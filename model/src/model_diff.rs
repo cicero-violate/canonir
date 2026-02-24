@@ -1,40 +1,66 @@
 //! semantic: domain=tooling
 //! Model-aware diff for self-host invariant
 
-use serde_json::{Map, Value};
 use crate::ir::model_ir::ModelIR;
+use serde_json::{Map, Value};
 
 #[derive(Debug)]
-pub struct ModelDiff {
+pub struct Diff {
     pub added: Vec<String>,
     pub removed: Vec<String>,
     pub changed: Vec<String>,
 }
 
-impl ModelDiff {
+impl Diff {
     pub fn is_empty(&self) -> bool {
         self.added.is_empty() && self.removed.is_empty() && self.changed.is_empty()
     }
 
     pub fn diff_semantic(a: &ModelIR, b: &ModelIR) -> Self {
         let mut changed = Vec::new();
-        if a.nodes        != b.nodes        { changed.push("nodes".to_string()); }
-        if a.edge_hints   != b.edge_hints   { changed.push("edge_hints".to_string()); }
-        if a.emit_order   != b.emit_order   { changed.push("emit_order".to_string()); }
+        if a.nodes != b.nodes {
+            changed.push("nodes".to_string());
+        }
+        if a.edge_hints != b.edge_hints {
+            changed.push("edge_hints".to_string());
+        }
+        if a.emit_order != b.emit_order {
+            changed.push("emit_order".to_string());
+        }
         // graph vertex counts as a cheap proxy for structural change
-        if a.name_graph  .vertex_count() != b.name_graph  .vertex_count() { changed.push("name_graph".to_string()); }
-        if a.type_graph  .vertex_count() != b.type_graph  .vertex_count() { changed.push("type_graph".to_string()); }
-        if a.call_graph  .vertex_count() != b.call_graph  .vertex_count() { changed.push("call_graph".to_string()); }
-        if a.module_graph.vertex_count() != b.module_graph.vertex_count() { changed.push("module_graph".to_string()); }
-        if a.cfg_graph   .vertex_count() != b.cfg_graph   .vertex_count() { changed.push("cfg_graph".to_string()); }
-        if a.region_graph.vertex_count() != b.region_graph.vertex_count() { changed.push("region_graph".to_string()); }
-        if a.value_graph .vertex_count() != b.value_graph .vertex_count() { changed.push("value_graph".to_string()); }
-        if a.macro_graph .vertex_count() != b.macro_graph .vertex_count() { changed.push("macro_graph".to_string()); }
-        ModelDiff { added: vec![], removed: vec![], changed }
+        if a.name_graph.vertex_count() != b.name_graph.vertex_count() {
+            changed.push("name_graph".to_string());
+        }
+        if a.type_graph.vertex_count() != b.type_graph.vertex_count() {
+            changed.push("type_graph".to_string());
+        }
+        if a.call_graph.vertex_count() != b.call_graph.vertex_count() {
+            changed.push("call_graph".to_string());
+        }
+        if a.module_graph.vertex_count() != b.module_graph.vertex_count() {
+            changed.push("module_graph".to_string());
+        }
+        if a.cfg_graph.vertex_count() != b.cfg_graph.vertex_count() {
+            changed.push("cfg_graph".to_string());
+        }
+        if a.region_graph.vertex_count() != b.region_graph.vertex_count() {
+            changed.push("region_graph".to_string());
+        }
+        if a.value_graph.vertex_count() != b.value_graph.vertex_count() {
+            changed.push("value_graph".to_string());
+        }
+        if a.macro_graph.vertex_count() != b.macro_graph.vertex_count() {
+            changed.push("macro_graph".to_string());
+        }
+        Diff {
+            added: vec![],
+            removed: vec![],
+            changed,
+        }
     }
 }
 
-pub fn diff_models(a: &Value, b: &Value) -> ModelDiff {
+pub fn diff_models(a: &Value, b: &Value) -> Diff {
     let a = normalize_model(a);
     let b = normalize_model(b);
 
@@ -72,7 +98,11 @@ pub fn diff_models(a: &Value, b: &Value) -> ModelDiff {
         changed.push("limits".into());
     }
 
-    ModelDiff { added, removed, changed }
+    Diff {
+        added,
+        removed,
+        changed,
+    }
 }
 
 fn normalize_model(v: &Value) -> Value {
