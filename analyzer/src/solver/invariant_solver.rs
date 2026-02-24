@@ -48,13 +48,21 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
 
     // ── 2. Every Impl.for_struct names a Struct that exists ─────────────────
     // Equation: valid_impl(i) <=> ∃ j: Struct { name } where name == for_struct
-    let struct_names: std::collections::HashSet<&str> = ir.nodes.iter().filter_map(|n| {
-        if let NodeKind::Struct { name, .. } = &n.kind { Some(name.as_str()) } else { None }
+    // Equation: valid_impl_target(name) <=> ∃ node with matching name that is
+    //   Struct | Enum | Trait | TypeAlias  (all legal impl targets in Rust)
+    let impl_target_names: std::collections::HashSet<&str> = ir.nodes.iter().filter_map(|n| {
+        match &n.kind {
+            NodeKind::Struct    { name, .. } => Some(name.as_str()),
+            NodeKind::Enum      { name, .. } => Some(name.as_str()),
+            NodeKind::Trait     { name, .. } => Some(name.as_str()),
+            NodeKind::TypeAlias { name, .. } => Some(name.as_str()),
+            _ => None,
+        }
     }).collect();
 
     for (idx, node) in ir.nodes.iter().enumerate() {
         if let NodeKind::Impl { for_struct, .. } = &node.kind {
-            if !struct_names.contains(for_struct.as_str()) {
+            if !impl_target_names.contains(for_struct.as_str()) {
                 bail!(
                     "invariant_solver: Impl node {} references unknown struct {:?}",
                     idx, for_struct

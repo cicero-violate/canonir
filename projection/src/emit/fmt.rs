@@ -9,18 +9,24 @@ pub fn fmt_generics(gs: &[GenericParam]) -> String {
     if gs.is_empty() {
         return String::new();
     }
-    let inner: Vec<String> = gs
-        .iter()
-        .map(|g| {
-            if g.is_lifetime {
-                format!("'{}", g.name)
-            } else if g.bounds.is_empty() {
-                g.name.clone()
-            } else {
-                format!("{}: {}", g.name, g.bounds.join(" + "))
-            }
-        })
-        .collect();
+    // Equation:
+    //   fmt_generic(g) = "'" name                  if is_lifetime
+    //                  = name                      if bounds=∅, default=None
+    //                  = name ": " bounds          if bounds≠∅
+    //                  = <above> " = " default_ty  if default_ty=Some  (E11)
+    let inner: Vec<String> = gs.iter().map(|g| {
+        let base = if g.is_lifetime {
+            format!("'{}", g.name)
+        } else if g.bounds.is_empty() {
+            g.name.clone()
+        } else {
+            format!("{}: {}", g.name, g.bounds.join(" + "))
+        };
+        match &g.default_ty {
+            Some(d) => format!("{} = {}", base, d),
+            None    => base,
+        }
+    }).collect();
     format!("<{}>", inner.join(", "))
 }
 

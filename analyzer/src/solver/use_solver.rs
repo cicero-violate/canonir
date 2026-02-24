@@ -27,6 +27,10 @@
 //!       inject Contains edge: site_mod -> Use node
 //!       (deduplicated by (site_mod, full_path))
 //!
+//! S1 — transitive re-export resolution:
+//!   resolve*(u) = fixpoint { follow Resolves from Use nodes until non-Use reached }
+//!   Equation: def*(u) = last non-Use node reachable via Resolves chain from u
+//!
 //! Algorithm: DFS (algorithms::graph::dfs) on inv_mod to walk upward.
 
 use std::collections::HashSet;
@@ -111,13 +115,37 @@ pub fn solve(ir: &mut ModelIR) -> Result<()> {
     };
 
     // Collect Resolves pairs from name_graph.
+    // S1: transitively follow Resolves chains through Use nodes.
+    // Equation: def*(u) = chase Resolves edges until we reach a non-Use node or a cycle.
     let mut resolves_pairs: Vec<(usize, usize)> = Vec::new();
     for src_idx in 0..name_v {
         let src_id = NodeId(src_idx as u32);
         for (dst_id, edge) in ir.name_graph.neighbours(src_id) {
-            if *edge == EdgeKind::Resolves {
-                resolves_pairs.push((src_idx, dst_id.index()));
+            if *edge != EdgeKind::Resolves { continue; }
+            // Chase transitive Resolves: follow through Use nodes.
+            let mut cur = dst_id.index();
+            let mut visited = HashSet::new();
+            loop {
+                if !visited.insert(cur) { break; } // cycle guard
+                // If cur is a Use node and has its own Resolves edge, follow it.
+                let mut next = None;
+                if cur < name_v {
+                    if matches!(ir.nodes.get(cur).map(|n| &n.kind), Some(NodeKind::Use { .. })) {
+                        let cur_id = NodeId(cur as u32);
+                        for (nb_id, nb_edge) in ir.name_graph.neighbours(cur_id) {
+                            if *nb_edge == EdgeKind::Resolves {
+                                next = Some(nb_id.index());
+                                break;
+                            }
+                        }
+                    }
+                }
+                match next {
+                    Some(n) => cur = n,
+                    None    => break,
+                }
             }
+            resolves_pairs.push((src_idx, cur));
         }
     }
     if resolves_pairs.is_empty() { return Ok(()); }

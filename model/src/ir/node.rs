@@ -23,6 +23,7 @@
 //!   ImplTrait / DynTrait edges            (E8, in edge.rs)
 //!   NodeKind::Lifetime { name }           (E9)
 //!   Param.lifetime : Option<String>       (E9 — &'a T params)
+//!   GenericParam.default_ty               (E11 — T = DefaultType)
 
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +70,9 @@ pub struct GenericParam {
     pub name: String,
     pub bounds: Vec<String>,
     pub is_lifetime: bool,
+    /// E11 — default type, e.g. `T = String` in `struct Foo<T = String>`.
+    #[serde(default)]
+    pub default_ty: Option<String>,
 }
 
 /// A struct or tuple field.
