@@ -16,6 +16,7 @@
 
 use anyhow::{bail, Result};
 use model::ir::{model_ir::ModelIR, node::NodeKind};
+use model::ir::edge::EdgeKind;
 use algorithms::graph::reachability::is_acyclic;
 use crate::solver::csr_to_adj;
 
@@ -46,7 +47,28 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
         }
     }
 
-    // ── 2. Every Impl.for_struct names a Struct that exists ─────────────────
+    // ── 2. Renames edges must connect same-kinded name-bearing nodes ─────────
+    // Equation: valid_rename(s, d) <=> node_kind_tag(s) == node_kind_tag(d)
+    //   A Function renaming a Struct is always a data error.
+    let name_v = ir.name_graph.vertex_count();
+    for src_idx in 0..name_v {
+        let src_id = model::ir::node::NodeId(src_idx as u32);
+        for (dst_id, edge) in ir.name_graph.neighbours(src_id) {
+            if *edge != model::ir::edge::EdgeKind::Renames { continue; }
+            let dst_idx = dst_id.index();
+            if src_idx >= v || dst_idx >= v { continue; } // caught by check 1
+            let src_tag = node_kind_tag(&ir.nodes[src_idx].kind);
+            let dst_tag = node_kind_tag(&ir.nodes[dst_idx].kind);
+            if src_tag != dst_tag {
+                bail!(
+                    "invariant_solver: illegal Renames edge {} ({}) -> {} ({}): kind mismatch",
+                    src_idx, src_tag, dst_idx, dst_tag
+                );
+            }
+        }
+    }
+
+    // ── 3. Every Impl.for_struct names a Struct that exists ─────────────────
     // Equation: valid_impl(i) <=> ∃ j: Struct { name } where name == for_struct
     // Equation: valid_impl_target(name) <=> ∃ node with matching name that is
     //   Struct | Enum | Trait | TypeAlias  (all legal impl targets in Rust)
@@ -59,6 +81,14 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
             _ => None,
         }
     }).collect();
+
+    // S17 debug — remove after fix confirmed
+    eprintln!("[invariant_solver] impl_target_names: {:?}", impl_target_names);
+    for (idx, node) in ir.nodes.iter().enumerate() {
+        if let NodeKind::Impl { for_struct, .. } = &node.kind {
+            eprintln!("[invariant_solver] Impl node {} for_struct={:?} found={}", idx, for_struct, impl_target_names.contains(for_struct.as_str()));
+        }
+    }
 
     for (idx, node) in ir.nodes.iter().enumerate() {
         if let NodeKind::Impl { for_struct, .. } = &node.kind {
@@ -82,4 +112,25 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn node_kind_tag(kind: &NodeKind) -> &'static str {
+    match kind {
+        NodeKind::Crate      { .. } => "Crate",
+        NodeKind::Module     { .. } => "Module",
+        NodeKind::Struct     { .. } => "Struct",
+        NodeKind::Enum       { .. } => "Enum",
+        NodeKind::Trait      { .. } => "Trait",
+        NodeKind::Impl       { .. } => "Impl",
+        NodeKind::Function   { .. } => "Function",
+        NodeKind::Method     { .. } => "Method",
+        NodeKind::Const      { .. } => "Const",
+        NodeKind::Static     { .. } => "Static",
+        NodeKind::Use        { .. } => "Use",
+        NodeKind::TypeRef    { .. } => "TypeRef",
+        NodeKind::TypeAlias  { .. } => "TypeAlias",
+        NodeKind::Lifetime   { .. } => "Lifetime",
+        NodeKind::ExternCrate{ .. } => "ExternCrate",
+        NodeKind::MacroCall  { .. } => "MacroCall",
+    }
 }

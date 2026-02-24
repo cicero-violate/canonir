@@ -71,7 +71,6 @@ pub struct GenericParam {
     pub bounds: Vec<String>,
     pub is_lifetime: bool,
     /// E11 — default type, e.g. `T = String` in `struct Foo<T = String>`.
-    #[serde(default)]
     pub default_ty: Option<String>,
 }
 
@@ -91,7 +90,6 @@ pub struct Param {
     pub is_self: bool,
     pub mutable: bool,
     /// E9 — named lifetime on a reference parameter, e.g. `'a` for `&'a T`.
-    #[serde(default)]
     pub lifetime: Option<String>,
 }
 
@@ -200,7 +198,7 @@ impl Default for StructKind {
 }
 
 /// Every item in the IR is one of these kinds.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum NodeKind {
     // ── Crate / Module ──────────────────────────────────────────────────────
     Crate {
