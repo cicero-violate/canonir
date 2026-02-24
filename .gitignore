@@ -104,3 +104,5 @@ tests/
 *.tlog
 
 *.o
+
+test_rust_project/
