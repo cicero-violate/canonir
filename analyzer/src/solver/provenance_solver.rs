@@ -27,7 +27,7 @@ fn node_name(kind: &NodeKind) -> Option<&str> {
         NodeKind::Trait     { name, .. } => Some(name),
         NodeKind::TypeAlias { name, .. } => Some(name),
         NodeKind::TypeRef   { name }     => Some(name),
-        NodeKind::Use       { path, alias } => Some(alias.as_deref().unwrap_or(path.as_str())),
+        NodeKind::Use       { path, alias, .. } => Some(alias.as_deref().unwrap_or(path.as_str())),
         _ => None,
     }
 }

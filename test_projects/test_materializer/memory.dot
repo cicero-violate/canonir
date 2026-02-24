@@ -1,0 +1,190 @@
+digraph sovereign_memory_modules {
+    rankdir=LR;
+    compound=true;
+    nodesep=0.5;
+    ranksep=1.4;
+    node [shape=box, style=rounded, fontsize=10];
+    edge [fontsize=9];
+
+    // -------------------------------------------------------
+    // merkle-core  (no dependencies on other crates)
+    // -------------------------------------------------------
+    subgraph cluster_merkle_core {
+        label="merkle-core";
+        style=rounded; color="#333333";
+
+        mc_hash  [label="hash.rs"];
+        mc_tree  [label="tree.rs"];
+        mc_root  [label="root.rs"];
+        mc_proof [label="proof.rs"];
+        mc_lib   [label="lib.rs"];
+
+        mc_hash  -> mc_tree;
+        mc_tree  -> mc_root;
+        mc_hash  -> mc_proof;
+        mc_root  -> mc_lib;
+        mc_proof -> mc_lib;
+    }
+
+    // -------------------------------------------------------
+    // partition-store
+    // -------------------------------------------------------
+    subgraph cluster_partition_store {
+        label="partition-store";
+        style=rounded; color="#333333";
+
+        ps_schema    [label="schema.rs"];
+        ps_access    [label="access.rs"];
+        ps_partition [label="partition.rs"];
+        ps_lib       [label="lib.rs"];
+
+        ps_schema    -> ps_partition;
+        ps_access    -> ps_partition;
+        ps_partition -> ps_lib;
+    }
+
+    // -------------------------------------------------------
+    // tlog-writer
+    // -------------------------------------------------------
+    subgraph cluster_tlog_writer {
+        label="tlog-writer";
+        style=rounded; color="#333333";
+
+        tw_entry  [label="entry.rs"];
+        tw_rotate [label="rotate.rs"];
+        tw_writer [label="writer.rs"];
+        tw_lib    [label="lib.rs"];
+
+        tw_entry  -> tw_writer;
+        tw_rotate -> tw_writer;
+        tw_writer -> tw_lib;
+    }
+
+    // -------------------------------------------------------
+    // snapshot-manager
+    // -------------------------------------------------------
+    subgraph cluster_snapshot_manager {
+        label="snapshot-manager";
+        style=rounded; color="#333333";
+
+        sm_freeze  [label="freeze.rs"];
+        sm_compact [label="compact.rs"];
+        sm_restore [label="restore.rs"];
+        sm_lib     [label="lib.rs"];
+
+        sm_freeze  -> sm_lib;
+        sm_compact -> sm_lib;
+        sm_restore -> sm_lib;
+    }
+
+    // -------------------------------------------------------
+    // epoch-sealer
+    // -------------------------------------------------------
+    subgraph cluster_epoch_sealer {
+        label="epoch-sealer";
+        style=rounded; color="#333333";
+
+        es_ror        [label="root_of_roots.rs"];
+        es_epoch_file [label="epoch_file.rs"];
+        es_sealer     [label="sealer.rs"];
+        es_lib        [label="lib.rs"];
+
+        es_ror        -> es_sealer;
+        es_epoch_file -> es_sealer;
+        es_sealer     -> es_lib;
+    }
+
+    // -------------------------------------------------------
+    // proof-store
+    // -------------------------------------------------------
+    subgraph cluster_proof_store {
+        label="proof-store";
+        style=rounded; color="#333333";
+
+        prs_shard [label="shard.rs"];
+        prs_store [label="store.rs"];
+        prs_lib   [label="lib.rs"];
+
+        prs_shard -> prs_store;
+        prs_store -> prs_lib;
+    }
+
+    // -------------------------------------------------------
+    // root-chain
+    // -------------------------------------------------------
+    subgraph cluster_root_chain {
+        label="root-chain";
+        style=rounded; color="#333333";
+
+        rc_detect  [label="detect.rs"];
+        rc_trusted [label="trusted_root.rs"];
+        rc_chain   [label="chain.rs"];
+        rc_lib     [label="lib.rs"];
+
+        rc_detect  -> rc_chain;
+        rc_trusted -> rc_chain;
+        rc_chain   -> rc_lib;
+    }
+
+    // -------------------------------------------------------
+    // verifier
+    // -------------------------------------------------------
+    subgraph cluster_verifier {
+        label="verifier";
+        style=rounded; color="#333333";
+
+        vf_result [label="result.rs"];
+        vf_verify [label="verify.rs"];
+        vf_lib    [label="lib.rs"];
+
+        vf_result -> vf_verify;
+        vf_verify -> vf_lib;
+    }
+
+    // -------------------------------------------------------
+    // inter-crate edges
+    // source file -> destination file that imports it
+    // -------------------------------------------------------
+
+    // merkle-core -> partition-store
+    mc_lib -> ps_partition  [label="MerkleNode, Hash" color="#0055aa" ltail=cluster_merkle_core];
+
+    // merkle-core -> snapshot-manager
+    mc_lib -> sm_freeze     [label="MerkleRoot"       color="#0055aa" ltail=cluster_merkle_core];
+    mc_lib -> sm_restore    [label="MerkleRoot"       color="#0055aa" ltail=cluster_merkle_core];
+
+    // merkle-core -> epoch-sealer
+    mc_lib -> es_ror        [label="MerkleTree, Hash" color="#0055aa" ltail=cluster_merkle_core];
+    mc_lib -> es_epoch_file [label="MerkleRoot"       color="#0055aa" ltail=cluster_merkle_core];
+
+    // merkle-core -> proof-store
+    mc_lib -> prs_store     [label="ProofPath"        color="#0055aa" ltail=cluster_merkle_core];
+
+    // merkle-core -> root-chain
+    mc_lib -> rc_chain      [label="MerkleRoot, Hash" color="#0055aa" ltail=cluster_merkle_core];
+
+    // merkle-core -> verifier
+    mc_lib -> vf_verify     [label="verify()"         color="#0055aa" ltail=cluster_merkle_core];
+
+    // partition-store -> tlog-writer
+    ps_lib -> tw_writer     [label="PartitionId"      color="#884400" lhead=cluster_tlog_writer];
+
+    // partition-store -> snapshot-manager
+    ps_lib -> sm_freeze     [label="Partition"        color="#884400"];
+    ps_lib -> sm_restore    [label="Partition"        color="#884400"];
+
+    // partition-store -> epoch-sealer
+    ps_lib -> es_sealer     [label="PartitionRoot"    color="#884400"];
+
+    // tlog-writer -> snapshot-manager
+    tw_lib -> sm_compact    [label="TlogEntry"        color="#006600" lhead=cluster_snapshot_manager];
+
+    // epoch-sealer -> root-chain
+    es_lib -> rc_chain      [label="EpochRoot"        color="#aa6600" lhead=cluster_root_chain];
+
+    // proof-store -> verifier
+    prs_lib -> vf_verify    [label="ProofPath"        color="#006600"];
+
+    // root-chain -> verifier
+    rc_lib -> vf_verify     [label="TrustedRoot"      color="#880088"];
+}

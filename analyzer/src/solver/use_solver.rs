@@ -35,7 +35,7 @@ use algorithms::graph::dfs::dfs;
 use model::ir::{
     edge::EdgeKind,
     model_ir::ModelIR,
-    node::{Node, NodeId, NodeKind},
+    node::{Node, NodeId, NodeKind, Visibility},
 };
 use crate::graph::module_graph::ModuleGraphBuilder;
 use crate::solver::csr_to_adj;
@@ -179,7 +179,7 @@ pub fn solve(ir: &mut ModelIR) -> Result<()> {
         let use_id = ir.nodes.len() as u32;
         ir.nodes.push(Node {
             id: NodeId(use_id),
-            kind: NodeKind::Use { path: full_path, alias: None },
+            kind: NodeKind::Use { path: full_path, alias: None, vis: Visibility::Private, glob: false },
             span: None,
         });
         all_edges.push((site_mod as u32, use_id, EdgeKind::Contains));

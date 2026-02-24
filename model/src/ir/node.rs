@@ -15,6 +15,12 @@
 //!   where_clauses(v)  -> Vec<String>      (E2)
 //!   unsafe_(v)        -> bool             (E12)
 //!   async_(v)         -> bool             (E13)
+//!   vis(Use)          -> Visibility       (E3)
+//!   glob(Use)         -> bool             (E15)
+//!   inline(Module)    -> bool             (E10)
+//!   kind(Struct)      -> StructKind       (E7)
+//!   ExternCrate                           (E4)
+//!   ImplTrait / DynTrait edges            (E8, in edge.rs)
 
 use serde::{Deserialize, Serialize};
 
@@ -42,13 +48,17 @@ pub enum Visibility {
 impl Visibility {
     pub fn to_token(&self) -> &str {
         match self {
-            Visibility::Public    => "pub ",
-            Visibility::PubCrate  => "pub(crate) ",
-            Visibility::PubSuper  => "pub(super) ",
-            Visibility::PubIn(_)  => "pub(in ...) ",
-            Visibility::Private   => "",
+            Visibility::Public => "pub ",
+            Visibility::PubCrate => "pub(crate) ",
+            Visibility::PubSuper => "pub(super) ",
+            Visibility::PubIn(_) => "pub(in ...) ",
+            Visibility::Private => "",
         }
     }
+}
+
+impl Default for Visibility {
+    fn default() -> Self { Visibility::Private }
 }
 
 /// A generic parameter: `T`, `T: Clone + Debug`, `'a`.
@@ -89,7 +99,11 @@ pub struct EnumVariant {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Stmt {
     /// `let <pat>: <ty> = <expr>;`
-    Let { pat: String, ty: Option<String>, init: Option<String> },
+    Let {
+        pat: String,
+        ty: Option<String>,
+        init: Option<String>,
+    },
     /// A bare expression statement.
     Expr(String),
     /// A return expression.  `return <expr>;`
@@ -104,7 +118,11 @@ pub enum Terminator {
     /// Falls through to block index `target`.
     Goto(u32),
     /// `if <cond> { goto true_bb } else { goto false_bb }`
-    Branch { cond: String, true_bb: u32, false_bb: u32 },
+    Branch {
+        cond: String,
+        true_bb: u32,
+        false_bb: u32,
+    },
     /// Function returns (value already in last Stmt::Return).
     Return,
     /// Unreachable / not yet assigned.
@@ -157,18 +175,39 @@ pub struct TraitMethod {
     pub async_: bool,
 }
 
+/// How a struct's fields are laid out (E7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum StructKind {
+    /// `struct Foo { x: T }` — named fields.
+    Named,
+    /// `struct Foo(T, U)` — positional tuple fields.
+    Tuple,
+    /// `struct Foo;` — no fields.
+    Unit,
+}
+
+impl Default for StructKind {
+    fn default() -> Self { StructKind::Named }
+}
+
 /// Every item in the IR is one of these kinds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum NodeKind {
     // ── Crate / Module ──────────────────────────────────────────────────────
-    Crate { name: String, edition: String },
+    Crate {
+        name: String,
+        edition: String,
+    },
 
-    /// E10: inline flag not yet added (future).
-    Module { path: String, file: String },
+    Module {
+        path: String,
+        file: String,
+        /// E10 — true for `mod foo { ... }` inline blocks.
+        #[serde(default)]
+        inline: bool,
+    },
 
     // ── Type definitions ────────────────────────────────────────────────────
-
-    /// E1: attrs; E2: where_clauses; E7: StructKind not yet split.
     Struct {
         name: String,
         vis: Visibility,
@@ -181,6 +220,9 @@ pub enum NodeKind {
         /// E2 — where clauses.
         #[serde(default)]
         where_clauses: Vec<String>,
+        /// E7 — struct layout kind.
+        #[serde(default)]
+        struct_kind: StructKind,
     },
 
     /// E6 — enum with variants.  Unblocks S13 (exhaustiveness_solver).
@@ -199,7 +241,6 @@ pub enum NodeKind {
     },
 
     // ── Trait / Impl ────────────────────────────────────────────────────────
-
     Trait {
         name: String,
         vis: Visibility,
@@ -232,7 +273,6 @@ pub enum NodeKind {
     },
 
     // ── Functions / Methods ─────────────────────────────────────────────────
-
     Function {
         name: String,
         vis: Visibility,
@@ -276,7 +316,6 @@ pub enum NodeKind {
     },
 
     // ── Values ──────────────────────────────────────────────────────────────
-
     /// E5 — const item.  Unblocks S11 (const_solver).
     ///   Equation: emit = attrs vis "const" name ":" ty "=" value ";"
     Const {
@@ -305,11 +344,21 @@ pub enum NodeKind {
     },
 
     // ── Use / Type helpers ──────────────────────────────────────────────────
+    /// E3/E15 — use declaration (synthetic or from source).
+    Use {
+        /// E3 — visibility of the re-export.
+        #[serde(default)]
+        vis: Visibility,
+        path: String,
+        alias: Option<String>,
+        /// E15 — true for `use foo::*` glob imports.
+        #[serde(default)]
+        glob: bool,
+    },
 
-    /// A synthetic `use` declaration injected by use_solver.
-    Use { path: String, alias: Option<String> },
-
-    TypeRef { name: String },
+    TypeRef {
+        name: String,
+    },
 
     TypeAlias {
         name: String,
@@ -325,6 +374,15 @@ pub enum NodeKind {
     },
 
     // ── Macros ──────────────────────────────────────────────────────────────
+    // ── Extern ──────────────────────────────────────────────────────────────
+    /// E4 — `extern crate foo` or `extern crate foo as bar`.
+    ExternCrate {
+        name: String,
+        alias: Option<String>,
+        /// E3 — visibility, e.g. `pub extern crate`.
+        #[serde(default)]
+        vis: Visibility,
+    },
 
     /// E14 — macro invocation.  Unblocks S12 (macro_solver).
     ///   Equation: emit = path "!(" tokens ")"

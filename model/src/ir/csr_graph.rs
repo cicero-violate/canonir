@@ -33,7 +33,12 @@ pub struct CsrGraph<ND, ED> {
 impl<ND, ED> CsrGraph<ND, ED> {
     /// Create an empty graph with no nodes.
     pub fn empty() -> Self {
-        Self { node_data: Vec::new(), row_ptr: vec![0], col_idx: Vec::new(), edge_data: Vec::new() }
+        Self {
+            node_data: Vec::new(),
+            row_ptr: vec![0],
+            col_idx: Vec::new(),
+            edge_data: Vec::new(),
+        }
     }
 
     pub fn vertex_count(&self) -> usize {
@@ -70,10 +75,17 @@ impl<ND, ED> CsrGraph<ND, ED> {
         let col_idx: Vec<u32> = edges.iter().map(|e| e.1).collect();
         let edge_data: Vec<ED> = edges.into_iter().map(|e| e.2).collect();
 
-        Self { node_data, row_ptr, col_idx, edge_data }
+        Self {
+            node_data,
+            row_ptr,
+            col_idx,
+            edge_data,
+        }
     }
 }
 
 impl<ND, ED> Default for CsrGraph<ND, ED> {
-    fn default() -> Self { Self::empty() }
+    fn default() -> Self {
+        Self::empty()
+    }
 }

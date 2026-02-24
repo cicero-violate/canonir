@@ -9,6 +9,7 @@
 //!   Calls                           -> call_graph
 //!   Renames | Resolves              -> name_graph
 //!   TypeOf  | TypeUnifies           -> type_graph
+//!   ImplTrait | DynTrait            -> type_graph  (E8)
 //!   CfgEdge | CfgBranch             -> cfg_graph
 //!
 //! CFG edges are also auto-derived from Body::Blocks terminators.
@@ -64,6 +65,9 @@ pub fn derive(ir: &mut ModelIR) -> Result<()> {
             }
             EdgeKind::TypeUnifies => {
                 type_b.add_unifies(src, dst);
+            }
+            EdgeKind::ImplTrait | EdgeKind::DynTrait => {
+                type_b.add_type_of(src, dst);
             }
             EdgeKind::CfgEdge => {
                 cfg_b.add_cfg_edge(src, dst);

@@ -10,6 +10,8 @@
 //!   G_call  : src --[Calls]-->   dst     (call graph edge)
 //!   G_module: src --[Contains]--> dst    (module containment)
 //!   G_cfg   : src --[CfgEdge]-->  dst    (control flow)
+//!   G_type  : src --[ImplTrait]--> dst   (E8 — impl Trait position)
+//!   G_type  : src --[DynTrait]-->  dst   (E8 — dyn Trait position)
 
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +23,10 @@ pub enum EdgeKind {
     // type-inference graph
     TypeOf,
     TypeUnifies,
+    /// E8 — `impl Trait` in argument/return position: Fn → Trait node.
+    ImplTrait,
+    /// E8 — `dyn Trait` in argument/return position: Fn → Trait node.
+    DynTrait,
     // call graph
     Calls,
     // structural / module graph
@@ -30,11 +36,11 @@ pub enum EdgeKind {
     CfgEdge,
     CfgBranch { label: String },
     // region / borrow graph
-    Outlives,        // lifetime 'a outlives 'b
+    Outlives, // lifetime 'a outlives 'b
     // value / const graph
-    ConstDep,        // const item depends on another const item
+    ConstDep, // const item depends on another const item
     // macro expansion graph
-    Expands,         // macro node expands to item node
+    Expands, // macro node expands to item node
 }
 
 /// A single edge declaration for use in JSON / capture layer.

@@ -2,7 +2,8 @@ use model::ir::{
     edge::EdgeKind,
     model_ir::ModelIR,
     node::{
-        Body, EnumVariant, Field, GenericParam, NodeId, NodeKind, Param, TraitMethod, Visibility,
+        Body, EnumVariant, Field, GenericParam, NodeId, NodeKind, Param, StructKind, TraitMethod,
+        Visibility,
     },
 };
 
@@ -52,8 +53,8 @@ fn dispatch(ir: &ModelIR, id: NodeId, pad: &str) -> String {
     let node = ir.node(id);
     match &node.kind {
         NodeKind::Module { .. } => ModuleEmitter(id).emit(ir, pad),
-        NodeKind::Struct { name, vis, generics, fields, derives, attrs, where_clauses } => {
-            StructEmitter { name, vis, generics, fields, derives, attrs, where_clauses }.emit(ir, pad)
+        NodeKind::Struct { name, vis, generics, fields, derives, attrs, where_clauses, struct_kind } => {
+            StructEmitter { name, vis, generics, fields, derives, attrs, where_clauses, struct_kind }.emit(ir, pad)
         }
         NodeKind::Enum { name, vis, generics, variants, derives, attrs, where_clauses } => {
             EnumEmitter { name, vis, generics, variants, derives, attrs, where_clauses }.emit(ir, pad)
@@ -70,8 +71,8 @@ fn dispatch(ir: &ModelIR, id: NodeId, pad: &str) -> String {
         NodeKind::Method { name, vis, generics, params, ret, body, attrs, where_clauses, unsafe_, async_ } => {
             FnEmitter { name, vis, generics, params, ret, body, attrs, where_clauses, unsafe_: *unsafe_, async_: *async_ }.emit(ir, pad)
         }
-        NodeKind::Use { path, alias } => {
-            UseEmitter { path, alias }.emit(ir, pad)
+        NodeKind::Use { vis, path, alias, glob } => {
+            UseEmitter { vis, path, alias, glob: *glob }.emit(ir, pad)
         }
         NodeKind::TypeRef { name } => TypeRefEmitter { name }.emit(ir, pad),
         NodeKind::Const { name, vis, ty, value, attrs } => {
@@ -85,6 +86,9 @@ fn dispatch(ir: &ModelIR, id: NodeId, pad: &str) -> String {
         }
         NodeKind::MacroCall { path, tokens } => {
             MacroCallEmitter { path, tokens }.emit(ir, pad)
+        }
+        NodeKind::ExternCrate { name, alias, vis } => {
+            ExternCrateEmitter { name, alias, vis }.emit(ir, pad)
         }
         NodeKind::Crate { .. } => String::new(),
     }
@@ -170,9 +174,15 @@ impl Emit for ModuleEmitter {
         for child_id in &other_nodes {
             let child = ir.node(*child_id);
             match &child.kind {
-                NodeKind::Module { path, .. } => {
+                NodeKind::Module { path, inline, .. } => {
                     let name = path.rsplit("::").next().unwrap_or(path.as_str());
-                    out.push_str(&format!("{}pub mod {};\n", pad, name));
+                    if *inline {
+                        let inner_pad = format!("{}    ", pad);
+                        let body = ModuleEmitter(*child_id).emit(ir, &inner_pad);
+                        out.push_str(&format!("{}pub mod {} {{\n{}{}}}\n", pad, name, body, pad));
+                    } else {
+                        out.push_str(&format!("{}pub mod {};\n", pad, name));
+                    }
                 }
                 _ => {
                     let src = dispatch(ir, *child_id, pad);
@@ -197,29 +207,49 @@ struct StructEmitter<'a> {
     derives: &'a [String],
     attrs: &'a [String],
     where_clauses: &'a [String],
+    struct_kind: &'a StructKind,
 }
 
 impl Emit for StructEmitter<'_> {
-    /// Equation:
-    ///   emit(Struct) = [#[derive(...)]] vis "struct" name generics "{" fields "}"
+    /// Equations:
+    ///   emit(Struct::Named)  = attrs [derive] vis "struct" name generics wc "{" fields "}"
+    ///   emit(Struct::Tuple)  = attrs [derive] vis "struct" name generics "(" fields ")" wc ";"
+    ///   emit(Struct::Unit)   = attrs [derive] vis "struct" name ";"
     fn emit(&self, _ir: &ModelIR, pad: &str) -> String {
         let mut s = fmt_attrs(self.attrs, pad);
         if !self.derives.is_empty() {
             s.push_str(&format!("{}#[derive({})]\n", pad, self.derives.join(", ")));
         }
         let wc = fmt_where(self.where_clauses);
-        s.push_str(&format!(
-            "{}{}struct {}{}{} {{\n",
-            pad,
-            self.vis.to_token(),
-            self.name,
-            fmt_generics(self.generics),
-            wc,
-        ));
-        for f in self.fields {
-            s.push_str(&fmt_field(f, &format!("{}    ", pad)));
+        match self.struct_kind {
+            StructKind::Unit => {
+                s.push_str(&format!(
+                    "{}{}struct {};\n",
+                    pad, self.vis.to_token(), self.name,
+                ));
+            }
+            StructKind::Tuple => {
+                let tys: Vec<String> = self.fields.iter()
+                    .map(|f| format!("{}{}", f.vis.to_token(), f.ty))
+                    .collect();
+                s.push_str(&format!(
+                    "{}{}struct {}{}({}){};\n",
+                    pad, self.vis.to_token(), self.name,
+                    fmt_generics(self.generics), tys.join(", "), wc,
+                ));
+            }
+            StructKind::Named => {
+                s.push_str(&format!(
+                    "{}{}struct {}{}{} {{\n",
+                    pad, self.vis.to_token(), self.name,
+                    fmt_generics(self.generics), wc,
+                ));
+                for f in self.fields {
+                    s.push_str(&fmt_field(f, &format!("{}    ", pad)));
+                }
+                s.push_str(&format!("{}}}\n", pad));
+            }
         }
-        s.push_str(&format!("{}}}\n", pad));
         s
     }
 }
@@ -400,17 +430,48 @@ impl Emit for FnEmitter<'_> {
 // ═══════════════════════════════════════════════════════════════════════════
 
 struct UseEmitter<'a> {
+    vis: &'a Visibility,
     path: &'a str,
     alias: &'a Option<String>,
+    glob: bool,
 }
 
 impl Emit for UseEmitter<'_> {
-    /// Equation:
-    ///   emit(Use) = "use" path ["as" alias] ";"
+    /// Equations:
+    ///   emit(Use, glob=true)  = vis "use" path "::*;"
+    ///   emit(Use, alias=Some) = vis "use" path "as" alias ";"
+    ///   emit(Use)             = vis "use" path ";"
     fn emit(&self, _ir: &ModelIR, pad: &str) -> String {
+        let v = self.vis.to_token();
+        if self.glob {
+            format!("{}{}use {}::*;\n", pad, v, self.path)
+        } else {
+            match self.alias {
+                Some(a) => format!("{}{}use {} as {};\n", pad, v, self.path, a),
+                None    => format!("{}{}use {};\n", pad, v, self.path),
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ExternCrateEmitter  (E4)
+// ═══════════════════════════════════════════════════════════════════════════
+
+struct ExternCrateEmitter<'a> {
+    name: &'a str,
+    alias: &'a Option<String>,
+    vis: &'a Visibility,
+}
+
+impl Emit for ExternCrateEmitter<'_> {
+    /// Equation:
+    ///   emit(ExternCrate) = vis "extern crate" name ["as" alias] ";"
+    fn emit(&self, _ir: &ModelIR, pad: &str) -> String {
+        let v = self.vis.to_token();
         match self.alias {
-            Some(a) => format!("{}use {} as {};\n", pad, self.path, a),
-            None    => format!("{}use {};\n", pad, self.path),
+            Some(a) => format!("{}{}extern crate {} as {};\n", pad, v, self.name, a),
+            None    => format!("{}{}extern crate {};\n", pad, v, self.name),
         }
     }
 }

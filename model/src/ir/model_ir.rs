@@ -14,12 +14,12 @@
 //! Pipeline:
 //!   capture  ->  ModelIR  ->  derive()  ->  solve()  ->  emit()
 
+use crate::ir::edge::EdgeHint;
 use crate::ir::{
     csr_graph::CsrGraph,
     edge::EdgeKind,
     node::{Node, NodeId, NodeKind},
 };
-use crate::ir::edge::EdgeHint;
 use serde::{Deserialize, Serialize};
 
 /// The full intermediate representation of a Rust workspace.

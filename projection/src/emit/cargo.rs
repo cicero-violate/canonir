@@ -40,5 +40,9 @@ pub fn emit_cargo_toml(ir: &ModelIR) -> Option<String> {
         ));
     }
 
+    // Prevent emitted crate from inheriting parent workspace.
+    // Adding empty [workspace] makes this Cargo.toml a workspace root.
+    out.push_str("\n[workspace]\n");
+
     Some(out)
 }

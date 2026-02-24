@@ -31,6 +31,7 @@ fn node_sort_key(kind: &NodeKind) -> (&'static str, String) {
         NodeKind::Static    { name, .. }  => ("5c_static", name.clone()),
         NodeKind::MacroCall { path, .. }  => ("9b_macro",  path.clone()),
         NodeKind::TypeRef   { name }      => ("9_tyref",   name.clone()),
+        NodeKind::ExternCrate { name, .. } => ("1b_extern", name.clone()),
     }
 }
 
