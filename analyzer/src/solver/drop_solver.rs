@@ -25,7 +25,11 @@
 //!           (structural inconsistency — malformed CFG)
 //!
 //! Normal warning path:
-//!   drop_order(f) ≠ reverse(decl_order(f))  => hard Err
+//!   ∃ exit e: exit_drop(e) not a subsequence of expected_drop  => hard Err
+//!
+//! Subsequence predicate:
+//!   is_subseq(xs, ys) <=> xs can be obtained by deleting elements from ys
+//!   This allows per-path bindings to be absent while preserving relative order.
 
 use anyhow::{bail, Result};
 use model::ir::{
@@ -135,10 +139,11 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
 
                 // All exit paths must agree on drop order of their post-dominator blocks.
                 if !decl_order.is_empty() && !exit_decls.is_empty() {
-                    // The exit_drop must be a suffix of expected_drop
-                    // (bindings not on this path were declared in non-post-dominating blocks).
-                    let suffix_ok = expected_drop.ends_with(exit_drop.as_slice());
-                    if !suffix_ok {
+                    // exit_drop must be a subsequence of expected_drop.
+                    // Bindings on other paths are absent here — that is valid.
+                    // Only a reordering within this path's bindings is an error.
+                    // Equation: is_subseq(exit_drop, expected_drop)
+                    if !is_subsequence(&exit_drop, &expected_drop) {
                         bail!(
                             "drop_solver: `{}` exit block {} has inconsistent drop order \
                              on this path.\n  expected suffix: {:?}\n  got:             {:?}",
@@ -158,4 +163,19 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Returns true if `needle` is a subsequence of `haystack`.
+///
+/// Equation: is_subseq([], _) = true
+///           is_subseq(x:xs, []) = false
+///           is_subseq(x:xs, y:ys) = if x==y then is_subseq(xs,ys)
+///                                            else is_subseq(x:xs, ys)
+fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {
+    let mut ni = 0;
+    for h in haystack {
+        if ni == needle.len() { break; }
+        if needle[ni] == *h { ni += 1; }
+    }
+    ni == needle.len()
 }

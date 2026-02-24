@@ -162,6 +162,7 @@ impl Emit for ModuleEmitter {
                 other_nodes.push(child_id);
             }
         }
+        eprintln!("[emitter] module {:?} use_nodes={:?} other_nodes={:?}", id, use_nodes, other_nodes);
 
         // Emit use declarations at the top of the file.
         for uid in &use_nodes {

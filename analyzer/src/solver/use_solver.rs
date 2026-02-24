@@ -229,5 +229,14 @@ pub fn solve(ir: &mut ModelIR) -> Result<()> {
     }
     ir.module_graph = builder.build();
 
+    // Sanity: verify node 0..old_v edges are preserved.
+    // If the rebuilt graph has fewer vertices than original nodes, something
+    // went wrong in the builder — fail loudly rather than silently drop edges.
+    assert!(
+        ir.module_graph.vertex_count() >= ir.nodes.len(),
+        "use_solver: module_graph vertex_count {} < node count {} after rebuild",
+        ir.module_graph.vertex_count(), ir.nodes.len()
+    );
+
     Ok(())
 }

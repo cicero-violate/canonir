@@ -38,6 +38,7 @@ pub mod unsafe_solver;
 
 /// Run all solvers in dependency order.
 pub fn solve(ir: &mut ModelIR) -> Result<()> {
+    invariant_solver::solve(ir)?; // ── gate: structural safety before any mutation
     module_solver::solve(ir)?;   // containment must be settled first
     name_solver::solve(ir)?;     // rename constraints depend on module order
     type_solver::solve(ir)?;     // type unification depends on resolved names
@@ -45,7 +46,6 @@ pub fn solve(ir: &mut ModelIR) -> Result<()> {
     cfg_solver::solve(ir)?;      // CFG dominators depend on call resolution
     use_solver::solve(ir)?;      // inject Use nodes after all names are resolved
     // ── Phase 2: semantic correctness ───────────────────────────────────────
-    invariant_solver::solve(ir)?; // structural safety (edges, impl targets, acyclicity)
     visibility_solver::solve(ir)?;// pub/private access rule enforcement
     impl_solver::solve(ir)?;      // impl target existence + duplicate detection
     trait_solver::solve(ir)?;     // trait method completeness
