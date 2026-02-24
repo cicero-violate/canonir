@@ -1,0 +1,11 @@
+[workspace]
+members = [
+  "algorithms",	
+  "model",
+  "capture",
+  "analyzer",
+  "mutation",
+  "projection",
+  "orchestration",
+]
+resolver = "2"

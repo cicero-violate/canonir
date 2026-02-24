@@ -1,0 +1,20 @@
+[package]
+name = "capture_rustc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+model = { path = "../model" }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.145"
+anyhow = "1"
+syn = "2.0.117"
+walkdir = "2"
+
+[lib]
+path = "src/lib.rs"
+
+
+[features]
+default = ["rustc_frontend"]
+rustc_frontend = []
