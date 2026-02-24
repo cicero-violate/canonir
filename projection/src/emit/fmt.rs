@@ -31,13 +31,37 @@ pub fn fmt_params(params: &[Param]) -> String {
             if p.is_self {
                 if p.mutable { "&mut self".into() } else { "&self".into() }
             } else if p.mutable {
-                format!("mut {}: {}", p.name, p.ty)
+                let ty = fmt_ref_ty(&p.lifetime, &p.ty);
+                format!("mut {}: {}", p.name, ty)
             } else {
-                format!("{}: {}", p.name, p.ty)
+                let ty = fmt_ref_ty(&p.lifetime, &p.ty);
+                format!("{}: {}", p.name, ty)
             }
         })
         .collect();
     format!("({})", inner.join(", "))
+}
+
+/// Prepend a lifetime to a reference type if present.
+///
+/// Equation:
+///   fmt_ref_ty(Some('a), "&T")  = "&'a T"
+///   fmt_ref_ty(Some('a), "&mut T") = "&'a mut T"
+///   fmt_ref_ty(None, ty)        = ty   (pass-through)
+fn fmt_ref_ty(lifetime: &Option<String>, ty: &str) -> String {
+    match lifetime {
+        None => ty.to_string(),
+        Some(lt) => {
+            if let Some(rest) = ty.strip_prefix("&mut ") {
+                format!("&'{}  mut {}", lt, rest)
+            } else if let Some(rest) = ty.strip_prefix('&') {
+                format!("&'{} {}", lt, rest)
+            } else {
+                // Non-reference type with lifetime annotation — pass through.
+                ty.to_string()
+            }
+        }
+    }
 }
 
 pub fn fmt_field(f: &Field, pad: &str) -> String {

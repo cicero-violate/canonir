@@ -21,6 +21,8 @@
 //!   kind(Struct)      -> StructKind       (E7)
 //!   ExternCrate                           (E4)
 //!   ImplTrait / DynTrait edges            (E8, in edge.rs)
+//!   NodeKind::Lifetime { name }           (E9)
+//!   Param.lifetime : Option<String>       (E9 — &'a T params)
 
 use serde::{Deserialize, Serialize};
 
@@ -84,6 +86,9 @@ pub struct Param {
     pub ty: String,
     pub is_self: bool,
     pub mutable: bool,
+    /// E9 — named lifetime on a reference parameter, e.g. `'a` for `&'a T`.
+    #[serde(default)]
+    pub lifetime: Option<String>,
 }
 
 /// One variant of an enum  (E6).
@@ -375,6 +380,13 @@ pub enum NodeKind {
 
     // ── Macros ──────────────────────────────────────────────────────────────
     // ── Extern ──────────────────────────────────────────────────────────────
+    // ── Lifetimes ───────────────────────────────────────────────────────────
+    /// E9 — a named lifetime node, e.g. `'a` or `'static`.
+    /// Outlives edges in G_region connect these nodes.
+    Lifetime {
+        name: String,
+    },
+
     /// E4 — `extern crate foo` or `extern crate foo as bar`.
     ExternCrate {
         name: String,

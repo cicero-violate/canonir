@@ -91,6 +91,7 @@ fn dispatch(ir: &ModelIR, id: NodeId, pad: &str) -> String {
             ExternCrateEmitter { name, alias, vis }.emit(ir, pad)
         }
         NodeKind::Crate { .. } => String::new(),
+        NodeKind::Lifetime { .. } => String::new(), // lifetime nodes are IR-only, not emitted
     }
 }
 
