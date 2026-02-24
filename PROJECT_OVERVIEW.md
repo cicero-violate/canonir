@@ -63,7 +63,10 @@ analyzer/src/
     exhaustiveness_solver.rs — ACTIVE: warn on uncovered enum variants
     unsafe_solver.rs   — ACTIVE: warn on safe callers of unsafe fns via G_call
     borrow_solver.rs   — stub: awaits IR lifetime nodes (gap E9)
-    drop_solver.rs     — stub: awaits ownership/scope IR nodes
+    drop_solver.rs     — ACTIVE: post_dom drop order verification (S16)
+
+algorithms/src/control_flow/
+  dominators.rs       — dominators(), post_dominators() (reversed CFG + synthetic super_exit)
 
 algorithms/src/graph/
   dfs.rs              — dfs(adj, start) -> Vec<usize>
@@ -107,4 +110,3 @@ test_projects/test_rust_project/model_ir.json
 - Solvers enforce semantic legality.
 - Emit is deterministic.
 - model_diff is semantic-complete.
-

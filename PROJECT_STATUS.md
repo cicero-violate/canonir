@@ -5,6 +5,7 @@
 - Workspace compiles clean.
 - All IR gaps closed: E1–E15 (E9 lifetime nodes, E11 generic defaults included).
 - Solvers active: S9 (borrow), S11 (const), S12 (macro), S13 (exhaustiveness), S15 (unsafe).
+- S16 (drop_solver) active: post-dominator drop order verification on Body::Blocks.
 - S1 (transitive re-exports), S2 (SCC diag nodes), S4 (impl target hard error) closed.
 - 8 CSR graphs wired end-to-end.
 - Emitters cover all NodeKind variants.
@@ -30,17 +31,13 @@
 - SCC cycle TypeRef diagnostic nodes injected into IR + emit_order (S2).
 - Impl target validation accepts Struct/Enum/Trait/TypeAlias (S4).
 
-## Remaining Gaps
-
-| Gap | Missing                               |
-|-----+---------------------------------------|
-| S16 | drop_solver — blocked by ownership IR |
-
 ## Next Highest Value
 
 1. capture_rustc round-trip closure (real .rs → capture → emit → identical .rs)
 2. Full mutation test: AddNode + AddEdge + RemoveNode + diff_report.json
-3. drop_solver / ownership IR (S16)
+3. drop_solver ownership IR extension: scope nodes, conditional drop paths (S16b)
 
 System invariant:
 IR → Graph → Solve → Emit is stable.
+- Drop order verification via post_dominators (S16).
+- algorithms::control_flow::dominators extended with post_dominators().
