@@ -105,4 +105,4 @@ tests/
 
 *.o
 
-test_rust_project/
+test_projects/
