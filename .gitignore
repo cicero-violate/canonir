@@ -101,3 +101,5 @@ tests/
 *.tarcanonical.tar
 
 *.tlog
+
+*.o
