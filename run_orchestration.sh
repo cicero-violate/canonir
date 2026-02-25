@@ -21,7 +21,8 @@ cargo build
 
 cp /workspace/ai_sandbox/canon/test_projects/test_rust_project/test_capture/model_ir_captured.json /workspace/ai_sandbox/canon/test_projects/test_rust_project/
 
-echo "head -50 model_ir.json\n"
-head -50 /workspace/ai_sandbox/canon/test_projects/test_rust_project/model_ir.json
-echo "head -50 model_ir_captured.json\n"
-head -50 /workspace/ai_sandbox/canon/test_projects/test_rust_project/model_ir_captured.json
+echo "bat -n /workspace/ai_sandbox/canon/test_projects/test_rust_project/model_ir.json | sed -n '1000,1040p'"
+bat -n /workspace/ai_sandbox/canon/test_projects/test_rust_project/model_ir.json | sed -n '1000,1040p'
+echo "bat -n /workspace/ai_sandbox/canon/test_projects/test_rust_project/model_ir_captured.json | sed -n '1000,1040p'"
+bat -n /workspace/ai_sandbox/canon/test_projects/test_rust_project/model_ir_captured.json | sed -n '1000,1040p'
+
