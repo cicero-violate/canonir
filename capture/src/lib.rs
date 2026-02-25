@@ -1,5 +1,14 @@
 #![feature(rustc_private)]
 
+//! Canon capture (rustc frontend) — map-reduce projection into ModelIR.
+//!
+//! Architecture (scalable / deterministic / parallel-ready):
+//!   1) index  : stable DefId -> NodeId space (sorted)
+//!   2) project: per-def projection (no shared mutation) producing Partial
+//!   3) assemble: deterministic merge of Partials into ModelIR
+//!
+//! Future: swap rustc_private for public API when available; add incremental cache.
+
 extern crate model;
 extern crate rustc_driver;
 extern crate rustc_hir;
@@ -7,63 +16,39 @@ extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_span;
 
-pub mod ast;
-pub mod cargo_project;
-pub mod driver;
-pub mod hir;
-pub mod mir;
+use anyhow::Result;
+use model::ir::model_ir::ModelIR;
+use rustc_middle::ty::TyCtxt;
+use rustc_span::def_id::DefId;
 
-use ast::capture_ast;
-use cargo_project::CargoProject;
-use driver::{run_hir, run_mir};
-use model::ir::model_ir::Model;
+pub mod assemble;
+pub mod index;
+pub mod project;
 
-use std::path::Path;
-
-/// Unified entry point:
-/// - Resolve Cargo project
-/// - Build dependencies
-/// - Inject extern flags
-/// - Run HIR + MIR passes
-pub fn run(entry: &Path) -> Result<Model, Box<dyn std::error::Error>> {
-    let entry = entry.canonicalize()?;
-
-    // --- AST pre-pass (syn-based) ---
-    let mut model = capture_ast(&entry)?;
-    println!("AST modules captured: {}", model.modules.len());
-    println!("AST functions captured: {}", model.functions.len());
-
-    let project = CargoProject::from_entry(&entry)?;
-
-    project.ensure_dependencies_built()?;
-
-    let targets = project.targets()?;
-
-    let _primary = targets.iter().find(|t| t.kind.iter().any(|k| k == "lib")).or_else(|| targets.first()).ok_or("no cargo target found")?;
-
-    // Use Cargo's *exact* rustc invocation (includes cfg/features/proc-macros/externs/out-dir/etc).
-    let args = project.rustc_args_from_cargo_verbose()?;
-
-    let hir_model = run_hir(&args);
-    let mir_model = run_mir(&args);
-
-    println!("HIR items captured: {}", hir_model.hir_items.len());
-    println!("MIR bodies captured: {}", mir_model.mir_bodies.len());
-
-    model.hir_items = hir_model.hir_items;
-    model.hir_exprs = hir_model.hir_exprs;
-    model.hir_types = hir_model.hir_types;
-    model.hir_paths = hir_model.hir_paths;
-    model.mir_bodies = mir_model.mir_bodies;
-
-    Ok(model)
+/// Per-def capture output: nodes + edge hints (local to one DefId).
+#[derive(Debug, Default)]
+pub struct Partial {
+    pub nodes: Vec<model::ir::node::Node>,
+    pub edge_hints: Vec<model::ir::edge::EdgeHint>,
 }
 
-// Deleted duplicate API.
-// `run()` is the single public entry point.
+/// Entry point: capture a crate into ModelIR using the scalable pipeline.
+pub fn capture(tcx: TyCtxt<'_>) -> Result<ModelIR> {
+    let index = index::build_index(tcx);
 
-pub fn write_model_json(model: &Model, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let file = std::fs::File::create(path)?;
-    serde_json::to_writer_pretty(file, model)?;
-    Ok(())
+    // Map: project each DefId sequentially (rayon disabled due to TyCtxt !Sync).
+    let partials: Vec<Partial> = index
+        .def_ids
+        .iter()
+        .map(|d| project::project_def(tcx, *d, &index))
+        .collect();
+
+    // Reduce: deterministic assembly.
+    let ir = assemble::assemble(tcx, index, partials);
+    Ok(ir)
+}
+
+/// Convenience for future incremental mode: project a single def.
+pub fn capture_def(tcx: TyCtxt<'_>, def_id: DefId) -> Result<Partial> {
+    Ok(project::project_def(tcx, def_id, &index::build_index(tcx)))
 }
