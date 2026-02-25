@@ -4,7 +4,7 @@ use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use model::model_ir::*;
+use model::ir::model_ir::*;
 
 pub fn capture_ast(root: &Path) -> Result<Model> {
     let mut modules = Vec::new();
