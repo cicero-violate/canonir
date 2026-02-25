@@ -28,4 +28,4 @@ bat -n /workspace/ai_sandbox/canon/test_projects/test_rust_project/model_ir_capt
 
 bat -n /workspace/ai_sandbox/canon/test_projects/test_rust_project/compare.py
 cd /workspace/ai_sandbox/canon/test_projects/test_rust_project
-python diff_headers.py model_ir.json model_ir_captured.json
+python compare.py model_ir.json model_ir_captured.json
