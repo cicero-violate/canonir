@@ -4,7 +4,7 @@ use rustc_interface::interface::Compiler;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
 
-use model::model_ir::{MirBasicBlock, MirBody, Model};
+use model::ir::model_ir::{MirBasicBlock, MirBody, Model};
 
 pub struct MirCollector {
     pub model: Model,
