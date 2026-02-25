@@ -20,3 +20,4 @@ cd /workspace/ai_sandbox/canon/test_projects/test_rust_project/test_capture
 cargo build
 
 cp /workspace/ai_sandbox/canon/test_projects/test_rust_project/test_capture/model_ir_captured.json /workspace/ai_sandbox/canon/test_projects/test_rust_project/
+
