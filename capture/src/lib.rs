@@ -16,7 +16,7 @@ pub mod mir;
 use ast::capture_ast;
 use cargo_project::CargoProject;
 use driver::{run_hir, run_mir};
-use model::model_ir::Model;
+use model::ir::model_ir::Model;
 
 use std::path::Path;
 
