@@ -3,6 +3,7 @@ use rustc_hir::{def::DefKind, Safety};
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_middle::ty::print::PrintTraitRefExt;
 use rustc_span::def_id::DefId;
+use rustc_middle::mir;
 
 use crate::index::Index;
 
@@ -56,8 +57,21 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
             let async_ = tcx.asyncness(def_id).is_async();
             NodeKind::Method { name: name.clone(), vis, generics, params, ret, body: Body::None, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_, async_ }
         }
-        DefKind::Const => NodeKind::Const { name: name.clone(), vis, ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()), value: String::new(), attrs: Vec::new() },
-        DefKind::Static { .. } => NodeKind::Static { name: name.clone(), vis, ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()), value: String::new(), mutable: true, attrs: Vec::new() },
+        DefKind::Const => NodeKind::Const {
+            name: name.clone(),
+            vis,
+            ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()),
+            value: eval_const_value(tcx, def_id),
+            attrs: Vec::new(),
+        },
+        DefKind::Static { .. } => NodeKind::Static {
+            name: name.clone(),
+            vis,
+            ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()),
+            value: eval_const_value(tcx, def_id),
+            mutable: true,
+            attrs: Vec::new(),
+        },
         DefKind::TyAlias => NodeKind::TypeAlias { name: name.clone(), vis, generics, ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()), attrs: Vec::new(), where_clauses: Vec::new() },
         // All other DefKinds (TyParam, LifetimeParam, Variant, Field, Closure,
         // AnonConst, Ctor, etc.) are not top-level ModelIR items — skip them.
@@ -127,4 +141,14 @@ where I: Iterator<Item = &'a ty::FieldDef> {
 
 fn fmt_ty(tcx: TyCtxt<'_>, ty: ty::Ty<'_>) -> String {
     ty.to_string()
+}
+
+/// Attempt to evaluate a Const or Static item's value as a display string.
+/// Returns empty string if evaluation fails.
+fn eval_const_value(tcx: TyCtxt<'_>, def_id: DefId) -> String {
+    let ty = tcx.type_of(def_id).instantiate_identity();
+    match tcx.const_eval_poly(def_id) {
+        Ok(val) => format!("{}", mir::Const::from_value(val, ty)),
+        Err(_) => String::new(),
+    }
 }
