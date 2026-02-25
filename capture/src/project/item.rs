@@ -1,6 +1,7 @@
 use model::ir::node::{Body, EnumVariant, Field, GenericParam, Node, NodeKind, Param, StructKind, Visibility};
 use rustc_hir::{def::DefKind, Safety};
 use rustc_middle::ty::{self, TyCtxt};
+use rustc_middle::ty::print::PrintTraitRefExt;
 use rustc_span::def_id::DefId;
 
 use crate::index::Index;
