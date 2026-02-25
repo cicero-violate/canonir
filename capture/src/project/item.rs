@@ -1,6 +1,4 @@
-use model::ir::node::{
-    Body, EnumVariant, Field, GenericParam, Node, NodeKind, Param, StructKind, Visibility,
-};
+use model::ir::node::{Body, EnumVariant, Field, GenericParam, Node, NodeKind, Param, StructKind, Visibility};
 use rustc_hir::{def::DefKind, Safety};
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_span::def_id::DefId;
@@ -15,14 +13,10 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
     let span_str = format!("{:?}", span);
 
     let vis = map_vis(tcx.visibility(def_id));
-    let generics = map_generics(tcx.generics_of(def_id));
+    let generics = map_generics(tcx, def_id);
 
     let kind = match tcx.def_kind(def_id) {
-        DefKind::Mod => NodeKind::Module {
-            path: name.clone(),
-            file: span_str.clone(),
-            inline: false,
-        },
+        DefKind::Mod => NodeKind::Module { path: name.clone(), file: span_str.clone(), inline: false },
         DefKind::Struct | DefKind::Union => {
             let adt = tcx.adt_def(def_id);
             let variant = adt.non_enum_variant();
@@ -32,59 +26,18 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
                 _ => StructKind::Named,
             };
             let fields = map_fields(tcx, variant.fields.iter());
-            NodeKind::Struct {
-                name: name.clone(),
-                vis,
-                generics,
-                fields,
-                derives: Vec::new(),
-                attrs: Vec::new(),
-                where_clauses: Vec::new(),
-                struct_kind,
-            }
+            NodeKind::Struct { name: name.clone(), vis, generics, fields, derives: Vec::new(), attrs: Vec::new(), where_clauses: Vec::new(), struct_kind }
         }
         DefKind::Enum => {
             let adt = tcx.adt_def(def_id);
-            let variants = adt
-                .variants()
-                .iter()
-                .map(|v| EnumVariant {
-                    name: v.name.to_string(),
-                    fields: map_fields(tcx, v.fields.iter()),
-                })
-                .collect();
-            NodeKind::Enum {
-                name: name.clone(),
-                vis,
-                generics,
-                variants,
-                derives: Vec::new(),
-                attrs: Vec::new(),
-                where_clauses: Vec::new(),
-            }
+            let variants = adt.variants().iter().map(|v| EnumVariant { name: v.name.to_string(), fields: map_fields(tcx, v.fields.iter()) }).collect();
+            NodeKind::Enum { name: name.clone(), vis, generics, variants, derives: Vec::new(), attrs: Vec::new(), where_clauses: Vec::new() }
         }
-        DefKind::Trait => NodeKind::Trait {
-            name: name.clone(),
-            vis,
-            generics,
-            methods: Vec::new(),
-            attrs: Vec::new(),
-            where_clauses: Vec::new(),
-            unsafe_: false,
-        },
+        DefKind::Trait => NodeKind::Trait { name: name.clone(), vis, generics, methods: Vec::new(), attrs: Vec::new(), where_clauses: Vec::new(), unsafe_: false },
         DefKind::Impl { .. } => {
             // impl_opt_trait_ref returns None for inherent impls, Some for trait impls.
-            let for_trait = tcx
-                .impl_opt_trait_ref(def_id)
-                .map(|early_binder| tcx.def_path_str(early_binder.skip_binder().def_id));
-            NodeKind::Impl {
-                for_struct: name.clone(),
-                for_trait,
-                generics,
-                attrs: Vec::new(),
-                where_clauses: Vec::new(),
-                unsafe_: false,
-            }
+            let for_trait = tcx.impl_opt_trait_ref(def_id).map(|early_binder| tcx.def_path_str(early_binder.skip_binder().def_id));
+            NodeKind::Impl { for_struct: name.clone(), for_trait, generics, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_: false }
         }
         DefKind::Fn => {
             let sig = tcx.fn_sig(def_id).skip_binder();
@@ -92,18 +45,7 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
             let ret = fmt_ty(tcx, sig.output().skip_binder());
             let unsafe_ = sig.safety() == Safety::Unsafe;
             let async_ = tcx.asyncness(def_id).is_async();
-            NodeKind::Function {
-                name: name.clone(),
-                vis,
-                generics,
-                params,
-                ret,
-                body: Body::None,
-                attrs: Vec::new(),
-                where_clauses: Vec::new(),
-                unsafe_,
-                async_,
-            }
+            NodeKind::Function { name: name.clone(), vis, generics, params, ret, body: Body::None, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_, async_ }
         }
         DefKind::AssocFn => {
             let sig = tcx.fn_sig(def_id).skip_binder();
@@ -111,52 +53,17 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
             let ret = fmt_ty(tcx, sig.output().skip_binder());
             let unsafe_ = sig.safety() == Safety::Unsafe;
             let async_ = tcx.asyncness(def_id).is_async();
-            NodeKind::Method {
-                name: name.clone(),
-                vis,
-                generics,
-                params,
-                ret,
-                body: Body::None,
-                attrs: Vec::new(),
-                where_clauses: Vec::new(),
-                unsafe_,
-                async_,
-            }
+            NodeKind::Method { name: name.clone(), vis, generics, params, ret, body: Body::None, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_, async_ }
         }
-        DefKind::Const => NodeKind::Const {
-            name: name.clone(),
-            vis,
-            ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()),
-            value: String::new(),
-            attrs: Vec::new(),
-        },
-        DefKind::Static { .. } => NodeKind::Static {
-            name: name.clone(),
-            vis,
-            ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()),
-            value: String::new(),
-            mutable: true,
-            attrs: Vec::new(),
-        },
-        DefKind::TyAlias => NodeKind::TypeAlias {
-            name: name.clone(),
-            vis,
-            generics,
-            ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()),
-            attrs: Vec::new(),
-            where_clauses: Vec::new(),
-        },
+        DefKind::Const => NodeKind::Const { name: name.clone(), vis, ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()), value: String::new(), attrs: Vec::new() },
+        DefKind::Static { .. } => NodeKind::Static { name: name.clone(), vis, ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()), value: String::new(), mutable: true, attrs: Vec::new() },
+        DefKind::TyAlias => NodeKind::TypeAlias { name: name.clone(), vis, generics, ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()), attrs: Vec::new(), where_clauses: Vec::new() },
         // All other DefKinds (TyParam, LifetimeParam, Variant, Field, Closure,
         // AnonConst, Ctor, etc.) are not top-level ModelIR items — skip them.
         _ => return None,
     };
 
-    Some(Node {
-        id,
-        kind,
-        span: Some(span_str),
-    })
+    Some(Node { id, kind, span: Some(span_str) })
 }
 
 fn map_vis(v: ty::Visibility<DefId>) -> Visibility {
@@ -167,43 +74,54 @@ fn map_vis(v: ty::Visibility<DefId>) -> Visibility {
     }
 }
 
-fn map_generics(gens: &ty::Generics) -> Vec<GenericParam> {
+/// Map generic params for `def_id`, pulling trait/lifetime bounds from
+/// `predicates_of` and attaching them to the correct param by name.
+fn map_generics(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<GenericParam> {
+    let gens = tcx.generics_of(def_id);
+
+    // Collect bounds per param name from predicates_of.
+    // predicates_of may ICE on some items (e.g. closures) — guard with a check.
+    let mut bounds_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
+    if matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn | DefKind::Struct | DefKind::Enum | DefKind::Trait | DefKind::Impl { .. } | DefKind::TyAlias) {
+        for (clause, _span) in tcx.predicates_of(def_id).predicates {
+            match clause.kind().skip_binder() {
+                ty::ClauseKind::Trait(tp) => {
+                    // Only collect bounds where the self type is a plain type param.
+                    if let ty::TyKind::Param(p) = tp.self_ty().kind() {
+                        let trait_str = format!("{}", tp.trait_ref.print_only_trait_path());
+                        bounds_map.entry(p.name.to_string()).or_default().push(trait_str);
+                    }
+                }
+                ty::ClauseKind::RegionOutlives(ro) => {
+                    // 'a: 'b — attach to the lifetime param 'a.
+                    let name = format!("{}", ro.0);
+                    let bound = format!("{}", ro.1);
+                    bounds_map.entry(name).or_default().push(bound);
+                }
+                _ => {}
+            }
+        }
+    }
+
     gens.own_params
         .iter()
-        .map(|p| GenericParam {
-            name: p.name.to_string(),
-            bounds: Vec::new(),
-            is_lifetime: matches!(p.kind, ty::GenericParamDefKind::Lifetime),
-            default_ty: None,
+        .map(|p| {
+            let name = p.name.to_string();
+            let bounds = bounds_map.remove(&name).unwrap_or_default();
+            let is_lifetime = matches!(p.kind, ty::GenericParamDefKind::Lifetime);
+            GenericParam { name, bounds, is_lifetime, default_ty: None }
         })
         .collect()
 }
 
 fn map_params(inputs: &[ty::Ty<'_>], tcx: TyCtxt<'_>) -> Vec<Param> {
-    inputs
-        .iter()
-        .enumerate()
-        .map(|(i, ty)| Param {
-            name: format!("p{i}"),
-            ty: fmt_ty(tcx, *ty),
-            is_self: false,
-            mutable: false,
-            lifetime: None,
-        })
-        .collect()
+    inputs.iter().enumerate().map(|(i, ty)| Param { name: format!("p{i}"), ty: fmt_ty(tcx, *ty), is_self: false, mutable: false, lifetime: None }).collect()
 }
 
 fn map_fields<'a, I>(tcx: TyCtxt<'a>, fields: I) -> Vec<Field>
-where
-    I: Iterator<Item = &'a ty::FieldDef>,
-{
-    fields
-        .map(|f| Field {
-            name: Some(f.name.to_string()),
-            ty: fmt_ty(tcx, tcx.type_of(f.did).instantiate_identity()),
-            vis: Visibility::Public,
-        })
-        .collect()
+where I: Iterator<Item = &'a ty::FieldDef> {
+    fields.map(|f| Field { name: Some(f.name.to_string()), ty: fmt_ty(tcx, tcx.type_of(f.did).instantiate_identity()), vis: Visibility::Public }).collect()
 }
 
 fn fmt_ty(tcx: TyCtxt<'_>, ty: ty::Ty<'_>) -> String {
