@@ -89,7 +89,7 @@ fn map_generics(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<GenericParam> {
                 ty::ClauseKind::Trait(tp) => {
                     // Only collect bounds where the self type is a plain type param.
                     if let ty::TyKind::Param(p) = tp.self_ty().kind() {
-                        let trait_str = format!("{}", tp.trait_ref.print_only_trait_path());
+                        let trait_str = format!("{}", tp.trait_ref.print_only_trait_name());
                         bounds_map.entry(p.name.to_string()).or_default().push(trait_str);
                     }
                 }
