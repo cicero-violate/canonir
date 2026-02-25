@@ -95,6 +95,10 @@ fn main() {
 
     // Step 3: serialize IR to JSON.
     if let Some(ir) = ir_slot.lock().unwrap().take() {
+        // Only write once — if the file already exists from a lib capture, skip the bin.
+        if std::path::Path::new(&out_path).exists() {
+            std::process::exit(0);
+        }
         match serde_json::to_string_pretty(&ir) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&out_path, json) {

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use model::ir::{
     edge::{EdgeHint, EdgeKind},
     model_ir::ModelIR,
@@ -41,6 +42,22 @@ pub fn assemble(tcx: TyCtxt<'_>, index: Index, parts: Vec<Partial>) -> ModelIR {
     }
 
     ir.nodes = nodes;
+
+    // ── Drop dangling edges: remove hints referencing non-existent NodeIds ───
+    let valid_ids: HashSet<u32> = ir.nodes.iter().map(|n| n.id.0).collect();
+    ir.edge_hints.retain(|h| valid_ids.contains(&h.src) && valid_ids.contains(&h.dst));
+
+    // ── Compact node ids to be contiguous 0..N ───────────────────────────────
+    // After filtering, ids may have gaps (e.g. 0,1,2,4,5). Remap to 0..N.
+    let mut remap: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    for (new_id, node) in ir.nodes.iter_mut().enumerate() {
+        remap.insert(node.id.0, new_id as u32);
+        node.id = NodeId(new_id as u32);
+    }
+    for h in ir.edge_hints.iter_mut() {
+        h.src = *remap.get(&h.src).unwrap();
+        h.dst = *remap.get(&h.dst).unwrap();
+    }
 
     // ── Contains edges: Crate(0) -> every top-level node ────────────────────
     // "Top-level" = nodes whose parent in the index is the crate root DefId,

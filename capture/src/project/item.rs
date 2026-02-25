@@ -37,7 +37,11 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
         DefKind::Trait => NodeKind::Trait { name: name.clone(), vis, generics, methods: Vec::new(), attrs: Vec::new(), where_clauses: Vec::new(), unsafe_: false },
         DefKind::Impl { .. } => {
             let for_trait = tcx.impl_opt_trait_ref(def_id).map(|eb| tcx.def_path_str(eb.skip_binder().def_id));
-            NodeKind::Impl { for_struct: name.clone(), for_trait, generics, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_: false }
+            let for_struct = tcx.type_of(def_id).instantiate_identity()
+                .ty_adt_def()
+                .map(|adt| tcx.def_path_str(adt.did()))
+                .unwrap_or_else(|| name.clone());
+            NodeKind::Impl { for_struct, for_trait, generics, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_: false }
         }
         DefKind::Fn => {
             let sig = tcx.fn_sig(def_id).skip_binder();
