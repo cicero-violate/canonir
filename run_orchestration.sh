@@ -12,3 +12,5 @@ rm -rf test_projects/test_rust_project/test_capture/
 cargo run -p orchestration -- \
   test_projects/test_rust_project/test_capture/model_ir_captured.json \
   test_projects/test_rust_project/test_capture
+
+cd   test_projects/test_rust_project/test_capture
