@@ -22,6 +22,27 @@ pub fn project_relations(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Vec<E
     }
 
     // ── Impl relationships ───────────────────────────────────────────────────
+    // ── Re-export edges: Use --[Renames]--> target ───────────────────────────
+    if matches!(tcx.def_kind(def_id), DefKind::Use) {
+        if let Some(local) = def_id.as_local() {
+            if let rustc_hir::Node::Item(item) = tcx.hir_node_by_def_id(local) {
+                if let rustc_hir::ItemKind::Use(use_path, _) = item.kind {
+                    for res in use_path.res.iter() {
+                        if let Some(rustc_hir::def::Res::Def(_, target_did)) = res {
+                            if let Some(&target_node) = index.def_to_node.get(target_did) {
+                                edges.push(EdgeHint {
+                                    src: id.index() as u32,
+                                    dst: target_node.index() as u32,
+                                    kind: EdgeKind::Renames,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if matches!(tcx.def_kind(def_id), DefKind::Impl { .. }) {
         // ImplFor: impl --[ImplFor]--> struct/type being implemented
         // type_of on an impl DefId gives the self type (the struct).
