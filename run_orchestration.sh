@@ -26,5 +26,6 @@ bat -n /workspace/ai_sandbox/canon/test_projects/test_rust_project/model_ir.json
 echo "bat -n /workspace/ai_sandbox/canon/test_projects/test_rust_project/model_ir_captured.json | sed -n '800,1000p'"
 bat -n /workspace/ai_sandbox/canon/test_projects/test_rust_project/model_ir_captured.json | sed -n '800,1000p'
 
-
+bat -n /workspace/ai_sandbox/canon/test_projects/test_rust_project/compare.py
+python3 /workspace/ai_sandbox/canon/test_projects/test_rust_project/compare.py
 
