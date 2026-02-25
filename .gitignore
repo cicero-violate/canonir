@@ -6,7 +6,7 @@ target/
 **/.cargo-lock/
 
 # Cargo.lock
-n# Keep for binaries, remove for libraries if desired
+# Keep for binaries, remove for libraries if desired
 Cargo.lock
 
 # === Rustfmt / Clippy ===
