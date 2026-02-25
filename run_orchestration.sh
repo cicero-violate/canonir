@@ -1,5 +1,6 @@
 cargo build --workspace
 
+rm -rf /workspace/ai_sandbox/canon/test_projects/test_rust_project/test_capture/model_ir_captured.json
 rm -rf test_projects/test_rust_project/test_emit/
 cargo run -p orchestration -- \
   test_projects/test_rust_project/model_ir.json \
