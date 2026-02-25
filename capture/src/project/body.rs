@@ -1,3 +1,4 @@
+use rustc_hir as hir;
 use model::ir::edge::{EdgeHint, EdgeKind};
 use rustc_middle::mir::{self};
 use rustc_middle::ty::TyCtxt;
@@ -21,7 +22,13 @@ pub fn project_body(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Vec<EdgeHi
     if !tcx.is_mir_available(local_def) {
         return Vec::new();
     }
-    let body = tcx.optimized_mir(local_def);
+    // optimized_mir panics on Const/Static items — use mir_for_ctfe for those.
+    let body = match tcx.hir_body_const_context(local_def) {
+        Some(hir::ConstContext::ConstFn) | Some(hir::ConstContext::Const { .. }) | Some(hir::ConstContext::Static(_)) => {
+            tcx.mir_for_ctfe(local_def)
+        }
+        None => tcx.optimized_mir(local_def),
+    };
 
     let caller_id = id.index() as u32;
     let mut hints = Vec::new();
