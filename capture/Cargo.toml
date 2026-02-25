@@ -18,3 +18,5 @@ path = "src/lib.rs"
 [features]
 default = ["rustc_frontend"]
 rustc_frontend = []
+
+[workspace]
