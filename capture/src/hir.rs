@@ -3,7 +3,7 @@ use rustc_hir::intravisit::{self, Visitor};
 use rustc_interface::interface::Compiler;
 use rustc_middle::ty::TyCtxt;
 
-use model::model_ir::{HirExpr, HirItem, Model};
+use model::ir::model_ir::{HirExpr, HirItem, Model};
 
 pub struct HirCollector {
     pub model: Model,
