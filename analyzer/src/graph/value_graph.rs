@@ -11,12 +11,14 @@
 use model::ir::{csr_graph::CsrGraph, edge::EdgeKind, node::NodeId};
 
 pub struct ValueGraphBuilder {
-    v:     usize,
+    v: usize,
     edges: Vec<(u32, u32, EdgeKind)>,
 }
 
 impl ValueGraphBuilder {
-    pub fn new(v: usize) -> Self { Self { v, edges: Vec::new() } }
+    pub fn new(v: usize) -> Self {
+        Self { v, edges: Vec::new() }
+    }
 
     /// Register: const node `src` depends on const node `dst`.
     /// Equation: ConstDep(src, dst) ∈ G_value

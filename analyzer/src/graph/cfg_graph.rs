@@ -19,7 +19,7 @@ use model::ir::{
 };
 
 pub struct CfgGraphBuilder {
-    v:     usize,
+    v: usize,
     edges: Vec<(u32, u32, EdgeKind)>,
 }
 

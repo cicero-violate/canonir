@@ -11,38 +11,16 @@
 //!   lib_section     = "[[lib]]\npath = \"src/lib.rs\"\n"  (always — lib root present)
 //!   bin_section     = "[[bin]]\nname={name}\npath=\"src/main.rs\"\n"  if has_binary
 
-use model::ir::{model_ir::ModelIR, node::NodeKind};
-
-pub fn emit_cargo_toml(ir: &ModelIR) -> Option<String> {
-    // Find the Crate node.
-    let (crate_name, edition) = ir.nodes.iter().find_map(|n| {
-        if let NodeKind::Crate { name, edition } = &n.kind {
-            Some((name.clone(), edition.clone()))
-        } else {
-            None
-        }
-    })?;
-
-    // Detect whether a binary entry point exists.
-    let has_binary = ir.nodes.iter().any(|n| {
-        matches!(&n.kind, NodeKind::Module { file, .. } if file.ends_with("main.rs"))
-    });
-
-    let mut out = format!(
-        "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"{}\"\n\n[dependencies]\n",
-        crate_name, edition
-    );
+pub fn emit_cargo_toml(crate_name: &str, edition: &str, has_binary: bool) -> String {
+    let mut out = format!("[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"{}\"\n\n[dependencies]\n", crate_name, edition);
 
     if has_binary {
-        out.push_str(&format!(
-            "\n[[bin]]\nname = \"{}\"\npath = \"src/main.rs\"\n",
-            crate_name
-        ));
+        out.push_str(&format!("\n[[bin]]\nname = \"{}\"\npath = \"src/main.rs\"\n", crate_name));
     }
 
     // Prevent emitted crate from inheriting parent workspace.
     // Adding empty [workspace] makes this Cargo.toml a workspace root.
     out.push_str("\n[workspace]\n");
 
-    Some(out)
+    out
 }

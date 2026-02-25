@@ -13,7 +13,7 @@ use model::ir::{
 };
 
 pub struct CallGraphBuilder {
-    v:     usize,
+    v: usize,
     edges: Vec<(u32, u32, EdgeKind)>,
 }
 
@@ -28,17 +28,12 @@ impl CallGraphBuilder {
 
     /// Auto-derive call edges from Effects::calls strings by matching names.
     /// nodes: full node arena for name lookup.
-    pub fn add_calls_from_effects(
-        &mut self,
-        caller: NodeId,
-        call_names: &[String],
-        nodes: &[model::ir::node::Node],
-    ) {
+    pub fn add_calls_from_effects(&mut self, caller: NodeId, call_names: &[String], nodes: &[model::ir::node::Node]) {
         for name in call_names {
             for node in nodes {
                 let matches = match &node.kind {
                     NodeKind::Function { name: n, .. } => n == name,
-                    NodeKind::Method   { name: n, .. } => n == name,
+                    NodeKind::Method { name: n, .. } => n == name,
                     _ => false,
                 };
                 if matches {

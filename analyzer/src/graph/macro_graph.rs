@@ -11,12 +11,14 @@
 use model::ir::{csr_graph::CsrGraph, edge::EdgeKind, node::NodeId};
 
 pub struct MacroGraphBuilder {
-    v:     usize,
+    v: usize,
     edges: Vec<(u32, u32, EdgeKind)>,
 }
 
 impl MacroGraphBuilder {
-    pub fn new(v: usize) -> Self { Self { v, edges: Vec::new() } }
+    pub fn new(v: usize) -> Self {
+        Self { v, edges: Vec::new() }
+    }
 
     /// Register: macro node `src` expands to item node `dst`.
     /// Equation: Expands(src, dst) ∈ G_macro

@@ -33,41 +33,50 @@
 //!
 //! Algorithm: DFS (algorithms::graph::dfs) on inv_mod to walk upward.
 
-use std::collections::HashSet;
-use anyhow::Result;
+use crate::graph::module_graph::ModuleGraphBuilder;
+use crate::solver::csr_to_adj;
 use algorithms::graph::dfs::dfs;
+use anyhow::Result;
 use model::ir::{
     edge::EdgeKind,
     model_ir::ModelIR,
     node::{Node, NodeId, NodeKind, Visibility},
 };
-use crate::graph::module_graph::ModuleGraphBuilder;
-use crate::solver::csr_to_adj;
+use std::collections::HashSet;
 
 pub fn solve(ir: &mut ModelIR) -> Result<()> {
     let v = ir.module_graph.vertex_count();
-    if v == 0 { return Ok(()); }
+    if v == 0 {
+        return Ok(());
+    }
     let name_v = ir.name_graph.vertex_count();
-    if name_v == 0 { return Ok(()); }
+    if name_v == 0 {
+        return Ok(());
+    }
 
     // ── Phase A: pure read — build all data structures from ir ──────────────
     // All reads happen here; no mutation until Phase B.
 
     // Crate name for binary-module use paths.
     // Equation: crate_name = first NodeKind::Crate node's name field.
-    let crate_name: String = ir.nodes.iter().find_map(|n| {
-        if let NodeKind::Crate { name, .. } = &n.kind { Some(name.clone()) } else { None }
-    }).unwrap_or_else(|| "crate".to_string());
+    let crate_name: String = ir.nodes.iter().find_map(|n| if let NodeKind::Crate { name, .. } = &n.kind { Some(name.clone()) } else { None }).unwrap_or_else(|| "crate".to_string());
 
     // Binary module set: modules whose file is src/main.rs or does not live
     // under the lib.rs root. We detect by file name ending in "main.rs".
     // Equation: bin_mods = { idx | snap[idx] == Module && file ends_with "main.rs" }
-    let bin_mod_set: HashSet<usize> = ir.nodes.iter().enumerate().filter_map(|(idx, n)| {
-        if let NodeKind::Module { file, .. } = &n.kind {
-            if file.ends_with("main.rs") { return Some(idx); }
-        }
-        None
-    }).collect();
+    let bin_mod_set: HashSet<usize> = ir
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, n)| {
+            if let NodeKind::Module { file, .. } = &n.kind {
+                if file.ends_with("main.rs") {
+                    return Some(idx);
+                }
+            }
+            None
+        })
+        .collect();
 
     // inv_mod[child_idx] = [parent_idx, ...]
     // Equation: inv_mod[dst] += src  for (src, dst, _) in fwd_module_edges
@@ -86,25 +95,31 @@ pub fn solve(ir: &mut ModelIR) -> Result<()> {
     #[derive(Clone)]
     enum SnapKind {
         Module { path: String },
-        Named  { name: String },
+        Named { name: String },
         Other,
     }
-    let snap: Vec<SnapKind> = ir.nodes.iter().map(|n| match &n.kind {
-        NodeKind::Module    { path, .. } => SnapKind::Module { path: path.clone() },
-        NodeKind::Function  { name, .. } => SnapKind::Named  { name: name.clone() },
-        NodeKind::Method    { name, .. } => SnapKind::Named  { name: name.clone() },
-        NodeKind::Struct    { name, .. } => SnapKind::Named  { name: name.clone() },
-        NodeKind::Trait     { name, .. } => SnapKind::Named  { name: name.clone() },
-        NodeKind::TypeAlias { name, .. } => SnapKind::Named  { name: name.clone() },
-        NodeKind::TypeRef   { name }     => SnapKind::Named  { name: name.clone() },
-        _                                => SnapKind::Other,
-    }).collect();
+    let snap: Vec<SnapKind> = ir
+        .nodes
+        .iter()
+        .map(|n| match &n.kind {
+            NodeKind::Module { path, .. } => SnapKind::Module { path: path.clone() },
+            NodeKind::Function { name, .. } => SnapKind::Named { name: name.clone() },
+            NodeKind::Method { name, .. } => SnapKind::Named { name: name.clone() },
+            NodeKind::Struct { name, .. } => SnapKind::Named { name: name.clone() },
+            NodeKind::Trait { name, .. } => SnapKind::Named { name: name.clone() },
+            NodeKind::TypeAlias { name, .. } => SnapKind::Named { name: name.clone() },
+            NodeKind::TypeRef { name } => SnapKind::Named { name: name.clone() },
+            _ => SnapKind::Other,
+        })
+        .collect();
 
     // containing_module(n):
     //   DFS upward on inv_mod from n; return first index whose snap is Module.
     //   inv_mod is a DAG (forest), so DFS terminates.
     let containing_module = |start: usize| -> Option<usize> {
-        if start >= inv_mod.len() { return None; }
+        if start >= inv_mod.len() {
+            return None;
+        }
         let visited = dfs(&inv_mod, start);
         for node_idx in visited {
             if let Some(SnapKind::Module { .. }) = snap.get(node_idx) {
@@ -121,13 +136,17 @@ pub fn solve(ir: &mut ModelIR) -> Result<()> {
     for src_idx in 0..name_v {
         let src_id = NodeId(src_idx as u32);
         for (dst_id, edge) in ir.name_graph.neighbours(src_id) {
-            if *edge != EdgeKind::Resolves { continue; }
+            if *edge != EdgeKind::Resolves {
+                continue;
+            }
             // Chase transitive Resolves: follow through Use nodes.
             let mut cur = dst_id.index();
             let mut visited = HashSet::new();
             loop {
-                if !visited.insert(cur) { break; } // cycle guard
-                // If cur is a Use node and has its own Resolves edge, follow it.
+                if !visited.insert(cur) {
+                    break;
+                } // cycle guard
+                  // If cur is a Use node and has its own Resolves edge, follow it.
                 let mut next = None;
                 if cur < name_v {
                     if matches!(ir.nodes.get(cur).map(|n| &n.kind), Some(NodeKind::Use { .. })) {
@@ -142,13 +161,15 @@ pub fn solve(ir: &mut ModelIR) -> Result<()> {
                 }
                 match next {
                     Some(n) => cur = n,
-                    None    => break,
+                    None => break,
                 }
             }
             resolves_pairs.push((src_idx, cur));
         }
     }
-    if resolves_pairs.is_empty() { return Ok(()); }
+    if resolves_pairs.is_empty() {
+        return Ok(());
+    }
 
     // Compute injections: Vec<(site_mod_idx, full_path)>
     // Equation:
@@ -157,12 +178,20 @@ pub fn solve(ir: &mut ModelIR) -> Result<()> {
     let mut injections: Vec<(usize, String)> = Vec::new(); // (site_mod, full_path)
 
     for (site_idx, def_idx) in resolves_pairs {
-        let site_mod = match containing_module(site_idx) { Some(m) => m, None => continue };
-        let def_mod  = match containing_module(def_idx)  { Some(m) => m, None => continue };
-        if site_mod == def_mod { continue; }
+        let site_mod = match containing_module(site_idx) {
+            Some(m) => m,
+            None => continue,
+        };
+        let def_mod = match containing_module(def_idx) {
+            Some(m) => m,
+            None => continue,
+        };
+        if site_mod == def_mod {
+            continue;
+        }
 
         let def_name = match snap.get(def_idx) {
-            Some(SnapKind::Named  { name }) => name.clone(),
+            Some(SnapKind::Named { name }) => name.clone(),
             Some(SnapKind::Module { path }) => path.clone(),
             _ => continue,
         };
@@ -178,11 +207,15 @@ pub fn solve(ir: &mut ModelIR) -> Result<()> {
         let mod_path_stripped = def_mod_path.strip_prefix("crate").unwrap_or(&def_mod_path);
         let full_path = format!("{}{}::{}", prefix, mod_path_stripped, def_name);
         let key = (site_mod, full_path.clone());
-        if seen.contains(&key) { continue; }
+        if seen.contains(&key) {
+            continue;
+        }
         seen.insert(key);
         injections.push((site_mod, full_path));
     }
-    if injections.is_empty() { return Ok(()); }
+    if injections.is_empty() {
+        return Ok(());
+    }
 
     // ── Phase B: mutation — inject Use nodes, rebuild module_graph ───────────
     // No closures borrow ir past this point.
@@ -205,11 +238,7 @@ pub fn solve(ir: &mut ModelIR) -> Result<()> {
     //     new_edge: (site_mod, use_id, Contains)
     for (site_mod, full_path) in injections {
         let use_id = ir.nodes.len() as u32;
-        ir.nodes.push(Node {
-            id: NodeId(use_id),
-            kind: NodeKind::Use { path: full_path, alias: None, vis: Visibility::Private, glob: false },
-            span: None,
-        });
+        ir.nodes.push(Node { id: NodeId(use_id), kind: NodeKind::Use { path: full_path, alias: None, vis: Visibility::Private, glob: false }, span: None });
         all_edges.push((site_mod as u32, use_id, EdgeKind::Contains));
     }
 
@@ -232,11 +261,7 @@ pub fn solve(ir: &mut ModelIR) -> Result<()> {
     // Sanity: verify node 0..old_v edges are preserved.
     // If the rebuilt graph has fewer vertices than original nodes, something
     // went wrong in the builder — fail loudly rather than silently drop edges.
-    assert!(
-        ir.module_graph.vertex_count() >= ir.nodes.len(),
-        "use_solver: module_graph vertex_count {} < node count {} after rebuild",
-        ir.module_graph.vertex_count(), ir.nodes.len()
-    );
+    assert!(ir.module_graph.vertex_count() >= ir.nodes.len(), "use_solver: module_graph vertex_count {} < node count {} after rebuild", ir.module_graph.vertex_count(), ir.nodes.len());
 
     Ok(())
 }

@@ -19,8 +19,5 @@ use super::scc::kosaraju_scc;
 /// Equation:
 ///   outlives_cycles(adj) = [ scc | scc ∈ kosaraju_scc(adj), |scc| > 1 ]
 pub fn outlives_cycles(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
-    kosaraju_scc(adj)
-        .into_iter()
-        .filter(|scc| scc.len() > 1)
-        .collect()
+    kosaraju_scc(adj).into_iter().filter(|scc| scc.len() > 1).collect()
 }

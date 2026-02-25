@@ -11,8 +11,12 @@
 //!   added_edges   = after.edge_hints  \ before.edge_hints
 //!   removed_edges = before.edge_hints \ after.edge_hints
 
-use model::ir::{edge::EdgeHint, model_ir::ModelIR, node::{NodeId, NodeKind}};
 use crate::ChangeSet;
+use model::ir::{
+    edge::EdgeHint,
+    model_ir::ModelIR,
+    node::{NodeId, NodeKind},
+};
 use std::collections::HashSet;
 
 pub fn diff(before: &ModelIR, after: &ModelIR) -> ChangeSet {
@@ -37,7 +41,9 @@ pub fn diff(before: &ModelIR, after: &ModelIR) -> ChangeSet {
     for i in 0..bn.min(an) {
         let bk = &before.nodes[i].kind;
         let ak = &after.nodes[i].kind;
-        if bk == ak { continue; }
+        if bk == ak {
+            continue;
+        }
         if is_tombstone(ak) && !is_tombstone(bk) {
             removed_nodes.push(NodeId(i as u32));
         } else if !is_tombstone(ak) {
@@ -50,14 +56,10 @@ pub fn diff(before: &ModelIR, after: &ModelIR) -> ChangeSet {
     //   added_edges   = after.edge_hints  \ before.edge_hints
     //   removed_edges = before.edge_hints \ after.edge_hints
     let before_edges: HashSet<EdgeHintKey> = before.edge_hints.iter().map(EdgeHintKey::from).collect();
-    let after_edges:  HashSet<EdgeHintKey> = after.edge_hints.iter().map(EdgeHintKey::from).collect();
+    let after_edges: HashSet<EdgeHintKey> = after.edge_hints.iter().map(EdgeHintKey::from).collect();
 
-    let added_edges: Vec<EdgeHint> = after.edge_hints.iter()
-        .filter(|h| !before_edges.contains(&EdgeHintKey::from(*h)))
-        .cloned().collect();
-    let removed_edges: Vec<EdgeHint> = before.edge_hints.iter()
-        .filter(|h| !after_edges.contains(&EdgeHintKey::from(*h)))
-        .cloned().collect();
+    let added_edges: Vec<EdgeHint> = after.edge_hints.iter().filter(|h| !before_edges.contains(&EdgeHintKey::from(*h))).cloned().collect();
+    let removed_edges: Vec<EdgeHint> = before.edge_hints.iter().filter(|h| !after_edges.contains(&EdgeHintKey::from(*h))).cloned().collect();
 
     ChangeSet { added_nodes, removed_nodes, changed_nodes, added_edges, removed_edges }
 }

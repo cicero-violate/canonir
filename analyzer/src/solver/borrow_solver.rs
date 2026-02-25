@@ -41,34 +41,15 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
     // Equation: cycles = outlives_cycles(adj)
     let cycles = outlives_cycles(&adj);
     if cycles.is_empty() {
-        log::info!(
-            "borrow_solver: region graph is acyclic — {} lifetime node(s) valid",
-            v
-        );
+        log::info!("borrow_solver: region graph is acyclic — {} lifetime node(s) valid", v);
         return Ok(());
     }
 
     // Collect names of conflicting lifetimes for the error message.
     let names: Vec<String> = cycles
         .iter()
-        .map(|scc| {
-            scc.iter()
-                .filter_map(|&i| {
-                    ir.nodes.get(i).and_then(|n| {
-                        if let NodeKind::Lifetime { name } = &n.kind {
-                            Some(format!("'{}", name))
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
+        .map(|scc| scc.iter().filter_map(|&i| ir.nodes.get(i).and_then(|n| if let NodeKind::Lifetime { name } = &n.kind { Some(format!("'{}", name)) } else { None })).collect::<Vec<_>>().join(", "))
         .collect();
 
-    bail!(
-        "borrow_solver: conflicting lifetime constraints — cycles: [{}]",
-        names.join("; ")
-    );
+    bail!("borrow_solver: conflicting lifetime constraints — cycles: [{}]", names.join("; "));
 }

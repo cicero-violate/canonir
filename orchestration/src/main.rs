@@ -17,23 +17,20 @@
 //!   Δ        : ChangeSet      — diff(snap_A, snap_B)
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
 use model::ir::model_ir::ModelIR;
-use mutation::{MutationOp, apply, diff, verify};
+use mutation::{apply, diff, verify, MutationOp};
+use std::path::PathBuf;
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
-    let json_path = args.next().map(PathBuf::from)
-        .context("usage: orchestration <model_ir.json> <output_dir> [--mutate <mutation.json>]")?;
-    let out_dir = args.next().map(PathBuf::from)
-        .context("usage: orchestration <model_ir.json> <output_dir> [--mutate <mutation.json>]")?;
+    let json_path = args.next().map(PathBuf::from).context("usage: orchestration <model_ir.json> <output_dir> [--mutate <mutation.json>]")?;
+    let out_dir = args.next().map(PathBuf::from).context("usage: orchestration <model_ir.json> <output_dir> [--mutate <mutation.json>]")?;
 
     // Optional --mutate <path>
     let mutate_path: Option<PathBuf> = {
         let flag = args.next();
         if flag.as_deref() == Some("--mutate") {
-            Some(args.next().map(PathBuf::from)
-                .context("--mutate requires a path argument")?)
+            Some(args.next().map(PathBuf::from).context("--mutate requires a path argument")?)
         } else {
             None
         }
@@ -45,10 +42,8 @@ fn main() -> Result<()> {
 fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBuf>) -> Result<()> {
     // ── Stage 1: load ModelIR from JSON ─────────────────────────────────────
     println!("Loading {:?}", json_path);
-    let json = std::fs::read_to_string(&json_path)
-        .with_context(|| format!("cannot read {:?}", json_path))?;
-    let mut ir: ModelIR = serde_json::from_str(&json)
-        .with_context(|| format!("cannot parse ModelIR from {:?}", json_path))?;
+    let json = std::fs::read_to_string(&json_path).with_context(|| format!("cannot read {:?}", json_path))?;
+    let mut ir: ModelIR = serde_json::from_str(&json).with_context(|| format!("cannot parse ModelIR from {:?}", json_path))?;
     println!("  nodes: {}", ir.nodes.len());
 
     // ── Stage 2: analyze (derive + solve) ───────────────────────────────────
@@ -64,10 +59,8 @@ fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBu
 
         // Load mutation ops from JSON
         // Format: array of MutationOp
-        let mut_json = std::fs::read_to_string(&mut_path)
-            .with_context(|| format!("cannot read mutation file {:?}", mut_path))?;
-        let ops: Vec<MutationOp> = serde_json::from_str(&mut_json)
-            .with_context(|| format!("cannot parse MutationOp list from {:?}", mut_path))?;
+        let mut_json = std::fs::read_to_string(&mut_path).with_context(|| format!("cannot read mutation file {:?}", mut_path))?;
+        let ops: Vec<MutationOp> = serde_json::from_str(&mut_json).with_context(|| format!("cannot parse MutationOp list from {:?}", mut_path))?;
         println!("  applying {} mutation op(s)...", ops.len());
 
         // Apply each op in sequence
@@ -86,7 +79,8 @@ fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBu
         // diff(snap_A, IR')
         // Equation: Δ = diff(snap_A, IR')
         let delta = diff(&snap_a, &ir);
-        println!("ChangeSet: +{} nodes, -{} nodes, ~{} nodes, +{} edges, -{} edges",
+        println!(
+            "ChangeSet: +{} nodes, -{} nodes, ~{} nodes, +{} edges, -{} edges",
             delta.added_nodes.len(),
             delta.removed_nodes.len(),
             delta.changed_nodes.len(),
@@ -97,8 +91,7 @@ fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBu
         // Write diff report
         std::fs::create_dir_all(&out_dir)?;
         let diff_path = out_dir.join("diff_report.json");
-        std::fs::write(&diff_path, serde_json::to_string_pretty(&delta)?)
-            .context("diff report write failed")?;
+        std::fs::write(&diff_path, serde_json::to_string_pretty(&delta)?).context("diff report write failed")?;
         println!("Diff report written to {:?}", diff_path);
     }
 

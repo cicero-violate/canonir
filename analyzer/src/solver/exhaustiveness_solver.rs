@@ -21,7 +21,9 @@ use model::ir::{
 
 pub fn solve(ir: &ModelIR) -> Result<()> {
     // Collect all enum variant name sets.
-    let enums: Vec<(String, Vec<String>)> = ir.nodes.iter()
+    let enums: Vec<(String, Vec<String>)> = ir
+        .nodes
+        .iter()
         .filter_map(|n| {
             if let NodeKind::Enum { name, variants, .. } = &n.kind {
                 let vnames: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
@@ -58,15 +60,9 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
             continue;
         }
         // Check that every variant name appears somewhere in the body text.
-        let uncovered: Vec<&str> = variants.iter()
-            .filter(|v| !body_text.contains(v.as_str()))
-            .map(|v| v.as_str())
-            .collect();
+        let uncovered: Vec<&str> = variants.iter().filter(|v| !body_text.contains(v.as_str())).map(|v| v.as_str()).collect();
         if !uncovered.is_empty() {
-            log::warn!(
-                "exhaustiveness_solver: enum `{}` may have uncovered variants: {:?}",
-                enum_name, uncovered
-            );
+            log::warn!("exhaustiveness_solver: enum `{}` may have uncovered variants: {:?}", enum_name, uncovered);
         } else {
             log::info!("exhaustiveness_solver: enum `{}` — all {} variant(s) referenced", enum_name, variants.len());
         }

@@ -10,30 +10,45 @@
 //! Equation:
 //!   emit_order' = filter(emit_order, ¬dead)
 
-use anyhow::Result;
-use model::ir::{model_ir::ModelIR, node::{NodeKind, Visibility}};
-use algorithms::graph::reachability::reachability;
 use crate::solver::csr_to_adj;
+use algorithms::graph::reachability::reachability;
+use anyhow::Result;
+use model::ir::{
+    model_ir::ModelIR,
+    node::{NodeKind, Visibility},
+};
 
 pub fn solve(ir: &mut ModelIR) -> Result<()> {
     let call_v = ir.call_graph.vertex_count();
-    if call_v == 0 { return Ok(()); }
+    if call_v == 0 {
+        return Ok(());
+    }
 
     let adj = csr_to_adj(&ir.call_graph);
 
     // Roots: main functions + all pub functions (conservatively live).
     // Equation: roots = { v | fn_name(v)="main" } ∪ { v | vis(v)=Public }
-    let roots: Vec<usize> = ir.nodes.iter().enumerate().filter_map(|(idx, n)| {
-        match &n.kind {
+    let roots: Vec<usize> = ir
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, n)| match &n.kind {
             NodeKind::Function { name, vis, .. } => {
-                if name == "main" || *vis == Visibility::Public { Some(idx) } else { None }
+                if name == "main" || *vis == Visibility::Public {
+                    Some(idx)
+                } else {
+                    None
+                }
             }
             NodeKind::Crate { .. } => Some(idx),
             _ => None,
-        }
-    }).filter(|&idx| idx < call_v).collect();
+        })
+        .filter(|&idx| idx < call_v)
+        .collect();
 
-    if roots.is_empty() { return Ok(()); }
+    if roots.is_empty() {
+        return Ok(());
+    }
 
     let live = reachability(&adj, &roots);
 
@@ -44,8 +59,12 @@ pub fn solve(ir: &mut ModelIR) -> Result<()> {
         let idx = id.index();
         match ir.nodes.get(idx).map(|n| &n.kind) {
             Some(NodeKind::Function { vis, .. }) => {
-                if idx < live.len() && live[idx] { return true; }
-                if *vis == Visibility::Public     { return true; }
+                if idx < live.len() && live[idx] {
+                    return true;
+                }
+                if *vis == Visibility::Public {
+                    return true;
+                }
                 false
             }
             _ => true,

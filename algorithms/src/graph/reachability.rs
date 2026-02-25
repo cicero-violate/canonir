@@ -40,9 +40,15 @@ pub fn is_acyclic(adj: &[Vec<usize>]) -> bool {
     fn visit(u: usize, adj: &[Vec<usize>], colour: &mut Vec<u8>) -> bool {
         colour[u] = 1; // grey — on stack
         for &w in &adj[u] {
-            if w >= adj.len() { continue; }
-            if colour[w] == 1 { return false; } // back edge = cycle
-            if colour[w] == 0 && !visit(w, adj, colour) { return false; }
+            if w >= adj.len() {
+                continue;
+            }
+            if colour[w] == 1 {
+                return false;
+            } // back edge = cycle
+            if colour[w] == 0 && !visit(w, adj, colour) {
+                return false;
+            }
         }
         colour[u] = 2; // black — done
         true

@@ -14,34 +14,28 @@
 //!
 //! CFG edges are also auto-derived from Body::Blocks terminators.
 
+use crate::graph::{
+    call_graph::CallGraphBuilder, cfg_graph::CfgGraphBuilder, macro_graph::MacroGraphBuilder, module_graph::ModuleGraphBuilder, name_graph::NameGraphBuilder, region_graph::RegionGraphBuilder,
+    type_graph::TypeGraphBuilder, value_graph::ValueGraphBuilder,
+};
 use anyhow::Result;
 use model::ir::{
     edge::EdgeKind,
     model_ir::ModelIR,
     node::{NodeId, NodeKind},
 };
-use crate::graph::{
-    call_graph::CallGraphBuilder,
-    cfg_graph::CfgGraphBuilder,
-    module_graph::ModuleGraphBuilder,
-    name_graph::NameGraphBuilder,
-    type_graph::TypeGraphBuilder,
-    region_graph::RegionGraphBuilder,
-    value_graph::ValueGraphBuilder,
-    macro_graph::MacroGraphBuilder,
-};
 
 pub fn derive(ir: &mut ModelIR) -> Result<()> {
     let v = ir.nodes.len();
 
     let mut module_b = ModuleGraphBuilder::new(v);
-    let mut call_b   = CallGraphBuilder::new(v);
-    let mut name_b   = NameGraphBuilder::new(v);
-    let mut type_b   = TypeGraphBuilder::new(v);
-    let mut cfg_b    = CfgGraphBuilder::new(v);
+    let mut call_b = CallGraphBuilder::new(v);
+    let mut name_b = NameGraphBuilder::new(v);
+    let mut type_b = TypeGraphBuilder::new(v);
+    let mut cfg_b = CfgGraphBuilder::new(v);
     let mut region_b = RegionGraphBuilder::new(v);
-    let mut value_b  = ValueGraphBuilder::new(v);
-    let mut macro_b  = MacroGraphBuilder::new(v);
+    let mut value_b = ValueGraphBuilder::new(v);
+    let mut macro_b = MacroGraphBuilder::new(v);
 
     // Route edge_hints into builders.
     for hint in &ir.edge_hints {
@@ -99,13 +93,13 @@ pub fn derive(ir: &mut ModelIR) -> Result<()> {
     }
 
     ir.module_graph = module_b.build();
-    ir.call_graph   = call_b.build();
-    ir.name_graph   = name_b.build();
-    ir.type_graph   = type_b.build();
-    ir.cfg_graph    = cfg_b.build();
+    ir.call_graph = call_b.build();
+    ir.name_graph = name_b.build();
+    ir.type_graph = type_b.build();
+    ir.cfg_graph = cfg_b.build();
     ir.region_graph = region_b.build();
-    ir.value_graph  = value_b.build();
-    ir.macro_graph  = macro_b.build();
+    ir.value_graph = value_b.build();
+    ir.macro_graph = macro_b.build();
 
     Ok(())
 }

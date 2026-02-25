@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 /// Returns post_dom[v] = immediate post-dominator index for each real block v.
 /// super_exit node (index node_count) is included in returned vec but can be ignored.
 pub fn post_dominators(node_count: usize, succs: &[Vec<usize>], exit_nodes: &[usize]) -> Vec<HashSet<usize>> {
-    let total = node_count + 1;          // +1 for synthetic super_exit
+    let total = node_count + 1; // +1 for synthetic super_exit
     let super_exit = node_count;
 
     // Build reversed predecessor map for the iterative dominator algorithm.

@@ -12,18 +12,18 @@
 //!
 //! Algorithm: Kosaraju SCC to find unification groups, then check concrete conflicts.
 
+use crate::solver::csr_to_adj;
+use algorithms::graph::scc::kosaraju_scc;
 use anyhow::Result;
 use model::ir::{model_ir::ModelIR, node::NodeKind};
-use algorithms::graph::scc::kosaraju_scc;
-use crate::solver::csr_to_adj;
 
 /// Extract a representative type string from a node (best-effort).
 fn node_ty(kind: &NodeKind) -> Option<&str> {
     match kind {
         NodeKind::Function { ret, .. } => Some(ret.as_str()),
-        NodeKind::Method   { ret, .. } => Some(ret.as_str()),
-        NodeKind::TypeAlias { ty, .. }  => Some(ty.as_str()),
-        NodeKind::TypeRef   { name }    => Some(name.as_str()),
+        NodeKind::Method { ret, .. } => Some(ret.as_str()),
+        NodeKind::TypeAlias { ty, .. } => Some(ty.as_str()),
+        NodeKind::TypeRef { name } => Some(name.as_str()),
         _ => None,
     }
 }
@@ -35,31 +35,25 @@ fn is_concrete(ty: &str) -> bool {
 
 pub fn solve(ir: &ModelIR) -> Result<()> {
     let v = ir.type_graph.vertex_count();
-    if v == 0 { return Ok(()); }
+    if v == 0 {
+        return Ok(());
+    }
 
-    let adj  = csr_to_adj(&ir.type_graph);
+    let adj = csr_to_adj(&ir.type_graph);
     let sccs = kosaraju_scc(&adj);
 
     // For each SCC with >1 node, check for concrete type conflicts.
     // Equation: conflict(u,v) <=> TypeUnifies(u,v) ∧ ty(u)≠ty(v) ∧ concrete(u) ∧ concrete(v)
     for scc in sccs.iter().filter(|s| s.len() > 1) {
-        let tys: Vec<(usize, &str)> = scc.iter().filter_map(|&idx| {
-            ir.nodes.get(idx).and_then(|n| node_ty(&n.kind).map(|t| (idx, t)))
-        }).collect();
+        let tys: Vec<(usize, &str)> = scc.iter().filter_map(|&idx| ir.nodes.get(idx).and_then(|n| node_ty(&n.kind).map(|t| (idx, t)))).collect();
 
-        let concrete: Vec<(usize, &str)> = tys.iter()
-            .filter(|(_, t)| is_concrete(t))
-            .copied()
-            .collect();
+        let concrete: Vec<(usize, &str)> = tys.iter().filter(|(_, t)| is_concrete(t)).copied().collect();
 
         if concrete.len() > 1 {
             let first_ty = concrete[0].1;
             for &(idx, ty) in &concrete[1..] {
                 if ty != first_ty {
-                    eprintln!(
-                        "WARN generic_solver: type conflict in SCC: node {} has {:?} vs {:?}",
-                        idx, ty, first_ty
-                    );
+                    eprintln!("WARN generic_solver: type conflict in SCC: node {} has {:?} vs {:?}", idx, ty, first_ty);
                 }
             }
         }

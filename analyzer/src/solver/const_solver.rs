@@ -11,17 +11,14 @@
 //!
 //! Current implementation: cycle detection only (full folding deferred).
 
-use anyhow::{bail, Result};
-use model::ir::{model_ir::ModelIR, node::NodeKind};
 use crate::solver::csr_to_adj;
 use algorithms::graph::topological_sort::topological_sort;
+use anyhow::{bail, Result};
+use model::ir::{model_ir::ModelIR, node::NodeKind};
 
 pub fn solve(ir: &ModelIR) -> Result<()> {
     // Collect const/static node ids for diagnostics.
-    let const_nodes: Vec<usize> = ir.nodes.iter()
-        .filter(|n| matches!(&n.kind, NodeKind::Const { .. } | NodeKind::Static { .. }))
-        .map(|n| n.id.index())
-        .collect();
+    let const_nodes: Vec<usize> = ir.nodes.iter().filter(|n| matches!(&n.kind, NodeKind::Const { .. } | NodeKind::Static { .. })).map(|n| n.id.index()).collect();
 
     if const_nodes.is_empty() {
         return Ok(());

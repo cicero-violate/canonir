@@ -17,14 +17,16 @@
 //! Algorithm used: DFS for reachability (algorithms crate),
 //!                 iterative dominator solve (local, standard)
 
+use crate::solver::csr_to_adj;
+use algorithms::graph::dfs::dfs;
 use anyhow::Result;
 use model::ir::model_ir::ModelIR;
-use algorithms::graph::dfs::dfs;
-use crate::solver::csr_to_adj;
 
 pub fn solve(ir: &mut ModelIR) -> Result<()> {
     let v = ir.cfg_graph.vertex_count();
-    if v == 0 { return Ok(()); }
+    if v == 0 {
+        return Ok(());
+    }
 
     let adj = csr_to_adj(&ir.cfg_graph);
 
@@ -42,7 +44,9 @@ pub fn solve(ir: &mut ModelIR) -> Result<()> {
     // Build reverse adjacency (predecessors).
     let mut pred: Vec<Vec<usize>> = vec![Vec::new(); v];
     for (u, nbrs) in adj.iter().enumerate() {
-        for &w in nbrs { pred[w].push(u); }
+        for &w in nbrs {
+            pred[w].push(u);
+        }
     }
 
     // Post-order from DFS for convergence speed.
@@ -51,13 +55,13 @@ pub fn solve(ir: &mut ModelIR) -> Result<()> {
         changed = false;
         // Process in reverse post-order (skip entry).
         for v_node in 1..v {
-            if !reachable.contains(&v_node) { continue; }
-            let processed_preds: Vec<usize> = pred[v_node]
-                .iter()
-                .filter(|&&p| dom[p] != undef)
-                .copied()
-                .collect();
-            if processed_preds.is_empty() { continue; }
+            if !reachable.contains(&v_node) {
+                continue;
+            }
+            let processed_preds: Vec<usize> = pred[v_node].iter().filter(|&&p| dom[p] != undef).copied().collect();
+            if processed_preds.is_empty() {
+                continue;
+            }
             let new_dom = processed_preds.into_iter().reduce(|a, b| intersect_dom(&dom, a, b)).unwrap();
             if dom[v_node] != new_dom {
                 dom[v_node] = new_dom;
@@ -75,8 +79,12 @@ pub fn solve(ir: &mut ModelIR) -> Result<()> {
 /// Intersect two dominator sets by walking the dominator tree.
 fn intersect_dom(dom: &[usize], mut a: usize, mut b: usize) -> usize {
     while a != b {
-        while a > b { a = dom[a]; }
-        while b > a { b = dom[b]; }
+        while a > b {
+            a = dom[a];
+        }
+        while b > a {
+            b = dom[b];
+        }
     }
     a
 }

@@ -2,8 +2,8 @@ use anyhow::Result;
 use model::ir::model_ir::ModelIR;
 
 pub mod derive;
-pub mod solver;
 pub mod graph;
+pub mod solver;
 
 /// Unified analysis entry point.
 ///

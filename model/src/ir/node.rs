@@ -61,7 +61,9 @@ impl Visibility {
 }
 
 impl Default for Visibility {
-    fn default() -> Self { Visibility::Private }
+    fn default() -> Self {
+        Visibility::Private
+    }
 }
 
 /// A generic parameter: `T`, `T: Clone + Debug`, `'a`.
@@ -106,11 +108,7 @@ pub struct EnumVariant {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Stmt {
     /// `let <pat>: <ty> = <expr>;`
-    Let {
-        pat: String,
-        ty: Option<String>,
-        init: Option<String>,
-    },
+    Let { pat: String, ty: Option<String>, init: Option<String> },
     /// A bare expression statement.
     Expr(String),
     /// A return expression.  `return <expr>;`
@@ -125,11 +123,7 @@ pub enum Terminator {
     /// Falls through to block index `target`.
     Goto(u32),
     /// `if <cond> { goto true_bb } else { goto false_bb }`
-    Branch {
-        cond: String,
-        true_bb: u32,
-        false_bb: u32,
-    },
+    Branch { cond: String, true_bb: u32, false_bb: u32 },
     /// Function returns (value already in last Stmt::Return).
     Return,
     /// Unreachable / not yet assigned.
@@ -194,7 +188,9 @@ pub enum StructKind {
 }
 
 impl Default for StructKind {
-    fn default() -> Self { StructKind::Named }
+    fn default() -> Self {
+        StructKind::Named
+    }
 }
 
 /// Every item in the IR is one of these kinds.

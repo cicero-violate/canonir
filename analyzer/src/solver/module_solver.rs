@@ -11,16 +11,18 @@
 //!
 //! Algorithm used: topological_sort (Kahn's, from algorithms crate)
 
+use crate::solver::csr_to_adj;
+use algorithms::graph::topological_sort::topological_sort;
 use anyhow::Result;
 use model::ir::model_ir::ModelIR;
-use algorithms::graph::topological_sort::topological_sort;
-use crate::solver::csr_to_adj;
 
 pub fn solve(ir: &mut ModelIR) -> Result<()> {
     let v = ir.module_graph.vertex_count();
-    if v == 0 { return Ok(()); }
+    if v == 0 {
+        return Ok(());
+    }
 
-    let adj   = csr_to_adj(&ir.module_graph);
+    let adj = csr_to_adj(&ir.module_graph);
     let order = topological_sort(&adj);
 
     // Store emit order on ModelIR so projection can consume it directly.

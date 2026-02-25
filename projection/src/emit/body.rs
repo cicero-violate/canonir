@@ -10,13 +10,7 @@ pub fn emit_blocks(blocks: &[BasicBlock], pad: &str) -> String {
     out
 }
 
-fn emit_block_rec(
-    blocks: &[BasicBlock],
-    idx: usize,
-    pad: &str,
-    visited: &mut Vec<bool>,
-    out: &mut String,
-) {
+fn emit_block_rec(blocks: &[BasicBlock], idx: usize, pad: &str, visited: &mut Vec<bool>, out: &mut String) {
     if idx >= blocks.len() || visited[idx] {
         return;
     }
@@ -59,4 +53,3 @@ fn emit_stmt(stmt: &Stmt, pad: &str) -> String {
 pub fn indent_raw(src: &str, pad: &str) -> String {
     src.lines().map(|line| format!("{}{}\n", pad, line)).collect()
 }
-

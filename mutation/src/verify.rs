@@ -7,9 +7,9 @@
 //!   verify(IR) = analyze(clone(IR)) ∧ invariant_solver(IR)
 //!   // clone so verify is non-destructive
 
+use analyzer::solver::invariant_solver;
 use anyhow::Result;
 use model::ir::model_ir::ModelIR;
-use analyzer::solver::invariant_solver;
 
 /// Verify structural and semantic invariants on `ir`.
 /// Clones `ir` to run `analyze()` non-destructively, then runs

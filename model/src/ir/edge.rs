@@ -34,7 +34,9 @@ pub enum EdgeKind {
     ImplFor,  // impl -> struct
     // control-flow graph
     CfgEdge,
-    CfgBranch { label: String },
+    CfgBranch {
+        label: String,
+    },
     // region / borrow graph
     Outlives, // lifetime 'a outlives 'b
     // value / const graph

@@ -16,20 +16,22 @@
 //!
 //!   violation: (u, v, Resolves) ∈ G_name ∧ ¬visible(u, v)
 
+use crate::solver::csr_to_adj;
+use algorithms::graph::reachability::reachability;
 use anyhow::Result;
 use model::ir::{
     edge::EdgeKind,
     model_ir::ModelIR,
     node::{NodeId, NodeKind, Visibility},
 };
-use algorithms::graph::reachability::reachability;
-use crate::solver::csr_to_adj;
 
 pub fn solve(ir: &ModelIR) -> Result<()> {
     let n = ir.nodes.len();
     let name_v = ir.name_graph.vertex_count();
     let mod_v = ir.module_graph.vertex_count();
-    if name_v == 0 || mod_v == 0 { return Ok(()); }
+    if name_v == 0 || mod_v == 0 {
+        return Ok(());
+    }
 
     // Build inv_module: child -> [parents]
     // Equation: inv[dst] += src for (src, dst, Contains) in G_module
@@ -37,22 +39,32 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
     let mut inv: Vec<Vec<usize>> = vec![Vec::new(); mod_v.max(n)];
     for (src, nbrs) in fwd.iter().enumerate() {
         for &dst in nbrs {
-            if dst < inv.len() { inv[dst].push(src); }
+            if dst < inv.len() {
+                inv[dst].push(src);
+            }
         }
     }
 
     // containing_module(idx): first Module ancestor in inv
     let containing_module = |start: usize| -> Option<usize> {
-        if start >= inv.len() { return None; }
+        if start >= inv.len() {
+            return None;
+        }
         let mut stack = vec![start];
         let mut seen = vec![false; inv.len()];
         while let Some(u) = stack.pop() {
-            if seen[u] { continue; }
+            if seen[u] {
+                continue;
+            }
             seen[u] = true;
             if let Some(NodeKind::Module { .. }) = ir.nodes.get(u).map(|n| &n.kind) {
                 return Some(u);
             }
-            for &p in &inv[u] { if !seen[p] { stack.push(p); } }
+            for &p in &inv[u] {
+                if !seen[p] {
+                    stack.push(p);
+                }
+            }
         }
         None
     };
@@ -60,8 +72,12 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
     // ancestor_or_eq(a, b): is a reachable from b via inv (i.e. a is above b)?
     // We use forward reachability on fwd: a can reach b => a is ancestor of b.
     let ancestor_or_eq = |a: usize, b: usize| -> bool {
-        if a == b { return true; }
-        if a >= fwd.len() { return false; }
+        if a == b {
+            return true;
+        }
+        if a >= fwd.len() {
+            return false;
+        }
         let reach = reachability(&fwd, &[a]);
         b < reach.len() && reach[b]
     };
@@ -75,45 +91,42 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
     for src_idx in 0..name_v {
         let src_id = NodeId(src_idx as u32);
         for (dst_id, edge) in ir.name_graph.neighbours(src_id) {
-            if *edge != EdgeKind::Resolves { continue; }
+            if *edge != EdgeKind::Resolves {
+                continue;
+            }
             let dst_idx = dst_id.index();
 
             let vis = match ir.nodes.get(dst_idx).map(|n| &n.kind) {
-                Some(NodeKind::Struct    { vis, .. }) => vis.clone(),
-                Some(NodeKind::Function  { vis, .. }) => vis.clone(),
-                Some(NodeKind::Method    { vis, .. }) => vis.clone(),
-                Some(NodeKind::Trait     { vis, .. }) => vis.clone(),
+                Some(NodeKind::Struct { vis, .. }) => vis.clone(),
+                Some(NodeKind::Function { vis, .. }) => vis.clone(),
+                Some(NodeKind::Method { vis, .. }) => vis.clone(),
+                Some(NodeKind::Trait { vis, .. }) => vis.clone(),
                 Some(NodeKind::TypeAlias { vis, .. }) => vis.clone(),
                 _ => Visibility::Public, // Crate, Module, Use — always reachable
             };
 
             let ok = match &vis {
-                Visibility::Public   => true,
+                Visibility::Public => true,
                 Visibility::PubCrate => true, // single-crate IR
-                Visibility::Private  => {
-                    containing_module(src_idx) == containing_module(dst_idx)
-                }
+                Visibility::Private => containing_module(src_idx) == containing_module(dst_idx),
                 Visibility::PubSuper => {
-                    if let (Some(sm), Some(dm)) =
-                        (containing_module(src_idx), containing_module(dst_idx))
-                    {
-                        parent_module(dm)
-                            .map(|p| ancestor_or_eq(p, sm))
-                            .unwrap_or(false)
-                    } else { false }
+                    if let (Some(sm), Some(dm)) = (containing_module(src_idx), containing_module(dst_idx)) {
+                        parent_module(dm).map(|p| ancestor_or_eq(p, sm)).unwrap_or(false)
+                    } else {
+                        false
+                    }
                 }
                 Visibility::PubIn(_) => true, // conservative: accept
             };
 
             if !ok {
-                warnings.push(format!(
-                    "visibility_solver: node {} accesses private item {} ({:?})",
-                    src_idx, dst_idx, vis
-                ));
+                warnings.push(format!("visibility_solver: node {} accesses private item {} ({:?})", src_idx, dst_idx, vis));
             }
         }
     }
 
-    for w in &warnings { eprintln!("WARN {}", w); }
+    for w in &warnings {
+        eprintln!("WARN {}", w);
+    }
     Ok(())
 }

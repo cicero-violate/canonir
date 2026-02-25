@@ -52,11 +52,7 @@ impl Diff {
         if a.macro_graph.vertex_count() != b.macro_graph.vertex_count() {
             changed.push("macro_graph".to_string());
         }
-        Diff {
-            added: vec![],
-            removed: vec![],
-            changed,
-        }
+        Diff { added: vec![], removed: vec![], changed }
     }
 }
 
@@ -98,11 +94,7 @@ pub fn diff_models(a: &Value, b: &Value) -> Diff {
         changed.push("limits".into());
     }
 
-    Diff {
-        added,
-        removed,
-        changed,
-    }
+    Diff { added, removed, changed }
 }
 
 fn normalize_model(v: &Value) -> Value {

@@ -21,12 +21,14 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
 
     // Build set of unsafe node indices.
     // Equation: U = { i | nodes[i].unsafe_ }
-    let unsafe_set: Vec<bool> = ir.nodes.iter()
+    let unsafe_set: Vec<bool> = ir
+        .nodes
+        .iter()
         .map(|n| match &n.kind {
             NodeKind::Function { unsafe_, .. } => *unsafe_,
-            NodeKind::Method   { unsafe_, .. } => *unsafe_,
-            NodeKind::Impl     { unsafe_, .. } => *unsafe_,
-            NodeKind::Trait    { unsafe_, .. } => *unsafe_,
+            NodeKind::Method { unsafe_, .. } => *unsafe_,
+            NodeKind::Impl { unsafe_, .. } => *unsafe_,
+            NodeKind::Trait { unsafe_, .. } => *unsafe_,
             _ => false,
         })
         .collect();
@@ -42,10 +44,7 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
             if callee_unsafe && !caller_unsafe {
                 let caller_name = node_name(ir, caller_idx);
                 let callee_name = node_name(ir, callee_id.index());
-                log::warn!(
-                    "unsafe_solver: safe fn `{}` calls unsafe fn `{}` without unsafe block",
-                    caller_name, callee_name
-                );
+                log::warn!("unsafe_solver: safe fn `{}` calls unsafe fn `{}` without unsafe block", caller_name, callee_name);
             }
         }
     }
@@ -54,9 +53,12 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
 }
 
 fn node_name(ir: &ModelIR, idx: usize) -> String {
-    ir.nodes.get(idx).map(|n| match &n.kind {
-        NodeKind::Function { name, .. } => name.clone(),
-        NodeKind::Method   { name, .. } => name.clone(),
-        _ => format!("node_{}", idx),
-    }).unwrap_or_else(|| format!("node_{}", idx))
+    ir.nodes
+        .get(idx)
+        .map(|n| match &n.kind {
+            NodeKind::Function { name, .. } => name.clone(),
+            NodeKind::Method { name, .. } => name.clone(),
+            _ => format!("node_{}", idx),
+        })
+        .unwrap_or_else(|| format!("node_{}", idx))
 }

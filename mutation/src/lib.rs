@@ -38,10 +38,10 @@ use serde::{Deserialize, Serialize};
 ///   RemoveEdge(src,dst,k): IR'.edge_hints = IR.edge_hints \ { (src,dst,k) }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MutationOp {
-    AddNode    { kind: NodeKind, span: Option<String> },
+    AddNode { kind: NodeKind, span: Option<String> },
     RemoveNode { id: NodeId },
     UpdateNode { id: NodeId, kind: NodeKind },
-    AddEdge    { hint: EdgeHint },
+    AddEdge { hint: EdgeHint },
     RemoveEdge { src: NodeId, dst: NodeId, kind: model::ir::edge::EdgeKind },
 }
 
@@ -57,20 +57,16 @@ pub enum MutationOp {
 ///   removed_edges = E(IR)  \ E(IR')
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangeSet {
-    pub added_nodes:   Vec<NodeId>,
+    pub added_nodes: Vec<NodeId>,
     pub removed_nodes: Vec<NodeId>,
     pub changed_nodes: Vec<(NodeId, NodeKind, NodeKind)>, // (id, before, after)
-    pub added_edges:   Vec<EdgeHint>,
+    pub added_edges: Vec<EdgeHint>,
     pub removed_edges: Vec<EdgeHint>,
 }
 
 impl ChangeSet {
     pub fn is_empty(&self) -> bool {
-        self.added_nodes.is_empty()
-            && self.removed_nodes.is_empty()
-            && self.changed_nodes.is_empty()
-            && self.added_edges.is_empty()
-            && self.removed_edges.is_empty()
+        self.added_nodes.is_empty() && self.removed_nodes.is_empty() && self.changed_nodes.is_empty() && self.added_edges.is_empty() && self.removed_edges.is_empty()
     }
 }
 

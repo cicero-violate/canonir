@@ -8,14 +8,10 @@
 //!   (impl,   item, Contains) — impl block contains method
 //!   (impl,   struct, ImplFor) — impl targets struct
 
-use model::ir::{
-    csr_graph::CsrGraph,
-    edge::EdgeKind,
-    node::NodeId,
-};
+use model::ir::{csr_graph::CsrGraph, edge::EdgeKind, node::NodeId};
 
 pub struct ModuleGraphBuilder {
-    v:     usize,
+    v: usize,
     edges: Vec<(u32, u32, EdgeKind)>,
 }
 

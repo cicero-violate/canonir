@@ -13,12 +13,12 @@
 //!   AddEdge    : ir.edge_hints.push(hint)
 //!   RemoveEdge : ir.edge_hints.retain(|h| ¬matches(h, src,dst,kind))
 
+use crate::MutationOp;
 use anyhow::{bail, Result};
 use model::ir::{
     model_ir::ModelIR,
     node::{Node, NodeId, NodeKind},
 };
-use crate::MutationOp;
 
 /// Apply one mutation to `ir` and return the primary affected NodeId.
 pub fn apply(ir: &mut ModelIR, op: MutationOp) -> Result<NodeId> {
@@ -76,9 +76,7 @@ pub fn apply(ir: &mut ModelIR, op: MutationOp) -> Result<NodeId> {
         // ── RemoveEdge ───────────────────────────────────────────────────────
         // Equation: E' = E \ { h | h.src=src ∧ h.dst=dst ∧ h.kind=kind }
         MutationOp::RemoveEdge { src, dst, kind } => {
-            ir.edge_hints.retain(|h| {
-                !(h.src == src.0 && h.dst == dst.0 && h.kind == kind)
-            });
+            ir.edge_hints.retain(|h| !(h.src == src.0 && h.dst == dst.0 && h.kind == kind));
             Ok(src)
         }
     }

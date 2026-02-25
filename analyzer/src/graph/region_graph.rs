@@ -11,12 +11,14 @@
 use model::ir::{csr_graph::CsrGraph, edge::EdgeKind, node::NodeId};
 
 pub struct RegionGraphBuilder {
-    v:     usize,
+    v: usize,
     edges: Vec<(u32, u32, EdgeKind)>,
 }
 
 impl RegionGraphBuilder {
-    pub fn new(v: usize) -> Self { Self { v, edges: Vec::new() } }
+    pub fn new(v: usize) -> Self {
+        Self { v, edges: Vec::new() }
+    }
 
     /// Register: lifetime `a` outlives lifetime `b`.
     /// Equation: Outlives(a, b) ∈ G_region

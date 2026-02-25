@@ -9,16 +9,13 @@
 //!   expand_order = topo(G_macro)     — safe expansion sequence
 //!   ∃ cycle in G_macro  =>  Err     — recursive macro detected
 
-use anyhow::{bail, Result};
-use model::ir::{model_ir::ModelIR, node::NodeKind};
 use crate::solver::csr_to_adj;
 use algorithms::graph::topological_sort::topological_sort;
+use anyhow::{bail, Result};
+use model::ir::{model_ir::ModelIR, node::NodeKind};
 
 pub fn solve(ir: &mut ModelIR) -> Result<()> {
-    let macro_nodes: Vec<usize> = ir.nodes.iter()
-        .filter(|n| matches!(&n.kind, NodeKind::MacroCall { .. }))
-        .map(|n| n.id.index())
-        .collect();
+    let macro_nodes: Vec<usize> = ir.nodes.iter().filter(|n| matches!(&n.kind, NodeKind::MacroCall { .. })).map(|n| n.id.index()).collect();
 
     if macro_nodes.is_empty() {
         return Ok(());

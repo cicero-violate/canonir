@@ -7,14 +7,10 @@
 //!   (src, dst, TypeOf)      — expression src has type dst
 //!   (src, dst, TypeUnifies) — src and dst must unify (type inference)
 
-use model::ir::{
-    csr_graph::CsrGraph,
-    edge::EdgeKind,
-    node::NodeId,
-};
+use model::ir::{csr_graph::CsrGraph, edge::EdgeKind, node::NodeId};
 
 pub struct TypeGraphBuilder {
-    v:     usize,
+    v: usize,
     edges: Vec<(u32, u32, EdgeKind)>,
 }
 

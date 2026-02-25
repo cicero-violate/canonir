@@ -31,18 +31,18 @@
 //!   is_subseq(xs, ys) <=> xs can be obtained by deleting elements from ys
 //!   This allows per-path bindings to be absent while preserving relative order.
 
+use algorithms::control_flow::dominators::post_dominators;
 use anyhow::{bail, Result};
 use model::ir::{
     model_ir::ModelIR,
     node::{Body, NodeKind, Stmt, Terminator},
 };
-use algorithms::control_flow::dominators::post_dominators;
 
 pub fn solve(ir: &ModelIR) -> Result<()> {
     for node in &ir.nodes {
         let (fname, body) = match &node.kind {
             NodeKind::Function { name, body, .. } => (name.clone(), body),
-            NodeKind::Method   { name, body, .. } => (name.clone(), body),
+            NodeKind::Method { name, body, .. } => (name.clone(), body),
             _ => continue,
         };
 
@@ -60,18 +60,24 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
 
         for (i, bb) in blocks.iter().enumerate() {
             match &bb.terminator {
-                Terminator::Goto(t)    => {
+                Terminator::Goto(t) => {
                     let t = *t as usize;
-                    if t < n { succs[i].push(t); }
+                    if t < n {
+                        succs[i].push(t);
+                    }
                 }
                 Terminator::Branch { true_bb, false_bb, .. } => {
-                    let t = *true_bb  as usize;
+                    let t = *true_bb as usize;
                     let f = *false_bb as usize;
-                    if t < n { succs[i].push(t); }
-                    if f < n { succs[i].push(f); }
+                    if t < n {
+                        succs[i].push(t);
+                    }
+                    if f < n {
+                        succs[i].push(f);
+                    }
                 }
                 Terminator::Return => exit_nodes.push(i),
-                Terminator::None   => {}
+                Terminator::None => {}
             }
         }
 
@@ -93,18 +99,15 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
                 bail!(
                     "drop_solver: `{}` block {} has let-bindings but does not \
                      post-dominate itself — malformed CFG",
-                    fname, i
+                    fname,
+                    i
                 );
             }
         }
 
         // ── Compute declaration order and expected drop order ────────────────
         // decl_order(f) = concat_{i} [pat | Stmt::Let{pat} ∈ b_i]
-        let decl_order: Vec<String> = blocks.iter()
-            .flat_map(|bb| bb.stmts.iter().filter_map(|s| {
-                if let Stmt::Let { pat, .. } = s { Some(pat.clone()) } else { None }
-            }))
-            .collect();
+        let decl_order: Vec<String> = blocks.iter().flat_map(|bb| bb.stmts.iter().filter_map(|s| if let Stmt::Let { pat, .. } = s { Some(pat.clone()) } else { None })).collect();
 
         if decl_order.is_empty() {
             continue;
@@ -126,12 +129,11 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
             for &exit in &exit_nodes {
                 // Blocks that post-dominate 'exit' are in post_dom[exit].
                 // The super_exit synthetic node (index n) is not a real block.
-                let exit_decls: Vec<String> = blocks.iter()
+                let exit_decls: Vec<String> = blocks
+                    .iter()
                     .enumerate()
                     .filter(|(i, _)| post_dom[exit].contains(i))
-                    .flat_map(|(_, bb)| bb.stmts.iter().filter_map(|s| {
-                        if let Stmt::Let { pat, .. } = s { Some(pat.clone()) } else { None }
-                    }))
+                    .flat_map(|(_, bb)| bb.stmts.iter().filter_map(|s| if let Stmt::Let { pat, .. } = s { Some(pat.clone()) } else { None }))
                     .collect();
 
                 let mut exit_drop = exit_decls.clone();
@@ -147,7 +149,10 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
                         bail!(
                             "drop_solver: `{}` exit block {} has inconsistent drop order \
                              on this path.\n  expected suffix: {:?}\n  got:             {:?}",
-                            fname, exit, expected_drop, exit_drop
+                            fname,
+                            exit,
+                            expected_drop,
+                            exit_drop
                         );
                     }
                 }
@@ -156,10 +161,7 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
             }
         }
 
-        log::info!(
-            "drop_solver: `{}` — {} binding(s), drop order: {:?}",
-            fname, decl_order.len(), expected_drop
-        );
+        log::info!("drop_solver: `{}` — {} binding(s), drop order: {:?}", fname, decl_order.len(), expected_drop);
     }
 
     Ok(())
@@ -174,8 +176,12 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
 fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {
     let mut ni = 0;
     for h in haystack {
-        if ni == needle.len() { break; }
-        if needle[ni] == *h { ni += 1; }
+        if ni == needle.len() {
+            break;
+        }
+        if needle[ni] == *h {
+            ni += 1;
+        }
     }
     ni == needle.len()
 }

@@ -9,33 +9,35 @@
 //!   provenance(v) = DFS on Resolves edges until no outgoing Resolves
 //!   shadow(u,v)   detected when two nodes in same module share a name
 
+use crate::solver::csr_to_adj;
+use algorithms::graph::dfs::dfs;
 use anyhow::Result;
 use model::ir::{
     edge::EdgeKind,
     model_ir::ModelIR,
     node::{NodeId, NodeKind},
 };
-use algorithms::graph::dfs::dfs;
-use crate::solver::csr_to_adj;
 use std::collections::HashMap;
 
 fn node_name(kind: &NodeKind) -> Option<&str> {
     match kind {
-        NodeKind::Function  { name, .. } => Some(name),
-        NodeKind::Method    { name, .. } => Some(name),
-        NodeKind::Struct    { name, .. } => Some(name),
-        NodeKind::Trait     { name, .. } => Some(name),
+        NodeKind::Function { name, .. } => Some(name),
+        NodeKind::Method { name, .. } => Some(name),
+        NodeKind::Struct { name, .. } => Some(name),
+        NodeKind::Trait { name, .. } => Some(name),
         NodeKind::TypeAlias { name, .. } => Some(name),
-        NodeKind::TypeRef   { name }     => Some(name),
-        NodeKind::Use       { path, alias, .. } => Some(alias.as_deref().unwrap_or(path.as_str())),
+        NodeKind::TypeRef { name } => Some(name),
+        NodeKind::Use { path, alias, .. } => Some(alias.as_deref().unwrap_or(path.as_str())),
         _ => None,
     }
 }
 
 pub fn solve(ir: &ModelIR) -> Result<()> {
     let name_v = ir.name_graph.vertex_count();
-    let mod_v  = ir.module_graph.vertex_count();
-    if name_v == 0 || mod_v == 0 { return Ok(()); }
+    let mod_v = ir.module_graph.vertex_count();
+    if name_v == 0 || mod_v == 0 {
+        return Ok(());
+    }
 
     // Build Resolves-only adjacency for provenance DFS.
     // Equation: resolves_adj[u] = { v | (u, v, Resolves) ∈ G_name }
@@ -65,21 +67,31 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
     let mut inv_mod: Vec<Vec<usize>> = vec![Vec::new(); fwd.len().max(ir.nodes.len())];
     for (src, nbrs) in fwd.iter().enumerate() {
         for &dst in nbrs {
-            if dst < inv_mod.len() { inv_mod[dst].push(src); }
+            if dst < inv_mod.len() {
+                inv_mod[dst].push(src);
+            }
         }
     }
 
     let containing_module = |start: usize| -> Option<usize> {
-        if start >= inv_mod.len() { return None; }
+        if start >= inv_mod.len() {
+            return None;
+        }
         let mut stack = vec![start];
         let mut seen = vec![false; inv_mod.len()];
         while let Some(u) = stack.pop() {
-            if seen[u] { continue; }
+            if seen[u] {
+                continue;
+            }
             seen[u] = true;
             if let Some(NodeKind::Module { .. }) = ir.nodes.get(u).map(|n| &n.kind) {
                 return Some(u);
             }
-            for &p in &inv_mod[u] { if !seen[p] { stack.push(p); } }
+            for &p in &inv_mod[u] {
+                if !seen[p] {
+                    stack.push(p);
+                }
+            }
         }
         None
     };
@@ -95,10 +107,7 @@ pub fn solve(ir: &ModelIR) -> Result<()> {
     }
     for ((m, name), indices) in &by_mod_name {
         if indices.len() > 1 {
-            eprintln!(
-                "WARN provenance_solver: name {:?} shadowed in module {} by nodes {:?}",
-                name, m, indices
-            );
+            eprintln!("WARN provenance_solver: name {:?} shadowed in module {} by nodes {:?}", name, m, indices);
         }
     }
 

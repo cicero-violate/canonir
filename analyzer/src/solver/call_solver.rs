@@ -13,14 +13,16 @@
 //!
 //! Algorithm used: DFS (from algorithms crate)
 
+use crate::solver::csr_to_adj;
+use algorithms::graph::dfs::dfs;
 use anyhow::Result;
 use model::ir::model_ir::ModelIR;
-use algorithms::graph::dfs::dfs;
-use crate::solver::csr_to_adj;
 
 pub fn solve(ir: &mut ModelIR) -> Result<()> {
     let v = ir.call_graph.vertex_count();
-    if v == 0 { return Ok(()); }
+    if v == 0 {
+        return Ok(());
+    }
 
     let adj = csr_to_adj(&ir.call_graph);
 

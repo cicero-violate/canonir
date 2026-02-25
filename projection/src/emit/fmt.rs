@@ -1,7 +1,4 @@
-use model::ir::{
-    model_ir::ModelIR,
-    node::{Body, Field, GenericParam, Param, TraitMethod},
-};
+use model::ir::node::{Body, Field, GenericParam, Param, TraitMethod};
 
 use crate::emit::body::{emit_blocks, indent_raw};
 
@@ -14,19 +11,28 @@ pub fn fmt_generics(gs: &[GenericParam]) -> String {
     //                  = name                      if bounds=∅, default=None
     //                  = name ": " bounds          if bounds≠∅
     //                  = <above> " = " default_ty  if default_ty=Some  (E11)
-    let inner: Vec<String> = gs.iter().map(|g| {
-        let base = if g.is_lifetime {
-            format!("'{}", g.name)
-        } else if g.bounds.is_empty() {
-            g.name.clone()
-        } else {
-            format!("{}: {}", g.name, g.bounds.join(" + "))
-        };
-        match &g.default_ty {
-            Some(d) => format!("{} = {}", base, d),
-            None    => base,
-        }
-    }).collect();
+    let inner: Vec<String> = gs
+        .iter()
+        .map(|g| {
+            let base = if g.is_lifetime {
+                // Lifetime names in the IR may already include the leading `'`.
+                // Avoid doubling it (e.g. "'a" should stay "'a", not "''a").
+                if g.name.starts_with('\'') {
+                    g.name.clone()
+                } else {
+                    format!("'{}", g.name)
+                }
+            } else if g.bounds.is_empty() {
+                g.name.clone()
+            } else {
+                format!("{}: {}", g.name, g.bounds.join(" + "))
+            };
+            match &g.default_ty {
+                Some(d) => format!("{} = {}", base, d),
+                None => base,
+            }
+        })
+        .collect();
     format!("<{}>", inner.join(", "))
 }
 
@@ -35,7 +41,11 @@ pub fn fmt_params(params: &[Param]) -> String {
         .iter()
         .map(|p| {
             if p.is_self {
-                if p.mutable { "&mut self".into() } else { "&self".into() }
+                if p.mutable {
+                    "&mut self".into()
+                } else {
+                    "&self".into()
+                }
             } else if p.mutable {
                 let ty = fmt_ref_ty(&p.lifetime, &p.ty);
                 format!("mut {}: {}", p.name, ty)
@@ -78,27 +88,13 @@ pub fn fmt_field(f: &Field, pad: &str) -> String {
 }
 
 /// Trait method helper (not a NodeKind — lives inside Trait node directly)
-pub fn fmt_trait_method(m: &TraitMethod, _ir: &ModelIR, pad: &str) -> String {
+pub fn fmt_trait_method(m: &TraitMethod, pad: &str) -> String {
     let ret_part = if m.ret == "()" { String::new() } else { format!(" -> {}", m.ret) };
     let unsafe_kw = if m.unsafe_ { "unsafe " } else { "" };
-    let async_kw  = if m.async_  { "async "  } else { "" };
-    let wc = if m.where_clauses.is_empty() {
-        String::new()
-    } else {
-        format!("\nwhere\n    {}", m.where_clauses.join(",\n    "))
-    };
+    let async_kw = if m.async_ { "async " } else { "" };
+    let wc = if m.where_clauses.is_empty() { String::new() } else { format!("\nwhere\n    {}", m.where_clauses.join(",\n    ")) };
     let mut s: String = m.attrs.iter().map(|a| format!("{}#[{}]\n", pad, a)).collect();
-    let sig = format!(
-        "{}{}{}fn {}{}{}{}{}",
-        pad,
-        async_kw,
-        unsafe_kw,
-        m.name,
-        fmt_generics(&m.generics),
-        fmt_params(&m.params),
-        ret_part,
-        wc,
-    );
+    let sig = format!("{}{}{}fn {}{}{}{}{}", pad, async_kw, unsafe_kw, m.name, fmt_generics(&m.generics), fmt_params(&m.params), ret_part, wc,);
     let inner = format!("{}    ", pad);
     s.push_str(&match &m.body {
         Body::None => format!("{};\n", sig),

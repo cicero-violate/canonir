@@ -8,7 +8,7 @@ pub mod dijkstra;
 #[cfg(feature = "cuda")]
 pub mod gpu;
 pub mod invariant;
-pub mod scc;
-pub mod topological_sort;
 pub mod reachability;
 pub mod region;
+pub mod scc;
+pub mod topological_sort;

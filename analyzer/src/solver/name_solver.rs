@@ -13,16 +13,18 @@
 //!
 //! Algorithm used: topological_sort (Kahn's, from algorithms crate)
 
+use crate::solver::csr_to_adj;
+use algorithms::graph::topological_sort::topological_sort;
 use anyhow::Result;
 use model::ir::{edge::EdgeKind, model_ir::ModelIR, node::NodeKind};
-use algorithms::graph::topological_sort::topological_sort;
-use crate::solver::csr_to_adj;
 
 pub fn solve(ir: &mut ModelIR) -> Result<()> {
     let v = ir.name_graph.vertex_count();
-    if v == 0 { return Ok(()); }
+    if v == 0 {
+        return Ok(());
+    }
 
-    let adj   = csr_to_adj(&ir.name_graph);
+    let adj = csr_to_adj(&ir.name_graph);
     let order = topological_sort(&adj);
 
     // Collect (dst_index, new_name) pairs first to avoid borrow conflict.
@@ -52,11 +54,11 @@ pub fn solve(ir: &mut ModelIR) -> Result<()> {
 
 fn node_name(kind: &NodeKind) -> Option<&str> {
     match kind {
-        NodeKind::Struct   { name, .. } => Some(name),
-        NodeKind::Trait    { name, .. } => Some(name),
+        NodeKind::Struct { name, .. } => Some(name),
+        NodeKind::Trait { name, .. } => Some(name),
         NodeKind::Function { name, .. } => Some(name),
-        NodeKind::Method   { name, .. } => Some(name),
-        NodeKind::TypeRef  { name }     => Some(name),
+        NodeKind::Method { name, .. } => Some(name),
+        NodeKind::TypeRef { name } => Some(name),
         NodeKind::Impl { for_struct, .. } => Some(for_struct),
         _ => None,
     }
@@ -64,11 +66,11 @@ fn node_name(kind: &NodeKind) -> Option<&str> {
 
 fn apply_rename(kind: &mut NodeKind, new_name: String) {
     match kind {
-        NodeKind::Struct   { name, .. } => *name = new_name,
-        NodeKind::Trait    { name, .. } => *name = new_name,
+        NodeKind::Struct { name, .. } => *name = new_name,
+        NodeKind::Trait { name, .. } => *name = new_name,
         NodeKind::Function { name, .. } => *name = new_name,
-        NodeKind::Method   { name, .. } => *name = new_name,
-        NodeKind::TypeRef  { name }     => *name = new_name,
+        NodeKind::Method { name, .. } => *name = new_name,
+        NodeKind::TypeRef { name } => *name = new_name,
         NodeKind::Impl { for_struct, .. } => *for_struct = new_name,
         _ => {}
     }

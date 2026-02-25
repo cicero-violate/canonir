@@ -10,14 +10,10 @@
 //! At capture time, the populator calls `add_rename(src, dst)` or
 //! `add_resolves(src, dst)` before handing the edge list to `build()`.
 
-use model::ir::{
-    csr_graph::CsrGraph,
-    edge::EdgeKind,
-    node::NodeId,
-};
+use model::ir::{csr_graph::CsrGraph, edge::EdgeKind, node::NodeId};
 
 pub struct NameGraphBuilder {
-    v:     usize,
+    v: usize,
     edges: Vec<(u32, u32, EdgeKind)>,
 }
 
