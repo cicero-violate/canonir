@@ -14,3 +14,4 @@ cargo run -p orchestration -- \
   test_projects/test_rust_project/test_capture
 
 cd   test_projects/test_rust_project/test_capture
+cargo build
