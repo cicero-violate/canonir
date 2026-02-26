@@ -6,6 +6,7 @@ mod group_impl_methods;
 mod inject_imports;
 mod normalize_visibility;
 mod sanitize_generics;
+mod order_items;
 
 pub trait LayoutPass {
     fn run(&self, plan: &mut Plan, ctx: &LayoutCtx);
@@ -37,6 +38,7 @@ pub fn run_layout_passes(plan: &mut Plan, ctx: &LayoutCtx) {
         Box::new(sanitize_generics::SanitizeGenerics),
         Box::new(normalize_visibility::NormalizeVisibility),
         Box::new(inject_imports::InjectImports),
+        Box::new(order_items::OrderItems),
     ];
 
     for p in passes {

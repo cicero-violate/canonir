@@ -4,25 +4,23 @@
 
 - Workspace builds; some warnings remain (lint/unused).
 - All IR gaps closed: E1–E15 (E9 lifetime nodes, E11 generic defaults included).
-- Solvers active: S9 (borrow), S11 (const), S12 (macro), S13 (exhaustiveness), S15 (unsafe).
-- S16 (drop_solver) active: post-dominator drop order verification on Body::Blocks.
-- S1 (transitive re-exports), S2 (SCC diag nodes), S4 (impl target hard error) closed.
+- Solvers active: S9 (borrow), S11 (const), S12 (macro), S13 (exhaustiveness), S15 (unsafe), S16 (drop).
 - 8 CSR graphs wired end-to-end.
-- Projection split: layout/build_plan (passes) → emit/emit_plan (Plan → strings).
-- Emitters cover all NodeKind variants from Plan.
+- Projection pipeline: layout (passes) → emit (pure rendering). Emit layer contains no traversal/sorting/mutation.
+- Layout ordering now explicit via `passes/order_items.rs` using NodeKind priority ExternCrate→Use→TypeAlias→Const→Static→Struct→Enum→Trait→Impl→Fn.
 - model_diff covers all graphs + emit_order + edge_hints.
 
 ## What Is Working
 
 - Graph build → solve → validate → emit loop.
-- Deterministic emit_order via stability_solver.
+- Deterministic emit_order via stability_solver + layout order_items pass (emit is dumb renderer).
 - Const cycle detection (S11).
 - Macro recursion detection (S12).
 - Unsafe caller warnings (S15).
 - Enum exhaustiveness warnings (S13).
 - Borrow solver: cycle detection on G_region via outlives_cycles (S9).
 - Named / tuple / unit struct emission (E7).
-- Inline module blocks (E10).
+- Inline module blocks (E10) emitted without DFS traversal.
 - Glob imports and pub use re-exports (E3/E15).
 - extern crate declarations (E4).
 - impl Trait / dyn Trait edges routed to type_graph (E8).

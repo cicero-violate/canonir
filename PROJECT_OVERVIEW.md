@@ -79,13 +79,20 @@ projection/src/layout/
   mod.rs        — Plan/FilePlan/ItemPlan API; build_plan(ir) runs passes
   skeleton.rs   — raw structural Plan from ModelIR (files/modules/impl stubs)
   passes/
+    order_items.rs       — sorts items by NodeKind priority (ExternCrate→Use→TypeAlias→Const→Static→Struct→Enum→Trait→Impl→Fn)
     group_impl_methods.rs   — attach impl methods via module_graph
     sanitize_generics.rs    — drop fn default type params; infer missing params
     normalize_visibility.rs — clear vis on trait methods inside impls
     inject_imports.rs       — heuristic imports (e.g. Describable)
 
 projection/src/emit/
-  emitters.rs  — emit_plan (Plan -> (PathBuf, String)), module traversal uses algorithms::graph::dfs
+  mod.rs       — re-exports pure renderers
+  file.rs      — emit_plan (Plan -> (PathBuf, String)), no ordering logic
+  items.rs     — Item/Module dispatch; modules iterate Plan order (no DFS)
+  functions.rs — Trait/Fn renderers
+  impls.rs     — Impl renderer
+  types.rs     — Struct/Enum/TypeAlias/ExternCrate/TypeRef renderers
+  macros.rs    — MacroCall helper shim
   fmt.rs       — fmt_trait_method honours attrs/where/unsafe/async
   body.rs      — emit_blocks(), indent_raw()
   cargo.rs     — emit_cargo_toml(name, edition, has_binary)
@@ -115,5 +122,5 @@ test_projects/test_rust_project/model_ir.json
 - IR is canonical state.
 - Graphs are constraint representation.
 - Solvers enforce semantic legality.
-- Emit is deterministic.
+- Emit is deterministic (order frozen in layout, emit is pure rendering).
 - model_diff is semantic-complete.
