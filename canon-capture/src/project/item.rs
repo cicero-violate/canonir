@@ -1,5 +1,6 @@
 use crate::types::TraitMethod;
 use crate::types::{Body, EnumVariant, Field, GenericParam, Node, NodeKind, Param, StructKind, Visibility};
+use crate::types::{EdgeHint, EdgeKind};
 use rustc_hir::{def::DefKind, GenericBound, PatKind, PredicateOrigin, Safety, WherePredicateKind};
 use rustc_middle::ty::print::PrintTraitRefExt;
 use rustc_middle::ty::AssocKind;
@@ -12,7 +13,8 @@ use crate::norm;
 
 /// Structural projection: DefId -> NodeKind using HIR/ty queries.
 /// All strings are canonicalized via norm:: before NodeKind construction.
-pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Node> {
+pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Option<Node>, Vec<EdgeHint>) {
+    let id = *index.def_to_node.get(&def_id)?;
     let id = *index.def_to_node.get(&def_id)?;
     let full_path = norm::path(tcx, def_id);
     let name = norm::short(&full_path).to_string();
