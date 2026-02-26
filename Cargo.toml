@@ -1,11 +1,12 @@
 [workspace]
 members = [
-  "algorithms",	
+  "algorithms",
   "model",
   "capture",
   "analyzer",
   "mutation",
   "projection",
   "orchestration",
+  "canon_capture",
 ]
 resolver = "2"

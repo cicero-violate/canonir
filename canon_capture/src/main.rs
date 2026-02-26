@@ -46,40 +46,28 @@ fn main() {
     let is_probe = rustc_args.iter().any(|a| a.starts_with("--print="))
         || rustc_args.iter().any(|a| a == "-")
         || rustc_args.iter().any(|a| a == "-vV" || a == "--version")
-        || rustc_args
-            .windows(2)
-            .any(|w| w[0] == "--crate-name" && w[1] == "___");
+        || rustc_args.windows(2).any(|w| w[0] == "--crate-name" && w[1] == "___");
 
     if is_probe {
-        let status = Command::new(&real_rustc)
-            .args(&rustc_args)
-            .status()
-            .expect("failed to exec real rustc (probe)");
+        let status = Command::new(&real_rustc).args(&rustc_args).status().expect("failed to exec real rustc (probe)");
         std::process::exit(status.code().unwrap_or(1));
     }
 
     // For non-primary packages (deps), just run real rustc.
     let is_primary = std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some();
     if !is_primary {
-        let status = Command::new(&real_rustc)
-            .args(&rustc_args)
-            .status()
-            .expect("failed to exec real rustc (dep)");
+        let status = Command::new(&real_rustc).args(&rustc_args).status().expect("failed to exec real rustc (dep)");
         std::process::exit(status.code().unwrap_or(1));
     }
 
     // Step 1: run real rustc so cargo bookkeeping stays consistent.
-    let status = Command::new(&real_rustc)
-        .args(&rustc_args)
-        .status()
-        .expect("failed to exec real rustc (primary)");
+    let status = Command::new(&real_rustc).args(&rustc_args).status().expect("failed to exec real rustc (primary)");
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
 
     // Step 2: run capture pass via rustc_driver on the same args.
-    let out_path = std::env::var("CANON_CAPTURE_OUT")
-        .unwrap_or_else(|_| "model_ir_captured.json".to_string());
+    let out_path = std::env::var("CANON_CAPTURE_OUT").unwrap_or_else(|_| "model_ir_captured.json".to_string());
 
     let ir_slot: IrSlot = Arc::new(Mutex::new(None));
     let mut callbacks = CaptureCallbacks { ir_slot: Arc::clone(&ir_slot) };

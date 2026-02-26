@@ -62,7 +62,7 @@ analyzer/src/
     macro_solver.rs    — ACTIVE: topo-sort G_macro, error on recursive macro cycle
     exhaustiveness_solver.rs — ACTIVE: warn on uncovered enum variants
     unsafe_solver.rs   — ACTIVE: warn on safe callers of unsafe fns via G_call
-    borrow_solver.rs   — stub: awaits IR lifetime nodes (gap E9)
+    borrow_solver.rs   — ACTIVE: Outlives SCC cycle detection (G_region)
     drop_solver.rs     — ACTIVE: post_dom drop order verification (S16)
 
 algorithms/src/control_flow/
@@ -75,13 +75,20 @@ algorithms/src/graph/
   reachability.rs     — reachability(adj, roots) -> Vec<bool>
                         is_acyclic(adj) -> bool
 
+projection/src/layout/
+  mod.rs        — Plan/FilePlan/ItemPlan API; build_plan(ir) runs passes
+  skeleton.rs   — raw structural Plan from ModelIR (files/modules/impl stubs)
+  passes/
+    group_impl_methods.rs   — attach impl methods via module_graph
+    sanitize_generics.rs    — drop fn default type params; infer missing params
+    normalize_visibility.rs — clear vis on trait methods inside impls
+    inject_imports.rs       — heuristic imports (e.g. Describable)
+
 projection/src/emit/
-  emitters.rs  — dispatch() covers all NodeKind variants
-                 NEW: EnumEmitter, ConstEmitter, StaticEmitter, MacroCallEmitter
-                 NEW: fmt_attrs(), fmt_where() shared helpers
-                 ALL emitters thread attrs/where_clauses/unsafe_/async_
-  fmt.rs       — fmt_trait_method: honours attrs, where_clauses, unsafe_, async_
+  emitters.rs  — emit_plan (Plan -> (PathBuf, String)), module traversal uses algorithms::graph::dfs
+  fmt.rs       — fmt_trait_method honours attrs/where/unsafe/async
   body.rs      — emit_blocks(), indent_raw()
+  cargo.rs     — emit_cargo_toml(name, edition, has_binary)
 
 mutation/
   src/
@@ -92,8 +99,8 @@ mutation/
 
 orchestration/src/main.rs
   — args: <model_ir.json> <output_dir> [--mutate <mutation.json>]
-  — --mutate: snapshot_A → apply_mutations → verify → diff → emit
-              → snapshot_B + diff_report.json
+  — pipeline: load → analyze → (optional mutate/verify/diff) → project(layout) → emit → snapshot
+  — projection API: project(&ModelIR) -> Plan; emit_to_disk(&Plan, out_dir)
 
 test_projects/test_rust_project/model_ir.json
   — 46 nodes: Crate, Module x9, Struct x2, Enum x1, Trait x1, Impl x4,

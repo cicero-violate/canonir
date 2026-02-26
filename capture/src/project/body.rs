@@ -1,5 +1,5 @@
-use rustc_hir as hir;
 use model::ir::edge::{EdgeHint, EdgeKind};
+use rustc_hir as hir;
 use rustc_middle::mir::{self};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
@@ -15,8 +15,12 @@ use crate::index::Index;
 /// Call edges: src=caller id, dst=callee NodeId (skipped if callee not in index).
 /// ConstDep:   src=caller id, dst=const NodeId (skipped if const not in index).
 pub fn project_body(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Vec<EdgeHint> {
-    let Some(local_def) = def_id.as_local() else { return Vec::new(); };
-    let Some(&id) = index.def_to_node.get(&def_id) else { return Vec::new(); };
+    let Some(local_def) = def_id.as_local() else {
+        return Vec::new();
+    };
+    let Some(&id) = index.def_to_node.get(&def_id) else {
+        return Vec::new();
+    };
 
     // Guard: only project bodies for items that actually have MIR.
     if !tcx.is_mir_available(local_def) {
@@ -24,9 +28,7 @@ pub fn project_body(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Vec<EdgeHi
     }
     // optimized_mir panics on Const/Static items — use mir_for_ctfe for those.
     let body = match tcx.hir_body_const_context(local_def) {
-        Some(hir::ConstContext::ConstFn) | Some(hir::ConstContext::Const { .. }) | Some(hir::ConstContext::Static(_)) => {
-            tcx.mir_for_ctfe(local_def)
-        }
+        Some(hir::ConstContext::ConstFn) | Some(hir::ConstContext::Const { .. }) | Some(hir::ConstContext::Static(_)) => tcx.mir_for_ctfe(local_def),
         None => tcx.optimized_mir(local_def),
     };
 
@@ -38,11 +40,7 @@ pub fn project_body(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Vec<EdgeHi
         // src=dst=caller_id (self-loop) until ModelIR grows BB-level nodes.
         if let Some(term) = &bb_data.terminator {
             for _succ in term.successors() {
-                hints.push(EdgeHint {
-                    src: caller_id,
-                    dst: caller_id,
-                    kind: EdgeKind::CfgEdge,
-                });
+                hints.push(EdgeHint { src: caller_id, dst: caller_id, kind: EdgeKind::CfgEdge });
             }
         }
 
@@ -56,11 +54,7 @@ pub fn project_body(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Vec<EdgeHi
                     if let mir::Const::Unevaluated(uneval, _) = c.const_ {
                         if let Some(&const_node) = index.def_to_node.get(&uneval.def) {
                             if const_node != id {
-                                hints.push(EdgeHint {
-                                    src: caller_id,
-                                    dst: const_node.index() as u32,
-                                    kind: EdgeKind::ConstDep,
-                                });
+                                hints.push(EdgeHint { src: caller_id, dst: const_node.index() as u32, kind: EdgeKind::ConstDep });
                             }
                         }
                     }
@@ -73,11 +67,7 @@ pub fn project_body(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Vec<EdgeHi
             if let mir::TerminatorKind::Call { func, .. } = &term.kind {
                 if let Some((callee_def_id, _)) = func.const_fn_def() {
                     if let Some(&callee_node) = index.def_to_node.get(&callee_def_id) {
-                        hints.push(EdgeHint {
-                            src: caller_id,
-                            dst: callee_node.index() as u32,
-                            kind: EdgeKind::Calls,
-                        });
+                        hints.push(EdgeHint { src: caller_id, dst: callee_node.index() as u32, kind: EdgeKind::Calls });
                     }
                 }
             }

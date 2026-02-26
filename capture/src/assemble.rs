@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use model::ir::{
     edge::{EdgeHint, EdgeKind},
     model_ir::ModelIR,
@@ -6,6 +5,7 @@ use model::ir::{
 };
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::LOCAL_CRATE;
+use std::collections::HashSet;
 
 use crate::{index::Index, Partial};
 
@@ -18,14 +18,7 @@ pub fn assemble(tcx: TyCtxt<'_>, index: Index, parts: Vec<Partial>) -> ModelIR {
     // ── Crate node at NodeId(0) ──────────────────────────────────────────────
     let crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
     let edition = format!("{}", tcx.sess.edition());
-    let crate_node = Node {
-        id: NodeId(0),
-        kind: NodeKind::Crate {
-            name: crate_name,
-            edition,
-        },
-        span: None,
-    };
+    let crate_node = Node { id: NodeId(0), kind: NodeKind::Crate { name: crate_name, edition }, span: None };
 
     // ── Merge partials, shifting all NodeIds by +1 ───────────────────────────
     let mut nodes: Vec<Node> = vec![crate_node];
@@ -67,11 +60,7 @@ pub fn assemble(tcx: TyCtxt<'_>, index: Index, parts: Vec<Partial>) -> ModelIR {
     // DefId in our index).
     for (def_id, &node_id) in &index.def_to_node {
         if tcx.opt_parent(*def_id).map_or(true, |p| !index.def_to_node.contains_key(&p)) {
-            ir.edge_hints.push(EdgeHint {
-                src: 0,
-                dst: node_id.0 + 1,
-                kind: EdgeKind::Contains,
-            });
+            ir.edge_hints.push(EdgeHint { src: 0, dst: node_id.0 + 1, kind: EdgeKind::Contains });
         }
     }
 

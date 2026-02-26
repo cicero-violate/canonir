@@ -2,13 +2,14 @@
 
 ## Current State
 
-- Workspace compiles clean.
+- Workspace builds; some warnings remain (lint/unused).
 - All IR gaps closed: E1–E15 (E9 lifetime nodes, E11 generic defaults included).
 - Solvers active: S9 (borrow), S11 (const), S12 (macro), S13 (exhaustiveness), S15 (unsafe).
 - S16 (drop_solver) active: post-dominator drop order verification on Body::Blocks.
 - S1 (transitive re-exports), S2 (SCC diag nodes), S4 (impl target hard error) closed.
 - 8 CSR graphs wired end-to-end.
-- Emitters cover all NodeKind variants.
+- Projection split: layout/build_plan (passes) → emit/emit_plan (Plan → strings).
+- Emitters cover all NodeKind variants from Plan.
 - model_diff covers all graphs + emit_order + edge_hints.
 
 ## What Is Working
@@ -35,7 +36,8 @@
 
 1. capture_rustc round-trip closure (real .rs → capture → emit → identical .rs)
 2. Full mutation test: AddNode + AddEdge + RemoveNode + diff_report.json
-3. drop_solver ownership IR extension: scope nodes, conditional drop paths (S16b)
+3. Layout pass coverage/tests: per-pass unit tests + ordering guarantees
+4. drop_solver ownership IR extension: scope nodes, conditional drop paths (S16b)
 
 System invariant:
 IR → Graph → Solve → Emit is stable.

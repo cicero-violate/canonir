@@ -1,0 +1,11 @@
+[env]
+RUSTC_BOOTSTRAP = "1"
+
+[build]
+rustflags = ["-A", "warnings"]
+
+[alias]
+# json-build = "build --message-format=json"
+# json-check = "check --message-format=json"
+# json-run = "run --message-format=json"
+json-build = "build --message-format=json --color=never --locked"

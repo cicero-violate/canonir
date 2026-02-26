@@ -23,6 +23,7 @@ use rustc_span::def_id::DefId;
 
 pub mod assemble;
 pub mod index;
+pub mod norm;
 pub mod project;
 
 /// Per-def capture output: nodes + edge hints (local to one DefId).
@@ -37,11 +38,7 @@ pub fn capture(tcx: TyCtxt<'_>) -> Result<ModelIR> {
     let index = index::build_index(tcx);
 
     // Map: project each DefId sequentially (rayon disabled due to TyCtxt !Sync).
-    let partials: Vec<Partial> = index
-        .def_ids
-        .iter()
-        .map(|d| project::project_def(tcx, *d, &index))
-        .collect();
+    let partials: Vec<Partial> = index.def_ids.iter().map(|d| project::project_def(tcx, *d, &index)).collect();
 
     // Reduce: deterministic assembly.
     let ir = assemble::assemble(tcx, index, partials);

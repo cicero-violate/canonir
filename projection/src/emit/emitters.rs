@@ -2,6 +2,7 @@ use crate::emit::body::{emit_blocks, indent_raw};
 use crate::emit::cargo::emit_cargo_toml;
 use crate::emit::fmt::{fmt_field, fmt_generics, fmt_params, fmt_trait_method};
 use crate::layout::{FilePlan, ImplPlan, ItemPlan, ModuleDeclPlan, Plan};
+use algorithms::graph::dfs::dfs;
 use model::ir::node::{Body, EnumVariant, Field, GenericParam, NodeKind, Param, StructKind, TraitMethod, Visibility};
 use std::path::PathBuf;
 
@@ -77,8 +78,18 @@ impl ModuleEmitter<'_> {
         if self.decl.inline {
             let inner_pad = format!("{}    ", pad);
             let mut body = String::new();
-            for item in &self.decl.items {
-                body.push_str(&dispatch_item(item, &inner_pad));
+            let n = self.decl.items.len();
+            if n > 0 {
+                // Traverse inline children with shared DFS utility to mirror stable pre-order.
+                let mut adj = vec![Vec::new(); n + 1];
+                let root = n;
+                for i in 0..n {
+                    adj[root].push(i);
+                }
+                let order = dfs(&adj, root);
+                for idx in order.into_iter().filter(|i| *i < n) {
+                    body.push_str(&dispatch_item(&self.decl.items[idx], &inner_pad));
+                }
             }
             format!("{}pub mod {} {{\n{}{}}}\n", pad, self.decl.name, body, pad)
         } else {
