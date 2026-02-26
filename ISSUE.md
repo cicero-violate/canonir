@@ -17,8 +17,8 @@ Remaining gaps (content, not structure):
   - main.rs not captured (binary entry point, expected gap)
 
 Key files:
-  capture/src/norm.rs          — normalization layer (span/path/file/ty)
-  capture/src/project/item.rs  — HIR → NodeKind projection
-  capture/src/project/body.rs  — MIR body capture (next target)
-  capture/src/assemble.rs      — partial merge + Use dedup
-  model/src/ir/node.rs         — Body enum (None/Raw/Rust variants)
+bat -n capture/src/norm.rs         # — normalization layer (span/path/file/ty)
+bat -n capture/src/project/item.rs # — HIR → NodeKind projection
+bat -n capture/src/project/body.rs # — MIR body capture (next target)
+bat -n capture/src/assemble.rs     # — partial merge + Use dedup
+bat -n model/src/ir/node.rs        # — Body enum (None/Raw/Rust variants)
