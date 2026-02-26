@@ -48,8 +48,9 @@ fn main() {
         || rustc_args.iter().any(|a| a == "-")
         || rustc_args.iter().any(|a| a == "-vV" || a == "--version")
         || rustc_args.windows(2).any(|w| w[0] == "--crate-name" && w[1] == "___");
+    let is_build_script = rustc_args.windows(2).any(|w| w[0] == "--crate-name" && w[1] == "build_script_build");
 
-    if is_probe {
+    if is_probe || is_build_script {
         let status = Command::new(&real_rustc).args(&rustc_args).status().expect("failed to exec real rustc (probe)");
         std::process::exit(status.code().unwrap_or(1));
     }

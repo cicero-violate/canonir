@@ -49,7 +49,9 @@ pub fn build_plan(ir: &CanonIR) -> Result<Plan> {
     let root_mod = ir.nodes.iter().find(|n| if let CanonNodeKind::Module { path_id, .. } = &n.kind { ir.lookup_path(*path_id) == "crate" } else { false });
 
     if let Some(root) = root_mod {
-        walk_module(ir, root.id, PathBuf::from("src/lib.rs"), &mut files);
+        let has_root_main = module_children(ir, root.id).iter().any(|id| is_root_main_fn(ir, *id));
+        let root_file = if has_root_main { PathBuf::from("src/main.rs") } else { PathBuf::from("src/lib.rs") };
+        walk_module(ir, root.id, root_file, &mut files);
     } else {
         // Fallback: flat emit of all root-level items.
         let items = flat_root_items(ir);
@@ -181,6 +183,13 @@ fn module_children(ir: &CanonIR, module_id: CanonId) -> Vec<CanonId> {
         let mut v: Vec<CanonId> = child_set.into_iter().map(CanonId).collect();
         v.sort_by_key(|id| id.0);
         v
+    }
+}
+
+fn is_root_main_fn(ir: &CanonIR, id: CanonId) -> bool {
+    match &ir.node(id).kind {
+        CanonNodeKind::Fn { name_id, .. } => ir.lookup_name(*name_id) == "main",
+        _ => false,
     }
 }
 

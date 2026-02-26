@@ -9,4 +9,7 @@ members = [
   "canon-analyzer",
   "canon-projection",
 ]
+exclude = [
+  "test_projects",
+]
 resolver = "2"

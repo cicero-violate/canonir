@@ -1,7 +1,7 @@
 pub fn emit_cargo_toml(name: &str, edition: &str, has_binary: bool, dependencies: &[String]) -> String {
     let mut out = format!("[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"{}\"\n\n", name, edition);
     if has_binary {
-        out.push_str("[[bin]]\nname = \"app\"\npath = \"src/main.rs\"\n\n");
+        out.push_str(&format!("[[bin]]\nname = \"{}\"\npath = \"src/main.rs\"\n\n", name));
     }
     out.push_str("[dependencies]\n");
     for dep in dependencies {
