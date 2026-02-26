@@ -30,16 +30,16 @@ python /workspace/ai_sandbox/canon/test_projects/test_rust_projects/diff_src_dir
 /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/test_1/src \
 /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/test_1/src
 
-./run_capture.sh /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/semantic_lint /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/semantic_lint/canon_capture.json
-rm -rf /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/semantic_lint/
+./run_capture.sh /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/semantic-lint /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/semantic-lint/canon_capture.json
+rm -rf /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/semantic-lint/
 cargo run -p orchestration -- \
-/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/semantic_lint/canon_capture.json \
-/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/semantic_lint
+/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/semantic-lint/canon_capture.json \
+/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/semantic-lint
 
-cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/semantic_lint && cargo fmt
-cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/semantic_lint && cargo fmt
-cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/semantic_lint && CARGO_NET_OFFLINE="${CARGO_NET_OFFLINE:-true}" cargo build
+cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/semantic-lint && cargo fmt
+cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/semantic-lint && cargo fmt
+cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/semantic-lint && CARGO_NET_OFFLINE="${CARGO_NET_OFFLINE:-true}" cargo build
 
 python /workspace/ai_sandbox/canon/test_projects/test_rust_projects/diff_src_dirs.py \
-/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/semantic_lint/src \
-/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/semantic_lint/src
+/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/semantic-lint/src \
+/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/semantic-lint/src
