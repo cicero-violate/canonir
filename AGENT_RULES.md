@@ -75,6 +75,6 @@ extract_function("emit_node", $ARGV);
 extract_function("emit_module", $ARGV);
 extract_function("emit_impl", $ARGV);
 ' canon-projection/src/emit/items.rs \
-   canon-projection/src/emit/impls.rs
+  canon-projection/src/emit/impls.rs
 ```
 
