@@ -106,7 +106,6 @@ tests/
 *.o
 
 test_projects/
-chatgpt_rustsandbox/
 test_projects/chatgpt_rustsandbox/
 **/target/
 *.tar.gz
