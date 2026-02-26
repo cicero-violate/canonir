@@ -8,5 +8,6 @@ members = [
   "projection",
   "orchestration",
   "canon_capture",
+  "canon",
 ]
 resolver = "2"
