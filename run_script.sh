@@ -57,3 +57,17 @@ cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/conversatio
 python /workspace/ai_sandbox/canon/test_projects/test_rust_projects/diff_src_dirs.py \
 /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/conversation/src \
 /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/conversation/src
+
+./run_capture.sh /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/canon /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/canon/canon_capture.json
+rm -rf /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/canon/
+cargo run -p orchestration -- \
+/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/canon/canon_capture.json \
+/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/canon
+
+cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/canon && cargo fmt
+cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/canon && cargo fmt
+cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/canon && CARGO_NET_OFFLINE="${CARGO_NET_OFFLINE:-true}" cargo build
+
+python /workspace/ai_sandbox/canon/test_projects/test_rust_projects/diff_src_dirs.py \
+/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/canon/src \
+/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/canon/src
