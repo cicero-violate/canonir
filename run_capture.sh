@@ -39,9 +39,11 @@ mkdir -p "$(dirname "$OUTPUT_JSON")"
 
 # Force recompile so the wrapper always fires.
 rm -rf "$PROJECT_DIR/target_capture"
+mkdir -p "$PROJECT_DIR/target_capture"
 
 CANON_CAPTURE_OUT="$OUTPUT_JSON" \
 RUSTC_WRAPPER="$WRAPPER" \
+CARGO_NET_OFFLINE="${CARGO_NET_OFFLINE:-true}" \
     cargo build \
         --manifest-path "$PROJECT_DIR/Cargo.toml" \
         --target-dir "$PROJECT_DIR/target_capture" \

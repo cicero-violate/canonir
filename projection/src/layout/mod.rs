@@ -1,10 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use model::ir::{
-    model_ir::ModelIR,
-    node::{GenericParam, NodeId, NodeKind},
-};
+use model::ir::{model_ir::ModelIR, node::{GenericParam, NodeId, NodeKind, Visibility}};
 
 mod passes;
 mod skeleton;
@@ -27,13 +24,15 @@ pub struct FilePlan {
 pub enum ItemPlan {
     Module(ModuleDeclPlan),
     Impl(ImplPlan),
-    CargoToml { name: String, edition: String, has_binary: bool },
+    CargoToml { name: String, edition: String, has_binary: bool, dependencies: Vec<String> },
     Leaf(NodeKind),
 }
 
 #[derive(Debug, Clone)]
 pub struct ModuleDeclPlan {
     pub name: String,
+    pub vis: Visibility,
+    pub default_public: bool,
     pub inline: bool,
     pub items: Vec<ItemPlan>,
     pub node_id: Option<NodeId>,

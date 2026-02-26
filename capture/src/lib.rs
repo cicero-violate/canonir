@@ -41,11 +41,39 @@ pub fn capture(tcx: TyCtxt<'_>) -> Result<ModelIR> {
     let partials: Vec<Partial> = index.def_ids.iter().map(|d| project::project_def(tcx, *d, &index)).collect();
 
     // Reduce: deterministic assembly.
-    let ir = assemble::assemble(tcx, index, partials);
+    let mut ir = assemble::assemble(tcx, index, partials);
+    ir.cargo_dependencies = read_cargo_dependencies();
     Ok(ir)
 }
 
 /// Convenience for future incremental mode: project a single def.
 pub fn capture_def(tcx: TyCtxt<'_>, def_id: DefId) -> Result<Partial> {
     Ok(project::project_def(tcx, def_id, &index::build_index(tcx)))
+}
+
+fn read_cargo_dependencies() -> Vec<String> {
+    let manifest_dir = match std::env::var("CARGO_MANIFEST_DIR") {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let manifest = std::path::Path::new(&manifest_dir).join("Cargo.toml");
+    let text = match std::fs::read_to_string(manifest) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut in_deps = false;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_deps = trimmed == "[dependencies]";
+            continue;
+        }
+        if !in_deps || trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        out.push(trimmed.to_string());
+    }
+    out
 }

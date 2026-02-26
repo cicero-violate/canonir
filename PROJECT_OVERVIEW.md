@@ -10,6 +10,12 @@ cargo run -p orchestration -- \
 
 cd test_projects/test_rust_project/test_emit && cargo build
 cargo run
+
+# latest parity check (capture -> emit -> build)
+cargo run -p orchestration -- \
+  test_projects/test_rust_projects/capture/test_1/capture.json \
+  test_projects/test_rust_projects/emit/test_1
+cd test_projects/test_rust_projects/emit/test_1 && cargo build
 ```
 
 ### Core files to know
@@ -22,11 +28,13 @@ model/src/ir/
                     NEW: EnumVariant, NodeKind::{Enum,Const,Static,MacroCall}
                     NEW fields on all items: attrs, where_clauses
                     NEW fields on Fn/Method/Trait/Impl: unsafe_, async_
+                    NEW on Module: vis (module visibility preserved end-to-end)
   edge.rs         — EdgeKind: Contains, Calls, Resolves, Renames, TypeOf,
                     TypeUnifies, CfgEdge, CfgBranch, Outlives, ConstDep, Expands
   csr_graph.rs    — CsrGraph<ND,ED>: from_edges(), neighbours(), Default
   model_ir.rs     — ModelIR: nodes, emit_order, edge_hints,
                     8 CsrGraphs (name, type, call, module, cfg, region, value, macro)
+                    NEW: cargo_dependencies (for Cargo.toml emission)
   model_diff.rs   — diff_semantic covers all 8 graphs + edge_hints + emit_order
 
 analyzer/src/
@@ -77,25 +85,28 @@ algorithms/src/graph/
 
 projection/src/layout/
   mod.rs        — Plan/FilePlan/ItemPlan API; build_plan(ir) runs passes
-  skeleton.rs   — raw structural Plan from ModelIR (files/modules/impl stubs)
+  skeleton.rs   — raw structural Plan from ModelIR (files/modules/impl stubs),
+                  dependency inference fallback, module default visibility policy
   passes/
     order_items.rs       — sorts items by NodeKind priority (ExternCrate→Use→TypeAlias→Const→Static→Struct→Enum→Trait→Impl→Fn)
     group_impl_methods.rs   — attach impl methods via module_graph
-    sanitize_generics.rs    — drop fn default type params; infer missing params
+    sanitize_generics.rs    — keep IR generics stable (no synthetic inference)
     normalize_visibility.rs — clear vis on trait methods inside impls
-    inject_imports.rs       — heuristic imports (e.g. Describable)
+    inject_imports.rs       — heuristic imports + Use dedup + targeted fallbacks
 
 projection/src/emit/
   mod.rs       — re-exports pure renderers
   file.rs      — emit_plan (Plan -> (PathBuf, String)), no ordering logic
-  items.rs     — Item/Module dispatch; modules iterate Plan order (no DFS)
-  functions.rs — Trait/Fn renderers
+  items.rs     — Item/Module dispatch; modules iterate Plan order (no DFS),
+                 module visibility-aware `mod`/`pub mod`
+  functions.rs — Trait/Fn renderers (type normalization applied)
   impls.rs     — Impl renderer
-  types.rs     — Struct/Enum/TypeAlias/ExternCrate/TypeRef renderers
+  types.rs     — Struct/Enum/TypeAlias/ExternCrate/TypeRef renderers (type normalization)
   macros.rs    — MacroCall helper shim
-  fmt.rs       — fmt_trait_method honours attrs/where/unsafe/async
+  fmt.rs       — fmt_trait_method honours attrs/where/unsafe/async;
+                 normalizes std path aliases + local path qualification
   body.rs      — emit_blocks(), indent_raw()
-  cargo.rs     — emit_cargo_toml(name, edition, has_binary)
+  cargo.rs     — emit_cargo_toml(name, edition, has_binary, dependencies)
 
 mutation/
   src/

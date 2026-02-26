@@ -33,6 +33,9 @@ pub struct ModelIR {
     /// Explicit edge hints provided by JSON author or capture layer.
     /// derive() distributes these into the five CSR graphs.
     pub edge_hints: Vec<EdgeHint>,
+    /// Dependencies from `[dependencies]` in Cargo.toml, preserved for emit.
+    #[serde(default)]
+    pub cargo_dependencies: Vec<String>,
     /// G_name  — rename / name-resolution constraints.
     pub name_graph: CsrGraph<NodeId, EdgeKind>,
     /// G_type  — type inference / unification edges.
@@ -61,6 +64,7 @@ impl ModelIR {
             nodes: Vec::new(),
             emit_order: Vec::new(),
             edge_hints: Vec::new(),
+            cargo_dependencies: Vec::new(),
             name_graph: CsrGraph::empty(),
             type_graph: CsrGraph::empty(),
             call_graph: CsrGraph::empty(),

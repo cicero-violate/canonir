@@ -41,6 +41,10 @@ pub fn short(full_path: &str) -> &str {
 pub fn ty(raw: &str) -> String {
     // Pass 1: common type paths (std / core / alloc variants).
     const REPLACEMENTS: &[(&str, &str)] = &[
+        ("std::Path",                 "std::path::Path"),
+        ("std::PathBuf",              "std::path::PathBuf"),
+        ("std::Formatter",            "std::fmt::Formatter"),
+        ("std::Error",                "std::error::Error"),
         ("std::string::String",       "String"),
         ("alloc::string::String",     "String"),
         ("std::result::Result",       "Result"),
@@ -128,11 +132,11 @@ pub fn ty(raw: &str) -> String {
 
 /// Strip crate-relative path prefixes from type strings produced by ty.to_string().
 /// Called after norm::ty so stdlib is already shortened.
-/// "data::model::User"      → "User"
-/// "traits::Describable"    → "Describable"
-/// "Vec<data::model::User>" → "Vec<User>"
+/// "<crate>::data::model::User" → "crate::data::model::User"
+/// "std::path::PathBuf"         → "std::path::PathBuf"
 pub fn ty_strip_local(s: &str, krate: &str) -> String {
-    strip_path_prefixes(s, krate)
+    let crate_prefix = format!("{}::", krate);
+    s.replace(&crate_prefix, "crate::")
 }
 
 /// Strip "impl Foo: Bar + Baz" → "impl Foo" in type position.
@@ -177,50 +181,6 @@ pub fn ty_clean_impl(s: &str) -> String {
 pub fn ty_strip_static_lifetime(s: &str) -> String {
     s.replace("&'static str", "&str")
      .replace("&'static [u8]", "&[u8]")
-}
-
-fn strip_path_prefixes(s: &str, krate: &str) -> String {
-    const KEEP_PREFIXES: &[&str] = &[
-        "std::", "core::", "alloc::", "futures::", "tokio::",
-        "serde::", "anyhow::", "thiserror::",
-    ];
-    let crate_prefix = format!("{}::", krate);
-    let mut result = s.replace(&crate_prefix, "");
-    loop {
-        let mut changed = false;
-        let bytes = result.as_bytes();
-        let mut i = 0;
-        let mut new_result = String::with_capacity(result.len());
-        while i < bytes.len() {
-            if i + 1 < bytes.len() && bytes[i] == b':' && bytes[i + 1] == b':' {
-                let seg_end = i;
-                let mut seg_start = seg_end;
-                while seg_start > 0 {
-                    let c = bytes[seg_start - 1];
-                    if c.is_ascii_alphanumeric() || c == b'_' {
-                        seg_start -= 1;
-                    } else {
-                        break;
-                    }
-                }
-                let seg = &result[seg_start..seg_end];
-                let keep = KEEP_PREFIXES.iter().any(|p| p.starts_with(&format!("{}::", seg)));
-                if !keep && !seg.is_empty() {
-                    let before = &result[..seg_start];
-                    let after = &result[i + 2..];
-                    result = format!("{}{}", before, after);
-                    changed = true;
-                    break;
-                }
-            }
-            new_result.push(bytes[i] as char);
-            i += 1;
-        }
-        if !changed {
-            break;
-        }
-    }
-    result
 }
 
 /// Canonical span: "src/foo.rs:line:col" — lo position only, no hygiene.

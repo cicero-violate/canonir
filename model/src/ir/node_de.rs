@@ -76,7 +76,12 @@ fn decode_crate(obj: serde_json::Map<String, Value>) -> Result<NodeKind, String>
 }
 
 fn decode_module(obj: serde_json::Map<String, Value>) -> Result<NodeKind, String> {
-    Ok(NodeKind::Module { path: get_str(&obj, "path")?.to_owned(), file: get_str(&obj, "file")?.to_owned(), inline: default_de(&obj, "inline")? })
+    Ok(NodeKind::Module {
+        path: get_str(&obj, "path")?.to_owned(),
+        file: get_str(&obj, "file")?.to_owned(),
+        vis: default_de(&obj, "vis")?,
+        inline: default_de(&obj, "inline")?,
+    })
 }
 
 fn decode_struct(obj: serde_json::Map<String, Value>) -> Result<NodeKind, String> {

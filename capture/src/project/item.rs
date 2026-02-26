@@ -35,7 +35,7 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
                     false
                 }
             });
-            NodeKind::Module { path: norm::module_path(tcx, def_id), file, inline }
+            NodeKind::Module { path: norm::module_path(tcx, def_id), file, vis, inline }
         }
         DefKind::Struct | DefKind::Union => {
             let adt = tcx.adt_def(def_id);
@@ -100,24 +100,24 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
             if let Some(local) = def_id.as_local() {
                 if let rustc_hir::Node::Item(item) = tcx.hir_node_by_def_id(local) {
                     if let rustc_hir::ItemKind::Use(use_path, use_kind) = item.kind {
-                        let path = use_path.res.iter().find_map(|r| {
-                            if let Some(rustc_hir::def::Res::Def(_, did)) = r {
-                                let p = norm::path(tcx, *did);
-                                let is_local = p.starts_with("crate::");
-                                let is_external = p.contains("::") && !p.starts_with("crate");
-                                if is_local || is_external {
-                                    Some(p)
+                        let sm = tcx.sess.source_map();
+                        let mut path = sm
+                            .span_to_snippet(use_path.span)
+                            .ok()
+                            .map(|s| s.trim().trim_start_matches("::").to_string())
+                            .filter(|s| !s.is_empty());
+
+                        if path.is_none() {
+                            path = use_path.res.iter().find_map(|r| {
+                                if let Some(rustc_hir::def::Res::Def(_, did)) = r {
+                                    Some(norm::path(tcx, *did))
                                 } else {
                                     None
                                 }
-                            } else {
-                                None
-                            }
-                        });
-                        let path = match path {
-                            Some(p) => p,
-                            None => return None,
-                        };
+                            });
+                        }
+
+                        let path = path?;
                         let glob = matches!(use_kind, rustc_hir::UseKind::Glob);
                         let alias = match use_kind {
                             rustc_hir::UseKind::Single(ident) if ident.name.as_str() != path.rsplit("::").next().unwrap_or("") => Some(ident.to_string()),

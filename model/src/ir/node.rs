@@ -205,6 +205,8 @@ pub enum NodeKind {
     Module {
         path: String,
         file: String,
+        #[serde(default)]
+        vis: Visibility,
         /// E10 — true for `mod foo { ... }` inline blocks.
         #[serde(default)]
         inline: bool,

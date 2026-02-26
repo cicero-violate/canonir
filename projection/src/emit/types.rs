@@ -4,7 +4,7 @@
 // - No mutation
 // - Pure string rendering of Plan
 
-use crate::emit::fmt::{fmt_field, fmt_generics};
+use crate::emit::fmt::{fmt_field, fmt_generics, normalize_ty};
 use crate::emit::helpers::{fmt_attrs, fmt_where, Emit};
 use model::ir::node::{EnumVariant, Field, GenericParam, StructKind, Visibility};
 
@@ -31,7 +31,7 @@ impl Emit for StructEmitter<'_> {
                 s.push_str(&format!("{}{}struct {}{};\n", pad, self.vis.to_token(), self.name, wc,));
             }
             StructKind::Tuple => {
-                let tys: Vec<String> = self.fields.iter().map(|f| format!("{}{}", f.vis.to_token(), f.ty)).collect();
+                let tys: Vec<String> = self.fields.iter().map(|f| format!("{}{}", f.vis.to_token(), normalize_ty(&f.ty))).collect();
                 s.push_str(&format!("{}{}struct {}{}({}){};\n", pad, self.vis.to_token(), self.name, fmt_generics(self.generics), tys.join(", "), wc,));
             }
             StructKind::Named => {
@@ -69,7 +69,7 @@ impl Emit for EnumEmitter<'_> {
             if v.fields.is_empty() {
                 s.push_str(&format!("{}{},\n", inner, v.name));
             } else if v.fields.iter().all(|f| f.name.is_none()) {
-                let tys: Vec<&str> = v.fields.iter().map(|f| f.ty.as_str()).collect();
+                let tys: Vec<String> = v.fields.iter().map(|f| normalize_ty(&f.ty)).collect();
                 s.push_str(&format!("{}{}({}),\n", inner, v.name, tys.join(", ")));
             } else {
                 s.push_str(&format!("{}{} {{\n", inner, v.name));
@@ -98,7 +98,7 @@ impl Emit for TypeAliasEmitter<'_> {
     fn emit(&self, pad: &str) -> String {
         let s = fmt_attrs(self.attrs, pad);
         let wc = fmt_where(self.where_clauses);
-        format!("{}{}{}type {}{} = {}{};\n", s, pad, self.vis.to_token(), self.name, fmt_generics(self.generics), self.ty, wc,)
+        format!("{}{}{}type {}{} = {}{};\n", s, pad, self.vis.to_token(), self.name, fmt_generics(self.generics), normalize_ty(self.ty), wc,)
     }
 }
 

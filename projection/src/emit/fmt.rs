@@ -65,16 +65,17 @@ pub fn fmt_params(params: &[Param]) -> String {
 ///   fmt_ref_ty(Some('a), "&mut T") = "&'a mut T"
 ///   fmt_ref_ty(None, ty)        = ty   (pass-through)
 fn fmt_ref_ty(lifetime: &Option<String>, ty: &str) -> String {
+    let ty = normalize_ty(ty);
     match lifetime {
-        None => ty.to_string(),
+        None => ty,
         Some(lt) => {
-            if let Some(rest) = ty.strip_prefix("&mut ") {
+            if let Some(rest) = ty.as_str().strip_prefix("&mut ") {
                 format!("&'{}  mut {}", lt, rest)
-            } else if let Some(rest) = ty.strip_prefix('&') {
+            } else if let Some(rest) = ty.as_str().strip_prefix('&') {
                 format!("&'{} {}", lt, rest)
             } else {
                 // Non-reference type with lifetime annotation — pass through.
-                ty.to_string()
+                ty
             }
         }
     }
@@ -82,14 +83,14 @@ fn fmt_ref_ty(lifetime: &Option<String>, ty: &str) -> String {
 
 pub fn fmt_field(f: &Field, pad: &str) -> String {
     match &f.name {
-        Some(n) => format!("{}{}{}: {},\n", pad, f.vis.to_token(), n, f.ty),
-        None => format!("{}{}{},\n", pad, f.vis.to_token(), f.ty),
+        Some(n) => format!("{}{}{}: {},\n", pad, f.vis.to_token(), n, normalize_ty(&f.ty)),
+        None => format!("{}{}{},\n", pad, f.vis.to_token(), normalize_ty(&f.ty)),
     }
 }
 
 /// Trait method helper (not a NodeKind — lives inside Trait node directly)
 pub fn fmt_trait_method(m: &TraitMethod, pad: &str) -> String {
-    let ret_part = if m.ret == "()" { String::new() } else { format!(" -> {}", m.ret) };
+    let ret_part = if m.ret == "()" { String::new() } else { format!(" -> {}", normalize_ty(&m.ret)) };
     let unsafe_kw = if m.unsafe_ { "unsafe " } else { "" };
     let async_kw = if m.async_ { "async " } else { "" };
     let wc = if m.where_clauses.is_empty() { String::new() } else { format!("\nwhere\n    {}", m.where_clauses.join(",\n    ")) };
@@ -102,4 +103,39 @@ pub fn fmt_trait_method(m: &TraitMethod, pad: &str) -> String {
         Body::Raw(src) => format!("{} {{\n{}{}}}\n", sig, indent_raw(src, &inner), pad),
     });
     s
+}
+
+pub fn normalize_ty(ty: &str) -> String {
+    let mut s = ty
+        .replace("std::PathBuf", "std::path::PathBuf")
+        .replace("std::Path", "std::path::Path")
+        .replace("std::Formatter", "std::fmt::Formatter")
+        .replace("std::Error", "std::error::Error");
+    for root in ["data", "traits", "results", "core", "consts"] {
+        s = qualify_root(&s, root);
+    }
+    s
+}
+
+fn qualify_root(s: &str, root: &str) -> String {
+    let pat = format!("{root}::");
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len() + 16);
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if s[i..].starts_with(&pat) {
+            let prev = if i == 0 { b' ' } else { bytes[i - 1] };
+            let boundary = matches!(prev, b' ' | b'<' | b'(' | b'[' | b',' | b'&' | b'=' | b'>');
+            let already_qualified = i >= 2 && bytes[i - 1] == b':' && bytes[i - 2] == b':';
+            if boundary && !already_qualified {
+                out.push_str("crate::");
+            }
+            out.push_str(&pat);
+            i += pat.len();
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }

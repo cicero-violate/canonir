@@ -9,6 +9,10 @@
 - Projection pipeline: layout (passes) → emit (pure rendering). Emit layer contains no traversal/sorting/mutation.
 - Layout ordering now explicit via `passes/order_items.rs` using NodeKind priority ExternCrate→Use→TypeAlias→Const→Static→Struct→Enum→Trait→Impl→Fn.
 - model_diff covers all graphs + emit_order + edge_hints.
+- Module visibility now preserved end-to-end (capture -> ModelIR -> layout -> emit), including `pub mod` in lib/module trees and `mod` in bin roots.
+- Generic inference in layout sanitize pass removed; emitter no longer introduces synthetic generics like `<Node>`.
+- Import injection now de-duplicates `use` items and only injects targeted fallbacks (`Describable`, `std::path::Path`, `crate::symbol::Symbol`) when needed.
+- Cargo.toml emission now includes dependency lines (captured list when available, conservative inference fallback otherwise).
 
 ## What Is Working
 
@@ -29,13 +33,16 @@
 - Transitive Resolves chain following through Use nodes (S1).
 - SCC cycle TypeRef diagnostic nodes injected into IR + emit_order (S2).
 - Impl target validation accepts Struct/Enum/Trait/TypeAlias (S4).
+- Regression fix: `test_projects/test_rust_projects/emit/test_1` now compiles clean after orchestration emit.
+- Regression fix: emitted type strings normalize invalid `std::Path`/`std::PathBuf` forms and qualify local module paths where required.
 
 ## Next Highest Value
 
-1. capture_rustc round-trip closure (real .rs → capture → emit → identical .rs)
-2. Full mutation test: AddNode + AddEdge + RemoveNode + diff_report.json
-3. Layout pass coverage/tests: per-pass unit tests + ordering guarantees
-4. drop_solver ownership IR extension: scope nodes, conditional drop paths (S16b)
+1. capture_rustc round-trip closure (real .rs → capture → emit → minimal textual diff, not only compile parity)
+2. Strengthen capture of local type paths so emitter qualification fallback can be removed
+3. Full mutation test: AddNode + AddEdge + RemoveNode + diff_report.json
+4. Layout pass coverage/tests: per-pass unit tests + ordering guarantees
+5. drop_solver ownership IR extension: scope nodes, conditional drop paths (S16b)
 
 System invariant:
 IR → Graph → Solve → Emit is stable.

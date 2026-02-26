@@ -5,7 +5,7 @@
 // - Pure string rendering of Plan
 
 use crate::emit::body::{emit_blocks, indent_raw};
-use crate::emit::fmt::{fmt_generics, fmt_params, fmt_trait_method};
+use crate::emit::fmt::{fmt_generics, fmt_params, fmt_trait_method, normalize_ty};
 use crate::emit::helpers::{fmt_attrs, fmt_where, Emit};
 use model::ir::node::{Body, GenericParam, Param, TraitMethod, Visibility};
 
@@ -60,7 +60,7 @@ impl Emit for FnEmitter<'_> {
         let ret_part = if self.ret == "()" {
             String::new()
         } else {
-            format!(" -> {}", self.ret)
+            format!(" -> {}", normalize_ty(self.ret))
         };
         let unsafe_kw = if self.unsafe_ { "unsafe " } else { "" };
         let async_kw = if self.async_ { "async " } else { "" };

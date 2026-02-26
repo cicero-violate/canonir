@@ -11,8 +11,12 @@
 //!   lib_section     = "[[lib]]\npath = \"src/lib.rs\"\n"  (always — lib root present)
 //!   bin_section     = "[[bin]]\nname={name}\npath=\"src/main.rs\"\n"  if has_binary
 
-pub fn emit_cargo_toml(crate_name: &str, edition: &str, has_binary: bool) -> String {
+pub fn emit_cargo_toml(crate_name: &str, edition: &str, has_binary: bool, dependencies: &[String]) -> String {
     let mut out = format!("[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"{}\"\n\n[dependencies]\n", crate_name, edition);
+    for dep in dependencies {
+        out.push_str(dep);
+        out.push('\n');
+    }
 
     if has_binary {
         out.push_str(&format!("\n[[bin]]\nname = \"{}\"\npath = \"src/main.rs\"\n", crate_name));

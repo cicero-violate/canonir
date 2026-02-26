@@ -15,7 +15,9 @@ pub fn dispatch_item(item: &ItemPlan, pad: &str) -> String {
     match item {
         ItemPlan::Module(decl) => ModuleEmitter { decl }.emit(pad),
         ItemPlan::Impl(imp) => ImplEmitter { imp }.emit(pad),
-        ItemPlan::CargoToml { name, edition, has_binary } => emit_cargo_toml(name, edition, *has_binary),
+        ItemPlan::CargoToml { name, edition, has_binary, dependencies } => {
+            emit_cargo_toml(name, edition, *has_binary, dependencies)
+        }
         ItemPlan::Leaf(kind) => dispatch_kind(kind, pad),
     }
 }
@@ -61,15 +63,20 @@ struct ModuleEmitter<'a> {
 
 impl ModuleEmitter<'_> {
     fn emit(&self, pad: &str) -> String {
+        let v = if matches!(self.decl.vis, Visibility::Private) && self.decl.default_public {
+            "pub "
+        } else {
+            self.decl.vis.to_token()
+        };
         if self.decl.inline {
             let inner_pad = format!("{}    ", pad);
             let mut body = String::new();
             for item in &self.decl.items {
                 body.push_str(&dispatch_item(item, &inner_pad));
             }
-            format!("{}pub mod {} {{\n{}{}}}\n", pad, self.decl.name, body, pad)
+            format!("{}{}mod {} {{\n{}{}}}\n", pad, v, self.decl.name, body, pad)
         } else {
-            format!("{}pub mod {};\n", pad, self.decl.name)
+            format!("{}{}mod {};\n", pad, v, self.decl.name)
         }
     }
 }
@@ -114,7 +121,15 @@ struct ConstEmitter<'a> {
 impl Emit for ConstEmitter<'_> {
     fn emit(&self, pad: &str) -> String {
         let s = crate::emit::helpers::fmt_attrs(self.attrs, pad);
-        format!("{}{}{}const {}: {} = {};\n", s, pad, self.vis.to_token(), self.name, self.ty, self.value,)
+        format!(
+            "{}{}{}const {}: {} = {};\n",
+            s,
+            pad,
+            self.vis.to_token(),
+            self.name,
+            crate::emit::fmt::normalize_ty(self.ty),
+            self.value,
+        )
     }
 }
 
@@ -135,6 +150,15 @@ impl Emit for StaticEmitter<'_> {
     fn emit(&self, pad: &str) -> String {
         let s = crate::emit::helpers::fmt_attrs(self.attrs, pad);
         let mut_kw = if self.mutable { "mut " } else { "" };
-        format!("{}{}{}static {}{}: {} = {};\n", s, pad, self.vis.to_token(), mut_kw, self.name, self.ty, self.value,)
+        format!(
+            "{}{}{}static {}{}: {} = {};\n",
+            s,
+            pad,
+            self.vis.to_token(),
+            mut_kw,
+            self.name,
+            crate::emit::fmt::normalize_ty(self.ty),
+            self.value,
+        )
     }
 }
