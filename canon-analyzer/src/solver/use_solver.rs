@@ -102,6 +102,21 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
     let mut seen: HashSet<(usize, String)> = HashSet::new();
     let mut injections: Vec<(usize, String)> = Vec::new();
 
+    // Pre-populate seen with existing Use nodes per module to avoid
+    // injecting duplicates of Use nodes already present in the IR.
+    for src_idx in 0..ir.module_graph.vertex_count() {
+        let src_id = NodeId(src_idx as u32);
+        for (dst_id, edge) in ir.module_graph.neighbours(src_id) {
+            if !matches!(edge, EdgeKind::Contains) {
+                continue;
+            }
+            if let Some(CanonNodeKind::Use { path_id, .. }) = ir.nodes.get(dst_id.index()).map(|n| &n.kind) {
+                let path_str = ir.lookup_path(*path_id).to_string();
+                seen.insert((src_idx, path_str));
+            }
+        }
+    }
+
     for (site_idx, def_idx) in resolves_pairs {
         let site_mod = match containing_module(site_idx) {
             Some(m) => m,
@@ -121,8 +136,18 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
             _ => continue,
         };
 
-        let mod_path_stripped = def_mod_path.strip_prefix("crate").unwrap_or(&def_mod_path);
-        let full_path = format!("{}{}::{}", crate_name, mod_path_stripped, def_name);
+        // If def_idx itself is a Module, use its full path directly.
+        // Otherwise build path as def_mod_path::def_name.
+        let full_path = match ir.nodes.get(def_idx).map(|n| &n.kind) {
+            Some(CanonNodeKind::Module { path_id, .. }) => {
+                ir.lookup_path(*path_id).to_string()
+            }
+            _ => {
+                let mod_path_stripped =
+                    def_mod_path.strip_prefix("crate").unwrap_or(&def_mod_path);
+                format!("crate{}::{}", mod_path_stripped, def_name)
+            }
+        };
         let key = (site_mod, full_path.clone());
         if seen.insert(key) {
             injections.push((site_mod, full_path));
@@ -168,7 +193,10 @@ fn node_display_name(ir: &CanonIR, idx: usize) -> String {
         | Some(CanonNodeKind::GenericParam { name_id, .. })
         | Some(CanonNodeKind::Param { name_id, .. })
         | Some(CanonNodeKind::Variant { name_id, .. }) => ir.lookup_name(*name_id).to_string(),
-        Some(CanonNodeKind::Module { path_id, .. }) => ir.lookup_path(*path_id).to_string(),
+        Some(CanonNodeKind::Module { path_id, .. }) => {
+            let full = ir.lookup_path(*path_id);
+            full.rsplit("::").next().unwrap_or(full).to_string()
+        }
         Some(CanonNodeKind::Use { path_id, .. }) => ir.lookup_path(*path_id).to_string(),
         _ => format!("node_{}", idx),
     }

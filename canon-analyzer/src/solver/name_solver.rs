@@ -65,19 +65,6 @@ fn apply_rename(ir: &mut CanonIR, idx: usize, new_name: &str) {
     let new_id = ir.intern_name(new_name);
     if let Some(node) = ir.nodes.get_mut(idx) {
         match &mut node.kind {
-            CanonNodeKind::Struct { name_id, .. }
-            | CanonNodeKind::Enum { name_id, .. }
-            | CanonNodeKind::Trait { name_id, .. }
-            | CanonNodeKind::Fn { name_id, .. }
-            | CanonNodeKind::TypeRef { name_id }
-            | CanonNodeKind::TypeAlias { name_id, .. }
-            | CanonNodeKind::Const { name_id, .. }
-            | CanonNodeKind::Static { name_id, .. }
-            | CanonNodeKind::ExternCrate { name_id, .. }
-            | CanonNodeKind::Lifetime { name_id }
-            | CanonNodeKind::GenericParam { name_id, .. }
-            | CanonNodeKind::Param { name_id, .. }
-            | CanonNodeKind::Variant { name_id, .. } => *name_id = new_id,
             CanonNodeKind::Use { alias, .. } => *alias = Some(new_id),
             _ => {}
         }

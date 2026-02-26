@@ -551,13 +551,17 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
     for path in &mut canon.path_intern.vec {
         let mut normalized = norm::local_crate_path(path, &local_crate);
         for root in &local_module_roots {
-            let root_prefix = format!("{root}::");
+            eprintln!("DEBUG norm root={root} path={path:?}");
+        let root_prefix = format!("{root}::");
             if normalized.starts_with(&root_prefix) {
                 normalized = format!("crate::{normalized}");
             }
             normalized = normalized.replace(&format!("<{root}::"), &format!("<crate::{root}::"));
             normalized = normalized.replace(&format!("dyn {root}::"), &format!("dyn crate::{root}::"));
             normalized = normalized.replace(&format!("&{root}::"), &format!("&crate::{root}::"));
+            normalized = normalized.replace(&format!("Box<dyn {root}::"), &format!("Box<dyn crate::{root}::"));
+            normalized = normalized.replace(&format!(", {root}::"), &format!(", crate::{root}::"));
+            normalized = normalized.replace(&format!("({root}::"), &format!("(crate::{root}::"));
         }
         *path = normalized;
     }
