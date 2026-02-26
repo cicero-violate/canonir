@@ -40,6 +40,22 @@ pub fn assemble(tcx: TyCtxt<'_>, index: Index, parts: Vec<Partial>) -> ModelIR {
     let valid_ids: HashSet<u32> = ir.nodes.iter().map(|n| n.id.0).collect();
     ir.edge_hints.retain(|h| valid_ids.contains(&h.src) && valid_ids.contains(&h.dst));
 
+    // ── Deduplicate Use nodes that resolve to the same canonical import ─────
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut drop_ids: HashSet<u32> = HashSet::new();
+    for n in &ir.nodes {
+        if let NodeKind::Use { path, alias, glob, .. } = &n.kind {
+            let key = format!("{}|{}|{}", glob, path, alias.as_deref().unwrap_or(""));
+            if !seen.insert(key) {
+                drop_ids.insert(n.id.0);
+            }
+        }
+    }
+    if !drop_ids.is_empty() {
+        ir.nodes.retain(|n| !drop_ids.contains(&n.id.0));
+        ir.edge_hints.retain(|h| !drop_ids.contains(&h.src) && !drop_ids.contains(&h.dst));
+    }
+
     // ── Compact node ids to be contiguous 0..N ───────────────────────────────
     // After filtering, ids may have gaps (e.g. 0,1,2,4,5). Remap to 0..N.
     let mut remap: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();

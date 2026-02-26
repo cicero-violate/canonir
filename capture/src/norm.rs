@@ -58,6 +58,132 @@ pub fn ty(raw: &str) -> String {
     s
 }
 
+/// Strip crate-relative path prefixes from type strings produced by
+/// ty.to_string(). Called after norm::ty so stdlib is already shortened.
+/// "data::model::User"   → "User"
+/// "traits::Describable" → "Describable"
+/// "Vec<data::model::User>" → "Vec<User>"
+/// Leaves external crate paths (no matching prefix) intact.
+/// Takes the local crate name so it can also strip "my_crate::foo" forms.
+pub fn ty_strip_local(s: &str, krate: &str) -> String {
+    // Build a regex-free replacement: walk all occurrences of "::" and strip
+    // any leading path component that is a known local module segment.
+    // Strategy: replace "X::Y::Z" where X is not std/core/alloc with "Z".
+    // We do this by splitting on angle brackets to avoid breaking generics,
+    // then applying path stripping to each token.
+    strip_path_prefixes(s, krate)
+}
+
+/// Strip "impl Foo: Bar + Baz" → "impl Foo" in type position.
+/// rustc renders impl-trait params as "impl Trait: Bound1 + Bound2".
+/// In ModelIR / emitted Rust, impl Trait params have no inline bounds.
+pub fn ty_clean_impl(s: &str) -> String {
+    // "impl Trait: Bound1 + Bound2" -> "impl Trait"
+    // Only strip when:
+    //   - after "impl " is a plain identifier (no "::")
+    //   - followed by a single ':' (not "::")
+    // This avoids mangling "impl future::Future<...>" which has paths but no bounds-colon.
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"impl ") {
+            out.push_str("impl ");
+            i += 5;
+            let name_start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            let name = &s[name_start..i];
+            out.push_str(name);
+            // Strip only if next is ':' (single) meaning bounds, not path.
+            if i < bytes.len() && bytes[i] == b':' && (i + 1 >= bytes.len() || bytes[i + 1] != b':') {
+                // Skip until delimiter at depth 0.
+                i += 1; // skip ':'
+                let mut depth = 0usize;
+                while i < bytes.len() {
+                    match bytes[i] {
+                        b'<' => {
+                            depth += 1;
+                            i += 1;
+                        }
+                        b'>' if depth > 0 => {
+                            depth -= 1;
+                            i += 1;
+                        }
+                        b',' | b')' if depth == 0 => break,
+                        _ => i += 1,
+                    }
+                }
+            }
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn strip_path_prefixes(s: &str, krate: &str) -> String {
+    // Tokenize preserving structure: split on < > ( ) , space
+    // and strip path prefixes from identifier-like tokens.
+    // Simple approach: find all "X::Y" patterns where X is not a known
+    // external crate and strip leading segments until only the last remains,
+    // BUT only when the full path starts with the local crate name or is a
+    // relative module path (no std/core/alloc/etc prefix).
+    const KEEP_PREFIXES: &[&str] = &["std::", "core::", "alloc::", "futures::", "tokio::", "serde::", "anyhow::", "thiserror::"];
+    // Replace "krate::foo::Bar" with "foo::Bar" first (crate-qualified form).
+    let crate_prefix = format!("{}::", krate);
+    let mut result = s.replace(&crate_prefix, "");
+    // Now strip remaining "foo::Bar" → "Bar" for paths that don't start
+    // with a known external crate prefix.
+    // We do a pass: find "::" and walk back to find the start of the segment.
+    loop {
+        let mut changed = false;
+        // Find any "word::word" pattern where the leading word is not a
+        // kept prefix root.
+        let bytes = result.as_bytes();
+        let mut i = 0;
+        let mut new_result = String::with_capacity(result.len());
+        while i < bytes.len() {
+            // Look for "::"
+            if i + 1 < bytes.len() && bytes[i] == b':' && bytes[i + 1] == b':' {
+                // Walk back to find start of the leading segment.
+                let seg_end = i;
+                let mut seg_start = seg_end;
+                while seg_start > 0 {
+                    let c = bytes[seg_start - 1];
+                    if c.is_ascii_alphanumeric() || c == b'_' {
+                        seg_start -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                let seg = &result[seg_start..seg_end];
+                // Check if this segment is a kept external prefix root.
+                let keep = KEEP_PREFIXES.iter().any(|p| p.starts_with(&format!("{}::", seg)));
+                if !keep && !seg.is_empty() {
+                    // Strip "seg::" — remove from seg_start to i+2
+                    // Rewrite: everything before seg_start already pushed,
+                    // skip seg and "::", continue from i+2.
+                    // But we've been pushing char by char — restart with replace.
+                    let before = &result[..seg_start];
+                    let after = &result[i + 2..];
+                    result = format!("{}{}", before, after);
+                    changed = true;
+                    break;
+                }
+            }
+            new_result.push(bytes[i] as char);
+            i += 1;
+        }
+        if !changed {
+            break;
+        }
+    }
+    result
+}
+
 /// Canonical span: "src/foo.rs:line:col" — lo position only, no hygiene.
 pub fn span(tcx: TyCtxt<'_>, s: Span) -> String {
     let sm = tcx.sess.source_map();
@@ -84,8 +210,12 @@ pub fn path(tcx: TyCtxt<'_>, def_id: DefId) -> String {
     } else if let Some(rest) = raw.strip_prefix(&format!("{}::", krate)) {
         format!("crate::{}", rest)
     } else {
+        // If this is a local DefId but def_path_str omitted the crate name (can happen in
+        // some re-export / module edge cases), rebuild from def_path segments.
+        if def_id.is_local() && !raw.starts_with("crate::") && raw.contains("::") {
+            return module_path(tcx, def_id);
+        }
         // Cross-crate or already-canonical path — return as-is.
-        // Do NOT re-prefix: if it already starts with "crate::" we must not touch it.
         raw
     }
 }

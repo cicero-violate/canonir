@@ -30,12 +30,12 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
                 Some(rustc_hir::def::CtorKind::Const) => StructKind::Unit,
                 _ => StructKind::Named,
             };
-            let fields = map_fields(tcx, variant.fields.iter());
+            let fields = map_fields(tcx, variant.fields.iter(), false);
             NodeKind::Struct { name, vis, generics, fields, derives: Vec::new(), attrs: Vec::new(), where_clauses: Vec::new(), struct_kind }
         }
         DefKind::Enum => {
             let adt = tcx.adt_def(def_id);
-            let variants = adt.variants().iter().map(|v| EnumVariant { name: v.name.to_string(), fields: map_fields(tcx, v.fields.iter()) }).collect();
+            let variants = adt.variants().iter().map(|v| EnumVariant { name: v.name.to_string(), fields: map_fields(tcx, v.fields.iter(), true) }).collect();
             NodeKind::Enum { name, vis, generics, variants, derives: Vec::new(), attrs: Vec::new(), where_clauses: Vec::new() }
         }
         DefKind::Trait => NodeKind::Trait { name, vis, generics, methods: Vec::new(), attrs: Vec::new(), where_clauses: Vec::new(), unsafe_: false },
@@ -70,11 +70,12 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
                         let path = use_path.res.iter().find_map(|r| {
                             if let Some(rustc_hir::def::Res::Def(_, did)) = r {
                                 let p = norm::path(tcx, *did);
-                                // Only emit Use nodes with canonical crate-relative
-                                // or fully-qualified external paths. Drop bare names
-                                // that lack a module prefix — these are resolution
-                                // artifacts that would produce invalid `use` statements.
-                                if p.contains("::") {
+                                // Only emit canonical paths:
+                                // - local items must be "crate::..."
+                                // - external items must be "some_crate::..."
+                                let is_local = p.starts_with("crate::");
+                                let is_external = p.contains("::") && !p.starts_with("crate");
+                                if is_local || is_external {
                                     Some(p)
                                 } else {
                                     None
@@ -148,7 +149,7 @@ fn map_generics(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<GenericParam> {
         .filter(|p| p.name.as_str() != "Self")
         .map(|p| {
             let name = p.name.to_string();
-            let bounds = bounds_map.remove(&name).unwrap_or_default();
+            let bounds = bounds_map.remove(&name).unwrap_or_default().into_iter().filter(|b| b != "Sized" && b != "MetaSized").collect();
             let is_lifetime = matches!(p.kind, ty::GenericParamDefKind::Lifetime);
             GenericParam { name, bounds, is_lifetime, default_ty: None }
         })
@@ -182,11 +183,11 @@ fn map_params(tcx: TyCtxt<'_>, def_id: DefId, inputs: &[ty::Ty<'_>]) -> Vec<Para
         .collect()
 }
 
-fn map_fields<'a, I>(tcx: TyCtxt<'a>, fields: I) -> Vec<Field>
+fn map_fields<'a, I>(tcx: TyCtxt<'a>, fields: I, in_enum: bool) -> Vec<Field>
 where I: Iterator<Item = &'a ty::FieldDef> {
     fields
         .map(|f| {
-            let vis = map_vis(tcx.visibility(f.did));
+            let vis = if in_enum { Visibility::Private } else { map_vis(tcx.visibility(f.did)) };
             // Tuple struct/variant fields have numeric names "0", "1", ... in HIR.
             // ModelIR uses name: None for unnamed (positional) fields.
             let raw_name = f.name.to_string();
@@ -197,5 +198,8 @@ where I: Iterator<Item = &'a ty::FieldDef> {
 }
 
 fn fmt_ty(tcx: TyCtxt<'_>, ty: ty::Ty<'_>) -> String {
-    norm::ty(&ty.to_string())
+    let krate = tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).to_string();
+    let s = norm::ty(&ty.to_string());
+    let s = norm::ty_strip_local(&s, &krate);
+    norm::ty_clean_impl(&s)
 }
