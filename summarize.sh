@@ -7,4 +7,4 @@ bat -n /workspace/ai_sandbox/canon/GOAL.md
 bat -n /workspace/ai_sandbox/canon/PLAN.md
 bat -n /workspace/ai_sandbox/canon/EXECUTION_STATUS.md
 
-tree --gitignore
+tree --gitignore -I 'chatgpt_rustsandbox'
