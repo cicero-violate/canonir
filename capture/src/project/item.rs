@@ -1,6 +1,7 @@
 use model::ir::node::TraitMethod;
 use model::ir::node::{Body, EnumVariant, Field, GenericParam, Node, NodeKind, Param, StructKind, Visibility};
-use rustc_hir::{def::DefKind, PatKind, Safety};
+use rustc_hir::{def::DefKind, GenericBound, PatKind, PredicateOrigin, Safety, WherePredicateKind};
+use rustc_span::hygiene::{ExpnKind, MacroKind};
 use rustc_middle::ty::print::PrintTraitRefExt;
 use rustc_middle::ty::AssocKind;
 use rustc_middle::ty::{self, TyCtxt};
@@ -20,10 +21,22 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
     let file_str = norm::file(tcx, raw_span);
 
     let vis = map_vis(tcx.visibility(def_id));
-    let generics = map_generics(tcx, def_id);
+    let (generics, where_clauses) = map_generics(tcx, def_id);
 
     let kind = match tcx.def_kind(def_id) {
-        DefKind::Mod => NodeKind::Module { path: norm::module_path(tcx, def_id), file: norm::module_file(tcx, def_id), inline: false },
+        DefKind::Mod => {
+            let file = norm::module_file(tcx, def_id);
+            // An inline module lives in the same file as its declaration span.
+            let decl_file = norm::file(tcx, raw_span);
+            let inline = file == decl_file && def_id.as_local().map_or(false, |local| {
+                if let rustc_hir::Node::Item(item) = tcx.hir_node_by_def_id(local) {
+                    matches!(item.kind, rustc_hir::ItemKind::Mod(_, _))
+                } else {
+                    false
+                }
+            });
+            NodeKind::Module { path: norm::module_path(tcx, def_id), file, inline }
+        }
         DefKind::Struct | DefKind::Union => {
             let adt = tcx.adt_def(def_id);
             let variant = adt.non_enum_variant();
@@ -33,21 +46,23 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
                 _ => StructKind::Named,
             };
             let fields = map_fields(tcx, variant.fields.iter(), false);
-            NodeKind::Struct { name, vis, generics, fields, derives: Vec::new(), attrs: Vec::new(), where_clauses: Vec::new(), struct_kind }
+            let derives = collect_derives(tcx, def_id);
+            NodeKind::Struct { name, vis, generics, fields, derives, attrs: Vec::new(), where_clauses, struct_kind }
         }
         DefKind::Enum => {
             let adt = tcx.adt_def(def_id);
             let variants = adt.variants().iter().map(|v| EnumVariant { name: v.name.to_string(), fields: map_fields(tcx, v.fields.iter(), true) }).collect();
-            NodeKind::Enum { name, vis, generics, variants, derives: Vec::new(), attrs: Vec::new(), where_clauses: Vec::new() }
+            let derives = collect_derives(tcx, def_id);
+            NodeKind::Enum { name, vis, generics, variants, derives, attrs: Vec::new(), where_clauses }
         }
         DefKind::Trait => {
             let methods = collect_trait_methods(tcx, def_id);
-            NodeKind::Trait { name, vis, generics, methods, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_: false }
+            NodeKind::Trait { name, vis, generics, methods, attrs: Vec::new(), where_clauses, unsafe_: false }
         }
         DefKind::Impl { .. } => {
             let for_trait = tcx.impl_opt_trait_ref(def_id).map(|eb| norm::path(tcx, eb.skip_binder().def_id)).map(|p| norm::short(&p).to_string());
             let for_struct = tcx.type_of(def_id).instantiate_identity().ty_adt_def().map(|adt| norm::short(&norm::path(tcx, adt.did())).to_string()).unwrap_or_else(|| name.clone());
-            NodeKind::Impl { for_struct, for_trait, generics, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_: false }
+            NodeKind::Impl { for_struct, for_trait, generics, attrs: Vec::new(), where_clauses, unsafe_: false }
         }
         DefKind::Fn => {
             let sig = tcx.fn_sig(def_id).skip_binder();
@@ -57,7 +72,7 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
             let ret = if async_ { unwrap_future_output(&ret_raw) } else { ret_raw };
             let unsafe_ = sig.safety() == Safety::Unsafe;
             let body = hir_body_src(tcx, def_id);
-            NodeKind::Function { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_, async_ }
+            NodeKind::Function { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ }
         }
         DefKind::AssocFn => {
             let sig = tcx.fn_sig(def_id).skip_binder();
@@ -67,7 +82,7 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
             let ret = if async_ { unwrap_future_output(&ret_raw) } else { ret_raw };
             let unsafe_ = sig.safety() == Safety::Unsafe;
             let body = hir_body_src(tcx, def_id);
-            NodeKind::Method { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_, async_ }
+            NodeKind::Method { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ }
         }
         DefKind::Const => {
             let ty_str = fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity());
@@ -80,7 +95,7 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
             let mutable = mutability == rustc_hir::Mutability::Mut;
             NodeKind::Static { name, vis, ty: ty_str, value, mutable, attrs: Vec::new() }
         }
-        DefKind::TyAlias => NodeKind::TypeAlias { name, vis, generics, ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()), attrs: Vec::new(), where_clauses: Vec::new() },
+        DefKind::TyAlias => NodeKind::TypeAlias { name, vis, generics, ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()), attrs: Vec::new(), where_clauses },
         DefKind::Use => {
             if let Some(local) = def_id.as_local() {
                 if let rustc_hir::Node::Item(item) = tcx.hir_node_by_def_id(local) {
@@ -88,9 +103,6 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
                         let path = use_path.res.iter().find_map(|r| {
                             if let Some(rustc_hir::def::Res::Def(_, did)) = r {
                                 let p = norm::path(tcx, *did);
-                                // Only emit canonical paths:
-                                // - local items must be "crate::..."
-                                // - external items must be "some_crate::..."
                                 let is_local = p.starts_with("crate::");
                                 let is_external = p.contains("::") && !p.starts_with("crate");
                                 if is_local || is_external {
@@ -102,7 +114,6 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
                                 None
                             }
                         });
-                        // If resolution failed (no Res::Def found), skip this Use node.
                         let path = match path {
                             Some(p) => p,
                             None => return None,
@@ -132,72 +143,126 @@ fn map_vis(v: ty::Visibility<DefId>) -> Visibility {
     }
 }
 
-fn map_generics(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<GenericParam> {
-    let supported = matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn | DefKind::Struct | DefKind::Enum | DefKind::Trait | DefKind::Impl { .. } | DefKind::TyAlias);
+/// Returns `(generic_params, where_clause_strings)`.
+///
+/// Inline bounds: read from HIR `GenericParam.bounds` (written as `<T: Bound>`).
+/// Where clauses: read from HIR `Generics.predicates` with `origin == WhereClause`.
+/// Both are source snippets — exactly what the user wrote, no path normalization.
+fn map_generics(tcx: TyCtxt<'_>, def_id: DefId) -> (Vec<GenericParam>, Vec<String>) {
+    let supported = matches!(
+        tcx.def_kind(def_id),
+        DefKind::Fn | DefKind::AssocFn | DefKind::Struct | DefKind::Enum
+            | DefKind::Trait | DefKind::Impl { .. } | DefKind::TyAlias
+    );
     if !supported {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
-    let gens = tcx.generics_of(def_id);
-    let mut bounds_map: std::collections::HashMap<String, Vec<String>> = Default::default();
+    let Some(local) = def_id.as_local() else {
+        return map_generics_ty_fallback(tcx, def_id);
+    };
 
-    for (clause, _span) in tcx.predicates_of(def_id).predicates {
-        match clause.kind().skip_binder() {
-            ty::ClauseKind::Trait(tp) => {
-                if let ty::TyKind::Param(p) = tp.self_ty().kind() {
-                    let trait_str = format!("{}", tp.trait_ref.print_only_trait_name());
-                    // Skip implicit Sized bound — rustc adds it to every type param.
-                    if trait_str == "Sized" || trait_str == "MetaSized" {
-                        continue;
+    let hir_generics = match tcx.hir_node_by_def_id(local) {
+        rustc_hir::Node::Item(item) => item.kind.generics(),
+        rustc_hir::Node::TraitItem(ti) => Some(ti.generics),
+        rustc_hir::Node::ImplItem(ii) => Some(ii.generics),
+        _ => None,
+    };
+    let Some(hgen) = hir_generics else {
+        return map_generics_ty_fallback(tcx, def_id);
+    };
+
+    let sm = tcx.sess.source_map();
+
+    // Inline bounds: from GenericParam.bounds, skip Sized.
+    let params: Vec<GenericParam> = hgen.params.iter()
+        .filter(|p| {
+            let n = p.name.ident().to_string();
+            n != "Self" && !p.is_elided_lifetime() && !p.is_impl_trait()
+        })
+        .map(|p| {
+            let name = p.name.ident().to_string();
+            let is_lifetime = matches!(p.kind, rustc_hir::GenericParamKind::Lifetime { .. });
+            // All bounds (inline and where) live in hgen.predicates since PR #93803.
+            // Inline bounds have origin == GenericParam; where-clause bounds have origin == WhereClause.
+            let bounds: Vec<String> = hgen.predicates.iter()
+                .filter_map(|pred| {
+                    if let WherePredicateKind::BoundPredicate(bp) = pred.kind {
+                        if bp.origin == PredicateOrigin::GenericParam {
+                            // Check that this predicate applies to our param by matching name.
+                            let bounded_name = sm.span_to_snippet(bp.bounded_ty.span).unwrap_or_default();
+                            if bounded_name == name {
+                                return Some(bp.bounds);
+                            }
+                        }
                     }
-                    bounds_map.entry(p.name.to_string()).or_default().push(trait_str);
+                    None
+                })
+                .flat_map(|bounds| bounds.iter())
+                .filter(|b| !is_sized_bound(b))
+                .filter_map(|b| sm.span_to_snippet(b.span()).ok())
+                .collect();
+            GenericParam { name, bounds, is_lifetime, default_ty: None }
+        })
+        .collect();
+
+    // Where clauses: predicates with origin == WhereClause.
+    let mut where_clauses: Vec<String> = Vec::new();
+    for pred in hgen.predicates {
+        if !pred.kind.in_where_clause() {
+            continue;
+        }
+        match pred.kind {
+            WherePredicateKind::BoundPredicate(bp) => {
+                let lhs = sm.span_to_snippet(bp.bounded_ty.span).unwrap_or_default();
+                let rhs: Vec<String> = bp.bounds.iter()
+                    .filter_map(|b| sm.span_to_snippet(b.span()).ok())
+                    .collect();
+                if !lhs.is_empty() && !rhs.is_empty() {
+                    where_clauses.push(format!("{}: {}", lhs, rhs.join(" + ")));
                 }
             }
-            ty::ClauseKind::RegionOutlives(ro) => {
-                let name = format!("{}", ro.0);
-                let bound = format!("{}", ro.1);
-                bounds_map.entry(name).or_default().push(bound);
+            WherePredicateKind::RegionPredicate(rp) => {
+                let lhs = rp.lifetime.ident.to_string();
+                let rhs: Vec<String> = rp.bounds.iter()
+                    .filter_map(|b| sm.span_to_snippet(b.span()).ok())
+                    .collect();
+                if !rhs.is_empty() {
+                    where_clauses.push(format!("{}: {}", lhs, rhs.join(" + ")));
+                }
             }
             _ => {}
         }
     }
 
-    gens.own_params
-        .iter()
-        .filter(|p| p.name.as_str() != "Self")
-        // Filter out synthetic impl-trait params (named "impl Trait").
-        .filter(|p| !p.name.as_str().starts_with("impl "))
-        .map(|p| {
-            let name = p.name.to_string();
-            let bounds = bounds_map
-                .remove(&name)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|b| normalize_bound(&b))
-                .filter(|b| b != "Sized" && b != "MetaSized")
-                .collect();
-            let is_lifetime = matches!(p.kind, ty::GenericParamDefKind::Lifetime);
-            GenericParam { name, bounds, is_lifetime, default_ty: None }
-        })
-        .collect()
+    (params, where_clauses)
 }
 
-/// Strip stdlib path prefixes from a trait bound string.
-/// "std::marker::Sized" -> "Sized", "std::cmp::PartialOrd" -> "PartialOrd", etc.
-fn normalize_bound(b: &str) -> String {
-    const BOUND_PREFIXES: &[&str] = &[
-        "std::marker::", "core::marker::", "std::cmp::", "core::cmp::",
-        "std::fmt::", "core::fmt::", "std::clone::", "core::clone::",
-        "std::ops::", "core::ops::", "std::convert::", "core::convert::",
-        "std::iter::", "core::iter::", "std::future::", "core::future::",
-        "std::hash::", "core::hash::",
-    ];
-    for prefix in BOUND_PREFIXES {
-        if let Some(short) = b.strip_prefix(prefix) {
-            return short.to_string();
+/// True if a HIR GenericBound is a `Sized` or `MetaSized` bound (implicit, skip it).
+#[allow(dead_code)]
+fn is_sized_bound(b: &GenericBound<'_>) -> bool {
+    if let GenericBound::Trait(tr) = b {
+        if let Some(seg) = tr.trait_ref.path.segments.last() {
+            let n = seg.ident.name.as_str();
+            return n == "Sized" || n == "MetaSized";
         }
     }
-    b.to_string()
+    false
+}
+
+/// Fallback for non-local DefIds: ty-query only, no where-clause split.
+fn map_generics_ty_fallback(tcx: TyCtxt<'_>, def_id: DefId) -> (Vec<GenericParam>, Vec<String>) {
+    let gens = tcx.generics_of(def_id);
+    let params = gens.own_params
+        .iter()
+        .filter(|p| p.name.as_str() != "Self" && !p.name.as_str().starts_with("impl "))
+        .map(|p| {
+            let name = p.name.to_string();
+            let is_lifetime = matches!(p.kind, ty::GenericParamDefKind::Lifetime);
+            GenericParam { name, bounds: Vec::new(), is_lifetime, default_ty: None }
+        })
+        .collect();
+    (params, Vec::new())
 }
 
 fn map_params(tcx: TyCtxt<'_>, def_id: DefId, inputs: &[ty::Ty<'_>]) -> Vec<Param> {
@@ -223,7 +288,6 @@ fn map_params(tcx: TyCtxt<'_>, def_id: DefId, inputs: &[ty::Ty<'_>]) -> Vec<Para
             let name = hir_names.get(i).and_then(|n| n.clone()).unwrap_or_else(|| format!("p{i}"));
             let is_self = name == "self";
             let ty_str = if is_self {
-                // Normalize self type: &User -> &Self, User -> Self.
                 let raw = fmt_ty(tcx, *ty);
                 if raw.starts_with('&') { "&Self".to_string() } else { "Self".to_string() }
             } else {
@@ -239,8 +303,6 @@ where I: Iterator<Item = &'a ty::FieldDef> {
     fields
         .map(|f| {
             let vis = if in_enum { Visibility::Private } else { map_vis(tcx.visibility(f.did)) };
-            // Tuple struct/variant fields have numeric names "0", "1", ... in HIR.
-            // ModelIR uses name: None for unnamed (positional) fields.
             let raw_name = f.name.to_string();
             let name = if raw_name.chars().all(|c| c.is_ascii_digit()) { None } else { Some(raw_name) };
             Field { name, ty: fmt_ty(tcx, tcx.type_of(f.did).instantiate_identity()), vis }
@@ -252,14 +314,12 @@ fn fmt_ty(tcx: TyCtxt<'_>, ty: ty::Ty<'_>) -> String {
     let krate = tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).to_string();
     let s = norm::ty(&ty.to_string());
     let s = norm::ty_strip_local(&s, &krate);
-    norm::ty_clean_impl(&s)
+    let s = norm::ty_clean_impl(&s);
+    norm::ty_strip_static_lifetime(&s)
 }
 
-/// For trait method declarations, HIR param names come from the TraitItem,
-/// not from a body (which doesn't exist for declarations). Fall back to
-/// walking the HIR TraitItem's fn decl for ident names.
+/// For trait method declarations, HIR param names come from the TraitItem fn decl.
 fn map_trait_method_params(tcx: TyCtxt<'_>, def_id: DefId, inputs: &[ty::Ty<'_>]) -> Vec<Param> {
-    // Try to get param idents from HIR TraitItem fn decl.
     let hir_names: Vec<Option<String>> = def_id
         .as_local()
         .and_then(|local| {
@@ -271,10 +331,7 @@ fn map_trait_method_params(tcx: TyCtxt<'_>, def_id: DefId, inputs: &[ty::Ty<'_>]
             None
         })
         .unwrap_or_default();
-    // Get self status from AssocItem.
     let has_self = inputs.first().map_or(false, |ty| {
-        // The first input is `&Self` or `Self` for methods with self.
-        // Check via ty string — crude but reliable for our purposes.
         let s = ty.to_string();
         s == "Self" || s.ends_with("Self")
     });
@@ -286,39 +343,26 @@ fn map_trait_method_params(tcx: TyCtxt<'_>, def_id: DefId, inputs: &[ty::Ty<'_>]
             let name = if is_self {
                 "self".to_string()
             } else {
-                hir_names
-                    .get(i)
-                    .and_then(|n| n.clone())
-                    .unwrap_or_else(|| format!("p{i}"))
+                hir_names.get(i).and_then(|n| n.clone()).unwrap_or_else(|| format!("p{i}"))
             };
-
             let ty_str = if is_self {
                 let raw = fmt_ty(tcx, *ty);
-                if raw.starts_with('&') {
-                    "&Self".to_string()
-                } else {
-                    "Self".to_string()
-                }
+                if raw.starts_with('&') { "&Self".to_string() } else { "Self".to_string() }
             } else {
                 fmt_ty(tcx, *ty)
             };
-
             Param { name, ty: ty_str, is_self, mutable: false, lifetime: None }
         })
         .collect()
 }
 
-/// Unwrap `impl Future<Output = T>` or `impl Future<Output=T>` → `T`.
-/// Used to normalize async fn return types so the emit layer can render
-/// `async fn foo() -> T` instead of `async fn foo() -> impl Future<Output=T>`.
+/// Unwrap `impl Future<Output = T>` → `T` for async fn return types.
 fn unwrap_future_output(ret: &str) -> String {
-    // Matches: "impl Future<Output = T>" or "impl Future<Output=T>"
     let trimmed = ret.trim();
     if let Some(inner) = trimmed.strip_prefix("impl Future<Output") {
         let inner = inner.trim_start_matches(|c: char| c.is_whitespace());
         if let Some(inner) = inner.strip_prefix("=") {
             let inner = inner.trim();
-            // Strip trailing '>'
             if let Some(t) = inner.strip_suffix('>') {
                 return t.trim().to_string();
             }
@@ -328,11 +372,8 @@ fn unwrap_future_output(ret: &str) -> String {
 }
 
 /// Slice the source text of a Const or Static initializer expression.
-/// Falls back to empty string if the item has no local body or the span
-/// is synthetic (macros, autogenerated code).
 fn hir_init_src(tcx: TyCtxt<'_>, def_id: DefId) -> String {
     let Some(local) = def_id.as_local() else { return String::new() };
-    // Nightly-stable safe body extraction
     let Some(body) = tcx.hir_maybe_body_owned_by(local) else { return String::new() };
     let span = body.value.span;
     let sm = tcx.sess.source_map();
@@ -348,12 +389,10 @@ fn collect_trait_methods(tcx: TyCtxt<'_>, trait_def_id: DefId) -> Vec<TraitMetho
             let sig = tcx.fn_sig(item.def_id).skip_binder();
             let params = map_trait_method_params(tcx, item.def_id, sig.inputs().skip_binder());
             let ret = fmt_ty(tcx, sig.output().skip_binder());
-            // For async fns, fn_sig output is `impl Future<Output = T>`.
-            // Unwrap to T so emit produces `async fn ... -> T`.
             let ret = if tcx.asyncness(item.def_id).is_async() { unwrap_future_output(&ret) } else { ret };
             let unsafe_ = sig.safety() == Safety::Unsafe;
             let async_ = tcx.asyncness(item.def_id).is_async();
-            let generics = map_generics(tcx, item.def_id);
+            let (generics, _where_clauses) = map_generics(tcx, item.def_id);
             let vis = map_vis(tcx.visibility(item.def_id));
             TraitMethod { name: item.name().to_string(), vis, generics, params, ret, body: Body::None, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_, async_ }
         })
@@ -361,7 +400,6 @@ fn collect_trait_methods(tcx: TyCtxt<'_>, trait_def_id: DefId) -> Vec<TraitMetho
 }
 
 /// Capture function/method body as Body::Raw(source) via HIR body span.
-/// Returns Body::None for trait declarations and extern fns (no local body).
 fn hir_body_src(tcx: TyCtxt<'_>, def_id: DefId) -> Body {
     let Some(local) = def_id.as_local() else { return Body::None };
     let Some(body) = tcx.hir_maybe_body_owned_by(local) else { return Body::None };
@@ -373,17 +411,12 @@ fn hir_body_src(tcx: TyCtxt<'_>, def_id: DefId) -> Body {
     }
 }
 
-/// Strip a single layer of outer `{ ... }` braces from a body snippet,
-/// trimming whitespace. The HIR body value span includes the block braces,
-/// but ModelIR Body::Raw stores just the inner content.
+/// Strip outer `{ ... }` braces and dedent.
 fn strip_outer_braces(src: String) -> String {
     let trimmed = src.trim();
     if trimmed.starts_with('{') && trimmed.ends_with('}') {
-        // Remove first '{' and last '}', then trim inner whitespace.
         let inner = &trimmed[1..trimmed.len() - 1];
-        // Dedent: find minimum indentation and strip it.
         let lines: Vec<&str> = inner.lines().collect();
-        // Find minimum leading whitespace among non-empty lines.
         let min_indent = lines.iter()
             .filter(|l| !l.trim().is_empty())
             .map(|l| l.len() - l.trim_start().len())
@@ -396,4 +429,27 @@ fn strip_outer_braces(src: String) -> String {
     } else {
         src
     }
+}
+
+/// Extract derive macro names from `#[derive(...)]` attributes via HIR attr list.
+fn collect_derives(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<String> {
+    let mut derives = Vec::new();
+    for impl_did in tcx.all_local_trait_impls(()).values().flatten().copied() {
+        let impl_def_id = impl_did.to_def_id();
+        // Only impls for our ADT.
+        let Some(adt) = tcx.type_of(impl_def_id).instantiate_identity().ty_adt_def() else { continue };
+        if adt.did() != def_id { continue; }
+        // Must be #[automatically_derived] with a Derive expansion context.
+        if !tcx.is_automatically_derived(impl_def_id) { continue; }
+        let outer = tcx.def_span(impl_did).ctxt().outer_expn_data();
+        if !matches!(outer.kind, ExpnKind::Macro(MacroKind::Derive, _)) { continue; }
+        // Extract the trait name.
+        {
+            let trait_ref = tcx.impl_trait_ref(impl_def_id);
+            let trait_did = trait_ref.skip_binder().def_id;
+            let name = norm::short(&norm::path(tcx, trait_did)).to_string();
+            derives.push(name);
+        }
+    }
+    derives
 }
