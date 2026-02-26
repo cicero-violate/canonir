@@ -44,16 +44,16 @@ python /workspace/ai_sandbox/canon/test_projects/test_rust_projects/diff_src_dir
 /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/semantic-lint/src \
 /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/semantic-lint/src
 
-./run_capture.sh /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/MMSB /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/MMSB/canon_capture.json
-rm -rf /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/MMSB/
+./run_capture.sh /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/conversation /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/conversation/canon_capture.json
+rm -rf /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/conversation/
 cargo run -p orchestration -- \
-/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/MMSB/canon_capture.json \
-/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/MMSB
+/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/conversation/canon_capture.json \
+/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/conversation
 
-cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/MMSB && cargo fmt
-cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/MMSB && cargo fmt
-cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/MMSB && CARGO_NET_OFFLINE="${CARGO_NET_OFFLINE:-true}" cargo build
+cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/conversation && cargo fmt
+cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/conversation && cargo fmt
+cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/conversation && CARGO_NET_OFFLINE="${CARGO_NET_OFFLINE:-true}" cargo build
 
 python /workspace/ai_sandbox/canon/test_projects/test_rust_projects/diff_src_dirs.py \
-/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/MMSB/src \
-/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/MMSB/src
+/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/conversation/src \
+/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/conversation/src
