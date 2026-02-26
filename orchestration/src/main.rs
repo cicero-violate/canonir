@@ -20,26 +20,42 @@ use anyhow::{Context, Result};
 use model::ir::model_ir::ModelIR;
 use mutation::{apply, diff, verify, MutationOp};
 use std::path::PathBuf;
+use canon::seal;
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let json_path = args.next().map(PathBuf::from).context("usage: orchestration <model_ir.json> <output_dir> [--mutate <mutation.json>]")?;
     let out_dir = args.next().map(PathBuf::from).context("usage: orchestration <model_ir.json> <output_dir> [--mutate <mutation.json>]")?;
 
-    // Optional --mutate <path>
-    let mutate_path: Option<PathBuf> = {
-        let flag = args.next();
-        if flag.as_deref() == Some("--mutate") {
-            Some(args.next().map(PathBuf::from).context("--mutate requires a path argument")?)
-        } else {
-            None
-        }
-    };
+    // Parse remaining flags (order-independent)
+    let mut mutate_path: Option<PathBuf> = None;
+    let mut emit_canon = false;
 
-    run_pipeline(json_path, out_dir, mutate_path)
+    while let Some(flag) = args.next() {
+        match flag.as_str() {
+            "--mutate" => {
+                mutate_path = Some(
+                    args.next()
+                        .map(PathBuf::from)
+                        .context("--mutate requires a path argument")?,
+                );
+            }
+            "--canon" => {
+                emit_canon = true;
+            }
+            _ => {}
+        }
+    }
+
+    run_pipeline(json_path, out_dir, mutate_path, emit_canon)
 }
 
-fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBuf>) -> Result<()> {
+fn run_pipeline(
+    json_path: PathBuf,
+    out_dir: PathBuf,
+    mutate_path: Option<PathBuf>,
+    emit_canon: bool,
+) -> Result<()> {
     // ── Stage 1: load ModelIR from JSON ─────────────────────────────────────
     println!("Loading {:?}", json_path);
     let json = std::fs::read_to_string(&json_path).with_context(|| format!("cannot read {:?}", json_path))?;
@@ -110,5 +126,23 @@ fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBu
     println!("Snapshot written to {:?}", snap_path);
 
     println!("Pipeline complete.");
+
+    // Optional seal → CanonIR
+    if emit_canon {
+        println!("Sealing to CanonIR...");
+        let canon_ir = seal(&ir);
+        let canon_json =
+            serde_json::to_string_pretty(&canon_ir).context("canon serialize failed")?;
+        let canon_path = out_dir.join("canon.json");
+        std::fs::write(&canon_path, canon_json).context("canon write failed")?;
+        println!(
+            "CanonIR: {} nodes, {} names, {} paths → {:?}",
+            canon_ir.nodes.len(),
+            canon_ir.name_intern.len(),
+            canon_ir.path_intern.len(),
+            canon_path,
+        );
+    }
+
     Ok(())
 }
