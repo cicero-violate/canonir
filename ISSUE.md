@@ -18,3 +18,10 @@ Round-trip status: capture -> ModelIR -> emit -> cargo build compiles clean.
 
 Remaining diff is emit-order only (analyzer-level) and one alias RHS
 formatting difference (std::result::Result vs Result) — not capture bugs."
+
+Key files:
+bat -n capture/src/norm.rs         # — normalization layer (span/path/file/ty)
+bat -n capture/src/project/item.rs # — HIR → NodeKind projection
+bat -n capture/src/project/body.rs # — MIR body capture (next target)
+bat -n capture/src/assemble.rs     # — partial merge + Use dedup
+bat -n model/src/ir/node.rs        # — Body enum (None/Raw/Rust variants)"
