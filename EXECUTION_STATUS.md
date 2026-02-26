@@ -23,3 +23,25 @@
 
 - Phase 4 — **Blocked** on g2 (Use node target field) and g3 fully active. h1 path injection still in `file.rs`.
 - Phase 6 — **Blocked** on g1 (Crate node missing `dependencies` field).
+
+## IR Fixes (2026-02-26)
+
+- g1 — **Completed**
+  - Added `dependencies: Vec<PathId>` (serde default `vec![]`) to `CanonNodeKind::Crate` in `node.rs`.
+  - Updated `canon_assemble.rs` Crate constructor to emit `dependencies: vec![]`.
+  - `build_plan` in `layout/mod.rs` now reads `Crate.dependencies` directly.
+  - Deleted `infer_dependencies` and `roots_from_text` from `layout/mod.rs`.
+  - Unblocks Phase 6.
+
+- g2 — **Completed**
+  - Added `target: Option<CanonId>` (serde default `None`) to `CanonNodeKind::Use` in `node.rs`.
+  - Updated all Use constructors (`canon_assemble.rs`, `use_solver.rs`) to emit `target: None`.
+  - Updated all Use destructuring patterns (`items.rs`, `use_solver.rs`) with `..`.
+  - Unblocks Phase 4.
+
+- Phase 4 — **Unblocked** — g2 resolved, g3 active. h1 path injection remains in `file.rs`; ready for use_solver injection work.
+- Phase 6 — **Unblocked** — g1 resolved. Ready to add `dep_solver.rs` and wire into solver chain.
+
+---
+
+
