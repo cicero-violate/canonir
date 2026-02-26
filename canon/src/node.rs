@@ -82,9 +82,7 @@ pub enum TypeKind {
 
     /// Unresolved type reference by name (e.g. from TypeRef nodes in ModelIR).
     /// NameId points into name_intern.
-    TypeRef {
-        name_id: NameId,
-    },
+    TypeRef { name_id: NameId },
 }
 
 // ── CFG op kinds (replaces Stmt + Terminator strings) ────────────────────────

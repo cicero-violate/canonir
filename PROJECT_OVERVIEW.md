@@ -2,136 +2,89 @@
 
 ## Verified Execution
 
-```
+```bash
+# Model pipeline (default)
 rm -rf test_projects/test_rust_project/test_emit
 cargo run -p orchestration -- \
   test_projects/test_rust_project/model_ir.json \
   test_projects/test_rust_project/test_emit
-
 cd test_projects/test_rust_project/test_emit && cargo build
-cargo run
 
-# latest parity check (capture -> emit -> build)
+# Canon pipeline for test_1
+rm -rf test_projects/test_rust_projects/emit/test_1
 cargo run -p orchestration -- \
   test_projects/test_rust_projects/capture/test_1/capture.json \
-  test_projects/test_rust_projects/emit/test_1
+  test_projects/test_rust_projects/emit/test_1 \
+  --canon
 cd test_projects/test_rust_projects/emit/test_1 && cargo build
+
+# Canon pipeline for repomap
+rm -rf test_projects/test_rust_projects/emit/repomap
+cargo run -p orchestration -- \
+  test_projects/test_rust_projects/capture/repomap/capture.json \
+  test_projects/test_rust_projects/emit/repomap \
+  --canon
+cd test_projects/test_rust_projects/emit/repomap && cargo build
 ```
 
 ### Core files to know
 
-```
+```text
 model/src/ir/
   mod.rs          — re-exports all IR modules
   node.rs         — NodeId, NodeKind, Body, BasicBlock, Stmt, Terminator,
                     Field, Param, GenericParam, EnumVariant, Visibility
-                    NEW: EnumVariant, NodeKind::{Enum,Const,Static,MacroCall}
-                    NEW fields on all items: attrs, where_clauses
-                    NEW fields on Fn/Method/Trait/Impl: unsafe_, async_
-                    NEW on Module: vis (module visibility preserved end-to-end)
   edge.rs         — EdgeKind: Contains, Calls, Resolves, Renames, TypeOf,
                     TypeUnifies, CfgEdge, CfgBranch, Outlives, ConstDep, Expands
   csr_graph.rs    — CsrGraph<ND,ED>: from_edges(), neighbours(), Default
   model_ir.rs     — ModelIR: nodes, emit_order, edge_hints,
-                    8 CsrGraphs (name, type, call, module, cfg, region, value, macro)
-                    NEW: cargo_dependencies (for Cargo.toml emission)
+                    8 CsrGraphs (name, type, call, module, cfg, region, value, macro),
+                    cargo_dependencies
   model_diff.rs   — diff_semantic covers all 8 graphs + edge_hints + emit_order
 
+canon/src/
+  ir.rs           — CanonIR, intern tables, 8 CSR graphs, emit_order
+  node.rs         — CanonNodeKind, TypeKind, CfgOp, flags bitfield
+  seal.rs         — seal(ModelIR) -> CanonIR
+                    now enriches composite payload (fields/variants/generics/trait methods/derives)
+
 analyzer/src/
-  lib.rs               — analyze(ir) = derive() + solve()
-  derive.rs            — routes all 11 EdgeKinds into 8 graph builders
-  graph/
-    name_graph.rs      — NameGraphBuilder   (Renames, Resolves)
-    type_graph.rs      — TypeGraphBuilder   (TypeOf, TypeUnifies)
-    call_graph.rs      — CallGraphBuilder   (Calls)
-    module_graph.rs    — ModuleGraphBuilder (Contains, ImplFor)
-    cfg_graph.rs       — CfgGraphBuilder    (CfgEdge, CfgBranch)
-    region_graph.rs    — RegionGraphBuilder (Outlives)
-    value_graph.rs     — ValueGraphBuilder  (ConstDep)
-    macro_graph.rs     — MacroGraphBuilder  (Expands)
-  solver/
-    mod.rs             — solve() chains all solvers in dependency order
-    module_solver.rs   — topo sort → emit_order
-    name_solver.rs     — topo sort → rename propagation
-    type_solver.rs     — Kosaraju SCC → cycle detection
-    call_solver.rs     — DFS → dead function detection
-    cfg_solver.rs      — DFS reachability + Cooper dominators
-    use_solver.rs      — DFS on inv_module_graph → inject Use nodes
-    invariant_solver.rs— dangling edges, impl targets, acyclic module graph
-    visibility_solver.rs— pub/private enforcement across modules
-    impl_solver.rs     — impl target existence + duplicate impl detection
-    trait_solver.rs    — trait method completeness
-    generic_solver.rs  — TypeUnifies concrete conflict detection via SCC
-    provenance_solver.rs— name shadowing + symbol origin chains
-    cycle_diag_solver.rs— structured diagnostics for type SCC cycles
-    liveness_solver.rs — prune dead functions from emit_order
-    stability_solver.rs— deterministic emit_order sort (covers all NodeKind variants)
-    const_solver.rs    — ACTIVE: topo-sort G_value, error on ConstDep cycle
-    macro_solver.rs    — ACTIVE: topo-sort G_macro, error on recursive macro cycle
-    exhaustiveness_solver.rs — ACTIVE: warn on uncovered enum variants
-    unsafe_solver.rs   — ACTIVE: warn on safe callers of unsafe fns via G_call
-    borrow_solver.rs   — ACTIVE: Outlives SCC cycle detection (G_region)
-    drop_solver.rs     — ACTIVE: post_dom drop order verification (S16)
+  lib.rs          — analyze(ir) = derive() + solve() on ModelIR
+  derive.rs       — routes edge_hints into 8 graph builders
+  graph/          — name/type/call/module/cfg/region/value/macro builders
+  solver/         — full ModelIR solver chain
 
-algorithms/src/control_flow/
-  dominators.rs       — dominators(), post_dominators() (reversed CFG + synthetic super_exit)
+canon-analyzer/src/
+  lib.rs          — canon_analyze(ir) = derive() + solve() on CanonIR
+  derive.rs       — runs Canon graph builders and unions derived edges with sealed edges
+  graph/          — Canon-native builders for all 8 graphs
+  solver/         — Canon solver chain (invariant/module/type/call/cfg/...)
+                    Canon mode currently skips aggressive name/use mutation steps
 
-algorithms/src/graph/
-  dfs.rs              — dfs(adj, start) -> Vec<usize>
-  topological_sort.rs — Kahn's algorithm
-  scc.rs              — Kosaraju SCC
-  reachability.rs     — reachability(adj, roots) -> Vec<bool>
-                        is_acyclic(adj) -> bool
+projection/src/
+  layout/         — Model layout passes
+  emit/           — Model emitter split by concern (file/items/functions/impls/types/body/fmt/cargo)
 
-projection/src/layout/
-  mod.rs        — Plan/FilePlan/ItemPlan API; build_plan(ir) runs passes
-  skeleton.rs   — raw structural Plan from ModelIR (files/modules/impl stubs),
-                  dependency inference fallback, module default visibility policy
-  passes/
-    order_items.rs       — sorts items by NodeKind priority (ExternCrate→Use→TypeAlias→Const→Static→Struct→Enum→Trait→Impl→Fn)
-    group_impl_methods.rs   — attach impl methods via module_graph
-    sanitize_generics.rs    — keep IR generics stable (no synthetic inference)
-    normalize_visibility.rs — clear vis on trait methods inside impls
-    inject_imports.rs       — heuristic imports + Use dedup + targeted fallbacks
-
-projection/src/emit/
-  mod.rs       — re-exports pure renderers
-  file.rs      — emit_plan (Plan -> (PathBuf, String)), no ordering logic
-  items.rs     — Item/Module dispatch; modules iterate Plan order (no DFS),
-                 module visibility-aware `mod`/`pub mod`
-  functions.rs — Trait/Fn renderers (type normalization applied)
-  impls.rs     — Impl renderer
-  types.rs     — Struct/Enum/TypeAlias/ExternCrate/TypeRef renderers (type normalization)
-  macros.rs    — MacroCall helper shim
-  fmt.rs       — fmt_trait_method honours attrs/where/unsafe/async;
-                 normalizes std path aliases + local path qualification
-  body.rs      — emit_blocks(), indent_raw()
-  cargo.rs     — emit_cargo_toml(name, edition, has_binary, dependencies)
-
-mutation/
-  src/
-    lib.rs     — MutationOp, ChangeSet, apply/diff/verify re-exports
-    apply.rs   — apply(ir, op) -> Result<NodeId>  (tombstone strategy)
-    diff.rs    — diff(before, after) -> ChangeSet
-    verify.rs  — verify(ir) = analyze(clone) + invariant_solver
+canon-projection/src/
+  layout/         — Canon layout plan builder + dependency inference
+  emit/           — Canon emitter split like projection:
+                    file/items/functions/impls/types/body/fmt/cargo/macros/helpers
+                    Type rendering is structural via TypeKind
 
 orchestration/src/main.rs
-  — args: <model_ir.json> <output_dir> [--mutate <mutation.json>]
-  — pipeline: load → analyze → (optional mutate/verify/diff) → project(layout) → emit → snapshot
-  — projection API: project(&ModelIR) -> Plan; emit_to_disk(&Plan, out_dir)
-
-test_projects/test_rust_project/model_ir.json
-  — 46 nodes: Crate, Module x9, Struct x2, Enum x1, Trait x1, Impl x4,
-              Method x4, Function x9, Const x2, Static x1, MacroCall x1,
-              TypeAlias x2, TypeRef x2, Use x1
-  — exercises: trait impls, enums, const/static, async fn, unsafe fn,
-               attrs, where clauses, macro calls, Describable trait,
-               dead function, TypeUnifies cycle, cross-module Resolves
+  args: <model_ir.json> <output_dir> [--mutate <mutation.json>] [--canon]
+  mode default: Model pipeline only
+    load -> analyze -> (optional mutate/verify/diff) -> projection -> emit -> model_ir_solved.json
+  mode --canon: Canon pipeline only
+    load -> analyze -> seal -> canon_analyze -> canon_projection -> canon_ir_solved.json
+```
 
 ## Design Properties
 
-- IR is canonical state.
-- Graphs are constraint representation.
-- Solvers enforce semantic legality.
-- Emit is deterministic (order frozen in layout, emit is pure rendering).
-- model_diff is semantic-complete.
+- IR remains canonical state.
+- 8 CSR graphs are the shared constraint representation.
+- Solvers enforce legality before emit.
+- Emit layers are split into pure renderers (no traversal/sorting/mutation in emit).
+- Orchestration mode selection is explicit:
+  - default = Model pipeline
+  - `--canon` = Canon pipeline

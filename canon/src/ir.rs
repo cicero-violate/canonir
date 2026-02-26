@@ -83,43 +83,43 @@ pub struct CanonIR {
 
     // ── 8 CSR graphs ─────────────────────────────────────────────────────────
     /// G_name  — rename / name-resolution constraints.
-    pub name_graph:   CsrGraph<CanonId, EdgeKind>,
+    pub name_graph: CsrGraph<CanonId, EdgeKind>,
     /// G_type  — type inference / unification / impl / dyn edges.
-    pub type_graph:   CsrGraph<CanonId, EdgeKind>,
+    pub type_graph: CsrGraph<CanonId, EdgeKind>,
     /// G_call  — caller → callee.
-    pub call_graph:   CsrGraph<CanonId, EdgeKind>,
+    pub call_graph: CsrGraph<CanonId, EdgeKind>,
     /// G_module — containment: module → item.
     pub module_graph: CsrGraph<CanonId, EdgeKind>,
     /// G_cfg   — control-flow edges within bodies.
-    pub cfg_graph:    CsrGraph<CanonId, EdgeKind>,
+    pub cfg_graph: CsrGraph<CanonId, EdgeKind>,
     /// G_region — lifetime outlives constraints.
     #[serde(default)]
     pub region_graph: CsrGraph<CanonId, EdgeKind>,
     /// G_value  — const/static dependency edges.
     #[serde(default)]
-    pub value_graph:  CsrGraph<CanonId, EdgeKind>,
+    pub value_graph: CsrGraph<CanonId, EdgeKind>,
     /// G_macro  — macro expansion edges.
     #[serde(default)]
-    pub macro_graph:  CsrGraph<CanonId, EdgeKind>,
+    pub macro_graph: CsrGraph<CanonId, EdgeKind>,
 }
 
 impl CanonIR {
     pub fn new() -> Self {
         Self {
-            version:      "canon-1.0".into(),
-            nodes:        Vec::new(),
-            emit_order:   Vec::new(),
-            name_intern:  Interner::new(),
-            path_intern:  Interner::new(),
-            type_index:   HashMap::new(),
-            name_graph:   CsrGraph::empty(),
-            type_graph:   CsrGraph::empty(),
-            call_graph:   CsrGraph::empty(),
+            version: "canon-1.0".into(),
+            nodes: Vec::new(),
+            emit_order: Vec::new(),
+            name_intern: Interner::new(),
+            path_intern: Interner::new(),
+            type_index: HashMap::new(),
+            name_graph: CsrGraph::empty(),
+            type_graph: CsrGraph::empty(),
+            call_graph: CsrGraph::empty(),
             module_graph: CsrGraph::empty(),
-            cfg_graph:    CsrGraph::empty(),
+            cfg_graph: CsrGraph::empty(),
             region_graph: CsrGraph::empty(),
-            value_graph:  CsrGraph::empty(),
-            macro_graph:  CsrGraph::empty(),
+            value_graph: CsrGraph::empty(),
+            macro_graph: CsrGraph::empty(),
         }
     }
 
