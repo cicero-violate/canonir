@@ -165,13 +165,39 @@ fn map_generics(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<GenericParam> {
     gens.own_params
         .iter()
         .filter(|p| p.name.as_str() != "Self")
+        // Filter out synthetic impl-trait params (named "impl Trait").
+        .filter(|p| !p.name.as_str().starts_with("impl "))
         .map(|p| {
             let name = p.name.to_string();
-            let bounds = bounds_map.remove(&name).unwrap_or_default().into_iter().filter(|b| b != "Sized" && b != "MetaSized").collect();
+            let bounds = bounds_map
+                .remove(&name)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|b| normalize_bound(&b))
+                .filter(|b| b != "Sized" && b != "MetaSized")
+                .collect();
             let is_lifetime = matches!(p.kind, ty::GenericParamDefKind::Lifetime);
             GenericParam { name, bounds, is_lifetime, default_ty: None }
         })
         .collect()
+}
+
+/// Strip stdlib path prefixes from a trait bound string.
+/// "std::marker::Sized" -> "Sized", "std::cmp::PartialOrd" -> "PartialOrd", etc.
+fn normalize_bound(b: &str) -> String {
+    const BOUND_PREFIXES: &[&str] = &[
+        "std::marker::", "core::marker::", "std::cmp::", "core::cmp::",
+        "std::fmt::", "core::fmt::", "std::clone::", "core::clone::",
+        "std::ops::", "core::ops::", "std::convert::", "core::convert::",
+        "std::iter::", "core::iter::", "std::future::", "core::future::",
+        "std::hash::", "core::hash::",
+    ];
+    for prefix in BOUND_PREFIXES {
+        if let Some(short) = b.strip_prefix(prefix) {
+            return short.to_string();
+        }
+    }
+    b.to_string()
 }
 
 fn map_params(tcx: TyCtxt<'_>, def_id: DefId, inputs: &[ty::Ty<'_>]) -> Vec<Param> {
@@ -196,7 +222,14 @@ fn map_params(tcx: TyCtxt<'_>, def_id: DefId, inputs: &[ty::Ty<'_>]) -> Vec<Para
         .map(|(i, ty)| {
             let name = hir_names.get(i).and_then(|n| n.clone()).unwrap_or_else(|| format!("p{i}"));
             let is_self = name == "self";
-            Param { name, ty: fmt_ty(tcx, *ty), is_self, mutable: false, lifetime: None }
+            let ty_str = if is_self {
+                // Normalize self type: &User -> &Self, User -> Self.
+                let raw = fmt_ty(tcx, *ty);
+                if raw.starts_with('&') { "&Self".to_string() } else { "Self".to_string() }
+            } else {
+                fmt_ty(tcx, *ty)
+            };
+            Param { name, ty: ty_str, is_self, mutable: false, lifetime: None }
         })
         .collect()
 }
@@ -250,8 +283,27 @@ fn map_trait_method_params(tcx: TyCtxt<'_>, def_id: DefId, inputs: &[ty::Ty<'_>]
         .enumerate()
         .map(|(i, ty)| {
             let is_self = i == 0 && has_self;
-            let name = if is_self { "self".to_string() } else { hir_names.get(i).and_then(|n| n.clone()).unwrap_or_else(|| format!("p{i}")) };
-            Param { name, ty: fmt_ty(tcx, *ty), is_self, mutable: false, lifetime: None }
+            let name = if is_self {
+                "self".to_string()
+            } else {
+                hir_names
+                    .get(i)
+                    .and_then(|n| n.clone())
+                    .unwrap_or_else(|| format!("p{i}"))
+            };
+
+            let ty_str = if is_self {
+                let raw = fmt_ty(tcx, *ty);
+                if raw.starts_with('&') {
+                    "&Self".to_string()
+                } else {
+                    "Self".to_string()
+                }
+            } else {
+                fmt_ty(tcx, *ty)
+            };
+
+            Param { name, ty: ty_str, is_self, mutable: false, lifetime: None }
         })
         .collect()
 }
@@ -316,7 +368,32 @@ fn hir_body_src(tcx: TyCtxt<'_>, def_id: DefId) -> Body {
     let span = body.value.span;
     let sm = tcx.sess.source_map();
     match sm.span_to_snippet(span) {
-        Ok(src) => Body::Raw(src),
+        Ok(src) => Body::Raw(strip_outer_braces(src)),
         Err(_) => Body::None,
+    }
+}
+
+/// Strip a single layer of outer `{ ... }` braces from a body snippet,
+/// trimming whitespace. The HIR body value span includes the block braces,
+/// but ModelIR Body::Raw stores just the inner content.
+fn strip_outer_braces(src: String) -> String {
+    let trimmed = src.trim();
+    if trimmed.starts_with('{') && trimmed.ends_with('}') {
+        // Remove first '{' and last '}', then trim inner whitespace.
+        let inner = &trimmed[1..trimmed.len() - 1];
+        // Dedent: find minimum indentation and strip it.
+        let lines: Vec<&str> = inner.lines().collect();
+        // Find minimum leading whitespace among non-empty lines.
+        let min_indent = lines.iter()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.len() - l.trim_start().len())
+            .min()
+            .unwrap_or(0);
+        let dedented: Vec<&str> = lines.iter()
+            .map(|l| if l.len() >= min_indent { &l[min_indent..] } else { l.trim_start() })
+            .collect();
+        dedented.join("\n").trim().to_string()
+    } else {
+        src
     }
 }

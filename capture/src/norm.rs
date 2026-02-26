@@ -48,11 +48,75 @@ pub fn ty(raw: &str) -> String {
         ("alloc::vec::Vec", "Vec"),
         ("alloc::boxed::Box", "Box"),
     ];
+    // Strip stdlib noise that leaks through ty.to_string().
+    const REPLACEMENTS2: &[(&str, &str)] = &[
+        ("std::future::Future", "Future"),
+        ("core::future::Future", "Future"),
+        ("core::marker::Sized", "Sized"),
+        ("std::marker::Sized", "Sized"),
+        ("core::marker::Send", "Send"),
+        ("core::marker::Sync", "Sync"),
+        ("std::marker::Send", "Send"),
+        ("std::marker::Sync", "Sync"),
+        ("core::cmp::PartialOrd", "PartialOrd"),
+        ("core::cmp::PartialEq", "PartialEq"),
+        ("core::fmt::Debug", "Debug"),
+        ("core::fmt::Display", "Display"),
+        ("core::marker::Copy", "Copy"),
+        ("core::clone::Clone", "Clone"),
+    ];
     let mut s = raw.to_string();
     for (full, short) in REPLACEMENTS {
         // Replace all occurrences (e.g. inside generics).
         while let Some(pos) = s.find(full) {
             s.replace_range(pos..pos + full.len(), short);
+        }
+    }
+    for (full, short) in REPLACEMENTS2 {
+        while let Some(pos) = s.find(full) {
+            s.replace_range(pos..pos + full.len(), short);
+        }
+    }
+    // Strip trailing `+ 'static` lifetime bounds from dyn/impl types.
+    // e.g. "dyn Describable + 'static" -> "dyn Describable"
+    //      "Box<dyn Describable + 'static>" -> "Box<dyn Describable>"
+    loop {
+        if let Some(pos) = s.find(" + 'static") {
+            s.replace_range(pos..pos + " + 'static".len(), "");
+        } else {
+            break;
+        }
+    }
+    // Strip spurious parens around dyn traits: "Box<(dyn Foo)>" -> "Box<dyn Foo>"
+    loop {
+        if let Some(pos) = s.find("(dyn ") {
+            // Find matching closing paren
+            let rest = &s[pos + 1..];
+            if let Some(close) = rest.find(')') {
+                let inner = &rest[..close]; // "dyn Foo"
+                let before = &s[..pos];
+                let after = &rest[close + 1..];
+                s = format!("{}{}{}", before, inner, after);
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    // Strip inline `: Sized` bounds that appear in type alias generics rendered by ty.to_string().
+    // e.g. "Result1231<T: Sized>" -> "Result1231<T>"
+    loop {
+        if let Some(pos) = s.find(": Sized") {
+            // Only strip if followed by '>' or ',' (i.e. it's a generic param bound, not a trait object)
+            let after = s.as_bytes().get(pos + 7).copied();
+            if matches!(after, Some(b'>') | Some(b',') | Some(b' ') | None) {
+                s.replace_range(pos..pos + 7, "");
+            } else {
+                break;
+            }
+        } else {
+            break;
         }
     }
     s
