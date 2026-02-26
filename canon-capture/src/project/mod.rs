@@ -12,9 +12,11 @@ pub fn project_def(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Partial {
     let mut partial = Partial::default();
 
     // Structural node emission.
-    if let Some(node) = item::project_item(tcx, def_id, index) {
+    let (node_opt, item_edges) = item::project_item(tcx, def_id, index);
+    if let Some(node) = node_opt {
         partial.nodes.push(node);
     }
+    partial.edge_hints.extend(item_edges);
 
     // Relations directly derivable from the item (parent/module/impl/trait edges).
     partial.edge_hints.extend(relations::project_relations(tcx, def_id, index));

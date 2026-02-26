@@ -263,6 +263,7 @@ pub struct Node {
 pub enum EdgeKind {
     Renames,
     Resolves,
+    ImplRef,
     TypeOf,
     TypeUnifies,
     ImplTrait,

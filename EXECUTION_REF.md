@@ -78,3 +78,16 @@ rg "contains\|format!\|strip_prefix\|replace\|inject\|HashSet" \
   canon-projection/src/emit/impls.rs \
   canon-projection/src/layout/mod.rs -n
 ```
+
+### Verify Resolves edge semantics (use-site → def, not impl → trait)
+```bash
+# ImplRef should appear in name_graph only for impl→trait edges
+# Resolves should appear only for use-site→definition edges
+rg "ImplRef\|Resolves" canon/src/edge.rs canon-capture/src/types.rs -n
+rg "ImplRef\|Resolves" canon-capture/src/project/relations.rs canon-capture/src/project/item.rs -n
+```
+
+### Inspect project_item tuple return (Node + use Resolves edges)
+```bash
+perl -0777 -ne '...' canon-capture/src/project/item.rs  # extract_function("project_item", ...)
+```

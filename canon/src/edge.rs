@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub enum EdgeKind {
     Renames,
     Resolves,
+    ImplRef,
     TypeOf,
     TypeUnifies,
     ImplTrait,

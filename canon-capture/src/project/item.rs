@@ -14,8 +14,9 @@ use crate::norm;
 /// Structural projection: DefId -> NodeKind using HIR/ty queries.
 /// All strings are canonicalized via norm:: before NodeKind construction.
 pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Option<Node>, Vec<EdgeHint>) {
-    let id = *index.def_to_node.get(&def_id)?;
-    let id = *index.def_to_node.get(&def_id)?;
+    let Some(&id) = index.def_to_node.get(&def_id) else {
+        return (None, vec![]);
+    };
     let full_path = norm::path(tcx, def_id);
     let name = norm::short(&full_path).to_string();
     let raw_span = tcx.def_span(def_id);
@@ -93,33 +94,47 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Option<No
             NodeKind::Static { name, vis, ty: ty_str, value, mutable, attrs: Vec::new() }
         }
         DefKind::TyAlias => NodeKind::TypeAlias { name, vis, generics, ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()), attrs: Vec::new(), where_clauses },
-        DefKind::Use => {
-            if let Some(local) = def_id.as_local() {
-                if let rustc_hir::Node::Item(item) = tcx.hir_node_by_def_id(local) {
-                    if let rustc_hir::ItemKind::Use(use_path, use_kind) = item.kind {
-                        let sm = tcx.sess.source_map();
-                        let mut path = sm.span_to_snippet(use_path.span).ok().map(|s| s.trim().trim_start_matches("::").to_string()).filter(|s| !s.is_empty());
+         DefKind::Use => {
+             if let Some(local) = def_id.as_local() {
+                 if let rustc_hir::Node::Item(item) = tcx.hir_node_by_def_id(local) {
+                     if let rustc_hir::ItemKind::Use(use_path, use_kind) = item.kind {
+                         let sm = tcx.sess.source_map();
+                         let mut path = sm.span_to_snippet(use_path.span).ok().map(|s| s.trim().trim_start_matches("::").to_string()).filter(|s| !s.is_empty());
 
-                        if path.is_none() {
-                            path = use_path.res.iter().find_map(|r| if let Some(rustc_hir::def::Res::Def(_, did)) = r { Some(norm::path(tcx, *did)) } else { None });
-                        }
+                         if path.is_none() {
+                             path = use_path.res.iter().find_map(|r| if let Some(rustc_hir::def::Res::Def(_, did)) = r { Some(norm::path(tcx, *did)) } else { None });
+                         }
 
-                        let path = path?;
-                        let glob = matches!(use_kind, rustc_hir::UseKind::Glob);
-                        let alias = match use_kind {
-                            rustc_hir::UseKind::Single(ident) if ident.name.as_str() != path.rsplit("::").next().unwrap_or("") => Some(ident.to_string()),
-                            _ => None,
-                        };
-                        return Some(Node { id, kind: NodeKind::Use { vis, path, alias, glob }, span: Some(span_str) });
-                    }
-                }
-            }
-            return None;
-        }
-        _ => return None,
+                         let Some(path) = path else {
+                             return (None, vec![]);
+                         };
+                         let glob = matches!(use_kind, rustc_hir::UseKind::Glob);
+                         let alias = match use_kind {
+                             rustc_hir::UseKind::Single(ident) if ident.name.as_str() != path.rsplit("::").next().unwrap_or("") => Some(ident.to_string()),
+                             _ => None,
+                         };
+                         let mut edges: Vec<EdgeHint> = Vec::new();
+                         for res in use_path.res.iter().flatten() {
+                             if let rustc_hir::def::Res::Def(_, target_did) = res {
+                                 if let Some(&target_node) = index.def_to_node.get(target_did) {
+                                     edges.push(EdgeHint {
+                                         src: id.index() as u32,
+                                         dst: target_node.index() as u32,
+                                         kind: EdgeKind::Resolves,
+                                     });
+                                 }
+                             }
+                         }
+                         return (Some(Node { id, kind: NodeKind::Use { vis, path, alias, glob }, span: Some(span_str) }), edges);
+                     }
+                 }
+             }
+             return (None, vec![]);
+         }
+         _ => return (None, vec![]),
     };
 
-    Some(Node { id, kind, span: Some(span_str) })
+    (Some(Node { id, kind, span: Some(span_str) }), vec![])
 }
 
 fn map_vis(v: ty::Visibility<DefId>) -> Visibility {

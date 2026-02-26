@@ -23,6 +23,7 @@ fn map_edge_kind(k: &ModelEdgeKind) -> CanonEdgeKind {
     match k {
         ModelEdgeKind::Renames => CanonEdgeKind::Renames,
         ModelEdgeKind::Resolves => CanonEdgeKind::Resolves,
+        ModelEdgeKind::ImplRef => CanonEdgeKind::ImplRef,
         ModelEdgeKind::TypeOf => CanonEdgeKind::TypeOf,
         ModelEdgeKind::TypeUnifies => CanonEdgeKind::TypeUnifies,
         ModelEdgeKind::ImplTrait => CanonEdgeKind::ImplTrait,
@@ -489,7 +490,9 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
         let dst = id_map[hint.dst as usize];
         let k = map_edge_kind(&hint.kind);
         match &hint.kind {
-            ModelEdgeKind::Renames | ModelEdgeKind::Resolves => name_edges.push((src, dst, k)),
+            ModelEdgeKind::Renames
+            | ModelEdgeKind::Resolves
+            | ModelEdgeKind::ImplRef => name_edges.push((src, dst, k)),
             ModelEdgeKind::TypeOf | ModelEdgeKind::TypeUnifies | ModelEdgeKind::ImplTrait | ModelEdgeKind::DynTrait => type_edges.push((src, dst, k)),
             ModelEdgeKind::Calls => call_edges.push((src, dst, k)),
             ModelEdgeKind::Contains | ModelEdgeKind::ImplFor => module_edges.push((src, dst, k)),

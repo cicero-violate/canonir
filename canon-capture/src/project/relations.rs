@@ -32,7 +32,7 @@ pub fn project_relations(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Vec<E
 
         // Resolves: impl --[Resolves]--> trait (only for trait impls, not inherent)
         if let Some(&trait_node) = tcx.impl_opt_trait_ref(def_id).and_then(|eb| index.def_to_node.get(&eb.skip_binder().def_id)) {
-            edges.push(EdgeHint { src: id.index() as u32, dst: trait_node.index() as u32, kind: EdgeKind::Resolves });
+            edges.push(EdgeHint { src: id.index() as u32, dst: trait_node.index() as u32, kind: EdgeKind::ImplRef });
         }
     }
 

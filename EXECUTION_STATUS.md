@@ -63,8 +63,33 @@
 ## All Six Phases — Done
 
 Remaining gaps before success condition is fully met:
-- `use_solver` injection covers local `Resolves` edges; `std::path::Path` / `PathBuf` injection
-  now depends on capture emitting `Resolves` edges for those types (no emitter fallback remains).
 - `Use.target` field exists but is not yet populated by `use_solver` injection (set to `None`);
   full target resolution is a follow-on task.
 - g5 full structured type parsing (generics, tuples, arrays) remains future work.
+
+---
+
+## Post-Phase Work (2026-02-26)
+
+### Resolves edge semantics fix — **Completed**
+
+**Problem:** `EdgeKind::Resolves` had two colliding semantics:
+- Capture emitted `impl → trait` as `Resolves` (routed into `name_edges`)
+- `use_solver` read `name_graph` for `Resolves` expecting `use-site → definition` pairs
+- Impls and their traits always share a module → `site_mod == def_mod` guard fired → injection was a permanent no-op
+
+**Fix:**
+- Added `EdgeKind::ImplRef` to both `canon/src/edge.rs` and `canon-capture/src/types.rs`
+- `project_relations` now emits `ImplRef` (not `Resolves`) for `impl → trait`
+- `canon_assemble.rs` maps `ModelEdgeKind::ImplRef → CanonEdgeKind::ImplRef`, routed into `name_edges`
+- `canon-mutation/src/apply.rs` `graph_slot` handles `ImplRef` → `"name"`
+- `project_item` signature changed to `(Option<Node>, Vec<EdgeHint>)`: the `DefKind::Use` branch
+  now emits one `Resolves` edge per `Res::Def` in `use_path.res` (use-node → resolved definition)
+- `project_def` in `mod.rs` destructures the tuple and extends `partial.edge_hints` with item edges
+
+**Effect:** `use_solver` now receives genuine use-site `Resolves` edges from capture.
+Import injection fires correctly for locally-defined types referenced across modules.
+
+### Next steps
+- Populate `Use.target: Option<CanonId>` in `use_solver` injection (currently always `None`)
+- g5 full structured type parsing: generics `Vec<T>`, tuples, arrays
