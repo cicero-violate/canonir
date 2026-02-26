@@ -93,3 +93,23 @@ Import injection fires correctly for locally-defined types referenced across mod
 ### Next steps
 - Populate `Use.target: Option<CanonId>` in `use_solver` injection (currently always `None`)
 - g5 full structured type parsing: generics `Vec<T>`, tuples, arrays
+
+---
+
+### use_solver + path normalization correctness — **Completed** (2026-02-26)
+
+**Verified:** test_1 pipeline compiles clean end-to-end.
+
+Fixes applied:
+
+1. **use_solver injection prefix** — injected paths used `crate_name` (e.g. `test_rust_project::traits::Describable`) instead of `"crate"`. Fixed to always use `"crate"` prefix for local definitions.
+
+2. **Duplicate Use injection (E0252)** — `use_solver` injected Use nodes that duplicated existing ones. Fixed by pre-populating the `seen` set with all existing Use node paths per module before the injection loop.
+
+3. **Module target path (E0432 `::model::model`)** — when `def_idx` is a Module node, `node_display_name` returned the full path and injection appended it again as `def_name`. Fixed: when `def_idx` is Module, use its path directly.
+
+4. **name_solver renames definition nodes** — `apply_rename` was renaming TypeAlias/Struct/etc nodes via `Renames` edges from `use X as R`, causing `Result1231` → `R`. Fixed: `apply_rename` now only updates `Use::alias`, never definition node names.
+
+5. **Path normalization double-application** — `local_module_roots` replacements in `canon_assemble` added `crate::` prefix inside already-prefixed paths (`Box<dyn traits::` → `Box<dyn crate::traits::`). Added coverage for `Box<dyn`, `, `, `(` prefix patterns.
+
+6. **Stale capture JSON** — `rustc_capture` skips writing if output file exists; `run_capture.sh` was not deleting the output before capture, causing rebuilt binaries to appear ineffective. Fixed: `run_capture.sh` now deletes output JSON before invoking cargo build.
