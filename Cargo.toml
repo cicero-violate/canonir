@@ -1,12 +1,8 @@
 [workspace]
 members = [
   "algorithms",
-  "model",
-  "capture",
   "canon-capture",
-  "analyzer",
-  "mutation",
-  "projection",
+  "canon-mutation",
   "orchestration",
   "rustc_capture",
   "canon",

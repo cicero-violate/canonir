@@ -1,6 +1,7 @@
 use canon::node::{CanonId, CanonNodeKind, CfgOp};
 use canon::CanonIR;
-use model::ir::{csr_graph::CsrGraph, edge::EdgeKind};
+use canon::csr_graph::CsrGraph;
+use canon::edge::EdgeKind;
 
 pub struct CfgGraphBuilder {
     v: usize,

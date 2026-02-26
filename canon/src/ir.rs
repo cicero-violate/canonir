@@ -24,10 +24,11 @@
 
 use std::collections::HashMap;
 
-use model::ir::{csr_graph::CsrGraph, edge::EdgeKind};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    csr_graph::CsrGraph,
+    edge::EdgeKind,
     intern::{Interner, NameId, PathId},
     node::{CanonId, CanonNodeKind, TypeKind},
 };

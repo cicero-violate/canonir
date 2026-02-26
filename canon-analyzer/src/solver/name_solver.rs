@@ -3,7 +3,7 @@ use algorithms::graph::topological_sort::topological_sort;
 use anyhow::Result;
 use canon::node::CanonNodeKind;
 use canon::CanonIR;
-use model::ir::edge::EdgeKind;
+use canon::edge::EdgeKind;
 
 pub fn solve(ir: &mut CanonIR) -> Result<()> {
     let v = ir.name_graph.vertex_count();

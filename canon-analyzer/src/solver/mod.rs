@@ -1,7 +1,7 @@
 use anyhow::Result;
 use canon::node::CanonId;
 use canon::CanonIR;
-use model::ir::node::NodeId;
+use canon::id::NodeId;
 
 pub mod borrow_solver;
 pub mod call_solver;
@@ -58,7 +58,7 @@ pub(crate) fn to_canon_id(id: NodeId) -> CanonId {
     CanonId(id.0)
 }
 
-pub(crate) fn csr_to_adj<ND, ED>(graph: &model::ir::csr_graph::CsrGraph<ND, ED>) -> Vec<Vec<usize>> {
+pub(crate) fn csr_to_adj<ND, ED>(graph: &canon::csr_graph::CsrGraph<ND, ED>) -> Vec<Vec<usize>> {
     let v = graph.vertex_count();
     (0..v).map(|i| graph.neighbours(NodeId(i as u32)).map(|(dst, _)| dst.index()).collect()).collect()
 }

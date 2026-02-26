@@ -6,9 +6,8 @@ edition = "2024"
 [dependencies]
 anyhow = "1"
 canon = { path = "../canon" }
-capture_rustc = { path = "../capture" }
-model = { path = "../model" }
 rustc-hash = "1"
+serde = { version = "=1.0.228", features = ["derive"] }
 
 [lib]
 path = "src/lib.rs"

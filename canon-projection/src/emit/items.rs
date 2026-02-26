@@ -25,6 +25,9 @@ pub fn emit_node(ir: &CanonIR, id: CanonId, pad: &str) -> String {
             let alias = alias.map(|a| format!(" as {}", ir.lookup_name(a))).unwrap_or_default();
             let raw_path = ir.lookup_path(*path_id);
             let path = normalize_use_path(raw_path, ir);
+            if !path.contains("::") && path.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+                return String::new();
+            }
             format!("{}{}use {}{}{};\n", pad, vis, path, glob, alias)
         }
         CanonNodeKind::ExternCrate { name_id, alias, flags } => {
@@ -63,8 +66,8 @@ fn emit_module(ir: &CanonIR, module_id: CanonId, path_id: canon::node::PathId, f
     if (f & flags::INLINE) != 0 {
         let inner_pad = format!("{}    ", pad);
         let mut inner = String::new();
-        for (dst, edge) in ir.module_graph.neighbours(model::ir::node::NodeId(module_id.0)) {
-            if matches!(edge, model::ir::edge::EdgeKind::Contains) {
+        for (dst, edge) in ir.module_graph.neighbours(canon::id::NodeId(module_id.0)) {
+            if matches!(edge, canon::edge::EdgeKind::Contains) {
                 inner.push_str(&emit_node(ir, CanonId(dst.0), &inner_pad));
             }
         }

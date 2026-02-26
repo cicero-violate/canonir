@@ -1,25 +1,25 @@
 cargo build --workspace
 
 
-rm -rf /workspace/ai_sandbox/canon/test_projects/test_rust_project/model_ir_captured.json
+rm -rf /workspace/ai_sandbox/canon/test_projects/test_rust_project/canon_ir_captured.json
 
 rm -rf /workspace/ai_sandbox/canon/test_projects/test_rust_project/test_emit/
 cargo run -p orchestration -- \
-  test_projects/test_rust_project/model_ir.json \
+  test_projects/test_rust_project/capture.json \
   test_projects/test_rust_project/test_emit
 
 rm -rf /workspace/ai_sandbox/canon/test_projects/test_rust_project/test_capture/
 ./run_capture.sh test_projects/test_rust_project/test_emit/ \
-    test_projects/test_rust_project/test_capture/model_ir_captured.json
+    test_projects/test_rust_project/test_capture/canon_ir_captured.json
 
 cargo run -p orchestration -- \
-  test_projects/test_rust_project/test_capture/model_ir_captured.json \
+  test_projects/test_rust_project/test_capture/canon_ir_captured.json \
   test_projects/test_rust_project/test_capture
 
 cd /workspace/ai_sandbox/canon/test_projects/test_rust_project/test_capture
 cargo build
 
-cp /workspace/ai_sandbox/canon/test_projects/test_rust_project/test_capture/model_ir_captured.json /workspace/ai_sandbox/canon/test_projects/test_rust_project/
+cp /workspace/ai_sandbox/canon/test_projects/test_rust_project/test_capture/canon_ir_captured.json /workspace/ai_sandbox/canon/test_projects/test_rust_project/
 
 # echo "bat -n /workspace/ai_sandbox/canon/test_projects/test_rust_project/model_ir.json | sed -n '800,1000p'"
 # bat -n /workspace/ai_sandbox/canon/test_projects/test_rust_project/model_ir.json | sed -n '800,1000p'
@@ -28,7 +28,7 @@ cp /workspace/ai_sandbox/canon/test_projects/test_rust_project/test_capture/mode
 
 # bat -n /workspace/ai_sandbox/canon/test_projects/test_rust_project/compare.py
 cd /workspace/ai_sandbox/canon/test_projects/test_rust_project/
-python /workspace/ai_sandbox/canon/test_projects/test_rust_project/compare.py model_ir.json model_ir_captured.json
+python /workspace/ai_sandbox/canon/test_projects/test_rust_project/compare.py capture.json canon_ir_captured.json
 
 # bat -n /workspace/ai_sandbox/canon/test_projects/test_rust_project/diff_src_dirs.py
 python /workspace/ai_sandbox/canon/test_projects/test_rust_project/diff_src_dirs.py \

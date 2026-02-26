@@ -7,5 +7,4 @@ edition = "2024"
 log = "0.4"
 anyhow = "1"
 canon = { path = "../canon" }
-model = { path = "../model" }
 algorithms = { path = "../algorithms" }

@@ -1,6 +1,7 @@
 use canon::node::{CanonId, CanonNodeKind};
 use canon::CanonIR;
-use model::ir::{csr_graph::CsrGraph, edge::EdgeKind};
+use canon::csr_graph::CsrGraph;
+use canon::edge::EdgeKind;
 
 pub struct MacroGraphBuilder {
     v: usize,
@@ -19,7 +20,7 @@ impl MacroGraphBuilder {
     pub fn derive_from_ir(&mut self, ir: &CanonIR) {
         let mut module_children: Vec<Vec<usize>> = vec![Vec::new(); ir.nodes.len()];
         for src in 0..ir.module_graph.vertex_count() {
-            let src_id = model::ir::node::NodeId(src as u32);
+            let src_id = canon::id::NodeId(src as u32);
             for (dst, edge) in ir.module_graph.neighbours(src_id) {
                 if *edge == EdgeKind::Contains {
                     module_children[src].push(dst.index());

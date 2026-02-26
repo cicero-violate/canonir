@@ -12,8 +12,8 @@ pub fn emit_impl(ir: &CanonIR, impl_id: CanonId, for_ty: CanonId, for_trait: Opt
     };
 
     let mut out = head;
-    for (dst, edge) in ir.module_graph.neighbours(model::ir::node::NodeId(impl_id.0)) {
-        if !matches!(edge, model::ir::edge::EdgeKind::Contains) {
+    for (dst, edge) in ir.module_graph.neighbours(canon::id::NodeId(impl_id.0)) {
+        if !matches!(edge, canon::edge::EdgeKind::Contains) {
             continue;
         }
         if let CanonNodeKind::Fn { name_id, sig_id, body, flags, .. } = &ir.node(CanonId(dst.0)).kind {

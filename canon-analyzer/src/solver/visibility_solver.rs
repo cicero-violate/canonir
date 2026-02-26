@@ -3,7 +3,7 @@ use algorithms::graph::reachability::reachability;
 use anyhow::Result;
 use canon::node::{flags, CanonNodeKind};
 use canon::CanonIR;
-use model::ir::{edge::EdgeKind, node::NodeId};
+use canon::{edge::EdgeKind, id::NodeId};
 
 pub fn solve(ir: &CanonIR) -> Result<()> {
     let n = ir.nodes.len();

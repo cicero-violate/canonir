@@ -3,7 +3,7 @@ use algorithms::graph::dfs::dfs;
 use anyhow::Result;
 use canon::node::CanonNodeKind;
 use canon::CanonIR;
-use model::ir::{edge::EdgeKind, node::NodeId};
+use canon::{edge::EdgeKind, id::NodeId};
 use std::collections::HashMap;
 
 fn node_name<'a>(ir: &'a CanonIR, kind: &'a CanonNodeKind) -> Option<&'a str> {

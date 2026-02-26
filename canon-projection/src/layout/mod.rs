@@ -155,10 +155,10 @@ fn module_name<'a>(ir: &'a CanonIR, path_id: canon::node::PathId) -> &'a str {
 /// in emit_order where possible.
 fn module_children(ir: &CanonIR, module_id: CanonId) -> Vec<CanonId> {
     // Build set of direct children via Contains edges.
-    let src = model::ir::node::NodeId(module_id.0);
+    let src = canon::id::NodeId(module_id.0);
     let mut child_set: HashSet<u32> = HashSet::new();
     for (dst, edge) in ir.module_graph.neighbours(src) {
-        if matches!(edge, model::ir::edge::EdgeKind::Contains) {
+        if matches!(edge, canon::edge::EdgeKind::Contains) {
             child_set.insert(dst.0);
         }
     }
@@ -198,6 +198,9 @@ fn infer_dependencies(ir: &CanonIR) -> Vec<String> {
             if root.is_empty() {
                 continue;
             }
+            if !root.chars().next().is_some_and(|c| c.is_ascii_lowercase()) {
+                continue;
+            }
             if matches!(root, "crate" | "self" | "super" | "std" | "core" | "alloc") {
                 continue;
             }
@@ -207,8 +210,8 @@ fn infer_dependencies(ir: &CanonIR) -> Vec<String> {
             deps.insert(root.replace('_', "-"));
         }
     }
-    // Also scan interned/raw name strings for fully-qualified external paths
-    // that may appear in bodies (e.g. tree_sitter_rust::LANGUAGE).
+    // Scan interned/raw text for fully-qualified external paths
+    // (e.g. tree_sitter_rust::LANGUAGE) used directly in bodies.
     for s in &ir.name_intern.vec {
         for root in roots_from_text(s) {
             if matches!(root.as_str(), "crate" | "self" | "super" | "std" | "core" | "alloc") {
@@ -254,9 +257,9 @@ fn roots_from_text(src: &str) -> Vec<String> {
 fn flat_root_items(ir: &CanonIR) -> Vec<CanonId> {
     let mut has_parent = vec![false; ir.nodes.len()];
     for src in 0..ir.module_graph.vertex_count() {
-        let src_id = model::ir::node::NodeId(src as u32);
+        let src_id = canon::id::NodeId(src as u32);
         for (dst, edge) in ir.module_graph.neighbours(src_id) {
-            if matches!(edge, model::ir::edge::EdgeKind::Contains) && dst.index() < has_parent.len() {
+            if matches!(edge, canon::edge::EdgeKind::Contains) && dst.index() < has_parent.len() {
                 has_parent[dst.index()] = true;
             }
         }

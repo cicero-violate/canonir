@@ -1,7 +1,7 @@
 use anyhow::Result;
 use canon::node::{flags, CanonNodeKind};
 use canon::CanonIR;
-use model::ir::node::NodeId;
+use canon::id::NodeId;
 
 pub fn solve(ir: &CanonIR) -> Result<()> {
     if ir.call_graph.vertex_count() == 0 {

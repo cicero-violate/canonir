@@ -3,8 +3,8 @@ use algorithms::graph::reachability::is_acyclic;
 use anyhow::{bail, Result};
 use canon::node::CanonNodeKind;
 use canon::CanonIR;
-use model::ir::edge::EdgeKind;
-use model::ir::node::NodeId;
+use canon::edge::EdgeKind;
+use canon::id::NodeId;
 
 pub fn solve(ir: &CanonIR) -> Result<()> {
     let v = ir.nodes.len();

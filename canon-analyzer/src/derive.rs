@@ -5,7 +5,8 @@ use crate::graph::{
 use anyhow::Result;
 use canon::node::CanonId;
 use canon::CanonIR;
-use model::ir::{csr_graph::CsrGraph, edge::EdgeKind, node::NodeId};
+use canon::csr_graph::CsrGraph;
+use canon::{edge::EdgeKind, id::NodeId};
 
 pub fn derive(ir: &mut CanonIR) -> Result<()> {
     let v = ir.nodes.len();

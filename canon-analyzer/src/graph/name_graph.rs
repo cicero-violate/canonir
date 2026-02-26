@@ -1,6 +1,7 @@
 use canon::node::{CanonId, CanonNodeKind};
 use canon::CanonIR;
-use model::ir::{csr_graph::CsrGraph, edge::EdgeKind};
+use canon::csr_graph::CsrGraph;
+use canon::edge::EdgeKind;
 use std::collections::HashMap;
 
 pub struct NameGraphBuilder {
@@ -74,7 +75,7 @@ impl Resolver {
 
         let mut parent_of = vec![None; ir.nodes.len()];
         for src in 0..ir.module_graph.vertex_count() {
-            let src_id = model::ir::node::NodeId(src as u32);
+            let src_id = canon::id::NodeId(src as u32);
             for (dst, edge) in ir.module_graph.neighbours(src_id) {
                 if *edge == EdgeKind::Contains && dst.index() < parent_of.len() {
                     parent_of[dst.index()] = Some(src);
@@ -113,7 +114,11 @@ impl Resolver {
 
     fn resolve_unique_name(&self, skip: CanonId, name: &str) -> Option<CanonId> {
         let matches: Vec<CanonId> = self.by_name.get(name)?.iter().copied().filter(|id| *id != skip).collect();
-        (matches.len() == 1).then_some(matches[0])
+        if matches.len() == 1 {
+            Some(matches[0])
+        } else {
+            None
+        }
     }
 
     fn resolve_use(&self, use_id: CanonId, path: &str) -> Option<CanonId> {

@@ -1,13 +1,13 @@
 use canon::{
+    csr_graph::CsrGraph,
+    edge::EdgeKind as CanonEdgeKind,
     intern::{NameId, PathId},
     ir::CanonIR,
     node::{flags, CanonId, CanonNodeKind, CfgOp, PrimTy, TypeKind},
 };
-use capture_rustc::{index::Index, Partial};
-use model::ir::{
-    csr_graph::CsrGraph,
-    edge::{EdgeHint, EdgeKind},
-    node::{Body, EnumVariant, Field, GenericParam, Node, NodeId, NodeKind, StructKind, TraitMethod, Visibility},
+use crate::{index::Index, Partial};
+use crate::types::{
+    Body, EdgeHint, EdgeKind as ModelEdgeKind, EnumVariant, Field, GenericParam, Node, NodeId, NodeKind, StructKind, TraitMethod, Visibility,
 };
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::LOCAL_CRATE;
@@ -18,6 +18,25 @@ struct ModelLike {
     nodes: Vec<Node>,
     edge_hints: Vec<EdgeHint>,
     emit_order: Vec<NodeId>,
+}
+
+fn map_edge_kind(k: &ModelEdgeKind) -> CanonEdgeKind {
+    match k {
+        ModelEdgeKind::Renames => CanonEdgeKind::Renames,
+        ModelEdgeKind::Resolves => CanonEdgeKind::Resolves,
+        ModelEdgeKind::TypeOf => CanonEdgeKind::TypeOf,
+        ModelEdgeKind::TypeUnifies => CanonEdgeKind::TypeUnifies,
+        ModelEdgeKind::ImplTrait => CanonEdgeKind::ImplTrait,
+        ModelEdgeKind::DynTrait => CanonEdgeKind::DynTrait,
+        ModelEdgeKind::Calls => CanonEdgeKind::Calls,
+        ModelEdgeKind::Contains => CanonEdgeKind::Contains,
+        ModelEdgeKind::ImplFor => CanonEdgeKind::ImplFor,
+        ModelEdgeKind::CfgEdge => CanonEdgeKind::CfgEdge,
+        ModelEdgeKind::CfgBranch { label } => CanonEdgeKind::CfgBranch { label: label.clone() },
+        ModelEdgeKind::Outlives => CanonEdgeKind::Outlives,
+        ModelEdgeKind::ConstDep => CanonEdgeKind::ConstDep,
+        ModelEdgeKind::Expands => CanonEdgeKind::Expands,
+    }
 }
 
 fn vis_flags(v: &Visibility) -> u32 {
@@ -139,7 +158,7 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
             for bb in blocks {
                 let mut ops = Vec::new();
                 for stmt in &bb.stmts {
-                    use model::ir::node::Stmt;
+                    use crate::types::Stmt;
                     let op = match stmt {
                         Stmt::Let { pat, ty, init } => {
                             let name_id = NameId(canon.name_intern.intern(pat));
@@ -169,7 +188,7 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                     };
                     ops.push(op);
                 }
-                use model::ir::node::Terminator;
+                use crate::types::Terminator;
                 match &bb.terminator {
                     Terminator::Goto(t) => ops.push(CfgOp::Goto(*t)),
                     Terminator::Branch { cond, true_bb, false_bb } => {
@@ -230,7 +249,7 @@ fn assemble_model_like(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> M
         if tcx.opt_parent(*def_id).map_or(true, |p| !index.def_to_node.contains_key(&p)) {
             let shifted = node_id.0 + 1;
             if let Some(mapped) = remap.get(&shifted) {
-                model_like.edge_hints.push(EdgeHint { src: 0, dst: *mapped, kind: EdgeKind::Contains });
+                model_like.edge_hints.push(EdgeHint { src: 0, dst: *mapped, kind: ModelEdgeKind::Contains });
             }
         }
     }
@@ -448,22 +467,22 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
     for hint in &model_like.edge_hints {
         let src = id_map[hint.src as usize];
         let dst = id_map[hint.dst as usize];
-        let k = hint.kind.clone();
+        let k = map_edge_kind(&hint.kind);
         match &hint.kind {
-            EdgeKind::Renames | EdgeKind::Resolves => name_edges.push((src, dst, k)),
-            EdgeKind::TypeOf | EdgeKind::TypeUnifies | EdgeKind::ImplTrait | EdgeKind::DynTrait => type_edges.push((src, dst, k)),
-            EdgeKind::Calls => call_edges.push((src, dst, k)),
-            EdgeKind::Contains | EdgeKind::ImplFor => module_edges.push((src, dst, k)),
-            EdgeKind::CfgEdge | EdgeKind::CfgBranch { .. } => cfg_edges.push((src, dst, k)),
-            EdgeKind::Outlives => region_edges.push((src, dst, k)),
-            EdgeKind::ConstDep => value_edges.push((src, dst, k)),
-            EdgeKind::Expands => macro_edges.push((src, dst, k)),
+            ModelEdgeKind::Renames | ModelEdgeKind::Resolves => name_edges.push((src, dst, k)),
+            ModelEdgeKind::TypeOf | ModelEdgeKind::TypeUnifies | ModelEdgeKind::ImplTrait | ModelEdgeKind::DynTrait => type_edges.push((src, dst, k)),
+            ModelEdgeKind::Calls => call_edges.push((src, dst, k)),
+            ModelEdgeKind::Contains | ModelEdgeKind::ImplFor => module_edges.push((src, dst, k)),
+            ModelEdgeKind::CfgEdge | ModelEdgeKind::CfgBranch { .. } => cfg_edges.push((src, dst, k)),
+            ModelEdgeKind::Outlives => region_edges.push((src, dst, k)),
+            ModelEdgeKind::ConstDep => value_edges.push((src, dst, k)),
+            ModelEdgeKind::Expands => macro_edges.push((src, dst, k)),
         }
     }
 
     let n = canon.nodes.len();
     let node_data: Vec<CanonId> = (0..n as u32).map(CanonId).collect();
-    let to_raw = |v: Vec<(CanonId, CanonId, EdgeKind)>| -> Vec<(u32, u32, EdgeKind)> { v.into_iter().map(|(s, d, k)| (s.0, d.0, k)).collect() };
+    let to_raw = |v: Vec<(CanonId, CanonId, CanonEdgeKind)>| -> Vec<(u32, u32, CanonEdgeKind)> { v.into_iter().map(|(s, d, k)| (s.0, d.0, k)).collect() };
 
     canon.name_graph = CsrGraph::from_edges(node_data.clone(), to_raw(name_edges));
     canon.type_graph = CsrGraph::from_edges(node_data.clone(), to_raw(type_edges));

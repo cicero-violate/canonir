@@ -2,7 +2,8 @@ use crate::solver::csr_to_adj;
 use anyhow::Result;
 use canon::node::{CanonId, CanonNodeKind};
 use canon::CanonIR;
-use model::ir::{csr_graph::CsrGraph, edge::EdgeKind, node::NodeId};
+use canon::csr_graph::CsrGraph;
+use canon::{edge::EdgeKind, id::NodeId};
 use std::collections::HashSet;
 
 pub fn solve(ir: &mut CanonIR) -> Result<()> {
