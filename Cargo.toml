@@ -7,7 +7,9 @@ members = [
   "mutation",
   "projection",
   "orchestration",
-  "canon_capture",
+  "rustc_capture",
   "canon",
+  "canon-analyzer",
+  "canon-projection",
 ]
 resolver = "2"
