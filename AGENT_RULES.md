@@ -30,3 +30,51 @@ Decision Rule
 - awk to slice.
 - apply_patch to modify.
 - perl for structure-aware parsing.
+
+bat
+- Use only as a last resort for manual inspection.
+- Use when full-file visual context is required.
+- Do not use bat for automated extraction or structured processing.
+
+
+example
+```bash
+perl -0777 -ne '
+my $src = $_;
+
+sub extract_function {
+    my ($name, $file) = @_;
+    while ($src =~ /(^\s*(pub\s+)?fn\s+$name[^{]*\{)/mg) {
+        my $start = pos($src) - length($1);
+        my $depth = 1;
+        my $i = pos($src);
+
+        while ($depth && $i < length($src)) {
+            my $c = substr($src, $i, 1);
+            $depth++ if $c eq "{";
+            $depth-- if $c eq "}";
+            $i++;
+        }
+
+        my $block = substr($src, $start, $i - $start);
+
+        if ($block =~ /flags::|vis_token|normalize_use_path|for_trait|UNSAFE|INLINE/) {
+            my @lines = split /\n/, $block;
+            print "\n=== $file :: $name ===\n\n";
+            for my $j (0..$#lines) {
+                printf "%5d  %s\n", $j+1, $lines[$j];
+            }
+        }
+
+        pos($src) = $i;
+    }
+}
+
+extract_function("dispatch_item", $ARGV);
+extract_function("emit_node", $ARGV);
+extract_function("emit_module", $ARGV);
+extract_function("emit_impl", $ARGV);
+' canon-projection/src/emit/items.rs \
+   canon-projection/src/emit/impls.rs
+```
+
