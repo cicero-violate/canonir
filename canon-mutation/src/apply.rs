@@ -1,11 +1,11 @@
 use crate::MutationOp;
 use anyhow::{bail, Result};
+use canon::csr_graph::CsrGraph;
+use canon::{edge::EdgeKind, id::NodeId};
 use canon::{
     node::{CanonId, CanonNodeKind},
     CanonIR, CanonNode,
 };
-use canon::csr_graph::CsrGraph;
-use canon::{edge::EdgeKind, id::NodeId};
 
 fn graph_slot(kind: &EdgeKind) -> &'static str {
     match kind {

@@ -2,8 +2,8 @@ pub mod apply;
 pub mod diff;
 pub mod verify;
 
-use canon::node::{CanonId, CanonNodeKind};
 use canon::edge::EdgeKind;
+use canon::node::{CanonId, CanonNodeKind};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

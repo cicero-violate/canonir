@@ -1,6 +1,6 @@
 use crate::{ChangeSet, GraphEdge};
-use canon::{node::CanonId, CanonIR};
 use canon::{edge::EdgeKind, id::NodeId};
+use canon::{node::CanonId, CanonIR};
 use std::collections::HashSet;
 
 fn extract_edges(ir: &CanonIR) -> Vec<GraphEdge> {

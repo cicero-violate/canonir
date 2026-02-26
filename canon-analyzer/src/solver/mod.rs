@@ -1,7 +1,7 @@
 use anyhow::Result;
+use canon::id::NodeId;
 use canon::node::CanonId;
 use canon::CanonIR;
-use canon::id::NodeId;
 
 pub mod borrow_solver;
 pub mod call_solver;
@@ -28,7 +28,8 @@ pub mod visibility_solver;
 pub fn solve(ir: &mut CanonIR) -> Result<()> {
     invariant_solver::solve(ir)?;
     module_solver::solve(ir)?;
-    // Keep names stable for Canon emit parity; Model-style rename propagation is too aggressive here.
+    use_solver::solve(ir)?;
+    name_solver::solve(ir)?;
     type_solver::solve(ir)?;
     call_solver::solve(ir)?;
     cfg_solver::solve(ir)?;

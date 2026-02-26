@@ -1,13 +1,12 @@
+use crate::norm;
+use crate::types::{Body, EdgeHint, EdgeKind as ModelEdgeKind, EnumVariant, Field, GenericParam, Node, NodeId, NodeKind, StructKind, TraitMethod, Visibility};
+use crate::{index::Index, Partial};
 use canon::{
     csr_graph::CsrGraph,
     edge::EdgeKind as CanonEdgeKind,
     intern::{NameId, PathId},
     ir::CanonIR,
     node::{flags, CanonId, CanonNodeKind, CfgOp, PrimTy, TypeKind},
-};
-use crate::{index::Index, Partial};
-use crate::types::{
-    Body, EdgeHint, EdgeKind as ModelEdgeKind, EnumVariant, Field, GenericParam, Node, NodeId, NodeKind, StructKind, TraitMethod, Visibility,
 };
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::LOCAL_CRATE;
@@ -50,7 +49,27 @@ fn vis_flags(v: &Visibility) -> u32 {
 }
 
 fn str_to_type_kind(canon: &mut CanonIR, ty: &str) -> TypeKind {
-    match ty.trim() {
+    let trimmed = ty.trim();
+    // Structured parsing for reference types before primitive/extern fallthrough.
+    if let Some(inner) = trimmed.strip_prefix("&mut ") {
+        let inner_id = intern_ty(canon, inner);
+        return TypeKind::Ref { lifetime: None, inner: inner_id, mutable: true };
+    }
+    if let Some(inner) = trimmed.strip_prefix('&') {
+        let inner_id = intern_ty(canon, inner);
+        return TypeKind::Ref { lifetime: None, inner: inner_id, mutable: false };
+    }
+    if let Some(inner) = trimmed.strip_prefix("dyn ") {
+        let name_id = NameId(canon.name_intern.intern(inner));
+        let trait_id = canon.push_node(CanonNodeKind::TypeRef { name_id });
+        return TypeKind::DynTrait(trait_id);
+    }
+    if let Some(inner) = trimmed.strip_prefix("impl ") {
+        let name_id = NameId(canon.name_intern.intern(inner));
+        let trait_id = canon.push_node(CanonNodeKind::TypeRef { name_id });
+        return TypeKind::ImplTrait(trait_id);
+    }
+    match trimmed {
         "bool" => TypeKind::Primitive(PrimTy::Bool),
         "char" => TypeKind::Primitive(PrimTy::Char),
         "str" => TypeKind::Primitive(PrimTy::Str),
@@ -71,7 +90,8 @@ fn str_to_type_kind(canon: &mut CanonIR, ty: &str) -> TypeKind {
         "()" => TypeKind::Primitive(PrimTy::Unit),
         "!" => TypeKind::Primitive(PrimTy::Never),
         other => {
-            let pid = PathId(canon.path_intern.intern(other));
+            let normalized = norm::norm_path(other);
+            let pid = PathId(canon.path_intern.intern(&normalized));
             TypeKind::Extern(pid)
         }
     }
@@ -259,6 +279,7 @@ fn assemble_model_like(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> M
 
 pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> CanonIR {
     let model_like = assemble_model_like(tcx, index, parts);
+    let local_crate = tcx.crate_name(LOCAL_CRATE).to_string();
     let mut canon = CanonIR::new();
 
     let mut id_map: Vec<CanonId> = Vec::with_capacity(model_like.nodes.len());
@@ -308,8 +329,7 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
                 }
                 CanonNodeKind::Impl { for_ty, for_trait: trait_ty, generics: vec![], attrs: vec![], flags: f }
             }
-            NodeKind::Function { name, vis, params, ret, body, unsafe_, async_, .. }
-            | NodeKind::Method { name, vis, params, ret, body, unsafe_, async_, .. } => {
+            NodeKind::Function { name, vis, params, ret, body, unsafe_, async_, .. } | NodeKind::Method { name, vis, params, ret, body, unsafe_, async_, .. } => {
                 let name_id = NameId(canon.name_intern.intern(name));
                 let ret_id = intern_ty(&mut canon, ret);
                 let param_ids: Vec<CanonId> = params
@@ -492,6 +512,53 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
     canon.region_graph = CsrGraph::from_edges(node_data.clone(), to_raw(region_edges));
     canon.value_graph = CsrGraph::from_edges(node_data.clone(), to_raw(value_edges));
     canon.macro_graph = CsrGraph::from_edges(node_data, to_raw(macro_edges));
+
+    // Ensure every Extern type path is normalized before projection.
+    let mut extern_type_updates: Vec<(usize, PathId)> = Vec::new();
+    for (idx, node) in canon.nodes.iter().enumerate() {
+        if let CanonNodeKind::Type { kind: TypeKind::Extern(path_id) } = &node.kind {
+            let raw = canon.lookup_path(*path_id).to_string();
+            let normalized = norm::norm_path(&raw);
+            if normalized != raw {
+                let normalized_id = PathId(canon.path_intern.intern(&normalized));
+                extern_type_updates.push((idx, normalized_id));
+            }
+        }
+    }
+    for (idx, normalized_id) in extern_type_updates {
+        if let CanonNodeKind::Type { kind: TypeKind::Extern(path_id) } = &mut canon.nodes[idx].kind {
+            *path_id = normalized_id;
+        }
+    }
+
+    let mut local_module_roots: HashSet<String> = HashSet::new();
+    for node in &canon.nodes {
+        if let CanonNodeKind::Module { path_id, .. } = &node.kind {
+            if let Some(rest) = canon.lookup_path(*path_id).strip_prefix("crate::") {
+                if let Some(root) = rest.split("::").next() {
+                    if !root.is_empty() {
+                        local_module_roots.insert(root.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Normalize local crate-qualified paths once at assemble time.
+    for path in &mut canon.path_intern.vec {
+        let mut normalized = norm::local_crate_path(path, &local_crate);
+        for root in &local_module_roots {
+            let root_prefix = format!("{root}::");
+            if normalized.starts_with(&root_prefix) {
+                normalized = format!("crate::{normalized}");
+            }
+            normalized = normalized.replace(&format!("<{root}::"), &format!("<crate::{root}::"));
+            normalized = normalized.replace(&format!("dyn {root}::"), &format!("dyn crate::{root}::"));
+            normalized = normalized.replace(&format!("&{root}::"), &format!("&crate::{root}::"));
+        }
+        *path = normalized;
+    }
+    canon.path_intern.restore_index();
 
     canon
 }

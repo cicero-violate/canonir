@@ -41,41 +41,41 @@ pub fn short(full_path: &str) -> &str {
 pub fn ty(raw: &str) -> String {
     // Pass 1: common type paths (std / core / alloc variants).
     const REPLACEMENTS: &[(&str, &str)] = &[
-        ("std::Path",                 "std::path::Path"),
-        ("std::PathBuf",              "std::path::PathBuf"),
-        ("std::Formatter",            "std::fmt::Formatter"),
-        ("std::Error",                "std::error::Error"),
-        ("std::string::String",       "String"),
-        ("alloc::string::String",     "String"),
-        ("std::result::Result",       "Result"),
-        ("core::result::Result",      "Result"),
-        ("alloc::result::Result",     "Result"),
-        ("std::option::Option",       "Option"),
-        ("core::option::Option",      "Option"),
-        ("std::vec::Vec",             "Vec"),
-        ("alloc::vec::Vec",           "Vec"),
-        ("core::vec::Vec",            "Vec"),
-        ("std::boxed::Box",           "Box"),
-        ("alloc::boxed::Box",         "Box"),
+        ("std::Path", "std::path::Path"),
+        ("std::PathBuf", "std::path::PathBuf"),
+        ("std::Formatter", "std::fmt::Formatter"),
+        ("std::Error", "std::error::Error"),
+        ("std::string::String", "String"),
+        ("alloc::string::String", "String"),
+        ("std::result::Result", "Result"),
+        ("core::result::Result", "Result"),
+        ("alloc::result::Result", "Result"),
+        ("std::option::Option", "Option"),
+        ("core::option::Option", "Option"),
+        ("std::vec::Vec", "Vec"),
+        ("alloc::vec::Vec", "Vec"),
+        ("core::vec::Vec", "Vec"),
+        ("std::boxed::Box", "Box"),
+        ("alloc::boxed::Box", "Box"),
         ("std::collections::HashMap", "HashMap"),
         ("std::collections::HashSet", "HashSet"),
     ];
     // Pass 2: trait / marker paths that appear inside type strings.
     const REPLACEMENTS2: &[(&str, &str)] = &[
-        ("std::future::Future",   "Future"),
-        ("core::future::Future",  "Future"),
-        ("core::marker::Sized",   "Sized"),
-        ("std::marker::Sized",    "Sized"),
-        ("core::marker::Send",    "Send"),
-        ("core::marker::Sync",    "Sync"),
-        ("std::marker::Send",     "Send"),
-        ("std::marker::Sync",     "Sync"),
+        ("std::future::Future", "Future"),
+        ("core::future::Future", "Future"),
+        ("core::marker::Sized", "Sized"),
+        ("std::marker::Sized", "Sized"),
+        ("core::marker::Send", "Send"),
+        ("core::marker::Sync", "Sync"),
+        ("std::marker::Send", "Send"),
+        ("std::marker::Sync", "Sync"),
         ("core::cmp::PartialOrd", "PartialOrd"),
-        ("core::cmp::PartialEq",  "PartialEq"),
-        ("core::fmt::Debug",      "Debug"),
-        ("core::fmt::Display",    "Display"),
-        ("core::marker::Copy",    "Copy"),
-        ("core::clone::Clone",    "Clone"),
+        ("core::cmp::PartialEq", "PartialEq"),
+        ("core::fmt::Debug", "Debug"),
+        ("core::fmt::Display", "Display"),
+        ("core::marker::Copy", "Copy"),
+        ("core::clone::Clone", "Clone"),
     ];
     let mut s = raw.to_string();
     for (full, short) in REPLACEMENTS {
@@ -139,6 +139,38 @@ pub fn ty_strip_local(s: &str, krate: &str) -> String {
     s.replace(&crate_prefix, "crate::")
 }
 
+/// Normalize a fully-qualified local crate path to `crate::...`.
+/// "my_crate::core::engine" -> "crate::core::engine"
+/// "my_crate"               -> "crate"
+pub fn local_crate_path(raw: &str, krate: &str) -> String {
+    if raw == krate {
+        "crate".to_string()
+    } else if let Some(rest) = raw.strip_prefix(&format!("{}::", krate)) {
+        format!("crate::{}", rest)
+    } else {
+        raw.to_string()
+    }
+}
+
+/// Normalize extern/type path strings before interning into CanonIR.
+/// Only stdlib/core/alloc path fixes belong here.
+/// Local-crate prefix logic lives exclusively in canon_assemble::local_module_roots.
+pub fn norm_path(raw: &str) -> String {
+    let mut s = raw.to_string();
+    s = s.replace("std::PathBuf", "std::path::PathBuf");
+    s = s.replace("std::Path", "std::path::Path");
+    s = s.replace("&std::path::Path", "&Path");
+    s = s.replace("std::path::PathBuf", "PathBuf");
+    s = s.replace("std::path::Path", "Path");
+
+    for p in ["crate::Vec<", "crate::Box<", "crate::Result<", "crate::Option<"] {
+        if s.starts_with(p) {
+            s = s.replacen("crate::", "", 1);
+        }
+    }
+    s
+}
+
 /// Strip "impl Foo: Bar + Baz" → "impl Foo" in type position.
 /// rustc renders impl-trait params as "impl Trait: Bound1 + Bound2".
 pub fn ty_clean_impl(s: &str) -> String {
@@ -160,8 +192,14 @@ pub fn ty_clean_impl(s: &str) -> String {
                 let mut depth = 0usize;
                 while i < bytes.len() {
                     match bytes[i] {
-                        b'<' => { depth += 1; i += 1; }
-                        b'>' if depth > 0 => { depth -= 1; i += 1; }
+                        b'<' => {
+                            depth += 1;
+                            i += 1;
+                        }
+                        b'>' if depth > 0 => {
+                            depth -= 1;
+                            i += 1;
+                        }
                         b',' | b')' if depth == 0 => break,
                         _ => i += 1,
                     }
@@ -179,8 +217,7 @@ pub fn ty_clean_impl(s: &str) -> String {
 /// "&'static str" → "&str", "&'static [u8]" → "&[u8]".
 /// These appear in const item types from tcx.type_of.
 pub fn ty_strip_static_lifetime(s: &str) -> String {
-    s.replace("&'static str", "&str")
-     .replace("&'static [u8]", "&[u8]")
+    s.replace("&'static str", "&str").replace("&'static [u8]", "&[u8]")
 }
 
 /// Canonical span: "src/foo.rs:line:col" — lo position only, no hygiene.
@@ -251,9 +288,26 @@ pub fn module_file(tcx: TyCtxt<'_>, def_id: DefId) -> String {
 
 fn real_filename(name: &FileName) -> String {
     match name {
-        FileName::Real(rn) => rn.local_path()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "<unknown>".to_string()),
+        FileName::Real(rn) => rn.local_path().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "<unknown>".to_string()),
         _ => "<macro>".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{local_crate_path, norm_path};
+
+    #[test]
+    fn normalizes_local_crate_path_prefixes() {
+        assert_eq!(local_crate_path("my_crate::core::engine", "my_crate"), "crate::core::engine");
+        assert_eq!(local_crate_path("my_crate", "my_crate"), "crate");
+        assert_eq!(local_crate_path("serde::Serialize", "my_crate"), "serde::Serialize");
+    }
+
+    #[test]
+    fn normalizes_extern_type_paths() {
+        assert_eq!(norm_path("data::model::User"), "crate::data::model::User");
+        assert_eq!(norm_path("Vec<data::model::User>"), "Vec<crate::data::model::User>");
+        assert_eq!(norm_path("Box<dyn traits::Describable>"), "Box<dyn crate::traits::Describable>");
     }
 }

@@ -107,8 +107,18 @@ pub enum StructKind {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum NodeKind {
-    Crate { name: String, edition: String },
-    Module { path: String, file: String, #[serde(default)] vis: Visibility, #[serde(default)] inline: bool },
+    Crate {
+        name: String,
+        edition: String,
+    },
+    Module {
+        path: String,
+        file: String,
+        #[serde(default)]
+        vis: Visibility,
+        #[serde(default)]
+        inline: bool,
+    },
     Struct {
         name: String,
         vis: Visibility,
@@ -188,10 +198,35 @@ pub enum NodeKind {
         #[serde(default)]
         async_: bool,
     },
-    Const { name: String, vis: Visibility, ty: String, value: String, #[serde(default)] attrs: Vec<String> },
-    Static { name: String, vis: Visibility, ty: String, value: String, #[serde(default)] mutable: bool, #[serde(default)] attrs: Vec<String> },
-    Use { #[serde(default)] vis: Visibility, path: String, alias: Option<String>, #[serde(default)] glob: bool },
-    TypeRef { name: String },
+    Const {
+        name: String,
+        vis: Visibility,
+        ty: String,
+        value: String,
+        #[serde(default)]
+        attrs: Vec<String>,
+    },
+    Static {
+        name: String,
+        vis: Visibility,
+        ty: String,
+        value: String,
+        #[serde(default)]
+        mutable: bool,
+        #[serde(default)]
+        attrs: Vec<String>,
+    },
+    Use {
+        #[serde(default)]
+        vis: Visibility,
+        path: String,
+        alias: Option<String>,
+        #[serde(default)]
+        glob: bool,
+    },
+    TypeRef {
+        name: String,
+    },
     TypeAlias {
         name: String,
         vis: Visibility,
@@ -202,9 +237,19 @@ pub enum NodeKind {
         #[serde(default)]
         where_clauses: Vec<String>,
     },
-    Lifetime { name: String },
-    ExternCrate { name: String, alias: Option<String>, #[serde(default)] vis: Visibility },
-    MacroCall { path: String, tokens: String },
+    Lifetime {
+        name: String,
+    },
+    ExternCrate {
+        name: String,
+        alias: Option<String>,
+        #[serde(default)]
+        vis: Visibility,
+    },
+    MacroCall {
+        path: String,
+        tokens: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

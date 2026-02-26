@@ -1,16 +1,50 @@
 use crate::solver::csr_to_adj;
 use anyhow::Result;
+use canon::csr_graph::CsrGraph;
 use canon::node::{CanonId, CanonNodeKind};
 use canon::CanonIR;
-use canon::csr_graph::CsrGraph;
 use canon::{edge::EdgeKind, id::NodeId};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub fn solve(ir: &mut CanonIR) -> Result<()> {
     let v = ir.module_graph.vertex_count();
     if v == 0 {
         return Ok(());
     }
+    // ── Dedup pass ───────────────────────────────────────────────────────────
+    // Collapse Use nodes that are structural duplicates within the same parent
+    // module. Key = (parent_module_idx, path_id, alias, flags).
+    {
+        let old_v = ir.module_graph.vertex_count();
+        let mut raw_edges: Vec<(u32, u32, EdgeKind)> = Vec::new();
+        for src_idx in 0..old_v {
+            let src_id = NodeId(src_idx as u32);
+            for (dst_id, edge) in ir.module_graph.neighbours(src_id) {
+                raw_edges.push((src_id.0, dst_id.0, edge.clone()));
+            }
+        }
+        // (parent, path_id, alias_id, flags) -> already emitted
+        let mut seen: HashSet<(u32, u32, u32, u32)> = HashSet::new();
+        let mut deduped: Vec<(u32, u32, EdgeKind)> = Vec::new();
+        for (src, dst, edge) in raw_edges {
+            let is_dup = if matches!(edge, EdgeKind::Contains) {
+                if let Some(CanonNodeKind::Use { path_id, alias, flags }) = ir.nodes.get(dst as usize).map(|n| &n.kind) {
+                    let key = (src, path_id.0, alias.map(|a| a.0).unwrap_or(u32::MAX), *flags);
+                    !seen.insert(key)
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            if !is_dup {
+                deduped.push((src, dst, edge));
+            }
+        }
+        let node_data: Vec<CanonId> = (0..ir.nodes.len() as u32).map(CanonId).collect();
+        ir.module_graph = CsrGraph::from_edges(node_data, deduped);
+    }
+
     let name_v = ir.name_graph.vertex_count();
     if name_v == 0 {
         return Ok(());

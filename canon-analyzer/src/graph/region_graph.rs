@@ -1,7 +1,7 @@
-use canon::node::{CanonId, CanonNodeKind};
-use canon::CanonIR;
 use canon::csr_graph::CsrGraph;
 use canon::edge::EdgeKind;
+use canon::node::{CanonId, CanonNodeKind};
+use canon::CanonIR;
 
 pub struct RegionGraphBuilder {
     v: usize,

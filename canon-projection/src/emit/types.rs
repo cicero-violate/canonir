@@ -1,7 +1,7 @@
 use canon::ir::CanonIR;
 use canon::node::{CanonId, CanonNodeKind, NameId, PrimTy, TypeKind};
 
-use crate::emit::fmt::{normalize_extern_path, vis_token};
+use crate::emit::fmt::vis_token;
 
 pub fn emit_struct(ir: &CanonIR, name_id: NameId, generics: &[CanonId], fields: &[CanonId], derives: &[CanonId], flags: u32, struct_kind: u8, pad: &str) -> String {
     let vis = vis_token(flags);
@@ -182,7 +182,7 @@ fn render_type_kind(ir: &CanonIR, kind: &TypeKind) -> String {
         TypeKind::ImplTrait(id) => format!("impl {}", render_type_id(ir, *id)),
         TypeKind::DynTrait(id) => format!("dyn {}", render_type_id(ir, *id)),
         TypeKind::Param(name_id) => ir.lookup_name(*name_id).to_string(),
-        TypeKind::Extern(path_id) => normalize_extern_path(ir.lookup_path(*path_id), ir),
+        TypeKind::Extern(path_id) => ir.lookup_path(*path_id).to_string(),
         TypeKind::TypeRef { name_id } => ir.lookup_name(*name_id).to_string(),
     }
 }

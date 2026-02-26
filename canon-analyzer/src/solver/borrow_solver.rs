@@ -1,8 +1,8 @@
 use algorithms::graph::region::outlives_cycles;
 use anyhow::{bail, Result};
+use canon::id::NodeId;
 use canon::node::CanonNodeKind;
 use canon::CanonIR;
-use canon::id::NodeId;
 
 pub fn solve(ir: &CanonIR) -> Result<()> {
     let v = ir.region_graph.vertex_count();

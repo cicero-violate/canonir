@@ -1,9 +1,9 @@
 use crate::solver::{csr_to_adj, to_node_id};
 use algorithms::graph::topological_sort::topological_sort;
 use anyhow::Result;
+use canon::edge::EdgeKind;
 use canon::node::CanonNodeKind;
 use canon::CanonIR;
-use canon::edge::EdgeKind;
 
 pub fn solve(ir: &mut CanonIR) -> Result<()> {
     let v = ir.name_graph.vertex_count();

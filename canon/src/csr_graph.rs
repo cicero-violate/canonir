@@ -8,8 +8,8 @@
 //!   edge_data: Vec<ED>        — per-edge payload,           length E
 //!   node_data: Vec<ND>        — per-node payload,           length V
 
-use serde::{Deserialize, Serialize};
 use crate::id::NodeId;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CsrGraph<ND, ED> {

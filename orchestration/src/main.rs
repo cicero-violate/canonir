@@ -38,8 +38,7 @@ fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBu
         println!("Snapshot A: {} canon nodes", snap_a.nodes.len());
 
         let mut_json = std::fs::read_to_string(&mut_path).with_context(|| format!("cannot read mutation file {:?}", mut_path))?;
-        let ops: Vec<canon_mutation::MutationOp> =
-            serde_json::from_str(&mut_json).with_context(|| format!("cannot parse canon MutationOp list from {:?}", mut_path))?;
+        let ops: Vec<canon_mutation::MutationOp> = serde_json::from_str(&mut_json).with_context(|| format!("cannot parse canon MutationOp list from {:?}", mut_path))?;
         println!("  applying {} canon mutation op(s)...", ops.len());
 
         for (i, op) in ops.into_iter().enumerate() {

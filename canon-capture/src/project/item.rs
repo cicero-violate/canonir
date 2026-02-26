@@ -1,11 +1,11 @@
 use crate::types::TraitMethod;
 use crate::types::{Body, EnumVariant, Field, GenericParam, Node, NodeKind, Param, StructKind, Visibility};
 use rustc_hir::{def::DefKind, GenericBound, PatKind, PredicateOrigin, Safety, WherePredicateKind};
-use rustc_span::hygiene::{ExpnKind, MacroKind};
 use rustc_middle::ty::print::PrintTraitRefExt;
 use rustc_middle::ty::AssocKind;
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_span::def_id::DefId;
+use rustc_span::hygiene::{ExpnKind, MacroKind};
 
 use crate::index::Index;
 use crate::norm;
@@ -28,13 +28,8 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
             let file = norm::module_file(tcx, def_id);
             // An inline module lives in the same file as its declaration span.
             let decl_file = norm::file(tcx, raw_span);
-            let inline = file == decl_file && def_id.as_local().map_or(false, |local| {
-                if let rustc_hir::Node::Item(item) = tcx.hir_node_by_def_id(local) {
-                    matches!(item.kind, rustc_hir::ItemKind::Mod(_, _))
-                } else {
-                    false
-                }
-            });
+            let inline = file == decl_file
+                && def_id.as_local().map_or(false, |local| if let rustc_hir::Node::Item(item) = tcx.hir_node_by_def_id(local) { matches!(item.kind, rustc_hir::ItemKind::Mod(_, _)) } else { false });
             NodeKind::Module { path: norm::module_path(tcx, def_id), file, vis, inline }
         }
         DefKind::Struct | DefKind::Union => {
@@ -101,20 +96,10 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
                 if let rustc_hir::Node::Item(item) = tcx.hir_node_by_def_id(local) {
                     if let rustc_hir::ItemKind::Use(use_path, use_kind) = item.kind {
                         let sm = tcx.sess.source_map();
-                        let mut path = sm
-                            .span_to_snippet(use_path.span)
-                            .ok()
-                            .map(|s| s.trim().trim_start_matches("::").to_string())
-                            .filter(|s| !s.is_empty());
+                        let mut path = sm.span_to_snippet(use_path.span).ok().map(|s| s.trim().trim_start_matches("::").to_string()).filter(|s| !s.is_empty());
 
                         if path.is_none() {
-                            path = use_path.res.iter().find_map(|r| {
-                                if let Some(rustc_hir::def::Res::Def(_, did)) = r {
-                                    Some(norm::path(tcx, *did))
-                                } else {
-                                    None
-                                }
-                            });
+                            path = use_path.res.iter().find_map(|r| if let Some(rustc_hir::def::Res::Def(_, did)) = r { Some(norm::path(tcx, *did)) } else { None });
                         }
 
                         let path = path?;
@@ -149,11 +134,7 @@ fn map_vis(v: ty::Visibility<DefId>) -> Visibility {
 /// Where clauses: read from HIR `Generics.predicates` with `origin == WhereClause`.
 /// Both are source snippets — exactly what the user wrote, no path normalization.
 fn map_generics(tcx: TyCtxt<'_>, def_id: DefId) -> (Vec<GenericParam>, Vec<String>) {
-    let supported = matches!(
-        tcx.def_kind(def_id),
-        DefKind::Fn | DefKind::AssocFn | DefKind::Struct | DefKind::Enum
-            | DefKind::Trait | DefKind::Impl { .. } | DefKind::TyAlias
-    );
+    let supported = matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn | DefKind::Struct | DefKind::Enum | DefKind::Trait | DefKind::Impl { .. } | DefKind::TyAlias);
     if !supported {
         return (Vec::new(), Vec::new());
     }
@@ -175,7 +156,9 @@ fn map_generics(tcx: TyCtxt<'_>, def_id: DefId) -> (Vec<GenericParam>, Vec<Strin
     let sm = tcx.sess.source_map();
 
     // Inline bounds: from GenericParam.bounds, skip Sized.
-    let params: Vec<GenericParam> = hgen.params.iter()
+    let params: Vec<GenericParam> = hgen
+        .params
+        .iter()
         .filter(|p| {
             let n = p.name.ident().to_string();
             n != "Self" && !p.is_elided_lifetime() && !p.is_impl_trait()
@@ -185,7 +168,9 @@ fn map_generics(tcx: TyCtxt<'_>, def_id: DefId) -> (Vec<GenericParam>, Vec<Strin
             let is_lifetime = matches!(p.kind, rustc_hir::GenericParamKind::Lifetime { .. });
             // All bounds (inline and where) live in hgen.predicates since PR #93803.
             // Inline bounds have origin == GenericParam; where-clause bounds have origin == WhereClause.
-            let bounds: Vec<String> = hgen.predicates.iter()
+            let bounds: Vec<String> = hgen
+                .predicates
+                .iter()
                 .filter_map(|pred| {
                     if let WherePredicateKind::BoundPredicate(bp) = pred.kind {
                         if bp.origin == PredicateOrigin::GenericParam {
@@ -215,18 +200,14 @@ fn map_generics(tcx: TyCtxt<'_>, def_id: DefId) -> (Vec<GenericParam>, Vec<Strin
         match pred.kind {
             WherePredicateKind::BoundPredicate(bp) => {
                 let lhs = sm.span_to_snippet(bp.bounded_ty.span).unwrap_or_default();
-                let rhs: Vec<String> = bp.bounds.iter()
-                    .filter_map(|b| sm.span_to_snippet(b.span()).ok())
-                    .collect();
+                let rhs: Vec<String> = bp.bounds.iter().filter_map(|b| sm.span_to_snippet(b.span()).ok()).collect();
                 if !lhs.is_empty() && !rhs.is_empty() {
                     where_clauses.push(format!("{}: {}", lhs, rhs.join(" + ")));
                 }
             }
             WherePredicateKind::RegionPredicate(rp) => {
                 let lhs = rp.lifetime.ident.to_string();
-                let rhs: Vec<String> = rp.bounds.iter()
-                    .filter_map(|b| sm.span_to_snippet(b.span()).ok())
-                    .collect();
+                let rhs: Vec<String> = rp.bounds.iter().filter_map(|b| sm.span_to_snippet(b.span()).ok()).collect();
                 if !rhs.is_empty() {
                     where_clauses.push(format!("{}: {}", lhs, rhs.join(" + ")));
                 }
@@ -253,7 +234,8 @@ fn is_sized_bound(b: &GenericBound<'_>) -> bool {
 /// Fallback for non-local DefIds: ty-query only, no where-clause split.
 fn map_generics_ty_fallback(tcx: TyCtxt<'_>, def_id: DefId) -> (Vec<GenericParam>, Vec<String>) {
     let gens = tcx.generics_of(def_id);
-    let params = gens.own_params
+    let params = gens
+        .own_params
         .iter()
         .filter(|p| p.name.as_str() != "Self" && !p.name.as_str().starts_with("impl "))
         .map(|p| {
@@ -289,7 +271,11 @@ fn map_params(tcx: TyCtxt<'_>, def_id: DefId, inputs: &[ty::Ty<'_>]) -> Vec<Para
             let is_self = name == "self";
             let ty_str = if is_self {
                 let raw = fmt_ty(tcx, *ty);
-                if raw.starts_with('&') { "&Self".to_string() } else { "Self".to_string() }
+                if raw.starts_with('&') {
+                    "&Self".to_string()
+                } else {
+                    "Self".to_string()
+                }
             } else {
                 fmt_ty(tcx, *ty)
             };
@@ -340,14 +326,14 @@ fn map_trait_method_params(tcx: TyCtxt<'_>, def_id: DefId, inputs: &[ty::Ty<'_>]
         .enumerate()
         .map(|(i, ty)| {
             let is_self = i == 0 && has_self;
-            let name = if is_self {
-                "self".to_string()
-            } else {
-                hir_names.get(i).and_then(|n| n.clone()).unwrap_or_else(|| format!("p{i}"))
-            };
+            let name = if is_self { "self".to_string() } else { hir_names.get(i).and_then(|n| n.clone()).unwrap_or_else(|| format!("p{i}")) };
             let ty_str = if is_self {
                 let raw = fmt_ty(tcx, *ty);
-                if raw.starts_with('&') { "&Self".to_string() } else { "Self".to_string() }
+                if raw.starts_with('&') {
+                    "&Self".to_string()
+                } else {
+                    "Self".to_string()
+                }
             } else {
                 fmt_ty(tcx, *ty)
             };
@@ -417,14 +403,8 @@ fn strip_outer_braces(src: String) -> String {
     if trimmed.starts_with('{') && trimmed.ends_with('}') {
         let inner = &trimmed[1..trimmed.len() - 1];
         let lines: Vec<&str> = inner.lines().collect();
-        let min_indent = lines.iter()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| l.len() - l.trim_start().len())
-            .min()
-            .unwrap_or(0);
-        let dedented: Vec<&str> = lines.iter()
-            .map(|l| if l.len() >= min_indent { &l[min_indent..] } else { l.trim_start() })
-            .collect();
+        let min_indent = lines.iter().filter(|l| !l.trim().is_empty()).map(|l| l.len() - l.trim_start().len()).min().unwrap_or(0);
+        let dedented: Vec<&str> = lines.iter().map(|l| if l.len() >= min_indent { &l[min_indent..] } else { l.trim_start() }).collect();
         dedented.join("\n").trim().to_string()
     } else {
         src
@@ -436,10 +416,7 @@ fn strip_outer_braces(src: String) -> String {
 /// Sources:
 ///   - StructuralPartialEq: rustc_builtin_macros/deriving/cmp/partial_eq.rs (bonus impl from derive(PartialEq))
 ///   - TrivialClone:        rustc_builtin_macros/deriving/clone.rs           (bonus impl from derive(Clone))
-const INTERNAL_DERIVE_TRAITS: &[&str] = &[
-    "StructuralPartialEq",
-    "TrivialClone",
-];
+const INTERNAL_DERIVE_TRAITS: &[&str] = &["StructuralPartialEq", "TrivialClone"];
 
 /// Extract derive macro names from automatically_derived impls.
 /// Filters out compiler-internal side-effect traits that are not user-writable macros.
@@ -449,17 +426,25 @@ fn collect_derives(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<String> {
         let impl_def_id = impl_did.to_def_id();
         // Only impls for our ADT.
         let Some(adt) = tcx.type_of(impl_def_id).instantiate_identity().ty_adt_def() else { continue };
-        if adt.did() != def_id { continue; }
+        if adt.did() != def_id {
+            continue;
+        }
         // Must be #[automatically_derived] with a Derive expansion context.
-        if !tcx.is_automatically_derived(impl_def_id) { continue; }
+        if !tcx.is_automatically_derived(impl_def_id) {
+            continue;
+        }
         let outer = tcx.def_span(impl_did).ctxt().outer_expn_data();
-        if !matches!(outer.kind, ExpnKind::Macro(MacroKind::Derive, _)) { continue; }
+        if !matches!(outer.kind, ExpnKind::Macro(MacroKind::Derive, _)) {
+            continue;
+        }
         // Extract the trait name.
         let trait_ref = tcx.impl_trait_ref(impl_def_id);
         let trait_did = trait_ref.skip_binder().def_id;
         let name = norm::short(&norm::path(tcx, trait_did)).to_string();
         // Skip compiler-internal side-effect traits.
-        if INTERNAL_DERIVE_TRAITS.contains(&name.as_str()) { continue; }
+        if INTERNAL_DERIVE_TRAITS.contains(&name.as_str()) {
+            continue;
+        }
         derives.push(name);
     }
     derives

@@ -5,7 +5,7 @@ use canon::node::{flags, CanonNodeKind};
 use canon::CanonIR;
 use canon::{edge::EdgeKind, id::NodeId};
 
-pub fn solve(ir: &CanonIR) -> Result<()> {
+pub fn solve(ir: &mut CanonIR) -> Result<()> {
     let n = ir.nodes.len();
     let name_v = ir.name_graph.vertex_count();
     let mod_v = ir.module_graph.vertex_count();
@@ -91,6 +91,52 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
     for w in &warnings {
         eprintln!("WARN {}", w);
     }
+
+    // ── Repair 1: modules at crate root with no visibility flag → set PUB ───
+    // Collect crate root's direct module children from module_graph.
+    let mut root_mod_children: Vec<usize> = Vec::new();
+    if mod_v > 0 {
+        let crate_idx = ir.nodes.iter().position(|n| matches!(n.kind, CanonNodeKind::Crate { .. })).unwrap_or(0);
+        let crate_id = canon::id::NodeId(crate_idx as u32);
+        for (dst, edge) in ir.module_graph.neighbours(crate_id) {
+            if matches!(edge, EdgeKind::Contains) {
+                if let Some(CanonNodeKind::Module { flags, .. }) = ir.nodes.get(dst.index()).map(|n| &n.kind) {
+                    if (*flags & (flags::PUB | flags::PUB_CRATE | flags::PUB_SUPER)) == 0 {
+                        root_mod_children.push(dst.index());
+                    }
+                }
+            }
+        }
+    }
+    for idx in root_mod_children {
+        if let CanonNodeKind::Module { flags, .. } = &mut ir.nodes[idx].kind {
+            *flags |= flags::PUB;
+        }
+    }
+
+    // ── Repair 2: Fn nodes inside trait impls → strip visibility flags ───────
+    // A trait impl is an Impl node with for_trait = Some(_).
+    let mut trait_impl_fns: Vec<usize> = Vec::new();
+    if mod_v > 0 {
+        for idx in 0..ir.nodes.len() {
+            if let CanonNodeKind::Impl { for_trait: Some(_), .. } = &ir.nodes[idx].kind {
+                let impl_id = canon::id::NodeId(idx as u32);
+                for (dst, edge) in ir.module_graph.neighbours(impl_id) {
+                    if matches!(edge, EdgeKind::Contains) {
+                        if let Some(CanonNodeKind::Fn { .. }) = ir.nodes.get(dst.index()).map(|n| &n.kind) {
+                            trait_impl_fns.push(dst.index());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for idx in trait_impl_fns {
+        if let CanonNodeKind::Fn { flags, .. } = &mut ir.nodes[idx].kind {
+            *flags &= !(flags::PUB | flags::PUB_CRATE | flags::PUB_SUPER);
+        }
+    }
+
     Ok(())
 }
 

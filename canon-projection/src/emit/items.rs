@@ -61,7 +61,7 @@ pub fn emit_node(ir: &CanonIR, id: CanonId, pad: &str) -> String {
 
 fn emit_module(ir: &CanonIR, module_id: CanonId, path_id: canon::node::PathId, f: u32, pad: &str) -> String {
     let name = ir.lookup_path(path_id).rsplit("::").next().unwrap_or(ir.lookup_path(path_id));
-    let vis = if (f & (flags::PUB | flags::PUB_CRATE | flags::PUB_SUPER)) == 0 { "pub " } else { vis_token(f) };
+    let vis = vis_token(f);
 
     if (f & flags::INLINE) != 0 {
         let inner_pad = format!("{}    ", pad);

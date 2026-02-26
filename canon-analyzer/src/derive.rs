@@ -3,9 +3,9 @@ use crate::graph::{
     type_graph::TypeGraphBuilder, value_graph::ValueGraphBuilder,
 };
 use anyhow::Result;
+use canon::csr_graph::CsrGraph;
 use canon::node::CanonId;
 use canon::CanonIR;
-use canon::csr_graph::CsrGraph;
 use canon::{edge::EdgeKind, id::NodeId};
 
 pub fn derive(ir: &mut CanonIR) -> Result<()> {

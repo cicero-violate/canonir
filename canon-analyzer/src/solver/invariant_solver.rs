@@ -1,10 +1,10 @@
 use crate::solver::csr_to_adj;
 use algorithms::graph::reachability::is_acyclic;
 use anyhow::{bail, Result};
-use canon::node::CanonNodeKind;
-use canon::CanonIR;
 use canon::edge::EdgeKind;
 use canon::id::NodeId;
+use canon::node::CanonNodeKind;
+use canon::CanonIR;
 
 pub fn solve(ir: &CanonIR) -> Result<()> {
     let v = ir.nodes.len();
