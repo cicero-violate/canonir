@@ -79,6 +79,12 @@ pub enum TypeKind {
     /// External / unresolved type (escape hatch, e.g. `std::collections::HashMap`)
     /// PathId points into path_intern.
     Extern(PathId),
+
+    /// Unresolved type reference by name (e.g. from TypeRef nodes in ModelIR).
+    /// NameId points into name_intern.
+    TypeRef {
+        name_id: NameId,
+    },
 }
 
 // ── CFG op kinds (replaces Stmt + Terminator strings) ────────────────────────
@@ -98,6 +104,10 @@ pub enum CfgOp {
     Goto(u32),
     /// unreachable
     Unreachable,
+    /// bare expression statement (interned source string, escape hatch)
+    Expr(CanonId),
+    /// raw source verbatim (interned into name_intern)
+    Raw(NameId),
 }
 
 // ── The canonical node kind ───────────────────────────────────────────────────
@@ -252,6 +262,11 @@ pub enum CanonNodeKind {
     },
 
     // ── Macro ────────────────────────────────────────────────────────────────
+    /// Unresolved type reference by name (from ModelIR TypeRef nodes).
+    TypeRef {
+        name_id: NameId,
+    },
+
     MacroCall {
         path_id: PathId,
         tokens_id: NameId, // interned token string (unavoidable escape)
