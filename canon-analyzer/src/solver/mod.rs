@@ -16,6 +16,7 @@ pub mod invariant_solver;
 pub mod liveness_solver;
 pub mod macro_solver;
 pub mod module_solver;
+pub mod dep_solver;
 pub mod name_solver;
 pub mod provenance_solver;
 pub mod stability_solver;
@@ -30,6 +31,7 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
     module_solver::solve(ir)?;
     use_solver::solve(ir)?;
     name_solver::solve(ir)?;
+    dep_solver::solve(ir)?;
     type_solver::solve(ir)?;
     call_solver::solve(ir)?;
     cfg_solver::solve(ir)?;

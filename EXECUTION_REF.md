@@ -29,27 +29,52 @@ extract_function("FUNCTION_NAME", $ARGV);
 ' path/to/file.rs
 ```
 
-### Phase 4 — h1: Remove path injection from file.rs
-Target: `emit_file` in `canon-projection/src/emit/file.rs` (lines 24–37, the string-scan inject block).
-Work moves to `use_solver.rs` — inject std::path::Path, PathBuf, and local types via Use nodes with resolved `target`.
+### Inspect solver chain
 ```bash
-# Inspect current h1 injection block
-perl -0777 -ne '...' canon-projection/src/emit/file.rs  # extract_function("emit_file", ...)
-# Find all Use node construction sites
-rg "CanonNodeKind::Use\s*\{" canon-analyzer/src/solver/use_solver.rs -n
-# Find solver chain order
-perl -0777 -ne '...' canon-analyzer/src/solver/mod.rs    # extract_function("solve", ...)
+perl -0777 -ne '...' canon-analyzer/src/solver/mod.rs  # extract_function("solve", ...)
 ```
 
-### Phase 6 — h6: Add dep_solver and wire into chain
-Target: new `canon-analyzer/src/solver/dep_solver.rs`; update `solver/mod.rs`; update `layout/mod.rs` `build_plan`.
+### Inspect dep_solver
 ```bash
-# Inspect current build_plan deps read (after g1 fix)
+cat canon-analyzer/src/solver/dep_solver.rs
+```
+
+### Inspect emit_file (h1 removed — file.rs is now pure projection)
+```bash
+perl -0777 -ne '...' canon-projection/src/emit/file.rs  # extract_function("emit_file", ...)
+```
+
+### Inspect use_solver injection logic
+```bash
+perl -0777 -ne '...' canon-analyzer/src/solver/use_solver.rs  # extract_function("solve", ...)
+```
+
+### Inspect visibility_solver repairs
+```bash
+perl -0777 -ne '...' canon-analyzer/src/solver/visibility_solver.rs  # extract_function("solve", ...)
+```
+
+### Inspect build_plan (reads Crate.dependencies directly)
+```bash
 perl -0777 -ne '...' canon-projection/src/layout/mod.rs  # extract_function("build_plan", ...)
-# Inspect solver chain
-perl -0777 -ne '...' canon-analyzer/src/solver/mod.rs    # extract_function("solve", ...)
-# Find Crate node construction in assemble (to see where dep_solver writes)
+```
+
+### Find all Use node construction sites
+```bash
+rg "CanonNodeKind::Use\s*\{" canon-analyzer/src/solver/use_solver.rs canon-capture/src/canon_assemble.rs -n
+```
+
+### Find Crate node construction (dependencies field)
+```bash
 rg "CanonNodeKind::Crate" canon-capture/src/canon_assemble.rs -n -A 5
-# Find path_intern usage (PathId interning pattern for dep paths)
-rg "path_intern.intern" canon-capture/src/canon_assemble.rs -n
+```
+
+### Verify no heuristics remain in emitter
+```bash
+rg "contains\|format!\|strip_prefix\|replace\|inject\|HashSet" \
+  canon-projection/src/emit/file.rs \
+  canon-projection/src/emit/fmt.rs \
+  canon-projection/src/emit/items.rs \
+  canon-projection/src/emit/impls.rs \
+  canon-projection/src/layout/mod.rs -n
 ```
