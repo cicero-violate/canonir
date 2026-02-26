@@ -6,6 +6,4 @@ bat -n /workspace/ai_sandbox/canon/EXECUTION_STATUS.md
 bat -n /workspace/ai_sandbox/canon/GOAL.md
 bat -n /workspace/ai_sandbox/canon/PLAN.md
 
-
-
 tree --gitignore
