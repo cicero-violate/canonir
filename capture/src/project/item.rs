@@ -1,6 +1,8 @@
+use model::ir::node::TraitMethod;
 use model::ir::node::{Body, EnumVariant, Field, GenericParam, Node, NodeKind, Param, StructKind, Visibility};
 use rustc_hir::{def::DefKind, PatKind, Safety};
 use rustc_middle::ty::print::PrintTraitRefExt;
+use rustc_middle::ty::AssocKind;
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_span::def_id::DefId;
 
@@ -38,7 +40,10 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
             let variants = adt.variants().iter().map(|v| EnumVariant { name: v.name.to_string(), fields: map_fields(tcx, v.fields.iter(), true) }).collect();
             NodeKind::Enum { name, vis, generics, variants, derives: Vec::new(), attrs: Vec::new(), where_clauses: Vec::new() }
         }
-        DefKind::Trait => NodeKind::Trait { name, vis, generics, methods: Vec::new(), attrs: Vec::new(), where_clauses: Vec::new(), unsafe_: false },
+        DefKind::Trait => {
+            let methods = collect_trait_methods(tcx, def_id);
+            NodeKind::Trait { name, vis, generics, methods, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_: false }
+        }
         DefKind::Impl { .. } => {
             let for_trait = tcx.impl_opt_trait_ref(def_id).map(|eb| norm::path(tcx, eb.skip_binder().def_id)).map(|p| norm::short(&p).to_string());
             let for_struct = tcx.type_of(def_id).instantiate_identity().ty_adt_def().map(|adt| norm::short(&norm::path(tcx, adt.did())).to_string()).unwrap_or_else(|| name.clone());
@@ -47,21 +52,34 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<Nod
         DefKind::Fn => {
             let sig = tcx.fn_sig(def_id).skip_binder();
             let params = map_params(tcx, def_id, sig.inputs().skip_binder());
-            let ret = fmt_ty(tcx, sig.output().skip_binder());
-            let unsafe_ = sig.safety() == Safety::Unsafe;
             let async_ = tcx.asyncness(def_id).is_async();
-            NodeKind::Function { name, vis, generics, params, ret, body: Body::None, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_, async_ }
+            let ret_raw = fmt_ty(tcx, sig.output().skip_binder());
+            let ret = if async_ { unwrap_future_output(&ret_raw) } else { ret_raw };
+            let unsafe_ = sig.safety() == Safety::Unsafe;
+            let body = hir_body_src(tcx, def_id);
+            NodeKind::Function { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_, async_ }
         }
         DefKind::AssocFn => {
             let sig = tcx.fn_sig(def_id).skip_binder();
             let params = map_params(tcx, def_id, sig.inputs().skip_binder());
-            let ret = fmt_ty(tcx, sig.output().skip_binder());
-            let unsafe_ = sig.safety() == Safety::Unsafe;
             let async_ = tcx.asyncness(def_id).is_async();
-            NodeKind::Method { name, vis, generics, params, ret, body: Body::None, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_, async_ }
+            let ret_raw = fmt_ty(tcx, sig.output().skip_binder());
+            let ret = if async_ { unwrap_future_output(&ret_raw) } else { ret_raw };
+            let unsafe_ = sig.safety() == Safety::Unsafe;
+            let body = hir_body_src(tcx, def_id);
+            NodeKind::Method { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_, async_ }
         }
-        DefKind::Const => NodeKind::Const { name, vis, ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()), value: String::new(), attrs: Vec::new() },
-        DefKind::Static { .. } => NodeKind::Static { name, vis, ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()), value: String::new(), mutable: true, attrs: Vec::new() },
+        DefKind::Const => {
+            let ty_str = fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity());
+            let value = hir_init_src(tcx, def_id);
+            NodeKind::Const { name, vis, ty: ty_str, value, attrs: Vec::new() }
+        }
+        DefKind::Static { mutability, .. } => {
+            let ty_str = fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity());
+            let value = hir_init_src(tcx, def_id);
+            let mutable = mutability == rustc_hir::Mutability::Mut;
+            NodeKind::Static { name, vis, ty: ty_str, value, mutable, attrs: Vec::new() }
+        }
         DefKind::TyAlias => NodeKind::TypeAlias { name, vis, generics, ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()), attrs: Vec::new(), where_clauses: Vec::new() },
         DefKind::Use => {
             if let Some(local) = def_id.as_local() {
@@ -202,4 +220,103 @@ fn fmt_ty(tcx: TyCtxt<'_>, ty: ty::Ty<'_>) -> String {
     let s = norm::ty(&ty.to_string());
     let s = norm::ty_strip_local(&s, &krate);
     norm::ty_clean_impl(&s)
+}
+
+/// For trait method declarations, HIR param names come from the TraitItem,
+/// not from a body (which doesn't exist for declarations). Fall back to
+/// walking the HIR TraitItem's fn decl for ident names.
+fn map_trait_method_params(tcx: TyCtxt<'_>, def_id: DefId, inputs: &[ty::Ty<'_>]) -> Vec<Param> {
+    // Try to get param idents from HIR TraitItem fn decl.
+    let hir_names: Vec<Option<String>> = def_id
+        .as_local()
+        .and_then(|local| {
+            if let rustc_hir::Node::TraitItem(ti) = tcx.hir_node_by_def_id(local) {
+                if let rustc_hir::TraitItemKind::Fn(fn_sig, _) = &ti.kind {
+                    return Some(fn_sig.decl.inputs.iter().map(|_| None::<String>).collect());
+                }
+            }
+            None
+        })
+        .unwrap_or_default();
+    // Get self status from AssocItem.
+    let has_self = inputs.first().map_or(false, |ty| {
+        // The first input is `&Self` or `Self` for methods with self.
+        // Check via ty string — crude but reliable for our purposes.
+        let s = ty.to_string();
+        s == "Self" || s.ends_with("Self")
+    });
+    inputs
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| {
+            let is_self = i == 0 && has_self;
+            let name = if is_self { "self".to_string() } else { hir_names.get(i).and_then(|n| n.clone()).unwrap_or_else(|| format!("p{i}")) };
+            Param { name, ty: fmt_ty(tcx, *ty), is_self, mutable: false, lifetime: None }
+        })
+        .collect()
+}
+
+/// Unwrap `impl Future<Output = T>` or `impl Future<Output=T>` → `T`.
+/// Used to normalize async fn return types so the emit layer can render
+/// `async fn foo() -> T` instead of `async fn foo() -> impl Future<Output=T>`.
+fn unwrap_future_output(ret: &str) -> String {
+    // Matches: "impl Future<Output = T>" or "impl Future<Output=T>"
+    let trimmed = ret.trim();
+    if let Some(inner) = trimmed.strip_prefix("impl Future<Output") {
+        let inner = inner.trim_start_matches(|c: char| c.is_whitespace());
+        if let Some(inner) = inner.strip_prefix("=") {
+            let inner = inner.trim();
+            // Strip trailing '>'
+            if let Some(t) = inner.strip_suffix('>') {
+                return t.trim().to_string();
+            }
+        }
+    }
+    ret.to_string()
+}
+
+/// Slice the source text of a Const or Static initializer expression.
+/// Falls back to empty string if the item has no local body or the span
+/// is synthetic (macros, autogenerated code).
+fn hir_init_src(tcx: TyCtxt<'_>, def_id: DefId) -> String {
+    let Some(local) = def_id.as_local() else { return String::new() };
+    // Nightly-stable safe body extraction
+    let Some(body) = tcx.hir_maybe_body_owned_by(local) else { return String::new() };
+    let span = body.value.span;
+    let sm = tcx.sess.source_map();
+    sm.span_to_snippet(span).unwrap_or_default()
+}
+
+/// Collect TraitMethod entries for a trait DefId from associated_items.
+fn collect_trait_methods(tcx: TyCtxt<'_>, trait_def_id: DefId) -> Vec<TraitMethod> {
+    tcx.associated_items(trait_def_id)
+        .in_definition_order()
+        .filter(|item| matches!(item.kind, AssocKind::Fn { .. }))
+        .map(|item| {
+            let sig = tcx.fn_sig(item.def_id).skip_binder();
+            let params = map_trait_method_params(tcx, item.def_id, sig.inputs().skip_binder());
+            let ret = fmt_ty(tcx, sig.output().skip_binder());
+            // For async fns, fn_sig output is `impl Future<Output = T>`.
+            // Unwrap to T so emit produces `async fn ... -> T`.
+            let ret = if tcx.asyncness(item.def_id).is_async() { unwrap_future_output(&ret) } else { ret };
+            let unsafe_ = sig.safety() == Safety::Unsafe;
+            let async_ = tcx.asyncness(item.def_id).is_async();
+            let generics = map_generics(tcx, item.def_id);
+            let vis = map_vis(tcx.visibility(item.def_id));
+            TraitMethod { name: item.name().to_string(), vis, generics, params, ret, body: Body::None, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_, async_ }
+        })
+        .collect()
+}
+
+/// Capture function/method body as Body::Raw(source) via HIR body span.
+/// Returns Body::None for trait declarations and extern fns (no local body).
+fn hir_body_src(tcx: TyCtxt<'_>, def_id: DefId) -> Body {
+    let Some(local) = def_id.as_local() else { return Body::None };
+    let Some(body) = tcx.hir_maybe_body_owned_by(local) else { return Body::None };
+    let span = body.value.span;
+    let sm = tcx.sess.source_map();
+    match sm.span_to_snippet(span) {
+        Ok(src) => Body::Raw(src),
+        Err(_) => Body::None,
+    }
 }
