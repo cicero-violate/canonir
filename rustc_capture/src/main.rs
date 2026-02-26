@@ -4,6 +4,7 @@ extern crate rustc_driver;
 extern crate rustc_interface;
 extern crate rustc_middle;
 
+use canon::CanonIR;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
@@ -11,7 +12,7 @@ use rustc_driver::Compilation;
 use rustc_interface::interface::Compiler;
 
 /// Shared slot to pass the captured IR out of the rustc callback.
-type IrSlot = Arc<Mutex<Option<model::ir::model_ir::ModelIR>>>;
+type IrSlot = Arc<Mutex<Option<CanonIR>>>;
 
 struct CaptureCallbacks {
     ir_slot: IrSlot,
@@ -19,7 +20,7 @@ struct CaptureCallbacks {
 
 impl rustc_driver::Callbacks for CaptureCallbacks {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: rustc_middle::ty::TyCtxt<'tcx>) -> Compilation {
-        match capture_rustc::capture(tcx) {
+        match canon_capture::capture(tcx) {
             Ok(ir) => {
                 *self.ir_slot.lock().unwrap() = Some(ir);
             }
@@ -67,7 +68,7 @@ fn main() {
     }
 
     // Step 2: run capture pass via rustc_driver on the same args.
-    let out_path = std::env::var("CANON_CAPTURE_OUT").unwrap_or_else(|_| "model_ir_captured.json".to_string());
+    let out_path = std::env::var("CANON_CAPTURE_OUT").unwrap_or_else(|_| "canon_ir_captured.json".to_string());
 
     let ir_slot: IrSlot = Arc::new(Mutex::new(None));
     let mut callbacks = CaptureCallbacks { ir_slot: Arc::clone(&ir_slot) };

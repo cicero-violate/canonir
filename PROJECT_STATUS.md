@@ -3,8 +3,8 @@
 ## Current State
 
 - Workspace builds.
-- Model pipeline remains stable and unchanged as default orchestration mode.
-- Canon pipeline is integrated end-to-end behind `--canon`:
+- Model pipeline remains available as legacy orchestration mode (`--model`).
+- Canon pipeline is integrated end-to-end as default orchestration mode:
   - `ModelIR -> seal -> CanonIR -> canon_analyze -> canon_projection -> Rust source`
 - Canon emitter is split into multi-file architecture matching `projection/src/emit` layout.
 - Canon output compile parity verified on:
@@ -31,7 +31,8 @@
   - use-dedup in file emission
 - Orchestration behavior is now explicit and non-confusing:
   - no dual emit in one run
-  - `--canon` runs only Canon pipeline
+  - default runs Canon pipeline
+  - `--model` runs legacy Model pipeline
 
 ## Known Non-Blocking Warnings
 

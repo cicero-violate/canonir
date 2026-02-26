@@ -9,6 +9,7 @@ pub mod layout;
 pub use layout::{FilePlan, ItemPlan, Plan};
 
 /// Walk ModelIR and produce a layout Plan (no source strings).
+#[deprecated(note = "Model projection is legacy-only. Prefer canon-projection on CanonIR.")]
 pub fn project(ir: &ModelIR) -> Result<Plan> {
     layout::build_plan(ir)
 }

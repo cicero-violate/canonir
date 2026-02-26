@@ -1,0 +1,18 @@
+[package]
+name = "canon-capture"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+canon = { path = "../canon" }
+capture_rustc = { path = "../capture" }
+model = { path = "../model" }
+rustc-hash = "1"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["rustc_frontend"]
+rustc_frontend = []

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# run_capture.sh — capture a Rust project into ModelIR JSON
+# run_capture.sh — capture a Rust project into CanonIR JSON
 #
 # Usage: ./run_capture.sh <path/to/project> <output.json>
 #
 # Example:
   # ./run_capture.sh test_projects/test_captured_project \
-  #     test_projects/test_captured_project/model_ir_captured.json
+  #     test_projects/test_captured_project/canon_ir_captured.json
 
 set -euo pipefail
 
@@ -17,16 +17,16 @@ PROJECT_DIR="$(realpath "$PROJECT_DIR")"
 OUTPUT_JSON="$(realpath -m "$OUTPUT_JSON")"
 
 # Build the capture wrapper first.
-echo "Building canon_capture..."
-cargo build -p canon_capture 2>&1
+echo "Building rustc_capture..."
+cargo build -p rustc_capture 2>&1
 
 WRAPPER="$(cargo metadata --no-deps --format-version 1 \
     | python3 -c "import sys,json; d=json.load(sys.stdin); \
-      print([w['target_directory'] for w in [d]][0])")/debug/canon_capture"
+      print([w['target_directory'] for w in [d]][0])")/debug/rustc_capture"
 
 # Fallback: find it directly.
 if [ ! -f "$WRAPPER" ]; then
-    WRAPPER="$(dirname "$(cargo locate-project --workspace --message-format plain)")/target/debug/canon_capture"
+    WRAPPER="$(dirname "$(cargo locate-project --workspace --message-format plain)")/target/debug/rustc_capture"
 fi
 
 REAL_RUSTC="$(rustup which rustc)"

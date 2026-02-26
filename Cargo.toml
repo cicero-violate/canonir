@@ -3,6 +3,7 @@ members = [
   "algorithms",
   "model",
   "capture",
+  "canon-capture",
   "analyzer",
   "mutation",
   "projection",

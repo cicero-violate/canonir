@@ -3,27 +3,26 @@
 ## Verified Execution
 
 ```bash
-# Model pipeline (default)
+# Model pipeline (legacy)
 rm -rf test_projects/test_rust_project/test_emit
 cargo run -p orchestration -- \
   test_projects/test_rust_project/model_ir.json \
-  test_projects/test_rust_project/test_emit
+  test_projects/test_rust_project/test_emit \
+  --model
 cd test_projects/test_rust_project/test_emit && cargo build
 
-# Canon pipeline for test_1
+# Canon pipeline for test_1 (default)
 rm -rf test_projects/test_rust_projects/emit/test_1
 cargo run -p orchestration -- \
   test_projects/test_rust_projects/capture/test_1/capture.json \
-  test_projects/test_rust_projects/emit/test_1 \
-  --canon
+  test_projects/test_rust_projects/emit/test_1
 cd test_projects/test_rust_projects/emit/test_1 && cargo build
 
-# Canon pipeline for repomap
+# Canon pipeline for repomap (default)
 rm -rf test_projects/test_rust_projects/emit/repomap
 cargo run -p orchestration -- \
   test_projects/test_rust_projects/capture/repomap/capture.json \
-  test_projects/test_rust_projects/emit/repomap \
-  --canon
+  test_projects/test_rust_projects/emit/repomap
 cd test_projects/test_rust_projects/emit/repomap && cargo build
 ```
 
@@ -72,11 +71,11 @@ canon-projection/src/
                     Type rendering is structural via TypeKind
 
 orchestration/src/main.rs
-  args: <model_ir.json> <output_dir> [--mutate <mutation.json>] [--canon]
-  mode default: Model pipeline only
+  args: <ir.json> <output_dir> [--mutate <mutation.json>] [--model]
+  mode default: Canon pipeline
+    load CanonIR (or ModelIR shim->seal) -> canon_analyze -> canon_projection -> canon_ir_solved.json
+  mode --model: legacy Model pipeline only
     load -> analyze -> (optional mutate/verify/diff) -> projection -> emit -> model_ir_solved.json
-  mode --canon: Canon pipeline only
-    load -> analyze -> seal -> canon_analyze -> canon_projection -> canon_ir_solved.json
 ```
 
 ## Design Properties
@@ -86,5 +85,5 @@ orchestration/src/main.rs
 - Solvers enforce legality before emit.
 - Emit layers are split into pure renderers (no traversal/sorting/mutation in emit).
 - Orchestration mode selection is explicit:
-  - default = Model pipeline
-  - `--canon` = Canon pipeline
+  - default = Canon pipeline
+  - `--model` = legacy Model pipeline

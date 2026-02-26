@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-capture_rustc = { path = "../capture" }
-model = { path = "../model" }
+canon_capture = { path = "../canon-capture", package = "canon-capture" }
+canon = { path = "../canon" }
 serde_json = "=1.0.145"
 anyhow = "1"
 
