@@ -289,7 +289,7 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
             NodeKind::Crate { name, edition } => {
                 let name_id = NameId(canon.name_intern.intern(name));
                 let ed: u32 = edition.parse().unwrap_or(2021);
-                CanonNodeKind::Crate { name_id, edition: ed }
+                CanonNodeKind::Crate { name_id, edition: ed, dependencies: vec![] }
             }
             NodeKind::Module { path, vis, inline, .. } => {
                 let path_id = PathId(canon.path_intern.intern(path));
@@ -378,7 +378,7 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
                 if *glob {
                     f |= flags::GLOB;
                 }
-                CanonNodeKind::Use { path_id, alias: alias_id, flags: f }
+                CanonNodeKind::Use { path_id, alias: alias_id, flags: f, target: None }
             }
             NodeKind::ExternCrate { name, alias, vis } => {
                 let name_id = NameId(canon.name_intern.intern(name));

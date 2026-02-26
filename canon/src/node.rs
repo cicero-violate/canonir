@@ -115,6 +115,8 @@ pub enum CanonNodeKind {
     Crate {
         name_id: NameId,
         edition: u32, // 2015 | 2018 | 2021
+        #[serde(default)]
+        dependencies: Vec<PathId>,
     },
 
     // ── Module ───────────────────────────────────────────────────────────────
@@ -243,6 +245,8 @@ pub enum CanonNodeKind {
         path_id: PathId,
         alias: Option<NameId>,
         flags: u32, // GLOB | PUB | ...
+        #[serde(default)]
+        target: Option<CanonId>,
     },
 
     ExternCrate {

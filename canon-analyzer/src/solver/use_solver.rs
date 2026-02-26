@@ -28,7 +28,7 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
         let mut deduped: Vec<(u32, u32, EdgeKind)> = Vec::new();
         for (src, dst, edge) in raw_edges {
             let is_dup = if matches!(edge, EdgeKind::Contains) {
-                if let Some(CanonNodeKind::Use { path_id, alias, flags }) = ir.nodes.get(dst as usize).map(|n| &n.kind) {
+                if let Some(CanonNodeKind::Use { path_id, alias, flags, .. }) = ir.nodes.get(dst as usize).map(|n| &n.kind) {
                     let key = (src, path_id.0, alias.map(|a| a.0).unwrap_or(u32::MAX), *flags);
                     !seen.insert(key)
                 } else {
@@ -143,7 +143,7 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
 
     for (site_mod, full_path) in injections {
         let path_id = ir.intern_path(&full_path);
-        let use_id = ir.push_node(CanonNodeKind::Use { path_id, alias: None, flags: 0 });
+        let use_id = ir.push_node(CanonNodeKind::Use { path_id, alias: None, flags: 0, target: None });
         all_edges.push((site_mod as u32, use_id.0, EdgeKind::Contains));
     }
 

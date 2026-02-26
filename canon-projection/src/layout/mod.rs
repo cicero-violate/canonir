@@ -59,7 +59,17 @@ pub fn build_plan(ir: &CanonIR) -> Result<Plan> {
     }
 
     if let Some((name, edition)) = crate_meta(ir) {
-        files.push(FilePlan { path: PathBuf::from("Cargo.toml"), items: vec![ItemPlan::CargoToml { name, edition, has_binary: false, dependencies: infer_dependencies(ir) }] });
+        let deps = ir.nodes.iter().find_map(|n| {
+            if let CanonNodeKind::Crate { dependencies, .. } = &n.kind {
+                Some(dependencies.iter().map(|pid| {
+                    let s = ir.lookup_path(*pid).to_string();
+                    format!("{} = \"*\"", s)
+                }).collect::<Vec<_>>())
+            } else {
+                None
+            }
+        }).unwrap_or_default();
+        files.push(FilePlan { path: PathBuf::from("Cargo.toml"), items: vec![ItemPlan::CargoToml { name, edition, has_binary: false, dependencies: deps }] });
     }
 
     Ok(Plan { files })
@@ -194,73 +204,9 @@ fn is_root_main_fn(ir: &CanonIR, id: CanonId) -> bool {
 }
 
 fn crate_meta(ir: &CanonIR) -> Option<(String, String)> {
-    ir.nodes.iter().find_map(|n| if let CanonNodeKind::Crate { name_id, edition } = &n.kind { Some((ir.lookup_name(*name_id).to_string(), edition.to_string())) } else { None })
+    ir.nodes.iter().find_map(|n| if let CanonNodeKind::Crate { name_id, edition, .. } = &n.kind { Some((ir.lookup_name(*name_id).to_string(), edition.to_string())) } else { None })
 }
 
-fn infer_dependencies(ir: &CanonIR) -> Vec<String> {
-    let mut deps = std::collections::BTreeSet::new();
-    let crate_name = crate_meta(ir).map(|(name, _)| name);
-    for n in &ir.nodes {
-        if let CanonNodeKind::Use { path_id, .. } = &n.kind {
-            let path = ir.lookup_path(*path_id);
-            let root = path.split("::").next().unwrap_or("").trim_start_matches('&').trim_start_matches(':');
-            if root.is_empty() {
-                continue;
-            }
-            if !root.chars().next().is_some_and(|c| c.is_ascii_lowercase()) {
-                continue;
-            }
-            if matches!(root, "crate" | "self" | "super" | "std" | "core" | "alloc") {
-                continue;
-            }
-            if crate_name.as_deref().is_some_and(|n| n == root) {
-                continue;
-            }
-            deps.insert(root.replace('_', "-"));
-        }
-    }
-    // Scan interned/raw text for fully-qualified external paths
-    // (e.g. tree_sitter_rust::LANGUAGE) used directly in bodies.
-    for s in &ir.name_intern.vec {
-        for root in roots_from_text(s) {
-            if matches!(root.as_str(), "crate" | "self" | "super" | "std" | "core" | "alloc") {
-                continue;
-            }
-            if !root.chars().next().is_some_and(|c| c.is_ascii_lowercase()) {
-                continue;
-            }
-            if crate_name.as_deref().is_some_and(|n| n == root) {
-                continue;
-            }
-            deps.insert(root.replace('_', "-"));
-        }
-    }
-    deps.into_iter().map(|d| format!("{} = \"*\"", d)).collect()
-}
-
-fn roots_from_text(src: &str) -> Vec<String> {
-    let bytes = src.as_bytes();
-    let mut out = Vec::new();
-    let mut i = 0usize;
-    while i + 2 < bytes.len() {
-        if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
-            let start = i;
-            i += 1;
-            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-                i += 1;
-            }
-            if i + 1 < bytes.len() && bytes[i] == b':' && bytes[i + 1] == b':' {
-                if start > 0 && bytes[start - 1] == b':' {
-                    continue;
-                }
-                out.push(src[start..i].to_string());
-            }
-        } else {
-            i += 1;
-        }
-    }
-    out
-}
 
 /// Fallback flat emit when no root module is found.
 fn flat_root_items(ir: &CanonIR) -> Vec<CanonId> {

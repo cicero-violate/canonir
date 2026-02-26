@@ -19,7 +19,7 @@ pub fn dispatch_item(ir: &CanonIR, item: &ItemPlan, pad: &str) -> String {
 pub fn emit_node(ir: &CanonIR, id: CanonId, pad: &str) -> String {
     match &ir.node(id).kind {
         CanonNodeKind::Module { path_id, flags: f } => emit_module(ir, id, *path_id, *f, pad),
-        CanonNodeKind::Use { path_id, alias, flags } => {
+        CanonNodeKind::Use { path_id, alias, flags, .. } => {
             let vis = vis_token(*flags);
             let glob = if (*flags & flags::GLOB) != 0 { "::*" } else { "" };
             let alias = alias.map(|a| format!(" as {}", ir.lookup_name(a))).unwrap_or_default();
