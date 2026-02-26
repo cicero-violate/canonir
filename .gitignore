@@ -106,5 +106,5 @@ tests/
 *.o
 
 test_projects/
-
 chatgpt_rustsandbox/chatgpt_rustsandbox/
+test_projects/
