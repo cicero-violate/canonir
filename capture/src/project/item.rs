@@ -431,7 +431,18 @@ fn strip_outer_braces(src: String) -> String {
     }
 }
 
-/// Extract derive macro names from `#[derive(...)]` attributes via HIR attr list.
+/// Compiler-internal traits emitted as side-effect impls by builtin derives.
+/// These are never user-writable macros and must never appear in #[derive(...)].
+/// Sources:
+///   - StructuralPartialEq: rustc_builtin_macros/deriving/cmp/partial_eq.rs (bonus impl from derive(PartialEq))
+///   - TrivialClone:        rustc_builtin_macros/deriving/clone.rs           (bonus impl from derive(Clone))
+const INTERNAL_DERIVE_TRAITS: &[&str] = &[
+    "StructuralPartialEq",
+    "TrivialClone",
+];
+
+/// Extract derive macro names from automatically_derived impls.
+/// Filters out compiler-internal side-effect traits that are not user-writable macros.
 fn collect_derives(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<String> {
     let mut derives = Vec::new();
     for impl_did in tcx.all_local_trait_impls(()).values().flatten().copied() {
@@ -444,12 +455,12 @@ fn collect_derives(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<String> {
         let outer = tcx.def_span(impl_did).ctxt().outer_expn_data();
         if !matches!(outer.kind, ExpnKind::Macro(MacroKind::Derive, _)) { continue; }
         // Extract the trait name.
-        {
-            let trait_ref = tcx.impl_trait_ref(impl_def_id);
-            let trait_did = trait_ref.skip_binder().def_id;
-            let name = norm::short(&norm::path(tcx, trait_did)).to_string();
-            derives.push(name);
-        }
+        let trait_ref = tcx.impl_trait_ref(impl_def_id);
+        let trait_did = trait_ref.skip_binder().def_id;
+        let name = norm::short(&norm::path(tcx, trait_did)).to_string();
+        // Skip compiler-internal side-effect traits.
+        if INTERNAL_DERIVE_TRAITS.contains(&name.as_str()) { continue; }
+        derives.push(name);
     }
     derives
 }
