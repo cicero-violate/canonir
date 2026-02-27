@@ -55,10 +55,6 @@ pub(crate) fn is_filtered_internal_call_path(path: &str) -> bool {
         || path.contains("SizedTypeProperties")
         || path.contains("::__iterator_get_unchecked")
         || path.ends_with("::is_val_statically_known")
-        || path.ends_with("::unwrap_or_else")
-        || path.ends_with("::parse")
-        || path.ends_with("::into")
-        || path.ends_with("::new")
 }
 
 pub(crate) fn path_has_unresolved_generic(path: &str) -> bool {

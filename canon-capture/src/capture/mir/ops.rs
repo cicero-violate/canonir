@@ -105,7 +105,7 @@ pub(crate) fn mir_call_args_labels<'tcx>(
     for arg in args {
         match mir_operand_label_for_arg(tcx, &arg.node, resolver)? {
             ArgLabel::Value(v) => out.push(v),
-            ArgLabel::Omit => {}
+            ArgLabel::Omit => return None,
         }
     }
     Some(out)
@@ -133,6 +133,11 @@ pub(crate) fn mir_method_call_stmt<'tcx>(
     if !matches!(tcx.def_kind(did), rustc_hir::def::DefKind::AssocFn) || args.is_empty() {
         return None;
     }
+    let assoc = tcx.associated_item(did);
+    let has_self_param = matches!(assoc.kind, ty::AssocKind::Fn { has_self: true, .. });
+    if !has_self_param {
+        return None;
+    }
     let receiver = match mir_operand_label_for_arg(tcx, &args[0].node, resolver)? {
         ArgLabel::Value(v) => v,
         ArgLabel::Omit => return None,
@@ -155,9 +160,9 @@ pub(crate) fn mir_call_stmt<'tcx>(
     dest: String,
 ) -> Option<Stmt> {
     let func = if let Some((did, _)) = func.const_fn_def() {
-        norm::path(tcx, did)
+        filters::strip_instance_generics(&norm::path(tcx, did))
     } else {
-        mir_operand_label(tcx, func, resolver)?
+        filters::strip_instance_generics(&mir_operand_label(tcx, func, resolver)?)
     };
     let args = mir_call_args_labels(tcx, args, resolver)?;
     Some(Stmt::Call {

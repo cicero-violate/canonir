@@ -8,9 +8,11 @@ pub fn structural_guard(
 ) -> bool {
     match stmt {
         Stmt::Assign { rhs, .. } => value_known(rhs, defined, suppressed_sentinel_names),
-        Stmt::Call { args, .. } => args
-            .iter()
-            .all(|a| value_known(a, defined, suppressed_sentinel_names)),
+        Stmt::Call { args, dest, .. } => {
+            let allow_suppressed_inputs = matches!(dest, Some(dest) if dest == "__ret");
+            args.iter()
+                .all(|a| value_known_with_mode(a, defined, suppressed_sentinel_names, allow_suppressed_inputs))
+        }
         Stmt::FieldAccess { base, .. } => value_known(base, defined, suppressed_sentinel_names),
         Stmt::MethodCall {
             receiver, args, ..
@@ -33,11 +35,20 @@ pub fn value_known(
     defined: &HashSet<String>,
     suppressed_sentinel_names: &HashSet<String>,
 ) -> bool {
+    value_known_with_mode(value, defined, suppressed_sentinel_names, false)
+}
+
+fn value_known_with_mode(
+    value: &str,
+    defined: &HashSet<String>,
+    suppressed_sentinel_names: &HashSet<String>,
+    allow_suppressed_inputs: bool,
+) -> bool {
     if expr_uses_suppressed_sentinel(value, suppressed_sentinel_names) {
-        return false;
+        return allow_suppressed_inputs;
     }
     if suppressed_sentinel_names.contains(value) {
-        return false;
+        return allow_suppressed_inputs;
     }
     if is_synthetic_name(value) {
         return defined.contains(value);
