@@ -8,6 +8,8 @@ pub mod edge_emit;
 pub mod engine;
 pub mod helpers;
 pub mod item;
+pub mod mir_engine;
+pub mod mir_patterns;
 pub mod relations;
 pub mod rules;
 

@@ -391,7 +391,7 @@ fn lower_use_item(
         let rustc_hir::def::Res::Def(_, target_did) = res else {
             continue;
         };
-        let path = norm::path(tcx, *target_did);
+        let path = sanitize_use_path(&norm::path(tcx, *target_did));
         if path.is_empty() {
             continue;
         }
@@ -438,6 +438,13 @@ fn lower_use_item(
     }
 
     Some((nodes, edges))
+}
+
+fn sanitize_use_path(path: &str) -> String {
+    path.split("::")
+        .filter(|seg| !seg.is_empty() && *seg != "_")
+        .collect::<Vec<_>>()
+        .join("::")
 }
 
 fn synthetic_use_id(base: NodeId, ordinal: u32) -> NodeId {

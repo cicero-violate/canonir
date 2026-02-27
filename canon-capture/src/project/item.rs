@@ -13,6 +13,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use crate::index::Index;
 use crate::norm;
 use crate::project::engine;
+use crate::project::mir_engine;
+use crate::project::mir_patterns::{self, MirOpKind};
 
 /// Structural projection: DefId -> NodeKind using HIR/ty queries.
 /// All strings are canonicalized via norm:: before NodeKind construction.
@@ -181,16 +183,12 @@ pub(crate) fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &
         if let Some(term) = &bb.terminator {
             if let mir::TerminatorKind::Call { destination, .. } = &term.kind {
                 if let Some(dest_name) = label_place_dest(&resolver, destination) {
-                    if dest_name != "__ret"
-                        && !defined.contains(&dest_name)
-                        && suppressed_sentinel_names.insert(dest_name.clone())
-                    {
-                        defined.insert(dest_name.clone());
-                        suppressed_dest_sentinels.push(Stmt::Assign {
-                            lhs: dest_name,
-                            rhs: "__canon_suppressed__".to_string(),
-                        });
-                    }
+                    mir_engine::emit_suppressed_binding(
+                        &dest_name,
+                        &mut defined,
+                        &mut suppressed_sentinel_names,
+                        &mut suppressed_dest_sentinels,
+                    );
                 }
             }
         }
@@ -198,16 +196,12 @@ pub(crate) fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &
             if let mir::StatementKind::Assign(boxed) = &stmt.kind {
                 let (lhs, _) = &**boxed;
                 if let Some(lhs_name) = label_place_dest(&resolver, lhs) {
-                    if lhs_name != "__ret"
-                        && !defined.contains(&lhs_name)
-                        && suppressed_sentinel_names.insert(lhs_name.clone())
-                    {
-                        defined.insert(lhs_name.clone());
-                        suppressed_dest_sentinels.push(Stmt::Assign {
-                            lhs: lhs_name,
-                            rhs: "__canon_suppressed__".to_string(),
-                        });
-                    }
+                    mir_engine::emit_suppressed_binding(
+                        &lhs_name,
+                        &mut defined,
+                        &mut suppressed_sentinel_names,
+                        &mut suppressed_dest_sentinels,
+                    );
                 }
             }
         }
@@ -260,93 +254,96 @@ pub(crate) fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &
             if lhs_name.as_ref().is_some_and(|name| call_feed_locals.contains(name)) {
                 continue;
             }
-            if is_field_access_candidate(rvalue) {
-                if let Some(field_stmt) = mir_field_access_stmt(tcx, &body.local_decls, lhs, rvalue, &resolver) {
-                    if !stmt_inputs_known(&field_stmt, &defined, &suppressed_sentinel_names) {
-                        if let Stmt::FieldAccess { dest: Some(dest), .. } = &field_stmt {
-                            if dest != "__ret" && !defined.contains(dest) {
-                                defined.insert(dest.clone());
-                                suppressed_sentinel_names.insert(dest.clone());
-                                stmts.push(Stmt::Assign {
-                                    lhs: dest.clone(),
-                                    rhs: "__canon_suppressed__".to_string(),
-                                });
+            match mir_patterns::dispatch_stmt_pattern(tcx, rvalue) {
+                MirOpKind::FieldAccess => {
+                    if let Some(field_stmt) = mir_field_access_stmt(tcx, &body.local_decls, lhs, rvalue, &resolver) {
+                        if !mir_engine::structural_guard(&field_stmt, &defined, &suppressed_sentinel_names) {
+                            if let Stmt::FieldAccess { dest: Some(dest), .. } = &field_stmt {
+                                mir_engine::emit_suppressed_binding(
+                                    dest,
+                                    &mut defined,
+                                    &mut suppressed_sentinel_names,
+                                    &mut stmts,
+                                );
                             }
+                            continue;
                         }
-                        continue;
-                    }
-                    if stmt_defines_ret(&field_stmt) {
-                        ret_value_defined = true;
-                        ret_binding_emitted = true;
-                    }
-                    if let Stmt::FieldAccess { dest: Some(dest), .. } = &field_stmt {
-                        defined.insert(dest.clone());
-                    }
-                    stmts.push(field_stmt);
-                    continue;
-                }
-                if let Some(lhs_name) = resolver.label_place(lhs) {
-                    defined.insert(lhs_name.clone());
-                    if lhs_name == "__ret" {
-                        ret_value_defined = true;
-                    }
-                }
-                continue;
-            }
-            if is_struct_lit_candidate(rvalue) {
-                if let Some(struct_stmt) = mir_struct_lit_stmt(tcx, lhs, rvalue, &resolver) {
-                    if !stmt_inputs_known(&struct_stmt, &defined, &suppressed_sentinel_names) {
-                        if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
-                            if dest != "__ret" && !defined.contains(dest) {
-                                defined.insert(dest.clone());
-                                suppressed_sentinel_names.insert(dest.clone());
-                                stmts.push(Stmt::Assign {
-                                    lhs: dest.clone(),
-                                    rhs: "__canon_suppressed__".to_string(),
-                                });
-                            }
-                        }
-                        continue;
-                    }
-                    if stmt_defines_ret(&struct_stmt) {
-                        ret_value_defined = true;
-                        ret_binding_emitted = true;
-                    }
-                    if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
-                        defined.insert(dest.clone());
-                    }
-                    stmts.push(struct_stmt);
-                }
-                continue;
-            }
-            if is_opaque_aggregate_candidate(rvalue) {
-                if let Some(lhs_name) = lhs_name.clone() {
-                    defined.insert(lhs_name.clone());
-                    if lhs_name == "__ret" {
-                        ret_value_defined = true;
-                        if !match_dest_emitted {
-                            stmts.push(Stmt::Match {
-                                dest: Some("__ret".to_string()),
-                            });
-                            match_dest_emitted = true;
+                        if stmt_defines_ret(&field_stmt) {
+                            ret_value_defined = true;
                             ret_binding_emitted = true;
                         }
+                        if let Stmt::FieldAccess { dest: Some(dest), .. } = &field_stmt {
+                            defined.insert(dest.clone());
+                        }
+                        stmts.push(field_stmt);
+                        continue;
                     }
+                    if let Some(lhs_name) = resolver.label_place(lhs) {
+                        defined.insert(lhs_name.clone());
+                        if lhs_name == "__ret" {
+                            ret_value_defined = true;
+                        }
+                    }
+                    continue;
                 }
-                continue;
+                MirOpKind::StructLit => {
+                    if let Some(struct_stmt) = mir_struct_lit_stmt(tcx, lhs, rvalue, &resolver) {
+                        if !mir_engine::structural_guard(&struct_stmt, &defined, &suppressed_sentinel_names) {
+                            if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
+                                mir_engine::emit_suppressed_binding(
+                                    dest,
+                                    &mut defined,
+                                    &mut suppressed_sentinel_names,
+                                    &mut stmts,
+                                );
+                            }
+                            continue;
+                        }
+                        if stmt_defines_ret(&struct_stmt) {
+                            ret_value_defined = true;
+                            ret_binding_emitted = true;
+                        }
+                        if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
+                            defined.insert(dest.clone());
+                        }
+                        stmts.push(struct_stmt);
+                    }
+                    continue;
+                }
+                MirOpKind::OpaqueAggregate => {
+                    if let Some(lhs_name) = lhs_name.clone() {
+                        defined.insert(lhs_name.clone());
+                        if lhs_name == "__ret" {
+                            ret_value_defined = true;
+                            if !match_dest_emitted {
+                                stmts.push(Stmt::Match {
+                                    dest: Some("__ret".to_string()),
+                                });
+                                match_dest_emitted = true;
+                                ret_binding_emitted = true;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                MirOpKind::Assign => {}
             }
             if is_zero_arg_enum_ctor_use(tcx, rvalue) {
                 if let Some(lhs_name) = lhs_name.clone() {
-                    let is_ret = lhs_name == "__ret";
-                    defined.insert(lhs_name.clone());
-                    suppressed_sentinel_names.insert(lhs_name.clone());
-                    stmts.push(Stmt::Assign {
-                        lhs: lhs_name,
-                        rhs: "__canon_suppressed__".to_string(),
-                    });
-                    if is_ret {
-                        ret_value_defined = true;
-                        ret_binding_emitted = true;
+                    if lhs_name == "__ret" {
+                        emit_suppressed_ret_binding(
+                            &mut stmts,
+                            &mut defined,
+                            &mut ret_value_defined,
+                            &mut ret_binding_emitted,
+                        );
+                    } else {
+                        mir_engine::emit_suppressed_binding(
+                            &lhs_name,
+                            &mut defined,
+                            &mut suppressed_sentinel_names,
+                            &mut stmts,
+                        );
                     }
                 }
                 continue;
@@ -360,15 +357,22 @@ pub(crate) fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &
                 &defined,
                 &suppressed_sentinel_names,
             ) {
-                if !stmt_inputs_known(&assign_stmt, &defined, &suppressed_sentinel_names) {
+                if !mir_engine::structural_guard(&assign_stmt, &defined, &suppressed_sentinel_names) {
                     if let Stmt::Assign { lhs, .. } = &assign_stmt {
-                        if lhs != "__ret" && !defined.contains(lhs) {
-                            defined.insert(lhs.clone());
-                            suppressed_sentinel_names.insert(lhs.clone());
-                            stmts.push(Stmt::Assign {
-                                lhs: lhs.clone(),
-                                rhs: "__canon_suppressed__".to_string(),
-                            });
+                        if lhs == "__ret" {
+                            emit_suppressed_ret_binding(
+                                &mut stmts,
+                                &mut defined,
+                                &mut ret_value_defined,
+                                &mut ret_binding_emitted,
+                            );
+                        } else {
+                            mir_engine::emit_suppressed_binding(
+                                lhs,
+                                &mut defined,
+                                &mut suppressed_sentinel_names,
+                                &mut stmts,
+                            );
                         }
                     }
                     continue;
@@ -382,14 +386,12 @@ pub(crate) fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &
                 }
                 stmts.push(assign_stmt);
             } else if let Some(lhs_name) = lhs_name.clone() {
-                if lhs_name != "__ret" && !defined.contains(&lhs_name) {
-                    defined.insert(lhs_name.clone());
-                    suppressed_sentinel_names.insert(lhs_name.clone());
-                    stmts.push(Stmt::Assign {
-                        lhs: lhs_name,
-                        rhs: "__canon_suppressed__".to_string(),
-                    });
-                }
+                mir_engine::emit_suppressed_binding(
+                    &lhs_name,
+                    &mut defined,
+                    &mut suppressed_sentinel_names,
+                    &mut stmts,
+                );
             }
         }
 
@@ -406,26 +408,38 @@ pub(crate) fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &
                 if filtered_internal_call_target(tcx, func, args, &resolver) {
                     if let Some(dest) = label_place_dest(&resolver, destination) {
                         if dest == "__ret" {
-                            ret_value_defined = true;
-                            ret_binding_emitted = true;
+                            emit_suppressed_ret_binding(
+                                &mut stmts,
+                                &mut defined,
+                                &mut ret_value_defined,
+                                &mut ret_binding_emitted,
+                            );
+                        } else {
+                            mir_engine::emit_suppressed_binding(
+                                &dest,
+                                &mut defined,
+                                &mut suppressed_sentinel_names,
+                                &mut stmts,
+                            );
                         }
-                        defined.insert(dest.clone());
-                        suppressed_sentinel_names.insert(dest.clone());
-                        stmts.push(Stmt::Assign {
-                            lhs: dest,
-                            rhs: "__canon_suppressed__".to_string(),
-                        });
                     }
                 } else if let Some(method_stmt) = mir_method_call_stmt(tcx, &func, &args, &destination, &resolver) {
-                    if !stmt_inputs_known(&method_stmt, &defined, &suppressed_sentinel_names) {
+                    if !mir_engine::structural_guard(&method_stmt, &defined, &suppressed_sentinel_names) {
                         if let Stmt::MethodCall { dest: Some(dest), .. } = &method_stmt {
-                            if dest != "__ret" && !defined.contains(dest) {
-                                defined.insert(dest.clone());
-                                suppressed_sentinel_names.insert(dest.clone());
-                                stmts.push(Stmt::Assign {
-                                    lhs: dest.clone(),
-                                    rhs: "__canon_suppressed__".to_string(),
-                                });
+                            if dest == "__ret" {
+                                emit_suppressed_ret_binding(
+                                    &mut stmts,
+                                    &mut defined,
+                                    &mut ret_value_defined,
+                                    &mut ret_binding_emitted,
+                                );
+                            } else {
+                                mir_engine::emit_suppressed_binding(
+                                    dest,
+                                    &mut defined,
+                                    &mut suppressed_sentinel_names,
+                                    &mut stmts,
+                                );
                             }
                         }
                         term = target
@@ -443,7 +457,7 @@ pub(crate) fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &
                         stmts.push(method_stmt);
                     }
                 } else if let Some(call_stmt) = mir_call_stmt(tcx, &func, &args, &destination, &resolver) {
-                    if stmt_inputs_known(&call_stmt, &defined, &suppressed_sentinel_names) {
+                    if mir_engine::structural_guard(&call_stmt, &defined, &suppressed_sentinel_names) {
                         if stmt_defines_ret(&call_stmt) {
                             ret_value_defined = true;
                             ret_binding_emitted = true;
@@ -453,23 +467,30 @@ pub(crate) fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &
                         }
                         stmts.push(call_stmt);
                     } else if let Stmt::Call { dest: Some(dest), .. } = &call_stmt {
-                        if dest != "__ret" && !defined.contains(dest) {
-                            defined.insert(dest.clone());
-                            suppressed_sentinel_names.insert(dest.clone());
-                            stmts.push(Stmt::Assign {
-                                lhs: dest.clone(),
-                                rhs: "__canon_suppressed__".to_string(),
-                            });
+                        if dest == "__ret" {
+                            emit_suppressed_ret_binding(
+                                &mut stmts,
+                                &mut defined,
+                                &mut ret_value_defined,
+                                &mut ret_binding_emitted,
+                            );
+                        } else {
+                            mir_engine::emit_suppressed_binding(
+                                dest,
+                                &mut defined,
+                                &mut suppressed_sentinel_names,
+                                &mut stmts,
+                            );
                         }
                     }
                 } else if let Some(dest_name) = label_place_dest(&resolver, destination) {
                     if dest_name != "__ret" {
-                        defined.insert(dest_name.clone());
-                        suppressed_sentinel_names.insert(dest_name.clone());
-                        stmts.push(Stmt::Assign {
-                            lhs: dest_name,
-                            rhs: "__canon_suppressed__".to_string(),
-                        });
+                        mir_engine::emit_suppressed_binding(
+                            &dest_name,
+                            &mut defined,
+                            &mut suppressed_sentinel_names,
+                            &mut stmts,
+                        );
                     } else {
                         if !match_dest_emitted {
                             stmts.push(Stmt::Match {
@@ -583,97 +604,19 @@ fn stmt_defines_ret(stmt: &Stmt) -> bool {
     }
 }
 
-fn value_known(value: &str, defined: &HashSet<String>, suppressed_sentinel_names: &HashSet<String>) -> bool {
-    if expr_uses_suppressed_sentinel(value, suppressed_sentinel_names) {
-        return false;
-    }
-    if suppressed_sentinel_names.contains(value) {
-        return false;
-    }
-    if is_synthetic_name(value) {
-        return false;
-    }
-    defined.contains(value) || value == "__ret" || is_structural_expr(value)
-}
-
-fn expr_uses_suppressed_sentinel(value: &str, suppressed_sentinel_names: &HashSet<String>) -> bool {
-    value
-        .split(|c: char| !(c == '_' || c.is_ascii_alphanumeric()))
-        .any(|tok| !tok.is_empty() && suppressed_sentinel_names.contains(tok))
-}
-
-fn is_synthetic_name(s: &str) -> bool {
-    let s = s.strip_prefix('_').unwrap_or(s);
-    let Some(rest) = s.strip_prefix('v') else {
-        return false;
-    };
-    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
-}
-
-fn is_structural_expr(value: &str) -> bool {
-    value.contains("::")
-        || value.starts_with('*')
-        || value.contains('(')
-        || value.contains(')')
-        || value.contains('[')
-        || value.contains(']')
-        || value.contains('&')
-        || value.contains(' ')
-        || value.starts_with('"')
-        || value.starts_with('\'')
-        || value == "true"
-        || value == "false"
-        || value.chars().next().is_some_and(|c| c.is_ascii_digit() || c == '-')
-}
-
-fn stmt_inputs_known(
-    stmt: &Stmt,
-    defined: &HashSet<String>,
-    suppressed_sentinel_names: &HashSet<String>,
-) -> bool {
-    match stmt {
-        Stmt::Assign { rhs, .. } => value_known(rhs, defined, suppressed_sentinel_names),
-        Stmt::Call { args, .. } => args
-            .iter()
-            .all(|a| value_known(a, defined, suppressed_sentinel_names)),
-        Stmt::FieldAccess { base, .. } => value_known(base, defined, suppressed_sentinel_names),
-        Stmt::MethodCall { receiver, args, .. } => {
-            value_known(receiver, defined, suppressed_sentinel_names)
-                && args
-                    .iter()
-                    .all(|a| value_known(a, defined, suppressed_sentinel_names))
-        }
-        Stmt::StructLit { fields, .. } => fields
-            .iter()
-            .all(|(_, v)| value_known(v, defined, suppressed_sentinel_names)),
-        Stmt::Match { .. } => true,
-        _ => true,
-    }
-}
-
-fn is_field_access_candidate(rvalue: &mir::Rvalue<'_>) -> bool {
-    matches!(
-        rvalue,
-        mir::Rvalue::Use(mir::Operand::Copy(place) | mir::Operand::Move(place))
-            if matches!(place.as_ref().last_projection(), Some((_, mir::ProjectionElem::Field(..))))
-    )
-}
-
-fn is_struct_lit_candidate(rvalue: &mir::Rvalue<'_>) -> bool {
-    matches!(rvalue, mir::Rvalue::Aggregate(kind, _) if matches!(&**kind, mir::AggregateKind::Adt(_, _, _, _, _)))
-}
-
-fn is_opaque_aggregate_candidate(rvalue: &mir::Rvalue<'_>) -> bool {
-    matches!(
-        rvalue,
-        mir::Rvalue::Aggregate(kind, _)
-            if matches!(
-                &**kind,
-                mir::AggregateKind::Closure(_, _)
-                    | mir::AggregateKind::Coroutine(_, _)
-                    | mir::AggregateKind::CoroutineClosure(_, _)
-            )
-    )
+fn emit_suppressed_ret_binding(
+    stmts: &mut Vec<Stmt>,
+    defined: &mut HashSet<String>,
+    ret_value_defined: &mut bool,
+    ret_binding_emitted: &mut bool,
+) {
+    stmts.push(Stmt::Assign {
+        lhs: "__ret".to_string(),
+        rhs: "__canon_suppressed__".to_string(),
+    });
+    *ret_value_defined = true;
+    *ret_binding_emitted = true;
+    defined.insert("__ret".to_string());
 }
 
 fn is_method_call_candidate(tcx: TyCtxt<'_>, func: &mir::Operand<'_>) -> bool {
@@ -708,7 +651,7 @@ fn mir_assign_stmt<'tcx>(
     if lhs == "__ret" {
         return Some(Stmt::Assign { lhs, rhs });
     }
-    if !value_known(&rhs, defined, suppressed_sentinel_names) {
+    if !mir_engine::value_known(&rhs, defined, suppressed_sentinel_names) {
         return None;
     }
     Some(Stmt::Assign { lhs, rhs })
@@ -1076,7 +1019,7 @@ fn mir_operand_label(tcx: TyCtxt<'_>, operand: &mir::Operand<'_>, resolver: &Loc
                 Some(norm::path(tcx, uneval.def))
             } else {
                 let const_str = c.const_.to_string();
-                if const_str.is_empty() || const_str == "_" {
+                if const_str.is_empty() || const_str == "_" || is_internal_mir_const_repr(&const_str) {
                     None
                 } else {
                     Some(strip_instance_generics(&const_str))
@@ -1085,6 +1028,12 @@ fn mir_operand_label(tcx: TyCtxt<'_>, operand: &mir::Operand<'_>, resolver: &Loc
         }
         mir::Operand::RuntimeChecks(_) => None,
     }
+}
+
+fn is_internal_mir_const_repr(s: &str) -> bool {
+    s.contains("{alloc")
+        || s.starts_with("alloc")
+        || s.contains("promoted[")
 }
 
 fn label_place_dest(

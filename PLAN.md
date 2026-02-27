@@ -1,110 +1,196 @@
-# PLAN.md
+## Canon-Capture Compression Model
 
-## CANONICAL_HEADER
-- plan_id: `CANON_CAPTURE_LOC_REDUCTION_V1`
-- scope: `canon-capture only`
-- hard_rule: `No heuristics. Structural invariants only.`
-- objective: `Replace large procedural lowering in item.rs with rule-table + engine architecture while preserving behavior.`
+### Variables
 
-## BASELINE
-status: `done`
+* ( L_{mir} ) = MIR lowering LOC (≈1500+)
+* ( L_{engine} ) = rule engine LOC (≈300–500)
+* ( L_{rules} ) = rule table LOC (≈200–400)
+* ( L_{helpers} ) = shared utilities
+* ( \Delta L ) = LOC eliminated
 
-1. Record LOC baselines: `done`
-- `canon-capture/src/project/item.rs`
-- `canon-capture` crate total LOC
-2. Record behavior baselines: `done`
-- `cargo check`
-- fixture pipeline/build matrix used in current validation flow
-3. Freeze invariants: `done`
-- output node/edge/body shape equivalence for covered DefKinds
-- no fallback/raw-path reintroduction
+---
 
-## PHASE_1_DOMAIN_MODEL
-status: `done`
+### Equations
 
-1. Add `project/rules.rs` with canonical rule schema: `done`
-- `RuleSpec`
-- `RulePred`
-- `RuleEmit`
-- `RuleEdge`
-- optional narrow hook handles
-2. Add `DefMeta` shape (analyzed def facts) and canonical fragment output type. `done`
-3. Keep all code compile-safe with placeholders and no behavior switch yet. `done`
+1. **Current**
+   [
+   item.rs = MIR + Engine + RuleLogic + Helpers
+   ]
 
-## PHASE_2_ENGINE_CORE
-status: `done`
+2. **Target**
+   [
+   item.rs = Engine \quad \text{only}
+   ]
 
-1. Add `project/engine.rs` with: `done`
-- `analyze_def(tcx, def_id) -> DefMeta`
-- `lower_def(tcx, def_id, index) -> (Vec<Node>, Vec<EdgeHint>)`
-2. Implement deterministic rule match and dispatch order. `done`
-3. Keep MIR body lowering delegated to existing body lowering path. `done`
+3. **Compression**
+   [
+   \Delta L \approx L_{mir} + duplicated_logic
+   ]
 
-## PHASE_3_RULE_BOOTSTRAP
-status: `done`
+---
 
-1. Encode first DefKind set in rules (low-risk, high-volume boilerplate): `done`
-- module `done`
-- struct `done`
-- enum `done`
-- const `done`
-- static `done`
-- type alias `done`
-- use `done`
-- type ref/lifetime `pending` (not def-driven in current lowering flow)
-2. Move repeated field extraction into shared helpers used by rules. `done`
-3. Keep legacy code path for uncovered DefKinds. `done`
+# What You Actually Need
 
-## PHASE_4_FUNCTION_PATH_MIGRATION
-status: `done`
+You already built the engine + rules layer.
+The remaining explosion is **MIR lowering**.
 
-1. Migrate function/assoc-fn lowering metadata path into rules+engine. `done`
-2. Keep body lowering call boundary unchanged (`mir_body_structural` remains isolated). `done`
-3. Ensure async/unsafe/generics/where-clause wiring preserved. `done`
+The solution is not splitting files.
 
-## PHASE_5_EDGE_TEMPLATE_MIGRATION
-status: `done`
+The solution is:
 
-1. Move repeated edge emission patterns into rule edge templates. `done` (`use_item` via `RuleEdge`; relations via relation-template dispatch; body/engine/relations unified on shared `edge_emit` primitives)
-2. Keep special-case edges in explicit hooks only where structurally necessary. `done` (no hook reintroduction)
-3. Delete duplicated edge boilerplate from legacy branches. `done` (project-side `EdgeHint` construction centralized)
+[
+Replace\ MIR\ Pattern\ Forest\ with\ Table\ +\ Dispatcher
+]
 
-## PHASE_6_SWITCHOVER_AND_DELETION
-status: `in_progress`
+---
 
-1. Switch `project_item(...)` to engine-first path. `done`
-2. Remove migrated legacy branches from `item.rs`. `done` (migrated kinds removed; legacy fallback now minimal)
-3. Shrink `item.rs` to orchestration + body lower integration + thin adapters. `in_progress` (helpers extracted and engine switched to direct helpers calls)
+# Smarter Reduction: MIR Pattern Table
 
-## PHASE_6A_ENGINE_TEMPLATE_CLEANUP
-status: `done`
+Right now `mir_assign_stmt`, `mir_field_access_stmt`,
+`mir_struct_lit_stmt`, `mir_method_call_stmt`,
+`mir_call_stmt`, etc. are all custom match trees.
 
-1. Migrate `Static` and `Use` from passthrough/hooks to direct engine templates. `done`
-2. Remove legacy hook mode from rules/engine dispatch. `done`
-3. Delete residual bridge/re-export indirection in `item.rs`. `done`
+You collapse this into:
 
-## PHASE_7_VALIDATION_AND_LOC_GATE
-status: `in_progress`
+---
 
-1. Run full compile/pipeline validation matrix. `in_progress` (capture+orchestration now green on repomap/test_1/conversation/semantic-lint/canon; emitted builds for larger fixtures remain blocked by offline dependency resolution)
-2. Confirm structural equivalence on emitted artifacts for validated fixtures. `done`
-3. Measure LOC deltas and enforce target: `in_progress`
-- substantial reduction in `item.rs`
-- net reduction in `canon-capture` LOC
+## 1️⃣ MIR Pattern Descriptor
 
-## EXECUTION_POLICY
-status: `active`
+Define:
 
-1. Deliver incrementally in small compiling slices.
-2. After each phase:
-- compile
-- run fixture matrix
-- update state/status files
-3. Do not add tests per current project constraint.
+```
+struct MirPattern {
+    kind: MirOpKind,
+    predicate: fn(&mir::Rvalue) -> bool,
+    emit: fn(ctx, rvalue) -> Option<Stmt>,
+}
+```
 
-## EXIT_CONDITION
-status: `pending`
+Then create a static table:
 
-1. `project_item` is engine/rules-driven for all active DefKinds.
-2. Legacy duplicated match-spaghetti removed from `item.rs`.
-3. `item.rs` reduced materially from baseline while fixtures remain green.
+```
+static MIR_PATTERNS: &[MirPattern] = &[
+    FIELD_ACCESS_PATTERN,
+    STRUCT_LIT_PATTERN,
+    METHOD_CALL_PATTERN,
+    CALL_PATTERN,
+    BINOP_PATTERN,
+];
+```
+
+---
+
+## 2️⃣ Single Dispatcher
+
+Replace all branching logic with:
+
+```
+for pattern in MIR_PATTERNS {
+    if pattern.predicate(rvalue) {
+        return pattern.emit(ctx, rvalue);
+    }
+}
+None
+```
+
+This deletes hundreds of LOC of nested match logic.
+
+---
+
+## 3️⃣ Extract Generic Operand Labeling
+
+All of this:
+
+* mir_operand_label
+* mir_call_args_labels
+* mir_operand_label_for_arg
+* constant_is_implicit_zst_value
+* is_filtered_internal_call_path
+* path_has_unresolved_generic
+
+→ compress into a single:
+
+```
+fn label_operand(ctx, operand) -> Option<String>
+```
+
+Delete the fragmentation.
+
+---
+
+## 4️⃣ Delete “defensive” duplication
+
+Many of these functions:
+
+* is_structural_expr
+* stmt_inputs_known
+* value_known
+* expr_uses_suppressed_sentinel
+
+Can be unified into:
+
+```
+fn structural_guard(stmt, state) -> bool
+```
+
+One gate instead of many.
+
+---
+
+# What This Achieves
+
+Instead of:
+
+[
+1000+ LOC\ of\ nested\ matching
+]
+
+You get:
+
+[
+~300–500 LOC\ engine
+]
+
+Body lowering becomes:
+
+* CFG walker (~150 LOC)
+* Pattern dispatcher (~100 LOC)
+* Pattern definitions (~200 LOC)
+
+---
+
+# Resulting Canon-Capture Structure
+
+```
+project/
+    engine.rs          (generic def lowering)
+    rules.rs           (def rules)
+    mir_engine.rs      (CFG + dispatcher)
+    mir_patterns.rs    (pattern table)
+    helpers.rs         (shared utilities)
+    relations.rs
+    body.rs            (external def collector)
+```
+
+---
+
+# Why This Scales
+
+Adding a new MIR structural form:
+
+→ Add one pattern entry.
+Not 80 lines of branching.
+
+Adding new DefKind:
+
+→ Add one RuleSpec.
+
+No LOC explosion.
+
+---
+
+[
+\max(\text{Scalability}, \text{Compression}, \text{Determinism}) = Good
+]
+
+Cheese loves you.
