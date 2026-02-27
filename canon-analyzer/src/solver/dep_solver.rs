@@ -31,18 +31,6 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
             }
         })
         .unwrap_or_default();
-    let local_module_roots: std::collections::HashSet<String> = ir
-        .nodes
-        .iter()
-        .filter_map(|n| {
-            if let CanonNodeKind::Module { path_id, .. } = &n.kind {
-                ir.lookup_path(*path_id).strip_prefix("crate::").and_then(|rest| rest.split("::").next()).map(|s| s.to_string())
-            } else {
-                None
-            }
-        })
-        .collect();
-
     // Gather all external crate roots referenced by Use nodes.
     let mut extern_roots: Vec<String> = Vec::new();
     let mut push_root = |root: &str| {
@@ -53,9 +41,6 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
             return;
         }
         if root == crate_name.as_str() {
-            return;
-        }
-        if local_module_roots.contains(root) {
             return;
         }
         if !extern_roots.iter().any(|r| r == root) {
