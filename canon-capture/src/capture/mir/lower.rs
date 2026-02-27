@@ -1,13 +1,13 @@
-use crate::types::{BasicBlock, Body, Stmt, Terminator, TypeExpr};
+use crate::types::{BasicBlock, Body, Stmt, Terminator};
 use rustc_middle::mir;
 use rustc_middle::mir::visit::Visitor;
-use rustc_middle::ty::{self, TyCtxt};
+use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::norm;
-use crate::capture::helpers::{lower_ty, render_type_expr};
+use crate::capture::mir::expr as mir_expr;
 use crate::capture::mir::guard as mir_guard;
+use crate::capture::mir::ops as mir_ops;
 use crate::capture::mir::patterns as mir_patterns;
 use crate::capture::mir::patterns::MirOpKind;
 
@@ -134,7 +134,7 @@ pub(crate) fn mir_body_structural(
         let mir::TerminatorKind::Call { func, args, .. } = &term_ref.kind else {
             continue;
         };
-        if !filtered_internal_call_target(tcx, func, args, &resolver) {
+        if !mir_ops::filtered_internal_call_target(tcx, func) {
             continue;
         }
         for arg in args {
@@ -331,7 +331,9 @@ fn lower_assign_statement<'tcx>(
 
     match mir_patterns::dispatch_stmt_pattern(tcx, rvalue) {
         MirOpKind::FieldAccess => {
-            if let Some(field_stmt) = mir_field_access_stmt(tcx, local_decls, lhs, rvalue, resolver) {
+            if let Some(field_stmt) =
+                mir_expr::mir_field_access_stmt(tcx, local_decls, lhs, rvalue, resolver)
+            {
                 if !mir_guard::structural_guard(&field_stmt, defined, suppressed_sentinel_names) {
                     if let Stmt::FieldAccess { dest: Some(dest), .. } = &field_stmt {
                         emit_suppressed_for_name(
@@ -364,7 +366,7 @@ fn lower_assign_statement<'tcx>(
             return;
         }
         MirOpKind::StructLit => {
-            if let Some(struct_stmt) = mir_struct_lit_stmt(tcx, lhs, rvalue, resolver) {
+            if let Some(struct_stmt) = mir_expr::mir_struct_lit_stmt(tcx, lhs, rvalue, resolver) {
                 if !mir_guard::structural_guard(&struct_stmt, defined, suppressed_sentinel_names) {
                     if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
                         emit_suppressed_for_name(
@@ -421,10 +423,16 @@ fn lower_assign_statement<'tcx>(
         MirOpKind::ConstUse => {
             // Fall through to generic assign lowering for non-zero-arg const uses.
         }
+        MirOpKind::ArrayAggregate => {
+            if let Some(lhs_name) = lhs_name.as_ref() && defined.contains(lhs_name) {
+                return;
+            }
+            // Fall through when destination is not yet defined.
+        }
         MirOpKind::Assign => {}
     }
 
-    if let Some(assign_stmt) = mir_assign_stmt(
+    if let Some(assign_stmt) = mir_expr::mir_assign_stmt(
         tcx,
         local_decls,
         lhs,
@@ -482,7 +490,7 @@ fn lower_call_terminator<'tcx>(
     ret_binding_emitted: &mut bool,
     match_dest_emitted: &mut bool,
 ) -> Terminator {
-    if filtered_internal_call_target(tcx, func, args, resolver) {
+    if mir_ops::filtered_internal_call_target(tcx, func) {
         if let Some(dest) = label_place_dest(resolver, destination) {
             emit_suppressed_for_name(
                 &dest,
@@ -493,7 +501,9 @@ fn lower_call_terminator<'tcx>(
                 ret_binding_emitted,
             );
         }
-    } else if let Some(method_stmt) = mir_method_call_stmt(tcx, func, args, destination, resolver) {
+    } else if let Some(dest) = label_place_dest(resolver, destination)
+        && let Some(method_stmt) = mir_ops::mir_method_call_stmt(tcx, func, args, resolver, dest.clone())
+    {
         if !mir_guard::structural_guard(&method_stmt, defined, suppressed_sentinel_names) {
             if let Stmt::MethodCall { dest: Some(dest), .. } = &method_stmt {
                 emit_suppressed_for_name(
@@ -518,7 +528,9 @@ fn lower_call_terminator<'tcx>(
             defined.insert(dest.clone());
         }
         stmts.push(method_stmt);
-    } else if let Some(call_stmt) = mir_call_stmt(tcx, func, args, destination, resolver) {
+    } else if let Some(dest) = label_place_dest(resolver, destination)
+        && let Some(call_stmt) = mir_ops::mir_call_stmt(tcx, func, args, resolver, dest.clone())
+    {
         if mir_guard::structural_guard(&call_stmt, defined, suppressed_sentinel_names) {
             if stmt_defines_ret(&call_stmt) {
                 *ret_value_defined = true;
@@ -596,7 +608,7 @@ fn lower_non_call_terminator<'tcx>(
         mir::TerminatorKind::SwitchInt { discr, .. } => {
             let mut succ = term_ref.successors();
             if let (Some(t), Some(f)) = (succ.next(), succ.next()) {
-                if let Some(cond) = mir_operand_label(tcx, discr, resolver) {
+                if let Some(cond) = mir_ops::mir_operand_label(tcx, discr, resolver) {
                     let true_bb = remap_bb_target(t, mir_to_emitted);
                     let false_bb = remap_bb_target(f, mir_to_emitted);
                     return match (true_bb, false_bb) {
@@ -665,531 +677,6 @@ pub(crate) fn label_place_dest(
         return None;
     }
     resolver.label_local(place.local)
-}
-
-pub(crate) fn strip_instance_generics(raw: &str) -> String {
-    if !raw.contains("::<") {
-        return raw.to_string();
-    }
-    let mut out = String::with_capacity(raw.len());
-    let chars: Vec<char> = raw.chars().collect();
-    let mut i = 0usize;
-    while i < chars.len() {
-        if i + 2 < chars.len() && chars[i] == ':' && chars[i + 1] == ':' && chars[i + 2] == '<' {
-            i += 3;
-            let mut depth = 1usize;
-            while i < chars.len() && depth > 0 {
-                match chars[i] {
-                    '<' => depth += 1,
-                    '>' => depth -= 1,
-                    _ => {}
-                }
-                i += 1;
-            }
-            continue;
-        }
-        out.push(chars[i]);
-        i += 1;
-    }
-    out
-}
-
-pub(crate) fn is_zero_arg_enum_ctor_expr_str(expr: &str) -> bool {
-    let expr = strip_instance_generics(expr);
-    expr == "std::option::Option::None"
-        || expr == "core::option::Option::None"
-        || expr == "Option::None"
-}
-
-pub(crate) fn is_internal_mir_const_repr(s: &str) -> bool {
-    s.contains("{alloc")
-        || s.starts_with("alloc")
-        || s.contains("promoted[")
-}
-
-pub(crate) fn is_filtered_internal_call_path(path: &str) -> bool {
-    matches!(
-        path,
-        "std::hint::must_use"
-            | "core::hint::must_use"
-            | "std::io::_print"
-            | "std::io::_eprint"
-            | "core::fmt::Arguments::new_v1"
-            | "std::fmt::Arguments::new_v1"
-            | "core::fmt::Arguments::new_v1_formatted"
-            | "std::fmt::Arguments::new_v1_formatted"
-    ) || path.ends_with("::new_display")
-        || path.ends_with("::branch")
-        || path.ends_with("::from_residual")
-        || path.ends_with("::from_output")
-        || path.ends_with("::from_str")
-        || path.contains("SizedTypeProperties")
-        || path.contains("::__iterator_get_unchecked")
-        || path.ends_with("::is_val_statically_known")
-        || path.ends_with("::parse")
-        || path.ends_with("::into")
-        || path.ends_with("::new")
-}
-
-pub(crate) fn path_has_unresolved_generic(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    let mut i = 0usize;
-    while i + 2 < bytes.len() {
-        if bytes[i] == b'<' && bytes[i + 2] == b'>' && bytes[i + 1].is_ascii_uppercase() {
-            return true;
-        }
-        i += 1;
-    }
-    false
-}
-
-pub(crate) enum ArgLabel {
-    Value(String),
-    Omit,
-}
-
-pub(crate) fn mir_operand_label_for_arg(
-    tcx: TyCtxt<'_>,
-    operand: &mir::Operand<'_>,
-    resolver: &LocalNameResolver,
-) -> Option<ArgLabel> {
-    match operand {
-        mir::Operand::Constant(c) if constant_is_implicit_zst_value(c) => Some(ArgLabel::Omit),
-        _ => mir_operand_label(tcx, operand, resolver).map(ArgLabel::Value),
-    }
-}
-
-fn constant_is_implicit_zst_value(constant: &mir::ConstOperand<'_>) -> bool {
-    matches!(
-        constant.const_.ty().kind(),
-        ty::TyKind::FnDef(..)
-            | ty::TyKind::Closure(..)
-            | ty::TyKind::Coroutine(..)
-            | ty::TyKind::CoroutineClosure(..)
-    )
-}
-
-pub(crate) fn mir_operand_label(
-    tcx: TyCtxt<'_>,
-    operand: &mir::Operand<'_>,
-    resolver: &LocalNameResolver,
-) -> Option<String> {
-    match operand {
-        mir::Operand::Copy(place) | mir::Operand::Move(place) => resolver.label_place(place),
-        mir::Operand::Constant(c) => {
-            if let ty::TyKind::FnDef(did, _) = c.const_.ty().kind() {
-                return Some(norm::path(tcx, *did));
-            }
-            if let mir::Const::Unevaluated(uneval, _) = c.const_ {
-                Some(norm::path(tcx, uneval.def))
-            } else {
-                let const_str = c.const_.to_string();
-                if const_str.is_empty() || const_str == "_" || is_internal_mir_const_repr(&const_str) {
-                    None
-                } else {
-                    Some(strip_instance_generics(&const_str))
-                }
-            }
-        }
-        mir::Operand::RuntimeChecks(_) => None,
-    }
-}
-
-pub(crate) fn mir_call_args_labels<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
-    resolver: &LocalNameResolver,
-) -> Option<Vec<String>> {
-    let mut out = Vec::with_capacity(args.len());
-    for arg in args {
-        match mir_operand_label_for_arg(tcx, &arg.node, resolver)? {
-            ArgLabel::Value(v) => out.push(v),
-            ArgLabel::Omit => {}
-        }
-    }
-    Some(out)
-}
-
-pub(crate) fn filtered_internal_call_target<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    func: &mir::Operand<'tcx>,
-    _args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
-    _resolver: &LocalNameResolver,
-) -> bool {
-    let Some((did, _)) = func.const_fn_def() else {
-        return false;
-    };
-    let path = norm::path(tcx, did);
-    if is_filtered_internal_call_path(&path) {
-        return true;
-    }
-    if path_has_unresolved_generic(&path) {
-        return true;
-    }
-    false
-}
-
-pub(crate) fn mir_method_call_stmt<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    func: &mir::Operand<'tcx>,
-    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
-    destination: &mir::Place<'tcx>,
-    resolver: &LocalNameResolver,
-) -> Option<Stmt> {
-    let (did, _) = func.const_fn_def()?;
-    if !matches!(tcx.def_kind(did), rustc_hir::def::DefKind::AssocFn) || args.is_empty() {
-        return None;
-    }
-    let receiver = match mir_operand_label_for_arg(tcx, &args[0].node, resolver)? {
-        ArgLabel::Value(v) => v,
-        ArgLabel::Omit => return None,
-    };
-    let method = tcx.item_name(did).to_string();
-    let args = mir_call_args_labels(tcx, &args[1..], resolver)?;
-    Some(Stmt::MethodCall {
-        receiver,
-        method,
-        args,
-        dest: Some(label_place_dest(resolver, destination)?),
-    })
-}
-
-pub(crate) fn mir_call_stmt<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    func: &mir::Operand<'tcx>,
-    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
-    destination: &mir::Place<'tcx>,
-    resolver: &LocalNameResolver,
-) -> Option<Stmt> {
-    let func = if let Some((did, _)) = func.const_fn_def() {
-        norm::path(tcx, did)
-    } else {
-        mir_operand_label(tcx, func, resolver)?
-    };
-    let args = mir_call_args_labels(tcx, args, resolver)?;
-    Some(Stmt::Call {
-        func,
-        args,
-        dest: Some(label_place_dest(resolver, destination)?),
-    })
-}
-
-pub(crate) fn render_projected_place_expr<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    local_decls: &mir::LocalDecls<'tcx>,
-    place: &mir::Place<'tcx>,
-    resolver: &LocalNameResolver,
-) -> Option<String> {
-    if place.projection.is_empty() {
-        return resolver.label_place(place);
-    }
-    let mut expr = resolver.label_local(place.local)?;
-    let mut cursor_ty = local_decls[place.local].ty;
-    let mut pending_downcast: Option<String> = None;
-    for elem in place.projection.iter() {
-        match elem {
-            mir::ProjectionElem::Deref => {
-                expr = format!("*{expr}");
-                cursor_ty = cursor_ty.builtin_deref(true)?;
-            }
-            mir::ProjectionElem::Downcast(variant_name, variant_idx) => {
-                let variant = variant_name
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| format!("variant_{}", variant_idx.as_usize()));
-                pending_downcast = Some(variant);
-            }
-            mir::ProjectionElem::Field(field_idx, field_ty) => {
-                let field = if let Some(variant) = pending_downcast.take() {
-                    expr = format!("({expr} as {variant})");
-                    field_idx.index().to_string()
-                } else {
-                    match cursor_ty.kind() {
-                        ty::TyKind::Adt(adt, _) => {
-                            let f = adt.non_enum_variant().fields.get(field_idx)?;
-                            let name = f.name.to_string();
-                            if name.chars().all(|c| c.is_ascii_digit()) {
-                                field_idx.index().to_string()
-                            } else {
-                                name
-                            }
-                        }
-                        ty::TyKind::Tuple(_) => field_idx.index().to_string(),
-                        _ => field_idx.index().to_string(),
-                    }
-                };
-                expr = format!("({expr}).{field}");
-                cursor_ty = field_ty;
-            }
-            mir::ProjectionElem::Index(local) => {
-                let idx = resolver.label_local(local)?;
-                expr = format!("{expr}[{idx}]");
-                cursor_ty = match cursor_ty.kind() {
-                    ty::TyKind::Array(inner, _) | ty::TyKind::Slice(inner) => *inner,
-                    _ => cursor_ty,
-                };
-            }
-            mir::ProjectionElem::OpaqueCast(..) | mir::ProjectionElem::UnwrapUnsafeBinder(..) => {}
-            _ => return None,
-        }
-    }
-    if let Some(variant) = pending_downcast {
-        expr = format!("({expr} as {variant})");
-    }
-    Some(expr)
-}
-
-pub(crate) fn mir_binop_token(op: mir::BinOp) -> Option<&'static str> {
-    match op {
-        mir::BinOp::Add => Some("+"),
-        mir::BinOp::Sub => Some("-"),
-        mir::BinOp::Mul => Some("*"),
-        mir::BinOp::Div => Some("/"),
-        mir::BinOp::Rem => Some("%"),
-        mir::BinOp::BitXor => Some("^"),
-        mir::BinOp::BitAnd => Some("&"),
-        mir::BinOp::BitOr => Some("|"),
-        mir::BinOp::Shl => Some("<<"),
-        mir::BinOp::Shr => Some(">>"),
-        mir::BinOp::Eq => Some("=="),
-        mir::BinOp::Lt => Some("<"),
-        mir::BinOp::Le => Some("<="),
-        mir::BinOp::Ne => Some("!="),
-        mir::BinOp::Ge => Some(">="),
-        mir::BinOp::Gt => Some(">"),
-        mir::BinOp::Cmp => None,
-        mir::BinOp::Offset => None,
-        mir::BinOp::AddUnchecked => Some("+"),
-        mir::BinOp::SubUnchecked => Some("-"),
-        mir::BinOp::MulUnchecked => Some("*"),
-        mir::BinOp::ShlUnchecked => Some("<<"),
-        mir::BinOp::ShrUnchecked => Some(">>"),
-        mir::BinOp::AddWithOverflow => Some("+"),
-        mir::BinOp::SubWithOverflow => Some("-"),
-        mir::BinOp::MulWithOverflow => Some("*"),
-    }
-}
-
-pub(crate) fn mir_unop_token(op: mir::UnOp) -> &'static str {
-    match op {
-        mir::UnOp::Not => "!",
-        mir::UnOp::Neg => "-",
-        mir::UnOp::PtrMetadata => "",
-    }
-}
-
-pub(crate) fn mir_assign_stmt<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    local_decls: &mir::LocalDecls<'tcx>,
-    lhs: &mir::Place<'tcx>,
-    rvalue: &mir::Rvalue<'tcx>,
-    resolver: &LocalNameResolver,
-    defined: &std::collections::HashSet<String>,
-    suppressed_sentinel_names: &std::collections::HashSet<String>,
-) -> Option<Stmt> {
-    let lhs = resolver.label_place(lhs)?;
-    if matches!(rvalue, mir::Rvalue::Aggregate(kind, _) if matches!(&**kind, mir::AggregateKind::Array(_)))
-        && defined.contains(&lhs)
-    {
-        return None;
-    }
-    let rhs = mir_rvalue_expr(tcx, local_decls, rvalue, resolver)?;
-    if is_zero_arg_enum_ctor_expr_str(&rhs) {
-        return None;
-    }
-    if rhs.contains("SizedTypeProperties") {
-        return None;
-    }
-    if lhs == "__ret" {
-        return Some(Stmt::Assign { lhs, rhs });
-    }
-    if !mir_guard::value_known(&rhs, defined, suppressed_sentinel_names) {
-        return None;
-    }
-    Some(Stmt::Assign { lhs, rhs })
-}
-
-fn mir_rvalue_expr<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    local_decls: &mir::LocalDecls<'tcx>,
-    rvalue: &mir::Rvalue<'tcx>,
-    resolver: &LocalNameResolver,
-) -> Option<String> {
-    match rvalue {
-        mir::Rvalue::Use(op) => match op {
-            mir::Operand::Copy(place) | mir::Operand::Move(place) => {
-                if place.projection.is_empty() {
-                    resolver.label_place(place)
-                } else {
-                    render_projected_place_expr(tcx, local_decls, place, resolver)
-                }
-            }
-            _ => mir_operand_label(tcx, op, resolver),
-        },
-        mir::Rvalue::Ref(_, borrow_kind, place) => {
-            let place = render_projected_place_expr(tcx, local_decls, place, resolver)?;
-            Some(match borrow_kind {
-                mir::BorrowKind::Mut { .. } => format!("&mut {place}"),
-                _ => format!("&{place}"),
-            })
-        }
-        mir::Rvalue::RawPtr(raw_ptr_kind, place) => {
-            let place = render_projected_place_expr(tcx, local_decls, place, resolver)?;
-            Some(if matches!(raw_ptr_kind, mir::RawPtrKind::Mut) {
-                format!("&mut {place}")
-            } else {
-                format!("&{place}")
-            })
-        }
-        mir::Rvalue::BinaryOp(op, boxed) => {
-            let (lhs, rhs) = &**boxed;
-            Some(format!(
-                "({} {} {})",
-                mir_operand_label(tcx, lhs, resolver)?,
-                mir_binop_token(*op)?,
-                mir_operand_label(tcx, rhs, resolver)?,
-            ))
-        }
-        mir::Rvalue::UnaryOp(op, operand) => {
-            Some(format!("({}{})", mir_unop_token(*op), mir_operand_label(tcx, operand, resolver)?))
-        }
-        mir::Rvalue::Cast(_, operand, ty) => Some(format!(
-            "({} as {})",
-            mir_operand_label(tcx, operand, resolver)?,
-            render_type_expr(tcx, &lower_ty(tcx, *ty))
-        )),
-        mir::Rvalue::Aggregate(kind, operands) => match &**kind {
-            mir::AggregateKind::Tuple => {
-                let elems = operands
-                    .iter()
-                    .map(|op| mir_operand_label(tcx, op, resolver))
-                    .collect::<Option<Vec<_>>>()?;
-                if elems.len() == 1 {
-                    Some(format!("({},)", elems[0]))
-                } else {
-                    Some(format!("({})", elems.join(", ")))
-                }
-            }
-            mir::AggregateKind::Array(_) => {
-                let elems = operands
-                    .iter()
-                    .map(|op| mir_operand_label(tcx, op, resolver))
-                    .collect::<Option<Vec<_>>>()?;
-                Some(format!("[{}]", elems.join(", ")))
-            }
-            _ => None,
-        },
-        mir::Rvalue::Repeat(operand, count) => {
-            let count = count.try_to_target_usize(tcx)?;
-            Some(format!("[{}; {count}]", mir_operand_label(tcx, operand, resolver)?))
-        }
-        mir::Rvalue::Discriminant(place) => Some(format!("{} as isize", resolver.label_place(place)?)),
-        mir::Rvalue::CopyForDeref(place) => resolver.label_place(place),
-        _ => None,
-    }
-}
-
-pub(crate) fn mir_field_access_stmt<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    local_decls: &mir::LocalDecls<'tcx>,
-    lhs: &mir::Place<'tcx>,
-    rvalue: &mir::Rvalue<'tcx>,
-    resolver: &LocalNameResolver,
-) -> Option<Stmt> {
-    let mir::Rvalue::Use(mir::Operand::Copy(place) | mir::Operand::Move(place)) = rvalue else {
-        return None;
-    };
-    let (base, proj) = place.as_ref().last_projection()?;
-    let mir::ProjectionElem::Field(field_idx, ty) = proj else {
-        return None;
-    };
-
-    let base_ty = base.ty(local_decls, tcx).ty;
-    if is_primitive_value_ty(base_ty) {
-        return None;
-    }
-
-    let field = match base_ty.kind() {
-        ty::TyKind::Adt(adt, _) if adt.is_struct() || adt.is_union() => {
-            let f = adt.non_enum_variant().fields.get(field_idx)?;
-            let name = f.name.to_string();
-            if name.chars().all(|c| c.is_ascii_digit()) {
-                field_idx.index().to_string()
-            } else {
-                name
-            }
-        }
-        ty::TyKind::Adt(adt, _) if adt.is_enum() => {
-            let downcast_idx = place
-                .projection
-                .iter()
-                .find_map(|elem| match elem {
-                    mir::ProjectionElem::Downcast(_, idx) => Some(idx),
-                    _ => None,
-                })?;
-            let f = adt.variant(downcast_idx).fields.get(field_idx)?;
-            let name = f.name.to_string();
-            if name.chars().all(|c| c.is_ascii_digit()) {
-                field_idx.index().to_string()
-            } else {
-                name
-            }
-        }
-        ty::TyKind::Tuple(_) => field_idx.index().to_string(),
-        _ => return None,
-    };
-    Some(Stmt::FieldAccess {
-        base: resolver.label_place_ref(base)?,
-        field,
-        dest: Some(resolver.label_place(lhs)?),
-    })
-}
-
-fn is_primitive_value_ty(ty: ty::Ty<'_>) -> bool {
-    matches!(
-        ty.kind(),
-        ty::TyKind::Bool
-            | ty::TyKind::Char
-            | ty::TyKind::Int(..)
-            | ty::TyKind::Uint(..)
-            | ty::TyKind::Float(..)
-            | ty::TyKind::Str
-            | ty::TyKind::Never
-    )
-}
-
-pub(crate) fn mir_struct_lit_stmt<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    lhs: &mir::Place<'tcx>,
-    rvalue: &mir::Rvalue<'tcx>,
-    resolver: &LocalNameResolver,
-) -> Option<Stmt> {
-    let mir::Rvalue::Aggregate(kind, operands) = rvalue else {
-        return None;
-    };
-    let mir::AggregateKind::Adt(adt_did, variant_idx, _, _, _) = &**kind else {
-        return None;
-    };
-    let adt = tcx.adt_def(*adt_did);
-    let variant = adt.variant(*variant_idx);
-    if adt.is_enum() && variant.fields.is_empty() {
-        return None;
-    }
-    let fields = variant
-        .fields
-        .iter()
-        .zip(operands.iter())
-        .map(|(f, op)| Some((f.name.to_string(), mir_operand_label(tcx, op, resolver)?)))
-        .collect::<Option<Vec<_>>>()?;
-    let ctor_path = if adt.is_enum() {
-        format!("{}::{}", norm::path(tcx, *adt_did), variant.name)
-    } else {
-        norm::path(tcx, *adt_did)
-    };
-    Some(Stmt::StructLit {
-        ty: TypeExpr::Path(ctor_path),
-        fields,
-        dest: Some(resolver.label_place(lhs)?),
-    })
 }
 
 pub(crate) fn remap_bb_target(target: mir::BasicBlock, mir_to_emitted: &[Option<u32>]) -> Option<u32> {

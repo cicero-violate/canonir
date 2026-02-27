@@ -7,6 +7,7 @@ pub enum MirOpKind {
     StructLit,
     OpaqueAggregate,
     ZeroArgEnumCtor,
+    ArrayAggregate,
     ConstUse,
     Assign,
 }
@@ -73,6 +74,10 @@ fn is_zero_arg_enum_ctor_pattern(tcx: TyCtxt<'_>, rvalue: &mir::Rvalue<'_>) -> b
     false
 }
 
+fn is_array_aggregate_pattern(_tcx: TyCtxt<'_>, rvalue: &mir::Rvalue<'_>) -> bool {
+    matches!(rvalue, mir::Rvalue::Aggregate(kind, _) if matches!(&**kind, mir::AggregateKind::Array(_)))
+}
+
 static MIR_PATTERNS: &[MirPattern] = &[
     MirPattern {
         kind: MirOpKind::FieldAccess,
@@ -89,6 +94,10 @@ static MIR_PATTERNS: &[MirPattern] = &[
     MirPattern {
         kind: MirOpKind::ZeroArgEnumCtor,
         predicate: is_zero_arg_enum_ctor_pattern,
+    },
+    MirPattern {
+        kind: MirOpKind::ArrayAggregate,
+        predicate: is_array_aggregate_pattern,
     },
     MirPattern {
         kind: MirOpKind::ConstUse,
