@@ -1,62 +1,58 @@
 # AGENT_STATE.md
 
 ## CANONICAL_HEADER
-- state_id: `CANON_STRUCTURAL_HARVEST_SLICE_08`
+- state_id: `CANON_STRUCTURAL_HARVEST_SLICE_09`
 - date: `2026-02-27`
 - mode: `execution`
 - invariant: `Structural invariants only. No heuristics.`
 
 ### 1) Investigate the problem
-- Objective: complete return-value carrier capture for `field_text`/`fn_signature` and `symbol::line`/`symbol::render` switch/downcast paths.
+- Objective: continue structural iteration and close remaining return carriers after prior suppression-elimination pass.
 
 ### 2) Gather facts
-- Prior slice baseline: `canon suppressed __ret count = 11`.
-- Intermediate reduction achieved earlier: `11 -> 8` by introducing call-gap return carriers for unresolved `__ret` call destinations.
-- Remaining `8` sites were switch-source return carriers lowered through `Stmt::Match { dest: Some(__ret) }` then rewritten to suppressed binding.
+- Runtime check (`cargo run .`) on capture fixture succeeds and emits full symbol map.
+- Runtime check on emit fixture returns no output due panic-based gap carriers.
+- Previous invariant report falsely showed clean state because it counted only `canon suppressed binding`.
 
 ### 3) Break down the facts
-- Pattern A: unresolved call terminators with destination `__ret` should emit deterministic return carrier, not suppressed binding.
-- Pattern B: switch-source `__ret` match carrier should lower to a deterministic switch-gap carrier, not suppressed binding.
-- Pattern C: projection must render each carrier sentinel deterministically.
+- Gap Class A: call-return carrier placeholders (`canon call result not lowered`).
+- Gap Class B: switch-return carrier placeholders (`canon switch result not lowered`).
+- Gap Class C: unresolved `__ret` carrier sites must be tracked independent of old suppression metric.
 
 ### 4) Write it to a state file
 - State overwritten for this execution slice.
 
 ### 5) Sort structural and categorical patterns
-- Return-call gap invariant:
-- call/method/filtered-call lowering to `__ret` that cannot be rendered structurally emits `Assign(__ret, __canon_call_gap__)`.
-- Switch-gap invariant:
-- match return carrier emits `Assign(__ret, __canon_switch_gap__)` during normalization.
-- Projection invariant:
-- carrier sentinels emit explicit panic placeholders, never `todo!()` and never unbound names.
+- Measurement invariant:
+- structural report must track all unresolved carrier sentinels, not only legacy suppression strings.
+- Site invariant:
+- unresolved `__ret` carriers require per-function site listing for deterministic next-step lowering.
 
 ### 6) Write it to state file
 - Files touched in this slice:
-- `canon-capture/src/capture/mir/terminator.rs`
-- `canon-capture/src/capture/mir/passes.rs`
-- `canon-projection/src/emit/body.rs`
+- `run_script.sh`
 - `STRUCTURAL_INVARIANTS_REPORT.md`
 - `AGENT_STATE.md`
 
 ### 7) Solve the state file
-- Implemented structural return-carrier lowering:
-- filtered/guard-failed call paths targeting `__ret` now emit `__canon_call_gap__`.
-- normalized switch match carriers targeting `__ret` now emit `__canon_switch_gap__`.
-- projection renders both sentinels as deterministic panic bindings.
+- `run_script.sh` invariant extraction updated to include:
+- `canon call gap count`
+- `canon switch gap count`
+- `unresolved gap total`
+- `unresolved __ret gap count`
+- unresolved `__ret` site harvesting across all sentinel classes.
 
 ### 8) Emit and project the solution incrementally
 - Validation executed:
-- `cargo check -p canon-capture -p canon-projection -p orchestration`
 - `./run_script.sh repomap`
 - Current repomap structural surface:
 - `canon suppressed binding count: 0`
-- `canon suppressed __ret count: 0`
-- `canon suppressed non-__ret count: 0`
-- `canon match gap count: 0`
-- `unreachable count: 0`
-- `// match count: 0`
-- `// goto count: 0`
+- `canon call gap count: 3`
+- `canon switch gap count: 8`
+- `unresolved gap total: 11`
+- `unresolved __ret gap count: 11`
+- unresolved sites are now explicitly listed in report.
 
 ### 9) Repeat step 3
 - Next structural target:
-- apply the same invariant sweep on `test_1` fixture and regenerate gap table for remaining structural classes.
+- reduce unresolved `__ret` gaps by lowering call-gap class first (`extract_symbols`, `field_text`, `fn_signature`), then switch-gap class (`symbol::line`, `symbol::render`, loop collectors).

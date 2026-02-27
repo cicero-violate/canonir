@@ -111,11 +111,15 @@ extract_invariants() {
         # Emitted-source structural surface (always useful even when logs are green).
         local emit_src="$ROOT/emit/$fixture/src"
         if [[ -d "$emit_src" ]]; then
-            local suppressed_count suppressed_ret_count suppressed_nonret_count match_gap_count unreachable_count match_comment_count goto_comment_count
+            local suppressed_count suppressed_ret_count suppressed_nonret_count match_gap_count call_gap_count switch_gap_count unresolved_ret_gap_count unresolved_gap_total unreachable_count match_comment_count goto_comment_count
             suppressed_count=$(rg -n 'canon suppressed binding' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
             suppressed_ret_count=$(rg -n '__ret\s*=\s*panic!\("canon suppressed binding"\)' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
             suppressed_nonret_count=$((suppressed_count - suppressed_ret_count))
             match_gap_count=$(rg -n 'canon match result not lowered' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
+            call_gap_count=$(rg -n 'canon call result not lowered' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
+            switch_gap_count=$(rg -n 'canon switch result not lowered' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
+            unresolved_ret_gap_count=$(rg -n 'let mut __ret = panic!\("canon (suppressed binding|call result not lowered|switch result not lowered|match result not lowered)"\);' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
+            unresolved_gap_total=$((suppressed_count + match_gap_count + call_gap_count + switch_gap_count))
             unreachable_count=$(rg -n 'unreachable!\(\);' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
             match_comment_count=$(rg -n '// match' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
             goto_comment_count=$(rg -n '// goto' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
@@ -124,11 +128,15 @@ extract_invariants() {
             echo "  - canon suppressed __ret count: $suppressed_ret_count"
             echo "  - canon suppressed non-__ret count: $suppressed_nonret_count"
             echo "  - canon match gap count: $match_gap_count"
+            echo "  - canon call gap count: $call_gap_count"
+            echo "  - canon switch gap count: $switch_gap_count"
+            echo "  - unresolved gap total: $unresolved_gap_total"
+            echo "  - unresolved __ret gap count: $unresolved_ret_gap_count"
             echo "  - unreachable count: $unreachable_count"
             echo "  - // match count: $match_comment_count"
             echo "  - // goto count: $goto_comment_count"
-            if [[ "$suppressed_ret_count" -gt 0 ]]; then
-                echo "- suppressed __ret sites:"
+            if [[ "$unresolved_ret_gap_count" -gt 0 ]]; then
+                echo "- unresolved __ret gap sites:"
                 while IFS= read -r hit; do
                     local file line fn
                     file="${hit%%:*}"
@@ -142,7 +150,7 @@ extract_invariants() {
                         fn="fn <unknown>"
                     fi
                     echo "  - ${file#$emit_src/}:$line :: $fn"
-                done < <(rg -n 'let mut __ret = panic!\("canon suppressed binding"\);' "$emit_src" -g '*.rs')
+                done < <(rg -n 'let mut __ret = panic!\("canon (suppressed binding|call result not lowered|switch result not lowered|match result not lowered)"\);' "$emit_src" -g '*.rs')
             fi
         fi
         echo
