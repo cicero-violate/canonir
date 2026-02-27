@@ -1,49 +1,45 @@
 # Agent State
 
-## 2026-02-27 — Current Cycle (Phase 3.1 structural type lowering)
+## 2026-02-27 — Current Cycle (Phase 3 body/path structuralization)
 
 ### 1) Investigate the problem
-- `canon-capture` still relied on string-based type parsing in `canon_assemble` (`str_to_type_kind` and related text split/normalize helpers).
-- This violated the structural-only capture boundary and created unresolved/projection failures under async/opaque forms.
+- `canon_assemble` still synthesized `PathRef` by scanning raw body text (`extract_external_paths`), which is heuristic and outside structural boundaries.
+- Plan requires structural-only path reference emission.
 
 ### 2) Gather facts
-- `project/item.rs` already had `TyCtxt` access and could lower from `rustc_middle::ty::Ty` directly.
-- Model layer (`canon-capture/src/types.rs`) represented types as `String`, forcing assemble-time text parsing.
-- Orchestration panic surfaces were caused by non-structural fallback paths (`Unresolved` reaching projection).
+- `project/body.rs` already traverses MIR and has structural `DefId` references for calls/const dependencies.
+- `project_def` can already merge projected nodes and edges from sub-projections.
+- `dep_solver` reads `PathRef` nodes structurally; it does not require text source scans.
 
 ### 3) Break down the facts
-- Introduce structural model type expression in capture model.
-- Lower `rustc` `Ty` into structural model at project phase.
-- Convert structural model to Canon `TypeKind` in assemble phase.
-- Remove string parser dependency for item/type lowering.
+- Extend body projection to emit `PathRef` nodes from MIR-referenced `DefId` paths.
+- Add containment edges from function/method node to emitted `PathRef` node.
+- Remove assemble-time raw-text `PathRef` synthesis and helper functions.
 
 ### 4) Write it to a state file
 - This file is the overwritten cycle snapshot.
 
 ### 5) Sort structural and categorical patterns
-- Structural pattern A: types are lowered from compiler `Ty` into capture `TypeExpr`.
-- Structural pattern B: assemble maps `TypeExpr` -> `TypeKind` directly.
-- Structural pattern C: async/coroutine type path is resolved through `CoroutineArgsExt::return_ty` rather than text unwrap.
-- Categorical pattern A: remove parsing heuristics from capture type boundary.
+- Structural pattern A: body-level external references come from MIR `DefId` traversal.
+- Structural pattern B: `PathRef` node creation occurs in project phase, not assemble repair.
+- Categorical pattern A: delete heuristic text extraction surface from capture pipeline.
 
 ### 6) Write it to state file
 - Acceptance criteria for this cycle:
-  - no `str_to_type_kind` path for item/type lowering,
-  - structural lowering compiles,
-  - orchestration succeeds for baseline projects.
+  - no `extract_external_paths` body text scanner in assemble,
+  - `project_body` emits structural `PathRef` nodes,
+  - pipeline validates on baseline projects.
 
 ### 7) Solve the state file
-- `canon-capture/src/types.rs`
-  - added structural `TypeExpr` and `PrimType`.
-  - migrated model type-bearing fields from `String` to `TypeExpr`.
-- `canon-capture/src/project/item.rs`
-  - added structural `lower_ty` from `rustc_middle::ty::Ty` to `TypeExpr`.
-  - handled `FnPtr`, `FnDef`, `Dynamic`, `Alias(Opaque)` and `Coroutine` structurally.
-  - removed string `fmt_ty` return-path dependency for node type fields.
+- `canon-capture/src/project/body.rs`
+  - changed `project_body` return to `(Vec<Node>, Vec<EdgeHint>)`.
+  - emits structural `PathRef` nodes from MIR call/const `DefId` references.
+  - emits `Contains` edge from body owner node to each emitted `PathRef`.
+- `canon-capture/src/project/mod.rs`
+  - integrated body-projected nodes and edges into `Partial`.
 - `canon-capture/src/canon_assemble.rs`
-  - replaced string parser use with `intern_ty_expr` (`TypeExpr` -> `TypeKind`).
-  - retained local type relink pass and updated call sites to structural type model.
-  - removed obsolete parser tests tied to `str_to_type_kind`.
+  - removed raw-body `PathRef` synthesis block from `assemble_model_like`.
+  - removed `extract_external_paths` and `is_crate_root_ident` helpers.
 
 ### 8) Emit and project the solution incrementally
 - Validation:
@@ -54,7 +50,7 @@
 
 ### 9) Repeat step 3
 - Post-change fact breakdown:
-  - item/type lowering no longer depends on the old string parser path.
-  - remaining heuristics are outside this specific type-lowering slice (notably body/path text scan paths).
+  - `PathRef` is now emitted structurally from MIR traversal.
+  - assemble no longer scans body text for path extraction.
 - Next pending slice:
-  - continue Phase 3 structuralization for body/path reference extraction (remove raw text scan path in assemble and feed structural `PathRef` directly from projection).
+  - continue remaining Phase 3/4 structural cleanup surfaces (body CFG op structuralization and any remaining compensation boundaries).

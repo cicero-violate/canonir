@@ -21,8 +21,10 @@ pub fn project_def(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Partial {
         partial.edge_hints.extend(relations::project_relations(tcx, def_id, index));
     }
 
-    // MIR / bodies for functions (calls, cfg, const deps, outlives edges).
-    partial.edge_hints.extend(body::project_body(tcx, def_id, index));
+    // MIR / bodies for functions (calls, cfg, const deps, structural PathRef).
+    let (body_nodes, body_edges) = body::project_body(tcx, def_id, index);
+    partial.nodes.extend(body_nodes);
+    partial.edge_hints.extend(body_edges);
 
     partial
 }
