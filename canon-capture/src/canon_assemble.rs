@@ -381,6 +381,97 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                             let loc = canon.push_node(CanonNodeKind::Local { name_id: eid, ty, flags: 0 });
                             CfgOp::Expr(loc)
                         }
+                        Stmt::FieldAccess { base, field, dest } => {
+                            let ty = unit_ty(canon);
+                            let base_name = NameId(canon.name_intern.intern(base));
+                            let base_id = canon.push_node(CanonNodeKind::Local {
+                                name_id: base_name,
+                                ty,
+                                flags: 0,
+                            });
+                            let field_id = NameId(canon.name_intern.intern(field));
+                            let dest_id = dest.as_deref().map(|name| {
+                                let name_id = NameId(canon.name_intern.intern(name));
+                                canon.push_node(CanonNodeKind::Local {
+                                    name_id,
+                                    ty,
+                                    flags: 0,
+                                })
+                            });
+                            CfgOp::FieldAccess { base: base_id, field: field_id, dest: dest_id }
+                        }
+                        Stmt::MethodCall {
+                            receiver,
+                            method,
+                            args,
+                            dest,
+                        } => {
+                            let ty = unit_ty(canon);
+                            let receiver_name = NameId(canon.name_intern.intern(receiver));
+                            let receiver_id = canon.push_node(CanonNodeKind::Local {
+                                name_id: receiver_name,
+                                ty,
+                                flags: 0,
+                            });
+                            let arg_ids: Vec<CanonId> = args
+                                .iter()
+                                .map(|arg| {
+                                    let arg_name = NameId(canon.name_intern.intern(arg));
+                                    canon.push_node(CanonNodeKind::Local {
+                                        name_id: arg_name,
+                                        ty,
+                                        flags: 0,
+                                    })
+                                })
+                                .collect();
+                            let method_id = NameId(canon.name_intern.intern(method));
+                            let dest_id = dest.as_deref().map(|name| {
+                                let name_id = NameId(canon.name_intern.intern(name));
+                                canon.push_node(CanonNodeKind::Local {
+                                    name_id,
+                                    ty,
+                                    flags: 0,
+                                })
+                            });
+                            CfgOp::MethodCall {
+                                receiver: receiver_id,
+                                method: method_id,
+                                args: arg_ids,
+                                dest: dest_id,
+                            }
+                        }
+                        Stmt::StructLit { ty, fields, dest } => {
+                            let ty_id = intern_ty_expr(canon, ty);
+                            let value_ty = unit_ty(canon);
+                            let lowered_fields: Vec<(NameId, CanonId)> = fields
+                                .iter()
+                                .map(|(field, value)| {
+                                    let field_name = NameId(canon.name_intern.intern(field));
+                                    let value_name = NameId(canon.name_intern.intern(value));
+                                    (
+                                        field_name,
+                                        canon.push_node(CanonNodeKind::Local {
+                                            name_id: value_name,
+                                            ty: value_ty,
+                                            flags: 0,
+                                        }),
+                                    )
+                                })
+                                .collect();
+                            let dest_id = dest.as_deref().map(|name| {
+                                let name_id = NameId(canon.name_intern.intern(name));
+                                canon.push_node(CanonNodeKind::Local {
+                                    name_id,
+                                    ty: value_ty,
+                                    flags: 0,
+                                })
+                            });
+                            CfgOp::StructLit {
+                                ty: ty_id,
+                                fields: lowered_fields,
+                                dest: dest_id,
+                            }
+                        }
                         Stmt::Return(val) => {
                             let v = val.as_deref().map(|e| {
                                 let eid = NameId(canon.name_intern.intern(e));

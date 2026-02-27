@@ -109,6 +109,22 @@ pub struct EnumVariant {
 pub enum Stmt {
     Let { pat: String, ty: Option<TypeExpr>, init: Option<String> },
     Expr(String),
+    FieldAccess {
+        base: String,
+        field: String,
+        dest: Option<String>,
+    },
+    MethodCall {
+        receiver: String,
+        method: String,
+        args: Vec<String>,
+        dest: Option<String>,
+    },
+    StructLit {
+        ty: TypeExpr,
+        fields: Vec<(String, String)>,
+        dest: Option<String>,
+    },
     Return(Option<String>),
     Raw(String),
 }

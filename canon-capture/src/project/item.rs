@@ -1,7 +1,8 @@
 use crate::types::TraitMethod;
-use crate::types::{Body, EnumVariant, Field, GenericParam, Node, NodeKind, Param, PrimType, StructKind, TypeExpr, Visibility};
+use crate::types::{BasicBlock, Body, EnumVariant, Field, GenericParam, Node, NodeKind, Param, PrimType, Stmt, StructKind, Terminator, TypeExpr, Visibility};
 use crate::types::{EdgeHint, EdgeKind};
 use rustc_hir::{def::DefKind, GenericBound, PatKind, PredicateOrigin, Safety, WherePredicateKind};
+use rustc_middle::mir::{self};
 use rustc_middle::ty::print::PrintTraitRefExt;
 use rustc_middle::ty::AssocKind;
 use rustc_middle::ty::{self, CoroutineArgsExt, TyCtxt};
@@ -725,6 +726,174 @@ fn render_type_expr(_tcx: TyCtxt<'_>, expr: &TypeExpr) -> String {
             format!("{base}<{rendered}>")
         }
         TypeExpr::Path(path) => path.clone(),
+    }
+}
+
+fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Body> {
+    let local_def = def_id.as_local()?;
+    if !tcx.is_mir_available(local_def) {
+        return None;
+    }
+    let body = match tcx.hir_body_const_context(local_def) {
+        Some(rustc_hir::ConstContext::ConstFn)
+        | Some(rustc_hir::ConstContext::Const { .. })
+        | Some(rustc_hir::ConstContext::Static(_)) => tcx.mir_for_ctfe(local_def),
+        None => tcx.optimized_mir(local_def),
+    };
+
+    let mut blocks: Vec<BasicBlock> = Vec::with_capacity(body.basic_blocks.len());
+    for bb in body.basic_blocks.iter() {
+        let mut stmts: Vec<Stmt> = Vec::new();
+
+        for stmt in &bb.statements {
+            let mir::StatementKind::Assign(boxed) = &stmt.kind else {
+                continue;
+            };
+            let (lhs, rvalue) = &**boxed;
+            if let Some(field_stmt) = mir_field_access_stmt(tcx, lhs, rvalue) {
+                stmts.push(field_stmt);
+                continue;
+            }
+            if let Some(struct_stmt) = mir_struct_lit_stmt(tcx, lhs, rvalue) {
+                stmts.push(struct_stmt);
+            }
+        }
+
+        let mut term = Terminator::None;
+        if let Some(term_ref) = &bb.terminator {
+            if let mir::TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                target,
+                ..
+            } = &term_ref.kind
+                && let Some(method_stmt) = mir_method_call_stmt(tcx, func, args, destination)
+            {
+                stmts.push(method_stmt);
+                term = target
+                    .map(|bb| Terminator::Goto(bb.as_usize() as u32))
+                    .unwrap_or(Terminator::None);
+            } else if matches!(term_ref.kind, mir::TerminatorKind::Return) {
+                term = Terminator::Return;
+            } else if let mir::TerminatorKind::Goto { target } = term_ref.kind {
+                term = Terminator::Goto(target.as_usize() as u32);
+            } else if let mir::TerminatorKind::SwitchInt { discr, .. } = &term_ref.kind {
+                let mut succ = term_ref.successors();
+                if let (Some(t), Some(f)) = (succ.next(), succ.next()) {
+                    term = Terminator::Branch {
+                        cond: mir_operand_label(tcx, discr),
+                        true_bb: t.as_usize() as u32,
+                        false_bb: f.as_usize() as u32,
+                    };
+                }
+            }
+        }
+
+        blocks.push(BasicBlock { stmts, terminator: term });
+    }
+
+    Some(Body::Blocks(blocks))
+}
+
+fn mir_field_access_stmt<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    lhs: &mir::Place<'tcx>,
+    rvalue: &mir::Rvalue<'tcx>,
+) -> Option<Stmt> {
+    let mir::Rvalue::Use(mir::Operand::Copy(place) | mir::Operand::Move(place)) = rvalue else {
+        return None;
+    };
+    let (base, proj) = place.as_ref().last_projection()?;
+    let mir::ProjectionElem::Field(field_idx, ty) = proj else {
+        return None;
+    };
+    let field = match ty.kind() {
+        ty::TyKind::Adt(adt, _) => adt
+            .non_enum_variant()
+            .fields
+            .get(field_idx)
+            .map(|f| f.name.to_string())
+            .unwrap_or_else(|| field_idx.index().to_string()),
+        _ => field_idx.index().to_string(),
+    };
+    Some(Stmt::FieldAccess {
+        base: mir_place_ref_label(base),
+        field,
+        dest: Some(mir_place_label(lhs)),
+    })
+}
+
+fn mir_struct_lit_stmt<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    lhs: &mir::Place<'tcx>,
+    rvalue: &mir::Rvalue<'tcx>,
+) -> Option<Stmt> {
+    let mir::Rvalue::Aggregate(kind, operands) = rvalue else {
+        return None;
+    };
+    let mir::AggregateKind::Adt(adt_did, variant_idx, _, _, _) = &**kind else {
+        return None;
+    };
+    let adt = tcx.adt_def(*adt_did);
+    let variant = adt.variant(*variant_idx);
+    let fields = variant
+        .fields
+        .iter()
+        .zip(operands.iter())
+        .map(|(f, op)| (f.name.to_string(), mir_operand_label(tcx, op)))
+        .collect();
+    Some(Stmt::StructLit {
+        ty: TypeExpr::Path(norm::path(tcx, *adt_did)),
+        fields,
+        dest: Some(mir_place_label(lhs)),
+    })
+}
+
+fn mir_method_call_stmt<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    func: &mir::Operand<'tcx>,
+    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
+    destination: &mir::Place<'tcx>,
+) -> Option<Stmt> {
+    let (did, _) = func.const_fn_def()?;
+    if !matches!(tcx.def_kind(did), DefKind::AssocFn) || args.is_empty() {
+        return None;
+    }
+    let receiver = mir_operand_label(tcx, &args[0].node);
+    let method = tcx.item_name(did).to_string();
+    let args = args
+        .iter()
+        .skip(1)
+        .map(|a| mir_operand_label(tcx, &a.node))
+        .collect();
+    Some(Stmt::MethodCall {
+        receiver,
+        method,
+        args,
+        dest: Some(mir_place_label(destination)),
+    })
+}
+
+fn mir_place_label(place: &mir::Place<'_>) -> String {
+    format!("_{}", place.local.as_usize())
+}
+
+fn mir_place_ref_label(place: mir::PlaceRef<'_>) -> String {
+    format!("_{}", place.local.as_usize())
+}
+
+fn mir_operand_label(tcx: TyCtxt<'_>, operand: &mir::Operand<'_>) -> String {
+    match operand {
+        mir::Operand::Copy(place) | mir::Operand::Move(place) => mir_place_label(place),
+        mir::Operand::Constant(c) => {
+            if let mir::Const::Unevaluated(uneval, _) = c.const_ {
+                norm::path(tcx, uneval.def)
+            } else {
+                "_const".to_string()
+            }
+        }
+        mir::Operand::RuntimeChecks(_) => "_runtime_checks".to_string(),
     }
 }
 
