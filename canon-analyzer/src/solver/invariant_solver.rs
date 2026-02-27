@@ -1,4 +1,4 @@
-use crate::solver::csr_to_adj;
+use crate::solver::{csr_to_adj, global_csr_rev_to_adj, global_csr_to_adj};
 use algorithms::graph::reachability::is_acyclic;
 use anyhow::{bail, Result};
 use canon::edge::EdgeKind;
@@ -26,6 +26,33 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
                 if src >= v || dst >= v {
                     bail!("invariant_solver: dangling edge in {}_graph: {} -> {} (|V|={})", name, src, dst, v);
                 }
+            }
+        }
+    }
+
+    let global_adj = global_csr_to_adj(ir);
+    for (src, neighbours) in global_adj.iter().enumerate() {
+        for &dst in neighbours {
+            if src >= v || dst >= v {
+                bail!(
+                    "invariant_solver: dangling edge in graph_csr: {} -> {} (|V|={})",
+                    src,
+                    dst,
+                    v
+                );
+            }
+        }
+    }
+    let global_rev_adj = global_csr_rev_to_adj(ir);
+    for (src, neighbours) in global_rev_adj.iter().enumerate() {
+        for &dst in neighbours {
+            if src >= v || dst >= v {
+                bail!(
+                    "invariant_solver: dangling edge in graph_csr_rev: {} -> {} (|V|={})",
+                    src,
+                    dst,
+                    v
+                );
             }
         }
     }

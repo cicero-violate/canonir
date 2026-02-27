@@ -38,10 +38,10 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>) -> String
             let rhs_name = local_name(ir, *rhs);
             if rhs_name == "__canon_suppressed__" {
                 if declared.contains(&lhs_name) {
-                    format!("{lhs_name} = todo!(); // suppressed")
+                    format!("{lhs_name} = panic!(\"canon suppressed binding\");")
                 } else {
                     declared.insert(lhs_name.clone());
-                    format!("let mut {lhs_name} = todo!(); // suppressed")
+                    format!("let mut {lhs_name} = panic!(\"canon suppressed binding\");")
                 }
             } else {
                 bind_or_assign(&lhs_name, rhs_name, declared)
@@ -113,7 +113,7 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>) -> String
             Some(d) => {
                 let name = local_name(ir, *d);
                 declared.insert(name.clone());
-                format!("let mut {name} = todo!(); // match result")
+                format!("let mut {name} = panic!(\"canon match result not lowered\");")
             }
             None => "// match".into(),
         },

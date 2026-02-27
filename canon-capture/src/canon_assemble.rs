@@ -839,11 +839,13 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
     let mut region_edges = vec![];
     let mut value_edges = vec![];
     let mut macro_edges = vec![];
+    let mut all_edges = vec![];
 
     for hint in &model_like.edge_hints {
         let src = id_map[hint.src as usize];
         let dst = id_map[hint.dst as usize];
         let k = map_edge_kind(&hint.kind);
+        all_edges.push((src, dst, k.clone()));
         match &hint.kind {
             ModelEdgeKind::Renames
             | ModelEdgeKind::Resolves => name_edges.push((src, dst, k)),
@@ -856,6 +858,9 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
             ModelEdgeKind::Expands => macro_edges.push((src, dst, k)),
             ModelEdgeKind::Reexports => name_edges.push((src, dst, k)),
         }
+    }
+    for (src, dst, kind) in &vispath_edges {
+        all_edges.push((*src, *dst, kind.clone()));
     }
     module_edges.extend(vispath_edges);
 
@@ -871,6 +876,11 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
     canon.region_graph = CsrGraph::from_edges(node_data.clone(), to_raw(region_edges));
     canon.value_graph = CsrGraph::from_edges(node_data.clone(), to_raw(value_edges));
     canon.macro_graph = CsrGraph::from_edges(node_data, to_raw(macro_edges));
+    let all_raw: Vec<(u32, u32, CanonEdgeKind)> = all_edges
+        .into_iter()
+        .map(|(s, d, k)| (s.0, d.0, k))
+        .collect();
+    canon.rebuild_global_csr_from_edges(&all_raw);
 
     // Canonicalize Impl payload links from structural edges:
     // - Impl.for_ty from module_graph ImplFor

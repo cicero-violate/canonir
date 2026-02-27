@@ -1,4 +1,5 @@
 use anyhow::Result;
+use algorithms::graph::csr::Csr;
 use canon::id::NodeId;
 use canon::node::CanonId;
 use canon::CanonIR;
@@ -65,4 +66,21 @@ pub(crate) fn to_canon_id(id: NodeId) -> CanonId {
 pub(crate) fn csr_to_adj<ND, ED>(graph: &canon::csr_graph::CsrGraph<ND, ED>) -> Vec<Vec<usize>> {
     let v = graph.vertex_count();
     (0..v).map(|i| graph.neighbours(NodeId(i as u32)).map(|(dst, _)| dst.index()).collect()).collect()
+}
+
+pub(crate) fn global_csr_to_adj(ir: &CanonIR) -> Vec<Vec<usize>> {
+    graph_csr_to_adj(&ir.graph_csr)
+}
+
+pub(crate) fn global_csr_rev_to_adj(ir: &CanonIR) -> Vec<Vec<usize>> {
+    graph_csr_to_adj(&ir.graph_csr_rev)
+}
+
+fn graph_csr_to_adj(csr: &canon::ir::CanonCsr) -> Vec<Vec<usize>> {
+    let row_ptr: Vec<i32> = csr.row_ptr.iter().map(|&x| x as i32).collect();
+    let col_idx: Vec<i32> = csr.col_idx.iter().map(|&x| x as i32).collect();
+    let graph = Csr { row_ptr, col_idx };
+    (0..graph.vertex_count())
+        .map(|i| graph.neighbours(i).iter().map(|&dst| dst as usize).collect())
+        .collect()
 }

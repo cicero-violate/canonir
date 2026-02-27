@@ -7,8 +7,20 @@ Only direct facts from tool output are recorded.
 - log: /workspace/ai_sandbox/canon/.run_script_logs/repomap_orchestration.log
 - liveness facts:
   - 6:INFO liveness_solver: pruned 4 dead function(s) from emit_order
+- emitted structural surface:
+  - canon suppressed binding count: 5
+  - canon match gap count: 8
+  - unreachable count: 31
+  - // match count: 0
+  - // goto count: 80
 
 ## fixture=repomap step=diff
 - log: /workspace/ai_sandbox/canon/.run_script_logs/repomap_diff.log
 - no invariant-signature lines detected; inspect full log.
+- emitted structural surface:
+  - canon suppressed binding count: 5
+  - canon match gap count: 8
+  - unreachable count: 31
+  - // match count: 0
+  - // goto count: 80
 

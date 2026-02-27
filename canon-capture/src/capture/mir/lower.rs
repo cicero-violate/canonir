@@ -56,11 +56,8 @@ pub(crate) fn mir_body_structural(
     };
 
     let mut plan = stage_build_plan(tcx, body, param_names);
-    let emitted = stage_emit_blocks(tcx, body, returns_unit, &mut plan);
-    let blocks = mir_passes::normalize_blocks(
-        emitted,
-        std::mem::take(&mut plan.suppressed_dest_sentinels),
-    );
+    let draft = stage_emit_draft(tcx, body, returns_unit, &mut plan);
+    let blocks = stage_normalize_draft(draft);
     stage_finalize_body(blocks)
 }
 
@@ -104,18 +101,19 @@ fn stage_build_plan<'tcx>(
     }
 }
 
-fn stage_emit_blocks<'tcx>(
+fn stage_emit_draft<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &mir::Body<'tcx>,
     returns_unit: bool,
     plan: &mut LowerPlan,
-) -> Vec<mir_passes::EmittedBlock> {
+) -> mir_passes::BodyDraft {
     let emitted_block_capacity = plan
         .mir_to_emitted
         .iter()
         .filter(|slot| slot.is_some())
         .count();
-    let mut blocks: Vec<mir_passes::EmittedBlock> = Vec::with_capacity(emitted_block_capacity);
+    let mut emitted_blocks: Vec<mir_passes::EmittedBlock> =
+        Vec::with_capacity(emitted_block_capacity);
 
     for (mir_idx, bb) in body.basic_blocks.iter_enumerated() {
         if bb.is_cleanup {
@@ -124,21 +122,35 @@ fn stage_emit_blocks<'tcx>(
         if let Some(block) = mir_passes::emit_special_block(
             returns_unit,
             mir_idx.as_usize(),
-            &blocks,
+            &emitted_blocks,
             &plan.switch_analysis,
             &mut plan.defined,
         ) {
-            blocks.push(block);
+            emitted_blocks.push(block);
             continue;
         }
 
         let mut stmts = stage_prepare_block_stmts();
-        stage_lower_block_statements(tcx, body, bb, &blocks, plan, &mut stmts);
-        let term = stage_lower_block_terminator(tcx, returns_unit, bb, &blocks, plan, &mut stmts);
-        blocks.push(mir_passes::make_normal_block(stmts, term));
+        stage_lower_block_statements(tcx, body, bb, &emitted_blocks, plan, &mut stmts);
+        let term = stage_lower_block_terminator(
+            tcx,
+            returns_unit,
+            bb,
+            &emitted_blocks,
+            plan,
+            &mut stmts,
+        );
+        emitted_blocks.push(mir_passes::make_normal_block(stmts, term));
     }
 
-    blocks
+    mir_passes::make_body_draft(
+        emitted_blocks,
+        std::mem::take(&mut plan.suppressed_dest_sentinels),
+    )
+}
+
+fn stage_normalize_draft(draft: mir_passes::BodyDraft) -> Vec<BasicBlock> {
+    mir_passes::NormalizationPipeline::canonical().run(draft)
 }
 
 fn stage_prepare_block_stmts() -> Vec<Stmt> {

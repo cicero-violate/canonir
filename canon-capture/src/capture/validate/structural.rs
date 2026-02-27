@@ -4,6 +4,7 @@ use canon::ir::CanonIR;
 pub fn validate(canon: &CanonIR) -> Result<()> {
     validate_no_alloc_artifacts(canon)?;
     validate_no_malformed_paths(canon)?;
+    validate_global_csr(canon)?;
     Ok(())
 }
 
@@ -24,6 +25,13 @@ fn validate_no_malformed_paths(canon: &CanonIR) -> Result<()> {
         if p.split("::").any(|seg| seg.is_empty() || seg == "_" || seg.starts_with('_')) {
             bail!("Invariant violation: malformed/private helper path segment in Canon path interner");
         }
+    }
+    Ok(())
+}
+
+fn validate_global_csr(canon: &CanonIR) -> Result<()> {
+    if let Err(msg) = canon.validate_global_csr() {
+        bail!("Invariant violation: {msg}");
     }
     Ok(())
 }
