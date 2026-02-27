@@ -23,10 +23,16 @@ pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
     let mut preds: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); body.basic_blocks.len()];
     let mut succs: Vec<Vec<usize>> = vec![Vec::new(); body.basic_blocks.len()];
     for (idx, bb) in body.basic_blocks.iter_enumerated() {
+        if bb.is_cleanup {
+            continue;
+        }
         let Some(term) = &bb.terminator else {
             continue;
         };
         for succ in term.successors() {
+            if body.basic_blocks[succ].is_cleanup {
+                continue;
+            }
             succs[idx.as_usize()].push(succ.as_usize());
             preds[succ.as_usize()].insert(idx.as_usize());
         }
@@ -35,6 +41,9 @@ pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
             all_switch_sources.insert(src);
             let succ_set = switch_succs_by_source.entry(src).or_default();
             for succ in term.successors() {
+                if body.basic_blocks[succ].is_cleanup {
+                    continue;
+                }
                 succ_set.insert(succ.as_usize());
             }
         }

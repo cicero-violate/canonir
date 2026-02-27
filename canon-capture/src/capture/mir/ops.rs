@@ -142,20 +142,38 @@ pub(crate) fn mir_method_call_stmt<'tcx>(
     resolver: &LocalNameResolver,
     dest: String,
 ) -> Option<Stmt> {
-    let (did, _) = func.const_fn_def()?;
-    if !matches!(tcx.def_kind(did), rustc_hir::def::DefKind::AssocFn) || args.is_empty() {
+    if args.is_empty() {
         return None;
     }
-    let assoc = tcx.associated_item(did);
-    let has_self_param = matches!(assoc.kind, ty::AssocKind::Fn { has_self: true, .. });
-    if !has_self_param {
-        return None;
+    if let Some((did, _)) = func.const_fn_def() {
+        if !matches!(tcx.def_kind(did), rustc_hir::def::DefKind::AssocFn) {
+            return None;
+        }
+        let assoc = tcx.associated_item(did);
+        let has_self_param = matches!(assoc.kind, ty::AssocKind::Fn { has_self: true, .. });
+        if !has_self_param {
+            return None;
+        }
+        let receiver = match mir_operand_label_for_arg(tcx, &args[0].node, resolver)? {
+            ArgLabel::Value(v) => v,
+            ArgLabel::Omit => return None,
+        };
+        let method = tcx.item_name(did).to_string();
+        let args = mir_call_args_labels(tcx, &args[1..], resolver)?;
+        return Some(Stmt::MethodCall {
+            receiver,
+            method,
+            args,
+            dest: Some(dest),
+        });
     }
+
+    let func_label = mir_operand_label(tcx, func, resolver)?;
+    let method = dynamic_trait_method_name(&func_label)?;
     let receiver = match mir_operand_label_for_arg(tcx, &args[0].node, resolver)? {
         ArgLabel::Value(v) => v,
         ArgLabel::Omit => return None,
     };
-    let method = tcx.item_name(did).to_string();
     let args = mir_call_args_labels(tcx, &args[1..], resolver)?;
     Some(Stmt::MethodCall {
         receiver,
@@ -202,4 +220,15 @@ pub(crate) fn mir_call_stmt<'tcx>(
         args,
         dest: Some(dest),
     })
+}
+
+fn dynamic_trait_method_name(func_label: &str) -> Option<String> {
+    if !func_label.contains(" as ") {
+        return None;
+    }
+    let method = func_label.rsplit("::").next()?;
+    if method.is_empty() || !method.chars().all(|c| c == '_' || c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(method.to_string())
 }

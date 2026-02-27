@@ -270,15 +270,8 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
                 ctx.stmts.push(field_stmt);
                 return;
             }
-            if let Some(lhs_name) = ctx.resolver.label_place(lhs) {
-                mir_util::emit_suppressed_for_name(
-                    &lhs_name,
-                    ctx.stmts,
-                    ctx.defined,
-                    ctx.suppressed_sentinel_names,
-                );
-            }
-            return;
+            // Fallback to generic assign lowering for projected field reads
+            // that are representable as pure expressions (for example `(*self).score`).
         }
         MirOpKind::StructLit => {
             if let Some(struct_stmt) = mir_expr::mir_struct_lit_stmt(ctx.tcx, lhs, rvalue, ctx.resolver)
@@ -302,15 +295,10 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
                     ctx.defined.insert(dest.clone());
                 }
                 ctx.stmts.push(struct_stmt);
-            } else if let Some(lhs_name) = lhs_name {
-                mir_util::emit_suppressed_for_name(
-                    &lhs_name,
-                    ctx.stmts,
-                    ctx.defined,
-                    ctx.suppressed_sentinel_names,
-                );
+                return;
             }
-            return;
+            // Struct-literal pattern may still be representable as a generic
+            // assignment expression (for example enum unit variants).
         }
         MirOpKind::OpaqueAggregate => {
             if let Some(lhs_name) = lhs_name.clone() {
@@ -324,7 +312,30 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
             return;
         }
         MirOpKind::ZeroArgEnumCtor => {
-            if let Some(lhs_name) = lhs_name.clone() {
+            if let Some(assign_stmt) = mir_expr::mir_assign_stmt(
+                ctx.tcx,
+                ctx.local_decls,
+                lhs,
+                rvalue,
+                ctx.resolver,
+                ctx.defined,
+                ctx.suppressed_sentinel_names,
+            ) {
+                if mir_guard::structural_guard(&assign_stmt, ctx.defined, ctx.suppressed_sentinel_names)
+                {
+                    if let Stmt::Assign { lhs, .. } = &assign_stmt {
+                        ctx.defined.insert(lhs.clone());
+                    }
+                    ctx.stmts.push(assign_stmt);
+                } else if let Some(lhs_name) = lhs_name.clone() {
+                    mir_util::emit_suppressed_for_name(
+                        &lhs_name,
+                        ctx.stmts,
+                        ctx.defined,
+                        ctx.suppressed_sentinel_names,
+                    );
+                }
+            } else if let Some(lhs_name) = lhs_name.clone() {
                 mir_util::emit_suppressed_for_name(
                     &lhs_name,
                     ctx.stmts,

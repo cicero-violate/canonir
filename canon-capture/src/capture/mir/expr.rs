@@ -360,12 +360,14 @@ fn mir_rvalue_expr<'tcx>(
         }
         mir::Rvalue::BinaryOp(op, boxed) => {
             let (lhs, rhs) = &**boxed;
-            Some(format!(
-                "({} {} {})",
-                mir_ops::mir_operand_label(tcx, lhs, resolver)?,
-                mir_binop_token(*op)?,
-                mir_ops::mir_operand_label(tcx, rhs, resolver)?,
-            ))
+            let lhs = mir_ops::mir_operand_label(tcx, lhs, resolver)?;
+            let rhs = mir_ops::mir_operand_label(tcx, rhs, resolver)?;
+            match *op {
+                mir::BinOp::AddWithOverflow => Some(format!("({lhs}).overflowing_add({rhs})")),
+                mir::BinOp::SubWithOverflow => Some(format!("({lhs}).overflowing_sub({rhs})")),
+                mir::BinOp::MulWithOverflow => Some(format!("({lhs}).overflowing_mul({rhs})")),
+                _ => Some(format!("({lhs} {} {rhs})", mir_binop_token(*op)?)),
+            }
         }
         mir::Rvalue::UnaryOp(op, operand) => Some(format!(
             "({}{})",
@@ -378,6 +380,18 @@ fn mir_rvalue_expr<'tcx>(
             render_type_expr(tcx, &lower_ty(tcx, *ty))
         )),
         mir::Rvalue::Aggregate(kind, operands) => match &**kind {
+            mir::AggregateKind::Adt(adt_did, variant_idx, _, _, _) => {
+                let adt = tcx.adt_def(*adt_did);
+                let variant = adt.variant(*variant_idx);
+                if !variant.fields.is_empty() || !operands.is_empty() {
+                    return None;
+                }
+                if adt.is_enum() {
+                    Some(format!("{}::{}", norm::path(tcx, *adt_did), variant.name))
+                } else {
+                    Some(norm::path(tcx, *adt_did))
+                }
+            }
             mir::AggregateKind::Tuple => {
                 let elems = operands
                     .iter()
