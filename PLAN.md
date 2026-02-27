@@ -1,37 +1,99 @@
 # PLAN.md
 
 ## CANONICAL_HEADER
-- plan_id: `CANON_BODY_RETURN_INVARIANTS_V1`
-- scope: `Capture -> CanonIR -> Projection`
+- plan_id: `CANON_CAPTURE_LOC_REDUCTION_V1`
+- scope: `canon-capture only`
 - hard_rule: `No heuristics. Structural invariants only.`
-- objective: `Complete non-unit return structural reconstruction and remove projection-side todo fallback.`
+- objective: `Replace large procedural lowering in item.rs with rule-table + engine architecture while preserving behavior.`
 
-## PHASE_R1_RETURN_VALUE_CAPTURE
-status: `in_progress`
-
-1. Capture MIR return-place flow (`_0`) into explicit canonical return operations.
-2. Emit `CfgOp::Assign` only when RHS is structurally declared/known.
-3. Preserve compile safety while expanding structural return coverage.
-
-## PHASE_R2_RETURN_EMIT_STRICTNESS
+## BASELINE
 status: `pending`
 
-1. Remove projection-side non-unit `todo!()` injection in `emit_fn`.
-2. Require body-carried return value structure for non-unit functions.
-3. Fail on invariant violations rather than patching in projection.
+1. Record LOC baselines:
+- `canon-capture/src/project/item.rs`
+- `canon-capture` crate total LOC
+2. Record behavior baselines:
+- `cargo check`
+- fixture pipeline/build matrix used in current validation flow
+3. Freeze invariants:
+- output node/edge/body shape equivalence for covered DefKinds
+- no fallback/raw-path reintroduction
 
-## PHASE_R3_VALIDATION_SWEEP
+## PHASE_1_DOMAIN_MODEL
 status: `pending`
 
-1. Workspace `cargo check`.
-2. Fixture matrix:
-   - `capture/repomap -> emit/repomap -> cargo build`
-   - `capture/test_1 -> emit/test_1 -> cargo build`
-3. Track remaining `todo!()` count in emitted fixtures as a structural gap metric.
+1. Add `project/rules.rs` with canonical rule schema:
+- `RuleSpec`
+- `RulePred`
+- `RuleEmit`
+- `RuleEdge`
+- optional narrow hook handles
+2. Add `DefMeta` shape (analyzed def facts) and canonical fragment output type.
+3. Keep all code compile-safe with placeholders and no behavior switch yet.
+
+## PHASE_2_ENGINE_CORE
+status: `pending`
+
+1. Add `project/engine.rs` with:
+- `analyze_def(tcx, def_id) -> DefMeta`
+- `lower_def(tcx, def_id, index) -> (Vec<Node>, Vec<EdgeHint>)`
+2. Implement deterministic rule match and dispatch order.
+3. Keep MIR body lowering delegated to existing body lowering path.
+
+## PHASE_3_RULE_BOOTSTRAP
+status: `pending`
+
+1. Encode first DefKind set in rules (low-risk, high-volume boilerplate):
+- module
+- struct
+- enum
+- const/static/type alias/use/type ref/lifetime
+2. Move repeated field extraction into shared helpers used by rules.
+3. Keep legacy code path for uncovered DefKinds.
+
+## PHASE_4_FUNCTION_PATH_MIGRATION
+status: `pending`
+
+1. Migrate function/assoc-fn lowering metadata path into rules+engine.
+2. Keep body lowering call boundary unchanged (`mir_body_structural` remains isolated).
+3. Ensure async/unsafe/generics/where-clause wiring preserved.
+
+## PHASE_5_EDGE_TEMPLATE_MIGRATION
+status: `pending`
+
+1. Move repeated edge emission patterns into rule edge templates.
+2. Keep special-case edges in explicit hooks only where structurally necessary.
+3. Delete duplicated edge boilerplate from legacy branches.
+
+## PHASE_6_SWITCHOVER_AND_DELETION
+status: `pending`
+
+1. Switch `project_item(...)` to engine-first path.
+2. Remove migrated legacy branches from `item.rs`.
+3. Shrink `item.rs` to orchestration + body lower integration + thin adapters.
+
+## PHASE_7_VALIDATION_AND_LOC_GATE
+status: `pending`
+
+1. Run full compile/pipeline validation matrix.
+2. Confirm structural equivalence on emitted artifacts for validated fixtures.
+3. Measure LOC deltas and enforce target:
+- substantial reduction in `item.rs`
+- net reduction in `canon-capture` LOC
+
+## EXECUTION_POLICY
+status: `active`
+
+1. Deliver incrementally in small compiling slices.
+2. After each phase:
+- compile
+- run fixture matrix
+- update state/status files
+3. Do not add tests per current project constraint.
 
 ## EXIT_CONDITION
 status: `pending`
 
-1. Non-unit returns are structurally represented from capture.
-2. Projection no longer injects `todo!()` as a return fallback.
-3. Validation sweep is green.
+1. `project_item` is engine/rules-driven for all active DefKinds.
+2. Legacy duplicated match-spaghetti removed from `item.rs`.
+3. `item.rs` reduced materially from baseline while fixtures remain green.

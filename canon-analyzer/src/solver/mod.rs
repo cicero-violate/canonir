@@ -19,6 +19,7 @@ pub mod module_solver;
 pub mod dep_solver;
 pub mod name_solver;
 pub mod provenance_solver;
+pub mod return_solver;
 pub mod stability_solver;
 pub mod trait_solver;
 pub mod type_solver;
@@ -42,6 +43,7 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
     provenance_solver::solve(ir)?;
     cycle_diag_solver::solve(ir)?;
     liveness_solver::solve(ir)?;
+    return_solver::solve(ir)?;
     stability_solver::solve(ir)?;
     borrow_solver::solve(ir)?;
     const_solver::solve(ir)?;

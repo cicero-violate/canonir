@@ -17,3 +17,4 @@
 | `name_intern` conflates namespaces      | `intern.rs`         | NameId is ambiguous                           | Separate interners or tagged IDs               |
 | `TypeKey` hashes `Debug` string         | `ir.rs`             | Type dedup unreliable                         | Structural recursive hash                      |
 | No unresolved/resolved type distinction | `node.rs`           | Solvers cannot mark resolution state          | `Unresolved(PathId)` vs `Resolved(CanonId)`    |
+| liveness_solver prunes externally-called functions | `canon-analyzer/src/solver/liveness_solver.rs` | E0425 missing emitted callees (e.g. `build_repomap`) | Keep any function whose NodeId appears as a callee in emitted `CfgOp::Call` |

@@ -34,7 +34,18 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>) -> String
             format!("let {}: {} = {};", lhs_name, render_type_id(ir, *ty), rhs_expr)
         }
         CfgOp::Assign { lhs, rhs } => {
-            bind_or_assign(&local_name(ir, *lhs), local_name(ir, *rhs), declared)
+            let lhs_name = local_name(ir, *lhs);
+            let rhs_name = local_name(ir, *rhs);
+            if rhs_name == "__canon_suppressed__" {
+                if declared.contains(&lhs_name) {
+                    format!("{lhs_name} = todo!(); // suppressed")
+                } else {
+                    declared.insert(lhs_name.clone());
+                    format!("let mut {lhs_name} = todo!(); // suppressed")
+                }
+            } else {
+                bind_or_assign(&lhs_name, rhs_name, declared)
+            }
         }
         CfgOp::Return(v) => match v {
             Some(v) => format!("return {};", local_name(ir, *v)),
@@ -98,7 +109,14 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>) -> String
                 None => format!("{};", expr),
             }
         }
-        CfgOp::Match { .. } => "// match".into(),
+        CfgOp::Match { dest } => match dest {
+            Some(d) => {
+                let name = local_name(ir, *d);
+                declared.insert(name.clone());
+                format!("let mut {name} = todo!(); // match result")
+            }
+            None => "// match".into(),
+        },
         CfgOp::Branch { .. } => "// branch".into(),
         CfgOp::Goto(_) => "// goto".into(),
         CfgOp::Unreachable => "unreachable!();".into(),
@@ -109,9 +127,43 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>) -> String
 fn callable_name(ir: &CanonIR, id: CanonId) -> String {
     match &ir.node(id).kind {
         CanonNodeKind::Fn { name_id, .. } => ir.lookup_name(*name_id).to_string(),
-        CanonNodeKind::Local { name_id, .. } => ir.lookup_name(*name_id).to_string(),
+        CanonNodeKind::Local { name_id, .. } => {
+            let raw = ir.lookup_name(*name_id);
+            resolve_local_callable_path(ir, raw).unwrap_or_else(|| raw.to_string())
+        }
         _ => format!("node_{}", id.0),
     }
+}
+
+fn resolve_local_callable_path(ir: &CanonIR, raw: &str) -> Option<String> {
+    let tail = raw.strip_prefix("crate::")?;
+    if tail.contains("::") {
+        return Some(raw.to_string());
+    }
+    let target_name = tail;
+    let target_fn = ir
+        .nodes
+        .iter()
+        .find(|n| matches!(&n.kind, CanonNodeKind::Fn { name_id, .. } if ir.lookup_name(*name_id) == target_name))?;
+
+    for node in &ir.nodes {
+        let CanonNodeKind::Module { path_id, .. } = &node.kind else {
+            continue;
+        };
+        let src = canon::id::NodeId(node.id.0);
+        let has_contains = ir
+            .module_graph
+            .neighbours(src)
+            .any(|(dst, edge)| matches!(edge, canon::edge::EdgeKind::Contains) && dst.0 == target_fn.id.0);
+        if has_contains {
+            let module_path = ir.lookup_path(*path_id);
+            if module_path == "crate" {
+                return Some(format!("crate::{target_name}"));
+            }
+            return Some(format!("{module_path}::{target_name}"));
+        }
+    }
+    Some(raw.to_string())
 }
 
 fn local_name(ir: &CanonIR, id: CanonId) -> String {

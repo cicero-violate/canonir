@@ -484,6 +484,14 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                                 dest: dest_id,
                             }
                         }
+                        Stmt::Match { dest } => {
+                            let ty = unit_ty(canon);
+                            let dest = dest.as_deref().map(|name| {
+                                let name_id = NameId(canon.name_intern.intern(name));
+                                canon.push_node(CanonNodeKind::Local { name_id, ty, flags: 0 })
+                            });
+                            CfgOp::Match { dest }
+                        }
                         Stmt::Return(val) => {
                             let v = val.as_deref().map(|e| {
                                 let eid = NameId(canon.name_intern.intern(e));
@@ -505,6 +513,7 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                         ops.push(CfgOp::Branch { cond: cloc, true_bb: *true_bb, false_bb: *false_bb });
                     }
                     Terminator::Return => {}
+                    Terminator::Unreachable => ops.push(CfgOp::Unreachable),
                     Terminator::None => {}
                 }
                 block_ids.push(canon.push_node(CanonNodeKind::BasicBlock { ops, next: None }));

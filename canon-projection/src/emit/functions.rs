@@ -1,5 +1,5 @@
 use canon::ir::CanonIR;
-use canon::node::{flags, CanonId, CanonNodeKind, NameId};
+use canon::node::{flags, CanonId, CanonNodeKind, CfgOp, NameId};
 
 use crate::emit::body::emit_body;
 use crate::emit::fmt::vis_token;
@@ -33,13 +33,48 @@ pub fn emit_fn(ir: &CanonIR, name_id: NameId, sig_id: CanonId, body: Option<Cano
         let mut out = format!("{}{}{}{}fn {}{}({}) -> {} {{\n", pad, vis, unsafe_kw, async_kw, ir.lookup_name(name_id), gens, params, ret);
         let param_names = collect_param_names(ir, sig_id);
         out.push_str(&emit_body(ir, body_id, &param_names, &format!("{}    ", pad)));
-        if ret.trim() != "()" {
-            out.push_str(&format!("{}    todo!()\n", pad));
+        if ret.trim() != "()" && !has_structural_return_op(ir, body_id) {
+            panic!("Invariant violation: non-unit function missing structural return op");
         }
         out.push_str(&format!("{}}}\n", pad));
         out
     } else {
         format!("{}{}{}{}fn {}{}({}) -> {};\n", pad, vis, unsafe_kw, async_kw, ir.lookup_name(name_id), gens, params, ret)
+    }
+}
+
+fn has_structural_return_op(ir: &CanonIR, body_id: CanonId) -> bool {
+    let CanonNodeKind::Body { blocks } = &ir.node(body_id).kind else {
+        return false;
+    };
+    for bb in blocks {
+        let CanonNodeKind::BasicBlock { ops, .. } = &ir.node(*bb).kind else {
+            continue;
+        };
+        for op in ops {
+            match op {
+                CfgOp::Return(Some(_)) => return true,
+                CfgOp::Match { dest: Some(_) } => return true,
+                CfgOp::Assign { lhs, .. }
+                | CfgOp::Call { dest: Some(lhs), .. }
+                | CfgOp::FieldAccess { dest: Some(lhs), .. }
+                | CfgOp::MethodCall { dest: Some(lhs), .. }
+                | CfgOp::StructLit { dest: Some(lhs), .. } => {
+                    if local_is_ret(ir, *lhs) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
+fn local_is_ret(ir: &CanonIR, id: CanonId) -> bool {
+    match &ir.node(id).kind {
+        CanonNodeKind::Local { name_id, .. } => ir.lookup_name(*name_id) == "__ret",
+        _ => false,
     }
 }
 

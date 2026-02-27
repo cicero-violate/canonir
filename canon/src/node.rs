@@ -111,8 +111,8 @@ pub enum CfgOp {
     Closure { sig_id: CanonId, body_id: CanonId },
     /// struct literal
     StructLit { ty: CanonId, fields: Vec<(NameId, CanonId)>, dest: Option<CanonId> },
-    /// match expression
-    Match { scrutinee: CanonId, arms: Vec<CanonId> }, // -> MatchArm nodes
+    /// match region placeholder with optional value destination
+    Match { dest: Option<CanonId> },
     /// if cond goto true_bb else false_bb
     Branch { cond: CanonId, true_bb: u32, false_bb: u32 },
     /// goto bb

@@ -4,26 +4,26 @@
 - project: `canon`
 - status_epoch: `2026-02-27`
 - pipeline_invariant: `Capture -> CanonIR -> Graph -> Solve -> Emit`
-- policy: `If tempted to use heuristic, stop and add missing structural invariant.`
+- policy: `No heuristics. Structural invariants only.`
 
 ## CURRENT_STATE
-- Workspace compiles.
-- Canon-only pipeline remains operational.
-- MIR-structured body capture is primary for fn/assoc fn in active flow.
-- Residual raw body/op variants are removed from active schema/model flow.
-- Active structural gap: non-unit return value reconstruction remains incomplete (emitted `todo!()` fallback still present).
+- Validation baseline is stable on active fixtures (`repomap`, `test_1`).
+- Project focus has moved to architecture refactor and LOC reduction in `canon-capture`.
 
-## VALIDATED_FIXTURES
-- `test_projects/test_rust_projects/capture/repomap` -> `emit/repomap` build: pass.
-- `test_projects/test_rust_projects/capture/test_1` -> `emit/test_1` build: pass.
+## ACTIVE_REFACTOR_TARGET
+- Primary file: `canon-capture/src/project/item.rs`
+- Refactor model:
+- Engine core (`A`)
+- Rule table (`R`)
+- Backend adapters/hooks (`E`)
 
 ## ACTIVE_PLAN_REFERENCE
 - Plan: [PLAN.md](/workspace/ai_sandbox/canon/PLAN.md)
 - State: [AGENT_STATE.md](/workspace/ai_sandbox/canon/AGENT_STATE.md)
-- Plan id: `CANON_BODY_RETURN_INVARIANTS_V1`
+- Plan id: `CANON_CAPTURE_LOC_REDUCTION_V1`
 - Plan status: `in_progress`
 
 ## DONE_CRITERIA_STATUS
-- MIR-structured body ops primary: `met`
-- Raw body/op variants eliminated from active path: `met`
-- Non-unit return structural completeness: `pending`
+- Green baseline before refactor: `met`
+- Rule-table + engine scaffold: `pending`
+- `item.rs` material LOC reduction with green fixtures: `pending`

@@ -131,6 +131,9 @@ pub enum Stmt {
         fields: Vec<(String, String)>,
         dest: Option<String>,
     },
+    Match {
+        dest: Option<String>,
+    },
     Return(Option<String>),
 }
 
@@ -139,6 +142,7 @@ pub enum Terminator {
     Goto(u32),
     Branch { cond: String, true_bb: u32, false_bb: u32 },
     Return,
+    Unreachable,
     None,
 }
 
