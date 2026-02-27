@@ -22,7 +22,38 @@ pub(crate) fn lower_call_terminator<'tcx>(
     suppressed_sentinel_names: &mut HashSet<String>,
     has_match_dest: bool,
 ) -> Terminator {
-    if mir_ops::is_format_call_target(tcx, func) {
+    let must_use_call = mir_ops::call_target_path(tcx, func)
+        .map(|p| p.contains("must_use"))
+        .unwrap_or(false)
+        || mir_ops::mir_operand_label(tcx, func, resolver)
+            .map(|f| f.ends_with("must_use"))
+            .unwrap_or(false);
+
+    if must_use_call && let Some(dest) = mir_util::label_place_dest(resolver, destination) {
+        if let Some(arg) = args.first()
+            && let Some(arg_value) = mir_ops::mir_operand_label(tcx, &arg.node, resolver)
+        {
+            stmts.push(Stmt::Assign {
+                lhs: dest.clone(),
+                rhs: arg_value,
+            });
+            defined.insert(dest);
+        } else if dest == "__ret" {
+            stmts.push(Stmt::Assign {
+                lhs: "__ret".to_string(),
+                rhs: "__canon_suppressed__".to_string(),
+            });
+            defined.insert("__ret".to_string());
+            suppressed_sentinel_names.insert("__ret".to_string());
+        } else {
+            mir_util::emit_suppressed_for_name(
+                &dest,
+                stmts,
+                defined,
+                suppressed_sentinel_names,
+            );
+        }
+    } else if mir_ops::is_format_call_target(tcx, func) {
         if let Some(dest) = mir_util::label_place_dest(resolver, destination) {
             stmts.push(Stmt::Assign {
                 lhs: dest.clone(),

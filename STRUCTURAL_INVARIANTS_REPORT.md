@@ -8,84 +8,100 @@ Only direct facts from tool output are recorded.
 - liveness facts:
   - 6:INFO liveness_solver: pruned 4 dead function(s) from emit_order
 - emitted structural surface:
-  - canon suppressed binding count: 11
-  - canon suppressed __ret count: 8
-  - canon suppressed non-__ret count: 3
+  - canon suppressed binding count: 15
+  - canon suppressed __ret count: 10
+  - canon suppressed non-__ret count: 5
   - canon match gap count: 0
   - canon call gap count: 0
   - canon switch gap count: 0
-  - unresolved gap total: 11
-  - unresolved __ret gap count: 8
+  - unresolved gap total: 15
+  - unresolved __ret gap count: 2
   - unreachable count: 0
   - // match count: 0
   - // goto count: 0
 - unresolved __ret gap sites:
-  - symbol.rs:29 ::     pub fn render(&self) -> String {
-  - repomap.rs:22 :: pub fn build_repomap(root_dir: &Path) -> Vec<FileMap> {
-  - repomap.rs:36 :: pub fn render_repomap(maps: &[FileMap], root_dir: &Path) -> String {
-  - extractor.rs:42 :: fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
-  - extractor.rs:80 :: fn fn_signature(node: Node, src: &[u8]) -> String {
-  - extractor.rs:97 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:113 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:137 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+  - symbol.rs:69 ::     pub fn render(&self) -> String {
+  - extractor.rs:81 :: fn fn_signature(node: Node, src: &[u8]) -> String {
 
 ## fixture=repomap step=build_emit
 - log: /workspace/ai_sandbox/canon/.run_script_logs/repomap_build_emit.log
 - rustc error facts:
-  - 24:error[E0282]: type annotations needed for `Vec<_>`
-  - 35:error[E0658]: use of unstable library feature `fmt_internals`
-  - 44:error[E0308]: mismatched types
-  - 80:error[E0282]: type annotations needed for `Vec<_>`
-  - 91:error[E0282]: type annotations needed for `Vec<_>`
-  - 102:error[E0282]: type annotations needed for `Vec<_>`
-  - 113:error[E0282]: type annotations needed for `Vec<_>`
+  - 24:error[E0308]: mismatched types
+  - 43:error[E0658]: use of unstable library feature `fmt_internals`
+  - 52:error[E0308]: mismatched types
+  - 88:error[E0308]: mismatched types
+  - 107:error[E0308]: mismatched types
+  - 126:error[E0308]: mismatched types
+  - 145:error[E0599]: no method named `deref` found for reference `&Vec<std::string::String>` in the current scope
+  - 161:error[E0658]: use of unstable library feature `fmt_internals`
+  - 170:error[E0308]: mismatched types
+  - 186:error[E0599]: no method named `deref` found for reference `&Vec<std::string::String>` in the current scope
+  - 202:error[E0308]: mismatched types
+  - 211:error[E0609]: no field `2` on type `(&&std::string::String, &&usize)`
+  - 219:error[E0658]: use of unstable library feature `fmt_internals`
+  - 228:error[E0308]: mismatched types
+  - 244:error[E0308]: mismatched types
+  - 253:error[E0609]: no field `2` on type `(&&std::string::String, &&usize)`
+  - 261:error[E0658]: use of unstable library feature `fmt_internals`
+  - 270:error[E0308]: mismatched types
+  - 286:error[E0658]: use of unstable library feature `fmt_internals`
+  - 295:error[E0308]: mismatched types
+  - 311:error[E0599]: no method named `deref` found for reference `&Vec<std::string::String>` in the current scope
+  - 327:error[E0308]: mismatched types
+  - 336:error[E0609]: no field `2` on type `(&&std::string::String, &&usize)`
+  - 344:error[E0658]: use of unstable library feature `fmt_internals`
+  - 353:error[E0308]: mismatched types
+  - 369:error[E0658]: use of unstable library feature `fmt_internals`
+  - 378:error[E0308]: mismatched types
+  - 394:error[E0308]: mismatched types
+  - 403:error[E0308]: mismatched types
+  - 412:error[E0658]: use of unstable library feature `fmt_internals`
+  - 421:error[E0308]: mismatched types
+  - 437:error[E0658]: use of unstable library feature `fmt_internals`
+  - 446:error[E0308]: mismatched types
+  - 462:error[E0658]: use of unstable library feature `fmt_internals`
+  - 471:error[E0308]: mismatched types
+  - 487:error[E0599]: no method named `deref` found for reference `&Vec<std::string::String>` in the current scope
+  - 503:error[E0609]: no field `2` on type `(&&std::string::String, &&usize)`
+  - 511:error[E0658]: use of unstable library feature `fmt_internals`
+  - 520:error[E0308]: mismatched types
+  - 536:error[E0658]: use of unstable library feature `fmt_internals`
+  - 545:error[E0308]: mismatched types
 - parser/build error facts:
-  - 60:error: this function depends on never type fallback being `()`
-  - 126:error: could not compile `repomap` (bin "repomap") due to 9 previous errors
+  - 68:error: this function depends on never type fallback being `()`
+  - 563:error: could not compile `repomap` (bin "repomap") due to 43 previous errors
 - emitted structural surface:
-  - canon suppressed binding count: 11
-  - canon suppressed __ret count: 8
-  - canon suppressed non-__ret count: 3
+  - canon suppressed binding count: 15
+  - canon suppressed __ret count: 10
+  - canon suppressed non-__ret count: 5
   - canon match gap count: 0
   - canon call gap count: 0
   - canon switch gap count: 0
-  - unresolved gap total: 11
-  - unresolved __ret gap count: 8
+  - unresolved gap total: 15
+  - unresolved __ret gap count: 2
   - unreachable count: 0
   - // match count: 0
   - // goto count: 0
 - unresolved __ret gap sites:
-  - symbol.rs:47 ::     pub fn render(&self) -> String {
-  - repomap.rs:22 :: pub fn build_repomap(root_dir: &Path) -> Vec<FileMap> {
-  - repomap.rs:36 :: pub fn render_repomap(maps: &[FileMap], root_dir: &Path) -> String {
-  - extractor.rs:42 :: fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
-  - extractor.rs:80 :: fn fn_signature(node: Node, src: &[u8]) -> String {
-  - extractor.rs:97 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:113 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:137 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+  - symbol.rs:138 ::     pub fn render(&self) -> String {
+  - extractor.rs:81 :: fn fn_signature(node: Node, src: &[u8]) -> String {
 
 ## fixture=repomap step=diff
 - log: /workspace/ai_sandbox/canon/.run_script_logs/repomap_diff.log
 - no invariant-signature lines detected; inspect full log.
 - emitted structural surface:
-  - canon suppressed binding count: 11
-  - canon suppressed __ret count: 8
-  - canon suppressed non-__ret count: 3
+  - canon suppressed binding count: 15
+  - canon suppressed __ret count: 10
+  - canon suppressed non-__ret count: 5
   - canon match gap count: 0
   - canon call gap count: 0
   - canon switch gap count: 0
-  - unresolved gap total: 11
-  - unresolved __ret gap count: 8
+  - unresolved gap total: 15
+  - unresolved __ret gap count: 2
   - unreachable count: 0
   - // match count: 0
   - // goto count: 0
 - unresolved __ret gap sites:
-  - symbol.rs:47 ::     pub fn render(&self) -> String {
-  - repomap.rs:22 :: pub fn build_repomap(root_dir: &Path) -> Vec<FileMap> {
-  - repomap.rs:36 :: pub fn render_repomap(maps: &[FileMap], root_dir: &Path) -> String {
-  - extractor.rs:42 :: fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
-  - extractor.rs:80 :: fn fn_signature(node: Node, src: &[u8]) -> String {
-  - extractor.rs:97 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:113 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:137 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:81 :: fn fn_signature(node: Node, src: &[u8]) -> String {
+  - symbol.rs:138 ::     pub fn render(&self) -> String {
 

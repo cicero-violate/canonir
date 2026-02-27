@@ -114,21 +114,29 @@ pub(crate) fn filtered_internal_call_target<'tcx>(
     tcx: TyCtxt<'tcx>,
     func: &mir::Operand<'tcx>,
 ) -> bool {
-    let Some((did, _)) = func.const_fn_def() else {
+    let Some(path) = call_target_path(tcx, func) else {
         return false;
     };
-    let path = norm::path(tcx, did);
     filters::is_filtered_internal_call_path(&path)
+}
+
+pub(crate) fn call_target_path<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    func: &mir::Operand<'tcx>,
+) -> Option<String> {
+    let (did, _) = func.const_fn_def()?;
+    Some(norm::path(tcx, did))
 }
 
 pub(crate) fn is_format_call_target<'tcx>(
     tcx: TyCtxt<'tcx>,
     func: &mir::Operand<'tcx>,
 ) -> bool {
-    let Some((did, _)) = func.const_fn_def() else {
+    let Some(path) = call_target_path(tcx, func) else {
         return false;
     };
-    matches!(norm::path(tcx, did).as_str(), "std::fmt::format" | "core::fmt::format")
+    matches!(path.as_str(), "std::fmt::format" | "core::fmt::format" | "alloc::fmt::format")
+        || (path.contains("fmt::") && path.ends_with("::format"))
 }
 
 pub(crate) fn mir_method_call_stmt<'tcx>(

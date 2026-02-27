@@ -65,31 +65,21 @@ pub(crate) fn emit_special_block(
     defined: &mut HashSet<String>,
 ) -> Option<EmittedBlock> {
     if switch_analysis.switch_sources.contains(&mir_idx_usize) {
-        let writes_ret = switch_analysis
-            .switch_source_writes_ret
-            .get(&mir_idx_usize)
-            .copied()
-            .unwrap_or(false);
-        let dest = if !returns_unit && writes_ret && blocks_have_ret_match(blocks) == false {
-            defined.insert("__ret".to_string());
-            Some("__ret".to_string())
-        } else {
-            None
-        };
-        let stmts = if dest.is_some() {
-            vec![Stmt::Match { dest }]
-        } else {
-            Vec::new()
-        };
+        let _ = (returns_unit, blocks, defined);
         return Some(EmittedBlock {
             role: BlockRole::SwitchSource,
             block: BasicBlock {
-                stmts,
+                stmts: Vec::new(),
                 terminator: Terminator::Unreachable,
             },
         });
     }
     if switch_analysis.switchint_arm_blocks.contains(&mir_idx_usize) {
+        if switch_analysis.switch_arm_writes_ret.contains(&mir_idx_usize)
+            || switch_analysis.switch_arm_returns.contains(&mir_idx_usize)
+        {
+            return None;
+        }
         return Some(EmittedBlock {
             role: BlockRole::SwitchArm,
             block: BasicBlock {

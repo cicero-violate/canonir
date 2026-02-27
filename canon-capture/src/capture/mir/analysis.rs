@@ -12,6 +12,8 @@ use std::collections::HashSet;
 pub(crate) struct SwitchAnalysis {
     pub(crate) switch_sources: BTreeSet<usize>,
     pub(crate) switchint_arm_blocks: BTreeSet<usize>,
+    pub(crate) switch_arm_writes_ret: BTreeSet<usize>,
+    pub(crate) switch_arm_returns: BTreeSet<usize>,
     pub(crate) switch_source_writes_ret: HashMap<usize, bool>,
 }
 
@@ -55,10 +57,7 @@ pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
                 }
             }
         }
-        let has_backedge = region
-            .iter()
-            .any(|bb_idx| succs[*bb_idx].iter().any(|next| region.contains(next) && next <= bb_idx));
-        if has_backedge {
+        if region_has_cycle(&region, &succs) {
             switch_sources.insert(*src);
         }
     }
@@ -111,6 +110,20 @@ pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
         .map(mir_util::bb_writes_return_place)
         .collect();
     let mut switch_source_writes_ret: HashMap<usize, bool> = HashMap::new();
+    let mut switch_arm_writes_ret: BTreeSet<usize> = BTreeSet::new();
+    let mut switch_arm_returns: BTreeSet<usize> = BTreeSet::new();
+    for arm in &switchint_arm_blocks {
+        let arm_bb = mir::BasicBlock::from_usize(*arm);
+        if bb_writes_ret.get(*arm).copied().unwrap_or(false) {
+            switch_arm_writes_ret.insert(*arm);
+        }
+        if matches!(
+            body.basic_blocks[arm_bb].terminator.as_ref().map(|t| &t.kind),
+            Some(mir::TerminatorKind::Return)
+        ) {
+            switch_arm_returns.insert(*arm);
+        }
+    }
     for src in &switch_sources {
         let mut seen: BTreeSet<usize> = BTreeSet::new();
         let mut stack: Vec<usize> = succs[*src].clone();
@@ -135,8 +148,52 @@ pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
     SwitchAnalysis {
         switch_sources,
         switchint_arm_blocks,
+        switch_arm_writes_ret,
+        switch_arm_returns,
         switch_source_writes_ret,
     }
+}
+
+fn region_has_cycle(region: &BTreeSet<usize>, succs: &[Vec<usize>]) -> bool {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Color {
+        White,
+        Gray,
+        Black,
+    }
+
+    fn dfs(
+        cur: usize,
+        region: &BTreeSet<usize>,
+        succs: &[Vec<usize>],
+        colors: &mut [Color],
+    ) -> bool {
+        colors[cur] = Color::Gray;
+        for &next in &succs[cur] {
+            if !region.contains(&next) {
+                continue;
+            }
+            match colors[next] {
+                Color::Gray => return true,
+                Color::White => {
+                    if dfs(next, region, succs, colors) {
+                        return true;
+                    }
+                }
+                Color::Black => {}
+            }
+        }
+        colors[cur] = Color::Black;
+        false
+    }
+
+    let mut colors = vec![Color::White; succs.len()];
+    for &node in region {
+        if colors[node] == Color::White && dfs(node, region, succs, &mut colors) {
+            return true;
+        }
+    }
+    false
 }
 
 pub(crate) fn compute_call_feed_locals<'tcx>(
@@ -190,6 +247,11 @@ pub(crate) fn collect_suppressed_dest_sentinels(
         let idx = bb_idx.as_usize();
         if !switch_analysis.switchint_arm_blocks.contains(&idx)
             && !switch_analysis.switch_sources.contains(&idx)
+        {
+            continue;
+        }
+        if switch_analysis.switch_arm_writes_ret.contains(&idx)
+            || switch_analysis.switch_arm_returns.contains(&idx)
         {
             continue;
         }

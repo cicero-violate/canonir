@@ -37,6 +37,7 @@ pub(crate) fn is_internal_mir_const_repr(s: &str) -> bool {
 }
 
 pub(crate) fn is_filtered_internal_call_path(path: &str) -> bool {
+    let fmt_arguments_ctor = path.contains("fmt::Arguments::new");
     matches!(
         path,
         "std::hint::must_use"
@@ -49,7 +50,8 @@ pub(crate) fn is_filtered_internal_call_path(path: &str) -> bool {
             | "std::fmt::Arguments::new_v1"
             | "core::fmt::Arguments::new_v1_formatted"
             | "std::fmt::Arguments::new_v1_formatted"
-    ) || path.ends_with("::new_display")
+    ) || fmt_arguments_ctor
+        || path.ends_with("::new_display")
         || path.ends_with("::branch")
         || path.ends_with("::from_residual")
         || path.ends_with("::from_output")
