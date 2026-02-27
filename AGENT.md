@@ -36,6 +36,8 @@ bat
 - Use when full-file visual context is required.
 - Do not use bat for automated extraction or structured processing.
 
+json
+never open json files completely, use python
 
 example
 ```bash
