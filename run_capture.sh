@@ -42,7 +42,7 @@ rm -rf "$PROJECT_DIR/target_capture"
 mkdir -p "$PROJECT_DIR/target_capture"
 
 # Remove stale output so the capture binary always writes fresh IR.
-rm -f "$OUTPUT_JSON"
+# rm -f "$OUTPUT_JSON"
 
 CANON_CAPTURE_OUT="$OUTPUT_JSON" \
 RUSTC_WRAPPER="$WRAPPER" \
