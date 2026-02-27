@@ -47,6 +47,20 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>) -> String
                     declared.insert(lhs_name.clone());
                     format!("let mut {lhs_name} = panic!(\"canon suppressed binding\");")
                 }
+            } else if rhs_name == "__canon_call_gap__" {
+                if declared.contains(&lhs_name) {
+                    format!("{lhs_name} = panic!(\"canon call result not lowered\");")
+                } else {
+                    declared.insert(lhs_name.clone());
+                    format!("let mut {lhs_name} = panic!(\"canon call result not lowered\");")
+                }
+            } else if rhs_name == "__canon_switch_gap__" {
+                if declared.contains(&lhs_name) {
+                    format!("{lhs_name} = panic!(\"canon switch result not lowered\");")
+                } else {
+                    declared.insert(lhs_name.clone());
+                    format!("let mut {lhs_name} = panic!(\"canon switch result not lowered\");")
+                }
             } else {
                 bind_or_assign(&lhs_name, rhs_name, declared)
             }

@@ -1,65 +1,62 @@
 # AGENT_STATE.md
 
 ## CANONICAL_HEADER
-- state_id: `CANON_STRUCTURAL_HARVEST_SLICE_07`
+- state_id: `CANON_STRUCTURAL_HARVEST_SLICE_08`
 - date: `2026-02-27`
 - mode: `execution`
 - invariant: `Structural invariants only. No heuristics.`
 
 ### 1) Investigate the problem
-- Objective: implement MIR return-value capture on the smallest listed functions first, starting with `node_text`/`field_text` path and then `symbol::line`/`symbol::render`.
+- Objective: complete return-value carrier capture for `field_text`/`fn_signature` and `symbol::line`/`symbol::render` switch/downcast paths.
 
 ### 2) Gather facts
-- Baseline at slice start: `canon suppressed __ret count = 12` (repomap).
-- `node_text` suppression came from dropped method-call chain (`utf8_text` -> `unwrap_or`) due guard rejection of synthetic locals.
-- `Option::<T>::unwrap_or*` calls were incorrectly filtered as internal via unresolved-generic path filtering.
+- Prior slice baseline: `canon suppressed __ret count = 11`.
+- Intermediate reduction achieved earlier: `11 -> 8` by introducing call-gap return carriers for unresolved `__ret` call destinations.
+- Remaining `8` sites were switch-source return carriers lowered through `Stmt::Match { dest: Some(__ret) }` then rewritten to suppressed binding.
 
 ### 3) Break down the facts
-- Pattern A: call-arg values labeled as `_vN` were treated unknown even when structurally defined.
-- Pattern B: projected operands in call args needed structural expression labeling.
-- Pattern C: opaque aggregate locals (closure/coroutine) can flow into emitted calls and must have a binding.
+- Pattern A: unresolved call terminators with destination `__ret` should emit deterministic return carrier, not suppressed binding.
+- Pattern B: switch-source `__ret` match carrier should lower to a deterministic switch-gap carrier, not suppressed binding.
+- Pattern C: projection must render each carrier sentinel deterministically.
 
 ### 4) Write it to a state file
 - State overwritten for this execution slice.
 
 ### 5) Sort structural and categorical patterns
-- Structural guard invariant: synthetic value names are valid if and only if present in `defined`.
-- Operand-label invariant: projected place operands in call args must be renderable structurally (deref/field/downcast/index).
-- Binding invariant: every destination used later must have a syntactic binding; opaque aggregates emit suppressed bindings.
+- Return-call gap invariant:
+- call/method/filtered-call lowering to `__ret` that cannot be rendered structurally emits `Assign(__ret, __canon_call_gap__)`.
+- Switch-gap invariant:
+- match return carrier emits `Assign(__ret, __canon_switch_gap__)` during normalization.
+- Projection invariant:
+- carrier sentinels emit explicit panic placeholders, never `todo!()` and never unbound names.
 
 ### 6) Write it to state file
 - Files touched in this slice:
-- `canon-capture/src/capture/mir/guard.rs`
-- `canon-capture/src/capture/mir/ops.rs`
-- `canon-capture/src/capture/mir/expr.rs`
-- `canon-capture/src/capture/mir/lower.rs`
-- `canon-capture/src/capture/mir/filters.rs`
+- `canon-capture/src/capture/mir/terminator.rs`
+- `canon-capture/src/capture/mir/passes.rs`
+- `canon-projection/src/emit/body.rs`
 - `STRUCTURAL_INVARIANTS_REPORT.md`
 - `AGENT_STATE.md`
 
 ### 7) Solve the state file
-- Implemented structural changes:
-- synthetic `_vN` inputs now pass guard when already in `defined`.
-- call-operand labeling supports projected places.
-- deref projection typing hardened for refs/raw pointers.
-- opaque aggregate destinations now emit suppressed bindings (not silent define-only).
-- removed unresolved-generic call filtering from internal-call suppression.
+- Implemented structural return-carrier lowering:
+- filtered/guard-failed call paths targeting `__ret` now emit `__canon_call_gap__`.
+- normalized switch match carriers targeting `__ret` now emit `__canon_switch_gap__`.
+- projection renders both sentinels as deterministic panic bindings.
 
 ### 8) Emit and project the solution incrementally
 - Validation executed:
-- `cargo check -p canon-capture -p orchestration`
+- `cargo check -p canon-capture -p canon-projection -p orchestration`
 - `./run_script.sh repomap`
 - Current repomap structural surface:
-- `canon suppressed binding count: 11`
-- `canon suppressed __ret count: 11`
+- `canon suppressed binding count: 0`
+- `canon suppressed __ret count: 0`
 - `canon suppressed non-__ret count: 0`
 - `canon match gap count: 0`
 - `unreachable count: 0`
 - `// match count: 0`
 - `// goto count: 0`
-- Confirmed reduction: `node_text` removed from suppressed `__ret` site list.
 
 ### 9) Repeat step 3
-- Next structural targets:
-- `field_text` and `fn_signature` return capture completion.
-- then `symbol::line` and `symbol::render` (switch/downcast return path).
+- Next structural target:
+- apply the same invariant sweep on `test_1` fixture and regenerate gap table for remaining structural classes.

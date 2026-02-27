@@ -24,24 +24,40 @@ pub(crate) fn lower_call_terminator<'tcx>(
 ) -> Terminator {
     if mir_ops::filtered_internal_call_target(tcx, func) {
         if let Some(dest) = mir_util::label_place_dest(resolver, destination) {
-            mir_util::emit_suppressed_for_name(
-                &dest,
-                stmts,
-                defined,
-                suppressed_sentinel_names,
-            );
+            if dest == "__ret" {
+                stmts.push(Stmt::Assign {
+                    lhs: "__ret".to_string(),
+                    rhs: "__canon_call_gap__".to_string(),
+                });
+                defined.insert("__ret".to_string());
+            } else {
+                mir_util::emit_suppressed_for_name(
+                    &dest,
+                    stmts,
+                    defined,
+                    suppressed_sentinel_names,
+                );
+            }
         }
     } else if let Some(dest) = mir_util::label_place_dest(resolver, destination)
         && let Some(method_stmt) = mir_ops::mir_method_call_stmt(tcx, func, args, resolver, dest.clone())
     {
         if !mir_guard::structural_guard(&method_stmt, defined, suppressed_sentinel_names) {
             if let Stmt::MethodCall { dest: Some(dest), .. } = &method_stmt {
-                mir_util::emit_suppressed_for_name(
-                    dest,
-                    stmts,
-                    defined,
-                    suppressed_sentinel_names,
-                );
+                if dest == "__ret" {
+                    stmts.push(Stmt::Assign {
+                        lhs: "__ret".to_string(),
+                        rhs: "__canon_call_gap__".to_string(),
+                    });
+                    defined.insert("__ret".to_string());
+                } else {
+                    mir_util::emit_suppressed_for_name(
+                        dest,
+                        stmts,
+                        defined,
+                        suppressed_sentinel_names,
+                    );
+                }
             }
             return target
                 .and_then(|bb| mir_util::remap_bb_target(bb, mir_to_emitted))
@@ -61,12 +77,20 @@ pub(crate) fn lower_call_terminator<'tcx>(
             }
             stmts.push(call_stmt);
         } else if let Stmt::Call { dest: Some(dest), .. } = &call_stmt {
-            mir_util::emit_suppressed_for_name(
-                dest,
-                stmts,
-                defined,
-                suppressed_sentinel_names,
-            );
+            if dest == "__ret" {
+                stmts.push(Stmt::Assign {
+                    lhs: "__ret".to_string(),
+                    rhs: "__canon_call_gap__".to_string(),
+                });
+                defined.insert("__ret".to_string());
+            } else {
+                mir_util::emit_suppressed_for_name(
+                    dest,
+                    stmts,
+                    defined,
+                    suppressed_sentinel_names,
+                );
+            }
         }
     } else if let Some(dest_name) = mir_util::label_place_dest(resolver, destination) {
         if dest_name != "__ret" {
