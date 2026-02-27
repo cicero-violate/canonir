@@ -26,9 +26,9 @@ Only direct facts from tool output are recorded.
   - repomap.rs:36 :: pub fn render_repomap(maps: &[FileMap], root_dir: &Path) -> String {
   - extractor.rs:42 :: fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
   - extractor.rs:80 :: fn fn_signature(node: Node, src: &[u8]) -> String {
-  - extractor.rs:97 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:113 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:129 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:105 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:121 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:137 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
 
 ## fixture=repomap step=build_emit
 - log: /workspace/ai_sandbox/canon/.run_script_logs/repomap_build_emit.log
@@ -62,9 +62,9 @@ Only direct facts from tool output are recorded.
   - repomap.rs:36 :: pub fn render_repomap(maps: &[FileMap], root_dir: &Path) -> String {
   - extractor.rs:42 :: fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
   - extractor.rs:80 :: fn fn_signature(node: Node, src: &[u8]) -> String {
-  - extractor.rs:97 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:113 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:129 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:105 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:121 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:137 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
 
 ## fixture=repomap step=diff
 - log: /workspace/ai_sandbox/canon/.run_script_logs/repomap_diff.log
@@ -88,7 +88,7 @@ Only direct facts from tool output are recorded.
   - repomap.rs:36 :: pub fn render_repomap(maps: &[FileMap], root_dir: &Path) -> String {
   - extractor.rs:42 :: fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
   - extractor.rs:80 :: fn fn_signature(node: Node, src: &[u8]) -> String {
-  - extractor.rs:97 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:113 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:129 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:105 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:121 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:137 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
 

@@ -1,5 +1,6 @@
 use rustc_middle::mir;
 use rustc_middle::ty::{self, TyCtxt};
+use rustc_abi::{FieldIdx, VariantIdx};
 
 use crate::capture::helpers::{lower_ty, render_type_expr};
 use crate::capture::mir::filters;
@@ -20,7 +21,7 @@ pub(crate) fn render_projected_place_expr<'tcx>(
     }
     let mut expr = resolver.label_local(place.local)?;
     let mut cursor_ty = local_decls[place.local].ty;
-    let mut pending_downcast: Option<String> = None;
+    let mut pending_downcast: Option<(VariantIdx, ty::Ty<'tcx>)> = None;
     for elem in place.projection.iter() {
         match elem {
             mir::ProjectionElem::Deref => {
@@ -32,24 +33,19 @@ pub(crate) fn render_projected_place_expr<'tcx>(
                 };
             }
             mir::ProjectionElem::Downcast(variant_name, variant_idx) => {
-                let variant = match cursor_ty.kind() {
-                    ty::TyKind::Adt(adt, _) if adt.is_enum() => {
-                        let enum_path = norm::path(tcx, adt.did());
-                        let variant_name = variant_name
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| adt.variant(variant_idx).name.to_string());
-                        format!("{enum_path}::{variant_name}")
-                    }
-                    _ => variant_name
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| format!("variant_{}", variant_idx.as_usize())),
-                };
-                pending_downcast = Some(variant);
+                let _ = variant_name;
+                pending_downcast = Some((variant_idx, cursor_ty));
             }
             mir::ProjectionElem::Field(field_idx, field_ty) => {
-                let field = if let Some(variant) = pending_downcast.take() {
-                    expr = format!("({expr} as {variant})");
-                    field_idx.index().to_string()
+                let field = if let Some(downcast) = pending_downcast.take() {
+                    expr = render_downcast_field_expr(
+                        tcx,
+                        &expr,
+                        downcast.1,
+                        downcast.0,
+                        field_idx,
+                    )?;
+                    String::new()
                 } else {
                     match cursor_ty.kind() {
                         ty::TyKind::Adt(adt, _) => {
@@ -65,7 +61,9 @@ pub(crate) fn render_projected_place_expr<'tcx>(
                         _ => field_idx.index().to_string(),
                     }
                 };
-                expr = format!("({expr}).{field}");
+                if !field.is_empty() {
+                    expr = format!("({expr}).{field}");
+                }
                 cursor_ty = field_ty;
             }
             mir::ProjectionElem::Index(local) => {
@@ -80,10 +78,72 @@ pub(crate) fn render_projected_place_expr<'tcx>(
             _ => return None,
         }
     }
-    if let Some(variant) = pending_downcast {
-        expr = format!("({expr} as {variant})");
+    if let Some(downcast) = pending_downcast {
+        let ty::TyKind::Adt(adt, _) = downcast.1.kind() else {
+            return None;
+        };
+        if !adt.is_enum() {
+            return None;
+        }
+        let enum_path = norm::path(tcx, adt.did());
+        let variant = adt.variant(downcast.0);
+        let variant_path = format!("{enum_path}::{}", variant.name);
+        expr = format!(
+            "match {expr} {{ {variant_path} => (), _ => panic!(\"canon downcast projection mismatch\") }}"
+        );
     }
     Some(expr)
+}
+
+fn render_downcast_field_expr<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    base_expr: &str,
+    enum_ty: ty::Ty<'tcx>,
+    variant_idx: VariantIdx,
+    field_idx: FieldIdx,
+) -> Option<String> {
+    let ty::TyKind::Adt(adt, _) = enum_ty.kind() else {
+        return None;
+    };
+    if !adt.is_enum() {
+        return None;
+    }
+    let variant = adt.variant(variant_idx);
+    let enum_path = norm::path(tcx, adt.did());
+    let variant_path = format!("{enum_path}::{}", variant.name);
+    let idx = field_idx.index();
+    if idx >= variant.fields.len() {
+        return None;
+    }
+
+    let bindings: Vec<String> = (0..variant.fields.len())
+        .map(|i| format!("__canon_f{i}"))
+        .collect();
+    let select = bindings[idx].clone();
+    let pattern = match &variant.fields {
+        fields if fields.is_empty() => variant_path.clone(),
+        fields if fields.iter().all(|f| {
+            let name = f.name.to_string();
+            !name.is_empty() && !name.chars().all(|c| c.is_ascii_digit())
+        }) =>
+        {
+            let named = fields
+                .iter()
+                .zip(bindings.iter())
+                .map(|(f, b)| format!("{}: {b}", f.name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{variant_path} {{ {named} }}")
+        }
+        _ => {
+            let tuple = bindings.join(", ");
+            format!("{variant_path}({tuple})")
+        }
+    };
+
+    Some(format!(
+        "match {base_expr} {{ {pattern} => {select}, _ => panic!(\"canon downcast projection mismatch\") }}"
+    ))
 }
 
 pub(crate) fn mir_binop_token(op: mir::BinOp) -> Option<&'static str> {
