@@ -15,8 +15,12 @@ pub fn emit_body(ir: &CanonIR, body_id: CanonId, param_names: &[String], pad: &s
             continue;
         };
         for op in ops {
+            let rendered = render_op(ir, op, &mut declared);
+            if rendered.is_empty() {
+                continue;
+            }
             out.push_str(pad);
-            out.push_str(&render_op(ir, op, &mut declared));
+            out.push_str(&rendered);
             if !out.ends_with('\n') {
                 out.push('\n');
             }
@@ -117,9 +121,9 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>) -> String
             }
             None => "// match".into(),
         },
-        CfgOp::Branch { .. } => "// branch".into(),
-        CfgOp::Goto(_) => "// goto".into(),
-        CfgOp::Unreachable => "unreachable!();".into(),
+        CfgOp::Branch { .. } => String::new(),
+        CfgOp::Goto(_) => String::new(),
+        CfgOp::Unreachable => String::new(),
         CfgOp::Expr(v) => format!("{};", local_name(ir, *v)),
     }
 }
