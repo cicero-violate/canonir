@@ -6,7 +6,7 @@ mkdir -p "$TMPDIR"
 rm -f "$TMPDIR"/*
 
 # Get commits oldest -> newest
-git log -n 20 --reverse --format="%h" -- "$FILE" |
+git log -n 5 --reverse --format="%h" -- "$FILE" |
 while read hash; do
   content=$(git show "$hash:$FILE")
 
