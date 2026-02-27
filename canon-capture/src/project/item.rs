@@ -233,14 +233,14 @@ pub(crate) fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &
             };
             blocks.push(BasicBlock {
                 stmts: vec![Stmt::Match { dest }],
-                terminator: Terminator::None,
+                terminator: Terminator::Unreachable,
             });
             continue;
         }
         if switchint_arm_blocks.contains(&mir_idx_usize) {
             blocks.push(BasicBlock {
                 stmts: Vec::new(),
-                terminator: Terminator::None,
+                terminator: Terminator::Unreachable,
             });
             continue;
         }

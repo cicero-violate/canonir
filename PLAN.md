@@ -86,7 +86,7 @@ status: `done`
 ## PHASE_7_VALIDATION_AND_LOC_GATE
 status: `in_progress`
 
-1. Run full compile/pipeline validation matrix. `in_progress` (repomap/test_1 green; expanded sweep exposed new return_solver gaps on conversation/semantic-lint)
+1. Run full compile/pipeline validation matrix. `in_progress` (capture+orchestration now green on repomap/test_1/conversation/semantic-lint/canon; emitted builds for larger fixtures remain blocked by offline dependency resolution)
 2. Confirm structural equivalence on emitted artifacts for validated fixtures. `done`
 3. Measure LOC deltas and enforce target: `in_progress`
 - substantial reduction in `item.rs`
