@@ -16,8 +16,8 @@ pub(crate) struct SwitchAnalysis {
 }
 
 pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
-    let mut switch_sources: BTreeSet<usize> = BTreeSet::new();
-    let mut direct_switch_succ: BTreeSet<usize> = BTreeSet::new();
+    let mut all_switch_sources: BTreeSet<usize> = BTreeSet::new();
+    let mut switch_succs_by_source: HashMap<usize, BTreeSet<usize>> = HashMap::new();
     let mut preds: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); body.basic_blocks.len()];
     let mut succs: Vec<Vec<usize>> = vec![Vec::new(); body.basic_blocks.len()];
     for (idx, bb) in body.basic_blocks.iter_enumerated() {
@@ -29,10 +29,44 @@ pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
             preds[succ.as_usize()].insert(idx.as_usize());
         }
         if matches!(term.kind, mir::TerminatorKind::SwitchInt { .. }) {
-            switch_sources.insert(idx.as_usize());
+            let src = idx.as_usize();
+            all_switch_sources.insert(src);
+            let succ_set = switch_succs_by_source.entry(src).or_default();
             for succ in term.successors() {
-                direct_switch_succ.insert(succ.as_usize());
+                succ_set.insert(succ.as_usize());
             }
+        }
+    }
+
+    let mut switch_sources: BTreeSet<usize> = BTreeSet::new();
+    for src in &all_switch_sources {
+        let Some(succs0) = switch_succs_by_source.get(src) else {
+            continue;
+        };
+        let mut region: BTreeSet<usize> = BTreeSet::new();
+        let mut stack: Vec<usize> = succs0.iter().copied().collect();
+        while let Some(cur) = stack.pop() {
+            if !region.insert(cur) {
+                continue;
+            }
+            for next in &succs[cur] {
+                if !region.contains(next) {
+                    stack.push(*next);
+                }
+            }
+        }
+        let has_backedge = region
+            .iter()
+            .any(|bb_idx| succs[*bb_idx].iter().any(|next| region.contains(next) && next <= bb_idx));
+        if has_backedge {
+            switch_sources.insert(*src);
+        }
+    }
+
+    let mut direct_switch_succ: BTreeSet<usize> = BTreeSet::new();
+    for src in &switch_sources {
+        if let Some(succ_set) = switch_succs_by_source.get(src) {
+            direct_switch_succ.extend(succ_set.iter().copied());
         }
     }
 

@@ -121,6 +121,16 @@ pub(crate) fn filtered_internal_call_target<'tcx>(
     filters::is_filtered_internal_call_path(&path)
 }
 
+pub(crate) fn is_format_call_target<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    func: &mir::Operand<'tcx>,
+) -> bool {
+    let Some((did, _)) = func.const_fn_def() else {
+        return false;
+    };
+    matches!(norm::path(tcx, did).as_str(), "std::fmt::format" | "core::fmt::format")
+}
+
 pub(crate) fn mir_method_call_stmt<'tcx>(
     tcx: TyCtxt<'tcx>,
     func: &mir::Operand<'tcx>,

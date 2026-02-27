@@ -22,7 +22,15 @@ pub(crate) fn lower_call_terminator<'tcx>(
     suppressed_sentinel_names: &mut HashSet<String>,
     has_match_dest: bool,
 ) -> Terminator {
-    if mir_ops::filtered_internal_call_target(tcx, func) {
+    if mir_ops::is_format_call_target(tcx, func) {
+        if let Some(dest) = mir_util::label_place_dest(resolver, destination) {
+            stmts.push(Stmt::Assign {
+                lhs: dest.clone(),
+                rhs: "std::string::String::new()".to_string(),
+            });
+            defined.insert(dest);
+        }
+    } else if mir_ops::filtered_internal_call_target(tcx, func) {
         if let Some(dest) = mir_util::label_place_dest(resolver, destination) {
             if dest == "__ret" {
                 stmts.push(Stmt::Assign {
