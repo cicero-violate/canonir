@@ -72,7 +72,7 @@ fn render_op(ir: &CanonIR, op: &CfgOp) -> String {
         CfgOp::Goto(_) => "// goto".into(),
         CfgOp::Unreachable => "unreachable!();".into(),
         CfgOp::Expr(v) => format!("{};", local_name(ir, *v)),
-        CfgOp::Raw(id) => ir.lookup_name(*id).to_string(),
+        CfgOp::Raw(id) => ir.lookup_body(*id).to_string(),
     }
 }
 

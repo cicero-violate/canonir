@@ -13,9 +13,9 @@ use crate::norm;
 
 /// Structural projection: DefId -> NodeKind using HIR/ty queries.
 /// All strings are canonicalized via norm:: before NodeKind construction.
-pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Option<Node>, Vec<EdgeHint>) {
+pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>, Vec<EdgeHint>) {
     let Some(&id) = index.def_to_node.get(&def_id) else {
-        return (None, vec![]);
+        return (Vec::new(), vec![]);
     };
     let full_path = norm::path(tcx, def_id);
     let name = norm::short(&full_path).to_string();
@@ -115,49 +115,88 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Option<No
         }
         DefKind::TyAlias => NodeKind::TypeAlias { name, vis, generics, ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()), attrs: Vec::new(), where_clauses },
          DefKind::Use => {
-             if let Some(local) = def_id.as_local() {
-                 if let rustc_hir::Node::Item(item) = tcx.hir_node_by_def_id(local) {
-                     if let rustc_hir::ItemKind::Use(use_path, use_kind) = item.kind {
-                         let sm = tcx.sess.source_map();
-                         let mut path = use_path
-                             .res
-                             .iter()
-                             .find_map(|r| if let Some(rustc_hir::def::Res::Def(_, did)) = r { Some(norm::path(tcx, *did)) } else { None });
+             let Some(local) = def_id.as_local() else {
+                 return (Vec::new(), vec![]);
+             };
+             let rustc_hir::Node::Item(item) = tcx.hir_node_by_def_id(local) else {
+                 return (Vec::new(), vec![]);
+             };
+             let rustc_hir::ItemKind::Use(use_path, use_kind) = item.kind else {
+                 return (Vec::new(), vec![]);
+             };
 
-                         if path.is_none() {
-                             path = sm.span_to_snippet(use_path.span).ok().map(|s| s.trim().trim_start_matches("::").to_string()).filter(|s| !s.is_empty());
-                         }
+             let mut nodes: Vec<Node> = Vec::new();
+             let mut edges: Vec<EdgeHint> = Vec::new();
+             let glob = matches!(use_kind, rustc_hir::UseKind::Glob);
+             let parent_src = tcx.opt_parent(def_id).and_then(|p| index.def_to_node.get(&p)).map(|nid| nid.index() as u32);
 
-                         let Some(path) = path else {
-                             return (None, vec![]);
-                         };
-                         let glob = matches!(use_kind, rustc_hir::UseKind::Glob);
-                         let alias = match use_kind {
-                             rustc_hir::UseKind::Single(ident) if ident.name.as_str() != path.rsplit("::").next().unwrap_or("") => Some(ident.to_string()),
-                             _ => None,
-                         };
-                         let mut edges: Vec<EdgeHint> = Vec::new();
-                         for res in use_path.res.iter().flatten() {
-                             if let rustc_hir::def::Res::Def(_, target_did) = res {
-                                 if let Some(&target_node) = index.def_to_node.get(target_did) {
-                                     edges.push(EdgeHint {
-                                         src: id.index() as u32,
-                                         dst: target_node.index() as u32,
-                                         kind: EdgeKind::Resolves,
-                                     });
-                                 }
-                             }
+             for (ordinal, res) in use_path.res.iter().flatten().enumerate() {
+                 let rustc_hir::def::Res::Def(_, target_did) = res else {
+                     continue;
+                 };
+                 let path = norm::path(tcx, *target_did);
+                 if path.is_empty() {
+                     continue;
+                 }
+                 let node_id = if ordinal == 0 { id } else { synthetic_use_id(id, ordinal as u32) };
+                 let alias = match use_kind {
+                     rustc_hir::UseKind::Single(ident) if ordinal == 0 => {
+                         let leaf = path.rsplit("::").next().unwrap_or("");
+                         if ident.name.as_str() != leaf {
+                             Some(ident.to_string())
+                         } else {
+                             None
                          }
-                         return (Some(Node { id, kind: NodeKind::Use { vis, path, alias, glob }, span: Some(span_str) }), edges);
+                     }
+                     _ => None,
+                 };
+                 nodes.push(Node {
+                     id: node_id,
+                     kind: NodeKind::Use {
+                         vis: vis.clone(),
+                         path,
+                         alias,
+                         glob,
+                     },
+                     span: Some(span_str.clone()),
+                 });
+
+                 if let Some(parent) = parent_src {
+                     edges.push(EdgeHint {
+                         src: parent,
+                         dst: node_id.index() as u32,
+                         kind: EdgeKind::Contains,
+                     });
+                 }
+                 if let Some(&target_node) = index.def_to_node.get(target_did) {
+                     edges.push(EdgeHint {
+                         src: node_id.index() as u32,
+                         dst: target_node.index() as u32,
+                         kind: EdgeKind::Resolves,
+                     });
+                     if is_public_vis(&vis) {
+                         edges.push(EdgeHint {
+                             src: node_id.index() as u32,
+                             dst: target_node.index() as u32,
+                             kind: EdgeKind::Reexports,
+                         });
                      }
                  }
              }
-             return (None, vec![]);
+             return (nodes, edges);
          }
-         _ => return (None, vec![]),
+         _ => return (Vec::new(), vec![]),
     };
 
-    (Some(Node { id, kind, span: Some(span_str) }), vec![])
+    (vec![Node { id, kind, span: Some(span_str) }], vec![])
+}
+
+fn synthetic_use_id(base: crate::types::NodeId, ordinal: u32) -> crate::types::NodeId {
+    crate::types::NodeId(1_000_000_000u32 + base.0.saturating_mul(1024) + ordinal)
+}
+
+fn is_public_vis(v: &Visibility) -> bool {
+    !matches!(v, Visibility::Private)
 }
 
 fn map_vis(tcx: TyCtxt<'_>, def_id: DefId, v: ty::Visibility<DefId>) -> Visibility {

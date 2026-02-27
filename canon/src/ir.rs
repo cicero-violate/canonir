@@ -245,11 +245,21 @@ impl CanonIR {
 
 fn canonical_path_form(s: &str) -> std::borrow::Cow<'_, str> {
     let trimmed = s.trim();
-    if let Some(rest) = trimmed.strip_prefix("::") {
-        std::borrow::Cow::Owned(rest.to_string())
-    } else {
-        std::borrow::Cow::Borrowed(trimmed)
+    let stripped = if let Some(rest) = trimmed.strip_prefix("::") { rest } else { trimmed };
+    let normalized = stripped.to_string();
+
+    let invalid = normalized.is_empty()
+        || normalized.contains('{')
+        || normalized.contains('}')
+        || normalized.contains("=>")
+        || normalized.contains('!')
+        || normalized.starts_with(':')
+        || normalized.ends_with(':');
+    if invalid {
+        panic!("invalid path for path_intern: {s}");
     }
+
+    std::borrow::Cow::Owned(normalized)
 }
 
 impl Default for CanonIR {

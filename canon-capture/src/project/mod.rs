@@ -12,14 +12,14 @@ pub fn project_def(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Partial {
     let mut partial = Partial::default();
 
     // Structural node emission.
-    let (node_opt, item_edges) = item::project_item(tcx, def_id, index);
-    if let Some(node) = node_opt {
-        partial.nodes.push(node);
-    }
+    let (nodes, item_edges) = item::project_item(tcx, def_id, index);
+    partial.nodes.extend(nodes);
     partial.edge_hints.extend(item_edges);
 
     // Relations directly derivable from the item (parent/module/impl/trait edges).
-    partial.edge_hints.extend(relations::project_relations(tcx, def_id, index));
+    if !matches!(tcx.def_kind(def_id), rustc_hir::def::DefKind::Use) {
+        partial.edge_hints.extend(relations::project_relations(tcx, def_id, index));
+    }
 
     // MIR / bodies for functions (calls, cfg, const deps, outlives edges).
     partial.edge_hints.extend(body::project_body(tcx, def_id, index));

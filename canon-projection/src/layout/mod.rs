@@ -64,10 +64,7 @@ pub fn build_plan(ir: &CanonIR) -> Result<Plan> {
                 Some(
                     dependencies
                         .iter()
-                        .map(|pid| {
-                            let s = ir.lookup_path(*pid);
-                            format!("{s} = \"*\"")
-                        })
+                        .map(|pid| render_dependency_entry(ir.lookup_path(*pid)))
                         .collect::<Vec<_>>(),
                 )
             } else {
@@ -217,6 +214,15 @@ fn crate_meta(ir: &CanonIR) -> Option<(String, String)> {
             None
         }
     })
+}
+
+fn render_dependency_entry(dep: &str) -> String {
+    if dep.contains('_') {
+        let package = dep.replace('_', "-");
+        format!("{dep} = {{ package = \"{package}\", version = \"*\" }}")
+    } else {
+        format!("{dep} = \"*\"")
+    }
 }
 
 

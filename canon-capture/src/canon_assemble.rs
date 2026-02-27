@@ -454,6 +454,9 @@ fn parse_struct_lit(canon: &mut CanonIR, stmt: &str) -> Option<CfgOp> {
     if ty_src.is_empty() {
         return None;
     }
+    if !is_type_like_head(ty_src) {
+        return None;
+    }
     let fields_src = &stmt[open + 1..close];
     let mut fields = Vec::new();
     for part in split_top_level(fields_src, ',') {
@@ -476,20 +479,24 @@ fn parse_struct_lit(canon: &mut CanonIR, stmt: &str) -> Option<CfgOp> {
     })
 }
 
+fn is_type_like_head(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '<' | '>' | ','))
+}
+
 fn lower_raw_stmt(canon: &mut CanonIR, stmt: &str) -> CfgOp {
-    parse_method_call(canon, stmt)
-        .or_else(|| parse_struct_lit(canon, stmt))
-        .or_else(|| parse_index(canon, stmt))
-        .or_else(|| parse_field_access(canon, stmt))
-        .unwrap_or_else(|| CfgOp::Raw(NameId(canon.name_intern.intern(stmt))))
+    CfgOp::Raw(canon.intern_body(stmt))
 }
 
 fn lower_raw_body(canon: &mut CanonIR, src: &str) -> Vec<CfgOp> {
-    let mut ops: Vec<CfgOp> = split_statements(src).into_iter().map(|stmt| lower_raw_stmt(canon, stmt)).collect();
-    if ops.is_empty() {
-        ops.push(CfgOp::Raw(NameId(canon.name_intern.intern(src))));
-    }
-    ops
+    vec![CfgOp::Raw(canon.intern_body(src))]
 }
 
 fn seal_generic_param(canon: &mut CanonIR, gp: &GenericParam) -> CanonId {
@@ -708,6 +715,9 @@ fn extract_external_paths(src: &str, crate_name: &str, local_roots: &HashSet<Str
         if root.is_empty() || root == crate_name || BUILTIN_ROOTS.contains(&root) || local_roots.contains(root) {
             continue;
         }
+        if !is_crate_root_ident(root) {
+            continue;
+        }
         let Some(first_rest) = rest.chars().next() else {
             continue;
         };
@@ -719,6 +729,17 @@ fn extract_external_paths(src: &str, crate_name: &str, local_roots: &HashSet<Str
         }
     }
     out
+}
+
+fn is_crate_root_ident(root: &str) -> bool {
+    let mut chars = root.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_lowercase() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> CanonIR {
@@ -854,7 +875,7 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
             NodeKind::Lifetime { name } => CanonNodeKind::Lifetime { name_id: NameId(canon.name_intern.intern(name)) },
             NodeKind::MacroCall { path, tokens } => {
                 let path_id = canon.intern_path(path);
-                let tokens_id = NameId(canon.name_intern.intern(tokens));
+                let tokens_id = canon.intern_body(tokens);
                 CanonNodeKind::MacroCall { path_id, tokens_id }
             }
             NodeKind::PathRef { path } => {
