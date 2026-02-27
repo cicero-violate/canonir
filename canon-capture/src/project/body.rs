@@ -1,6 +1,7 @@
 use crate::types::{EdgeHint, EdgeKind, Node, NodeId, NodeKind};
 use rustc_hir as hir;
 use rustc_middle::mir::{self};
+use rustc_middle::mir::visit::Visitor;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::LOCAL_CRATE;
 use rustc_span::def_id::DefId;
@@ -39,6 +40,14 @@ pub fn project_body(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
     let crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
     let mut pathrefs: Vec<String> = Vec::new();
     let mut hints = Vec::new();
+
+    // Collect external DefId paths referenced anywhere in MIR operands.
+    let mut collector = ExternalDefCollector {
+        tcx,
+        crate_name: &crate_name,
+        out: &mut pathrefs,
+    };
+    collector.visit_body(body);
 
     for bb_data in body.basic_blocks.iter() {
         // CFG edges: record that control flow exists within this function.
@@ -117,5 +126,22 @@ fn push_external_path(tcx: TyCtxt<'_>, did: DefId, crate_name: &str, out: &mut V
     }
     if !out.iter().any(|p| p == &path) {
         out.push(path);
+    }
+}
+
+struct ExternalDefCollector<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
+    crate_name: &'a str,
+    out: &'a mut Vec<String>,
+}
+
+impl<'tcx> Visitor<'tcx> for ExternalDefCollector<'_, 'tcx> {
+    fn visit_operand(&mut self, operand: &mir::Operand<'tcx>, location: mir::Location) {
+        if let mir::Operand::Constant(c) = operand
+            && let mir::Const::Unevaluated(uneval, _) = c.const_
+        {
+            push_external_path(self.tcx, uneval.def, self.crate_name, self.out);
+        }
+        self.super_operand(operand, location);
     }
 }

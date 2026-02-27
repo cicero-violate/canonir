@@ -1,49 +1,56 @@
 # Agent State
 
-## 2026-02-27 — Current Cycle (Phase 4 dep solver structural boundary tightening)
+## 2026-02-27 — Current Cycle (Structural invariants for declaration types + body operand path refs)
 
 ### 1) Investigate the problem
-- `dep_solver` still carried a local-module-root exclusion set built from module names.
-- That exclusion map was legacy behavior from earlier fallback periods and not required for current structural path-root derivation.
+- `emit/repomap` compile errors exposed structural drift between captured declaration types and emitted source types.
+- Failures included:
+  - missing explicit lifetime ties in function signatures,
+  - unstable `Vec<T, Global>` allocator parameter leakage,
+  - unresolved external crate reference (`tree_sitter_rust`) not present in emitted dependencies.
 
 ### 2) Gather facts
-- Dependency roots are now sourced structurally from `Use` and `PathRef` nodes.
-- Capture already emits local paths with explicit prefixes (`crate::`, `self::`, `super::`) in current flow.
-- Builtin/language roots and crate self-name filtering remain as explicit structural policy constraints.
+- Declaration-facing types were sourced primarily from normalized semantic `Ty`, which can erase source-level lifetime naming and materialize defaulted generic args.
+- `PathRef` extraction in body projection did not visit all MIR constant operands; it missed some external defs (e.g., constant references used in call arguments).
+- These are invariant gaps, not formatting errors.
 
 ### 3) Break down the facts
-- Remove local module root map construction.
-- Remove local-root membership filter from root collection.
-- Keep builtin/self filtering and dedup logic unchanged.
+- Enforce source declaration invariant for item signatures/fields: prefer HIR-declared type forms for locally-defined declarations.
+- Enforce body reference coverage invariant: collect external DefIds from all MIR operands.
 
 ### 4) Write it to a state file
 - This file is the overwritten cycle snapshot.
 
 ### 5) Sort structural and categorical patterns
-- Structural pattern A: dependency extraction should depend on canonical path roots from IR nodes only.
-- Structural pattern B: no local name-surface map needed in dep collection path.
-- Categorical pattern A: prune residual fallback-influenced filtering logic.
+- Structural pattern A: declaration types must preserve source-level shape (lifetimes, explicit generic args).
+- Structural pattern B: dependency path refs must cover all MIR operand constant references.
+- Categorical pattern A: semantic-normalization-only type lowering is insufficient for source-faithful emission.
 
 ### 6) Write it to state file
 - Acceptance criteria:
-  - local module root map/filter removed,
-  - analyzer compile + orchestration passes remain green.
+  - emitted repomap compiles without lifetime/allocator/path errors,
+  - dependency for `tree_sitter_rust` is emitted structurally,
+  - no heuristic fallback introduced.
 
 ### 7) Solve the state file
-- `canon-analyzer/src/solver/dep_solver.rs`
-  - removed `local_module_roots` collection from `Module` nodes.
-  - removed `if local_module_roots.contains(root)` exclusion branch.
-  - retained structural root extraction from `Use` and `PathRef`, builtin filtering, crate-self filtering, and dedup.
+- `canon-capture/src/project/item.rs`
+  - added HIR-declared type extraction for local declaration surfaces:
+    - function/method/trait-method params and return types,
+    - item/field const/static/type-alias/assoc-type/assoc-const declaration types.
+  - these are sourced by HIR spans and used as declaration-facing `TypeExpr::Path` forms.
+  - retained `Ty` structural lowering as fallback where HIR-declared form is unavailable.
+- `canon-capture/src/project/body.rs`
+  - added MIR visitor over operands to collect external `DefId` paths from all constant operands.
+  - this closes missing `PathRef` coverage for dependency extraction.
 
 ### 8) Emit and project the solution incrementally
 - Validation:
   - `cargo check` passed.
-  - capture + orchestration passed for:
-    - `test_projects/test_rust_projects/capture/test_1`
-    - `test_projects/test_rust_projects/capture/repomap`
+  - `run_capture + orchestration` for `capture/repomap` passed.
+  - `cargo build` in `test_projects/test_rust_projects/emit/repomap` passed (the previously reported errors are resolved).
 
 ### 9) Repeat step 3
 - Post-change fact breakdown:
-  - dep solver root collection is now reduced to direct structural root constraints and explicit policy filters.
+  - declaration type shape and dependency path coverage invariants are now enforced for this failure class.
 - Next pending slice:
-  - continue Phase 3.5 body structuralization where model still carries `Body::Raw`/`Stmt::Raw` surfaces.
+  - continue Phase 3.5 body structuralization to reduce remaining `Body::Raw`/`Stmt::Raw` surfaces.

@@ -66,7 +66,7 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
             let sig = tcx.fn_sig(def_id).skip_binder();
             let params = map_params(tcx, def_id, sig.inputs().skip_binder());
             let async_ = tcx.asyncness(def_id).is_async();
-            let ret = lower_ty(tcx, sig.output().skip_binder());
+            let ret = declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, sig.output().skip_binder()));
             let unsafe_ = sig.safety() == Safety::Unsafe;
             let body = hir_body_src(tcx, def_id);
             NodeKind::Function { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ }
@@ -75,21 +75,21 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
             let sig = tcx.fn_sig(def_id).skip_binder();
             let params = map_params(tcx, def_id, sig.inputs().skip_binder());
             let async_ = tcx.asyncness(def_id).is_async();
-            let ret = lower_ty(tcx, sig.output().skip_binder());
+            let ret = declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, sig.output().skip_binder()));
             let unsafe_ = sig.safety() == Safety::Unsafe;
             let body = hir_body_src(tcx, def_id);
             NodeKind::Method { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ }
         }
         DefKind::AssocTy => {
             let default_ty = if !matches!(tcx.associated_item(def_id).container, ty::AssocContainer::Trait) {
-                Some(lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()))
+                declared_item_ty_expr(tcx, def_id).or_else(|| Some(lower_ty(tcx, tcx.type_of(def_id).instantiate_identity())))
             } else {
                 None
             };
             NodeKind::AssocType { name, vis, generics, default_ty, attrs: Vec::new(), where_clauses }
         }
         DefKind::AssocConst => {
-            let ty_expr = lower_ty(tcx, tcx.type_of(def_id).instantiate_identity());
+            let ty_expr = declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
             let default_value = {
                 let v = hir_init_src(tcx, def_id);
                 if v.trim().is_empty() {
@@ -101,12 +101,12 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
             NodeKind::AssocConst { name, vis, ty: ty_expr, default_value, attrs: Vec::new() }
         }
         DefKind::Const => {
-            let ty_expr = lower_ty(tcx, tcx.type_of(def_id).instantiate_identity());
+            let ty_expr = declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
             let value = hir_init_src(tcx, def_id);
             NodeKind::Const { name, vis, ty: ty_expr, value, attrs: Vec::new() }
         }
         DefKind::Static { mutability, .. } => {
-            let ty_expr = lower_ty(tcx, tcx.type_of(def_id).instantiate_identity());
+            let ty_expr = declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
             let value = hir_init_src(tcx, def_id);
             let mutable = mutability == rustc_hir::Mutability::Mut;
             NodeKind::Static { name, vis, ty: ty_expr, value, mutable, attrs: Vec::new() }
@@ -115,7 +115,7 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
             name,
             vis,
             generics,
-            ty: lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()),
+            ty: declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, tcx.type_of(def_id).instantiate_identity())),
             attrs: Vec::new(),
             where_clauses,
         },
@@ -344,6 +344,7 @@ fn map_generics_ty_fallback(tcx: TyCtxt<'_>, def_id: DefId) -> (Vec<GenericParam
 }
 
 fn map_params<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, inputs: &[ty::Ty<'tcx>]) -> Vec<Param> {
+    let declared_tys = declared_fn_param_types(tcx, def_id).unwrap_or_default();
     let hir_names: Vec<Option<String>> = def_id
         .as_local()
         .and_then(|local| tcx.hir_maybe_body_owned_by(local))
@@ -376,7 +377,7 @@ fn map_params<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, inputs: &[ty::Ty<'tcx>]) -
                     TypeExpr::Param("Self".to_string())
                 }
             } else {
-                lower_ty(tcx, *ty)
+                declared_tys.get(i).cloned().unwrap_or_else(|| lower_ty(tcx, *ty))
             };
             Param { name, ty: ty_expr, is_self, mutable: false, lifetime: None }
         })
@@ -390,13 +391,15 @@ where I: Iterator<Item = &'a ty::FieldDef> {
             let vis = if in_enum { Visibility::Private } else { map_vis(tcx, f.did, tcx.visibility(f.did)) };
             let raw_name = f.name.to_string();
             let name = if raw_name.chars().all(|c| c.is_ascii_digit()) { None } else { Some(raw_name) };
-            Field { name, ty: lower_ty(tcx, tcx.type_of(f.did).instantiate_identity()), vis }
+            let ty = declared_item_ty_expr(tcx, f.did).unwrap_or_else(|| lower_ty(tcx, tcx.type_of(f.did).instantiate_identity()));
+            Field { name, ty, vis }
         })
         .collect()
 }
 
 /// For trait method declarations, HIR param names come from the TraitItem fn decl.
 fn map_trait_method_params<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, inputs: &[ty::Ty<'tcx>]) -> Vec<Param> {
+    let declared_tys = declared_fn_param_types(tcx, def_id).unwrap_or_default();
     let hir_names: Vec<Option<String>> = def_id
         .as_local()
         .and_then(|local| {
@@ -429,7 +432,7 @@ fn map_trait_method_params<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, inputs: &[ty:
                     TypeExpr::Param("Self".to_string())
                 }
             } else {
-                lower_ty(tcx, *ty)
+                declared_tys.get(i).cloned().unwrap_or_else(|| lower_ty(tcx, *ty))
             };
             Param { name, ty: ty_expr, is_self, mutable: false, lifetime: None }
         })
@@ -453,7 +456,7 @@ fn collect_trait_methods(tcx: TyCtxt<'_>, trait_def_id: DefId) -> Vec<TraitMetho
         .map(|item| {
             let sig = tcx.fn_sig(item.def_id).skip_binder();
             let params = map_trait_method_params(tcx, item.def_id, sig.inputs().skip_binder());
-            let ret = lower_ty(tcx, sig.output().skip_binder());
+            let ret = declared_fn_return_type_expr(tcx, item.def_id).unwrap_or_else(|| lower_ty(tcx, sig.output().skip_binder()));
             let unsafe_ = sig.safety() == Safety::Unsafe;
             let async_ = tcx.asyncness(item.def_id).is_async();
             let (generics, _where_clauses) = map_generics(tcx, item.def_id);
@@ -461,6 +464,95 @@ fn collect_trait_methods(tcx: TyCtxt<'_>, trait_def_id: DefId) -> Vec<TraitMetho
             TraitMethod { name: item.name().to_string(), vis, generics, params, ret, body: Body::None, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_, async_ }
         })
         .collect()
+}
+
+fn declared_item_ty_expr(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TypeExpr> {
+    let local = def_id.as_local()?;
+    let node = tcx.hir_node_by_def_id(local);
+    let ty = match node {
+        rustc_hir::Node::Item(item) => match &item.kind {
+            rustc_hir::ItemKind::Const(_, _, ty, _) => Some(*ty),
+            rustc_hir::ItemKind::Static(_, _, ty, _) => Some(*ty),
+            rustc_hir::ItemKind::TyAlias(_, _, ty) => Some(*ty),
+            _ => None,
+        },
+        rustc_hir::Node::ImplItem(ii) => match &ii.kind {
+            rustc_hir::ImplItemKind::Const(ty, _) => Some(*ty),
+            rustc_hir::ImplItemKind::Type(ty) => Some(*ty),
+            _ => None,
+        },
+        rustc_hir::Node::TraitItem(ti) => match &ti.kind {
+            rustc_hir::TraitItemKind::Const(ty, _, _) => Some(*ty),
+            rustc_hir::TraitItemKind::Type(_, Some(ty)) => Some(*ty),
+            _ => None,
+        },
+        rustc_hir::Node::Field(field) => Some(field.ty),
+        _ => None,
+    }?;
+    let sm = tcx.sess.source_map();
+    let snippet = sm.span_to_snippet(ty.span).ok()?.trim().to_string();
+    if snippet.is_empty() {
+        None
+    } else {
+        Some(TypeExpr::Path(snippet))
+    }
+}
+
+fn declared_fn_param_types(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Vec<TypeExpr>> {
+    let local = def_id.as_local()?;
+    let decl = match tcx.hir_node_by_def_id(local) {
+        rustc_hir::Node::Item(item) => match &item.kind {
+            rustc_hir::ItemKind::Fn { sig, .. } => Some(sig.decl),
+            _ => None,
+        },
+        rustc_hir::Node::ImplItem(ii) => match &ii.kind {
+            rustc_hir::ImplItemKind::Fn(sig, _) => Some(sig.decl),
+            _ => None,
+        },
+        rustc_hir::Node::TraitItem(ti) => match &ti.kind {
+            rustc_hir::TraitItemKind::Fn(sig, _) => Some(sig.decl),
+            _ => None,
+        },
+        _ => None,
+    }?;
+    let sm = tcx.sess.source_map();
+    Some(
+        decl.inputs
+            .iter()
+            .map(|ty| sm.span_to_snippet(ty.span).ok().map(|s| TypeExpr::Path(s.trim().to_string())).unwrap_or(TypeExpr::Path("_".to_string())))
+            .collect(),
+    )
+}
+
+fn declared_fn_return_type_expr(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TypeExpr> {
+    let local = def_id.as_local()?;
+    let output = match tcx.hir_node_by_def_id(local) {
+        rustc_hir::Node::Item(item) => match &item.kind {
+            rustc_hir::ItemKind::Fn { sig, .. } => Some(sig.decl.output),
+            _ => None,
+        },
+        rustc_hir::Node::ImplItem(ii) => match &ii.kind {
+            rustc_hir::ImplItemKind::Fn(sig, _) => Some(sig.decl.output),
+            _ => None,
+        },
+        rustc_hir::Node::TraitItem(ti) => match &ti.kind {
+            rustc_hir::TraitItemKind::Fn(sig, _) => Some(sig.decl.output),
+            _ => None,
+        },
+        _ => None,
+    }?;
+    match output {
+        rustc_hir::FnRetTy::DefaultReturn(_) => Some(TypeExpr::Primitive(PrimType::Unit)),
+        rustc_hir::FnRetTy::Return(ty) => {
+            let sm = tcx.sess.source_map();
+            let snippet = sm.span_to_snippet(ty.span).ok()?.trim().to_string();
+            if snippet.is_empty() {
+                None
+            } else {
+                Some(TypeExpr::Path(snippet))
+            }
+        }
+    }
 }
 
 fn lower_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> TypeExpr {
