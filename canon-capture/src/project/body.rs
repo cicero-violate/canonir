@@ -1,4 +1,4 @@
-use crate::types::{EdgeHint, EdgeKind, Node, NodeId, NodeKind};
+use crate::types::{EdgeHint, Node, NodeId, NodeKind};
 use rustc_hir as hir;
 use rustc_middle::mir::{self};
 use rustc_middle::mir::visit::Visitor;
@@ -8,6 +8,7 @@ use rustc_span::def_id::DefId;
 
 use crate::index::Index;
 use crate::norm;
+use crate::project::edge_emit;
 
 /// MIR/body projection: emit CFG edges, call edges, and const deps as EdgeHints.
 ///
@@ -54,7 +55,7 @@ pub fn project_body(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
         // src=dst=caller_id (self-loop) until ModelIR grows BB-level nodes.
         if let Some(term) = &bb_data.terminator {
             for _succ in term.successors() {
-                hints.push(EdgeHint { src: caller_id, dst: caller_id, kind: EdgeKind::CfgEdge });
+                edge_emit::push(&mut hints, caller_id, caller_id, crate::types::EdgeKind::CfgEdge);
             }
         }
 
@@ -69,7 +70,7 @@ pub fn project_body(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
                         push_external_path(tcx, uneval.def, &crate_name, &mut pathrefs);
                         if let Some(&const_node) = index.def_to_node.get(&uneval.def) {
                             if const_node != id {
-                                hints.push(EdgeHint { src: caller_id, dst: const_node.index() as u32, kind: EdgeKind::ConstDep });
+                                edge_emit::push(&mut hints, caller_id, const_node.index() as u32, crate::types::EdgeKind::ConstDep);
                             }
                         }
                     }
@@ -83,7 +84,7 @@ pub fn project_body(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
                 if let Some((callee_def_id, _)) = func.const_fn_def() {
                     push_external_path(tcx, callee_def_id, &crate_name, &mut pathrefs);
                     if let Some(&callee_node) = index.def_to_node.get(&callee_def_id) {
-                        hints.push(EdgeHint { src: caller_id, dst: callee_node.index() as u32, kind: EdgeKind::Calls });
+                        edge_emit::push(&mut hints, caller_id, callee_node.index() as u32, crate::types::EdgeKind::Calls);
                     }
                 }
             }
@@ -98,11 +99,7 @@ pub fn project_body(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
             kind: NodeKind::PathRef { path },
             span: None,
         });
-        hints.push(EdgeHint {
-            src: caller_id,
-            dst: node_id.index() as u32,
-            kind: EdgeKind::Contains,
-        });
+        edge_emit::push_contains(&mut hints, caller_id, node_id.index() as u32);
     }
 
     (nodes, hints)

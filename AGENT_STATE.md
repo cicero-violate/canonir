@@ -1,47 +1,46 @@
 # AGENT_STATE.md
 
 ## CANONICAL_HEADER
-- state_id: `CANON_CAPTURE_LOC_REDUCTION_V1_PHASE_5_EDGE_TEMPLATE_SLICE3`
+- state_id: `CANON_CAPTURE_LOC_REDUCTION_V1_PHASE_5_EDGE_TEMPLATE_SLICE4`
 - date: `2026-02-27`
 - mode: `execution`
 - invariant: `No heuristics. Structural invariants only.`
 
 ### 1) Investigate the problem
-- Unify edge emission across engine and relations so both flow through one structural primitive layer.
+- Continue consolidating project-level edge construction into one structural emission backend.
 
 ### 2) Gather facts
-- Added shared module: `canon-capture/src/project/edge_emit.rs`.
-- `edge_emit` now owns common `EdgeHint` construction:
-- `push`, `push_contains`, `push_resolves`, `push_reexports`,
-- `push_assoc_item`, `push_impl_for`, `push_impl_ref`.
-- Migrated `engine.rs` (`use_item` edge path) to `edge_emit`.
-- Migrated `relations.rs` template dispatch helpers to `edge_emit`.
+- Shared `project/edge_emit.rs` was added and already adopted by:
+- `engine.rs` (`use_item` edge path)
+- `relations.rs` (relation-template dispatch helpers)
+- This slice extends adoption to `body.rs`:
+- CFG (`CfgEdge`), const dependency (`ConstDep`), call (`Calls`), and pathref containment (`Contains`) now emit through `edge_emit`.
 
 ### 3) Break down the facts
-- Shared primitive layer removes duplicate `EdgeHint` constructors in multiple modules.
-- Relation-template dispatch remains active; only emission backend changed.
-- Rule-edge template dispatch remains active for `use_item`; only emission backend changed.
+- Project-level edge constructors are now centralized in one module.
+- Rule/template logic still controls edge selection; only constructor backend changed.
+- Behavior and invariants remain unchanged.
 
 ### 4) Write it to a state file
 - State overwritten to current checkpoint.
 
 ### 5) Sort structural and categorical patterns
-- Pattern A: edge declaration and edge emission are now separated.
-- Pattern B: rule/template systems decide *what* edges to emit.
-- Pattern C: `edge_emit` decides *how* edges are constructed.
+- Pattern A: selection layer (`RuleEdge`, `RelationTemplate`, MIR traversal) is separated from construction layer (`edge_emit`).
+- Pattern B: additional edge kinds can be standardized by adding wrappers without touching selection logic.
 
 ### 6) Write it to state file
 - Files changed this slice:
-- `canon-capture/src/project/edge_emit.rs` (new)
-- `canon-capture/src/project/mod.rs`
+- `canon-capture/src/project/body.rs`
+- `canon-capture/src/project/edge_emit.rs`
 - `canon-capture/src/project/engine.rs`
 - `canon-capture/src/project/relations.rs`
+- `canon-capture/src/project/mod.rs`
 - `PLAN.md`
 - `AGENT_STATE.md`
 - `PROJECT_STATUS.md`
 
 ### 7) Solve the state file
-- Completed shared edge primitive unification without fallback or heuristic logic.
+- Completed body-edge migration to shared primitives; project-level edge emission path is now structurally unified.
 
 ### 8) Emit and project the solution incrementally
 - Validation performed:
@@ -50,14 +49,13 @@
 - `repomap` capture -> orchestration -> emitted `cargo build`: pass
 - `test_1` capture -> orchestration -> emitted `cargo build`: pass
 - LOC snapshot:
-- `item.rs`: `1391`
-- `engine.rs`: `449`
-- `rules.rs`: `279`
-- `relations.rs`: `129`
+- `body.rs`: `144`
 - `edge_emit.rs`: `36`
-- `canon-capture/src` total: `4813`
+- `engine.rs`: `449`
+- `relations.rs`: `129`
+- `canon-capture/src` total: `4810`
 
 ### 9) Repeat step 3
 - Next slice:
-- migrate remaining inline edge constructors in `project/body.rs` to `edge_emit`
-- continue Phase 5 until project-level edge construction sites are consolidated
+- audit remaining non-project edge constructors (e.g. assemble path) and decide Phase 5 boundary
+- if out-of-scope for capture/project refactor, mark Phase 5 project-side completion explicitly
