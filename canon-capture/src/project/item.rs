@@ -71,7 +71,7 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
             let ret = declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, sig.output().skip_binder()));
             let unsafe_ = sig.safety() == Safety::Unsafe;
             let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-            let body = mir_body_structural(tcx, def_id, &param_names).unwrap_or_else(|| hir_body_src(tcx, def_id));
+            let body = mir_body_structural(tcx, def_id, &param_names);
             NodeKind::Function { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ }
         }
         DefKind::AssocFn => {
@@ -81,7 +81,7 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
             let ret = declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, sig.output().skip_binder()));
             let unsafe_ = sig.safety() == Safety::Unsafe;
             let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-            let body = mir_body_structural(tcx, def_id, &param_names).unwrap_or_else(|| hir_body_src(tcx, def_id));
+            let body = mir_body_structural(tcx, def_id, &param_names);
             NodeKind::Method { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ }
         }
         DefKind::AssocTy => {
@@ -732,10 +732,12 @@ fn render_type_expr(_tcx: TyCtxt<'_>, expr: &TypeExpr) -> String {
     }
 }
 
-fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -> Option<Body> {
-    let local_def = def_id.as_local()?;
+fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -> Body {
+    let Some(local_def) = def_id.as_local() else {
+        return Body::None;
+    };
     if !tcx.is_mir_available(local_def) {
-        return None;
+        return Body::None;
     }
     let body = match tcx.hir_body_const_context(local_def) {
         Some(rustc_hir::ConstContext::ConstFn)
@@ -746,7 +748,6 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -
     let resolver = LocalNameResolver::new(body, param_names);
 
     let mut blocks: Vec<BasicBlock> = Vec::with_capacity(body.basic_blocks.len());
-    let mut structured_ops = 0usize;
     for bb in body.basic_blocks.iter() {
         let mut stmts: Vec<Stmt> = Vec::new();
 
@@ -756,15 +757,15 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -
             };
             let (lhs, rvalue) = &**boxed;
             if is_field_access_candidate(rvalue) {
-                let field_stmt = mir_field_access_stmt(tcx, lhs, rvalue, &resolver)?;
-                stmts.push(field_stmt);
-                structured_ops += 1;
+                if let Some(field_stmt) = mir_field_access_stmt(tcx, lhs, rvalue, &resolver) {
+                    stmts.push(field_stmt);
+                }
                 continue;
             }
             if is_struct_lit_candidate(rvalue) {
-                let struct_stmt = mir_struct_lit_stmt(tcx, lhs, rvalue, &resolver)?;
-                stmts.push(struct_stmt);
-                structured_ops += 1;
+                if let Some(struct_stmt) = mir_struct_lit_stmt(tcx, lhs, rvalue, &resolver) {
+                    stmts.push(struct_stmt);
+                }
             }
         }
 
@@ -779,9 +780,9 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -
             } = &term_ref.kind
                 && is_method_call_candidate(tcx, func)
             {
-                let method_stmt = mir_method_call_stmt(tcx, func, args, destination, &resolver)?;
-                stmts.push(method_stmt);
-                structured_ops += 1;
+                if let Some(method_stmt) = mir_method_call_stmt(tcx, func, args, destination, &resolver) {
+                    stmts.push(method_stmt);
+                }
                 term = target
                     .map(|bb| Terminator::Goto(bb.as_usize() as u32))
                     .unwrap_or(Terminator::None);
@@ -792,12 +793,13 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -
             } else if let mir::TerminatorKind::SwitchInt { discr, .. } = &term_ref.kind {
                 let mut succ = term_ref.successors();
                 if let (Some(t), Some(f)) = (succ.next(), succ.next()) {
-                    let cond = mir_operand_label(tcx, discr, &resolver)?;
-                    term = Terminator::Branch {
-                        cond,
-                        true_bb: t.as_usize() as u32,
-                        false_bb: f.as_usize() as u32,
-                    };
+                    if let Some(cond) = mir_operand_label(tcx, discr, &resolver) {
+                        term = Terminator::Branch {
+                            cond,
+                            true_bb: t.as_usize() as u32,
+                            false_bb: f.as_usize() as u32,
+                        };
+                    }
                 }
             }
         }
@@ -805,10 +807,7 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -
         blocks.push(BasicBlock { stmts, terminator: term });
     }
 
-    if structured_ops == 0 {
-        return None;
-    }
-    Some(Body::Blocks(blocks))
+    Body::Blocks(blocks)
 }
 
 fn is_field_access_candidate(rvalue: &mir::Rvalue<'_>) -> bool {
@@ -841,7 +840,7 @@ fn mir_field_access_stmt<'tcx>(
         return None;
     };
     let field = match ty.kind() {
-        ty::TyKind::Adt(adt, _) => adt
+        ty::TyKind::Adt(adt, _) if adt.is_struct() || adt.is_union() => adt
             .non_enum_variant()
             .fields
             .get(field_idx)
@@ -978,31 +977,6 @@ fn is_rust_ident(s: &str) -> bool {
     chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
-/// Capture function/method body as Body::Raw(source) via HIR body span.
-fn hir_body_src(tcx: TyCtxt<'_>, def_id: DefId) -> Body {
-    let Some(local) = def_id.as_local() else { return Body::None };
-    let Some(body) = tcx.hir_maybe_body_owned_by(local) else { return Body::None };
-    let span = body.value.span;
-    let sm = tcx.sess.source_map();
-    match sm.span_to_snippet(span) {
-        Ok(src) => Body::Raw(strip_outer_braces(src)),
-        Err(_) => Body::None,
-    }
-}
-
-/// Strip outer `{ ... }` braces and dedent.
-fn strip_outer_braces(src: String) -> String {
-    let trimmed = src.trim();
-    if trimmed.starts_with('{') && trimmed.ends_with('}') {
-        let inner = &trimmed[1..trimmed.len() - 1];
-        let lines: Vec<&str> = inner.lines().collect();
-        let min_indent = lines.iter().filter(|l| !l.trim().is_empty()).map(|l| l.len() - l.trim_start().len()).min().unwrap_or(0);
-        let dedented: Vec<&str> = lines.iter().map(|l| if l.len() >= min_indent { &l[min_indent..] } else { l.trim_start() }).collect();
-        dedented.join("\n").trim().to_string()
-    } else {
-        src
-    }
-}
 
 /// Compiler-internal traits emitted as side-effect impls by builtin derives.
 /// These are never user-writable macros and must never appear in #[derive(...)].

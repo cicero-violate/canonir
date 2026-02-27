@@ -33,6 +33,9 @@ pub fn emit_fn(ir: &CanonIR, name_id: NameId, sig_id: CanonId, body: Option<Cano
         let mut out = format!("{}{}{}{}fn {}{}({}) -> {} {{\n", pad, vis, unsafe_kw, async_kw, ir.lookup_name(name_id), gens, params, ret);
         let param_names = collect_param_names(ir, sig_id);
         out.push_str(&emit_body(ir, body_id, &param_names, &format!("{}    ", pad)));
+        if ret.trim() != "()" {
+            out.push_str(&format!("{}    todo!()\n", pad));
+        }
         out.push_str(&format!("{}}}\n", pad));
         out
     } else {

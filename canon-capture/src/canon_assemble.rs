@@ -287,14 +287,6 @@ fn bool_ty(canon: &mut CanonIR) -> CanonId {
     canon.intern_type(TypeKind::Primitive(PrimTy::Bool))
 }
 
-fn lower_raw_stmt(canon: &mut CanonIR, stmt: &str) -> CfgOp {
-    CfgOp::Raw(canon.intern_body(stmt))
-}
-
-fn lower_raw_body(canon: &mut CanonIR, src: &str) -> Vec<CfgOp> {
-    vec![CfgOp::Raw(canon.intern_body(src))]
-}
-
 fn seal_generic_param(canon: &mut CanonIR, gp: &GenericParam) -> CanonId {
     let name_id = NameId(canon.name_intern.intern(&gp.name));
     let bounds = gp
@@ -353,8 +345,8 @@ fn seal_trait_method(canon: &mut CanonIR, m: &TraitMethod) -> CanonId {
 fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
     match body {
         Body::None => None,
-        Body::Raw(src) => {
-            let ops = lower_raw_body(canon, src);
+        Body::Raw(_src) => {
+            let ops = vec![CfgOp::Unreachable];
             let bb_id = canon.push_node(CanonNodeKind::BasicBlock { ops, next: None });
             Some(canon.push_node(CanonNodeKind::Body { blocks: vec![bb_id] }))
         }
@@ -480,7 +472,7 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                             });
                             CfgOp::Return(v)
                         }
-                        Stmt::Raw(src) => lower_raw_stmt(canon, src),
+                        Stmt::Raw(_src) => CfgOp::Unreachable,
                     };
                     ops.push(op);
                 }
@@ -493,7 +485,7 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                         let cloc = canon.push_node(CanonNodeKind::Local { name_id: cid, ty, flags: 0 });
                         ops.push(CfgOp::Branch { cond: cloc, true_bb: *true_bb, false_bb: *false_bb });
                     }
-                    Terminator::Return => ops.push(CfgOp::Return(None)),
+                    Terminator::Return => {}
                     Terminator::None => {}
                 }
                 block_ids.push(canon.push_node(CanonNodeKind::BasicBlock { ops, next: None }));

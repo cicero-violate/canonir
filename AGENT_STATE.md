@@ -1,44 +1,43 @@
-# Agent State
+# AGENT_STATE.md
 
-## 2026-02-27 — Current Cycle (MIR local/value invariants + projection cleanup + validation)
+## CANONICAL_HEADER
+- state_id: `CANON_BODY_STRUCTURAL_PRIMARY_V1`
+- date: `2026-02-27`
+- mode: `execution`
+- invariant: `No heuristics. Structural invariants only.`
 
 ### 1) Investigate the problem
-- Remaining requested work was:
-  1. complete body structure invariants for MIR locals/values,
-  2. projection cleanup for structured body ops,
-  3. final validation sweep.
+- Goal: make MIR-structured body ops primary and eliminate active raw body/op emission dependency.
+- Required: preserve emitted crate compilability for fixture matrix.
 
 ### 2) Gather facts
-- Prior MIR structured extraction could emit unresolved MIR temporaries (`_N`) that projection could not safely bind.
-- Projection still had placeholder behavior for `CfgOp::StructLit` and naive re-binding of destinations.
+- Prior flow still used raw fallback surfaces for function/method bodies.
+- Projection still had permissive raw-op rendering and incomplete structured body emission behavior.
+- `AGENT_STATE_SECTION_DELTAS.sh` requires stable `### N)` section headers.
 
 ### 3) Break down the facts
-- Structural invariant needed:
-  - only emit MIR-structured body when all used places/operands can be resolved to stable source identifiers.
-  - otherwise fallback to HIR raw body.
-- Projection invariant needed:
-  - destination writes must choose `let` on first bind and assignment on later writes.
+- Structural gap A: MIR locals/places need canonical resolvable names before structured op emission.
+- Structural gap B: projection must track declaration state for destination writes.
+- Structural gap C: raw-op rendering in projection hides invariant violations.
 
 ### 4) Write it to a state file
-- This file is overwritten for this completed cycle.
+- This file is recreated/overwritten in canonical numbered-section form.
 
 ### 5) Sort structural and categorical patterns
-- Pattern A: unresolved MIR locals are a schema/context gap, not a projection concern.
-- Pattern B: strict gating at capture boundary preserves correctness without heuristics.
-- Pattern C: structured op rendering should remain direct from CanonIR, no string repair.
+- Pattern A: unresolved local/value identity must block/skip structured op emission.
+- Pattern B: active raw text emission is an invariant leak.
+- Pattern C: validation must be compile-based across known fixtures.
 
 ### 6) Write it to state file
-- Implemented:
-  - MIR local-name resolver using param names + `var_debug_info` place bindings.
-  - Strict structural gating for MIR body extraction:
-    - unresolved place/operand labels cause fallback (`None`) to raw body.
-  - Re-enabled `mir_body_structural(...).unwrap_or_else(hir_body_src)` with resolver-based invariants.
-  - Projection updates:
-    - `emit_body` now tracks declared identifiers (params seeded) and uses bind-vs-assign logic.
-    - `CfgOp::StructLit` now renders concrete struct literal syntax instead of placeholder comment.
+- Implemented structural changes:
+  - MIR local-name resolver (parameter + var_debug_info based).
+  - Fn/assoc fn capture switched to MIR structured body as primary source.
+  - `Body::Raw`/`Stmt::Raw` no longer emit `CfgOp::Raw` in active capture flow.
+  - Projection `CfgOp::Raw` path changed to panic invariant.
+  - Structured `StructLit` render + bind-vs-assign destination tracking.
 
 ### 7) Solve the state file
-- All requested additions were implemented in this cycle with correctness-preserving fallback behavior.
+- Objective slice completed: active body emission path is structural-first and raw-op projection dependence is removed.
 
 ### 8) Emit and project the solution incrementally
 - Validation results:
@@ -47,4 +46,5 @@
   - `test_1`: capture -> orchestration -> emitted `cargo build`: pass.
 
 ### 9) Repeat step 3
-- No remaining pending items from this requested phase set.
+- No pending items remain in `PLAN.md` for this phase set.
+- Next execution should start from a new plan id if further invariants are introduced.

@@ -1,33 +1,28 @@
 # PROJECT_STATUS.md
 
-## Current State
+## CANONICAL_HEADER
+- project: `canon`
+- status_epoch: `2026-02-27`
+- pipeline_invariant: `Capture -> CanonIR -> Graph -> Solve -> Emit`
+- policy: `If tempted to use heuristic, stop and add missing structural invariant.`
 
-- Workspace builds.
-- Pipeline is Canon-only end-to-end.
-- Legacy `model/`, `capture/`, `analyzer/`, `projection/`, and `mutation/` crates are removed.
-- Canon ownership includes:
-  - Node/edge graph identity (`NodeId`, `EdgeKind`, `CsrGraph`)
-  - IR runtime (`CanonIR`)
-  - analysis, projection, mutation, and orchestration.
+## CURRENT_STATE
+- Workspace compiles.
+- Canon-only pipeline remains operational.
+- MIR-structured body capture is primary for fn/assoc fn in active flow.
+- Active raw-op projection surface is removed (`CfgOp::Raw` panics as invariant breach).
 
-## Working Paths
+## VALIDATED_FIXTURES
+- `test_projects/test_rust_projects/capture/repomap` -> `emit/repomap` build: pass.
+- `test_projects/test_rust_projects/capture/test_1` -> `emit/test_1` build: pass.
 
-- `run_capture.sh` captures `canon_capture.json` from rustc frontend.
-- `orchestration` accepts CanonIR JSON only.
-- Emission validated on:
-  - `test_projects/test_rust_projects/capture/test_1`
-  - `test_projects/test_rust_projects/capture/repomap`
+## ACTIVE_PLAN_REFERENCE
+- Plan: [PLAN.md](/workspace/ai_sandbox/canon/PLAN.md)
+- State: [AGENT_STATE.md](/workspace/ai_sandbox/canon/AGENT_STATE.md)
+- Plan id: `CANON_BODY_STRUCTURAL_PRIMARY_V1`
+- Plan status: `completed`
 
-## Known Warnings
-
-- `canon-analyzer` still emits non-fatal diagnostics in some test cases
-  (notably `impl_solver`/provenance-style warnings).
-
-## Next Work
-
-1. Add regression tests for capture/analyze/emit on `test_1` and `repomap`.
-2. Improve analyzer warning precision.
-3. Tighten emitter fidelity around module shaping and import minimization.
-
-System invariant:
-`Capture -> CanonIR -> Graph -> Solve -> Emit` remains stable.
+## DONE_CRITERIA_STATUS
+- MIR-structured body ops primary: `met`
+- Active raw emission dependency removed: `met`
+- Validation sweep green: `met`
