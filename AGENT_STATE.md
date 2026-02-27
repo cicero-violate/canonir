@@ -1,19 +1,24 @@
 # Agent State
 
-## 2026-02-27 — Current Cycle (Continue Plan: Phase 3.5 + 3.7)
+## 2026-02-27 — Current Cycle (Continue Plan: Phase 3.5/3.7 then Phase 4.2)
 
 ### 1) Investigate the problem
-- Continue Phase 3 with the next pending capture-side structural increment.
-- Target this cycle: reduce `CfgOp::Raw` usage for body statements and move path interning call sites to `CanonIR::intern_path`.
+- Continue from recent capture structure additions into the next pending slices.
+- Targets this cycle:
+  - Phase 3.5: reduce `CfgOp::Raw` by structurally lowering common body statements.
+  - Phase 3.7: route assembly path interning through `CanonIR::intern_path`.
+  - Phase 4.2: remove `dep_solver` text-scan fallback and heuristic root filtering.
 
 ### 2) Gather facts
-- Body capture still emits `Body::Raw` for most function/method bodies.
-- `seal_body` converted `Body::Raw` to a single `CfgOp::Raw`, losing structure for method calls, field access, index access, and struct literals.
-- `canon_assemble` still had multiple direct `path_intern.intern(...)` call sites.
+- `Body::Raw` still dominated body capture output.
+- `seal_body` previously collapsed each raw body to one `CfgOp::Raw`.
+- `canon_assemble` still had direct `path_intern.intern(...)` call sites.
+- `dep_solver` still had fallback scanning over `name_intern.vec` and `is_probable_crate_name`.
 
 ### 3) Break down the facts
-- A full HIR/MIR body lowering is larger than one cycle, but we can incrementally parse raw statements and emit structured `CfgOp` where pattern-safe.
-- Normalization authority should move to `intern_path` call sites to reduce ad-hoc path handling.
+- Full HIR/MIR lowering is larger than one increment, but partial structured lowering from raw statements is feasible now.
+- Updated path interning should call `intern_path` at assembly boundaries.
+- With `PathRef` present, dependency solving can drop text scanning and rely on structural nodes.
 
 ### 4) Write it to a state file
 - This file is the overwritten cycle snapshot.
@@ -22,8 +27,10 @@
 - Structural pattern A: convert recognisable raw statements into typed CFG ops.
 - Structural pattern B: keep `CfgOp::Raw` as fallback only.
 - Structural pattern C: call `canon.intern_path(...)` at assembly boundaries.
+- Structural pattern D: dependency roots come from structural paths (`Use`, `PathRef`) only.
 - Categorical pattern A: body-op lowering helpers in capture assembly.
 - Categorical pattern B: path interning boundary cleanup.
+- Categorical pattern C: dep solver fallback/heuristic removal.
 
 ### 6) Write it to state file
 - The patterns above define this cycle's acceptance criteria.
@@ -41,16 +48,22 @@
     - `NodeKind::Module`, `Use`, `MacroCall`, `PathRef`,
     - extern-type normalization rewrite IDs.
   - fixed borrow conflict in extern-type normalization loop by switching to index-based iteration.
+- `canon-analyzer/src/solver/dep_solver.rs`
+  - removed raw-text fallback scan over `name_intern.vec`.
+  - removed `is_probable_crate_name` heuristic filter.
+  - dependency extraction now derives roots from structural `Use` + `PathRef` paths only, with builtin/local-root filtering retained.
 
 ### 8) Emit and project the solution incrementally
 - Validation:
-  - `cargo check` passed for the workspace.
+  - `cargo check` passed after capture changes.
+  - `cargo check` passed again after `dep_solver` fallback removal.
 
 ### 9) Repeat step 3
 - Post-change fact breakdown:
   - `Body::Raw` now yields structural CFG ops for a subset of common patterns.
   - Remaining unsupported statement shapes still safely fall back to `CfgOp::Raw`.
   - Assembly path interning now consistently uses `intern_path` in updated call sites.
+- `dep_solver` no longer compensates with text scanning; it consumes structural nodes only.
 - Next pending slice:
   - continue reducing `CfgOp::Raw` dependence with additional structured body lowering,
-  - then proceed into Phase 4 solver compensation removal (`use_solver`, `dep_solver`, `visibility_solver`).
+  - continue Phase 4 compensation removal in `use_solver` and `visibility_solver`.

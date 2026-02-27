@@ -45,78 +45,34 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
 
     // Gather all external crate roots referenced by Use nodes.
     let mut extern_roots: Vec<String> = Vec::new();
+    let mut push_root = |root: &str| {
+        if root.is_empty() {
+            return;
+        }
+        if BUILTIN_ROOTS.contains(&root) {
+            return;
+        }
+        if root == crate_name.as_str() {
+            return;
+        }
+        if local_module_roots.contains(root) {
+            return;
+        }
+        if !extern_roots.iter().any(|r| r == root) {
+            extern_roots.push(root.to_string());
+        }
+    };
+
     for node in &ir.nodes {
         if let CanonNodeKind::Use { path_id, .. } = &node.kind {
             let path = ir.lookup_path(*path_id);
             let root = path.split("::").next().unwrap_or("").trim();
-            if root.is_empty() {
-                continue;
-            }
-            if BUILTIN_ROOTS.contains(&root) {
-                continue;
-            }
-            if root == crate_name.as_str() {
-                continue;
-            }
-            if local_module_roots.contains(root) {
-                continue;
-            }
-            if !is_probable_crate_name(root) {
-                continue;
-            }
-            if !extern_roots.iter().any(|r| r == root) {
-                extern_roots.push(root.to_string());
-            }
+            push_root(root);
         }
         if let CanonNodeKind::PathRef { path_id } = &node.kind {
             let path = ir.lookup_path(*path_id);
             let root = path.split("::").next().unwrap_or("").trim();
-            if root.is_empty() {
-                continue;
-            }
-            if BUILTIN_ROOTS.contains(&root) {
-                continue;
-            }
-            if root == crate_name.as_str() {
-                continue;
-            }
-            if local_module_roots.contains(root) {
-                continue;
-            }
-            if !is_probable_crate_name(root) {
-                continue;
-            }
-            if !extern_roots.iter().any(|r| r == root) {
-                extern_roots.push(root.to_string());
-            }
-        }
-    }
-
-    // Fallback extraction for explicit external crate paths in raw code snippets
-    // (e.g. `tree_sitter_rust::LANGUAGE`) that do not appear as Use nodes.
-    for text in &ir.name_intern.vec {
-        for token in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':')) {
-            let Some((root, rest)) = token.split_once("::") else {
-                continue;
-            };
-            let Some(first_rest) = rest.chars().next() else {
-                continue;
-            };
-            if !(first_rest.is_ascii_alphabetic() || first_rest == '_') {
-                continue;
-            }
-            if root.is_empty() || BUILTIN_ROOTS.contains(&root) || root == crate_name.as_str() {
-                continue;
-            }
-            if local_module_roots.contains(root) {
-                continue;
-            }
-            if !is_probable_crate_name(root) {
-                continue;
-            }
-            if !extern_roots.iter().any(|r| r == root) {
-                extern_roots.push(root.to_string());
-            }
+            push_root(root);
         }
     }
 
@@ -142,15 +98,4 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn is_probable_crate_name(root: &str) -> bool {
-    let mut chars = root.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !(first.is_ascii_lowercase() || first == '_') {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
