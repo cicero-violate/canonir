@@ -21,7 +21,8 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
         if let Some(name) = src_name {
             for (dst_id, edge) in ir.name_graph.neighbours(src_id) {
                 if *edge == EdgeKind::Renames {
-                    renames.push((dst_id.index(), name.clone()));
+                    let _ = dst_id;
+                    renames.push((*src_idx, name.clone()));
                 }
             }
         }
