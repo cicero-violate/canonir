@@ -126,7 +126,6 @@ pub enum Stmt {
         dest: Option<String>,
     },
     Return(Option<String>),
-    Raw(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -147,7 +146,6 @@ pub struct BasicBlock {
 pub enum Body {
     None,
     Blocks(Vec<BasicBlock>),
-    Raw(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -23,7 +23,7 @@ status: `completed`
 ## PHASE_P3_PROJECTION_RAW_SURFACE_REMOVAL
 status: `completed`
 
-1. Projection now treats `CfgOp::Raw` as invariant violation (`panic!`) rather than rendering text.
+1. Raw variants removed from active schema surfaces (`CfgOp::Raw`, capture `Body::Raw`, capture `Stmt::Raw`).
 2. Structured `StructLit` rendering implemented.
 3. Destination binding is declaration-safe (`let` first write, assignment on subsequent writes).
 
@@ -38,5 +38,5 @@ status: `completed`
 status: `completed`
 
 1. MIR-structured body ops are primary in active capture flow.
-2. Active projection path no longer accepts raw op emission.
+2. Raw body/op variants are eliminated from the active type/model path.
 3. Required validation matrix is green.

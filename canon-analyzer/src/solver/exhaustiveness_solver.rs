@@ -58,10 +58,6 @@ fn collect_body_text(ir: &CanonIR, body_id: canon::node::CanonId, out: &mut Stri
         };
         for op in ops {
             match op {
-                CfgOp::Raw(name_id) => {
-                    out.push_str(ir.lookup_body(*name_id));
-                    out.push('\n');
-                }
                 CfgOp::Expr(local_id) => {
                     if let CanonNodeKind::Local { name_id, .. } = &ir.node(*local_id).kind {
                         out.push_str(ir.lookup_name(*name_id));

@@ -10,7 +10,7 @@
 - Workspace compiles.
 - Canon-only pipeline remains operational.
 - MIR-structured body capture is primary for fn/assoc fn in active flow.
-- Active raw-op projection surface is removed (`CfgOp::Raw` panics as invariant breach).
+- Residual raw body/op variants are removed from active schema/model flow.
 
 ## VALIDATED_FIXTURES
 - `test_projects/test_rust_projects/capture/repomap` -> `emit/repomap` build: pass.
@@ -24,5 +24,5 @@
 
 ## DONE_CRITERIA_STATUS
 - MIR-structured body ops primary: `met`
-- Active raw emission dependency removed: `met`
+- Raw body/op variants eliminated from active path: `met`
 - Validation sweep green: `met`

@@ -86,7 +86,6 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>) -> String
         CfgOp::Goto(_) => "// goto".into(),
         CfgOp::Unreachable => "unreachable!();".into(),
         CfgOp::Expr(v) => format!("{};", local_name(ir, *v)),
-        CfgOp::Raw(_) => panic!("CfgOp::Raw reached projection"),
     }
 }
 

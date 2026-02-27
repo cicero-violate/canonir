@@ -121,8 +121,6 @@ pub enum CfgOp {
     Unreachable,
     /// bare expression statement (interned source string, escape hatch)
     Expr(CanonId),
-    /// raw source verbatim (interned into name_intern)
-    Raw(NameId),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

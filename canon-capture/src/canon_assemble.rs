@@ -345,11 +345,6 @@ fn seal_trait_method(canon: &mut CanonIR, m: &TraitMethod) -> CanonId {
 fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
     match body {
         Body::None => None,
-        Body::Raw(_src) => {
-            let ops = vec![CfgOp::Unreachable];
-            let bb_id = canon.push_node(CanonNodeKind::BasicBlock { ops, next: None });
-            Some(canon.push_node(CanonNodeKind::Body { blocks: vec![bb_id] }))
-        }
         Body::Blocks(blocks) => {
             let mut block_ids = Vec::with_capacity(blocks.len());
             for bb in blocks {
@@ -472,7 +467,6 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                             });
                             CfgOp::Return(v)
                         }
-                        Stmt::Raw(_src) => CfgOp::Unreachable,
                     };
                     ops.push(op);
                 }
