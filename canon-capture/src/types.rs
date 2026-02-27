@@ -25,20 +25,71 @@ pub struct GenericParam {
     pub name: String,
     pub bounds: Vec<String>,
     pub is_lifetime: bool,
-    pub default_ty: Option<String>,
+    pub default_ty: Option<TypeExpr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PrimType {
+    Bool,
+    Char,
+    Str,
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    Usize,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    Isize,
+    F32,
+    F64,
+    Unit,
+    Never,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TypeExpr {
+    Primitive(PrimType),
+    Ref {
+        lifetime: Option<String>,
+        inner: Box<TypeExpr>,
+        mutable: bool,
+    },
+    RawPtr {
+        inner: Box<TypeExpr>,
+        mutable: bool,
+    },
+    Array {
+        inner: Box<TypeExpr>,
+        len: Option<u64>,
+    },
+    Slice(Box<TypeExpr>),
+    Tuple(Vec<TypeExpr>),
+    FnPtr {
+        params: Vec<TypeExpr>,
+        ret: Box<TypeExpr>,
+    },
+    Param(String),
+    DynTrait(String),
+    ImplTrait(String),
+    Path(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Field {
     pub name: Option<String>,
-    pub ty: String,
+    pub ty: TypeExpr,
     pub vis: Visibility,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Param {
     pub name: String,
-    pub ty: String,
+    pub ty: TypeExpr,
     pub is_self: bool,
     pub mutable: bool,
     pub lifetime: Option<String>,
@@ -52,7 +103,7 @@ pub struct EnumVariant {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Stmt {
-    Let { pat: String, ty: Option<String>, init: Option<String> },
+    Let { pat: String, ty: Option<TypeExpr>, init: Option<String> },
     Expr(String),
     Return(Option<String>),
     Raw(String),
@@ -85,7 +136,7 @@ pub struct TraitMethod {
     pub vis: Visibility,
     pub generics: Vec<GenericParam>,
     pub params: Vec<Param>,
-    pub ret: String,
+    pub ret: TypeExpr,
     pub body: Body,
     #[serde(default)]
     pub attrs: Vec<String>,
@@ -156,8 +207,8 @@ pub enum NodeKind {
         unsafe_: bool,
     },
     Impl {
-        for_struct: String,
-        for_trait: Option<String>,
+        for_struct: TypeExpr,
+        for_trait: Option<TypeExpr>,
         generics: Vec<GenericParam>,
         #[serde(default)]
         attrs: Vec<String>,
@@ -171,7 +222,7 @@ pub enum NodeKind {
         vis: Visibility,
         generics: Vec<GenericParam>,
         params: Vec<Param>,
-        ret: String,
+        ret: TypeExpr,
         body: Body,
         #[serde(default)]
         attrs: Vec<String>,
@@ -187,7 +238,7 @@ pub enum NodeKind {
         vis: Visibility,
         generics: Vec<GenericParam>,
         params: Vec<Param>,
-        ret: String,
+        ret: TypeExpr,
         body: Body,
         #[serde(default)]
         attrs: Vec<String>,
@@ -202,7 +253,7 @@ pub enum NodeKind {
         name: String,
         vis: Visibility,
         generics: Vec<GenericParam>,
-        default_ty: Option<String>,
+        default_ty: Option<TypeExpr>,
         #[serde(default)]
         attrs: Vec<String>,
         #[serde(default)]
@@ -211,7 +262,7 @@ pub enum NodeKind {
     AssocConst {
         name: String,
         vis: Visibility,
-        ty: String,
+        ty: TypeExpr,
         default_value: Option<String>,
         #[serde(default)]
         attrs: Vec<String>,
@@ -219,7 +270,7 @@ pub enum NodeKind {
     Const {
         name: String,
         vis: Visibility,
-        ty: String,
+        ty: TypeExpr,
         value: String,
         #[serde(default)]
         attrs: Vec<String>,
@@ -227,7 +278,7 @@ pub enum NodeKind {
     Static {
         name: String,
         vis: Visibility,
-        ty: String,
+        ty: TypeExpr,
         value: String,
         #[serde(default)]
         mutable: bool,
@@ -249,7 +300,7 @@ pub enum NodeKind {
         name: String,
         vis: Visibility,
         generics: Vec<GenericParam>,
-        ty: String,
+        ty: TypeExpr,
         #[serde(default)]
         attrs: Vec<String>,
         #[serde(default)]

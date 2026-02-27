@@ -1,10 +1,10 @@
 use crate::types::TraitMethod;
-use crate::types::{Body, EnumVariant, Field, GenericParam, Node, NodeKind, Param, StructKind, Visibility};
+use crate::types::{Body, EnumVariant, Field, GenericParam, Node, NodeKind, Param, PrimType, StructKind, TypeExpr, Visibility};
 use crate::types::{EdgeHint, EdgeKind};
 use rustc_hir::{def::DefKind, GenericBound, PatKind, PredicateOrigin, Safety, WherePredicateKind};
 use rustc_middle::ty::print::PrintTraitRefExt;
 use rustc_middle::ty::AssocKind;
-use rustc_middle::ty::{self, TyCtxt};
+use rustc_middle::ty::{self, CoroutineArgsExt, TyCtxt};
 use rustc_span::def_id::DefId;
 use rustc_span::hygiene::{ExpnKind, MacroKind};
 
@@ -58,16 +58,15 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
             NodeKind::Trait { name, vis, generics, methods, attrs: Vec::new(), where_clauses, unsafe_: false }
         }
         DefKind::Impl { .. } => {
-            let for_trait = tcx.impl_opt_trait_ref(def_id).map(|eb| norm::path(tcx, eb.skip_binder().def_id)).map(|p| norm::short(&p).to_string());
-            let for_struct = tcx.type_of(def_id).instantiate_identity().ty_adt_def().map(|adt| norm::short(&norm::path(tcx, adt.did())).to_string()).unwrap_or_else(|| name.clone());
+            let for_trait = tcx.impl_opt_trait_ref(def_id).map(|eb| TypeExpr::Path(norm::path(tcx, eb.skip_binder().def_id)));
+            let for_struct = lower_ty(tcx, tcx.type_of(def_id).instantiate_identity());
             NodeKind::Impl { for_struct, for_trait, generics, attrs: Vec::new(), where_clauses, unsafe_: false }
         }
         DefKind::Fn => {
             let sig = tcx.fn_sig(def_id).skip_binder();
             let params = map_params(tcx, def_id, sig.inputs().skip_binder());
             let async_ = tcx.asyncness(def_id).is_async();
-            let ret_raw = fmt_ty(tcx, sig.output().skip_binder());
-            let ret = if async_ { unwrap_future_output(&ret_raw) } else { ret_raw };
+            let ret = lower_ty(tcx, sig.output().skip_binder());
             let unsafe_ = sig.safety() == Safety::Unsafe;
             let body = hir_body_src(tcx, def_id);
             NodeKind::Function { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ }
@@ -76,22 +75,21 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
             let sig = tcx.fn_sig(def_id).skip_binder();
             let params = map_params(tcx, def_id, sig.inputs().skip_binder());
             let async_ = tcx.asyncness(def_id).is_async();
-            let ret_raw = fmt_ty(tcx, sig.output().skip_binder());
-            let ret = if async_ { unwrap_future_output(&ret_raw) } else { ret_raw };
+            let ret = lower_ty(tcx, sig.output().skip_binder());
             let unsafe_ = sig.safety() == Safety::Unsafe;
             let body = hir_body_src(tcx, def_id);
             NodeKind::Method { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ }
         }
         DefKind::AssocTy => {
             let default_ty = if !matches!(tcx.associated_item(def_id).container, ty::AssocContainer::Trait) {
-                Some(fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()))
+                Some(lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()))
             } else {
                 None
             };
             NodeKind::AssocType { name, vis, generics, default_ty, attrs: Vec::new(), where_clauses }
         }
         DefKind::AssocConst => {
-            let ty_str = fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity());
+            let ty_expr = lower_ty(tcx, tcx.type_of(def_id).instantiate_identity());
             let default_value = {
                 let v = hir_init_src(tcx, def_id);
                 if v.trim().is_empty() {
@@ -100,20 +98,27 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
                     Some(v)
                 }
             };
-            NodeKind::AssocConst { name, vis, ty: ty_str, default_value, attrs: Vec::new() }
+            NodeKind::AssocConst { name, vis, ty: ty_expr, default_value, attrs: Vec::new() }
         }
         DefKind::Const => {
-            let ty_str = fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity());
+            let ty_expr = lower_ty(tcx, tcx.type_of(def_id).instantiate_identity());
             let value = hir_init_src(tcx, def_id);
-            NodeKind::Const { name, vis, ty: ty_str, value, attrs: Vec::new() }
+            NodeKind::Const { name, vis, ty: ty_expr, value, attrs: Vec::new() }
         }
         DefKind::Static { mutability, .. } => {
-            let ty_str = fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity());
+            let ty_expr = lower_ty(tcx, tcx.type_of(def_id).instantiate_identity());
             let value = hir_init_src(tcx, def_id);
             let mutable = mutability == rustc_hir::Mutability::Mut;
-            NodeKind::Static { name, vis, ty: ty_str, value, mutable, attrs: Vec::new() }
+            NodeKind::Static { name, vis, ty: ty_expr, value, mutable, attrs: Vec::new() }
         }
-        DefKind::TyAlias => NodeKind::TypeAlias { name, vis, generics, ty: fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()), attrs: Vec::new(), where_clauses },
+        DefKind::TyAlias => NodeKind::TypeAlias {
+            name,
+            vis,
+            generics,
+            ty: lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()),
+            attrs: Vec::new(),
+            where_clauses,
+        },
          DefKind::Use => {
              let Some(local) = def_id.as_local() else {
                  return (Vec::new(), vec![]);
@@ -338,7 +343,7 @@ fn map_generics_ty_fallback(tcx: TyCtxt<'_>, def_id: DefId) -> (Vec<GenericParam
     (params, Vec::new())
 }
 
-fn map_params(tcx: TyCtxt<'_>, def_id: DefId, inputs: &[ty::Ty<'_>]) -> Vec<Param> {
+fn map_params<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, inputs: &[ty::Ty<'tcx>]) -> Vec<Param> {
     let hir_names: Vec<Option<String>> = def_id
         .as_local()
         .and_then(|local| tcx.hir_maybe_body_owned_by(local))
@@ -360,17 +365,20 @@ fn map_params(tcx: TyCtxt<'_>, def_id: DefId, inputs: &[ty::Ty<'_>]) -> Vec<Para
         .map(|(i, ty)| {
             let name = hir_names.get(i).and_then(|n| n.clone()).unwrap_or_else(|| format!("p{i}"));
             let is_self = name == "self";
-            let ty_str = if is_self {
-                let raw = fmt_ty(tcx, *ty);
-                if raw.starts_with('&') {
-                    "&Self".to_string()
+            let ty_expr = if is_self {
+                if matches!(ty.kind(), ty::TyKind::Ref(_, _, _)) {
+                    TypeExpr::Ref {
+                        lifetime: None,
+                        inner: Box::new(TypeExpr::Param("Self".to_string())),
+                        mutable: false,
+                    }
                 } else {
-                    "Self".to_string()
+                    TypeExpr::Param("Self".to_string())
                 }
             } else {
-                fmt_ty(tcx, *ty)
+                lower_ty(tcx, *ty)
             };
-            Param { name, ty: ty_str, is_self, mutable: false, lifetime: None }
+            Param { name, ty: ty_expr, is_self, mutable: false, lifetime: None }
         })
         .collect()
 }
@@ -382,21 +390,13 @@ where I: Iterator<Item = &'a ty::FieldDef> {
             let vis = if in_enum { Visibility::Private } else { map_vis(tcx, f.did, tcx.visibility(f.did)) };
             let raw_name = f.name.to_string();
             let name = if raw_name.chars().all(|c| c.is_ascii_digit()) { None } else { Some(raw_name) };
-            Field { name, ty: fmt_ty(tcx, tcx.type_of(f.did).instantiate_identity()), vis }
+            Field { name, ty: lower_ty(tcx, tcx.type_of(f.did).instantiate_identity()), vis }
         })
         .collect()
 }
 
-fn fmt_ty(tcx: TyCtxt<'_>, ty: ty::Ty<'_>) -> String {
-    let krate = tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).to_string();
-    let s = norm::ty(&ty.to_string());
-    let s = norm::ty_strip_local(&s, &krate);
-    let s = norm::ty_clean_impl(&s);
-    norm::ty_strip_static_lifetime(&s)
-}
-
 /// For trait method declarations, HIR param names come from the TraitItem fn decl.
-fn map_trait_method_params(tcx: TyCtxt<'_>, def_id: DefId, inputs: &[ty::Ty<'_>]) -> Vec<Param> {
+fn map_trait_method_params<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, inputs: &[ty::Ty<'tcx>]) -> Vec<Param> {
     let hir_names: Vec<Option<String>> = def_id
         .as_local()
         .and_then(|local| {
@@ -418,34 +418,22 @@ fn map_trait_method_params(tcx: TyCtxt<'_>, def_id: DefId, inputs: &[ty::Ty<'_>]
         .map(|(i, ty)| {
             let is_self = i == 0 && has_self;
             let name = if is_self { "self".to_string() } else { hir_names.get(i).and_then(|n| n.clone()).unwrap_or_else(|| format!("p{i}")) };
-            let ty_str = if is_self {
-                let raw = fmt_ty(tcx, *ty);
-                if raw.starts_with('&') {
-                    "&Self".to_string()
+            let ty_expr = if is_self {
+                if matches!(ty.kind(), ty::TyKind::Ref(_, _, _)) {
+                    TypeExpr::Ref {
+                        lifetime: None,
+                        inner: Box::new(TypeExpr::Param("Self".to_string())),
+                        mutable: false,
+                    }
                 } else {
-                    "Self".to_string()
+                    TypeExpr::Param("Self".to_string())
                 }
             } else {
-                fmt_ty(tcx, *ty)
+                lower_ty(tcx, *ty)
             };
-            Param { name, ty: ty_str, is_self, mutable: false, lifetime: None }
+            Param { name, ty: ty_expr, is_self, mutable: false, lifetime: None }
         })
         .collect()
-}
-
-/// Unwrap `impl Future<Output = T>` → `T` for async fn return types.
-fn unwrap_future_output(ret: &str) -> String {
-    let trimmed = ret.trim();
-    if let Some(inner) = trimmed.strip_prefix("impl Future<Output") {
-        let inner = inner.trim_start_matches(|c: char| c.is_whitespace());
-        if let Some(inner) = inner.strip_prefix("=") {
-            let inner = inner.trim();
-            if let Some(t) = inner.strip_suffix('>') {
-                return t.trim().to_string();
-            }
-        }
-    }
-    ret.to_string()
 }
 
 /// Slice the source text of a Const or Static initializer expression.
@@ -465,8 +453,7 @@ fn collect_trait_methods(tcx: TyCtxt<'_>, trait_def_id: DefId) -> Vec<TraitMetho
         .map(|item| {
             let sig = tcx.fn_sig(item.def_id).skip_binder();
             let params = map_trait_method_params(tcx, item.def_id, sig.inputs().skip_binder());
-            let ret = fmt_ty(tcx, sig.output().skip_binder());
-            let ret = if tcx.asyncness(item.def_id).is_async() { unwrap_future_output(&ret) } else { ret };
+            let ret = lower_ty(tcx, sig.output().skip_binder());
             let unsafe_ = sig.safety() == Safety::Unsafe;
             let async_ = tcx.asyncness(item.def_id).is_async();
             let (generics, _where_clauses) = map_generics(tcx, item.def_id);
@@ -474,6 +461,179 @@ fn collect_trait_methods(tcx: TyCtxt<'_>, trait_def_id: DefId) -> Vec<TraitMetho
             TraitMethod { name: item.name().to_string(), vis, generics, params, ret, body: Body::None, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_, async_ }
         })
         .collect()
+}
+
+fn lower_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> TypeExpr {
+    match ty.kind() {
+        ty::TyKind::Bool => TypeExpr::Primitive(PrimType::Bool),
+        ty::TyKind::Char => TypeExpr::Primitive(PrimType::Char),
+        ty::TyKind::Str => TypeExpr::Primitive(PrimType::Str),
+        ty::TyKind::Int(i) => TypeExpr::Primitive(match i {
+            ty::IntTy::Isize => PrimType::Isize,
+            ty::IntTy::I8 => PrimType::I8,
+            ty::IntTy::I16 => PrimType::I16,
+            ty::IntTy::I32 => PrimType::I32,
+            ty::IntTy::I64 => PrimType::I64,
+            ty::IntTy::I128 => PrimType::I128,
+        }),
+        ty::TyKind::Uint(u) => TypeExpr::Primitive(match u {
+            ty::UintTy::Usize => PrimType::Usize,
+            ty::UintTy::U8 => PrimType::U8,
+            ty::UintTy::U16 => PrimType::U16,
+            ty::UintTy::U32 => PrimType::U32,
+            ty::UintTy::U64 => PrimType::U64,
+            ty::UintTy::U128 => PrimType::U128,
+        }),
+        ty::TyKind::Float(f) => TypeExpr::Primitive(match f {
+            ty::FloatTy::F32 => PrimType::F32,
+            ty::FloatTy::F64 => PrimType::F64,
+            ty::FloatTy::F16 => return TypeExpr::Path("f16".to_string()),
+            ty::FloatTy::F128 => return TypeExpr::Path("f128".to_string()),
+        }),
+        ty::TyKind::Never => TypeExpr::Primitive(PrimType::Never),
+        ty::TyKind::Tuple(items) => {
+            if items.is_empty() {
+                TypeExpr::Primitive(PrimType::Unit)
+            } else {
+                TypeExpr::Tuple(items.iter().map(|t| lower_ty(tcx, t)).collect())
+            }
+        }
+        ty::TyKind::Ref(region, inner, mutbl) => TypeExpr::Ref {
+            lifetime: match region.kind() {
+                ty::RegionKind::ReStatic => Some("'static".to_string()),
+                _ => None,
+            },
+            inner: Box::new(lower_ty(tcx, *inner)),
+            mutable: matches!(mutbl, rustc_hir::Mutability::Mut),
+        },
+        ty::TyKind::RawPtr(inner_ty, mutbl) => TypeExpr::RawPtr {
+            inner: Box::new(lower_ty(tcx, *inner_ty)),
+            mutable: matches!(mutbl, rustc_hir::Mutability::Mut),
+        },
+        ty::TyKind::Array(inner, len) => TypeExpr::Array {
+            inner: Box::new(lower_ty(tcx, *inner)),
+            len: len.try_to_target_usize(tcx),
+        },
+        ty::TyKind::Slice(inner) => TypeExpr::Slice(Box::new(lower_ty(tcx, *inner))),
+        ty::TyKind::FnPtr(sig, _) => {
+            let sig = sig.skip_binder();
+            let params = sig.inputs().iter().map(|t| lower_ty(tcx, *t)).collect();
+            let ret = Box::new(lower_ty(tcx, sig.output()));
+            TypeExpr::FnPtr { params, ret }
+        }
+        ty::TyKind::FnDef(def_id, args) => {
+            let sig = tcx.fn_sig(*def_id).instantiate(tcx, args).skip_binder();
+            let params = sig.inputs().iter().map(|t| lower_ty(tcx, *t)).collect();
+            let ret = Box::new(lower_ty(tcx, sig.output()));
+            TypeExpr::FnPtr { params, ret }
+        }
+        ty::TyKind::Adt(adt, args) => TypeExpr::Path(render_path_with_args(
+            tcx,
+            norm::path(tcx, adt.did()),
+            args.types().map(|t| lower_ty(tcx, t)).collect(),
+        )),
+        ty::TyKind::Param(param) => TypeExpr::Param(param.name.as_str().to_string()),
+        ty::TyKind::Dynamic(preds, _) => {
+            let principal = preds
+                .principal_def_id()
+                .map(|did| norm::path(tcx, did))
+                .unwrap_or_else(|| panic!("unsupported dyn type without principal trait: {ty:?}"));
+            TypeExpr::DynTrait(principal)
+        }
+        ty::TyKind::Coroutine(_, args) => {
+            let ret = args.as_coroutine().return_ty();
+            lower_ty(tcx, ret)
+        }
+        ty::TyKind::Alias(kind, alias_ty) => {
+            if matches!(kind, ty::AliasTyKind::Opaque) {
+                let hidden = tcx.type_of(alias_ty.def_id).instantiate_identity();
+                if matches!(hidden.kind(), ty::TyKind::Alias(_, inner) if inner.def_id == alias_ty.def_id) {
+                    panic!("opaque alias resolved to itself: {:?}", alias_ty.def_id);
+                }
+                lower_ty(tcx, hidden)
+            } else {
+                TypeExpr::Path(norm::path(tcx, alias_ty.def_id))
+            }
+        }
+        _ => panic!("unsupported structural type variant: {ty:?}"),
+    }
+}
+
+fn render_path_with_args(tcx: TyCtxt<'_>, base: String, args: Vec<TypeExpr>) -> String {
+    if args.is_empty() {
+        return base;
+    }
+    let rendered = args.iter().map(|a| render_type_expr(tcx, a)).collect::<Vec<_>>().join(", ");
+    format!("{base}<{rendered}>")
+}
+
+fn render_type_expr(_tcx: TyCtxt<'_>, expr: &TypeExpr) -> String {
+    match expr {
+        TypeExpr::Primitive(p) => match p {
+            PrimType::Bool => "bool".to_string(),
+            PrimType::Char => "char".to_string(),
+            PrimType::Str => "str".to_string(),
+            PrimType::U8 => "u8".to_string(),
+            PrimType::U16 => "u16".to_string(),
+            PrimType::U32 => "u32".to_string(),
+            PrimType::U64 => "u64".to_string(),
+            PrimType::U128 => "u128".to_string(),
+            PrimType::Usize => "usize".to_string(),
+            PrimType::I8 => "i8".to_string(),
+            PrimType::I16 => "i16".to_string(),
+            PrimType::I32 => "i32".to_string(),
+            PrimType::I64 => "i64".to_string(),
+            PrimType::I128 => "i128".to_string(),
+            PrimType::Isize => "isize".to_string(),
+            PrimType::F32 => "f32".to_string(),
+            PrimType::F64 => "f64".to_string(),
+            PrimType::Unit => "()".to_string(),
+            PrimType::Never => "!".to_string(),
+        },
+        TypeExpr::Ref { lifetime, inner, mutable } => {
+            let mut out = String::from("&");
+            if let Some(lf) = lifetime {
+                out.push_str(lf);
+                out.push(' ');
+            }
+            if *mutable {
+                out.push_str("mut ");
+            }
+            out.push_str(&render_type_expr(_tcx, inner));
+            out
+        }
+        TypeExpr::RawPtr { inner, mutable } => {
+            if *mutable {
+                format!("*mut {}", render_type_expr(_tcx, inner))
+            } else {
+                format!("*const {}", render_type_expr(_tcx, inner))
+            }
+        }
+        TypeExpr::Array { inner, len } => match len {
+            Some(len) => format!("[{}; {len}]", render_type_expr(_tcx, inner)),
+            None => format!("[{}; _]", render_type_expr(_tcx, inner)),
+        },
+        TypeExpr::Slice(inner) => format!("[{}]", render_type_expr(_tcx, inner)),
+        TypeExpr::Tuple(items) => {
+            if items.is_empty() {
+                "()".to_string()
+            } else {
+                let mut rendered = items.iter().map(|i| render_type_expr(_tcx, i)).collect::<Vec<_>>();
+                if rendered.len() == 1 {
+                    rendered[0].push(',');
+                }
+                format!("({})", rendered.join(", "))
+            }
+        }
+        TypeExpr::FnPtr { params, ret } => {
+            let params = params.iter().map(|p| render_type_expr(_tcx, p)).collect::<Vec<_>>().join(", ");
+            format!("fn({params}) -> {}", render_type_expr(_tcx, ret))
+        }
+        TypeExpr::Param(name) => name.clone(),
+        TypeExpr::DynTrait(path) => format!("dyn {path}"),
+        TypeExpr::ImplTrait(path) => format!("impl {path}"),
+        TypeExpr::Path(path) => path.clone(),
+    }
 }
 
 /// Capture function/method body as Body::Raw(source) via HIR body span.
