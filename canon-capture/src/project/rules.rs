@@ -92,9 +92,11 @@ impl RulePred {
 }
 
 /// Edge template kind reserved for rule-table migration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleEdge {
     Contains,
+    Resolves,
+    Reexports,
     TypeOf,
     ImplFor,
     Calls,
@@ -104,8 +106,6 @@ pub enum RuleEdge {
 /// Emit mode for a rule entry.
 #[derive(Debug, Clone)]
 pub enum RuleEmit {
-    /// Rule is currently handled by an explicit hook.
-    Hook(&'static str),
     /// Reserved named template.
     Template(&'static str),
 }
@@ -274,6 +274,6 @@ pub static RULES: &[RuleSpec] = &[
             is_assoc_item: None,
         },
         emit: RuleEmit::Template("use_item"),
-        edges: &[],
+        edges: &[RuleEdge::Contains, RuleEdge::Resolves, RuleEdge::Reexports],
     },
 ];

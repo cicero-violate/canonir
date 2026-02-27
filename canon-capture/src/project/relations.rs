@@ -5,39 +5,138 @@ use rustc_span::def_id::DefId;
 
 use crate::index::Index;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RelationTemplate {
+    ParentContains,
+    ParentAssocItem,
+    ImplFor,
+    ImplRef,
+}
+
+fn relation_templates(def_kind: DefKind) -> &'static [RelationTemplate] {
+    match def_kind {
+        DefKind::Impl { .. } => &[
+            RelationTemplate::ParentContains,
+            RelationTemplate::ImplFor,
+            RelationTemplate::ImplRef,
+        ],
+        DefKind::AssocFn | DefKind::AssocTy | DefKind::AssocConst => &[
+            RelationTemplate::ParentContains,
+            RelationTemplate::ParentAssocItem,
+        ],
+        _ => &[RelationTemplate::ParentContains],
+    }
+}
+
+fn push_parent_contains(
+    edges: &mut Vec<EdgeHint>,
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    id_u32: u32,
+    index: &Index,
+) -> Option<u32> {
+    let parent = tcx.opt_parent(def_id)?;
+    let pid = *index.def_to_node.get(&parent)?;
+    let parent_u32 = pid.index() as u32;
+    edges.push(EdgeHint {
+        src: parent_u32,
+        dst: id_u32,
+        kind: EdgeKind::Contains,
+    });
+    Some(parent_u32)
+}
+
+fn maybe_push_parent_assoc_item(
+    edges: &mut Vec<EdgeHint>,
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    parent_u32: Option<u32>,
+    id_u32: u32,
+) {
+    let Some(parent) = tcx.opt_parent(def_id) else {
+        return;
+    };
+    if !matches!(tcx.def_kind(def_id), DefKind::AssocFn | DefKind::AssocTy | DefKind::AssocConst) {
+        return;
+    }
+    if !matches!(tcx.def_kind(parent), DefKind::Trait | DefKind::Impl { .. }) {
+        return;
+    }
+    let Some(src) = parent_u32 else {
+        return;
+    };
+    edges.push(EdgeHint {
+        src,
+        dst: id_u32,
+        kind: EdgeKind::AssocItem,
+    });
+}
+
+fn maybe_push_impl_for(
+    edges: &mut Vec<EdgeHint>,
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    id_u32: u32,
+    index: &Index,
+) {
+    let self_ty = tcx.type_of(def_id).instantiate_identity();
+    let Some(adt_def_id) = self_ty.ty_adt_def().map(|adt| adt.did()) else {
+        return;
+    };
+    let Some(&struct_node) = index.def_to_node.get(&adt_def_id) else {
+        return;
+    };
+    edges.push(EdgeHint {
+        src: id_u32,
+        dst: struct_node.index() as u32,
+        kind: EdgeKind::ImplFor,
+    });
+}
+
+fn maybe_push_impl_ref(
+    edges: &mut Vec<EdgeHint>,
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    id_u32: u32,
+    index: &Index,
+) {
+    let Some(&trait_node) = tcx
+        .impl_opt_trait_ref(def_id)
+        .and_then(|eb| index.def_to_node.get(&eb.skip_binder().def_id))
+    else {
+        return;
+    };
+    edges.push(EdgeHint {
+        src: id_u32,
+        dst: trait_node.index() as u32,
+        kind: EdgeKind::ImplRef,
+    });
+}
+
 /// Relations derivable from item metadata (module parent, impl target, etc.).
 pub fn project_relations(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Vec<EdgeHint> {
     let Some(&id) = index.def_to_node.get(&def_id) else {
         return Vec::new();
     };
     let mut edges = Vec::new();
+    let id_u32 = id.index() as u32;
+    let templates = relation_templates(tcx.def_kind(def_id));
+    let mut parent_u32: Option<u32> = None;
 
-    // ── Parent containment: parent --[Contains]--> item ──────────────────────
-    if let Some(parent) = tcx.opt_parent(def_id) {
-        if let Some(&pid) = index.def_to_node.get(&parent) {
-            edges.push(EdgeHint { src: pid.index() as u32, dst: id.index() as u32, kind: EdgeKind::Contains });
-            if matches!(tcx.def_kind(def_id), DefKind::AssocFn | DefKind::AssocTy | DefKind::AssocConst)
-                && matches!(tcx.def_kind(parent), DefKind::Trait | DefKind::Impl { .. })
-            {
-                edges.push(EdgeHint { src: pid.index() as u32, dst: id.index() as u32, kind: EdgeKind::AssocItem });
+    for template in templates {
+        match template {
+            RelationTemplate::ParentContains => {
+                parent_u32 = push_parent_contains(&mut edges, tcx, def_id, id_u32, index);
             }
-        }
-    }
-
-    // ── Impl relationships ───────────────────────────────────────────────────
-    if matches!(tcx.def_kind(def_id), DefKind::Impl { .. }) {
-        // ImplFor: impl --[ImplFor]--> struct/type being implemented
-        // type_of on an impl DefId gives the self type (the struct).
-        let self_ty = tcx.type_of(def_id).instantiate_identity();
-        if let Some(adt_def_id) = self_ty.ty_adt_def().map(|adt| adt.did()) {
-            if let Some(&struct_node) = index.def_to_node.get(&adt_def_id) {
-                edges.push(EdgeHint { src: id.index() as u32, dst: struct_node.index() as u32, kind: EdgeKind::ImplFor });
+            RelationTemplate::ParentAssocItem => {
+                maybe_push_parent_assoc_item(&mut edges, tcx, def_id, parent_u32, id_u32);
             }
-        }
-
-        // Resolves: impl --[Resolves]--> trait (only for trait impls, not inherent)
-        if let Some(&trait_node) = tcx.impl_opt_trait_ref(def_id).and_then(|eb| index.def_to_node.get(&eb.skip_binder().def_id)) {
-            edges.push(EdgeHint { src: id.index() as u32, dst: trait_node.index() as u32, kind: EdgeKind::ImplRef });
+            RelationTemplate::ImplFor => {
+                maybe_push_impl_for(&mut edges, tcx, def_id, id_u32, index);
+            }
+            RelationTemplate::ImplRef => {
+                maybe_push_impl_ref(&mut edges, tcx, def_id, id_u32, index);
+            }
         }
     }
 

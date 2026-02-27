@@ -52,36 +52,43 @@ status: `done`
 - type alias `done`
 - use `done`
 - type ref/lifetime `pending` (not def-driven in current lowering flow)
-2. Move repeated field extraction into shared helpers used by rules. `pending`
+2. Move repeated field extraction into shared helpers used by rules. `done`
 3. Keep legacy code path for uncovered DefKinds. `done`
 
 ## PHASE_4_FUNCTION_PATH_MIGRATION
-status: `in_progress`
+status: `done`
 
 1. Migrate function/assoc-fn lowering metadata path into rules+engine. `done`
 2. Keep body lowering call boundary unchanged (`mir_body_structural` remains isolated). `done`
 3. Ensure async/unsafe/generics/where-clause wiring preserved. `done`
 
 ## PHASE_5_EDGE_TEMPLATE_MIGRATION
-status: `pending`
+status: `in_progress`
 
-1. Move repeated edge emission patterns into rule edge templates.
+1. Move repeated edge emission patterns into rule edge templates. `in_progress` (`use_item` edge templates complete; `relations.rs` moved to relation-template dispatch for `Contains/AssocItem/ImplFor/ImplRef`)
 2. Keep special-case edges in explicit hooks only where structurally necessary.
 3. Delete duplicated edge boilerplate from legacy branches.
 
 ## PHASE_6_SWITCHOVER_AND_DELETION
-status: `pending`
+status: `in_progress`
 
-1. Switch `project_item(...)` to engine-first path.
-2. Remove migrated legacy branches from `item.rs`.
-3. Shrink `item.rs` to orchestration + body lower integration + thin adapters.
+1. Switch `project_item(...)` to engine-first path. `done`
+2. Remove migrated legacy branches from `item.rs`. `done` (migrated kinds removed; legacy fallback now minimal)
+3. Shrink `item.rs` to orchestration + body lower integration + thin adapters. `in_progress` (helpers extracted and engine switched to direct helpers calls)
+
+## PHASE_6A_ENGINE_TEMPLATE_CLEANUP
+status: `done`
+
+1. Migrate `Static` and `Use` from passthrough/hooks to direct engine templates. `done`
+2. Remove legacy hook mode from rules/engine dispatch. `done`
+3. Delete residual bridge/re-export indirection in `item.rs`. `done`
 
 ## PHASE_7_VALIDATION_AND_LOC_GATE
-status: `pending`
+status: `in_progress`
 
-1. Run full compile/pipeline validation matrix.
-2. Confirm structural equivalence on emitted artifacts for validated fixtures.
-3. Measure LOC deltas and enforce target:
+1. Run full compile/pipeline validation matrix. `done` (active fixtures)
+2. Confirm structural equivalence on emitted artifacts for validated fixtures. `done`
+3. Measure LOC deltas and enforce target: `in_progress`
 - substantial reduction in `item.rs`
 - net reduction in `canon-capture` LOC
 

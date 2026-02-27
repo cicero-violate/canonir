@@ -5,6 +5,7 @@ use crate::{index::Index, Partial};
 
 pub mod body;
 pub mod engine;
+pub mod helpers;
 pub mod item;
 pub mod relations;
 pub mod rules;

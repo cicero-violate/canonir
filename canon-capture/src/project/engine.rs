@@ -6,8 +6,9 @@ use crate::index::Index;
 use crate::norm;
 use crate::types::{EdgeHint, EdgeKind, EnumVariant, Node, NodeId, NodeKind, StructKind, Visibility};
 
+use super::helpers;
 use super::item;
-use super::rules::{DefMeta, RuleSpec, RULES};
+use super::rules::{DefMeta, RuleEdge, RuleSpec, RULES};
 
 /// Analyze one definition into reusable metadata for rule matching.
 pub fn analyze_def(tcx: TyCtxt<'_>, def_id: DefId) -> DefMeta {
@@ -33,31 +34,37 @@ pub fn select_rule<'a>(meta: &DefMeta, rules: &'a [RuleSpec]) -> Option<&'a Rule
     rules.iter().find(|r| r.pred.matches(meta))
 }
 
-/// Engine entrypoint scaffold.
-/// Returns `None` in Phase 1 so legacy lowering remains authoritative.
+/// Engine entrypoint.
 pub fn lower_def(_tcx: TyCtxt<'_>, def_id: DefId, _index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
     let meta = analyze_def(_tcx, def_id);
     let rule = select_rule(&meta, RULES)?;
     match &rule.emit {
-        super::rules::RuleEmit::Hook("legacy_passthrough") => Some(item::project_item_legacy(_tcx, def_id, _index)),
         super::rules::RuleEmit::Template("mod_item") => lower_mod_item(_tcx, def_id, _index),
         super::rules::RuleEmit::Template("struct_like_item") => lower_struct_like_item(_tcx, def_id, _index),
         super::rules::RuleEmit::Template("enum_item") => lower_enum_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("trait_item") => lower_trait_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("impl_item") => lower_impl_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("assoc_ty_item") => lower_assoc_ty_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("assoc_const_item") => lower_assoc_const_item(_tcx, def_id, _index),
         super::rules::RuleEmit::Template("fn_item") => lower_fn_item(_tcx, def_id, _index),
         super::rules::RuleEmit::Template("assoc_fn_item") => lower_assoc_fn_item(_tcx, def_id, _index),
         super::rules::RuleEmit::Template("const_item") => lower_const_item(_tcx, def_id, _index),
         super::rules::RuleEmit::Template("static_item") => lower_static_item(_tcx, def_id, _index),
         super::rules::RuleEmit::Template("ty_alias_item") => lower_ty_alias_item(_tcx, def_id, _index),
-        super::rules::RuleEmit::Template("use_item") => lower_use_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("use_item") => lower_use_item(_tcx, def_id, _index, rule),
         _ => None,
     }
+}
+
+fn has_rule_edge(rule: &RuleSpec, edge: RuleEdge) -> bool {
+    rule.edges.contains(&edge)
 }
 
 fn lower_mod_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
     let id = *index.def_to_node.get(&def_id)?;
     let raw_span = tcx.def_span(def_id);
     let span = Some(norm::span(tcx, raw_span));
-    let vis = item::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
     let file = norm::module_file(tcx, def_id);
     let decl_file = norm::file(tcx, raw_span);
     let inline = file == decl_file
@@ -82,8 +89,8 @@ fn lower_struct_like_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Opti
     let full_path = norm::path(tcx, def_id);
     let name = norm::short(&full_path).to_string();
     let span = Some(norm::span(tcx, tcx.def_span(def_id)));
-    let vis = item::map_vis(tcx, def_id, tcx.visibility(def_id));
-    let (generics, where_clauses) = item::map_generics(tcx, def_id);
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
     let adt = tcx.adt_def(def_id);
     let variant = adt.non_enum_variant();
     let struct_kind = match variant.ctor_kind() {
@@ -91,8 +98,8 @@ fn lower_struct_like_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Opti
         Some(rustc_hir::def::CtorKind::Const) => StructKind::Unit,
         _ => StructKind::Named,
     };
-    let fields = item::map_fields(tcx, variant.fields.iter(), false);
-    let derives = item::collect_derives(tcx, def_id);
+    let fields = helpers::map_fields(tcx, variant.fields.iter(), false);
+    let derives = helpers::collect_derives(tcx, def_id);
     let kind = NodeKind::Struct {
         name,
         vis,
@@ -111,18 +118,18 @@ fn lower_enum_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec
     let full_path = norm::path(tcx, def_id);
     let name = norm::short(&full_path).to_string();
     let span = Some(norm::span(tcx, tcx.def_span(def_id)));
-    let vis = item::map_vis(tcx, def_id, tcx.visibility(def_id));
-    let (generics, where_clauses) = item::map_generics(tcx, def_id);
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
     let adt = tcx.adt_def(def_id);
     let variants: Vec<EnumVariant> = adt
         .variants()
         .iter()
         .map(|v| EnumVariant {
             name: v.name.to_string(),
-            fields: item::map_fields(tcx, v.fields.iter(), true),
+            fields: helpers::map_fields(tcx, v.fields.iter(), true),
         })
         .collect();
-    let derives = item::collect_derives(tcx, def_id);
+    let derives = helpers::collect_derives(tcx, def_id);
     let kind = NodeKind::Enum {
         name,
         vis,
@@ -135,19 +142,116 @@ fn lower_enum_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec
     Some((vec![Node { id, kind, span }], vec![]))
 }
 
+fn lower_trait_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
+    let methods = helpers::collect_trait_methods(tcx, def_id);
+    let kind = NodeKind::Trait {
+        name,
+        vis,
+        generics,
+        methods,
+        attrs: Vec::new(),
+        where_clauses,
+        unsafe_: false,
+    };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_impl_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
+    let for_trait = tcx
+        .impl_opt_trait_ref(def_id)
+        .map(|eb| crate::types::TypeExpr::Path(norm::path(tcx, eb.skip_binder().def_id)));
+    let for_struct = helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity());
+    let kind = NodeKind::Impl {
+        for_struct,
+        for_trait,
+        generics,
+        attrs: Vec::new(),
+        where_clauses,
+        unsafe_: false,
+    };
+    let _ = name;
+    let _ = vis;
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_assoc_ty_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
+    let default_ty = if !matches!(
+        tcx.associated_item(def_id).container,
+        rustc_middle::ty::AssocContainer::Trait
+    ) {
+        helpers::declared_item_ty_expr(tcx, def_id)
+            .or_else(|| Some(helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity())))
+    } else {
+        None
+    };
+    let kind = NodeKind::AssocType {
+        name,
+        vis,
+        generics,
+        default_ty,
+        attrs: Vec::new(),
+        where_clauses,
+    };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_assoc_const_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id)
+        .unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
+    let default_value = {
+        let v = helpers::hir_init_src(tcx, def_id);
+        if v.trim().is_empty() {
+            None
+        } else {
+            Some(v)
+        }
+    };
+    let kind = NodeKind::AssocConst {
+        name,
+        vis,
+        ty: ty_expr,
+        default_value,
+        attrs: Vec::new(),
+    };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
 fn lower_fn_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
     let id = *index.def_to_node.get(&def_id)?;
     let full_path = norm::path(tcx, def_id);
     let name = norm::short(&full_path).to_string();
     let span = Some(norm::span(tcx, tcx.def_span(def_id)));
-    let vis = item::map_vis(tcx, def_id, tcx.visibility(def_id));
-    let (generics, where_clauses) = item::map_generics(tcx, def_id);
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
     let sig = tcx.fn_sig(def_id).skip_binder();
     let returns_unit = sig.output().skip_binder().is_unit();
-    let params = item::map_params(tcx, def_id, sig.inputs().skip_binder());
+    let params = helpers::map_params(tcx, def_id, sig.inputs().skip_binder());
     let async_ = tcx.asyncness(def_id).is_async();
-    let ret = item::declared_fn_return_type_expr(tcx, def_id)
-        .unwrap_or_else(|| item::lower_ty(tcx, sig.output().skip_binder()));
+    let ret = helpers::declared_fn_return_type_expr(tcx, def_id)
+        .unwrap_or_else(|| helpers::lower_ty(tcx, sig.output().skip_binder()));
     let unsafe_ = sig.safety() == rustc_hir::Safety::Unsafe;
     let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
     let body = item::mir_body_structural(tcx, def_id, &param_names, returns_unit);
@@ -171,14 +275,14 @@ fn lower_assoc_fn_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<
     let full_path = norm::path(tcx, def_id);
     let name = norm::short(&full_path).to_string();
     let span = Some(norm::span(tcx, tcx.def_span(def_id)));
-    let vis = item::map_vis(tcx, def_id, tcx.visibility(def_id));
-    let (generics, where_clauses) = item::map_generics(tcx, def_id);
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
     let sig = tcx.fn_sig(def_id).skip_binder();
     let returns_unit = sig.output().skip_binder().is_unit();
-    let params = item::map_params(tcx, def_id, sig.inputs().skip_binder());
+    let params = helpers::map_params(tcx, def_id, sig.inputs().skip_binder());
     let async_ = tcx.asyncness(def_id).is_async();
-    let ret = item::declared_fn_return_type_expr(tcx, def_id)
-        .unwrap_or_else(|| item::lower_ty(tcx, sig.output().skip_binder()));
+    let ret = helpers::declared_fn_return_type_expr(tcx, def_id)
+        .unwrap_or_else(|| helpers::lower_ty(tcx, sig.output().skip_binder()));
     let unsafe_ = sig.safety() == rustc_hir::Safety::Unsafe;
     let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
     let body = item::mir_body_structural(tcx, def_id, &param_names, returns_unit);
@@ -202,10 +306,10 @@ fn lower_const_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Ve
     let full_path = norm::path(tcx, def_id);
     let name = norm::short(&full_path).to_string();
     let span = Some(norm::span(tcx, tcx.def_span(def_id)));
-    let vis = item::map_vis(tcx, def_id, tcx.visibility(def_id));
-    let ty_expr = item::declared_item_ty_expr(tcx, def_id)
-        .unwrap_or_else(|| item::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
-    let value = item::hir_init_src(tcx, def_id);
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id)
+        .unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
+    let value = helpers::hir_init_src(tcx, def_id);
     let kind = NodeKind::Const {
         name,
         vis,
@@ -221,10 +325,10 @@ fn lower_ty_alias_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<
     let full_path = norm::path(tcx, def_id);
     let name = norm::short(&full_path).to_string();
     let span = Some(norm::span(tcx, tcx.def_span(def_id)));
-    let vis = item::map_vis(tcx, def_id, tcx.visibility(def_id));
-    let (generics, where_clauses) = item::map_generics(tcx, def_id);
-    let ty_expr = item::declared_item_ty_expr(tcx, def_id)
-        .unwrap_or_else(|| item::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
+    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id)
+        .unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
     let kind = NodeKind::TypeAlias {
         name,
         vis,
@@ -241,10 +345,10 @@ fn lower_static_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(V
     let full_path = norm::path(tcx, def_id);
     let name = norm::short(&full_path).to_string();
     let span = Some(norm::span(tcx, tcx.def_span(def_id)));
-    let vis = item::map_vis(tcx, def_id, tcx.visibility(def_id));
-    let ty_expr = item::declared_item_ty_expr(tcx, def_id)
-        .unwrap_or_else(|| item::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
-    let value = item::hir_init_src(tcx, def_id);
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id)
+        .unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
+    let value = helpers::hir_init_src(tcx, def_id);
     let mutable = matches!(tcx.def_kind(def_id), DefKind::Static { mutability: rustc_hir::Mutability::Mut, .. });
     let kind = NodeKind::Static {
         name,
@@ -257,7 +361,12 @@ fn lower_static_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(V
     Some((vec![Node { id, kind, span }], vec![]))
 }
 
-fn lower_use_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+fn lower_use_item(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    index: &Index,
+    rule: &RuleSpec,
+) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
     let id = *index.def_to_node.get(&def_id)?;
     let local = def_id.as_local()?;
     let rustc_hir::Node::Item(item_hir) = tcx.hir_node_by_def_id(local) else {
@@ -268,7 +377,7 @@ fn lower_use_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<
     };
     let raw_span = tcx.def_span(def_id);
     let span_str = norm::span(tcx, raw_span);
-    let vis = item::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
     let mut nodes: Vec<Node> = Vec::new();
     let mut edges: Vec<EdgeHint> = Vec::new();
     let glob = matches!(use_kind, rustc_hir::UseKind::Glob);
@@ -312,25 +421,29 @@ fn lower_use_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<
             span: Some(span_str.clone()),
         });
 
-        if let Some(parent) = parent_src {
-            edges.push(EdgeHint {
-                src: parent,
-                dst: node_id.index() as u32,
-                kind: EdgeKind::Contains,
-            });
+        if has_rule_edge(rule, RuleEdge::Contains) {
+            if let Some(parent) = parent_src {
+                edges.push(EdgeHint {
+                    src: parent,
+                    dst: node_id.index() as u32,
+                    kind: EdgeKind::Contains,
+                });
+            }
         }
-        if let Some(&target_node) = index.def_to_node.get(target_did) {
-            edges.push(EdgeHint {
-                src: node_id.index() as u32,
-                dst: target_node.index() as u32,
-                kind: EdgeKind::Resolves,
-            });
-            if is_public_vis(&vis) {
+        if has_rule_edge(rule, RuleEdge::Resolves) {
+            if let Some(&target_node) = index.def_to_node.get(target_did) {
                 edges.push(EdgeHint {
                     src: node_id.index() as u32,
                     dst: target_node.index() as u32,
-                    kind: EdgeKind::Reexports,
+                    kind: EdgeKind::Resolves,
                 });
+                if has_rule_edge(rule, RuleEdge::Reexports) && is_public_vis(&vis) {
+                    edges.push(EdgeHint {
+                        src: node_id.index() as u32,
+                        dst: target_node.index() as u32,
+                        kind: EdgeKind::Reexports,
+                    });
+                }
             }
         }
     }

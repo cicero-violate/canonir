@@ -1,60 +1,64 @@
 # AGENT_STATE.md
 
 ## CANONICAL_HEADER
-- state_id: `CANON_CAPTURE_LOC_REDUCTION_V1_PHASE_4_FN_ASSOC_SLICE1`
+- state_id: `CANON_CAPTURE_LOC_REDUCTION_V1_PHASE_5_EDGE_TEMPLATE_SLICE2`
 - date: `2026-02-27`
 - mode: `execution`
 - invariant: `No heuristics. Structural invariants only.`
 
 ### 1) Investigate the problem
-- Migrate `Fn`/`AssocFn` metadata lowering to engine templates while preserving MIR body delegation.
+- Continue Phase 5 by removing remaining inline edge boilerplate in relation projection.
 
 ### 2) Gather facts
-- Rule table updates:
-- `fn_item` -> `Template("fn_item")`
-- `assoc_fn_item` -> `Template("assoc_fn_item")`
-- Engine template emitters added:
-- `lower_fn_item(...)`
-- `lower_assoc_fn_item(...)`
-- Shared helper visibility widened for engine reuse:
-- `map_params` -> `pub(crate)`
-- `declared_fn_return_type_expr` -> `pub(crate)`
-- `mir_body_structural` -> `pub(crate)`
-- Legacy branches deleted from `project_item_legacy`:
-- removed `DefKind::Fn`
-- removed `DefKind::AssocFn`
+- `project/relations.rs` previously had inline conditional edge pushes for:
+- parent `Contains`
+- assoc-item `AssocItem`
+- impl `ImplFor`
+- impl `ImplRef`
+- A new structural relation-template dispatcher is now implemented:
+- `RelationTemplate` enum
+- `relation_templates(def_kind)` mapping
+- per-template emission helpers (`push_parent_contains`, `maybe_push_parent_assoc_item`, `maybe_push_impl_for`, `maybe_push_impl_ref`)
 
 ### 3) Break down the facts
-- Function metadata path is now engine-owned.
-- MIR body lowering call boundary remained unchanged and isolated in item module.
-- Fallback still covers remaining higher-complexity kinds (`Trait`, `Impl`, assoc const/type).
+- Relation edge emission is now table-driven in shape rather than ad-hoc branching.
+- Emitted edge semantics are preserved: same edge kinds and same gating conditions.
+- Phase 5 now has two active migrated surfaces:
+- `engine/use_item` via `RuleEdge`
+- `relations.rs` via `RelationTemplate`
 
 ### 4) Write it to a state file
 - State overwritten to current checkpoint.
 
 ### 5) Sort structural and categorical patterns
-- Pattern A: function path migration is complete without touching MIR lowering internals.
-- Pattern B: engine now owns both low-risk item kinds and function metadata forms.
-- Pattern C: remaining legacy weight is concentrated in trait/impl/assoc metadata and helper internals.
+- Pattern A: edge category declarations now drive execution paths.
+- Pattern B: concrete edge push behavior is centralized in narrow helpers.
+- Pattern C: remaining edge work should target cross-module harmonization (shared template helpers) while preserving current invariants.
 
 ### 6) Write it to state file
 - Files changed this slice:
-- `canon-capture/src/project/rules.rs`
-- `canon-capture/src/project/engine.rs`
-- `canon-capture/src/project/item.rs`
+- `canon-capture/src/project/relations.rs`
+- `PLAN.md`
+- `AGENT_STATE.md`
+- `PROJECT_STATUS.md`
 
 ### 7) Solve the state file
-- Phase 4 is in progress; function/assoc-fn slice complete.
+- Completed relation-template migration slice with no fallback or heuristic behavior.
 
 ### 8) Emit and project the solution incrementally
 - Validation performed:
 - `cargo check -p canon-capture`: pass
 - `cargo check` workspace: pass
-- `repomap` full pipeline/build: pass
-- `test_1` full pipeline/build: pass
-- LOC:
-- `item.rs`: `2134 -> 1995`
+- `repomap` capture -> orchestration -> emitted `cargo build`: pass
+- `test_1` capture -> orchestration -> emitted `cargo build`: pass
+- LOC snapshot:
+- `item.rs`: `1391`
+- `engine.rs`: `460`
+- `rules.rs`: `279`
+- `relations.rs`: `144`
+- `canon-capture/src` total: `4802`
 
 ### 9) Repeat step 3
 - Next slice:
-- migrate `Trait`, `Impl`, `AssocTy`, `AssocConst` into engine templates.
+- converge `RuleEdge` and relation-template paths into shared edge-emission primitives
+- continue Phase 5 until remaining inline edge boilerplate is removed
