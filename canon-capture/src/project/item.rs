@@ -8,7 +8,7 @@ use rustc_middle::ty::AssocKind;
 use rustc_middle::ty::{self, CoroutineArgsExt, TyCtxt};
 use rustc_span::def_id::DefId;
 use rustc_span::hygiene::{ExpnKind, MacroKind};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::index::Index;
 use crate::norm;
@@ -746,6 +746,8 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -
         None => tcx.optimized_mir(local_def),
     };
     let resolver = LocalNameResolver::new(body, param_names);
+    let mut defined: HashSet<String> = param_names.iter().cloned().collect();
+    defined.insert("__ret".to_string());
 
     let mut blocks: Vec<BasicBlock> = Vec::with_capacity(body.basic_blocks.len());
     for bb in body.basic_blocks.iter() {
@@ -758,14 +760,27 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -
             let (lhs, rvalue) = &**boxed;
             if is_field_access_candidate(rvalue) {
                 if let Some(field_stmt) = mir_field_access_stmt(tcx, lhs, rvalue, &resolver) {
+                    if let Stmt::FieldAccess { dest: Some(dest), .. } = &field_stmt {
+                        defined.insert(dest.clone());
+                    }
                     stmts.push(field_stmt);
                 }
                 continue;
             }
             if is_struct_lit_candidate(rvalue) {
                 if let Some(struct_stmt) = mir_struct_lit_stmt(tcx, lhs, rvalue, &resolver) {
+                    if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
+                        defined.insert(dest.clone());
+                    }
                     stmts.push(struct_stmt);
                 }
+                continue;
+            }
+            if let Some(assign_stmt) = mir_assign_stmt(tcx, lhs, rvalue, &resolver, &defined) {
+                if let Stmt::Assign { lhs, .. } = &assign_stmt {
+                    defined.insert(lhs.clone());
+                }
+                stmts.push(assign_stmt);
             }
         }
 
@@ -781,6 +796,9 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -
                 && is_method_call_candidate(tcx, func)
             {
                 if let Some(method_stmt) = mir_method_call_stmt(tcx, func, args, destination, &resolver) {
+                    if let Stmt::MethodCall { dest: Some(dest), .. } = &method_stmt {
+                        defined.insert(dest.clone());
+                    }
                     stmts.push(method_stmt);
                 }
                 term = target
@@ -824,6 +842,24 @@ fn is_struct_lit_candidate(rvalue: &mir::Rvalue<'_>) -> bool {
 
 fn is_method_call_candidate(tcx: TyCtxt<'_>, func: &mir::Operand<'_>) -> bool {
     func.const_fn_def().map(|(did, _)| matches!(tcx.def_kind(did), DefKind::AssocFn)).unwrap_or(false)
+}
+
+fn mir_assign_stmt<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    lhs: &mir::Place<'tcx>,
+    rvalue: &mir::Rvalue<'tcx>,
+    resolver: &LocalNameResolver,
+    defined: &HashSet<String>,
+) -> Option<Stmt> {
+    let lhs = resolver.label_place(lhs)?;
+    let rhs = match rvalue {
+        mir::Rvalue::Use(op) => mir_operand_label(tcx, op, resolver)?,
+        _ => return None,
+    };
+    if !(defined.contains(&rhs) || rhs.contains("::")) {
+        return None;
+    }
+    Some(Stmt::Assign { lhs, rhs })
 }
 
 fn mir_field_access_stmt<'tcx>(
@@ -929,6 +965,7 @@ struct LocalNameResolver {
 impl LocalNameResolver {
     fn new<'tcx>(body: &mir::Body<'tcx>, param_names: &[String]) -> Self {
         let mut by_local: HashMap<u32, String> = HashMap::new();
+        by_local.insert(0, "__ret".to_string());
         for (idx, name) in param_names.iter().enumerate() {
             let local_idx = (idx + 1) as u32;
             if is_rust_ident(name) {

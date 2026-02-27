@@ -1,42 +1,37 @@
 # PLAN.md
 
 ## CANONICAL_HEADER
-- plan_id: `CANON_BODY_STRUCTURAL_PRIMARY_V1`
+- plan_id: `CANON_BODY_RETURN_INVARIANTS_V1`
 - scope: `Capture -> CanonIR -> Projection`
 - hard_rule: `No heuristics. Structural invariants only.`
-- objective: `Promote MIR-structured body ops to primary path and remove active Raw emission dependence.`
+- objective: `Complete non-unit return structural reconstruction and remove projection-side todo fallback.`
 
-## PHASE_P1_STRUCTURAL_INVARIANTS
-status: `completed`
+## PHASE_R1_RETURN_VALUE_CAPTURE
+status: `in_progress`
 
-1. Enforced canonical place/operand resolvability via MIR local-name resolver (params + debug info).
-2. Structured ops are emitted only when local/value identity is structurally resolvable.
-3. Mixed-mode raw fallback for fn/assoc fn body source removed from active path.
+1. Capture MIR return-place flow (`_0`) into explicit canonical return operations.
+2. Emit `CfgOp::Assign` only when RHS is structurally declared/known.
+3. Preserve compile safety while expanding structural return coverage.
 
-## PHASE_P2_CAPTURE_PRIMARY_STRUCTURED_BODY
-status: `completed`
+## PHASE_R2_RETURN_EMIT_STRICTNESS
+status: `pending`
 
-1. Fn/assoc fn capture now uses MIR structured body as primary source.
-2. `Body::Raw` is no longer used in active fn/method capture flow.
-3. Structured body extraction remains deterministic for method call / field access / struct literal and control-flow terminators.
+1. Remove projection-side non-unit `todo!()` injection in `emit_fn`.
+2. Require body-carried return value structure for non-unit functions.
+3. Fail on invariant violations rather than patching in projection.
 
-## PHASE_P3_PROJECTION_RAW_SURFACE_REMOVAL
-status: `completed`
+## PHASE_R3_VALIDATION_SWEEP
+status: `pending`
 
-1. Raw variants removed from active schema surfaces (`CfgOp::Raw`, capture `Body::Raw`, capture `Stmt::Raw`).
-2. Structured `StructLit` rendering implemented.
-3. Destination binding is declaration-safe (`let` first write, assignment on subsequent writes).
-
-## PHASE_P4_VALIDATION_SWEEP
-status: `completed`
-
-1. Workspace `cargo check`: pass.
-2. `repomap` fixture: capture -> orchestration -> emitted `cargo build`: pass.
-3. `test_1` fixture: capture -> orchestration -> emitted `cargo build`: pass.
+1. Workspace `cargo check`.
+2. Fixture matrix:
+   - `capture/repomap -> emit/repomap -> cargo build`
+   - `capture/test_1 -> emit/test_1 -> cargo build`
+3. Track remaining `todo!()` count in emitted fixtures as a structural gap metric.
 
 ## EXIT_CONDITION
-status: `completed`
+status: `pending`
 
-1. MIR-structured body ops are primary in active capture flow.
-2. Raw body/op variants are eliminated from the active type/model path.
-3. Required validation matrix is green.
+1. Non-unit returns are structurally represented from capture.
+2. Projection no longer injects `todo!()` as a return fallback.
+3. Validation sweep is green.

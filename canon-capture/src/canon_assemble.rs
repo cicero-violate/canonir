@@ -362,6 +362,14 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                             let lhs = canon.push_node(CanonNodeKind::Local { name_id, ty: ty_id, flags: 0 });
                             CfgOp::Let { lhs, ty: ty_id, rhs }
                         }
+                        Stmt::Assign { lhs, rhs } => {
+                            let ty = unit_ty(canon);
+                            let lhs_name = NameId(canon.name_intern.intern(lhs));
+                            let rhs_name = NameId(canon.name_intern.intern(rhs));
+                            let lhs_id = canon.push_node(CanonNodeKind::Local { name_id: lhs_name, ty, flags: 0 });
+                            let rhs_id = canon.push_node(CanonNodeKind::Local { name_id: rhs_name, ty, flags: 0 });
+                            CfgOp::Assign { lhs: lhs_id, rhs: rhs_id }
+                        }
                         Stmt::Expr(e) => {
                             let eid = NameId(canon.name_intern.intern(e));
                             let ty = unit_ty(canon);

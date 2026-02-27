@@ -11,6 +11,7 @@
 - Canon-only pipeline remains operational.
 - MIR-structured body capture is primary for fn/assoc fn in active flow.
 - Residual raw body/op variants are removed from active schema/model flow.
+- Active structural gap: non-unit return value reconstruction remains incomplete (emitted `todo!()` fallback still present).
 
 ## VALIDATED_FIXTURES
 - `test_projects/test_rust_projects/capture/repomap` -> `emit/repomap` build: pass.
@@ -19,10 +20,10 @@
 ## ACTIVE_PLAN_REFERENCE
 - Plan: [PLAN.md](/workspace/ai_sandbox/canon/PLAN.md)
 - State: [AGENT_STATE.md](/workspace/ai_sandbox/canon/AGENT_STATE.md)
-- Plan id: `CANON_BODY_STRUCTURAL_PRIMARY_V1`
-- Plan status: `completed`
+- Plan id: `CANON_BODY_RETURN_INVARIANTS_V1`
+- Plan status: `in_progress`
 
 ## DONE_CRITERIA_STATUS
 - MIR-structured body ops primary: `met`
 - Raw body/op variants eliminated from active path: `met`
-- Validation sweep green: `met`
+- Non-unit return structural completeness: `pending`

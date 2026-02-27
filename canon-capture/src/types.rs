@@ -108,6 +108,7 @@ pub struct EnumVariant {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Stmt {
     Let { pat: String, ty: Option<TypeExpr>, init: Option<String> },
+    Assign { lhs: String, rhs: String },
     Expr(String),
     FieldAccess {
         base: String,

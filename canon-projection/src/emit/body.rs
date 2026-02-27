@@ -33,7 +33,9 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>) -> String
             let rhs_expr = rhs.map(|r| local_name(ir, r)).unwrap_or_else(|| "Default::default()".into());
             format!("let {}: {} = {};", lhs_name, render_type_id(ir, *ty), rhs_expr)
         }
-        CfgOp::Assign { lhs, rhs } => format!("{} = {};", local_name(ir, *lhs), local_name(ir, *rhs)),
+        CfgOp::Assign { lhs, rhs } => {
+            bind_or_assign(&local_name(ir, *lhs), local_name(ir, *rhs), declared)
+        }
         CfgOp::Return(v) => match v {
             Some(v) => format!("return {};", local_name(ir, *v)),
             None => "return;".into(),

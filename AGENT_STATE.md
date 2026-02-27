@@ -1,48 +1,51 @@
 # AGENT_STATE.md
 
 ## CANONICAL_HEADER
-- state_id: `CANON_BODY_STRUCTURAL_PRIMARY_V1`
+- state_id: `CANON_BODY_RETURN_INVARIANTS_V1`
 - date: `2026-02-27`
 - mode: `execution`
 - invariant: `No heuristics. Structural invariants only.`
 
 ### 1) Investigate the problem
-- Requested continuation after initial commit.
-- Target: complete elimination of remaining raw body/op surfaces and keep pipeline green.
+- Continue advancing Canon goal after raw body/op variant removal.
+- Next blocker: non-unit return reconstruction is still incomplete.
 
 ### 2) Gather facts
-- Residual raw surfaces were still present in type/model definitions:
-  - `CfgOp::Raw`,
-  - capture `Body::Raw`,
-  - capture `Stmt::Raw`.
-- Fixture validation had to remain green (`repomap`, `test_1`).
+- MIR body path is primary and raw variants are removed.
+- Added structural `Stmt::Assign` capture and `CfgOp::Assign` lowering.
+- Introduced canonical return-place local mapping (`_0 -> __ret`) and guarded assignment emission.
+- Emitted fixtures still contain `todo!()` in non-unit functions.
 
 ### 3) Break down the facts
-- True structural completion requires removing residual raw variants, not only bypassing them in execution.
-- Projection and analyzer must compile without raw branches.
+- Remaining gap is return-value completeness, not raw-op fallback.
+- Projection still injects `todo!()` for non-unit functions missing explicit return structure.
+- This is the next structural invariant target.
 
 ### 4) Write it to a state file
-- File overwritten in canonical numbered format for `AGENT_STATE_SECTION_DELTAS.sh`.
+- File overwritten with current cycle state.
 
 ### 5) Sort structural and categorical patterns
-- Pattern A: raw variants are schema-level escape hatches and violate structural-only objective.
-- Pattern B: safe completion needs variant removal + compile + fixture-sweep confirmation.
+- Pattern A: assignment capture without declaration invariants causes undefined RHS values.
+- Pattern B: guarded assignment emission avoids invalid code but leaves return gaps.
+- Pattern C: return completeness must be solved in capture/IR, not projection fallback.
 
 ### 6) Write it to state file
-- Implemented:
-  - removed `CfgOp::Raw` from Canon node schema,
-  - removed capture `Body::Raw` and capture `Stmt::Raw` variants,
-  - removed raw match branches in projection/analyzer/capture assembly.
+- Completed in this slice:
+  - Added `Stmt::Assign`.
+  - Lowered `Stmt::Assign` -> `CfgOp::Assign`.
+  - Added assignment-definition guard in MIR body projection.
+- Pending:
+  - remove projection-side non-unit `todo!()` injection after return structure is complete.
 
 ### 7) Solve the state file
-- Raw body/op variant surfaces are now removed from active type/model path.
-- Structured MIR-body primary flow remains active.
+- Current slice solved assignment-level local/value invariant tightening.
+- Return invariant remains active and is now the explicit plan focus.
 
 ### 8) Emit and project the solution incrementally
 - Validation:
   - workspace `cargo check`: pass.
-  - `repomap`: capture -> orchestration -> emitted `cargo build`: pass.
-  - `test_1`: capture -> orchestration -> emitted `cargo build`: pass.
+  - repomap pipeline build: pass.
+  - emitted `todo!()` instances remain (tracked as current structural gap metric).
 
 ### 9) Repeat step 3
-- No pending items remain under current plan id.
+- Execute `PLAN.md` `PHASE_R1_RETURN_VALUE_CAPTURE` next until `todo!()` return fallback is removable.
