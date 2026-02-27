@@ -8,6 +8,7 @@ anyhow = "1"
 canon = { path = "../canon" }
 rustc-hash = "1"
 serde = { version = "=1.0.228", features = ["derive"] }
+toml = "0.8"
 
 [lib]
 path = "src/lib.rs"

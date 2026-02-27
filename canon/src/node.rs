@@ -155,6 +155,12 @@ pub enum WherePredKind {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DependencySpec {
+    pub crate_root: PathId,
+    pub package_name: Option<NameId>,
+}
+
 // ── The canonical node kind ───────────────────────────────────────────────────
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CanonNodeKind {
@@ -166,6 +172,10 @@ pub enum CanonNodeKind {
         edition: u32, // 2015 | 2018 | 2021
         #[serde(default)]
         dependencies: Vec<PathId>,
+        #[serde(default)]
+        dependency_packages: Vec<Option<NameId>>,
+        #[serde(default)]
+        declared_dependencies: Vec<DependencySpec>,
     },
 
     // ── Module ───────────────────────────────────────────────────────────────

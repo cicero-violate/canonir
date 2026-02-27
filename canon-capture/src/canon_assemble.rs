@@ -8,17 +8,76 @@ use canon::{
     edge::EdgeKind as CanonEdgeKind,
     intern::{NameId, PathId},
     ir::CanonIR,
-    node::{flags, CanonId, CanonNodeKind, CfgOp, PrimTy, TypeKind},
+    node::{flags, CanonId, CanonNodeKind, CfgOp, DependencySpec, PrimTy, TypeKind},
 };
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::LOCAL_CRATE;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 #[derive(Default)]
 struct ModelLike {
     nodes: Vec<Node>,
     edge_hints: Vec<EdgeHint>,
     emit_order: Vec<NodeId>,
+}
+
+fn load_declared_dependency_specs(canon: &mut CanonIR) -> Vec<DependencySpec> {
+    let manifest_dir = match std::env::var("CARGO_MANIFEST_DIR") {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let manifest_path = PathBuf::from(manifest_dir).join("Cargo.toml");
+    let manifest = match std::fs::read_to_string(manifest_path) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let value: toml::Value = match toml::from_str(&manifest) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let Some(deps) = value.get("dependencies").and_then(|v| v.as_table()) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for (key, dep_value) in deps {
+        let crate_root = key.replace('-', "_");
+        if !seen.insert(crate_root.clone()) {
+            continue;
+        }
+        let package_name: Option<String> = match dep_value {
+            toml::Value::String(_) => {
+                if key.contains('-') {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            }
+            toml::Value::Table(t) => {
+                if let Some(pkg) = t.get("package").and_then(|v| v.as_str()) {
+                    Some(pkg.to_string())
+                } else if key.contains('-') {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let crate_root = canon.intern_path(&crate_root);
+        let package_name = package_name
+            .as_deref()
+            .filter(|pkg| !pkg.is_empty())
+            .map(|pkg| NameId(canon.name_intern.intern(pkg)));
+        out.push(DependencySpec {
+            crate_root,
+            package_name,
+        });
+    }
+
+    out
 }
 
 fn map_edge_kind(k: &ModelEdgeKind) -> CanonEdgeKind {
@@ -410,7 +469,15 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
                     None
                 };
                 let ed: u32 = edition.parse().unwrap_or(2021);
-                CanonNodeKind::Crate { name_id, cargo_name, edition: ed, dependencies: vec![] }
+                let declared_dependencies = load_declared_dependency_specs(&mut canon);
+                CanonNodeKind::Crate {
+                    name_id,
+                    cargo_name,
+                    edition: ed,
+                    dependencies: vec![],
+                    dependency_packages: vec![],
+                    declared_dependencies,
+                }
             }
             NodeKind::Module { path, vis, inline, .. } => {
                 let path_id = canon.intern_path(path);

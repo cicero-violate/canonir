@@ -60,11 +60,23 @@ pub fn build_plan(ir: &CanonIR) -> Result<Plan> {
 
     if let Some((name, edition)) = crate_meta(ir) {
         let deps = ir.nodes.iter().find_map(|n| {
-            if let CanonNodeKind::Crate { dependencies, .. } = &n.kind {
+            if let CanonNodeKind::Crate {
+                dependencies,
+                dependency_packages,
+                ..
+            } = &n.kind
+            {
                 Some(
                     dependencies
                         .iter()
-                        .map(|pid| render_dependency_entry(ir.lookup_path(*pid)))
+                        .enumerate()
+                        .map(|(idx, pid)| {
+                            let package = dependency_packages
+                                .get(idx)
+                                .and_then(|id| *id)
+                                .map(|id| ir.lookup_name(id));
+                            render_dependency_entry(ir.lookup_path(*pid), package)
+                        })
                         .collect::<Vec<_>>(),
                 )
             } else {
@@ -216,9 +228,8 @@ fn crate_meta(ir: &CanonIR) -> Option<(String, String)> {
     })
 }
 
-fn render_dependency_entry(dep: &str) -> String {
-    if dep.contains('_') {
-        let package = dep.replace('_', "-");
+fn render_dependency_entry(dep: &str, package: Option<&str>) -> String {
+    if let Some(package) = package {
         format!("{dep} = {{ package = \"{package}\", version = \"*\" }}")
     } else {
         format!("{dep} = \"*\"")
