@@ -234,7 +234,8 @@ fn record_terminator_uses(term: &Terminator, used: &mut HashSet<String>) {
 }
 
 fn extend_expr_tokens(expr: &str, out: &mut HashSet<String>) {
-    for tok in expr.split(|c: char| !(c == '_' || c.is_ascii_alphanumeric())) {
+    let stripped = strip_quoted_literals(expr);
+    for tok in stripped.split(|c: char| !(c == '_' || c.is_ascii_alphanumeric())) {
         if tok.is_empty() {
             continue;
         }
@@ -243,4 +244,43 @@ fn extend_expr_tokens(expr: &str, out: &mut HashSet<String>) {
         }
         out.insert(tok.to_string());
     }
+}
+
+fn strip_quoted_literals(expr: &str) -> String {
+    let mut out = String::with_capacity(expr.len());
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    for ch in expr.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if (in_single || in_double) && ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if in_single {
+            if ch == '\'' {
+                in_single = false;
+            }
+            continue;
+        }
+        if in_double {
+            if ch == '"' {
+                in_double = false;
+            }
+            continue;
+        }
+        if ch == '\'' {
+            in_single = true;
+            continue;
+        }
+        if ch == '"' {
+            in_double = true;
+            continue;
+        }
+        out.push(ch);
+    }
+    out
 }
