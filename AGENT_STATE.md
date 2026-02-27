@@ -1,45 +1,44 @@
 # AGENT_STATE.md
 
 ## CANONICAL_HEADER
-- state_id: `CAPTURE_REFACTOR_MODEL_EXECUTION_SLICE_2`
+- state_id: `CAPTURE_REFACTOR_MODEL_EXECUTION_SLICE_10`
 - date: `2026-02-27`
 - mode: `execution`
 - invariant: `No heuristics. Structural invariants only.`
 
 ### 1) Investigate the problem
-- Slice 1 introduced `capture/*` architecture but `engine` and `rules` were still wrappers around `project/*`.
-- This kept duplicated ownership and blocked clean separation.
+- Method/plain call statement builders still lived in `project/item.rs`, despite most call-label/filter helper dependencies already moved to MIR lower layer.
 
 ### 2) Gather facts
-- `project/engine.rs` and `project/rules.rs` contained full implementations.
-- `capture/engine.rs` and `capture/rules.rs` were pass-through re-exports.
-- Pipeline already routes through `capture::pipeline::capture`.
+- Remaining functions were self-contained and depended on helpers now owned by `capture/mir/lower.rs`:
+- `mir_method_call_stmt`,
+- `mir_call_stmt`.
 
 ### 3) Break down the facts
-- Structural migration target for this slice:
-- make `capture/engine.rs` authoritative,
-- make `capture/rules.rs` authoritative,
-- reduce `project/*` to compatibility facades.
+- Migration action:
+- move method/plain call stmt builders into `capture/mir/lower.rs`,
+- import from new owner in `project/item.rs`,
+- delete local duplicate definitions.
 
 ### 4) Write it to a state file
 - State overwritten for this slice.
 
 ### 5) Sort structural and categorical patterns
-- Pattern A: ownership inversion (new layer depended on old layer content location).
-- Pattern B: compatibility retention required to avoid broad-callsite churn in one turn.
+- Pattern A: call-lowering ownership consolidation under MIR layer.
+- Pattern B: incremental elimination of `project/item.rs` helper responsibilities.
 
 ### 6) Write it to state file
 - Files changed:
-- `canon-capture/src/capture/engine.rs`
-- `canon-capture/src/capture/rules.rs`
-- `canon-capture/src/project/engine.rs`
-- `canon-capture/src/project/rules.rs`
+- `canon-capture/src/capture/mir/lower.rs`
+- `canon-capture/src/project/item.rs`
 - `AGENT_STATE.md`
 
 ### 7) Solve the state file
-- Copied full implementations from `project/*` into `capture/engine.rs` and `capture/rules.rs`.
-- Updated `capture/engine.rs` imports to use compatibility dependencies (`project::edge_emit`, `project::helpers`, `project::item`) while keeping engine ownership in `capture`.
-- Replaced `project/engine.rs` and `project/rules.rs` with single-line compatibility re-exports to `capture`.
+- Added to `capture/mir/lower.rs`:
+- `mir_method_call_stmt`,
+- `mir_call_stmt`.
+- Updated `project/item.rs` imports to consume these from `capture::mir::lower`.
+- Removed local `mir_method_call_stmt` and `mir_call_stmt` definitions from `project/item.rs`.
 
 ### 8) Emit and project the solution incrementally
 - Validation:
@@ -48,6 +47,5 @@
 
 ### 9) Repeat step 3
 - Next structural slice:
-- extract `LocalNameResolver` and MIR-local naming surfaces from `project/item.rs` into `capture/mir/resolver.rs`,
-- move MIR CFG lowering entry from `project/item.rs::mir_body_structural` into `capture/mir/lower.rs` authoritative implementation,
-- keep `project/item.rs` as compatibility facade where possible.
+- migrate projected-place rendering helpers (`render_projected_place_expr`, binop/unop token helpers) to `capture/mir/lower.rs`,
+- continue reducing `project/item.rs` to CFG orchestration + legacy bridge body only.
