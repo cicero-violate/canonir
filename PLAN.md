@@ -1,196 +1,193 @@
-## Canon-Capture Compression Model
+## Capture Refactor Model
 
 ### Variables
 
-* ( L_{mir} ) = MIR lowering LOC (≈1500+)
-* ( L_{engine} ) = rule engine LOC (≈300–500)
-* ( L_{rules} ) = rule table LOC (≈200–400)
-* ( L_{helpers} ) = shared utilities
-* ( \Delta L ) = LOC eliminated
+* ( G_s ) = rustc graph
+* ( G_c ) = Canon graph
+* ( \pi ) = capture transform
+* ( E ) = engine
+* ( R ) = rule table
+* ( M ) = MIR projection
+* ( V ) = structural validator
+* ( F ) = CanonFragment
 
 ---
 
 ### Equations
 
-1. **Current**
+1. **New Capture Definition**
    [
-   item.rs = MIR + Engine + RuleLogic + Helpers
+   \pi = Assemble \circ Merge \circ E
    ]
 
-2. **Target**
+2. **Engine**
    [
-   item.rs = Engine \quad \text{only}
+   E(def) = Apply(R, def) + M(def)
    ]
 
-3. **Compression**
+3. **Invariant Check**
    [
-   \Delta L \approx L_{mir} + duplicated_logic
+   V(G_c) = true
+   ]
+
+4. **Separation**
+   [
+   Engine \perp MIR \perp Validation
    ]
 
 ---
 
-# What You Actually Need
+# Canon-Capture Refactor (Clean Architecture)
 
-You already built the engine + rules layer.
-The remaining explosion is **MIR lowering**.
+## Target Directory Structure
 
-The solution is not splitting files.
+```text
+canon-capture/
+│
+├── lib.rs
+├── index.rs
+├── norm.rs
+│
+├── capture/
+│   ├── mod.rs
+│   ├── pipeline.rs        // top-level orchestration
+│   ├── engine.rs          // rule dispatcher
+│   ├── rules.rs           // declarative RuleSpec
+│   ├── relations.rs       // relation templates only
+│   ├── fragments.rs       // CanonFragment + builders
+│   │
+│   ├── mir/
+│   │   ├── mod.rs
+│   │   ├── lower.rs       // mir_body_structural (CFG walker)
+│   │   ├── patterns.rs    // MirPattern table
+│   │   ├── guard.rs       // structural_guard logic
+│   │   └── resolver.rs    // LocalNameResolver
+│   │
+│   ├── validate/
+│   │   ├── mod.rs
+│   │   └── structural.rs  // emission invariants
+│   │
+│   └── helpers.rs         // type + generics mapping
+```
 
-The solution is:
+---
+
+# Layer Responsibilities
+
+## 1️⃣ pipeline.rs
+
+```text
+capture(tcx):
+    index = build_index(tcx)
+    fragments = []
+    for def in index.def_ids:
+        fragments += engine::lower_def(...)
+    canon = canon_assemble(...)
+    validate::structural(canon)
+    return canon
+```
+
+Pure orchestration.
+
+---
+
+## 2️⃣ engine.rs
+
+Only:
+
+* analyze_def
+* select_rule
+* lower_def
+
+No MIR logic.
+No structural guards.
+
+---
+
+## 3️⃣ mir/lower.rs
+
+Only:
 
 [
-Replace\ MIR\ Pattern\ Forest\ with\ Table\ +\ Dispatcher
+CFG_{mir} \rightarrow Body_{canon}
 ]
 
----
-
-# Smarter Reduction: MIR Pattern Table
-
-Right now `mir_assign_stmt`, `mir_field_access_stmt`,
-`mir_struct_lit_stmt`, `mir_method_call_stmt`,
-`mir_call_stmt`, etc. are all custom match trees.
-
-You collapse this into:
+No visibility.
+No type mapping.
+No rule selection.
 
 ---
 
-## 1️⃣ MIR Pattern Descriptor
+## 4️⃣ mir/patterns.rs
 
-Define:
+Static pattern table.
 
-```
-struct MirPattern {
-    kind: MirOpKind,
-    predicate: fn(&mir::Rvalue) -> bool,
-    emit: fn(ctx, rvalue) -> Option<Stmt>,
+No branching forest.
+
+---
+
+## 5️⃣ validate/structural.rs
+
+Centralized invariant enforcement:
+
+* no MIR alloc artifacts
+* no item-scope statements
+* no malformed path segments
+* no sentinel leaks
+
+All structural invariants live here.
+
+---
+
+## 6️⃣ fragments.rs
+
+Builder utilities:
+
+```text
+CanonFragment {
+    nodes: Vec<Node>,
+    edges: Vec<EdgeHint>,
+    body: Option<Body>
 }
 ```
 
-Then create a static table:
-
-```
-static MIR_PATTERNS: &[MirPattern] = &[
-    FIELD_ACCESS_PATTERN,
-    STRUCT_LIT_PATTERN,
-    METHOD_CALL_PATTERN,
-    CALL_PATTERN,
-    BINOP_PATTERN,
-];
-```
-
----
-
-## 2️⃣ Single Dispatcher
-
-Replace all branching logic with:
-
-```
-for pattern in MIR_PATTERNS {
-    if pattern.predicate(rvalue) {
-        return pattern.emit(ctx, rvalue);
-    }
-}
-None
-```
-
-This deletes hundreds of LOC of nested match logic.
-
----
-
-## 3️⃣ Extract Generic Operand Labeling
-
-All of this:
-
-* mir_operand_label
-* mir_call_args_labels
-* mir_operand_label_for_arg
-* constant_is_implicit_zst_value
-* is_filtered_internal_call_path
-* path_has_unresolved_generic
-
-→ compress into a single:
-
-```
-fn label_operand(ctx, operand) -> Option<String>
-```
-
-Delete the fragmentation.
-
----
-
-## 4️⃣ Delete “defensive” duplication
-
-Many of these functions:
-
-* is_structural_expr
-* stmt_inputs_known
-* value_known
-* expr_uses_suppressed_sentinel
-
-Can be unified into:
-
-```
-fn structural_guard(stmt, state) -> bool
-```
-
-One gate instead of many.
+No raw Vec mutation scattered across modules.
 
 ---
 
 # What This Achieves
 
-Instead of:
+### Before
+
+* Engine + MIR + Guards intertwined
+* Invariants scattered
+* Hard to reason about boundaries
+
+### After
 
 [
-1000+ LOC\ of\ nested\ matching
+Capture = Deterministic\ Projection\ +\ Structural\ Validator
 ]
 
-You get:
+Clear separation of:
 
-[
-~300–500 LOC\ engine
-]
-
-Body lowering becomes:
-
-* CFG walker (~150 LOC)
-* Pattern dispatcher (~100 LOC)
-* Pattern definitions (~200 LOC)
+* Rule-based lowering
+* MIR projection
+* Invariant enforcement
 
 ---
 
-# Resulting Canon-Capture Structure
+# Resulting Properties
 
-```
-project/
-    engine.rs          (generic def lowering)
-    rules.rs           (def rules)
-    mir_engine.rs      (CFG + dispatcher)
-    mir_patterns.rs    (pattern table)
-    helpers.rs         (shared utilities)
-    relations.rs
-    body.rs            (external def collector)
-```
-
----
-
-# Why This Scales
-
-Adding a new MIR structural form:
-
-→ Add one pattern entry.
-Not 80 lines of branching.
-
-Adding new DefKind:
-
-→ Add one RuleSpec.
-
-No LOC explosion.
+* Scales with rule insertion
+* Structural violations caught before emit
+* Solver layer isolated
+* Capture vocabulary frozen cleanly
 
 ---
 
 [
-\max(\text{Scalability}, \text{Compression}, \text{Determinism}) = Good
+\max(\text{Separation}, \text{Determinism}, \text{Scalability}, \text{Clarity}) = Good
 ]
 
 Cheese loves you.
