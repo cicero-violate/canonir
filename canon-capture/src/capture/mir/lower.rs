@@ -405,20 +405,21 @@ fn lower_assign_statement<'tcx>(
             }
             return;
         }
-        MirOpKind::ConstUse => {
-            if is_zero_arg_enum_ctor_use(tcx, rvalue) {
-                if let Some(lhs_name) = lhs_name.clone() {
-                    emit_suppressed_for_name(
-                        &lhs_name,
-                        stmts,
-                        defined,
-                        suppressed_sentinel_names,
-                        ret_value_defined,
-                        ret_binding_emitted,
-                    );
-                }
-                return;
+        MirOpKind::ZeroArgEnumCtor => {
+            if let Some(lhs_name) = lhs_name.clone() {
+                emit_suppressed_for_name(
+                    &lhs_name,
+                    stmts,
+                    defined,
+                    suppressed_sentinel_names,
+                    ret_value_defined,
+                    ret_binding_emitted,
+                );
             }
+            return;
+        }
+        MirOpKind::ConstUse => {
+            // Fall through to generic assign lowering for non-zero-arg const uses.
         }
         MirOpKind::Assign => {}
     }
@@ -698,45 +699,6 @@ pub(crate) fn is_zero_arg_enum_ctor_expr_str(expr: &str) -> bool {
     expr == "std::option::Option::None"
         || expr == "core::option::Option::None"
         || expr == "Option::None"
-}
-
-pub(crate) fn is_zero_arg_enum_ctor_use(tcx: TyCtxt<'_>, rvalue: &mir::Rvalue<'_>) -> bool {
-    let mir::Rvalue::Use(mir::Operand::Constant(c)) = rvalue else {
-        return false;
-    };
-    if let ty::TyKind::FnDef(did, _) = c.const_.ty().kind() {
-        if matches!(
-            tcx.def_kind(*did),
-            rustc_hir::def::DefKind::Ctor(rustc_hir::def::CtorOf::Variant, rustc_hir::def::CtorKind::Const)
-        ) {
-            return true;
-        }
-    }
-    let ty::TyKind::Adt(adt, _) = c.const_.ty().kind() else {
-        return false;
-    };
-    if !adt.is_enum() {
-        return false;
-    }
-    if let mir::Const::Val(v, ty) = c.const_ {
-        if v.try_to_scalar_int().is_some()
-            && matches!(ty.kind(), ty::TyKind::Adt(adt2, _) if adt2.is_enum())
-            && adt.variants().iter().any(|var| var.fields.is_empty())
-        {
-            return true;
-        }
-    }
-    let rendered = strip_instance_generics(&c.const_.to_string());
-    for variant in adt.variants().iter() {
-        if !variant.fields.is_empty() {
-            continue;
-        }
-        let suffix = format!("::{}", variant.name);
-        if rendered.ends_with(&suffix) {
-            return true;
-        }
-    }
-    false
 }
 
 pub(crate) fn is_internal_mir_const_repr(s: &str) -> bool {
@@ -1024,9 +986,6 @@ pub(crate) fn mir_assign_stmt<'tcx>(
     defined: &std::collections::HashSet<String>,
     suppressed_sentinel_names: &std::collections::HashSet<String>,
 ) -> Option<Stmt> {
-    if is_zero_arg_enum_ctor_use(tcx, rvalue) {
-        return None;
-    }
     let lhs = resolver.label_place(lhs)?;
     if matches!(rvalue, mir::Rvalue::Aggregate(kind, _) if matches!(&**kind, mir::AggregateKind::Array(_)))
         && defined.contains(&lhs)

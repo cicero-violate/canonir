@@ -1,45 +1,45 @@
 # AGENT_STATE.md
 
 ## CANONICAL_HEADER
-- state_id: `CAPTURE_REFACTOR_MODEL_EXECUTION_SLICE_22`
+- state_id: `CAPTURE_REFACTOR_MODEL_EXECUTION_SLICE_23`
 - date: `2026-02-27`
 - mode: `execution`
 - invariant: `No heuristics. Structural invariants only.`
 
 ### 1) Investigate the problem
-- MIR lowering still had remaining inline logic for non-call terminators and partial assign suppression classification outside the pattern table.
+- One remaining specialization remained ad-hoc in `lower.rs`: zero-arg enum constructor suppression depended on a dedicated helper outside `patterns.rs` classification.
 
 ### 2) Gather facts
-- `lower_call_terminator(...)` already existed, but return/goto/drop/assert/switchint logic was still in the main loop.
-- Zero-arg enum ctor suppression check was still ad-hoc after pattern dispatch.
+- `ConstUse` already existed in `patterns.rs`, but zero-arg constructor detection was still in `lower.rs` (`is_zero_arg_enum_ctor_use`).
+- `mir_assign_stmt` still had an early zero-arg enum suppression check tied to the old helper.
 
 ### 3) Break down the facts
-- Structural targets for this slice:
-- extract non-call terminator lowering into dedicated helpers,
-- move constant-use assignment class into `patterns.rs` dispatch domain.
+- Structural target:
+- move zero-arg enum constructor detection into the pattern table,
+- make assign flow consume pattern kinds without duplicate detector logic,
+- remove redundant helper from `lower.rs`.
 
 ### 4) Write it to a state file
 - State overwritten for this slice.
 
 ### 5) Sort structural and categorical patterns
-- Pattern A: terminator decomposition (`call` vs `non-call`).
-- Pattern B: pattern-table expansion (`ConstUse` classification).
+- Pattern A: pattern-table specialization promotion (`ZeroArgEnumCtor`).
+- Pattern B: lowerer simplification by eliminating duplicate classifier checks.
 
 ### 6) Write it to state file
 - Files changed:
-- `canon-capture/src/capture/mir/lower.rs`
 - `canon-capture/src/capture/mir/patterns.rs`
+- `canon-capture/src/capture/mir/lower.rs`
 - `STRUCTURAL_INVARIANTS_REPORT.md`
 - `AGENT_STATE.md`
 
 ### 7) Solve the state file
-- Added and wired:
-- `lower_non_call_terminator(...)`
-- `lower_return_terminator(...)`
-- `remap_to_goto(...)`
-- Main loop now delegates non-call terminators through helper dispatch.
-- Added `MirOpKind::ConstUse` in `capture/mir/patterns.rs` and routed zero-arg enum ctor suppression through dispatcher path.
-- Removed redundant post-dispatch zero-arg enum check from assign flow.
+- Added `MirOpKind::ZeroArgEnumCtor` and `is_zero_arg_enum_ctor_pattern(...)` in `capture/mir/patterns.rs`.
+- Updated assign dispatch in `lower_assign_statement(...)`:
+- `ZeroArgEnumCtor` now emits suppressed binding directly and returns,
+- `ConstUse` now falls through to generic assign lowering for non-zero-arg constants.
+- Removed redundant zero-arg enum check from `mir_assign_stmt(...)`.
+- Deleted now-redundant `is_zero_arg_enum_ctor_use(...)` from `lower.rs`.
 
 ### 8) Emit and project the solution incrementally
 - Validation:
@@ -49,5 +49,5 @@
 
 ### 9) Repeat step 3
 - Next structural slice:
-- continue MIR compression by moving additional assignment-specialization tests from `lower.rs` into `patterns.rs` predicates and thin helper adapters,
-- keep `lower.rs` focused on CFG traversal/orchestration only.
+- continue extracting additional assignment suppression/specialization gates from `mir_assign_stmt` into explicit pattern kinds or guard adapters,
+- preserve `lower.rs` as CFG/orchestration surface with thin dispatch.

@@ -6,6 +6,7 @@ pub enum MirOpKind {
     FieldAccess,
     StructLit,
     OpaqueAggregate,
+    ZeroArgEnumCtor,
     ConstUse,
     Assign,
 }
@@ -40,6 +41,38 @@ fn is_opaque_aggregate_pattern(_tcx: TyCtxt<'_>, rvalue: &mir::Rvalue<'_>) -> bo
     )
 }
 
+fn is_zero_arg_enum_ctor_pattern(tcx: TyCtxt<'_>, rvalue: &mir::Rvalue<'_>) -> bool {
+    let mir::Rvalue::Use(mir::Operand::Constant(c)) = rvalue else {
+        return false;
+    };
+    if let rustc_middle::ty::TyKind::FnDef(did, _) = c.const_.ty().kind() {
+        if matches!(
+            tcx.def_kind(*did),
+            rustc_hir::def::DefKind::Ctor(
+                rustc_hir::def::CtorOf::Variant,
+                rustc_hir::def::CtorKind::Const
+            )
+        ) {
+            return true;
+        }
+    }
+    let rustc_middle::ty::TyKind::Adt(adt, _) = c.const_.ty().kind() else {
+        return false;
+    };
+    if !adt.is_enum() {
+        return false;
+    }
+    if let mir::Const::Val(v, ty) = c.const_ {
+        if v.try_to_scalar_int().is_some()
+            && matches!(ty.kind(), rustc_middle::ty::TyKind::Adt(adt2, _) if adt2.is_enum())
+            && adt.variants().iter().any(|var| var.fields.is_empty())
+        {
+            return true;
+        }
+    }
+    false
+}
+
 static MIR_PATTERNS: &[MirPattern] = &[
     MirPattern {
         kind: MirOpKind::FieldAccess,
@@ -52,6 +85,10 @@ static MIR_PATTERNS: &[MirPattern] = &[
     MirPattern {
         kind: MirOpKind::OpaqueAggregate,
         predicate: is_opaque_aggregate_pattern,
+    },
+    MirPattern {
+        kind: MirOpKind::ZeroArgEnumCtor,
+        predicate: is_zero_arg_enum_ctor_pattern,
     },
     MirPattern {
         kind: MirOpKind::ConstUse,
