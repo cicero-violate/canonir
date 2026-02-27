@@ -8,8 +8,8 @@ Only direct facts from tool output are recorded.
 - liveness facts:
   - 6:INFO liveness_solver: pruned 4 dead function(s) from emit_order
 - emitted structural surface:
-  - canon suppressed binding count: 12
-  - canon suppressed __ret count: 12
+  - canon suppressed binding count: 11
+  - canon suppressed __ret count: 11
   - canon suppressed non-__ret count: 0
   - canon match gap count: 0
   - unreachable count: 0
@@ -19,22 +19,21 @@ Only direct facts from tool output are recorded.
   - symbol.rs:13 ::     pub fn line(&self) -> usize {
   - symbol.rs:16 ::     pub fn render(&self) -> String {
   - repomap.rs:19 :: pub fn build_repomap(root_dir: &Path) -> Vec<FileMap> {
-  - repomap.rs:31 :: pub fn render_repomap(maps: &[FileMap], root_dir: &Path) -> String {
+  - repomap.rs:32 :: pub fn render_repomap(maps: &[FileMap], root_dir: &Path) -> String {
   - extractor.rs:11 :: pub fn extract_symbols(src: &str) -> Vec<Symbol> {
-  - extractor.rs:26 :: fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
-  - extractor.rs:31 :: fn field_text<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
-  - extractor.rs:42 :: fn fn_signature(node: Node, src: &[u8]) -> String {
-  - extractor.rs:51 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:59 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:67 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:73 :: fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
+  - extractor.rs:33 :: fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
+  - extractor.rs:39 :: fn field_text<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
+  - extractor.rs:55 :: fn fn_signature(node: Node, src: &[u8]) -> String {
+  - extractor.rs:79 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:94 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:109 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
 
 ## fixture=repomap step=diff
 - log: /workspace/ai_sandbox/canon/.run_script_logs/repomap_diff.log
 - no invariant-signature lines detected; inspect full log.
 - emitted structural surface:
-  - canon suppressed binding count: 12
-  - canon suppressed __ret count: 12
+  - canon suppressed binding count: 11
+  - canon suppressed __ret count: 11
   - canon suppressed non-__ret count: 0
   - canon match gap count: 0
   - unreachable count: 0
@@ -44,13 +43,12 @@ Only direct facts from tool output are recorded.
   - symbol.rs:13 ::     pub fn line(&self) -> usize {
   - symbol.rs:16 ::     pub fn render(&self) -> String {
   - repomap.rs:19 :: pub fn build_repomap(root_dir: &Path) -> Vec<FileMap> {
-  - repomap.rs:31 :: pub fn render_repomap(maps: &[FileMap], root_dir: &Path) -> String {
+  - repomap.rs:32 :: pub fn render_repomap(maps: &[FileMap], root_dir: &Path) -> String {
   - extractor.rs:11 :: pub fn extract_symbols(src: &str) -> Vec<Symbol> {
-  - extractor.rs:26 :: fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
-  - extractor.rs:31 :: fn field_text<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
-  - extractor.rs:42 :: fn fn_signature(node: Node, src: &[u8]) -> String {
-  - extractor.rs:51 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:59 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:67 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:73 :: fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
+  - extractor.rs:33 :: fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
+  - extractor.rs:39 :: fn field_text<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
+  - extractor.rs:55 :: fn fn_signature(node: Node, src: &[u8]) -> String {
+  - extractor.rs:79 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:94 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:109 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
 

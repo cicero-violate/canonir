@@ -25,12 +25,25 @@ pub(crate) fn render_projected_place_expr<'tcx>(
         match elem {
             mir::ProjectionElem::Deref => {
                 expr = format!("*{expr}");
-                cursor_ty = cursor_ty.builtin_deref(true)?;
+                cursor_ty = match cursor_ty.kind() {
+                    ty::TyKind::Ref(_, inner, _) => *inner,
+                    ty::TyKind::RawPtr(inner, _) => *inner,
+                    _ => cursor_ty.builtin_deref(true)?,
+                };
             }
             mir::ProjectionElem::Downcast(variant_name, variant_idx) => {
-                let variant = variant_name
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| format!("variant_{}", variant_idx.as_usize()));
+                let variant = match cursor_ty.kind() {
+                    ty::TyKind::Adt(adt, _) if adt.is_enum() => {
+                        let enum_path = norm::path(tcx, adt.did());
+                        let variant_name = variant_name
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| adt.variant(variant_idx).name.to_string());
+                        format!("{enum_path}::{variant_name}")
+                    }
+                    _ => variant_name
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| format!("variant_{}", variant_idx.as_usize())),
+                };
                 pending_downcast = Some(variant);
             }
             mir::ProjectionElem::Field(field_idx, field_ty) => {

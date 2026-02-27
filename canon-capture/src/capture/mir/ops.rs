@@ -38,7 +38,7 @@ pub(crate) fn mir_operand_label(
     resolver: &LocalNameResolver,
 ) -> Option<String> {
     match operand {
-        mir::Operand::Copy(place) | mir::Operand::Move(place) => resolver.label_place(place),
+        mir::Operand::Copy(place) | mir::Operand::Move(place) => label_operand_place(place, resolver),
         mir::Operand::Constant(c) => {
             if let ty::TyKind::FnDef(did, _) = c.const_.ty().kind() {
                 return Some(norm::path(tcx, *did));
@@ -56,6 +56,44 @@ pub(crate) fn mir_operand_label(
         }
         mir::Operand::RuntimeChecks(_) => None,
     }
+}
+
+fn label_operand_place(place: &mir::Place<'_>, resolver: &LocalNameResolver) -> Option<String> {
+    if place.projection.is_empty() {
+        return resolver.label_place(place);
+    }
+    let mut expr = resolver.label_local(place.local)?;
+    let mut pending_downcast: Option<String> = None;
+    for elem in place.projection.iter() {
+        match elem {
+            mir::ProjectionElem::Deref => {
+                expr = format!("*{expr}");
+            }
+            mir::ProjectionElem::Downcast(variant_name, variant_idx) => {
+                pending_downcast = Some(
+                    variant_name
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| format!("variant_{}", variant_idx.as_usize())),
+                );
+            }
+            mir::ProjectionElem::Field(field_idx, _) => {
+                if let Some(variant) = pending_downcast.take() {
+                    expr = format!("({expr} as {variant})");
+                }
+                expr = format!("({expr}).{}", field_idx.index());
+            }
+            mir::ProjectionElem::Index(local) => {
+                let idx = resolver.label_local(local)?;
+                expr = format!("{expr}[{idx}]");
+            }
+            mir::ProjectionElem::OpaqueCast(..) | mir::ProjectionElem::UnwrapUnsafeBinder(..) => {}
+            _ => return None,
+        }
+    }
+    if let Some(variant) = pending_downcast.take() {
+        expr = format!("({expr} as {variant})");
+    }
+    Some(expr)
 }
 
 pub(crate) fn mir_call_args_labels<'tcx>(
@@ -82,7 +120,6 @@ pub(crate) fn filtered_internal_call_target<'tcx>(
     };
     let path = norm::path(tcx, did);
     filters::is_filtered_internal_call_path(&path)
-        || filters::path_has_unresolved_generic(&path)
 }
 
 pub(crate) fn mir_method_call_stmt<'tcx>(

@@ -243,12 +243,6 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
     };
     let (lhs, rvalue) = &**boxed;
     let lhs_name = ctx.resolver.label_place(lhs);
-    if lhs_name
-        .as_ref()
-        .is_some_and(|name| ctx.call_feed_locals.contains(name))
-    {
-        return;
-    }
 
     match mir_patterns::dispatch_stmt_pattern(ctx.tcx, rvalue) {
         MirOpKind::FieldAccess => {
@@ -308,15 +302,12 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
         }
         MirOpKind::OpaqueAggregate => {
             if let Some(lhs_name) = lhs_name.clone() {
-                ctx.defined.insert(lhs_name.clone());
-                if lhs_name == "__ret"
-                    && !ctx.has_match_before_block
-                    && !stmts_have_ret_match(ctx.stmts)
-                {
-                    ctx.stmts.push(Stmt::Match {
-                        dest: Some("__ret".to_string()),
-                    });
-                }
+                mir_util::emit_suppressed_for_name(
+                    &lhs_name,
+                    ctx.stmts,
+                    ctx.defined,
+                    ctx.suppressed_sentinel_names,
+                );
             }
             return;
         }

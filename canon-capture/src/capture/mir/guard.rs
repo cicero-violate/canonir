@@ -40,7 +40,7 @@ pub fn value_known(
         return false;
     }
     if is_synthetic_name(value) {
-        return false;
+        return defined.contains(value);
     }
     defined.contains(value) || value == "__ret" || is_structural_expr(value)
 }
