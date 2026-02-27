@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
-# FILE="AGENT_STATE.md"
-FILE="PROJECT_STATUS.md"
+FILE="AGENT_STATE.md"
 TMPDIR="/tmp/agent_state_sections"
 mkdir -p "$TMPDIR"
 rm -f "$TMPDIR"/*
