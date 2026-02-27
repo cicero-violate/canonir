@@ -82,5 +82,6 @@ extract_function("emit_impl", $ARGV);
 
 USEFUL INFORMATION
 rustc compiler source code can be found in here
+/workspace/ai_sandbox/canon/test_projects/rust_compiler_info/compiler
 
 
