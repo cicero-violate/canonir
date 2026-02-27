@@ -23,7 +23,17 @@ pub(crate) fn map_vis(tcx: TyCtxt<'_>, def_id: DefId, v: ty::Visibility<DefId>) 
                     return Visibility::Private; // pub(self)
                 }
             }
-            Visibility::PubIn(norm::path(tcx, restricted))
+            let canonical = norm::path(tcx, restricted);
+            if canonical.trim().is_empty() {
+                // pub(in <path>) must carry a canonical non-empty path in ModelIR.
+                // When rustc visibility resolves to an empty path, degrade to private
+                // rather than emitting invalid PubIn payload.
+                Visibility::Private
+            } else if canonical == "crate" {
+                Visibility::PubCrate
+            } else {
+                Visibility::PubIn(canonical)
+            }
         }
     }
 }

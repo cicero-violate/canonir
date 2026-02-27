@@ -63,11 +63,11 @@ status: `done`
 3. Ensure async/unsafe/generics/where-clause wiring preserved. `done`
 
 ## PHASE_5_EDGE_TEMPLATE_MIGRATION
-status: `in_progress`
+status: `done`
 
-1. Move repeated edge emission patterns into rule edge templates. `in_progress` (`use_item` edge templates complete; `relations.rs` moved to relation-template dispatch; shared `edge_emit` primitives now used by engine + relations + body projection)
-2. Keep special-case edges in explicit hooks only where structurally necessary.
-3. Delete duplicated edge boilerplate from legacy branches.
+1. Move repeated edge emission patterns into rule edge templates. `done` (`use_item` via `RuleEdge`; relations via relation-template dispatch; body/engine/relations unified on shared `edge_emit` primitives)
+2. Keep special-case edges in explicit hooks only where structurally necessary. `done` (no hook reintroduction)
+3. Delete duplicated edge boilerplate from legacy branches. `done` (project-side `EdgeHint` construction centralized)
 
 ## PHASE_6_SWITCHOVER_AND_DELETION
 status: `in_progress`
@@ -86,7 +86,7 @@ status: `done`
 ## PHASE_7_VALIDATION_AND_LOC_GATE
 status: `in_progress`
 
-1. Run full compile/pipeline validation matrix. `done` (active fixtures)
+1. Run full compile/pipeline validation matrix. `in_progress` (repomap/test_1 green; expanded sweep exposed new return_solver gaps on conversation/semantic-lint)
 2. Confirm structural equivalence on emitted artifacts for validated fixtures. `done`
 3. Measure LOC deltas and enforce target: `in_progress`
 - substantial reduction in `item.rs`

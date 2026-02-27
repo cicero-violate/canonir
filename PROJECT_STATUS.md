@@ -15,6 +15,9 @@
 - Engine and relations now share `project/edge_emit.rs` for edge construction primitives.
 - Body projection (`CfgEdge/Calls/ConstDep/Contains`) now also emits through shared `project/edge_emit.rs`.
 - Validated fixture parity remains green.
+- Extended sweep update:
+- capture panic `invalid path for path_intern` fixed via visibility invariant in `map_vis` (empty `PubIn` paths no longer emitted).
+- `conversation`/`semantic-lint` now capture successfully but fail at analyzer `return_solver` (`visit_map` / `visit_str` terminal completeness gaps).
 
 ## REFACTOR_PROGRESS
 - Baseline metrics:
@@ -32,9 +35,10 @@
 - Phase 6 helper extraction slice 1
 - Phase 6 helper-bridge cleanup slice 2 (`collect_derives` moved, hook path removed)
 - Phase 6 helper-bridge cleanup slice 3 (`item.rs` helper re-export bridge removed)
+- Phase 5 edge-template migration (project-side edge construction unified via `edge_emit`)
 - Pending:
-- Phase 5 edge-template migration (remaining DefKind edge patterns)
 - Phase 7 final LOC gate with broader fixture sweep
+- Structural return completeness for expanded fixtures (conversation/semantic-lint)
 
 ## ACTIVE_PLAN_REFERENCE
 - Plan: [PLAN.md](/workspace/ai_sandbox/canon/PLAN.md)
