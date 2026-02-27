@@ -8,6 +8,7 @@ use rustc_middle::ty::AssocKind;
 use rustc_middle::ty::{self, CoroutineArgsExt, TyCtxt};
 use rustc_span::def_id::DefId;
 use rustc_span::hygiene::{ExpnKind, MacroKind};
+use std::collections::HashMap;
 
 use crate::index::Index;
 use crate::norm;
@@ -69,7 +70,8 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
             let async_ = tcx.asyncness(def_id).is_async();
             let ret = declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, sig.output().skip_binder()));
             let unsafe_ = sig.safety() == Safety::Unsafe;
-            let body = hir_body_src(tcx, def_id);
+            let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+            let body = mir_body_structural(tcx, def_id, &param_names).unwrap_or_else(|| hir_body_src(tcx, def_id));
             NodeKind::Function { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ }
         }
         DefKind::AssocFn => {
@@ -78,7 +80,8 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
             let async_ = tcx.asyncness(def_id).is_async();
             let ret = declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, sig.output().skip_binder()));
             let unsafe_ = sig.safety() == Safety::Unsafe;
-            let body = hir_body_src(tcx, def_id);
+            let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+            let body = mir_body_structural(tcx, def_id, &param_names).unwrap_or_else(|| hir_body_src(tcx, def_id));
             NodeKind::Method { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ }
         }
         DefKind::AssocTy => {
@@ -729,7 +732,7 @@ fn render_type_expr(_tcx: TyCtxt<'_>, expr: &TypeExpr) -> String {
     }
 }
 
-fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Body> {
+fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -> Option<Body> {
     let local_def = def_id.as_local()?;
     if !tcx.is_mir_available(local_def) {
         return None;
@@ -740,8 +743,10 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Body> {
         | Some(rustc_hir::ConstContext::Static(_)) => tcx.mir_for_ctfe(local_def),
         None => tcx.optimized_mir(local_def),
     };
+    let resolver = LocalNameResolver::new(body, param_names);
 
     let mut blocks: Vec<BasicBlock> = Vec::with_capacity(body.basic_blocks.len());
+    let mut structured_ops = 0usize;
     for bb in body.basic_blocks.iter() {
         let mut stmts: Vec<Stmt> = Vec::new();
 
@@ -750,12 +755,16 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Body> {
                 continue;
             };
             let (lhs, rvalue) = &**boxed;
-            if let Some(field_stmt) = mir_field_access_stmt(tcx, lhs, rvalue) {
+            if is_field_access_candidate(rvalue) {
+                let field_stmt = mir_field_access_stmt(tcx, lhs, rvalue, &resolver)?;
                 stmts.push(field_stmt);
+                structured_ops += 1;
                 continue;
             }
-            if let Some(struct_stmt) = mir_struct_lit_stmt(tcx, lhs, rvalue) {
+            if is_struct_lit_candidate(rvalue) {
+                let struct_stmt = mir_struct_lit_stmt(tcx, lhs, rvalue, &resolver)?;
                 stmts.push(struct_stmt);
+                structured_ops += 1;
             }
         }
 
@@ -768,9 +777,11 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Body> {
                 target,
                 ..
             } = &term_ref.kind
-                && let Some(method_stmt) = mir_method_call_stmt(tcx, func, args, destination)
+                && is_method_call_candidate(tcx, func)
             {
+                let method_stmt = mir_method_call_stmt(tcx, func, args, destination, &resolver)?;
                 stmts.push(method_stmt);
+                structured_ops += 1;
                 term = target
                     .map(|bb| Terminator::Goto(bb.as_usize() as u32))
                     .unwrap_or(Terminator::None);
@@ -781,8 +792,9 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Body> {
             } else if let mir::TerminatorKind::SwitchInt { discr, .. } = &term_ref.kind {
                 let mut succ = term_ref.successors();
                 if let (Some(t), Some(f)) = (succ.next(), succ.next()) {
+                    let cond = mir_operand_label(tcx, discr, &resolver)?;
                     term = Terminator::Branch {
-                        cond: mir_operand_label(tcx, discr),
+                        cond,
                         true_bb: t.as_usize() as u32,
                         false_bb: f.as_usize() as u32,
                     };
@@ -793,13 +805,33 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Body> {
         blocks.push(BasicBlock { stmts, terminator: term });
     }
 
+    if structured_ops == 0 {
+        return None;
+    }
     Some(Body::Blocks(blocks))
+}
+
+fn is_field_access_candidate(rvalue: &mir::Rvalue<'_>) -> bool {
+    matches!(
+        rvalue,
+        mir::Rvalue::Use(mir::Operand::Copy(place) | mir::Operand::Move(place))
+            if matches!(place.as_ref().last_projection(), Some((_, mir::ProjectionElem::Field(..))))
+    )
+}
+
+fn is_struct_lit_candidate(rvalue: &mir::Rvalue<'_>) -> bool {
+    matches!(rvalue, mir::Rvalue::Aggregate(kind, _) if matches!(&**kind, mir::AggregateKind::Adt(..)))
+}
+
+fn is_method_call_candidate(tcx: TyCtxt<'_>, func: &mir::Operand<'_>) -> bool {
+    func.const_fn_def().map(|(did, _)| matches!(tcx.def_kind(did), DefKind::AssocFn)).unwrap_or(false)
 }
 
 fn mir_field_access_stmt<'tcx>(
     tcx: TyCtxt<'tcx>,
     lhs: &mir::Place<'tcx>,
     rvalue: &mir::Rvalue<'tcx>,
+    resolver: &LocalNameResolver,
 ) -> Option<Stmt> {
     let mir::Rvalue::Use(mir::Operand::Copy(place) | mir::Operand::Move(place)) = rvalue else {
         return None;
@@ -818,9 +850,9 @@ fn mir_field_access_stmt<'tcx>(
         _ => field_idx.index().to_string(),
     };
     Some(Stmt::FieldAccess {
-        base: mir_place_ref_label(base),
+        base: resolver.label_place_ref(base)?,
         field,
-        dest: Some(mir_place_label(lhs)),
+        dest: Some(resolver.label_place(lhs)?),
     })
 }
 
@@ -828,6 +860,7 @@ fn mir_struct_lit_stmt<'tcx>(
     tcx: TyCtxt<'tcx>,
     lhs: &mir::Place<'tcx>,
     rvalue: &mir::Rvalue<'tcx>,
+    resolver: &LocalNameResolver,
 ) -> Option<Stmt> {
     let mir::Rvalue::Aggregate(kind, operands) = rvalue else {
         return None;
@@ -841,12 +874,12 @@ fn mir_struct_lit_stmt<'tcx>(
         .fields
         .iter()
         .zip(operands.iter())
-        .map(|(f, op)| (f.name.to_string(), mir_operand_label(tcx, op)))
-        .collect();
+        .map(|(f, op)| Some((f.name.to_string(), mir_operand_label(tcx, op, resolver)?)))
+        .collect::<Option<Vec<_>>>()?;
     Some(Stmt::StructLit {
         ty: TypeExpr::Path(norm::path(tcx, *adt_did)),
         fields,
-        dest: Some(mir_place_label(lhs)),
+        dest: Some(resolver.label_place(lhs)?),
     })
 }
 
@@ -855,46 +888,94 @@ fn mir_method_call_stmt<'tcx>(
     func: &mir::Operand<'tcx>,
     args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
     destination: &mir::Place<'tcx>,
+    resolver: &LocalNameResolver,
 ) -> Option<Stmt> {
     let (did, _) = func.const_fn_def()?;
     if !matches!(tcx.def_kind(did), DefKind::AssocFn) || args.is_empty() {
         return None;
     }
-    let receiver = mir_operand_label(tcx, &args[0].node);
+    let receiver = mir_operand_label(tcx, &args[0].node, resolver)?;
     let method = tcx.item_name(did).to_string();
     let args = args
         .iter()
         .skip(1)
-        .map(|a| mir_operand_label(tcx, &a.node))
-        .collect();
+        .map(|a| mir_operand_label(tcx, &a.node, resolver))
+        .collect::<Option<Vec<_>>>()?;
     Some(Stmt::MethodCall {
         receiver,
         method,
         args,
-        dest: Some(mir_place_label(destination)),
+        dest: Some(resolver.label_place(destination)?),
     })
 }
 
-fn mir_place_label(place: &mir::Place<'_>) -> String {
-    format!("_{}", place.local.as_usize())
-}
-
-fn mir_place_ref_label(place: mir::PlaceRef<'_>) -> String {
-    format!("_{}", place.local.as_usize())
-}
-
-fn mir_operand_label(tcx: TyCtxt<'_>, operand: &mir::Operand<'_>) -> String {
+fn mir_operand_label(tcx: TyCtxt<'_>, operand: &mir::Operand<'_>, resolver: &LocalNameResolver) -> Option<String> {
     match operand {
-        mir::Operand::Copy(place) | mir::Operand::Move(place) => mir_place_label(place),
+        mir::Operand::Copy(place) | mir::Operand::Move(place) => resolver.label_place(place),
         mir::Operand::Constant(c) => {
             if let mir::Const::Unevaluated(uneval, _) = c.const_ {
-                norm::path(tcx, uneval.def)
+                Some(norm::path(tcx, uneval.def))
             } else {
-                "_const".to_string()
+                None
             }
         }
-        mir::Operand::RuntimeChecks(_) => "_runtime_checks".to_string(),
+        mir::Operand::RuntimeChecks(_) => None,
     }
+}
+
+struct LocalNameResolver {
+    by_local: HashMap<u32, String>,
+}
+
+impl LocalNameResolver {
+    fn new<'tcx>(body: &mir::Body<'tcx>, param_names: &[String]) -> Self {
+        let mut by_local: HashMap<u32, String> = HashMap::new();
+        for (idx, name) in param_names.iter().enumerate() {
+            let local_idx = (idx + 1) as u32;
+            if is_rust_ident(name) {
+                by_local.insert(local_idx, name.clone());
+            }
+        }
+        for dbg in &body.var_debug_info {
+            let mir::VarDebugInfoContents::Place(place) = &dbg.value else {
+                continue;
+            };
+            if !place.projection.is_empty() {
+                continue;
+            }
+            let name = dbg.name.as_str().to_string();
+            if !is_rust_ident(&name) {
+                continue;
+            }
+            by_local.entry(place.local.as_u32()).or_insert(name);
+        }
+        Self { by_local }
+    }
+
+    fn label_place(&self, place: &mir::Place<'_>) -> Option<String> {
+        if !place.projection.is_empty() {
+            return None;
+        }
+        self.by_local.get(&place.local.as_u32()).cloned()
+    }
+
+    fn label_place_ref(&self, place: mir::PlaceRef<'_>) -> Option<String> {
+        if !place.projection.is_empty() {
+            return None;
+        }
+        self.by_local.get(&place.local.as_u32()).cloned()
+    }
+}
+
+fn is_rust_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        return false;
+    }
+    chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
 /// Capture function/method body as Body::Raw(source) via HIR body span.

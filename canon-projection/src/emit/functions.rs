@@ -31,12 +31,26 @@ pub fn emit_fn(ir: &CanonIR, name_id: NameId, sig_id: CanonId, body: Option<Cano
 
     if let Some(body_id) = body {
         let mut out = format!("{}{}{}{}fn {}{}({}) -> {} {{\n", pad, vis, unsafe_kw, async_kw, ir.lookup_name(name_id), gens, params, ret);
-        out.push_str(&emit_body(ir, body_id, &format!("{}    ", pad)));
+        let param_names = collect_param_names(ir, sig_id);
+        out.push_str(&emit_body(ir, body_id, &param_names, &format!("{}    ", pad)));
         out.push_str(&format!("{}}}\n", pad));
         out
     } else {
         format!("{}{}{}{}fn {}{}({}) -> {};\n", pad, vis, unsafe_kw, async_kw, ir.lookup_name(name_id), gens, params, ret)
     }
+}
+
+fn collect_param_names(ir: &CanonIR, sig_id: CanonId) -> Vec<String> {
+    let CanonNodeKind::FnSig { params, .. } = &ir.node(sig_id).kind else {
+        return Vec::new();
+    };
+    params
+        .iter()
+        .filter_map(|p| match &ir.node(*p).kind {
+            CanonNodeKind::Param { name_id, .. } => Some(ir.lookup_name(*name_id).to_string()),
+            _ => None,
+        })
+        .collect()
 }
 
 pub fn sig_parts(ir: &CanonIR, sig_id: CanonId) -> (String, String) {

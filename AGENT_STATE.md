@@ -1,52 +1,50 @@
 # Agent State
 
-## 2026-02-27 — Current Cycle (plan pruning + next phase continuation)
+## 2026-02-27 — Current Cycle (MIR local/value invariants + projection cleanup + validation)
 
 ### 1) Investigate the problem
-- User requested:
-  - delete implemented lines from `PLAN.md`,
-  - continue with next phase work.
-- `EXECUTION_STATUS.md` was deleted by user; pending tracking must rely on `PLAN.md` + this state file.
+- Remaining requested work was:
+  1. complete body structure invariants for MIR locals/values,
+  2. projection cleanup for structured body ops,
+  3. final validation sweep.
 
 ### 2) Gather facts
-- Previously completed phases are already in code (schema + dep package invariant + structural instantiation invariant).
-- Remaining major technical gap is Phase 3.5 completion (body projection still largely `Body::Raw` driven).
-- A direct global switch to MIR block emission caused invalid projected code due missing value/declaration invariants in projection output.
+- Prior MIR structured extraction could emit unresolved MIR temporaries (`_N`) that projection could not safely bind.
+- Projection still had placeholder behavior for `CfgOp::StructLit` and naive re-binding of destinations.
 
 ### 3) Break down the facts
-- Structural category:
-  - Body op extraction can be added structurally from MIR.
-  - Projection cannot safely consume MIR temporary locals without explicit declaration/value invariants.
-- Therefore:
-  - Keep pipeline correctness first.
-  - Keep MIR-body groundwork but do not force it as the primary body source until invariants are added.
+- Structural invariant needed:
+  - only emit MIR-structured body when all used places/operands can be resolved to stable source identifiers.
+  - otherwise fallback to HIR raw body.
+- Projection invariant needed:
+  - destination writes must choose `let` on first bind and assignment on later writes.
 
 ### 4) Write it to a state file
-- This file is overwritten for the current cycle.
+- This file is overwritten for this completed cycle.
 
 ### 5) Sort structural and categorical patterns
-- Pattern A: plan/document drift can be reduced by keeping plan pending-only.
-- Pattern B: structural capture changes are safe only when projection has matching invariants.
-- Pattern C: fallback to raw body is currently correctness-preserving, not heuristic compensation.
+- Pattern A: unresolved MIR locals are a schema/context gap, not a projection concern.
+- Pattern B: strict gating at capture boundary preserves correctness without heuristics.
+- Pattern C: structured op rendering should remain direct from CanonIR, no string repair.
 
 ### 6) Write it to state file
-- `PLAN.md` rewritten to pending-only phases:
-  - P1 capture body structure completion,
-  - P2 projection coverage for structured body ops,
-  - P3 final validation sweep.
-- Added MIR-structured statement scaffolding in capture types/assembly paths (`FieldAccess`, `MethodCall`, `StructLit`) but did not switch fn/method body source to MIR yet.
+- Implemented:
+  - MIR local-name resolver using param names + `var_debug_info` place bindings.
+  - Strict structural gating for MIR body extraction:
+    - unresolved place/operand labels cause fallback (`None`) to raw body.
+  - Re-enabled `mir_body_structural(...).unwrap_or_else(hir_body_src)` with resolver-based invariants.
+  - Projection updates:
+    - `emit_body` now tracks declared identifiers (params seeded) and uses bind-vs-assign logic.
+    - `CfgOp::StructLit` now renders concrete struct literal syntax instead of placeholder comment.
 
 ### 7) Solve the state file
-- Kept compile/runtime correctness by reverting the global fn/method body source back to HIR raw bodies.
-- Preserved groundwork for the next structural slice.
+- All requested additions were implemented in this cycle with correctness-preserving fallback behavior.
 
 ### 8) Emit and project the solution incrementally
-- Validation run results:
+- Validation results:
   - workspace `cargo check`: pass.
-  - fixture `repomap`: capture -> orchestration -> emitted `cargo build`: pass.
-  - fixture `test_1`: capture -> orchestration -> emitted `cargo build`: pass.
+  - `repomap`: capture -> orchestration -> emitted `cargo build`: pass.
+  - `test_1`: capture -> orchestration -> emitted `cargo build`: pass.
 
 ### 9) Repeat step 3
-- Next pending structural task:
-  - introduce declaration/value invariants for MIR locals in projection path,
-  - then safely enable MIR-body structured ops without emitting invalid temporaries.
+- No remaining pending items from this requested phase set.
