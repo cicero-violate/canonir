@@ -748,6 +748,7 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
     let mut canon = CanonIR::new();
 
     let mut id_map: Vec<CanonId> = Vec::with_capacity(model_like.nodes.len());
+    let mut pending_vis_paths: Vec<(CanonId, String)> = Vec::new();
 
     for node in &model_like.nodes {
         let canon_kind = match &node.kind {
@@ -884,7 +885,33 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
             }
         };
 
-        id_map.push(canon.push_node(canon_kind));
+        let cid = canon.push_node(canon_kind);
+        match &node.kind {
+            NodeKind::Module { vis: Visibility::PubIn(path), .. }
+            | NodeKind::Struct { vis: Visibility::PubIn(path), .. }
+            | NodeKind::Enum { vis: Visibility::PubIn(path), .. }
+            | NodeKind::Trait { vis: Visibility::PubIn(path), .. }
+            | NodeKind::Function { vis: Visibility::PubIn(path), .. }
+            | NodeKind::Method { vis: Visibility::PubIn(path), .. }
+            | NodeKind::AssocType { vis: Visibility::PubIn(path), .. }
+            | NodeKind::AssocConst { vis: Visibility::PubIn(path), .. }
+            | NodeKind::Const { vis: Visibility::PubIn(path), .. }
+            | NodeKind::Static { vis: Visibility::PubIn(path), .. }
+            | NodeKind::Use { vis: Visibility::PubIn(path), .. }
+            | NodeKind::ExternCrate { vis: Visibility::PubIn(path), .. }
+            | NodeKind::TypeAlias { vis: Visibility::PubIn(path), .. } => {
+                pending_vis_paths.push((cid, path.clone()));
+            }
+            _ => {}
+        }
+        id_map.push(cid);
+    }
+
+    let mut vispath_edges: Vec<(CanonId, CanonId, CanonEdgeKind)> = Vec::new();
+    for (owner, path) in pending_vis_paths {
+        let path_id = canon.intern_path(&path);
+        let vis_id = canon.push_node(CanonNodeKind::VisPath { flags: flags::PUB_IN, path_id });
+        vispath_edges.push((owner, vis_id, CanonEdgeKind::Contains));
     }
 
     for (i, node) in model_like.nodes.iter().enumerate() {
@@ -992,6 +1019,7 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
             ModelEdgeKind::Reexports => name_edges.push((src, dst, k)),
         }
     }
+    module_edges.extend(vispath_edges);
 
     let n = canon.nodes.len();
     let node_data: Vec<CanonId> = (0..n as u32).map(CanonId).collect();
