@@ -9,6 +9,8 @@ Only direct facts from tool output are recorded.
   - 6:INFO liveness_solver: pruned 4 dead function(s) from emit_order
 - emitted structural surface:
   - canon suppressed binding count: 13
+  - canon suppressed __ret count: 12
+  - canon suppressed non-__ret count: 1
   - canon match gap count: 0
   - unreachable count: 0
   - // match count: 0
@@ -19,6 +21,8 @@ Only direct facts from tool output are recorded.
 - no invariant-signature lines detected; inspect full log.
 - emitted structural surface:
   - canon suppressed binding count: 13
+  - canon suppressed __ret count: 12
+  - canon suppressed non-__ret count: 1
   - canon match gap count: 0
   - unreachable count: 0
   - // match count: 0

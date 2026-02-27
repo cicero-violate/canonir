@@ -111,14 +111,18 @@ extract_invariants() {
         # Emitted-source structural surface (always useful even when logs are green).
         local emit_src="$ROOT/emit/$fixture/src"
         if [[ -d "$emit_src" ]]; then
-            local suppressed_count match_gap_count unreachable_count match_comment_count goto_comment_count
+            local suppressed_count suppressed_ret_count suppressed_nonret_count match_gap_count unreachable_count match_comment_count goto_comment_count
             suppressed_count=$(rg -n 'canon suppressed binding' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
+            suppressed_ret_count=$(rg -n '__ret\s*=\s*panic!\("canon suppressed binding"\)' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
+            suppressed_nonret_count=$((suppressed_count - suppressed_ret_count))
             match_gap_count=$(rg -n 'canon match result not lowered' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
             unreachable_count=$(rg -n 'unreachable!\(\);' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
             match_comment_count=$(rg -n '// match' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
             goto_comment_count=$(rg -n '// goto' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
             echo "- emitted structural surface:"
             echo "  - canon suppressed binding count: $suppressed_count"
+            echo "  - canon suppressed __ret count: $suppressed_ret_count"
+            echo "  - canon suppressed non-__ret count: $suppressed_nonret_count"
             echo "  - canon match gap count: $match_gap_count"
             echo "  - unreachable count: $unreachable_count"
             echo "  - // match count: $match_comment_count"

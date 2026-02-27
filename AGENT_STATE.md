@@ -1,50 +1,49 @@
 # AGENT_STATE.md
 
 ## CANONICAL_HEADER
-- state_id: `CANON_STRUCTURAL_HARVEST_SLICE_03`
+- state_id: `CANON_STRUCTURAL_HARVEST_SLICE_04`
 - date: `2026-02-27`
 - mode: `execution`
 - invariant: `Structural invariants only. No heuristics.`
 
 ### 1) Investigate the problem
-- Remaining structural surface after prior slices: `match gap`, `unreachable`, `//goto`.
+- Remaining structural surface after slice 03: suppressed bindings only.
 
 ### 2) Gather facts
-- `run_script.sh repomap` metrics became the canonical extraction source.
-- Primary emission hotspots were in MIR normalization and projection body rendering.
+- `run_script.sh` previously reported only aggregate suppressed count.
+- Needed split by return-place vs non-return suppression to target real capture gap.
 
 ### 3) Break down the facts
-- Category A: synthetic control-flow artifacts emitted as source (`Goto`, `Branch`, `Unreachable`).
-- Category B: `Match { dest: Some(__ret) }` placeholders creating `canon match result not lowered`.
-- Category C: suppression over-injection volume.
+- Category A: suppressed `__ret` placeholders (return completeness carrier).
+- Category B: suppressed non-`__ret` placeholders (true unresolved value capture).
 
 ### 4) Write it to a state file
 - State overwritten for this execution slice.
 
 ### 5) Sort structural and categorical patterns
-- Structural pass pattern: normalize body ops first, then prune unreachable source-level artifacts.
-- Return invariant pattern: keep `__ret` binding structurally present for non-unit completeness.
+- Harvest pattern: classify structural gaps by role before changing lowering.
+- Metric pattern: keep aggregate and per-class counts in one report.
 
 ### 6) Write it to state file
 - Files touched in this slice:
-- `canon-capture/src/capture/mir/passes.rs`
-- `canon-projection/src/emit/body.rs`
 - `run_script.sh`
 - `STRUCTURAL_INVARIANTS_REPORT.md`
+- `AGENT_STATE.md`
 
 ### 7) Solve the state file
-- Added MIR normalization pass composition:
-- lower `Stmt::Match { dest: Some(x) }` -> `Stmt::Assign { lhs: x, rhs: "__canon_suppressed__" }`
-- prune suppressed bindings only when truly unused, but never prune `lhs == "__ret"`.
-- Projection invariant:
-- do not emit source lines for CFG metadata ops (`Branch`, `Goto`, `Unreachable`).
+- Extended invariant extraction in `run_script.sh`:
+- `canon suppressed __ret count`
+- `canon suppressed non-__ret count`
+- kept existing aggregate + structural control metrics.
 
 ### 8) Emit and project the solution incrementally
 - Validation executed:
-- `cargo check -p canon-capture -p canon-analyzer -p canon-projection -p orchestration`
+- `cargo check -p canon-projection -p orchestration`
 - `./run_script.sh repomap`
 - Current repomap structural surface:
 - `canon suppressed binding count: 13`
+- `canon suppressed __ret count: 12`
+- `canon suppressed non-__ret count: 1`
 - `canon match gap count: 0`
 - `unreachable count: 0`
 - `// match count: 0`
@@ -52,4 +51,5 @@
 
 ### 9) Repeat step 3
 - Next structural target:
-- reduce suppressed-binding count (`13`) via additional capture invariants that produce renderable statements instead of suppression.
+- close the single non-`__ret` suppressed gap (`1`) via capture-side lowering for the unresolved value producer.
+- keep `__ret` suppression isolated as return-gap carrier until return-value lowering is expanded.
