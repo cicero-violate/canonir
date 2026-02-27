@@ -1,1 +1,1 @@
-pub use crate::project::rules::CanonFragment;
+pub use crate::capture::rules::CanonFragment;

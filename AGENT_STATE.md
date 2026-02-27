@@ -1,51 +1,53 @@
 # AGENT_STATE.md
 
 ## CANONICAL_HEADER
-- state_id: `CAPTURE_REFACTOR_MODEL_EXECUTION_SLICE_10`
+- state_id: `CAPTURE_REFACTOR_MODEL_EXECUTION_SLICE_22`
 - date: `2026-02-27`
 - mode: `execution`
 - invariant: `No heuristics. Structural invariants only.`
 
 ### 1) Investigate the problem
-- Method/plain call statement builders still lived in `project/item.rs`, despite most call-label/filter helper dependencies already moved to MIR lower layer.
+- MIR lowering still had remaining inline logic for non-call terminators and partial assign suppression classification outside the pattern table.
 
 ### 2) Gather facts
-- Remaining functions were self-contained and depended on helpers now owned by `capture/mir/lower.rs`:
-- `mir_method_call_stmt`,
-- `mir_call_stmt`.
+- `lower_call_terminator(...)` already existed, but return/goto/drop/assert/switchint logic was still in the main loop.
+- Zero-arg enum ctor suppression check was still ad-hoc after pattern dispatch.
 
 ### 3) Break down the facts
-- Migration action:
-- move method/plain call stmt builders into `capture/mir/lower.rs`,
-- import from new owner in `project/item.rs`,
-- delete local duplicate definitions.
+- Structural targets for this slice:
+- extract non-call terminator lowering into dedicated helpers,
+- move constant-use assignment class into `patterns.rs` dispatch domain.
 
 ### 4) Write it to a state file
 - State overwritten for this slice.
 
 ### 5) Sort structural and categorical patterns
-- Pattern A: call-lowering ownership consolidation under MIR layer.
-- Pattern B: incremental elimination of `project/item.rs` helper responsibilities.
+- Pattern A: terminator decomposition (`call` vs `non-call`).
+- Pattern B: pattern-table expansion (`ConstUse` classification).
 
 ### 6) Write it to state file
 - Files changed:
 - `canon-capture/src/capture/mir/lower.rs`
-- `canon-capture/src/project/item.rs`
+- `canon-capture/src/capture/mir/patterns.rs`
+- `STRUCTURAL_INVARIANTS_REPORT.md`
 - `AGENT_STATE.md`
 
 ### 7) Solve the state file
-- Added to `capture/mir/lower.rs`:
-- `mir_method_call_stmt`,
-- `mir_call_stmt`.
-- Updated `project/item.rs` imports to consume these from `capture::mir::lower`.
-- Removed local `mir_method_call_stmt` and `mir_call_stmt` definitions from `project/item.rs`.
+- Added and wired:
+- `lower_non_call_terminator(...)`
+- `lower_return_terminator(...)`
+- `remap_to_goto(...)`
+- Main loop now delegates non-call terminators through helper dispatch.
+- Added `MirOpKind::ConstUse` in `capture/mir/patterns.rs` and routed zero-arg enum ctor suppression through dispatcher path.
+- Removed redundant post-dispatch zero-arg enum check from assign flow.
 
 ### 8) Emit and project the solution incrementally
 - Validation:
 - `cargo check -p canon-capture`: pass.
 - `./run_script.sh repomap`: pass.
+- `STRUCTURAL_INVARIANTS_REPORT.md` regenerated.
 
 ### 9) Repeat step 3
 - Next structural slice:
-- migrate projected-place rendering helpers (`render_projected_place_expr`, binop/unop token helpers) to `capture/mir/lower.rs`,
-- continue reducing `project/item.rs` to CFG orchestration + legacy bridge body only.
+- continue MIR compression by moving additional assignment-specialization tests from `lower.rs` into `patterns.rs` predicates and thin helper adapters,
+- keep `lower.rs` focused on CFG traversal/orchestration only.

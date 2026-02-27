@@ -6,9 +6,9 @@ use crate::index::Index;
 use crate::norm;
 use crate::types::{EdgeHint, EnumVariant, Node, NodeId, NodeKind, StructKind, Visibility};
 
-use crate::project::edge_emit;
-use crate::project::helpers;
-use crate::project::item;
+use crate::capture::edge_emit;
+use crate::capture::helpers;
+use crate::capture::mir::lower;
 
 use super::rules::{DefMeta, RuleEdge, RuleSpec, RULES};
 
@@ -256,7 +256,7 @@ fn lower_fn_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<N
         .unwrap_or_else(|| helpers::lower_ty(tcx, sig.output().skip_binder()));
     let unsafe_ = sig.safety() == rustc_hir::Safety::Unsafe;
     let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-    let body = item::mir_body_structural(tcx, def_id, &param_names, returns_unit);
+    let body = lower::mir_body_structural(tcx, def_id, &param_names, returns_unit);
     let kind = NodeKind::Function {
         name,
         vis,
@@ -287,7 +287,7 @@ fn lower_assoc_fn_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<
         .unwrap_or_else(|| helpers::lower_ty(tcx, sig.output().skip_binder()));
     let unsafe_ = sig.safety() == rustc_hir::Safety::Unsafe;
     let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-    let body = item::mir_body_structural(tcx, def_id, &param_names, returns_unit);
+    let body = lower::mir_body_structural(tcx, def_id, &param_names, returns_unit);
     let kind = NodeKind::Method {
         name,
         vis,
