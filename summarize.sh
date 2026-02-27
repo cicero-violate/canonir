@@ -1,4 +1,4 @@
-git log -n 3
+git log -n 8
 bat -n /workspace/ai_sandbox/canon/PROJECT_OVERVIEW.md
 bat -n /workspace/ai_sandbox/canon/PROJECT_EXAMPLE.md
 bat -n /workspace/ai_sandbox/canon/AGENT.md
