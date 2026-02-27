@@ -1,7 +1,13 @@
 use rustc_middle::mir;
+use rustc_middle::ty::TyCtxt;
 use std::collections::{BTreeSet, HashMap};
 
+use crate::capture::mir::guard as mir_guard;
+use crate::capture::mir::ops as mir_ops;
+use crate::capture::mir::resolver::LocalNameResolver;
 use crate::capture::mir::util as mir_util;
+use crate::types::Stmt;
+use std::collections::HashSet;
 
 pub(crate) struct SwitchAnalysis {
     pub(crate) switch_sources: BTreeSet<usize>,
@@ -97,4 +103,86 @@ pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
         switchint_arm_blocks,
         switch_source_writes_ret,
     }
+}
+
+pub(crate) fn compute_call_feed_locals<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &mir::Body<'tcx>,
+    resolver: &LocalNameResolver,
+) -> HashSet<String> {
+    let local_use_counts = mir_util::count_local_uses(body);
+    let mut filtered_arg_locals: HashSet<u32> = HashSet::new();
+    for bb in body.basic_blocks.iter() {
+        let Some(term_ref) = &bb.terminator else {
+            continue;
+        };
+        let mir::TerminatorKind::Call { func, args, .. } = &term_ref.kind else {
+            continue;
+        };
+        if !mir_ops::filtered_internal_call_target(tcx, func) {
+            continue;
+        }
+        for arg in args {
+            if let mir::Operand::Copy(place) | mir::Operand::Move(place) = &arg.node {
+                filtered_arg_locals.insert(place.local.as_u32());
+            }
+        }
+    }
+    let mut call_feed_locals: HashSet<String> = HashSet::new();
+    for local_u32 in filtered_arg_locals {
+        if local_use_counts.get(&local_u32).copied().unwrap_or(0) != 1 {
+            continue;
+        }
+        let local = mir::Local::from_u32(local_u32);
+        if let Some(name) = resolver.label_local(local) {
+            call_feed_locals.insert(name);
+        }
+    }
+    call_feed_locals
+}
+
+pub(crate) fn collect_suppressed_dest_sentinels(
+    body: &mir::Body<'_>,
+    resolver: &LocalNameResolver,
+    switch_analysis: &SwitchAnalysis,
+    defined: &mut HashSet<String>,
+    suppressed_sentinel_names: &mut HashSet<String>,
+) -> Vec<Stmt> {
+    let mut suppressed_dest_sentinels: Vec<Stmt> = Vec::new();
+    for (bb_idx, bb) in body.basic_blocks.iter_enumerated() {
+        if bb.is_cleanup {
+            continue;
+        }
+        let idx = bb_idx.as_usize();
+        if !switch_analysis.switchint_arm_blocks.contains(&idx)
+            && !switch_analysis.switch_sources.contains(&idx)
+        {
+            continue;
+        }
+        if let Some(term) = &bb.terminator
+            && let mir::TerminatorKind::Call { destination, .. } = &term.kind
+            && let Some(dest_name) = mir_util::label_place_dest(resolver, destination)
+        {
+            mir_guard::emit_suppressed_binding(
+                &dest_name,
+                defined,
+                suppressed_sentinel_names,
+                &mut suppressed_dest_sentinels,
+            );
+        }
+        for stmt in &bb.statements {
+            if let mir::StatementKind::Assign(boxed) = &stmt.kind {
+                let (lhs, _) = &**boxed;
+                if let Some(lhs_name) = mir_util::label_place_dest(resolver, lhs) {
+                    mir_guard::emit_suppressed_binding(
+                        &lhs_name,
+                        defined,
+                        suppressed_sentinel_names,
+                        &mut suppressed_dest_sentinels,
+                    );
+                }
+            }
+        }
+    }
+    suppressed_dest_sentinels
 }

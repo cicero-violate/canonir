@@ -1,58 +1,55 @@
 # AGENT_STATE.md
 
 ## CANONICAL_HEADER
-- state_id: `CAPTURE_REFACTOR_MODEL_EXECUTION_SLICE_30`
+- state_id: `CAPTURE_REFACTOR_MODEL_EXECUTION_SLICE_35`
 - date: `2026-02-27`
 - mode: `execution`
 - invariant: `No heuristics. Structural invariants only.`
 
 ### 1) Investigate the problem
-- `capture/mir/lower.rs` still embedded switch/suppression graph construction and reachability analysis.
+- Stage boundaries existed at top-level (`build plan`, `emit`, `finalize`) but block emission internals were still monolithic.
 
 ### 2) Gather facts
-- The following pre-analysis logic remained in `lower.rs`:
-- successor/pred graph construction
-- switch-source discovery
-- switch-reachable closure
-- switch-arm block fixpoint classification
-- switch-source return-write propagation
+- `stage_emit_blocks` mixed four responsibilities:
+1. special block routing (switch source/arm suppression)
+2. statement pre-seeding (suppressed sentinels)
+3. statement lowering
+4. terminator lowering and block assembly
 
 ### 3) Break down the facts
-- This is a distinct analysis phase and should be isolated from CFG emission orchestration.
-- Extracting it reduces coupling and makes `mir_body_structural` primarily sequencing logic.
+- Convert block emission to explicit sub-stages while freezing behavior:
+- `stage_emit_special_block`
+- `stage_prepare_block_stmts`
+- `stage_lower_block_statements`
+- `stage_lower_block_terminator`
+- `stage_finalize_block`
 
 ### 4) Write it to a state file
 - State overwritten for this slice.
 
 ### 5) Sort structural and categorical patterns
-- Pattern A: pre-analysis extraction (`capture/mir/analysis.rs`).
-- Pattern B: orchestration simplification (`lower.rs` consumes analysis result object).
-- Pattern C: clear phase boundary (analyze first, then emit).
+- Pattern A: stage decomposition (emit-phase internals).
+- Pattern B: orchestration-first readability (main loop now dispatches stages).
+- Pattern C: behavior freeze preserved (same solver/capture outputs).
 
 ### 6) Write it to state file
 - Files changed:
-- `canon-capture/src/capture/mir/analysis.rs` (new)
 - `canon-capture/src/capture/mir/lower.rs`
-- `canon-capture/src/capture/mir/mod.rs`
 - `STRUCTURAL_INVARIANTS_REPORT.md`
 - `AGENT_STATE.md`
 
 ### 7) Solve the state file
-- Added `capture/mir/analysis.rs`:
-- `SwitchAnalysis` struct
-- `analyze_switch_structure(body)`
-- Moved complete switch/suppression pre-analysis logic out of `lower.rs`.
-- Rewired `lower.rs` to consume `switch_analysis.*` fields.
-- Exported module in `capture/mir/mod.rs`.
+- Refactored `stage_emit_blocks` to call explicit sub-stage functions.
+- Extracted special/suppressed/stmt/terminator/finalize responsibilities into dedicated functions.
+- Preserved all existing structural decision points and derived-state checks.
 
 ### 8) Emit and project the solution incrementally
 - Validation:
 - `cargo check -p canon-capture`: pass.
 - `./run_script.sh repomap`: pass.
 - `STRUCTURAL_INVARIANTS_REPORT.md` regenerated.
-- LOC snapshot:
-- `capture/mir/lower.rs`: 393 LOC (down from 465 in previous slice).
 
 ### 9) Repeat step 3
-- Next structural slice:
-- extract filtered-call feeder-local computation and suppressed-destination pre-scan into dedicated analysis helpers so `lower.rs` is reduced further to block-walk orchestration plus dispatch calls.
+- Mutation trend checkpoint:
+- LOC did not decrease (`lower.rs` increased with stage scaffolding), confirming current phase is responsibility clarification.
+- Behavior freeze remains active: next changes should focus on moving stage functions to dedicated modules/files without semantic changes.

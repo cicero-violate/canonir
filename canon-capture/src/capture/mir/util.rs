@@ -65,15 +65,11 @@ pub(crate) fn stmt_defines_ret(stmt: &Stmt) -> bool {
 pub(crate) fn emit_suppressed_ret_binding(
     stmts: &mut Vec<Stmt>,
     defined: &mut HashSet<String>,
-    ret_value_defined: &mut bool,
-    ret_binding_emitted: &mut bool,
 ) {
     stmts.push(Stmt::Assign {
         lhs: "__ret".to_string(),
         rhs: "__canon_suppressed__".to_string(),
     });
-    *ret_value_defined = true;
-    *ret_binding_emitted = true;
     defined.insert("__ret".to_string());
 }
 
@@ -82,11 +78,9 @@ pub(crate) fn emit_suppressed_for_name(
     stmts: &mut Vec<Stmt>,
     defined: &mut HashSet<String>,
     suppressed_sentinel_names: &mut HashSet<String>,
-    ret_value_defined: &mut bool,
-    ret_binding_emitted: &mut bool,
 ) {
     if name == "__ret" {
-        emit_suppressed_ret_binding(stmts, defined, ret_value_defined, ret_binding_emitted);
+        emit_suppressed_ret_binding(stmts, defined);
     } else {
         mir_guard::emit_suppressed_binding(name, defined, suppressed_sentinel_names, stmts);
     }

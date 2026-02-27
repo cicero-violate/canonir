@@ -20,9 +20,7 @@ pub(crate) fn lower_call_terminator<'tcx>(
     stmts: &mut Vec<Stmt>,
     defined: &mut HashSet<String>,
     suppressed_sentinel_names: &mut HashSet<String>,
-    ret_value_defined: &mut bool,
-    ret_binding_emitted: &mut bool,
-    match_dest_emitted: &mut bool,
+    has_match_dest: bool,
 ) -> Terminator {
     if mir_ops::filtered_internal_call_target(tcx, func) {
         if let Some(dest) = mir_util::label_place_dest(resolver, destination) {
@@ -31,8 +29,6 @@ pub(crate) fn lower_call_terminator<'tcx>(
                 stmts,
                 defined,
                 suppressed_sentinel_names,
-                ret_value_defined,
-                ret_binding_emitted,
             );
         }
     } else if let Some(dest) = mir_util::label_place_dest(resolver, destination)
@@ -45,18 +41,12 @@ pub(crate) fn lower_call_terminator<'tcx>(
                     stmts,
                     defined,
                     suppressed_sentinel_names,
-                    ret_value_defined,
-                    ret_binding_emitted,
                 );
             }
             return target
                 .and_then(|bb| mir_util::remap_bb_target(bb, mir_to_emitted))
                 .map(Terminator::Goto)
                 .unwrap_or(Terminator::None);
-        }
-        if mir_util::stmt_defines_ret(&method_stmt) {
-            *ret_value_defined = true;
-            *ret_binding_emitted = true;
         }
         if let Stmt::MethodCall { dest: Some(dest), .. } = &method_stmt {
             defined.insert(dest.clone());
@@ -66,10 +56,6 @@ pub(crate) fn lower_call_terminator<'tcx>(
         && let Some(call_stmt) = mir_ops::mir_call_stmt(tcx, func, args, resolver, dest.clone())
     {
         if mir_guard::structural_guard(&call_stmt, defined, suppressed_sentinel_names) {
-            if mir_util::stmt_defines_ret(&call_stmt) {
-                *ret_value_defined = true;
-                *ret_binding_emitted = true;
-            }
             if let Stmt::Call { dest: Some(dest), .. } = &call_stmt {
                 defined.insert(dest.clone());
             }
@@ -80,8 +66,6 @@ pub(crate) fn lower_call_terminator<'tcx>(
                 stmts,
                 defined,
                 suppressed_sentinel_names,
-                ret_value_defined,
-                ret_binding_emitted,
             );
         }
     } else if let Some(dest_name) = mir_util::label_place_dest(resolver, destination) {
@@ -93,13 +77,10 @@ pub(crate) fn lower_call_terminator<'tcx>(
                 stmts,
             );
         } else {
-            if !*match_dest_emitted {
+            if !has_match_dest {
                 stmts.push(Stmt::Match {
                     dest: Some("__ret".to_string()),
                 });
-                *match_dest_emitted = true;
-                *ret_value_defined = true;
-                *ret_binding_emitted = true;
             }
             defined.insert("__ret".to_string());
         }
@@ -120,9 +101,8 @@ pub(crate) fn lower_non_call_terminator<'tcx>(
     mir_to_emitted: &[Option<u32>],
     stmts: &mut Vec<Stmt>,
     defined: &mut HashSet<String>,
-    ret_value_defined: &mut bool,
-    ret_binding_emitted: &mut bool,
-    match_dest_emitted: &mut bool,
+    has_ret_binding: bool,
+    has_match_dest: bool,
 ) -> Terminator {
     match &term_ref.kind {
         mir::TerminatorKind::Return => {
@@ -130,9 +110,8 @@ pub(crate) fn lower_non_call_terminator<'tcx>(
                 returns_unit,
                 stmts,
                 defined,
-                ret_value_defined,
-                ret_binding_emitted,
-                match_dest_emitted,
+                has_ret_binding,
+                has_match_dest,
             );
             Terminator::None
         }
@@ -173,21 +152,17 @@ fn lower_return_terminator(
     returns_unit: bool,
     stmts: &mut Vec<Stmt>,
     defined: &mut HashSet<String>,
-    ret_value_defined: &mut bool,
-    ret_binding_emitted: &mut bool,
-    match_dest_emitted: &mut bool,
+    has_ret_binding: bool,
+    has_match_dest: bool,
 ) {
     if returns_unit {
         stmts.push(Stmt::Return(None));
-    } else if *ret_binding_emitted && !*match_dest_emitted {
+    } else if has_ret_binding && !has_match_dest {
         stmts.push(Stmt::Return(Some("__ret".to_string())));
-    } else if !*match_dest_emitted && (!*ret_value_defined || !*ret_binding_emitted) {
+    } else if !has_match_dest && !has_ret_binding {
         stmts.push(Stmt::Match {
             dest: Some("__ret".to_string()),
         });
-        *match_dest_emitted = true;
-        *ret_value_defined = true;
-        *ret_binding_emitted = true;
         defined.insert("__ret".to_string());
     }
 }
