@@ -12,8 +12,24 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
         return Ok(());
     }
 
-    let trait_methods: HashMap<u32, HashSet<u32>> =
-        ir.nodes.iter().filter_map(|n| if let CanonNodeKind::Trait { methods, .. } = &n.kind { Some((n.id.0, methods.iter().map(|m| m.0).collect())) } else { None }).collect();
+    let trait_methods: HashMap<u32, HashSet<String>> = ir
+        .nodes
+        .iter()
+        .filter_map(|n| {
+            if let CanonNodeKind::Trait { methods, .. } = &n.kind {
+                let names: HashSet<String> = methods
+                    .iter()
+                    .filter_map(|m| match &ir.node(*m).kind {
+                        CanonNodeKind::Fn { name_id, .. } => Some(ir.lookup_name(*name_id).to_string()),
+                        _ => None,
+                    })
+                    .collect();
+                Some((n.id.0, names))
+            } else {
+                None
+            }
+        })
+        .collect();
 
     let adj = csr_to_adj(&ir.module_graph);
     let children_of = |idx: usize| -> Vec<usize> {
@@ -70,15 +86,15 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
             None => continue,
         };
 
-        let implemented: HashSet<u32> = children_of(idx)
+        let implemented: HashSet<String> = children_of(idx)
             .iter()
             .filter_map(|&child| match &ir.nodes.get(child)?.kind {
-                CanonNodeKind::Fn { .. } => Some(child as u32),
+                CanonNodeKind::Fn { name_id, .. } => Some(ir.lookup_name(*name_id).to_string()),
                 _ => None,
             })
             .collect();
 
-        let missing: Vec<u32> = required.iter().copied().filter(|m| !implemented.contains(m)).collect();
+        let missing: Vec<String> = required.iter().filter(|m| !implemented.contains(*m)).cloned().collect();
         if !missing.is_empty() {
             eprintln!("WARN trait_solver: Impl[{}] for trait {:?} missing methods {:?}", idx, trait_id, missing);
         }

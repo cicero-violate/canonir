@@ -47,7 +47,7 @@ fn vis_flags(v: &Visibility) -> u32 {
         Visibility::Public => flags::PUB,
         Visibility::PubCrate => flags::PUB_CRATE,
         Visibility::PubSuper => flags::PUB_SUPER,
-        Visibility::PubIn(_) => flags::PUB_CRATE,
+        Visibility::PubIn(_) => flags::PUB_IN,
         Visibility::Private => 0,
     }
 }
@@ -1005,6 +1005,39 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
     canon.region_graph = CsrGraph::from_edges(node_data.clone(), to_raw(region_edges));
     canon.value_graph = CsrGraph::from_edges(node_data.clone(), to_raw(value_edges));
     canon.macro_graph = CsrGraph::from_edges(node_data, to_raw(macro_edges));
+
+    // Canonicalize Impl payload links from structural edges:
+    // - Impl.for_ty from module_graph ImplFor
+    // - Impl.for_trait from type_graph ImplRef
+    let mut impl_payload_updates: Vec<(usize, Option<CanonId>, Option<CanonId>)> = Vec::new();
+    for idx in 0..canon.nodes.len() {
+        if !matches!(canon.nodes[idx].kind, CanonNodeKind::Impl { .. }) {
+            continue;
+        }
+        let mut for_ty: Option<CanonId> = None;
+        for (dst, edge) in canon.module_graph.neighbours(canon::id::NodeId(idx as u32)) {
+            if *edge == CanonEdgeKind::ImplFor {
+                for_ty = Some(CanonId(dst.0));
+                break;
+            }
+        }
+        let mut for_trait: Option<CanonId> = None;
+        for (dst, edge) in canon.type_graph.neighbours(canon::id::NodeId(idx as u32)) {
+            if *edge == CanonEdgeKind::ImplRef {
+                for_trait = Some(CanonId(dst.0));
+                break;
+            }
+        }
+        impl_payload_updates.push((idx, for_ty, for_trait));
+    }
+    for (idx, for_ty, for_trait) in impl_payload_updates {
+        if let CanonNodeKind::Impl { for_ty: node_for_ty, for_trait: node_for_trait, .. } = &mut canon.nodes[idx].kind {
+            if let Some(for_ty) = for_ty {
+                *node_for_ty = for_ty;
+            }
+            *node_for_trait = for_trait;
+        }
+    }
 
     // Ensure every Extern type path is normalized before projection.
     let mut extern_type_updates: Vec<(usize, PathId)> = Vec::new();

@@ -51,6 +51,20 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
     }
 
     let fwd = csr_to_adj(&ir.module_graph);
+    let local_module_roots: HashSet<String> = ir
+        .nodes
+        .iter()
+        .filter_map(|n| {
+            if let CanonNodeKind::Module { path_id, .. } = &n.kind {
+                ir.lookup_path(*path_id)
+                    .strip_prefix("crate::")
+                    .and_then(|rest| rest.split("::").next())
+                    .map(|s| s.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
     let mut use_parent_module: HashMap<usize, usize> = HashMap::new();
     for (src_idx, neighbours) in fwd.iter().enumerate() {
         for &dst_idx in neighbours {
@@ -83,11 +97,18 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
             continue;
         }
         if let Some(CanonNodeKind::Use { path_id, .. }) = ir.nodes.get(site_idx).map(|n| &n.kind) {
+            let path = ir.lookup_path(*path_id);
+            let root = path.split("::").next().unwrap_or("");
+            // External imports without local DefId targets are expected.
+            // Keep diagnostics for local unresolved imports only.
+            if root != "crate" && !local_module_roots.contains(root) {
+                continue;
+            }
             eprintln!(
                 "WARN use_solver: unresolved use at node {} in module {} path {}",
                 site_idx,
                 parent_mod,
-                ir.lookup_path(*path_id)
+                path
             );
         } else {
             eprintln!("WARN use_solver: unresolved use-like node {}", site_idx);
