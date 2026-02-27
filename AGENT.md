@@ -1,6 +1,10 @@
 RULES TO FOLLOW
 If you are tempted to create a heuristic, it means there is a structural gap.The new solution lacks invariants. Therefore abort the job, and notify the user.
 
+USEFUL INFORMATION
+rustc compiler source code can be found in here, it is very useful
+/workspace/ai_sandbox/canon/test_projects/rust_compiler_info/compiler
+
 Shell Text Processing Rules
 
 General Tooling Rules
