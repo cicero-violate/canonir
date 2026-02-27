@@ -210,7 +210,7 @@ pub(crate) fn compute_call_feed_locals<'tcx>(
         let mir::TerminatorKind::Call { func, args, .. } = &term_ref.kind else {
             continue;
         };
-        if !mir_ops::filtered_internal_call_target(tcx, func) {
+        if !mir_ops::filtered_internal_call_target(tcx, func, resolver) {
             continue;
         }
         for arg in args {

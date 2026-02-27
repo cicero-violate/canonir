@@ -10,12 +10,13 @@ pub fn emit_body(ir: &CanonIR, body_id: CanonId, param_names: &[String], pad: &s
     };
     let mut out = String::new();
     let mut declared: HashSet<String> = param_names.iter().cloned().collect();
+    let mut suppressed: HashSet<String> = HashSet::new();
     for bb in blocks {
         let CanonNodeKind::BasicBlock { ops, .. } = &ir.node(*bb).kind else {
             continue;
         };
         for op in ops {
-            let rendered = render_op(ir, op, &mut declared);
+            let rendered = render_op(ir, op, &mut declared, &mut suppressed);
             if rendered.is_empty() {
                 continue;
             }
@@ -29,7 +30,12 @@ pub fn emit_body(ir: &CanonIR, body_id: CanonId, param_names: &[String], pad: &s
     out
 }
 
-fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>) -> String {
+fn render_op(
+    ir: &CanonIR,
+    op: &CfgOp,
+    declared: &mut HashSet<String>,
+    suppressed: &mut HashSet<String>,
+) -> String {
     match op {
         CfgOp::Let { lhs, ty, rhs } => {
             let lhs_name = local_name(ir, *lhs);
@@ -41,12 +47,11 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>) -> String
             let lhs_name = local_name(ir, *lhs);
             let rhs_name = local_name(ir, *rhs);
             if rhs_name == "__canon_suppressed__" {
-                if declared.contains(&lhs_name) {
-                    format!("{lhs_name} = panic!(\"canon suppressed binding\");")
-                } else {
-                    declared.insert(lhs_name.clone());
-                    format!("let mut {lhs_name} = panic!(\"canon suppressed binding\");")
-                }
+                suppressed.insert(lhs_name.clone());
+                render_suppressed_binding(&lhs_name, declared)
+            } else if suppressed.contains(&rhs_name) {
+                suppressed.insert(lhs_name.clone());
+                render_suppressed_binding(&lhs_name, declared)
             } else if rhs_name == "__canon_call_gap__" {
                 if declared.contains(&lhs_name) {
                     format!("{lhs_name} = panic!(\"canon call result not lowered\");")
@@ -71,24 +76,54 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>) -> String
         },
         CfgOp::Call { func, args, dest } => {
             let fname = callable_name(ir, *func);
-            let args = args.iter().map(|a| local_name(ir, *a)).collect::<Vec<_>>().join(", ");
+            let arg_names = args.iter().map(|a| local_name(ir, *a)).collect::<Vec<_>>();
+            let args = arg_names.join(", ");
             match dest {
-                Some(d) => bind_or_assign(&local_name(ir, *d), format!("{}({})", fname, args), declared),
+                Some(d) => {
+                    let dest_name = local_name(ir, *d);
+                    if arg_names.iter().any(|a| suppressed.contains(a)) {
+                        suppressed.insert(dest_name.clone());
+                        render_suppressed_binding(&dest_name, declared)
+                    } else {
+                        bind_or_assign(&dest_name, format!("{}({})", fname, args), declared)
+                    }
+                }
                 None => format!("{}({});", fname, args),
             }
         }
         CfgOp::FieldAccess { base, field, dest } => {
-            let expr = format!("{}.{}", local_name(ir, *base), ir.lookup_name(*field));
+            let base_name = local_name(ir, *base);
+            let expr = format!("{}.{}", base_name, ir.lookup_name(*field));
             match dest {
-                Some(d) => bind_or_assign(&local_name(ir, *d), expr, declared),
+                Some(d) => {
+                    let dest_name = local_name(ir, *d);
+                    if suppressed.contains(&base_name) {
+                        suppressed.insert(dest_name.clone());
+                        render_suppressed_binding(&dest_name, declared)
+                    } else {
+                        bind_or_assign(&dest_name, expr, declared)
+                    }
+                }
                 None => format!("{};", expr),
             }
         }
         CfgOp::MethodCall { receiver, method, args, dest } => {
-            let args = args.iter().map(|a| local_name(ir, *a)).collect::<Vec<_>>().join(", ");
-            let expr = format!("{}.{}({})", local_name(ir, *receiver), ir.lookup_name(*method), args);
+            let receiver_name = local_name(ir, *receiver);
+            let arg_names = args.iter().map(|a| local_name(ir, *a)).collect::<Vec<_>>();
+            let args = arg_names.join(", ");
+            let expr = format!("{}.{}({})", receiver_name, ir.lookup_name(*method), args);
             match dest {
-                Some(d) => bind_or_assign(&local_name(ir, *d), expr, declared),
+                Some(d) => {
+                    let dest_name = local_name(ir, *d);
+                    if suppressed.contains(&receiver_name)
+                        || arg_names.iter().any(|a| suppressed.contains(a))
+                    {
+                        suppressed.insert(dest_name.clone());
+                        render_suppressed_binding(&dest_name, declared)
+                    } else {
+                        bind_or_assign(&dest_name, expr, declared)
+                    }
+                }
                 None => format!("{};", expr),
             }
         }
@@ -123,7 +158,19 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>) -> String
                 format!("{} {{ {} }}", ctor, fields)
             };
             match dest {
-                Some(d) => bind_or_assign(&local_name(ir, *d), expr, declared),
+                Some(d) => {
+                    let dest_name = local_name(ir, *d);
+                    if fields
+                        .iter()
+                        .map(|(_, val)| local_name(ir, *val))
+                        .any(|v| suppressed.contains(&v))
+                    {
+                        suppressed.insert(dest_name.clone());
+                        render_suppressed_binding(&dest_name, declared)
+                    } else {
+                        bind_or_assign(&dest_name, expr, declared)
+                    }
+                }
                 None => format!("{};", expr),
             }
         }
@@ -200,5 +247,14 @@ fn bind_or_assign(name: &str, expr: String, declared: &mut HashSet<String>) -> S
     } else {
         declared.insert(name.to_string());
         format!("let mut {name} = {expr};")
+    }
+}
+
+fn render_suppressed_binding(name: &str, declared: &mut HashSet<String>) -> String {
+    if declared.contains(name) {
+        format!("{name} = panic!(\"canon suppressed binding\");")
+    } else {
+        declared.insert(name.to_string());
+        format!("let mut {name} = panic!(\"canon suppressed binding\");")
     }
 }

@@ -80,7 +80,7 @@ pub(crate) fn lower_call_terminator<'tcx>(
             });
             defined.insert(dest);
         }
-    } else if mir_ops::filtered_internal_call_target(tcx, func) {
+    } else if mir_ops::filtered_internal_call_target(tcx, func, resolver) {
         if let Some(dest) = mir_util::label_place_dest(resolver, destination) {
             if dest == "__ret" {
                 stmts.push(Stmt::Assign {

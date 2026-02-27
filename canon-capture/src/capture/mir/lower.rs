@@ -271,7 +271,12 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
                 return;
             }
             if let Some(lhs_name) = ctx.resolver.label_place(lhs) {
-                ctx.defined.insert(lhs_name);
+                mir_util::emit_suppressed_for_name(
+                    &lhs_name,
+                    ctx.stmts,
+                    ctx.defined,
+                    ctx.suppressed_sentinel_names,
+                );
             }
             return;
         }
@@ -297,6 +302,13 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
                     ctx.defined.insert(dest.clone());
                 }
                 ctx.stmts.push(struct_stmt);
+            } else if let Some(lhs_name) = lhs_name {
+                mir_util::emit_suppressed_for_name(
+                    &lhs_name,
+                    ctx.stmts,
+                    ctx.defined,
+                    ctx.suppressed_sentinel_names,
+                );
             }
             return;
         }

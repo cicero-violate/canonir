@@ -1,6 +1,7 @@
 use rustc_middle::mir;
 use rustc_middle::ty::{self, TyCtxt};
 
+use crate::capture::helpers::{lower_ty, render_type_expr};
 use crate::capture::mir::filters;
 use crate::capture::mir::resolver::LocalNameResolver;
 use crate::types::Stmt;
@@ -61,38 +62,12 @@ fn label_operand_place(place: &mir::Place<'_>, resolver: &LocalNameResolver) -> 
     if place.projection.is_empty() {
         return resolver.label_place(place);
     }
-    let mut expr = resolver.label_local(place.local)?;
-    let mut pending_downcast: Option<String> = None;
-    for elem in place.projection.iter() {
-        match elem {
-            mir::ProjectionElem::Deref => {
-                expr = format!("*{expr}");
-            }
-            mir::ProjectionElem::Downcast(variant_name, variant_idx) => {
-                pending_downcast = Some(
-                    variant_name
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| format!("variant_{}", variant_idx.as_usize())),
-                );
-            }
-            mir::ProjectionElem::Field(field_idx, _) => {
-                if let Some(variant) = pending_downcast.take() {
-                    expr = format!("({expr} as {variant})");
-                }
-                expr = format!("({expr}).{}", field_idx.index());
-            }
-            mir::ProjectionElem::Index(local) => {
-                let idx = resolver.label_local(local)?;
-                expr = format!("{expr}[{idx}]");
-            }
-            mir::ProjectionElem::OpaqueCast(..) | mir::ProjectionElem::UnwrapUnsafeBinder(..) => {}
-            _ => return None,
-        }
+    // Operand-side projection rendering is intentionally strict because this path
+    // lacks full type context and can otherwise leak MIR-only field accesses.
+    if place.projection.len() == 1 && matches!(place.projection[0], mir::ProjectionElem::Deref) {
+        return Some(format!("*{}", resolver.label_local(place.local)?));
     }
-    if let Some(variant) = pending_downcast.take() {
-        expr = format!("({expr} as {variant})");
-    }
-    Some(expr)
+    None
 }
 
 pub(crate) fn mir_call_args_labels<'tcx>(
@@ -113,11 +88,16 @@ pub(crate) fn mir_call_args_labels<'tcx>(
 pub(crate) fn filtered_internal_call_target<'tcx>(
     tcx: TyCtxt<'tcx>,
     func: &mir::Operand<'tcx>,
+    resolver: &LocalNameResolver,
 ) -> bool {
-    let Some(path) = call_target_path(tcx, func) else {
-        return false;
-    };
-    filters::is_filtered_internal_call_path(&path)
+    if let Some(path) = call_target_path(tcx, func)
+        && filters::is_filtered_internal_call_path(&path)
+    {
+        return true;
+    }
+    mir_operand_label(tcx, func, resolver)
+        .map(|path| filters::is_filtered_internal_call_path(&path))
+        .unwrap_or(false)
 }
 
 pub(crate) fn call_target_path<'tcx>(
@@ -193,10 +173,29 @@ pub(crate) fn mir_call_stmt<'tcx>(
     dest: String,
 ) -> Option<Stmt> {
     let func = if let Some((did, _)) = func.const_fn_def() {
-        filters::strip_instance_generics(&norm::path(tcx, did))
+        if matches!(tcx.def_kind(did), rustc_hir::def::DefKind::AssocFn) {
+            let assoc = tcx.associated_item(did);
+            if matches!(
+                assoc.container,
+                ty::AssocContainer::InherentImpl | ty::AssocContainer::TraitImpl(_)
+            ) {
+                let impl_did = assoc.container_id(tcx);
+                let self_ty = tcx.type_of(impl_did).instantiate_identity();
+                let self_path = render_type_expr(tcx, &lower_ty(tcx, self_ty));
+                let method = tcx.item_name(did).to_string();
+                format!("{self_path}::{method}")
+            } else {
+                filters::strip_instance_generics(&norm::path(tcx, did))
+            }
+        } else {
+            filters::strip_instance_generics(&norm::path(tcx, did))
+        }
     } else {
         filters::strip_instance_generics(&mir_operand_label(tcx, func, resolver)?)
     };
+    if filters::path_has_unresolved_generic(&func) {
+        return None;
+    }
     let args = mir_call_args_labels(tcx, args, resolver)?;
     Some(Stmt::Call {
         func,

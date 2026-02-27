@@ -49,6 +49,16 @@ pub(crate) fn render_projected_place_expr<'tcx>(
                 } else {
                     match cursor_ty.kind() {
                         ty::TyKind::Adt(adt, _) => {
+                            if !adt.did().is_local() {
+                                let tuple_like = adt
+                                    .non_enum_variant()
+                                    .fields
+                                    .iter()
+                                    .all(|f| f.name.to_string().chars().all(|c| c.is_ascii_digit()));
+                                if tuple_like {
+                                    return None;
+                                }
+                            }
                             let f = adt.non_enum_variant().fields.get(field_idx)?;
                             let name = f.name.to_string();
                             if name.chars().all(|c| c.is_ascii_digit()) {
@@ -58,7 +68,7 @@ pub(crate) fn render_projected_place_expr<'tcx>(
                             }
                         }
                         ty::TyKind::Tuple(_) => field_idx.index().to_string(),
-                        _ => field_idx.index().to_string(),
+                        _ => return None,
                     }
                 };
                 if !field.is_empty() {
@@ -171,9 +181,9 @@ pub(crate) fn mir_binop_token(op: mir::BinOp) -> Option<&'static str> {
         mir::BinOp::MulUnchecked => Some("*"),
         mir::BinOp::ShlUnchecked => Some("<<"),
         mir::BinOp::ShrUnchecked => Some(">>"),
-        mir::BinOp::AddWithOverflow => Some("+"),
-        mir::BinOp::SubWithOverflow => Some("-"),
-        mir::BinOp::MulWithOverflow => Some("*"),
+        mir::BinOp::AddWithOverflow => None,
+        mir::BinOp::SubWithOverflow => None,
+        mir::BinOp::MulWithOverflow => None,
     }
 }
 
@@ -230,6 +240,16 @@ pub(crate) fn mir_field_access_stmt<'tcx>(
 
     let field = match base_ty.kind() {
         ty::TyKind::Adt(adt, _) if adt.is_struct() || adt.is_union() => {
+            if !adt.did().is_local() {
+                let tuple_like = adt
+                    .non_enum_variant()
+                    .fields
+                    .iter()
+                    .all(|f| f.name.to_string().chars().all(|c| c.is_ascii_digit()));
+                if tuple_like {
+                    return None;
+                }
+            }
             let f = adt.non_enum_variant().fields.get(field_idx)?;
             let name = f.name.to_string();
             if name.chars().all(|c| c.is_ascii_digit()) {
@@ -300,7 +320,10 @@ pub(crate) fn mir_struct_lit_stmt<'tcx>(
 }
 
 fn assign_rhs_should_suppress(rhs: &str) -> bool {
-    filters::is_zero_arg_enum_ctor_expr_str(rhs) || rhs.contains("SizedTypeProperties")
+    filters::is_zero_arg_enum_ctor_expr_str(rhs)
+        || rhs.contains("SizedTypeProperties")
+        || rhs.contains("std::alloc::Global")
+        || rhs.contains("alloc::Global")
 }
 
 fn mir_rvalue_expr<'tcx>(

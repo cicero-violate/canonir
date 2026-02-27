@@ -37,9 +37,11 @@ pub(crate) fn is_internal_mir_const_repr(s: &str) -> bool {
 }
 
 pub(crate) fn is_filtered_internal_call_path(path: &str) -> bool {
-    let fmt_arguments_ctor = path.contains("fmt::Arguments::new");
+    let normalized = strip_instance_generics(path);
+    let fmt_arguments_ctor = normalized.contains("fmt::Arguments::new");
+    let fmt_rt_argument_ctor = normalized.contains("fmt::rt::Argument::new");
     matches!(
-        path,
+        normalized.as_str(),
         "std::hint::must_use"
             | "core::hint::must_use"
             | "std::io::_print"
@@ -51,24 +53,35 @@ pub(crate) fn is_filtered_internal_call_path(path: &str) -> bool {
             | "core::fmt::Arguments::new_v1_formatted"
             | "std::fmt::Arguments::new_v1_formatted"
     ) || fmt_arguments_ctor
-        || path.ends_with("::new_display")
-        || path.ends_with("::branch")
-        || path.ends_with("::from_residual")
-        || path.ends_with("::from_output")
-        || path.ends_with("::from_str")
-        || path.contains("SizedTypeProperties")
-        || path.contains("::__iterator_get_unchecked")
-        || path.ends_with("::is_val_statically_known")
+        || fmt_rt_argument_ctor
+        || normalized.ends_with("::new_display")
+        || normalized.ends_with("::parse")
+        || normalized.ends_with("::branch")
+        || normalized.ends_with("::from_residual")
+        || normalized.ends_with("::from_output")
+        || normalized.ends_with("::from_str")
+        || normalized.contains("SizedTypeProperties")
+        || normalized.contains("::__iterator_get_unchecked")
+        || normalized.ends_with("::is_val_statically_known")
 }
 
 pub(crate) fn path_has_unresolved_generic(path: &str) -> bool {
     let bytes = path.as_bytes();
-    let mut i = 0usize;
-    while i + 2 < bytes.len() {
-        if bytes[i] == b'<' && bytes[i + 2] == b'>' && bytes[i + 1].is_ascii_uppercase() {
+    for i in 0..bytes.len() {
+        if bytes[i] != b'<' || i + 1 >= bytes.len() {
+            continue;
+        }
+        let c = bytes[i + 1];
+        if !c.is_ascii_uppercase() {
+            continue;
+        }
+        if i + 2 >= bytes.len() {
             return true;
         }
-        i += 1;
+        let next = bytes[i + 2];
+        if next == b'>' || next == b',' || next.is_ascii_whitespace() {
+            return true;
+        }
     }
     false
 }

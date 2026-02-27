@@ -1,55 +1,53 @@
 # AGENT_STATE.md
 
 ## CANONICAL_HEADER
-- state_id: `CANON_STRUCTURAL_HARVEST_SLICE_10`
+- state_id: `CANON_STRUCTURAL_HARVEST_SLICE_11`
 - date: `2026-02-27`
 - mode: `execution`
 - invariant: `Structural invariants only. No heuristics.`
 
 ### 1) Investigate the problem
-- Objective: continue structural capture invariants and remove remaining emission-side structural corruption after return-carrier closure.
+- Objective: continue structural invariant harvesting while keeping both fixture pipelines buildable.
 
 ### 2) Gather facts
-- `canon-capture` builds cleanly (`cargo check -p canon-capture`).
-- Repomap capture+orchestration succeeds.
-- Repomap unresolved `__ret` sentinel sites are now zero.
-- Remaining repomap build failures are concentrated in fmt/argument materialization and tuple-shape mismatches in `fn_signature` and `symbol::render` paths.
+- `run_script.sh test_1` passes `build_emit`.
+- `run_script.sh repomap` passes `build_emit`.
+- Structural output still has high suppression density and large semantic drift versus fixture sources.
 
 ### 3) Break down the facts
-- Gap Class A: fmt internals leakage (`std::fmt::Arguments::new`, rt `Argument` tuple/array forms) still emitted.
-- Gap Class B: projection/body rendering still emits tuple-shape-incompatible argument carriers in `symbol::render`.
-- Gap Class C: deref trait-call forms (`Vec::deref`) still leak as method-like calls without structural lowering.
+- Gap Class A: over-suppression in function bodies (`panic!(\"canon suppressed binding\")`) reduces semantic fidelity.
+- Gap Class B: unresolved semantic reconstruction in complex functions (`symbol::render`, extractor loops) despite structural compilability.
+- Gap Class C: projection/call lowering remains conservative, causing large body collapse.
 
 ### 4) Write it to a state file
-- State overwritten for this execution slice.
+- State overwritten for this execution slice (no append).
 
 ### 5) Sort structural and categorical patterns
-- Return-carrier invariant is now structurally satisfied for repomap (`__ret` unresolved count = 0).
-- Next invariant boundary is fmt/rt argument construction elimination from capture output.
+- Structural compile invariants are currently satisfied for both fixtures.
+- Next phase is controlled suppression reduction with invariant-preserving re-expansion of body ops.
 
 ### 6) Write it to state file
 - Files touched this slice:
 - `canon-capture/src/capture/mir/analysis.rs`
-- `canon-capture/src/capture/mir/passes.rs`
+- `canon-capture/src/capture/mir/expr.rs`
 - `canon-capture/src/capture/mir/filters.rs`
+- `canon-capture/src/capture/mir/lower.rs`
 - `canon-capture/src/capture/mir/ops.rs`
 - `canon-capture/src/capture/mir/terminator.rs`
+- `canon-projection/src/emit/body.rs`
 - `AGENT_STATE.md`
 
 ### 7) Solve the state file
-- Implemented structural cycle detection for switch regions (replaced backedge heuristic).
-- Preserved return-carrying switch-arm blocks (write-return and return-terminator arms are no longer suppressed).
-- Removed switch-source synthetic `Match{dest:__ret}` injection.
-- Added structural `must_use` identity-call lowering to preserve return value flow.
-- Expanded format-target detection and fmt constructor filtering shape.
+- Added destination sentinel emission for field/struct lowering misses.
+- Tightened projection rendering invariants to suppress invalid/private field forms.
+- Added structural filtering for fmt internals and unresolved-generic call paths.
+- Added associated-call canonicalization to emit `Type::method` for impl-associated calls.
 
 ### 8) Emit and project the solution incrementally
 - Validation executed:
-- `cargo check -p canon-capture`
-- `run_capture.sh .../capture/repomap .../canon_capture.json`
-- `cargo run -p orchestration -- .../canon_capture.json .../emit/repomap`
-- `cargo build` in `emit/repomap`
+- `/workspace/ai_sandbox/canon/run_script.sh test_1`
+- `/workspace/ai_sandbox/canon/run_script.sh repomap`
 
 ### 9) Repeat step 3
 - Next structural target:
-- suppress/lower fmt runtime argument constructors (`core::fmt::rt::Argument::*`, `Arguments::new`) and dependent tuple carriers in capture so emitter receives only structural calls/assigns.
+- reduce suppression volume structurally for top semantic hotspots (`extractor::*`, `symbol::render`, `results::combine_results`) while preserving compile invariants.
