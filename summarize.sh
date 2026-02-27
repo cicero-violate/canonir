@@ -8,6 +8,6 @@ bat -n /workspace/ai_sandbox/canon/GOAL.md
 # bat -n /workspace/ai_sandbox/canon/PLAN.md
 # bat -n /workspace/ai_sandbox/canon/EXECUTION_STATUS.md
 # bat -n /workspace/ai_sandbox/canon/EXECUTION_REF.md
-bat -n /workspace/ai_sandbox/canon/AGENT_STATE.md
+# bat -n /workspace/ai_sandbox/canon/AGENT_STATE.md
 
 tree --gitignore -I 'chatgpt_rustsandbox'
