@@ -1,57 +1,66 @@
 # Agent State
 
-## 2026-02-27 — Current Cycle (Continue Plan: Phase 4.6)
+## 2026-02-27 — Current Cycle (Continue Plan: Phase 5.1/5.3/5.4)
 
 ### 1) Investigate the problem
-- Continue Phase 4 after `ImplRef` graph-consumption updates.
+- Continue from analyzer completion into projection/layout cleanup.
 - Targets this cycle:
-  - Phase 4.6: derive `Instantiates` edges in `G_type` for generic `Extern`/`Unresolved` types that resolve to known canonical defs.
+  - Phase 5.1: handle `TypeKind::Unresolved` in projection as an error surface.
+  - Phase 5.3: remove dependency rendering special-cases and carry Cargo package naming structurally.
+  - Phase 5.4: remove `normalize_use_path` helper and related use-path heuristics.
 
 ### 2) Gather facts
-- `EdgeKind::Instantiates` exists in schema but had no analyzer derivation path.
-- `type_solver` was effectively no-op (SCC scan only) and did not mutate `type_graph`.
-- `TypeKind::Extern/Unresolved` generic arguments remain encoded in path text, so derivation requires parsing path generics.
+- `emit/types.rs` still rendered `TypeKind::Unresolved` as plain path text.
+- `layout/mod.rs` still contained `render_dependency_entry` with `tree_sitter*` special-cases.
+- `emit/fmt.rs` still exposed `normalize_use_path`, and `emit/items.rs` used additional path-filtering logic.
+- `CanonNodeKind::Crate` lacked a dedicated cargo package name field.
 
 ### 3) Break down the facts
-- For each `Type` node of `Extern/Unresolved` with generic args:
-  - parse root + args from `path`.
-  - if root resolves uniquely to local canonical def (Struct/Enum/Trait/TypeAlias), emit `Instantiates` edge to that def.
-  - resolve each generic arg to unique canonical type node when possible and emit `Instantiates` to arg type nodes.
-- Preserve existing `type_graph` edges and append derived edges without duplication.
+- Projection should fail-fast on unresolved types instead of silently emitting best-effort text.
+- Dependency lines should be emitted directly from canonical dependency roots; no crate-specific special-case mapping in layout.
+- Cargo package name should be represented on the Crate node (`cargo_name`) and consumed by layout metadata.
+- Use emission should consume canonical path directly; no normalize/filter helper in projection.
 
 ### 4) Write it to a state file
 - This file is the overwritten cycle snapshot.
 
 ### 5) Sort structural and categorical patterns
-- Structural pattern A: instantiation relations belong in `G_type`, not projection heuristics.
-- Structural pattern B: derivation is additive and deduplicated.
-- Categorical pattern A: generic path parsing in solver.
-- Categorical pattern B: local def/type resolution for edge targets.
+- Structural pattern A: unresolved types at emit boundary are hard projection errors.
+- Structural pattern B: cargo package naming is data on `Crate`, not inferred in layout.
+- Structural pattern C: use paths are emitted as stored canonical paths without projection-time normalization.
+- Categorical pattern A: schema extension (`Crate.cargo_name`).
+- Categorical pattern B: projection heuristic removal.
 
 ### 6) Write it to state file
 - The patterns above define this cycle's acceptance criteria.
 
 ### 7) Solve the state file
-- `canon-analyzer/src/solver/type_solver.rs`
-  - added `derive_instantiates_edges(ir)` and integrated it into `solve`.
-  - implemented generic path parsing helpers:
-    - `split_generic_path`, `split_top_level`, `normalize_type_text`.
-  - implemented type-key mapping helpers for matching args to canonical type nodes:
-    - `type_kind_text_key`, `primitive_name`.
-  - derivation behavior:
-    - scans `TypeKind::Extern` and `TypeKind::Unresolved` nodes,
-    - resolves generic root to unique local def by name where possible,
-    - resolves arg types to unique canonical type nodes where possible,
-    - appends deduped `EdgeKind::Instantiates` edges to `type_graph`.
+- `canon/src/node.rs`
+  - added `cargo_name: Option<NameId>` to `CanonNodeKind::Crate` (`serde(default)`).
+- `canon-capture/src/canon_assemble.rs`
+  - sets `Crate.cargo_name` during assembly (`name_with_underscores` -> hyphenated cargo package name).
+- `canon-projection/src/emit/types.rs`
+  - changed `TypeKind::Unresolved` rendering to fail-fast panic with path context.
+- `canon-projection/src/layout/mod.rs`
+  - removed `render_dependency_entry` special-case function.
+  - dependency lines now emit directly as `"{dep} = \"*\""` from canonical roots.
+  - `crate_meta` now prefers `Crate.cargo_name` and falls back to `name_id`.
+- `canon-projection/src/emit/fmt.rs`
+  - removed `normalize_use_path`.
+- `canon-projection/src/emit/items.rs`
+  - removed use of `normalize_use_path`.
+  - removed single-segment uppercase filtering heuristic; use paths are emitted directly.
 
 ### 8) Emit and project the solution incrementally
 - Validation:
-  - `cargo check` passed after type-solver instantiation derivation changes.
+  - `cargo check` passed across full workspace after projection/layout cleanup.
 
 ### 9) Repeat step 3
 - Post-change fact breakdown:
-  - `G_type` now gets explicit `Instantiates` edges for the resolvable subset of generic extern/unresolved types.
-  - unresolved/ambiguous cases remain non-fatal and are skipped (no synthetic guessing).
+  - projection no longer normalizes/filters use paths.
+  - layout no longer contains crate-specific dependency mapping heuristics.
+  - unresolved type emission now trips a hard projection error boundary.
+  - crate cargo package naming is now structurally represented.
 - Next pending slice:
   - continue Phase 3.5 body structuring to further reduce `CfgOp::Raw`,
-  - move into Phase 5 projection heuristic removals/validation.
+  - run representative fixture executions to validate runtime behavior after projection hardening.

@@ -61,10 +61,15 @@ pub fn build_plan(ir: &CanonIR) -> Result<Plan> {
     if let Some((name, edition)) = crate_meta(ir) {
         let deps = ir.nodes.iter().find_map(|n| {
             if let CanonNodeKind::Crate { dependencies, .. } = &n.kind {
-                Some(dependencies.iter().map(|pid| {
-                    let s = ir.lookup_path(*pid).to_string();
-                    render_dependency_entry(&s)
-                }).collect::<Vec<_>>())
+                Some(
+                    dependencies
+                        .iter()
+                        .map(|pid| {
+                            let s = ir.lookup_path(*pid);
+                            format!("{s} = \"*\"")
+                        })
+                        .collect::<Vec<_>>(),
+                )
             } else {
                 None
             }
@@ -204,20 +209,14 @@ fn is_root_main_fn(ir: &CanonIR, id: CanonId) -> bool {
 }
 
 fn crate_meta(ir: &CanonIR) -> Option<(String, String)> {
-    ir.nodes.iter().find_map(|n| if let CanonNodeKind::Crate { name_id, edition, .. } = &n.kind { Some((ir.lookup_name(*name_id).to_string(), edition.to_string())) } else { None })
-}
-
-fn render_dependency_entry(dep: &str) -> String {
-    let package = match dep {
-        "tree_sitter" => Some("tree-sitter"),
-        "tree_sitter_rust" => Some("tree-sitter-rust"),
-        _ => None,
-    };
-    if let Some(package) = package {
-        format!("{dep} = {{ package = \"{package}\", version = \"*\" }}")
-    } else {
-        format!("{dep} = \"*\"")
-    }
+    ir.nodes.iter().find_map(|n| {
+        if let CanonNodeKind::Crate { name_id, cargo_name, edition, .. } = &n.kind {
+            let pkg = cargo_name.map(|id| ir.lookup_name(id).to_string()).unwrap_or_else(|| ir.lookup_name(*name_id).to_string());
+            Some((pkg, edition.to_string()))
+        } else {
+            None
+        }
+    })
 }
 
 

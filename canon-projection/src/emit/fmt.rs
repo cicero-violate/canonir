@@ -1,4 +1,3 @@
-use canon::ir::CanonIR;
 use canon::node::flags;
 
 pub fn vis_token(f: u32) -> &'static str {
@@ -11,8 +10,4 @@ pub fn vis_token(f: u32) -> &'static str {
     } else {
         ""
     }
-}
-
-pub fn normalize_use_path<'a>(path: &'a str, _ir: &CanonIR) -> std::borrow::Cow<'a, str> {
-    std::borrow::Cow::Borrowed(path)
 }

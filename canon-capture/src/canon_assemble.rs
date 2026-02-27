@@ -732,8 +732,13 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
         let canon_kind = match &node.kind {
             NodeKind::Crate { name, edition } => {
                 let name_id = NameId(canon.name_intern.intern(name));
+                let cargo_name = if name.contains('_') {
+                    Some(NameId(canon.name_intern.intern(&name.replace('_', "-"))))
+                } else {
+                    None
+                };
                 let ed: u32 = edition.parse().unwrap_or(2021);
-                CanonNodeKind::Crate { name_id, edition: ed, dependencies: vec![] }
+                CanonNodeKind::Crate { name_id, cargo_name, edition: ed, dependencies: vec![] }
             }
             NodeKind::Module { path, vis, inline, .. } => {
                 let path_id = canon.intern_path(path);

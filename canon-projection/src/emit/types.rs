@@ -183,7 +183,7 @@ fn render_type_kind(ir: &CanonIR, kind: &TypeKind) -> String {
         TypeKind::DynTrait(id) => format!("dyn {}", render_type_id(ir, *id)),
         TypeKind::Param(name_id) => ir.lookup_name(*name_id).to_string(),
         TypeKind::Extern(path_id) => ir.lookup_path(*path_id).to_string(),
-        TypeKind::Unresolved(path_id) => ir.lookup_path(*path_id).to_string(),
+        TypeKind::Unresolved(path_id) => panic!("unresolved type reached projection: {}", ir.lookup_path(*path_id)),
         TypeKind::TypeRef { name_id } => ir.lookup_name(*name_id).to_string(),
     }
 }

@@ -161,6 +161,8 @@ pub enum CanonNodeKind {
     // ── Crate ────────────────────────────────────────────────────────────────
     Crate {
         name_id: NameId,
+        #[serde(default)]
+        cargo_name: Option<NameId>,
         edition: u32, // 2015 | 2018 | 2021
         #[serde(default)]
         dependencies: Vec<PathId>,

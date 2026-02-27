@@ -2,7 +2,7 @@ use canon::ir::CanonIR;
 use canon::node::{flags, CanonId, CanonNodeKind};
 
 use crate::emit::cargo::emit_cargo_toml;
-use crate::emit::fmt::{normalize_use_path, vis_token};
+use crate::emit::fmt::vis_token;
 use crate::emit::functions::{emit_fn, emit_trait};
 use crate::emit::impls::emit_impl;
 use crate::emit::macros::emit_macro_call;
@@ -23,11 +23,7 @@ pub fn emit_node(ir: &CanonIR, id: CanonId, pad: &str) -> String {
             let vis = vis_token(*flags);
             let glob = if (*flags & flags::GLOB) != 0 { "::*" } else { "" };
             let alias = alias.map(|a| format!(" as {}", ir.lookup_name(a))).unwrap_or_default();
-            let raw_path = ir.lookup_path(*path_id);
-            let path = normalize_use_path(raw_path, ir);
-            if !path.contains("::") && path.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
-                return String::new();
-            }
+            let path = ir.lookup_path(*path_id);
             format!("{}{}use {}{}{};\n", pad, vis, path, glob, alias)
         }
         CanonNodeKind::ExternCrate { name_id, alias, flags } => {
