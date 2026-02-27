@@ -1,5 +1,5 @@
 RULES TO FOLLOW
-when reading json files always use python to read the data
+If you are tempted to create a heuristic, it means there is a structural gap. Therefore abort the job, and notify the user.
 
 Shell Text Processing Rules
 
