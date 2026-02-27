@@ -45,6 +45,16 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
             let dst_kind = &ir.nodes[dst_idx].kind;
             let src_tag = node_kind_tag(src_kind);
             let dst_tag = node_kind_tag(dst_kind);
+            let rename_src_ok = matches!(src_kind, CanonNodeKind::Use { .. } | CanonNodeKind::ExternCrate { .. });
+            if !rename_src_ok {
+                bail!(
+                    "invariant_solver: illegal Renames edge {} ({}) -> {} ({}): source must be Use/ExternCrate",
+                    src_idx,
+                    src_tag,
+                    dst_idx,
+                    dst_tag
+                );
+            }
             let allowed_cross_kind = matches!(src_kind, CanonNodeKind::Use { .. } | CanonNodeKind::ExternCrate { .. });
             if src_tag != dst_tag && !allowed_cross_kind {
                 bail!("invariant_solver: illegal Renames edge {} ({}) -> {} ({}): kind mismatch", src_idx, src_tag, dst_idx, dst_tag);

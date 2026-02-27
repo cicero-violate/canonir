@@ -1,46 +1,47 @@
 # Agent State
 
-## 2026-02-27 — Current Cycle (Continue Phase 4 provenance quality)
+## 2026-02-27 — Current Cycle (Continue Phase 4 invariant hardening)
 
 ### 1) Investigate the problem
-- Continue after rename-direction correction.
+- Continue after provenance noise reduction.
 - Targets this cycle:
-  - Reduce remaining non-actionable provenance warnings while keeping diagnostics structural.
+  - Strengthen graph invariants so rename-edge legality is explicitly enforced.
 
 ### 2) Gather facts
-- After previous fixes, remaining analyzer noise was provenance shadow warnings for method names (`describe`, `fetch`) inside module scope.
-- Those collisions were between associated methods under `Trait`/`Impl` parents and are expected in Rust.
+- `Renames` edge legality checks allowed kind-shape validation but did not enforce source-kind ownership.
+- Structural contract requires rename semantics to originate from `Use`/`ExternCrate`.
 
 ### 3) Break down the facts
-- Provenance duplicate-name check needs parent-context awareness.
-- Associated methods in distinct trait/impl containers should not be flagged as module-level shadowing.
+- Add explicit invariant on `name_graph`:
+  - `Renames` source must be `Use` or `ExternCrate`.
+  - existing destination/name-bearing checks remain in place.
 
 ### 4) Write it to a state file
 - This file is the overwritten cycle snapshot.
 
 ### 5) Sort structural and categorical patterns
-- Structural pattern A: module shadow diagnostics exclude all-associated-method collision sets.
-- Structural pattern B: free-item collisions remain warned.
-- Categorical pattern A: provenance context filter based on module graph parent kinds.
+- Structural pattern A: rename-edge source ownership is strict.
+- Structural pattern B: invalid rename-edge source fails invariant solver immediately.
+- Categorical pattern A: invariant-layer quality gate.
 
 ### 6) Write it to state file
 - The patterns above define this cycle's acceptance criteria.
 
 ### 7) Solve the state file
-- `canon-analyzer/src/solver/provenance_solver.rs`
-  - added direct-parent tracking from module graph.
-  - shadow warning now skips groups where all colliding nodes are `Fn` nodes owned by `Trait`/`Impl` parents.
-  - keeps warnings for other name collisions.
+- `canon-analyzer/src/solver/invariant_solver.rs`
+  - added `Renames` source-kind check:
+    - source must be `Use` or `ExternCrate`.
+  - preserves existing mismatch/name-bearing checks for destination validation.
 
 ### 8) Emit and project the solution incrementally
 - Validation:
   - `cargo check` passed.
-  - `test_1` orchestration run passed.
-  - prior provenance shadow warnings were eliminated for expected associated-method duplicates.
+  - `test_1` orchestration run passed with invariant hardening enabled.
+  - `repomap` orchestration run passed with invariant hardening enabled.
 
 ### 9) Repeat step 3
 - Post-change fact breakdown:
-  - analyzer warning surface is now cleaner and more semantically aligned.
+  - rename graph semantics are now both solver-enforced and invariant-validated.
 - Next pending slice:
   - Phase 3.1: replace string type parsing with structural `Ty` walker in capture.
-  - continue with capture-side type structuralization work.
+  - continue capture-side type structuralization work.
