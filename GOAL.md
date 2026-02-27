@@ -8,9 +8,6 @@ Pipeline invariant:
 
 If CanonIR is valid, emission compiles. If emission fails, CanonIR is incomplete.
 
----
-
----
 
 ### Hard Invariant
 
