@@ -1,15 +1,17 @@
 use crate::types::{BasicBlock, Body, Stmt, Terminator};
 use rustc_middle::mir;
-use rustc_middle::mir::visit::Visitor;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::HashSet;
 
+use crate::capture::mir::analysis as mir_analysis;
 use crate::capture::mir::expr as mir_expr;
 use crate::capture::mir::guard as mir_guard;
 use crate::capture::mir::ops as mir_ops;
 use crate::capture::mir::patterns as mir_patterns;
 use crate::capture::mir::patterns::MirOpKind;
+use crate::capture::mir::terminator as mir_terminator;
+use crate::capture::mir::util as mir_util;
 
 use super::resolver::LocalNameResolver;
 
@@ -48,84 +50,9 @@ pub(crate) fn mir_body_structural(
         next_emitted += 1;
     }
 
-    let mut switch_sources: BTreeSet<usize> = BTreeSet::new();
-    let mut direct_switch_succ: BTreeSet<usize> = BTreeSet::new();
-    let mut preds: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); body.basic_blocks.len()];
-    let mut succs: Vec<Vec<usize>> = vec![Vec::new(); body.basic_blocks.len()];
-    for (idx, bb) in body.basic_blocks.iter_enumerated() {
-        let Some(term) = &bb.terminator else {
-            continue;
-        };
-        for succ in term.successors() {
-            succs[idx.as_usize()].push(succ.as_usize());
-            preds[succ.as_usize()].insert(idx.as_usize());
-        }
-        if matches!(term.kind, mir::TerminatorKind::SwitchInt { .. }) {
-            switch_sources.insert(idx.as_usize());
-            for succ in term.successors() {
-                direct_switch_succ.insert(succ.as_usize());
-            }
-        }
-    }
-    let mut switch_reachable: BTreeSet<usize> = direct_switch_succ.clone();
-    let mut frontier: Vec<usize> = direct_switch_succ.iter().copied().collect();
-    while let Some(cur) = frontier.pop() {
-        for sidx in &succs[cur] {
-            let sidx = *sidx;
-            if switch_reachable.insert(sidx) {
-                frontier.push(sidx);
-            }
-        }
-    }
+    let switch_analysis = mir_analysis::analyze_switch_structure(body);
 
-    let mut switchint_arm_blocks: BTreeSet<usize> = BTreeSet::new();
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for bb_idx in 0..body.basic_blocks.len() {
-            if switchint_arm_blocks.contains(&bb_idx) || !switch_reachable.contains(&bb_idx) {
-                continue;
-            }
-            let incoming = &preds[bb_idx];
-            if incoming.is_empty() {
-                continue;
-            }
-            let exclusively_switch_reachable = incoming.iter().all(|p| {
-                switch_sources.contains(p)
-                    || switchint_arm_blocks.contains(p)
-                    || direct_switch_succ.contains(p)
-            });
-            if exclusively_switch_reachable {
-                switchint_arm_blocks.insert(bb_idx);
-                changed = true;
-            }
-        }
-    }
-
-    let bb_writes_ret: Vec<bool> = body.basic_blocks.iter().map(bb_writes_return_place).collect();
-    let mut switch_source_writes_ret: HashMap<usize, bool> = HashMap::new();
-    for src in &switch_sources {
-        let mut seen: BTreeSet<usize> = BTreeSet::new();
-        let mut stack: Vec<usize> = succs[*src].clone();
-        let mut writes_ret = false;
-        while let Some(cur) = stack.pop() {
-            if !switch_reachable.contains(&cur) || !seen.insert(cur) {
-                continue;
-            }
-            if bb_writes_ret.get(cur).copied().unwrap_or(false) {
-                writes_ret = true;
-                break;
-            }
-            for next in &succs[cur] {
-                if switch_reachable.contains(next) {
-                    stack.push(*next);
-                }
-            }
-        }
-        switch_source_writes_ret.insert(*src, writes_ret);
-    }
-
-    let local_use_counts = count_local_uses(body);
+    let local_use_counts = mir_util::count_local_uses(body);
     let mut filtered_arg_locals: HashSet<u32> = HashSet::new();
     for bb in body.basic_blocks.iter() {
         let Some(term_ref) = &bb.terminator else {
@@ -161,12 +88,14 @@ pub(crate) fn mir_body_structural(
             continue;
         }
         let idx = bb_idx.as_usize();
-        if !switchint_arm_blocks.contains(&idx) && !switch_sources.contains(&idx) {
+        if !switch_analysis.switchint_arm_blocks.contains(&idx)
+            && !switch_analysis.switch_sources.contains(&idx)
+        {
             continue;
         }
         if let Some(term) = &bb.terminator {
             if let mir::TerminatorKind::Call { destination, .. } = &term.kind {
-                if let Some(dest_name) = label_place_dest(&resolver, destination) {
+                if let Some(dest_name) = mir_util::label_place_dest(&resolver, destination) {
                     mir_guard::emit_suppressed_binding(
                         &dest_name,
                         &mut defined,
@@ -179,7 +108,7 @@ pub(crate) fn mir_body_structural(
         for stmt in &bb.statements {
             if let mir::StatementKind::Assign(boxed) = &stmt.kind {
                 let (lhs, _) = &**boxed;
-                if let Some(lhs_name) = label_place_dest(&resolver, lhs) {
+                if let Some(lhs_name) = mir_util::label_place_dest(&resolver, lhs) {
                     mir_guard::emit_suppressed_binding(
                         &lhs_name,
                         &mut defined,
@@ -198,8 +127,12 @@ pub(crate) fn mir_body_structural(
             continue;
         }
         let mir_idx_usize = mir_idx.as_usize();
-        if switch_sources.contains(&mir_idx_usize) {
-            let writes_ret = switch_source_writes_ret.get(&mir_idx_usize).copied().unwrap_or(false);
+        if switch_analysis.switch_sources.contains(&mir_idx_usize) {
+            let writes_ret = switch_analysis
+                .switch_source_writes_ret
+                .get(&mir_idx_usize)
+                .copied()
+                .unwrap_or(false);
             let dest = if !returns_unit && writes_ret && !match_dest_emitted {
                 ret_value_defined = true;
                 ret_binding_emitted = true;
@@ -215,7 +148,7 @@ pub(crate) fn mir_body_structural(
             });
             continue;
         }
-        if switchint_arm_blocks.contains(&mir_idx_usize) {
+        if switch_analysis.switchint_arm_blocks.contains(&mir_idx_usize) {
             blocks.push(BasicBlock {
                 stmts: Vec::new(),
                 terminator: Terminator::Unreachable,
@@ -255,7 +188,7 @@ pub(crate) fn mir_body_structural(
                 ..
             } = &term_ref.kind
             {
-                term = lower_call_terminator(
+                term = mir_terminator::lower_call_terminator(
                     tcx,
                     func,
                     args,
@@ -271,7 +204,7 @@ pub(crate) fn mir_body_structural(
                     &mut match_dest_emitted,
                 );
             } else {
-                term = lower_non_call_terminator(
+                term = mir_terminator::lower_non_call_terminator(
                     tcx,
                     term_ref,
                     returns_unit,
@@ -290,21 +223,6 @@ pub(crate) fn mir_body_structural(
     }
 
     Body::Blocks(blocks)
-}
-
-fn emit_suppressed_for_name(
-    name: &str,
-    stmts: &mut Vec<Stmt>,
-    defined: &mut HashSet<String>,
-    suppressed_sentinel_names: &mut HashSet<String>,
-    ret_value_defined: &mut bool,
-    ret_binding_emitted: &mut bool,
-) {
-    if name == "__ret" {
-        emit_suppressed_ret_binding(stmts, defined, ret_value_defined, ret_binding_emitted);
-    } else {
-        mir_guard::emit_suppressed_binding(name, defined, suppressed_sentinel_names, stmts);
-    }
 }
 
 fn lower_assign_statement<'tcx>(
@@ -336,7 +254,7 @@ fn lower_assign_statement<'tcx>(
             {
                 if !mir_guard::structural_guard(&field_stmt, defined, suppressed_sentinel_names) {
                     if let Stmt::FieldAccess { dest: Some(dest), .. } = &field_stmt {
-                        emit_suppressed_for_name(
+                        mir_util::emit_suppressed_for_name(
                             dest,
                             stmts,
                             defined,
@@ -347,7 +265,7 @@ fn lower_assign_statement<'tcx>(
                     }
                     return;
                 }
-                if stmt_defines_ret(&field_stmt) {
+                if mir_util::stmt_defines_ret(&field_stmt) {
                     *ret_value_defined = true;
                     *ret_binding_emitted = true;
                 }
@@ -369,7 +287,7 @@ fn lower_assign_statement<'tcx>(
             if let Some(struct_stmt) = mir_expr::mir_struct_lit_stmt(tcx, lhs, rvalue, resolver) {
                 if !mir_guard::structural_guard(&struct_stmt, defined, suppressed_sentinel_names) {
                     if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
-                        emit_suppressed_for_name(
+                        mir_util::emit_suppressed_for_name(
                             dest,
                             stmts,
                             defined,
@@ -380,7 +298,7 @@ fn lower_assign_statement<'tcx>(
                     }
                     return;
                 }
-                if stmt_defines_ret(&struct_stmt) {
+                if mir_util::stmt_defines_ret(&struct_stmt) {
                     *ret_value_defined = true;
                     *ret_binding_emitted = true;
                 }
@@ -409,7 +327,7 @@ fn lower_assign_statement<'tcx>(
         }
         MirOpKind::ZeroArgEnumCtor => {
             if let Some(lhs_name) = lhs_name.clone() {
-                emit_suppressed_for_name(
+                mir_util::emit_suppressed_for_name(
                     &lhs_name,
                     stmts,
                     defined,
@@ -443,7 +361,7 @@ fn lower_assign_statement<'tcx>(
     ) {
         if !mir_guard::structural_guard(&assign_stmt, defined, suppressed_sentinel_names) {
             if let Stmt::Assign { lhs, .. } = &assign_stmt {
-                emit_suppressed_for_name(
+                mir_util::emit_suppressed_for_name(
                     lhs,
                     stmts,
                     defined,
@@ -454,7 +372,7 @@ fn lower_assign_statement<'tcx>(
             }
             return;
         }
-        if stmt_defines_ret(&assign_stmt) {
+        if mir_util::stmt_defines_ret(&assign_stmt) {
             *ret_value_defined = true;
             *ret_binding_emitted = true;
         }
@@ -463,7 +381,7 @@ fn lower_assign_statement<'tcx>(
         }
         stmts.push(assign_stmt);
     } else if let Some(lhs_name) = lhs_name {
-        emit_suppressed_for_name(
+        mir_util::emit_suppressed_for_name(
             &lhs_name,
             stmts,
             defined,
@@ -472,287 +390,4 @@ fn lower_assign_statement<'tcx>(
             ret_binding_emitted,
         );
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn lower_call_terminator<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    func: &mir::Operand<'tcx>,
-    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
-    destination: &mir::Place<'tcx>,
-    target: Option<mir::BasicBlock>,
-    resolver: &LocalNameResolver,
-    mir_to_emitted: &[Option<u32>],
-    stmts: &mut Vec<Stmt>,
-    defined: &mut HashSet<String>,
-    suppressed_sentinel_names: &mut HashSet<String>,
-    ret_value_defined: &mut bool,
-    ret_binding_emitted: &mut bool,
-    match_dest_emitted: &mut bool,
-) -> Terminator {
-    if mir_ops::filtered_internal_call_target(tcx, func) {
-        if let Some(dest) = label_place_dest(resolver, destination) {
-            emit_suppressed_for_name(
-                &dest,
-                stmts,
-                defined,
-                suppressed_sentinel_names,
-                ret_value_defined,
-                ret_binding_emitted,
-            );
-        }
-    } else if let Some(dest) = label_place_dest(resolver, destination)
-        && let Some(method_stmt) = mir_ops::mir_method_call_stmt(tcx, func, args, resolver, dest.clone())
-    {
-        if !mir_guard::structural_guard(&method_stmt, defined, suppressed_sentinel_names) {
-            if let Stmt::MethodCall { dest: Some(dest), .. } = &method_stmt {
-                emit_suppressed_for_name(
-                    dest,
-                    stmts,
-                    defined,
-                    suppressed_sentinel_names,
-                    ret_value_defined,
-                    ret_binding_emitted,
-                );
-            }
-            return target
-                .and_then(|bb| remap_bb_target(bb, mir_to_emitted))
-                .map(Terminator::Goto)
-                .unwrap_or(Terminator::None);
-        }
-        if stmt_defines_ret(&method_stmt) {
-            *ret_value_defined = true;
-            *ret_binding_emitted = true;
-        }
-        if let Stmt::MethodCall { dest: Some(dest), .. } = &method_stmt {
-            defined.insert(dest.clone());
-        }
-        stmts.push(method_stmt);
-    } else if let Some(dest) = label_place_dest(resolver, destination)
-        && let Some(call_stmt) = mir_ops::mir_call_stmt(tcx, func, args, resolver, dest.clone())
-    {
-        if mir_guard::structural_guard(&call_stmt, defined, suppressed_sentinel_names) {
-            if stmt_defines_ret(&call_stmt) {
-                *ret_value_defined = true;
-                *ret_binding_emitted = true;
-            }
-            if let Stmt::Call { dest: Some(dest), .. } = &call_stmt {
-                defined.insert(dest.clone());
-            }
-            stmts.push(call_stmt);
-        } else if let Stmt::Call { dest: Some(dest), .. } = &call_stmt {
-            emit_suppressed_for_name(
-                dest,
-                stmts,
-                defined,
-                suppressed_sentinel_names,
-                ret_value_defined,
-                ret_binding_emitted,
-            );
-        }
-    } else if let Some(dest_name) = label_place_dest(resolver, destination) {
-        if dest_name != "__ret" {
-            mir_guard::emit_suppressed_binding(
-                &dest_name,
-                defined,
-                suppressed_sentinel_names,
-                stmts,
-            );
-        } else {
-            if !*match_dest_emitted {
-                stmts.push(Stmt::Match {
-                    dest: Some("__ret".to_string()),
-                });
-                *match_dest_emitted = true;
-                *ret_value_defined = true;
-                *ret_binding_emitted = true;
-            }
-            defined.insert("__ret".to_string());
-        }
-    }
-
-    target
-        .and_then(|bb| remap_bb_target(bb, mir_to_emitted))
-        .map(Terminator::Goto)
-        .unwrap_or(Terminator::None)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn lower_non_call_terminator<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    term_ref: &mir::Terminator<'tcx>,
-    returns_unit: bool,
-    resolver: &LocalNameResolver,
-    mir_to_emitted: &[Option<u32>],
-    stmts: &mut Vec<Stmt>,
-    defined: &mut HashSet<String>,
-    ret_value_defined: &mut bool,
-    ret_binding_emitted: &mut bool,
-    match_dest_emitted: &mut bool,
-) -> Terminator {
-    match &term_ref.kind {
-        mir::TerminatorKind::Return => {
-            lower_return_terminator(
-                returns_unit,
-                stmts,
-                defined,
-                ret_value_defined,
-                ret_binding_emitted,
-                match_dest_emitted,
-            );
-            Terminator::None
-        }
-        mir::TerminatorKind::Goto { target }
-        | mir::TerminatorKind::Drop { target, .. }
-        | mir::TerminatorKind::Assert { target, .. } => remap_to_goto(*target, mir_to_emitted),
-        mir::TerminatorKind::SwitchInt { discr, .. } => {
-            let mut succ = term_ref.successors();
-            if let (Some(t), Some(f)) = (succ.next(), succ.next()) {
-                if let Some(cond) = mir_ops::mir_operand_label(tcx, discr, resolver) {
-                    let true_bb = remap_bb_target(t, mir_to_emitted);
-                    let false_bb = remap_bb_target(f, mir_to_emitted);
-                    return match (true_bb, false_bb) {
-                        (Some(t), Some(f)) => Terminator::Branch {
-                            cond,
-                            true_bb: t,
-                            false_bb: f,
-                        },
-                        (Some(t), None) => Terminator::Goto(t),
-                        (None, Some(f)) => Terminator::Goto(f),
-                        (None, None) => Terminator::None,
-                    };
-                }
-            }
-            Terminator::None
-        }
-        _ => Terminator::None,
-    }
-}
-
-fn remap_to_goto(target: mir::BasicBlock, mir_to_emitted: &[Option<u32>]) -> Terminator {
-    remap_bb_target(target, mir_to_emitted)
-        .map(Terminator::Goto)
-        .unwrap_or(Terminator::None)
-}
-
-fn lower_return_terminator(
-    returns_unit: bool,
-    stmts: &mut Vec<Stmt>,
-    defined: &mut HashSet<String>,
-    ret_value_defined: &mut bool,
-    ret_binding_emitted: &mut bool,
-    match_dest_emitted: &mut bool,
-) {
-    if returns_unit {
-        stmts.push(Stmt::Return(None));
-    } else if *ret_binding_emitted && !*match_dest_emitted {
-        stmts.push(Stmt::Return(Some("__ret".to_string())));
-    } else if !*match_dest_emitted && (!*ret_value_defined || !*ret_binding_emitted) {
-        stmts.push(Stmt::Match {
-            dest: Some("__ret".to_string()),
-        });
-        *match_dest_emitted = true;
-        *ret_value_defined = true;
-        *ret_binding_emitted = true;
-        defined.insert("__ret".to_string());
-    }
-}
-
-pub(crate) fn label_place_dest(
-    resolver: &LocalNameResolver,
-    place: &mir::Place<'_>,
-) -> Option<String> {
-    if let Some(name) = resolver.label_place(place) {
-        return Some(name);
-    }
-    let has_unsafe_proj = place.projection.iter().any(|p| {
-        matches!(
-            p,
-            mir::ProjectionElem::Downcast(..)
-                | mir::ProjectionElem::OpaqueCast(..)
-                | mir::ProjectionElem::UnwrapUnsafeBinder(..)
-        )
-    });
-    if has_unsafe_proj {
-        return None;
-    }
-    resolver.label_local(place.local)
-}
-
-pub(crate) fn remap_bb_target(target: mir::BasicBlock, mir_to_emitted: &[Option<u32>]) -> Option<u32> {
-    mir_to_emitted.get(target.as_usize()).and_then(|slot| *slot)
-}
-
-pub(crate) fn bb_writes_return_place(bb: &mir::BasicBlockData<'_>) -> bool {
-    for stmt in &bb.statements {
-        let mir::StatementKind::Assign(boxed) = &stmt.kind else {
-            continue;
-        };
-        let (lhs, _) = &**boxed;
-        if lhs.local.as_u32() == 0 {
-            return true;
-        }
-    }
-    let Some(term) = &bb.terminator else {
-        return false;
-    };
-    if let mir::TerminatorKind::Call { destination, .. } = &term.kind {
-        return destination.local.as_u32() == 0;
-    }
-    false
-}
-
-pub(crate) fn stmt_defines_ret(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Assign { lhs, .. } => lhs == "__ret",
-        Stmt::Call { dest: Some(dest), .. } => dest == "__ret",
-        Stmt::FieldAccess { dest: Some(dest), .. } => dest == "__ret",
-        Stmt::MethodCall { dest: Some(dest), .. } => dest == "__ret",
-        Stmt::StructLit { dest: Some(dest), .. } => dest == "__ret",
-        Stmt::Match { dest: Some(dest) } => dest == "__ret",
-        _ => false,
-    }
-}
-
-pub(crate) fn emit_suppressed_ret_binding(
-    stmts: &mut Vec<Stmt>,
-    defined: &mut HashSet<String>,
-    ret_value_defined: &mut bool,
-    ret_binding_emitted: &mut bool,
-) {
-    stmts.push(Stmt::Assign {
-        lhs: "__ret".to_string(),
-        rhs: "__canon_suppressed__".to_string(),
-    });
-    *ret_value_defined = true;
-    *ret_binding_emitted = true;
-    defined.insert("__ret".to_string());
-}
-
-pub(crate) fn is_method_call_candidate(tcx: TyCtxt<'_>, func: &mir::Operand<'_>) -> bool {
-    func.const_fn_def().map(|(did, _)| matches!(tcx.def_kind(did), rustc_hir::def::DefKind::AssocFn)).unwrap_or(false)
-}
-
-pub(crate) fn count_local_uses<'tcx>(body: &mir::Body<'tcx>) -> HashMap<u32, usize> {
-    struct Counter {
-        counts: HashMap<u32, usize>,
-    }
-    impl<'tcx> Visitor<'tcx> for Counter {
-        fn visit_local(
-            &mut self,
-            local: mir::Local,
-            context: rustc_middle::mir::visit::PlaceContext,
-            location: rustc_middle::mir::Location,
-        ) {
-            if context.is_use() {
-                *self.counts.entry(local.as_u32()).or_insert(0) += 1;
-            }
-            self.super_local(local, context, location);
-        }
-    }
-    let mut counter = Counter {
-        counts: HashMap::new(),
-    };
-    counter.visit_body(body);
-    counter.counts
 }
