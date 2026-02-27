@@ -35,7 +35,7 @@ impl NormalizationPipeline {
     pub(crate) fn canonical() -> Self {
         Self {
             prologue: pass_inject_suppressed_prologue,
-            normalize: pass_prune_unused_suppressed_bindings,
+            normalize: pass_lower_match_and_prune_bindings,
             finalize: pass_strip_roles,
         }
     }
@@ -156,6 +156,25 @@ fn pass_strip_roles(emitted: Vec<EmittedBlock>) -> Vec<BasicBlock> {
     emitted.into_iter().map(|e| e.block).collect()
 }
 
+fn pass_lower_match_and_prune_bindings(emitted: Vec<EmittedBlock>) -> Vec<EmittedBlock> {
+    let emitted = pass_lower_match_dest_to_suppressed(emitted);
+    pass_prune_unused_suppressed_bindings(emitted)
+}
+
+fn pass_lower_match_dest_to_suppressed(mut emitted: Vec<EmittedBlock>) -> Vec<EmittedBlock> {
+    for block in &mut emitted {
+        for stmt in &mut block.block.stmts {
+            if let Stmt::Match { dest: Some(dest) } = stmt {
+                *stmt = Stmt::Assign {
+                    lhs: dest.clone(),
+                    rhs: "__canon_suppressed__".to_string(),
+                };
+            }
+        }
+    }
+    emitted
+}
+
 fn pass_prune_unused_suppressed_bindings(mut emitted: Vec<EmittedBlock>) -> Vec<EmittedBlock> {
     let used = collect_used_value_names(&emitted);
     for block in &mut emitted {
@@ -163,7 +182,7 @@ fn pass_prune_unused_suppressed_bindings(mut emitted: Vec<EmittedBlock>) -> Vec<
             !matches!(
                 stmt,
                 Stmt::Assign { lhs, rhs }
-                    if rhs == "__canon_suppressed__" && !used.contains(lhs)
+                    if rhs == "__canon_suppressed__" && lhs != "__ret" && !used.contains(lhs)
             )
         });
     }
