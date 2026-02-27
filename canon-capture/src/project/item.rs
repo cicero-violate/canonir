@@ -66,22 +66,24 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
         }
         DefKind::Fn => {
             let sig = tcx.fn_sig(def_id).skip_binder();
+            let returns_unit = sig.output().skip_binder().is_unit();
             let params = map_params(tcx, def_id, sig.inputs().skip_binder());
             let async_ = tcx.asyncness(def_id).is_async();
             let ret = declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, sig.output().skip_binder()));
             let unsafe_ = sig.safety() == Safety::Unsafe;
             let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-            let body = mir_body_structural(tcx, def_id, &param_names);
+            let body = mir_body_structural(tcx, def_id, &param_names, returns_unit);
             NodeKind::Function { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ }
         }
         DefKind::AssocFn => {
             let sig = tcx.fn_sig(def_id).skip_binder();
+            let returns_unit = sig.output().skip_binder().is_unit();
             let params = map_params(tcx, def_id, sig.inputs().skip_binder());
             let async_ = tcx.asyncness(def_id).is_async();
             let ret = declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, sig.output().skip_binder()));
             let unsafe_ = sig.safety() == Safety::Unsafe;
             let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-            let body = mir_body_structural(tcx, def_id, &param_names);
+            let body = mir_body_structural(tcx, def_id, &param_names, returns_unit);
             NodeKind::Method { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ }
         }
         DefKind::AssocTy => {
@@ -732,7 +734,7 @@ fn render_type_expr(_tcx: TyCtxt<'_>, expr: &TypeExpr) -> String {
     }
 }
 
-fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -> Body {
+fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String], returns_unit: bool) -> Body {
     let Some(local_def) = def_id.as_local() else {
         return Body::None;
     };
@@ -748,6 +750,7 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -
     let resolver = LocalNameResolver::new(body, param_names);
     let mut defined: HashSet<String> = param_names.iter().cloned().collect();
     defined.insert("__ret".to_string());
+    let mut ret_value_defined = false;
 
     let mut blocks: Vec<BasicBlock> = Vec::with_capacity(body.basic_blocks.len());
     for bb in body.basic_blocks.iter() {
@@ -760,6 +763,12 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -
             let (lhs, rvalue) = &**boxed;
             if is_field_access_candidate(rvalue) {
                 if let Some(field_stmt) = mir_field_access_stmt(tcx, lhs, rvalue, &resolver) {
+                    if !stmt_inputs_known(&field_stmt, &defined) {
+                        continue;
+                    }
+                    if stmt_defines_ret(&field_stmt) {
+                        ret_value_defined = true;
+                    }
                     if let Stmt::FieldAccess { dest: Some(dest), .. } = &field_stmt {
                         defined.insert(dest.clone());
                     }
@@ -769,6 +778,12 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -
             }
             if is_struct_lit_candidate(rvalue) {
                 if let Some(struct_stmt) = mir_struct_lit_stmt(tcx, lhs, rvalue, &resolver) {
+                    if !stmt_inputs_known(&struct_stmt, &defined) {
+                        continue;
+                    }
+                    if stmt_defines_ret(&struct_stmt) {
+                        ret_value_defined = true;
+                    }
                     if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
                         defined.insert(dest.clone());
                     }
@@ -777,6 +792,12 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -
                 continue;
             }
             if let Some(assign_stmt) = mir_assign_stmt(tcx, lhs, rvalue, &resolver, &defined) {
+                if !stmt_inputs_known(&assign_stmt, &defined) {
+                    continue;
+                }
+                if stmt_defines_ret(&assign_stmt) {
+                    ret_value_defined = true;
+                }
                 if let Stmt::Assign { lhs, .. } = &assign_stmt {
                     defined.insert(lhs.clone());
                 }
@@ -793,19 +814,44 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -
                 target,
                 ..
             } = &term_ref.kind
-                && is_method_call_candidate(tcx, func)
             {
-                if let Some(method_stmt) = mir_method_call_stmt(tcx, func, args, destination, &resolver) {
-                    if let Stmt::MethodCall { dest: Some(dest), .. } = &method_stmt {
-                        defined.insert(dest.clone());
+                if is_method_call_candidate(tcx, func) {
+                    if let Some(method_stmt) = mir_method_call_stmt(tcx, func, args, destination, &resolver) {
+                        if !stmt_inputs_known(&method_stmt, &defined) {
+                            term = target
+                                .map(|bb| Terminator::Goto(bb.as_usize() as u32))
+                                .unwrap_or(Terminator::None);
+                            continue;
+                        }
+                        if stmt_defines_ret(&method_stmt) {
+                            ret_value_defined = true;
+                        }
+                        if let Stmt::MethodCall { dest: Some(dest), .. } = &method_stmt {
+                            defined.insert(dest.clone());
+                        }
+                        stmts.push(method_stmt);
                     }
-                    stmts.push(method_stmt);
+                } else if let Some(call_stmt) = mir_call_stmt(tcx, func, args, destination, &resolver) {
+                    if stmt_inputs_known(&call_stmt, &defined) {
+                        if stmt_defines_ret(&call_stmt) {
+                            ret_value_defined = true;
+                        }
+                        if let Stmt::Call { dest: Some(dest), .. } = &call_stmt {
+                            defined.insert(dest.clone());
+                        }
+                        stmts.push(call_stmt);
+                    }
                 }
                 term = target
                     .map(|bb| Terminator::Goto(bb.as_usize() as u32))
                     .unwrap_or(Terminator::None);
             } else if matches!(term_ref.kind, mir::TerminatorKind::Return) {
-                term = Terminator::Return;
+                if returns_unit {
+                    stmts.push(Stmt::Return(None));
+                } else if ret_value_defined {
+                    stmts.push(Stmt::Return(Some("__ret".to_string())));
+                }
+                term = Terminator::None;
             } else if let mir::TerminatorKind::Goto { target } = term_ref.kind {
                 term = Terminator::Goto(target.as_usize() as u32);
             } else if let mir::TerminatorKind::SwitchInt { discr, .. } = &term_ref.kind {
@@ -828,6 +874,34 @@ fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String]) -
     Body::Blocks(blocks)
 }
 
+fn stmt_defines_ret(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Assign { lhs, .. } => lhs == "__ret",
+        Stmt::Call { dest: Some(dest), .. } => dest == "__ret",
+        Stmt::FieldAccess { dest: Some(dest), .. } => dest == "__ret",
+        Stmt::MethodCall { dest: Some(dest), .. } => dest == "__ret",
+        Stmt::StructLit { dest: Some(dest), .. } => dest == "__ret",
+        _ => false,
+    }
+}
+
+fn value_known(value: &str, defined: &HashSet<String>) -> bool {
+    defined.contains(value) || value == "__ret" || value.contains("::")
+}
+
+fn stmt_inputs_known(stmt: &Stmt, defined: &HashSet<String>) -> bool {
+    match stmt {
+        Stmt::Assign { rhs, .. } => value_known(rhs, defined),
+        Stmt::Call { args, .. } => args.iter().all(|a| value_known(a, defined)),
+        Stmt::FieldAccess { base, .. } => value_known(base, defined),
+        Stmt::MethodCall { receiver, args, .. } => {
+            value_known(receiver, defined) && args.iter().all(|a| value_known(a, defined))
+        }
+        Stmt::StructLit { fields, .. } => fields.iter().all(|(_, v)| value_known(v, defined)),
+        _ => true,
+    }
+}
+
 fn is_field_access_candidate(rvalue: &mir::Rvalue<'_>) -> bool {
     matches!(
         rvalue,
@@ -837,7 +911,7 @@ fn is_field_access_candidate(rvalue: &mir::Rvalue<'_>) -> bool {
 }
 
 fn is_struct_lit_candidate(rvalue: &mir::Rvalue<'_>) -> bool {
-    matches!(rvalue, mir::Rvalue::Aggregate(kind, _) if matches!(&**kind, mir::AggregateKind::Adt(..)))
+    matches!(rvalue, mir::Rvalue::Aggregate(kind, _) if matches!(&**kind, mir::AggregateKind::Adt(_, _, _, _, _)))
 }
 
 fn is_method_call_candidate(tcx: TyCtxt<'_>, func: &mir::Operand<'_>) -> bool {
@@ -911,8 +985,13 @@ fn mir_struct_lit_stmt<'tcx>(
         .zip(operands.iter())
         .map(|(f, op)| Some((f.name.to_string(), mir_operand_label(tcx, op, resolver)?)))
         .collect::<Option<Vec<_>>>()?;
+    let ctor_path = if adt.is_enum() {
+        format!("{}::{}", norm::path(tcx, *adt_did), variant.name)
+    } else {
+        norm::path(tcx, *adt_did)
+    };
     Some(Stmt::StructLit {
-        ty: TypeExpr::Path(norm::path(tcx, *adt_did)),
+        ty: TypeExpr::Path(ctor_path),
         fields,
         dest: Some(resolver.label_place(lhs)?),
     })
@@ -939,6 +1018,26 @@ fn mir_method_call_stmt<'tcx>(
     Some(Stmt::MethodCall {
         receiver,
         method,
+        args,
+        dest: Some(resolver.label_place(destination)?),
+    })
+}
+
+fn mir_call_stmt<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    func: &mir::Operand<'tcx>,
+    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
+    destination: &mir::Place<'tcx>,
+    resolver: &LocalNameResolver,
+) -> Option<Stmt> {
+    let (did, _) = func.const_fn_def()?;
+    let func = norm::path(tcx, did);
+    let args = args
+        .iter()
+        .map(|a| mir_operand_label(tcx, &a.node, resolver))
+        .collect::<Option<Vec<_>>>()?;
+    Some(Stmt::Call {
+        func,
         args,
         dest: Some(resolver.label_place(destination)?),
     })

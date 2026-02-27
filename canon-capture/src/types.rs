@@ -110,6 +110,11 @@ pub enum Stmt {
     Let { pat: String, ty: Option<TypeExpr>, init: Option<String> },
     Assign { lhs: String, rhs: String },
     Expr(String),
+    Call {
+        func: String,
+        args: Vec<String>,
+        dest: Option<String>,
+    },
     FieldAccess {
         base: String,
         field: String,

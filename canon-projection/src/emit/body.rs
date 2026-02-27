@@ -72,12 +72,27 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>) -> String
         }
         CfgOp::Closure { .. } => "// closure".into(),
         CfgOp::StructLit { ty, fields, dest } => {
-            let fields = fields
-                .iter()
-                .map(|(name, val)| format!("{}: {}", ir.lookup_name(*name), local_name(ir, *val)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let expr = format!("{} {{ {} }}", render_type_id(ir, *ty), fields);
+            let ctor = render_type_id(ir, *ty);
+            let expr = if fields.is_empty() {
+                ctor
+            } else if fields.iter().all(|(name, _)| ir.lookup_name(*name).chars().all(|c| c.is_ascii_digit())) {
+                let mut values: Vec<(usize, String)> = fields
+                    .iter()
+                    .map(|(name, val)| {
+                        let idx = ir.lookup_name(*name).parse::<usize>().unwrap_or(usize::MAX);
+                        (idx, local_name(ir, *val))
+                    })
+                    .collect();
+                values.sort_by_key(|(idx, _)| *idx);
+                format!("{}({})", ctor, values.into_iter().map(|(_, v)| v).collect::<Vec<_>>().join(", "))
+            } else {
+                let fields = fields
+                    .iter()
+                    .map(|(name, val)| format!("{}: {}", ir.lookup_name(*name), local_name(ir, *val)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{} {{ {} }}", ctor, fields)
+            };
             match dest {
                 Some(d) => bind_or_assign(&local_name(ir, *d), expr, declared),
                 None => format!("{};", expr),
@@ -94,6 +109,7 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>) -> String
 fn callable_name(ir: &CanonIR, id: CanonId) -> String {
     match &ir.node(id).kind {
         CanonNodeKind::Fn { name_id, .. } => ir.lookup_name(*name_id).to_string(),
+        CanonNodeKind::Local { name_id, .. } => ir.lookup_name(*name_id).to_string(),
         _ => format!("node_{}", id.0),
     }
 }
@@ -113,6 +129,6 @@ fn bind_or_assign(name: &str, expr: String, declared: &mut HashSet<String>) -> S
         format!("{name} = {expr};")
     } else {
         declared.insert(name.to_string());
-        format!("let {name} = {expr};")
+        format!("let mut {name} = {expr};")
     }
 }

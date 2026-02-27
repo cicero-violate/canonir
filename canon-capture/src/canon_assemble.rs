@@ -376,6 +376,23 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                             let loc = canon.push_node(CanonNodeKind::Local { name_id: eid, ty, flags: 0 });
                             CfgOp::Expr(loc)
                         }
+                        Stmt::Call { func, args, dest } => {
+                            let ty = unit_ty(canon);
+                            let func_name = NameId(canon.name_intern.intern(func));
+                            let func_id = canon.push_node(CanonNodeKind::Local { name_id: func_name, ty, flags: 0 });
+                            let args: Vec<CanonId> = args
+                                .iter()
+                                .map(|arg| {
+                                    let arg_name = NameId(canon.name_intern.intern(arg));
+                                    canon.push_node(CanonNodeKind::Local { name_id: arg_name, ty, flags: 0 })
+                                })
+                                .collect();
+                            let dest = dest.as_deref().map(|name| {
+                                let name_id = NameId(canon.name_intern.intern(name));
+                                canon.push_node(CanonNodeKind::Local { name_id, ty, flags: 0 })
+                            });
+                            CfgOp::Call { func: func_id, args, dest }
+                        }
                         Stmt::FieldAccess { base, field, dest } => {
                             let ty = unit_ty(canon);
                             let base_name = NameId(canon.name_intern.intern(base));
