@@ -1,55 +1,63 @@
 # AGENT_STATE.md
 
 ## CANONICAL_HEADER
-- state_id: `CAPTURE_REFACTOR_MODEL_EXECUTION_SLICE_35`
+- state_id: `CAPTURE_REFACTOR_MODEL_EXECUTION_SLICE_37`
 - date: `2026-02-27`
 - mode: `execution`
 - invariant: `No heuristics. Structural invariants only.`
 
 ### 1) Investigate the problem
-- Stage boundaries existed at top-level (`build plan`, `emit`, `finalize`) but block emission internals were still monolithic.
+- Pass primitives were still embedded in `lower.rs`, keeping pipeline semantics mixed with orchestration wiring.
 
 ### 2) Gather facts
-- `stage_emit_blocks` mixed four responsibilities:
-1. special block routing (switch source/arm suppression)
-2. statement pre-seeding (suppressed sentinels)
-3. statement lowering
-4. terminator lowering and block assembly
+- The following pass concerns were local to `lower.rs`:
+- emitted block role model
+- special-block emission for switch regions
+- block normalization passes
+- emitted-structure predicates (`has_ret_match` / `has_ret_binding`)
 
 ### 3) Break down the facts
-- Convert block emission to explicit sub-stages while freezing behavior:
-- `stage_emit_special_block`
-- `stage_prepare_block_stmts`
-- `stage_lower_block_statements`
-- `stage_lower_block_terminator`
-- `stage_finalize_block`
+- Move pass primitives into a dedicated module so `lower.rs` is primarily stage orchestration + statement lowering.
+- Keep behavior frozen; only responsibility relocation.
 
 ### 4) Write it to a state file
 - State overwritten for this slice.
 
 ### 5) Sort structural and categorical patterns
-- Pattern A: stage decomposition (emit-phase internals).
-- Pattern B: orchestration-first readability (main loop now dispatches stages).
-- Pattern C: behavior freeze preserved (same solver/capture outputs).
+- Pattern A: pass-module extraction (`capture/mir/passes.rs`).
+- Pattern B: pipeline wiring in `lower.rs` uses pass API only.
+- Pattern C: preserve deterministic transform ordering.
 
 ### 6) Write it to state file
 - Files changed:
+- `canon-capture/src/capture/mir/passes.rs` (new)
 - `canon-capture/src/capture/mir/lower.rs`
+- `canon-capture/src/capture/mir/mod.rs`
 - `STRUCTURAL_INVARIANTS_REPORT.md`
 - `AGENT_STATE.md`
 
 ### 7) Solve the state file
-- Refactored `stage_emit_blocks` to call explicit sub-stage functions.
-- Extracted special/suppressed/stmt/terminator/finalize responsibilities into dedicated functions.
-- Preserved all existing structural decision points and derived-state checks.
+- Added `capture/mir/passes.rs` with:
+- `BlockRole`
+- `EmittedBlock`
+- `emit_special_block`
+- `normalize_blocks`
+- `make_normal_block`
+- `blocks_have_ret_match`
+- `blocks_have_ret_binding`
+- Rewired `lower.rs` to use `mir_passes::...` for role/special/normalize/predicate operations.
+- Removed local pass primitive ownership from `lower.rs`.
 
 ### 8) Emit and project the solution incrementally
 - Validation:
 - `cargo check -p canon-capture`: pass.
 - `./run_script.sh repomap`: pass.
 - `STRUCTURAL_INVARIANTS_REPORT.md` regenerated.
+- LOC snapshot:
+- `capture/mir/lower.rs`: 373 LOC
+- `capture/mir/passes.rs`: 108 LOC
 
 ### 9) Repeat step 3
-- Mutation trend checkpoint:
-- LOC did not decrease (`lower.rs` increased with stage scaffolding), confirming current phase is responsibility clarification.
-- Behavior freeze remains active: next changes should focus on moving stage functions to dedicated modules/files without semantic changes.
+- Next structural slice (behavior frozen):
+- formalize remaining lowering flow into explicit pass data transitions by introducing a small `BodyDraft` stage type (analysis output + emitted stream), then keep `mir_body_structural` as composition:
+  `B0(raw) -> P1(plan) -> P2(emit_draft) -> P3(normalize) -> Bn(final)`.

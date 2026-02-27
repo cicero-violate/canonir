@@ -4,6 +4,7 @@ pub mod filters;
 pub mod guard;
 pub mod lower;
 pub mod ops;
+pub mod passes;
 pub mod patterns;
 pub mod resolver;
 pub mod terminator;
