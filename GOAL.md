@@ -10,10 +10,7 @@ If CanonIR is valid, emission compiles. If emission fails, CanonIR is incomplete
 
 ---
 
-### Pending Work
 
-1. Finalize documentation and ownership boundaries after recent solver/capture/projection fixes.
-2. Continue fixture-based validation as new changes land.
 
 ---
 
