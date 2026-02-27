@@ -18,14 +18,22 @@ EOF
 run_step() {
     local fixture="$1"
     local step="$2"
-    shift 2
+    local extract_mode="${3:-on_fail}"
+    if [[ "$extract_mode" != "always" && "$extract_mode" != "on_fail" ]]; then
+        extract_mode="on_fail"
+    fi
+    if [[ "$3" == "always" || "$3" == "on_fail" ]]; then
+        shift 3
+    else
+        shift 2
+    fi
     local log="$LOG_DIR/${fixture}_${step}.log"
     echo "== [$fixture] $step =="
     set +e
     "$@" 2>&1 | tee "$log"
     local status=${PIPESTATUS[0]}
     set -e
-    if [[ $status -ne 0 ]]; then
+    if [[ "$extract_mode" == "always" || $status -ne 0 ]]; then
         extract_invariants "$fixture" "$step" "$log"
     fi
     return $status
@@ -43,6 +51,16 @@ extract_invariants() {
             found=1
             echo "- return_solver facts:"
             sed 's/^/  - /' /tmp/.inv_return_solver.$$
+        fi
+        if rg -n "^WARN (use_solver|visibility_solver|impl_solver|provenance_solver):" "$log" >/tmp/.inv_solver_warns.$$ 2>/dev/null; then
+            found=1
+            echo "- solver warning facts:"
+            sed 's/^/  - /' /tmp/.inv_solver_warns.$$
+        fi
+        if rg -n "^INFO liveness_solver: pruned [0-9]+ dead function\\(s\\) from emit_order" "$log" >/tmp/.inv_liveness.$$ 2>/dev/null; then
+            found=1
+            echo "- liveness facts:"
+            sed 's/^/  - /' /tmp/.inv_liveness.$$
         fi
         if rg -n "^error\\[E[0-9]+\\]:" "$log" >/tmp/.inv_rust_errors.$$ 2>/dev/null; then
             found=1
@@ -69,10 +87,10 @@ extract_invariants() {
             echo "- syntax-structure facts:"
             sed 's/^/  - /' /tmp/.inv_syntax.$$
         fi
-        if rg -n "model_json::_::_serde|core::prompt_config::_::_serde" "$log" >/tmp/.inv_invariant_serde.$$ 2>/dev/null; then
+        if rg -n "model_json::_::_serde|core::prompt_config::_::_serde|path .+::_[A-Za-z0-9_]+" "$log" >/tmp/.inv_invariant_serde.$$ 2>/dev/null; then
             found=1
             echo "- invariant candidates:"
-            echo '  - use-path normalization must never emit reserved `_` path segments.'
+            echo "  - use-path lowering must drop private helper segments (prefix '_')."
             sed 's/^/  - evidence: /' /tmp/.inv_invariant_serde.$$
         fi
         if rg -n '\{alloc[0-9]+:|expected item, found keyword `let`' "$log" >/tmp/.inv_invariant_alloc.$$ 2>/dev/null; then
@@ -94,6 +112,8 @@ extract_invariants() {
     } >> "$REPORT"
     rm -f \
       /tmp/.inv_return_solver.$$ \
+      /tmp/.inv_solver_warns.$$ \
+      /tmp/.inv_liveness.$$ \
       /tmp/.inv_rust_errors.$$ \
       /tmp/.inv_rust_errors_plain.$$ \
       /tmp/.inv_signals.$$ \
@@ -111,13 +131,13 @@ run_fixture() {
     local emit_dir="$ROOT/emit/$fixture"
     local failed=0
 
-    run_step "$fixture" capture "$SCRIPT_DIR/run_capture.sh" "$capture_dir" "$capture_json" || failed=1
-    run_step "$fixture" clean rm -rf "$emit_dir" || failed=1
-    run_step "$fixture" orchestration cargo run -p orchestration -- "$capture_json" "$emit_dir" || failed=1
-    run_step "$fixture" fmt_emit bash -lc "cd '$emit_dir' && cargo fmt" || failed=1
-    run_step "$fixture" fmt_capture bash -lc "cd '$capture_dir' && cargo fmt" || failed=1
-    run_step "$fixture" build_emit bash -lc "cd '$emit_dir' && CARGO_NET_OFFLINE='${CARGO_NET_OFFLINE:-true}' cargo build" || failed=1
-    run_step "$fixture" diff python "$ROOT/diff_src_dirs.py" "$capture_dir/src" "$emit_dir/src" || failed=1
+    run_step "$fixture" capture on_fail "$SCRIPT_DIR/run_capture.sh" "$capture_dir" "$capture_json" || failed=1
+    run_step "$fixture" clean on_fail rm -rf "$emit_dir" || failed=1
+    run_step "$fixture" orchestration always cargo run -p orchestration -- "$capture_json" "$emit_dir" || failed=1
+    run_step "$fixture" fmt_emit on_fail bash -lc "cd '$emit_dir' && cargo fmt" || failed=1
+    run_step "$fixture" fmt_capture on_fail bash -lc "cd '$capture_dir' && cargo fmt" || failed=1
+    run_step "$fixture" build_emit on_fail bash -lc "cd '$emit_dir' && CARGO_NET_OFFLINE='${CARGO_NET_OFFLINE:-true}' cargo build" || failed=1
+    run_step "$fixture" diff always python "$ROOT/diff_src_dirs.py" "$capture_dir/src" "$emit_dir/src" || failed=1
 
     return $failed
 }

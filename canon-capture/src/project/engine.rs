@@ -392,7 +392,9 @@ fn lower_use_item(
             continue;
         };
         let path = sanitize_use_path(&norm::path(tcx, *target_did));
-        if path.is_empty() {
+        // Invariant: macro-private helper segments (for example `_serde`) are
+        // compiler/internal scaffolding and must not cross the capture boundary.
+        if path.is_empty() || use_path_has_private_helper_segment(&path) {
             continue;
         }
         let node_id = if ordinal == 0 {
@@ -445,6 +447,10 @@ fn sanitize_use_path(path: &str) -> String {
         .filter(|seg| !seg.is_empty() && *seg != "_")
         .collect::<Vec<_>>()
         .join("::")
+}
+
+fn use_path_has_private_helper_segment(path: &str) -> bool {
+    path.split("::").any(|seg| seg.starts_with('_'))
 }
 
 fn synthetic_use_id(base: NodeId, ordinal: u32) -> NodeId {
