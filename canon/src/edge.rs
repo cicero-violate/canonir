@@ -17,4 +17,7 @@ pub enum EdgeKind {
     Outlives,
     ConstDep,
     Expands,
+    AssocItem,
+    Instantiates,
+    Reexports,
 }

@@ -43,6 +43,31 @@ fn render_op(ir: &CanonIR, op: &CfgOp) -> String {
                 None => format!("{}({});", fname, args),
             }
         }
+        CfgOp::FieldAccess { base, field, dest } => {
+            let expr = format!("{}.{}", local_name(ir, *base), ir.lookup_name(*field));
+            match dest {
+                Some(d) => format!("let {} = {};", local_name(ir, *d), expr),
+                None => format!("{};", expr),
+            }
+        }
+        CfgOp::MethodCall { receiver, method, args, dest } => {
+            let args = args.iter().map(|a| local_name(ir, *a)).collect::<Vec<_>>().join(", ");
+            let expr = format!("{}.{}({})", local_name(ir, *receiver), ir.lookup_name(*method), args);
+            match dest {
+                Some(d) => format!("let {} = {};", local_name(ir, *d), expr),
+                None => format!("{};", expr),
+            }
+        }
+        CfgOp::Index { base, idx, dest } => {
+            let expr = format!("{}[{}]", local_name(ir, *base), local_name(ir, *idx));
+            match dest {
+                Some(d) => format!("let {} = {};", local_name(ir, *d), expr),
+                None => format!("{};", expr),
+            }
+        }
+        CfgOp::Closure { .. } => "// closure".into(),
+        CfgOp::StructLit { .. } => "// struct literal".into(),
+        CfgOp::Match { .. } => "// match".into(),
         CfgOp::Branch { .. } => "// branch".into(),
         CfgOp::Goto(_) => "// goto".into(),
         CfgOp::Unreachable => "unreachable!();".into(),

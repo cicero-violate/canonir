@@ -36,6 +36,9 @@ fn map_edge_kind(k: &ModelEdgeKind) -> CanonEdgeKind {
         ModelEdgeKind::Outlives => CanonEdgeKind::Outlives,
         ModelEdgeKind::ConstDep => CanonEdgeKind::ConstDep,
         ModelEdgeKind::Expands => CanonEdgeKind::Expands,
+        ModelEdgeKind::AssocItem => CanonEdgeKind::AssocItem,
+        ModelEdgeKind::Instantiates => CanonEdgeKind::Instantiates,
+        ModelEdgeKind::Reexports => CanonEdgeKind::Reexports,
     }
 }
 
@@ -285,7 +288,7 @@ fn str_to_type_kind(canon: &mut CanonIR, ty: &str) -> TypeKind {
                 return TypeKind::Array { inner: inner_id, len };
             }
             let normalized = normalize_type_text(trimmed);
-            let pid = PathId(canon.path_intern.intern(&normalized));
+            let pid = canon.intern_path(&normalized);
             return TypeKind::Extern(pid);
         }
         let inner_id = intern_ty(canon, inner);
@@ -341,7 +344,7 @@ fn str_to_type_kind(canon: &mut CanonIR, ty: &str) -> TypeKind {
         "!" => TypeKind::Primitive(PrimTy::Never),
         other => {
             let normalized = normalize_type_text(other);
-            let pid = PathId(canon.path_intern.intern(&normalized));
+            let pid = canon.intern_path(&normalized);
             TypeKind::Extern(pid)
         }
     }
@@ -358,6 +361,135 @@ fn unit_ty(canon: &mut CanonIR) -> CanonId {
 
 fn bool_ty(canon: &mut CanonIR) -> CanonId {
     canon.intern_type(TypeKind::Primitive(PrimTy::Bool))
+}
+
+fn synth_local(canon: &mut CanonIR, raw: &str) -> CanonId {
+    let name_id = NameId(canon.name_intern.intern(raw.trim()));
+    let ty = unit_ty(canon);
+    canon.push_node(CanonNodeKind::Local { name_id, ty, flags: 0 })
+}
+
+fn split_statements(src: &str) -> Vec<&str> {
+    src.split(';').map(str::trim).filter(|s| !s.is_empty()).collect()
+}
+
+fn parse_method_call(canon: &mut CanonIR, stmt: &str) -> Option<CfgOp> {
+    if stmt.starts_with("let ") || !stmt.contains('.') || !stmt.contains('(') || !stmt.ends_with(')') {
+        return None;
+    }
+    let dot = stmt.find('.')?;
+    let open = stmt[dot + 1..].find('(')? + dot + 1;
+    let close = stmt.rfind(')')?;
+    if open >= close {
+        return None;
+    }
+    let receiver = stmt[..dot].trim();
+    let method_raw = stmt[dot + 1..open].trim();
+    let method = method_raw.split("::").next().unwrap_or(method_raw).trim();
+    if receiver.is_empty() || method.is_empty() {
+        return None;
+    }
+    let args_src = &stmt[open + 1..close];
+    let args = split_top_level(args_src, ',')
+        .into_iter()
+        .filter(|a| !a.trim().is_empty())
+        .map(|a| synth_local(canon, a))
+        .collect();
+    Some(CfgOp::MethodCall {
+        receiver: synth_local(canon, receiver),
+        method: NameId(canon.name_intern.intern(method)),
+        args,
+        dest: None,
+    })
+}
+
+fn parse_field_access(canon: &mut CanonIR, stmt: &str) -> Option<CfgOp> {
+    if stmt.starts_with("let ") || stmt.contains('(') || !stmt.contains('.') {
+        return None;
+    }
+    let dot = stmt.find('.')?;
+    let base = stmt[..dot].trim();
+    let field = stmt[dot + 1..].trim();
+    if base.is_empty() || field.is_empty() || !field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(CfgOp::FieldAccess {
+        base: synth_local(canon, base),
+        field: NameId(canon.name_intern.intern(field)),
+        dest: None,
+    })
+}
+
+fn parse_index(canon: &mut CanonIR, stmt: &str) -> Option<CfgOp> {
+    if stmt.starts_with("let ") || !stmt.contains('[') || !stmt.ends_with(']') {
+        return None;
+    }
+    let open = stmt.find('[')?;
+    let close = stmt.rfind(']')?;
+    if open >= close {
+        return None;
+    }
+    let base = stmt[..open].trim();
+    let idx = stmt[open + 1..close].trim();
+    if base.is_empty() || idx.is_empty() {
+        return None;
+    }
+    Some(CfgOp::Index {
+        base: synth_local(canon, base),
+        idx: synth_local(canon, idx),
+        dest: None,
+    })
+}
+
+fn parse_struct_lit(canon: &mut CanonIR, stmt: &str) -> Option<CfgOp> {
+    if stmt.starts_with("let ") || !stmt.contains('{') || !stmt.contains('}') {
+        return None;
+    }
+    let open = stmt.find('{')?;
+    let close = stmt.rfind('}')?;
+    if open >= close {
+        return None;
+    }
+    let ty_src = stmt[..open].trim();
+    if ty_src.is_empty() {
+        return None;
+    }
+    let fields_src = &stmt[open + 1..close];
+    let mut fields = Vec::new();
+    for part in split_top_level(fields_src, ',') {
+        if part.trim().is_empty() {
+            continue;
+        }
+        let (name, value) = if let Some((n, v)) = part.split_once(':') { (n.trim(), v.trim()) } else { (part.trim(), part.trim()) };
+        if name.is_empty() || value.is_empty() {
+            continue;
+        }
+        fields.push((NameId(canon.name_intern.intern(name)), synth_local(canon, value)));
+    }
+    if fields.is_empty() {
+        return None;
+    }
+    Some(CfgOp::StructLit {
+        ty: intern_ty(canon, ty_src),
+        fields,
+        dest: None,
+    })
+}
+
+fn lower_raw_stmt(canon: &mut CanonIR, stmt: &str) -> CfgOp {
+    parse_method_call(canon, stmt)
+        .or_else(|| parse_struct_lit(canon, stmt))
+        .or_else(|| parse_index(canon, stmt))
+        .or_else(|| parse_field_access(canon, stmt))
+        .unwrap_or_else(|| CfgOp::Raw(NameId(canon.name_intern.intern(stmt))))
+}
+
+fn lower_raw_body(canon: &mut CanonIR, src: &str) -> Vec<CfgOp> {
+    let mut ops: Vec<CfgOp> = split_statements(src).into_iter().map(|stmt| lower_raw_stmt(canon, stmt)).collect();
+    if ops.is_empty() {
+        ops.push(CfgOp::Raw(NameId(canon.name_intern.intern(src))));
+    }
+    ops
 }
 
 fn seal_generic_param(canon: &mut CanonIR, gp: &GenericParam) -> CanonId {
@@ -419,8 +551,8 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
     match body {
         Body::None => None,
         Body::Raw(src) => {
-            let raw_id = NameId(canon.name_intern.intern(src));
-            let bb_id = canon.push_node(CanonNodeKind::BasicBlock { ops: vec![CfgOp::Raw(raw_id)], next: None });
+            let ops = lower_raw_body(canon, src);
+            let bb_id = canon.push_node(CanonNodeKind::BasicBlock { ops, next: None });
             Some(canon.push_node(CanonNodeKind::Body { blocks: vec![bb_id] }))
         }
         Body::Blocks(blocks) => {
@@ -454,7 +586,7 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                             });
                             CfgOp::Return(v)
                         }
-                        Stmt::Raw(src) => CfgOp::Raw(NameId(canon.name_intern.intern(src))),
+                        Stmt::Raw(src) => lower_raw_stmt(canon, src),
                     };
                     ops.push(op);
                 }
@@ -524,7 +656,69 @@ fn assemble_model_like(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> M
         }
     }
 
+    // Synthesize PathRef nodes from raw function/method bodies so downstream
+    // solvers can consume structural external path references without scanning
+    // raw interned text.
+    let mut local_roots: HashSet<String> = HashSet::new();
+    for n in &model_like.nodes {
+        if let NodeKind::Module { path, .. } = &n.kind {
+            if let Some(rest) = path.strip_prefix("crate::") {
+                if let Some(root) = rest.split("::").next() {
+                    if !root.is_empty() {
+                        local_roots.insert(root.to_string());
+                    }
+                }
+            }
+        }
+    }
+    let crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
+    let mut seen_paths: HashSet<String> = HashSet::new();
+    let mut next_id = model_like.nodes.iter().map(|n| n.id.0).max().map(|x| x + 1).unwrap_or(0);
+    let mut extra_nodes: Vec<Node> = Vec::new();
+    for n in &model_like.nodes {
+        let body_src = match &n.kind {
+            NodeKind::Function { body: Body::Raw(src), .. } | NodeKind::Method { body: Body::Raw(src), .. } => Some(src.as_str()),
+            _ => None,
+        };
+        let Some(src) = body_src else {
+            continue;
+        };
+        for path in extract_external_paths(src, &crate_name, &local_roots) {
+            if seen_paths.insert(path.clone()) {
+                extra_nodes.push(Node { id: NodeId(next_id), kind: NodeKind::PathRef { path }, span: n.span.clone() });
+                next_id += 1;
+            }
+        }
+    }
+    model_like.nodes.extend(extra_nodes);
+
     model_like
+}
+
+fn extract_external_paths(src: &str, crate_name: &str, local_roots: &HashSet<String>) -> Vec<String> {
+    const BUILTIN_ROOTS: &[&str] = &["std", "core", "alloc", "proc_macro", "crate", "self", "super"];
+    let mut out: Vec<String> = Vec::new();
+    for token in src.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':' || c == '<' || c == '>')) {
+        if token.is_empty() || !token.contains("::") {
+            continue;
+        }
+        let Some((root, rest)) = token.split_once("::") else {
+            continue;
+        };
+        if root.is_empty() || root == crate_name || BUILTIN_ROOTS.contains(&root) || local_roots.contains(root) {
+            continue;
+        }
+        let Some(first_rest) = rest.chars().next() else {
+            continue;
+        };
+        if !(first_rest.is_ascii_alphabetic() || first_rest == '_') {
+            continue;
+        }
+        if !out.iter().any(|p| p == token) {
+            out.push(token.to_string());
+        }
+    }
+    out
 }
 
 pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> CanonIR {
@@ -542,7 +736,7 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
                 CanonNodeKind::Crate { name_id, edition: ed, dependencies: vec![] }
             }
             NodeKind::Module { path, vis, inline, .. } => {
-                let path_id = PathId(canon.path_intern.intern(path));
+                let path_id = canon.intern_path(path);
                 let mut f = vis_flags(vis);
                 if *inline {
                     f |= flags::INLINE;
@@ -605,6 +799,17 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
                 }
                 CanonNodeKind::Fn { name_id, sig_id, body: body_id, attrs: vec![], flags: f }
             }
+            NodeKind::AssocType { name, vis, default_ty, .. } => {
+                let name_id = NameId(canon.name_intern.intern(name));
+                let default_ty = default_ty.as_deref().map(|t| intern_ty(&mut canon, t));
+                CanonNodeKind::AssocType { name_id, generics: vec![], default_ty, flags: vis_flags(vis) }
+            }
+            NodeKind::AssocConst { name, vis, ty, default_value, .. } => {
+                let name_id = NameId(canon.name_intern.intern(name));
+                let ty_id = intern_ty(&mut canon, ty);
+                let default_value = default_value.as_deref().map(|v| NameId(canon.name_intern.intern(v)));
+                CanonNodeKind::AssocConst { name_id, ty: ty_id, default_value, flags: vis_flags(vis) }
+            }
             NodeKind::Const { name, vis, ty, value, .. } => {
                 let name_id = NameId(canon.name_intern.intern(name));
                 let ty_id = intern_ty(&mut canon, ty);
@@ -622,7 +827,7 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
                 CanonNodeKind::Static { name_id, ty: ty_id, value_id, attrs: vec![], flags: f }
             }
             NodeKind::Use { vis, path, alias, glob } => {
-                let path_id = PathId(canon.path_intern.intern(path));
+                let path_id = canon.intern_path(path);
                 let alias_id = alias.as_deref().map(|a| NameId(canon.name_intern.intern(a)));
                 let mut f = vis_flags(vis);
                 if *glob {
@@ -643,9 +848,13 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
             NodeKind::TypeRef { name } => CanonNodeKind::TypeRef { name_id: NameId(canon.name_intern.intern(name)) },
             NodeKind::Lifetime { name } => CanonNodeKind::Lifetime { name_id: NameId(canon.name_intern.intern(name)) },
             NodeKind::MacroCall { path, tokens } => {
-                let path_id = PathId(canon.path_intern.intern(path));
+                let path_id = canon.intern_path(path);
                 let tokens_id = NameId(canon.name_intern.intern(tokens));
                 CanonNodeKind::MacroCall { path_id, tokens_id }
+            }
+            NodeKind::PathRef { path } => {
+                let path_id = canon.intern_path(path);
+                CanonNodeKind::PathRef { path_id }
             }
         };
 
@@ -719,6 +928,12 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
                     *generics = gen_ids;
                 }
             }
+            NodeKind::AssocType { generics, .. } => {
+                let gen_ids: Vec<CanonId> = generics.iter().map(|g| seal_generic_param(&mut canon, g)).collect();
+                if let CanonNodeKind::AssocType { generics, .. } = &mut canon.nodes[cid.0 as usize].kind {
+                    *generics = gen_ids;
+                }
+            }
             _ => {}
         }
     }
@@ -740,15 +955,15 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
         let k = map_edge_kind(&hint.kind);
         match &hint.kind {
             ModelEdgeKind::Renames
-            | ModelEdgeKind::Resolves
-            | ModelEdgeKind::ImplRef => name_edges.push((src, dst, k)),
-            ModelEdgeKind::TypeOf | ModelEdgeKind::TypeUnifies | ModelEdgeKind::ImplTrait | ModelEdgeKind::DynTrait => type_edges.push((src, dst, k)),
+            | ModelEdgeKind::Resolves => name_edges.push((src, dst, k)),
+            ModelEdgeKind::TypeOf | ModelEdgeKind::TypeUnifies | ModelEdgeKind::ImplTrait | ModelEdgeKind::DynTrait | ModelEdgeKind::ImplRef | ModelEdgeKind::Instantiates => type_edges.push((src, dst, k)),
             ModelEdgeKind::Calls => call_edges.push((src, dst, k)),
-            ModelEdgeKind::Contains | ModelEdgeKind::ImplFor => module_edges.push((src, dst, k)),
+            ModelEdgeKind::Contains | ModelEdgeKind::ImplFor | ModelEdgeKind::AssocItem => module_edges.push((src, dst, k)),
             ModelEdgeKind::CfgEdge | ModelEdgeKind::CfgBranch { .. } => cfg_edges.push((src, dst, k)),
             ModelEdgeKind::Outlives => region_edges.push((src, dst, k)),
             ModelEdgeKind::ConstDep => value_edges.push((src, dst, k)),
             ModelEdgeKind::Expands => macro_edges.push((src, dst, k)),
+            ModelEdgeKind::Reexports => name_edges.push((src, dst, k)),
         }
     }
 
@@ -767,12 +982,16 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
 
     // Ensure every Extern type path is normalized before projection.
     let mut extern_type_updates: Vec<(usize, PathId)> = Vec::new();
-    for (idx, node) in canon.nodes.iter().enumerate() {
-        if let CanonNodeKind::Type { kind: TypeKind::Extern(path_id) } = &node.kind {
-            let raw = canon.lookup_path(*path_id).to_string();
+    for idx in 0..canon.nodes.len() {
+        let path_id = match &canon.nodes[idx].kind {
+            CanonNodeKind::Type { kind: TypeKind::Extern(path_id) } => Some(*path_id),
+            _ => None,
+        };
+        if let Some(path_id) = path_id {
+            let raw = canon.lookup_path(path_id).to_string();
             let normalized = norm::norm_path(&raw);
             if normalized != raw {
-                let normalized_id = PathId(canon.path_intern.intern(&normalized));
+                let normalized_id = canon.intern_path(&normalized);
                 extern_type_updates.push((idx, normalized_id));
             }
         }

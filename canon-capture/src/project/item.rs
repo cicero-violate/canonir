@@ -23,7 +23,7 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Option<No
     let span_str = norm::span(tcx, raw_span);
     let file_str = norm::file(tcx, raw_span);
 
-    let vis = map_vis(tcx.visibility(def_id));
+    let vis = map_vis(tcx, def_id, tcx.visibility(def_id));
     let (generics, where_clauses) = map_generics(tcx, def_id);
 
     let kind = match tcx.def_kind(def_id) {
@@ -82,6 +82,26 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Option<No
             let body = hir_body_src(tcx, def_id);
             NodeKind::Method { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ }
         }
+        DefKind::AssocTy => {
+            let default_ty = if !matches!(tcx.associated_item(def_id).container, ty::AssocContainer::Trait) {
+                Some(fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity()))
+            } else {
+                None
+            };
+            NodeKind::AssocType { name, vis, generics, default_ty, attrs: Vec::new(), where_clauses }
+        }
+        DefKind::AssocConst => {
+            let ty_str = fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity());
+            let default_value = {
+                let v = hir_init_src(tcx, def_id);
+                if v.trim().is_empty() {
+                    None
+                } else {
+                    Some(v)
+                }
+            };
+            NodeKind::AssocConst { name, vis, ty: ty_str, default_value, attrs: Vec::new() }
+        }
         DefKind::Const => {
             let ty_str = fmt_ty(tcx, tcx.type_of(def_id).instantiate_identity());
             let value = hir_init_src(tcx, def_id);
@@ -99,10 +119,13 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Option<No
                  if let rustc_hir::Node::Item(item) = tcx.hir_node_by_def_id(local) {
                      if let rustc_hir::ItemKind::Use(use_path, use_kind) = item.kind {
                          let sm = tcx.sess.source_map();
-                         let mut path = sm.span_to_snippet(use_path.span).ok().map(|s| s.trim().trim_start_matches("::").to_string()).filter(|s| !s.is_empty());
+                         let mut path = use_path
+                             .res
+                             .iter()
+                             .find_map(|r| if let Some(rustc_hir::def::Res::Def(_, did)) = r { Some(norm::path(tcx, *did)) } else { None });
 
                          if path.is_none() {
-                             path = use_path.res.iter().find_map(|r| if let Some(rustc_hir::def::Res::Def(_, did)) = r { Some(norm::path(tcx, *did)) } else { None });
+                             path = sm.span_to_snippet(use_path.span).ok().map(|s| s.trim().trim_start_matches("::").to_string()).filter(|s| !s.is_empty());
                          }
 
                          let Some(path) = path else {
@@ -137,11 +160,23 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Option<No
     (Some(Node { id, kind, span: Some(span_str) }), vec![])
 }
 
-fn map_vis(v: ty::Visibility<DefId>) -> Visibility {
-    if v.is_public() {
-        Visibility::Public
-    } else {
-        Visibility::Private
+fn map_vis(tcx: TyCtxt<'_>, def_id: DefId, v: ty::Visibility<DefId>) -> Visibility {
+    match v {
+        ty::Visibility::Public => Visibility::Public,
+        ty::Visibility::Restricted(restricted) => {
+            let crate_name = tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).to_string();
+            let restricted_path = tcx.def_path_str(restricted);
+            if restricted_path == crate_name {
+                return Visibility::PubCrate;
+            }
+            if let Some(local_def_id) = def_id.as_local() {
+                let parent = tcx.parent_module_from_def_id(local_def_id);
+                if restricted == parent.to_def_id() {
+                    return Visibility::Private; // pub(self)
+                }
+            }
+            Visibility::PubIn(norm::path(tcx, restricted))
+        }
     }
 }
 
@@ -305,7 +340,7 @@ fn map_fields<'a, I>(tcx: TyCtxt<'a>, fields: I, in_enum: bool) -> Vec<Field>
 where I: Iterator<Item = &'a ty::FieldDef> {
     fields
         .map(|f| {
-            let vis = if in_enum { Visibility::Private } else { map_vis(tcx.visibility(f.did)) };
+            let vis = if in_enum { Visibility::Private } else { map_vis(tcx, f.did, tcx.visibility(f.did)) };
             let raw_name = f.name.to_string();
             let name = if raw_name.chars().all(|c| c.is_ascii_digit()) { None } else { Some(raw_name) };
             Field { name, ty: fmt_ty(tcx, tcx.type_of(f.did).instantiate_identity()), vis }
@@ -396,7 +431,7 @@ fn collect_trait_methods(tcx: TyCtxt<'_>, trait_def_id: DefId) -> Vec<TraitMetho
             let unsafe_ = sig.safety() == Safety::Unsafe;
             let async_ = tcx.asyncness(item.def_id).is_async();
             let (generics, _where_clauses) = map_generics(tcx, item.def_id);
-            let vis = map_vis(tcx.visibility(item.def_id));
+            let vis = map_vis(tcx, item.def_id, tcx.visibility(item.def_id));
             TraitMethod { name: item.name().to_string(), vis, generics, params, ret, body: Body::None, attrs: Vec::new(), where_clauses: Vec::new(), unsafe_, async_ }
         })
         .collect()

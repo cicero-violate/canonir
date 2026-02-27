@@ -9,10 +9,10 @@ use canon::{
 
 fn graph_slot(kind: &EdgeKind) -> &'static str {
     match kind {
-        EdgeKind::Renames | EdgeKind::Resolves | EdgeKind::ImplRef => "name",
-        EdgeKind::TypeOf | EdgeKind::TypeUnifies | EdgeKind::ImplTrait | EdgeKind::DynTrait => "type",
+        EdgeKind::Renames | EdgeKind::Resolves | EdgeKind::ImplRef | EdgeKind::Reexports => "name",
+        EdgeKind::TypeOf | EdgeKind::TypeUnifies | EdgeKind::ImplTrait | EdgeKind::DynTrait | EdgeKind::Instantiates => "type",
         EdgeKind::Calls => "call",
-        EdgeKind::Contains | EdgeKind::ImplFor => "module",
+        EdgeKind::Contains | EdgeKind::ImplFor | EdgeKind::AssocItem => "module",
         EdgeKind::CfgEdge | EdgeKind::CfgBranch { .. } => "cfg",
         EdgeKind::Outlives => "region",
         EdgeKind::ConstDep => "value",

@@ -198,6 +198,24 @@ pub enum NodeKind {
         #[serde(default)]
         async_: bool,
     },
+    AssocType {
+        name: String,
+        vis: Visibility,
+        generics: Vec<GenericParam>,
+        default_ty: Option<String>,
+        #[serde(default)]
+        attrs: Vec<String>,
+        #[serde(default)]
+        where_clauses: Vec<String>,
+    },
+    AssocConst {
+        name: String,
+        vis: Visibility,
+        ty: String,
+        default_value: Option<String>,
+        #[serde(default)]
+        attrs: Vec<String>,
+    },
     Const {
         name: String,
         vis: Visibility,
@@ -250,6 +268,9 @@ pub enum NodeKind {
         path: String,
         tokens: String,
     },
+    PathRef {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -276,6 +297,9 @@ pub enum EdgeKind {
     Outlives,
     ConstDep,
     Expands,
+    AssocItem,
+    Instantiates,
+    Reexports,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

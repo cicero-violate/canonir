@@ -52,9 +52,33 @@ impl Eq for TypeKind {}
 
 impl std::hash::Hash for TypeKind {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // Delegate to derived Debug as a stable discriminant string.
-        // Good enough for a seal-pass tool; not cryptographic.
-        format!("{:?}", self).hash(state);
+        std::mem::discriminant(self).hash(state);
+        match self {
+            TypeKind::Primitive(p) => p.hash(state),
+            TypeKind::Adt(id) => id.hash(state),
+            TypeKind::Ref { lifetime, inner, mutable } => {
+                lifetime.hash(state);
+                inner.hash(state);
+                mutable.hash(state);
+            }
+            TypeKind::RawPtr { inner, mutable } => {
+                inner.hash(state);
+                mutable.hash(state);
+            }
+            TypeKind::Array { inner, len } => {
+                inner.hash(state);
+                len.hash(state);
+            }
+            TypeKind::Slice(id) => id.hash(state),
+            TypeKind::Tuple(ids) => ids.hash(state),
+            TypeKind::FnPtr(id) => id.hash(state),
+            TypeKind::ImplTrait(id) => id.hash(state),
+            TypeKind::DynTrait(id) => id.hash(state),
+            TypeKind::Param(name_id) => name_id.hash(state),
+            TypeKind::Extern(path_id) => path_id.hash(state),
+            TypeKind::Unresolved(path_id) => path_id.hash(state),
+            TypeKind::TypeRef { name_id } => name_id.hash(state),
+        }
     }
 }
 
@@ -75,6 +99,9 @@ pub struct CanonIR {
     pub name_intern: Interner,
     /// Qualified paths: module paths, use paths, extern crate paths, macro paths.
     pub path_intern: Interner,
+    /// Raw source snippets and macro token strings.
+    #[serde(default)]
+    pub body_intern: Interner,
 
     // ── Type dedup index (runtime only, not serialized) ───────────────────────
     /// Maps TypeKind → CanonId of the canonical Type node.
@@ -112,6 +139,7 @@ impl CanonIR {
             emit_order: Vec::new(),
             name_intern: Interner::new(),
             path_intern: Interner::new(),
+            body_intern: Interner::new(),
             type_index: HashMap::new(),
             name_graph: CsrGraph::empty(),
             type_graph: CsrGraph::empty(),
@@ -150,7 +178,14 @@ impl CanonIR {
     /// Intern a qualified path string, returning a PathId.
     #[inline]
     pub fn intern_path(&mut self, s: &str) -> PathId {
-        PathId(self.path_intern.intern(s))
+        let normalized = canonical_path_form(s);
+        PathId(self.path_intern.intern(normalized.as_ref()))
+    }
+
+    /// Intern raw source/token text, returning its stable index.
+    #[inline]
+    pub fn intern_body(&mut self, s: &str) -> NameId {
+        NameId(self.body_intern.intern(s))
     }
 
     /// Look up a name by NameId.
@@ -163,6 +198,12 @@ impl CanonIR {
     #[inline]
     pub fn lookup_path(&self, id: PathId) -> &str {
         self.path_intern.lookup(id.0)
+    }
+
+    /// Look up raw body/token text.
+    #[inline]
+    pub fn lookup_body(&self, id: NameId) -> &str {
+        self.body_intern.lookup(id.0)
     }
 
     // ── Type dedup ────────────────────────────────────────────────────────────
@@ -187,6 +228,7 @@ impl CanonIR {
     pub fn restore(&mut self) {
         self.name_intern.restore_index();
         self.path_intern.restore_index();
+        self.body_intern.restore_index();
         self.restore_type_index();
     }
 
@@ -198,6 +240,15 @@ impl CanonIR {
                 self.type_index.entry(key).or_insert(node.id);
             }
         }
+    }
+}
+
+fn canonical_path_form(s: &str) -> std::borrow::Cow<'_, str> {
+    let trimmed = s.trim();
+    if let Some(rest) = trimmed.strip_prefix("::") {
+        std::borrow::Cow::Owned(rest.to_string())
+    } else {
+        std::borrow::Cow::Borrowed(trimmed)
     }
 }
 

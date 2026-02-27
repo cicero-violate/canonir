@@ -16,6 +16,11 @@ pub fn project_relations(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Vec<E
     if let Some(parent) = tcx.opt_parent(def_id) {
         if let Some(&pid) = index.def_to_node.get(&parent) {
             edges.push(EdgeHint { src: pid.index() as u32, dst: id.index() as u32, kind: EdgeKind::Contains });
+            if matches!(tcx.def_kind(def_id), DefKind::AssocFn | DefKind::AssocTy | DefKind::AssocConst)
+                && matches!(tcx.def_kind(parent), DefKind::Trait | DefKind::Impl { .. })
+            {
+                edges.push(EdgeHint { src: pid.index() as u32, dst: id.index() as u32, kind: EdgeKind::AssocItem });
+            }
         }
     }
 

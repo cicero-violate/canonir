@@ -85,6 +85,8 @@ fn node_kind_tag(kind: &CanonNodeKind) -> &'static str {
         CanonNodeKind::Struct { .. } => "Struct",
         CanonNodeKind::Enum { .. } => "Enum",
         CanonNodeKind::Trait { .. } => "Trait",
+        CanonNodeKind::AssocType { .. } => "AssocType",
+        CanonNodeKind::AssocConst { .. } => "AssocConst",
         CanonNodeKind::Impl { .. } => "Impl",
         CanonNodeKind::Fn { .. } => "Fn",
         CanonNodeKind::FnSig { .. } => "FnSig",
@@ -103,8 +105,12 @@ fn node_kind_tag(kind: &CanonNodeKind) -> &'static str {
         CanonNodeKind::TypeAlias { .. } => "TypeAlias",
         CanonNodeKind::TypeRef { .. } => "TypeRef",
         CanonNodeKind::MacroCall { .. } => "MacroCall",
+        CanonNodeKind::PathRef { .. } => "PathRef",
         CanonNodeKind::Body { .. } => "Body",
         CanonNodeKind::BasicBlock { .. } => "BasicBlock",
+        CanonNodeKind::MatchArm { .. } => "MatchArm",
+        CanonNodeKind::Pattern { .. } => "Pattern",
+        CanonNodeKind::VisPath { .. } => "VisPath",
         CanonNodeKind::Local { .. } => "Local",
     }
 }
@@ -115,6 +121,8 @@ fn is_name_bearing(kind: &CanonNodeKind) -> bool {
         CanonNodeKind::Struct { .. }
             | CanonNodeKind::Enum { .. }
             | CanonNodeKind::Trait { .. }
+            | CanonNodeKind::AssocType { .. }
+            | CanonNodeKind::AssocConst { .. }
             | CanonNodeKind::Fn { .. }
             | CanonNodeKind::TypeAlias { .. }
             | CanonNodeKind::TypeRef { .. }

@@ -24,6 +24,7 @@ pub mod flags {
     pub const INLINE: u32 = 1 << 5; // inline module
     pub const PUB_CRATE: u32 = 1 << 6;
     pub const PUB_SUPER: u32 = 1 << 7;
+    pub const PUB_IN: u32 = 1 << 8;
 }
 
 // ── Primitive type enum (no strings) ─────────────────────────────────────────
@@ -79,6 +80,8 @@ pub enum TypeKind {
     /// External / unresolved type (escape hatch, e.g. `std::collections::HashMap`)
     /// PathId points into path_intern.
     Extern(PathId),
+    /// Known by path but not yet linked to a local definition.
+    Unresolved(PathId),
 
     /// Unresolved type reference by name (e.g. from TypeRef nodes in ModelIR).
     /// NameId points into name_intern.
@@ -96,6 +99,18 @@ pub enum CfgOp {
     Return(Option<CanonId>),
     /// fn_id(args) -> dest
     Call { func: CanonId, args: Vec<CanonId>, dest: Option<CanonId> },
+    /// base.field
+    FieldAccess { base: CanonId, field: NameId, dest: Option<CanonId> },
+    /// receiver.method(args)
+    MethodCall { receiver: CanonId, method: NameId, args: Vec<CanonId>, dest: Option<CanonId> },
+    /// base[idx]
+    Index { base: CanonId, idx: CanonId, dest: Option<CanonId> },
+    /// closure literal
+    Closure { sig_id: CanonId, body_id: CanonId },
+    /// struct literal
+    StructLit { ty: CanonId, fields: Vec<(NameId, CanonId)>, dest: Option<CanonId> },
+    /// match expression
+    Match { scrutinee: CanonId, arms: Vec<CanonId> }, // -> MatchArm nodes
     /// if cond goto true_bb else false_bb
     Branch { cond: CanonId, true_bb: u32, false_bb: u32 },
     /// goto bb
@@ -106,6 +121,38 @@ pub enum CfgOp {
     Expr(CanonId),
     /// raw source verbatim (interned into name_intern)
     Raw(NameId),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PatternKind {
+    Wildcard,
+    Binding {
+        name_id: NameId,
+        mutable: bool,
+    },
+    Tuple(Vec<CanonId>), // -> Pattern nodes
+    Struct {
+        ty: CanonId,
+        fields: Vec<(NameId, CanonId)>,
+    },
+    TupleStruct {
+        ty: CanonId,
+        fields: Vec<CanonId>,
+    },
+    Literal(NameId),
+    Or(Vec<CanonId>), // -> Pattern nodes
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum WherePredKind {
+    TypeBound {
+        ty: CanonId,
+        bounds: Vec<CanonId>,
+    },
+    LifetimeBound {
+        lifetime: CanonId,
+        bounds: Vec<CanonId>,
+    },
 }
 
 // ── The canonical node kind ───────────────────────────────────────────────────
@@ -152,6 +199,20 @@ pub enum CanonNodeKind {
         methods: Vec<CanonId>, // → Fn nodes (trait methods)
         attrs: Vec<CanonId>,
         flags: u32, // UNSAFE
+    },
+
+    AssocType {
+        name_id: NameId,
+        generics: Vec<CanonId>,
+        default_ty: Option<CanonId>, // None = abstract, Some = default/provided
+        flags: u32,
+    },
+
+    AssocConst {
+        name_id: NameId,
+        ty: CanonId,
+        default_value: Option<NameId>, // interned literal, None = abstract
+        flags: u32,
     },
 
     Impl {
@@ -205,8 +266,7 @@ pub enum CanonNodeKind {
     },
 
     WherePred {
-        ty: CanonId,          // → Type or GenericParam node
-        bounds: Vec<CanonId>, // → Trait nodes
+        kind: WherePredKind,
     },
 
     Variant {
@@ -274,6 +334,10 @@ pub enum CanonNodeKind {
         tokens_id: NameId, // interned token string (unavoidable escape)
     },
 
+    PathRef {
+        path_id: PathId, // fully qualified external path
+    },
+
     // ── CFG body ─────────────────────────────────────────────────────────────
     Body {
         blocks: Vec<CanonId>, // → BasicBlock nodes, in order
@@ -284,6 +348,21 @@ pub enum CanonNodeKind {
         /// Index of next block (for Goto/fallthrough).
         /// Branch terminator encodes both successors inside CfgOp::Branch.
         next: Option<u32>,
+    },
+
+    MatchArm {
+        pattern: CanonId, // -> Pattern node
+        guard: Option<CanonId>,
+        body: CanonId, // -> BasicBlock node
+    },
+
+    Pattern {
+        kind: PatternKind,
+    },
+
+    VisPath {
+        flags: u32, // PUB_IN
+        path_id: PathId, // in crate::some::module
     },
 
     // ── Local variable (inside body) ──────────────────────────────────────────

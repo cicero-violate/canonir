@@ -68,6 +68,28 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
                 extern_roots.push(root.to_string());
             }
         }
+        if let CanonNodeKind::PathRef { path_id } = &node.kind {
+            let path = ir.lookup_path(*path_id);
+            let root = path.split("::").next().unwrap_or("").trim();
+            if root.is_empty() {
+                continue;
+            }
+            if BUILTIN_ROOTS.contains(&root) {
+                continue;
+            }
+            if root == crate_name.as_str() {
+                continue;
+            }
+            if local_module_roots.contains(root) {
+                continue;
+            }
+            if !is_probable_crate_name(root) {
+                continue;
+            }
+            if !extern_roots.iter().any(|r| r == root) {
+                extern_roots.push(root.to_string());
+            }
+        }
     }
 
     // Fallback extraction for explicit external crate paths in raw code snippets
