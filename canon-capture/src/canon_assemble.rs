@@ -54,32 +54,6 @@ fn vis_flags(v: &Visibility) -> u32 {
     }
 }
 
-fn split_top_level<'a>(s: &'a str, delim: char) -> Vec<&'a str> {
-    let mut out: Vec<&str> = Vec::new();
-    let mut start = 0usize;
-    let mut angle = 0i32;
-    let mut paren = 0i32;
-    let mut bracket = 0i32;
-
-    for (idx, ch) in s.char_indices() {
-        match ch {
-            '<' => angle += 1,
-            '>' if angle > 0 => angle -= 1,
-            '(' => paren += 1,
-            ')' if paren > 0 => paren -= 1,
-            '[' => bracket += 1,
-            ']' if bracket > 0 => bracket -= 1,
-            _ => {}
-        }
-        if ch == delim && angle == 0 && paren == 0 && bracket == 0 {
-            out.push(s[start..idx].trim());
-            start = idx + ch.len_utf8();
-        }
-    }
-    out.push(s[start..].trim());
-    out
-}
-
 fn prim_to_canon(prim: &PrimType) -> PrimTy {
     match prim {
         PrimType::Bool => PrimTy::Bool,
@@ -236,145 +210,12 @@ fn intern_ty_expr(canon: &mut CanonIR, ty: &TypeExpr) -> CanonId {
     canon.intern_type(kind)
 }
 
-fn intern_type_path_expr(canon: &mut CanonIR, ty_src: &str) -> CanonId {
-    let path_id = canon.intern_path(ty_src.trim());
-    canon.intern_type(TypeKind::Unresolved(path_id))
-}
-
 fn unit_ty(canon: &mut CanonIR) -> CanonId {
     canon.intern_type(TypeKind::Primitive(PrimTy::Unit))
 }
 
 fn bool_ty(canon: &mut CanonIR) -> CanonId {
     canon.intern_type(TypeKind::Primitive(PrimTy::Bool))
-}
-
-fn synth_local(canon: &mut CanonIR, raw: &str) -> CanonId {
-    let name_id = NameId(canon.name_intern.intern(raw.trim()));
-    let ty = unit_ty(canon);
-    canon.push_node(CanonNodeKind::Local { name_id, ty, flags: 0 })
-}
-
-fn split_statements(src: &str) -> Vec<&str> {
-    src.split(';').map(str::trim).filter(|s| !s.is_empty()).collect()
-}
-
-fn parse_method_call(canon: &mut CanonIR, stmt: &str) -> Option<CfgOp> {
-    if stmt.starts_with("let ") || !stmt.contains('.') || !stmt.contains('(') || !stmt.ends_with(')') {
-        return None;
-    }
-    let dot = stmt.find('.')?;
-    let open = stmt[dot + 1..].find('(')? + dot + 1;
-    let close = stmt.rfind(')')?;
-    if open >= close {
-        return None;
-    }
-    let receiver = stmt[..dot].trim();
-    let method_raw = stmt[dot + 1..open].trim();
-    let method = method_raw.split("::").next().unwrap_or(method_raw).trim();
-    if receiver.is_empty() || method.is_empty() {
-        return None;
-    }
-    let args_src = &stmt[open + 1..close];
-    let args = split_top_level(args_src, ',')
-        .into_iter()
-        .filter(|a| !a.trim().is_empty())
-        .map(|a| synth_local(canon, a))
-        .collect();
-    Some(CfgOp::MethodCall {
-        receiver: synth_local(canon, receiver),
-        method: NameId(canon.name_intern.intern(method)),
-        args,
-        dest: None,
-    })
-}
-
-fn parse_field_access(canon: &mut CanonIR, stmt: &str) -> Option<CfgOp> {
-    if stmt.starts_with("let ") || stmt.contains('(') || !stmt.contains('.') {
-        return None;
-    }
-    let dot = stmt.find('.')?;
-    let base = stmt[..dot].trim();
-    let field = stmt[dot + 1..].trim();
-    if base.is_empty() || field.is_empty() || !field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        return None;
-    }
-    Some(CfgOp::FieldAccess {
-        base: synth_local(canon, base),
-        field: NameId(canon.name_intern.intern(field)),
-        dest: None,
-    })
-}
-
-fn parse_index(canon: &mut CanonIR, stmt: &str) -> Option<CfgOp> {
-    if stmt.starts_with("let ") || !stmt.contains('[') || !stmt.ends_with(']') {
-        return None;
-    }
-    let open = stmt.find('[')?;
-    let close = stmt.rfind(']')?;
-    if open >= close {
-        return None;
-    }
-    let base = stmt[..open].trim();
-    let idx = stmt[open + 1..close].trim();
-    if base.is_empty() || idx.is_empty() {
-        return None;
-    }
-    Some(CfgOp::Index {
-        base: synth_local(canon, base),
-        idx: synth_local(canon, idx),
-        dest: None,
-    })
-}
-
-fn parse_struct_lit(canon: &mut CanonIR, stmt: &str) -> Option<CfgOp> {
-    if stmt.starts_with("let ") || !stmt.contains('{') || !stmt.contains('}') {
-        return None;
-    }
-    let open = stmt.find('{')?;
-    let close = stmt.rfind('}')?;
-    if open >= close {
-        return None;
-    }
-    let ty_src = stmt[..open].trim();
-    if ty_src.is_empty() {
-        return None;
-    }
-    if !is_type_like_head(ty_src) {
-        return None;
-    }
-    let fields_src = &stmt[open + 1..close];
-    let mut fields = Vec::new();
-    for part in split_top_level(fields_src, ',') {
-        if part.trim().is_empty() {
-            continue;
-        }
-        let (name, value) = if let Some((n, v)) = part.split_once(':') { (n.trim(), v.trim()) } else { (part.trim(), part.trim()) };
-        if name.is_empty() || value.is_empty() {
-            continue;
-        }
-        fields.push((NameId(canon.name_intern.intern(name)), synth_local(canon, value)));
-    }
-    if fields.is_empty() {
-        return None;
-    }
-    Some(CfgOp::StructLit {
-        ty: intern_type_path_expr(canon, ty_src),
-        fields,
-        dest: None,
-    })
-}
-
-fn is_type_like_head(s: &str) -> bool {
-    let mut chars = s.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !(first.is_ascii_alphabetic() || first == '_') {
-        return false;
-    }
-    s.chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '<' | '>' | ','))
 }
 
 fn lower_raw_stmt(canon: &mut CanonIR, stmt: &str) -> CfgOp {
