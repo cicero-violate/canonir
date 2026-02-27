@@ -1,5 +1,5 @@
 RULES TO FOLLOW
-If you are tempted to create a heuristic, it means there is a structural gap. Therefore abort the job, and notify the user.
+If you are tempted to create a heuristic, it means there is a structural gap.The new solution lacks invariants. Therefore abort the job, and notify the user.
 
 Shell Text Processing Rules
 
