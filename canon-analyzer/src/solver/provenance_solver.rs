@@ -53,9 +53,13 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
     }
 
     let fwd = csr_to_adj(&ir.module_graph);
+    let mut direct_parents: Vec<Vec<usize>> = vec![Vec::new(); fwd.len().max(ir.nodes.len())];
     let mut inv_mod: Vec<Vec<usize>> = vec![Vec::new(); fwd.len().max(ir.nodes.len())];
     for (src, nbrs) in fwd.iter().enumerate() {
         for &dst in nbrs {
+            if dst < direct_parents.len() {
+                direct_parents[dst].push(src);
+            }
             if dst < inv_mod.len() {
                 inv_mod[dst].push(src);
             }
@@ -95,6 +99,20 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
     }
     for ((m, name), indices) in &by_mod_name {
         if indices.len() > 1 {
+            let all_assoc_methods = indices.iter().all(|idx| {
+                matches!(ir.nodes.get(*idx).map(|n| &n.kind), Some(CanonNodeKind::Fn { .. }))
+                    && direct_parents
+                        .get(*idx)
+                        .map(|parents| {
+                            parents.iter().any(|p| {
+                                matches!(ir.nodes.get(*p).map(|n| &n.kind), Some(CanonNodeKind::Trait { .. }) | Some(CanonNodeKind::Impl { .. }))
+                            })
+                        })
+                        .unwrap_or(false)
+            });
+            if all_assoc_methods {
+                continue;
+            }
             eprintln!("WARN provenance_solver: name {:?} shadowed in module {} by nodes {:?}", name, m, indices);
         }
     }
