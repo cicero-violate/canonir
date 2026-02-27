@@ -127,6 +127,23 @@ extract_invariants() {
             echo "  - unreachable count: $unreachable_count"
             echo "  - // match count: $match_comment_count"
             echo "  - // goto count: $goto_comment_count"
+            if [[ "$suppressed_ret_count" -gt 0 ]]; then
+                echo "- suppressed __ret sites:"
+                while IFS= read -r hit; do
+                    local file line fn
+                    file="${hit%%:*}"
+                    line="${hit#*:}"
+                    line="${line%%:*}"
+                    fn=$(awk -v target="$line" '
+                        /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]/ { last=$0 }
+                        NR >= target { print last; exit }
+                    ' "$file")
+                    if [[ -z "$fn" ]]; then
+                        fn="fn <unknown>"
+                    fi
+                    echo "  - ${file#$emit_src/}:$line :: $fn"
+                done < <(rg -n 'let mut __ret = panic!\("canon suppressed binding"\);' "$emit_src" -g '*.rs')
+            fi
         fi
         echo
     } >> "$REPORT"

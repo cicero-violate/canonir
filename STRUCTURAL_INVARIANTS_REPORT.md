@@ -15,6 +15,19 @@ Only direct facts from tool output are recorded.
   - unreachable count: 0
   - // match count: 0
   - // goto count: 0
+- suppressed __ret sites:
+  - symbol.rs:13 ::     pub fn line(&self) -> usize {
+  - symbol.rs:16 ::     pub fn render(&self) -> String {
+  - repomap.rs:19 :: pub fn build_repomap(root_dir: &Path) -> Vec<FileMap> {
+  - repomap.rs:31 :: pub fn render_repomap(maps: &[FileMap], root_dir: &Path) -> String {
+  - extractor.rs:11 :: pub fn extract_symbols(src: &str) -> Vec<Symbol> {
+  - extractor.rs:26 :: fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
+  - extractor.rs:31 :: fn field_text<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
+  - extractor.rs:42 :: fn fn_signature(node: Node, src: &[u8]) -> String {
+  - extractor.rs:51 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:59 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:67 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:73 :: fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
 
 ## fixture=repomap step=diff
 - log: /workspace/ai_sandbox/canon/.run_script_logs/repomap_diff.log
@@ -27,4 +40,17 @@ Only direct facts from tool output are recorded.
   - unreachable count: 0
   - // match count: 0
   - // goto count: 0
+- suppressed __ret sites:
+  - symbol.rs:13 ::     pub fn line(&self) -> usize {
+  - symbol.rs:16 ::     pub fn render(&self) -> String {
+  - repomap.rs:19 :: pub fn build_repomap(root_dir: &Path) -> Vec<FileMap> {
+  - repomap.rs:31 :: pub fn render_repomap(maps: &[FileMap], root_dir: &Path) -> String {
+  - extractor.rs:11 :: pub fn extract_symbols(src: &str) -> Vec<Symbol> {
+  - extractor.rs:26 :: fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
+  - extractor.rs:31 :: fn field_text<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
+  - extractor.rs:42 :: fn fn_signature(node: Node, src: &[u8]) -> String {
+  - extractor.rs:51 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:59 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:67 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:73 :: fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
 
