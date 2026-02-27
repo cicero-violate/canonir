@@ -8,100 +8,56 @@ Only direct facts from tool output are recorded.
 - liveness facts:
   - 6:INFO liveness_solver: pruned 4 dead function(s) from emit_order
 - emitted structural surface:
-  - canon suppressed binding count: 15
-  - canon suppressed __ret count: 10
-  - canon suppressed non-__ret count: 5
+  - canon suppressed binding count: 9
+  - canon suppressed __ret count: 1
+  - canon suppressed non-__ret count: 8
   - canon match gap count: 0
   - canon call gap count: 0
   - canon switch gap count: 0
-  - unresolved gap total: 15
-  - unresolved __ret gap count: 2
+  - unresolved gap total: 9
+  - unresolved __ret gap count: 1
   - unreachable count: 0
   - // match count: 0
   - // goto count: 0
 - unresolved __ret gap sites:
-  - symbol.rs:69 ::     pub fn render(&self) -> String {
-  - extractor.rs:81 :: fn fn_signature(node: Node, src: &[u8]) -> String {
+  - extractor.rs:51 :: fn field_text<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
 
 ## fixture=repomap step=build_emit
 - log: /workspace/ai_sandbox/canon/.run_script_logs/repomap_build_emit.log
 - rustc error facts:
-  - 24:error[E0308]: mismatched types
-  - 43:error[E0658]: use of unstable library feature `fmt_internals`
-  - 52:error[E0308]: mismatched types
-  - 88:error[E0308]: mismatched types
-  - 107:error[E0308]: mismatched types
-  - 126:error[E0308]: mismatched types
-  - 145:error[E0599]: no method named `deref` found for reference `&Vec<std::string::String>` in the current scope
-  - 161:error[E0658]: use of unstable library feature `fmt_internals`
-  - 170:error[E0308]: mismatched types
-  - 186:error[E0599]: no method named `deref` found for reference `&Vec<std::string::String>` in the current scope
-  - 202:error[E0308]: mismatched types
-  - 211:error[E0609]: no field `2` on type `(&&std::string::String, &&usize)`
-  - 219:error[E0658]: use of unstable library feature `fmt_internals`
-  - 228:error[E0308]: mismatched types
-  - 244:error[E0308]: mismatched types
-  - 253:error[E0609]: no field `2` on type `(&&std::string::String, &&usize)`
-  - 261:error[E0658]: use of unstable library feature `fmt_internals`
-  - 270:error[E0308]: mismatched types
-  - 286:error[E0658]: use of unstable library feature `fmt_internals`
-  - 295:error[E0308]: mismatched types
-  - 311:error[E0599]: no method named `deref` found for reference `&Vec<std::string::String>` in the current scope
-  - 327:error[E0308]: mismatched types
-  - 336:error[E0609]: no field `2` on type `(&&std::string::String, &&usize)`
-  - 344:error[E0658]: use of unstable library feature `fmt_internals`
-  - 353:error[E0308]: mismatched types
-  - 369:error[E0658]: use of unstable library feature `fmt_internals`
-  - 378:error[E0308]: mismatched types
-  - 394:error[E0308]: mismatched types
-  - 403:error[E0308]: mismatched types
-  - 412:error[E0658]: use of unstable library feature `fmt_internals`
-  - 421:error[E0308]: mismatched types
-  - 437:error[E0658]: use of unstable library feature `fmt_internals`
-  - 446:error[E0308]: mismatched types
-  - 462:error[E0658]: use of unstable library feature `fmt_internals`
-  - 471:error[E0308]: mismatched types
-  - 487:error[E0599]: no method named `deref` found for reference `&Vec<std::string::String>` in the current scope
-  - 503:error[E0609]: no field `2` on type `(&&std::string::String, &&usize)`
-  - 511:error[E0658]: use of unstable library feature `fmt_internals`
-  - 520:error[E0308]: mismatched types
-  - 536:error[E0658]: use of unstable library feature `fmt_internals`
-  - 545:error[E0308]: mismatched types
+  - 24:error[E0282]: type annotations needed
 - parser/build error facts:
-  - 68:error: this function depends on never type fallback being `()`
-  - 563:error: could not compile `repomap` (bin "repomap") due to 43 previous errors
+  - 39:error: could not compile `repomap` (bin "repomap") due to 1 previous error
 - emitted structural surface:
-  - canon suppressed binding count: 15
-  - canon suppressed __ret count: 10
-  - canon suppressed non-__ret count: 5
+  - canon suppressed binding count: 9
+  - canon suppressed __ret count: 1
+  - canon suppressed non-__ret count: 8
   - canon match gap count: 0
   - canon call gap count: 0
   - canon switch gap count: 0
-  - unresolved gap total: 15
-  - unresolved __ret gap count: 2
+  - unresolved gap total: 9
+  - unresolved __ret gap count: 1
   - unreachable count: 0
   - // match count: 0
   - // goto count: 0
 - unresolved __ret gap sites:
-  - symbol.rs:138 ::     pub fn render(&self) -> String {
-  - extractor.rs:81 :: fn fn_signature(node: Node, src: &[u8]) -> String {
+  - extractor.rs:51 :: fn field_text<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
 
 ## fixture=repomap step=diff
 - log: /workspace/ai_sandbox/canon/.run_script_logs/repomap_diff.log
 - no invariant-signature lines detected; inspect full log.
 - emitted structural surface:
-  - canon suppressed binding count: 15
-  - canon suppressed __ret count: 10
-  - canon suppressed non-__ret count: 5
+  - canon suppressed binding count: 9
+  - canon suppressed __ret count: 1
+  - canon suppressed non-__ret count: 8
   - canon match gap count: 0
   - canon call gap count: 0
   - canon switch gap count: 0
-  - unresolved gap total: 15
-  - unresolved __ret gap count: 2
+  - unresolved gap total: 9
+  - unresolved __ret gap count: 1
   - unreachable count: 0
   - // match count: 0
   - // goto count: 0
 - unresolved __ret gap sites:
-  - extractor.rs:81 :: fn fn_signature(node: Node, src: &[u8]) -> String {
-  - symbol.rs:138 ::     pub fn render(&self) -> String {
+  - extractor.rs:51 :: fn field_text<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
 

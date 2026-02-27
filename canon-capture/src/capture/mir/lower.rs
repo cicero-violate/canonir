@@ -302,22 +302,12 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
         }
         MirOpKind::OpaqueAggregate => {
             if let Some(lhs_name) = lhs_name.clone() {
-                if let Some(rhs) =
-                    closure_placeholder_expr(ctx.tcx, ctx.local_decls, lhs, rvalue)
-                {
-                    ctx.stmts.push(Stmt::Assign {
-                        lhs: lhs_name.clone(),
-                        rhs,
-                    });
-                    ctx.defined.insert(lhs_name);
-                } else {
-                    mir_util::emit_suppressed_for_name(
-                        &lhs_name,
-                        ctx.stmts,
-                        ctx.defined,
-                        ctx.suppressed_sentinel_names,
-                    );
-                }
+                mir_util::emit_suppressed_for_name(
+                    &lhs_name,
+                    ctx.stmts,
+                    ctx.defined,
+                    ctx.suppressed_sentinel_names,
+                );
             }
             return;
         }
@@ -383,35 +373,4 @@ fn stmts_have_ret_match(stmts: &[Stmt]) -> bool {
 
 fn stmts_have_ret_binding(stmts: &[Stmt]) -> bool {
     stmts.iter().any(mir_util::stmt_defines_ret)
-}
-
-fn closure_placeholder_expr<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    local_decls: &mir::LocalDecls<'tcx>,
-    lhs: &mir::Place<'tcx>,
-    rvalue: &mir::Rvalue<'tcx>,
-) -> Option<String> {
-    let mir::Rvalue::Aggregate(kind, _) = rvalue else {
-        return None;
-    };
-    if !matches!(
-        **kind,
-        mir::AggregateKind::Closure(..) | mir::AggregateKind::CoroutineClosure(..)
-    ) {
-        return None;
-    }
-    let local_ty = local_decls[lhs.local].ty;
-    let input_count = match local_ty.kind() {
-        ty::TyKind::Closure(_, args) => args.as_closure().sig().skip_binder().inputs().len(),
-        _ => return None,
-    };
-    let params = match input_count {
-        0 => "||".to_string(),
-        1 => "|_|".to_string(),
-        n => format!("|{}|", vec!["_"; n].join(", ")),
-    };
-    let _ = tcx; // keeps the signature consistent for future type-driven closure variants.
-    Some(format!(
-        "{params} panic!(\"canon closure body not lowered\")"
-    ))
 }

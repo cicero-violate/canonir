@@ -139,6 +139,22 @@ pub(crate) fn is_format_call_target<'tcx>(
         || (path.contains("fmt::") && path.ends_with("::format"))
 }
 
+pub(crate) fn is_deref_call_target<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    func: &mir::Operand<'tcx>,
+    resolver: &LocalNameResolver,
+) -> bool {
+    let by_path = call_target_path(tcx, func)
+        .map(|p| p.contains("ops::deref::Deref::deref"))
+        .unwrap_or(false);
+    if by_path {
+        return true;
+    }
+    mir_operand_label(tcx, func, resolver)
+        .map(|f| f.ends_with("::deref"))
+        .unwrap_or(false)
+}
+
 pub(crate) fn mir_method_call_stmt<'tcx>(
     tcx: TyCtxt<'tcx>,
     func: &mir::Operand<'tcx>,

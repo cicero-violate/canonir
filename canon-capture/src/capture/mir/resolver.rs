@@ -8,11 +8,12 @@ pub(crate) struct LocalNameResolver {
 impl LocalNameResolver {
     pub(crate) fn new<'tcx>(body: &mir::Body<'tcx>, param_names: &[String]) -> Self {
         let mut by_local: HashMap<u32, String> = HashMap::new();
-        by_local.insert(0, "__ret".to_string());
+        let mut owner_by_name: HashMap<String, u32> = HashMap::new();
+        insert_unique_name(&mut by_local, &mut owner_by_name, 0, "__ret".to_string());
         for (idx, name) in param_names.iter().enumerate() {
             let local_idx = (idx + 1) as u32;
             if is_rust_ident(name) {
-                by_local.insert(local_idx, name.clone());
+                insert_unique_name(&mut by_local, &mut owner_by_name, local_idx, name.clone());
             }
         }
         for dbg in &body.var_debug_info {
@@ -32,10 +33,21 @@ impl LocalNameResolver {
             if !is_rust_ident(&name) {
                 continue;
             }
-            by_local.entry(place.local.as_u32()).or_insert(name);
+            if by_local.contains_key(&place.local.as_u32()) {
+                continue;
+            }
+            insert_unique_name(&mut by_local, &mut owner_by_name, place.local.as_u32(), name);
         }
         for local in body.local_decls.indices() {
-            by_local.entry(local.as_u32()).or_insert_with(|| format!("_v{}", local.as_u32()));
+            if by_local.contains_key(&local.as_u32()) {
+                continue;
+            }
+            insert_unique_name(
+                &mut by_local,
+                &mut owner_by_name,
+                local.as_u32(),
+                format!("_v{}", local.as_u32()),
+            );
         }
         Self { by_local }
     }
@@ -111,4 +123,27 @@ fn is_value_name_safe(s: &str) -> bool {
         return false;
     }
     true
+}
+
+fn insert_unique_name(
+    by_local: &mut HashMap<u32, String>,
+    owner_by_name: &mut HashMap<String, u32>,
+    local_idx: u32,
+    preferred: String,
+) {
+    if let Some(existing) = owner_by_name.get(&preferred) {
+        if *existing == local_idx {
+            by_local.insert(local_idx, preferred);
+            return;
+        }
+        let mut candidate = format!("{preferred}_{local_idx}");
+        while owner_by_name.contains_key(&candidate) {
+            candidate.push('_');
+        }
+        owner_by_name.insert(candidate.clone(), local_idx);
+        by_local.insert(local_idx, candidate);
+        return;
+    }
+    owner_by_name.insert(preferred.clone(), local_idx);
+    by_local.insert(local_idx, preferred);
 }
