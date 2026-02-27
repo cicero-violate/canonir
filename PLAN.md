@@ -65,7 +65,7 @@ status: `done`
 ## PHASE_5_EDGE_TEMPLATE_MIGRATION
 status: `in_progress`
 
-1. Move repeated edge emission patterns into rule edge templates. `in_progress` (`use_item` edge templates complete; `relations.rs` moved to relation-template dispatch for `Contains/AssocItem/ImplFor/ImplRef`)
+1. Move repeated edge emission patterns into rule edge templates. `in_progress` (`use_item` edge templates complete; `relations.rs` moved to relation-template dispatch; shared `edge_emit` primitives now used by engine + relations)
 2. Keep special-case edges in explicit hooks only where structurally necessary.
 3. Delete duplicated edge boilerplate from legacy branches.
 

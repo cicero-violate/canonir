@@ -4,6 +4,7 @@ use rustc_span::def_id::DefId;
 use crate::{index::Index, Partial};
 
 pub mod body;
+pub mod edge_emit;
 pub mod engine;
 pub mod helpers;
 pub mod item;

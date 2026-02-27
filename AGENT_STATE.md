@@ -1,49 +1,47 @@
 # AGENT_STATE.md
 
 ## CANONICAL_HEADER
-- state_id: `CANON_CAPTURE_LOC_REDUCTION_V1_PHASE_5_EDGE_TEMPLATE_SLICE2`
+- state_id: `CANON_CAPTURE_LOC_REDUCTION_V1_PHASE_5_EDGE_TEMPLATE_SLICE3`
 - date: `2026-02-27`
 - mode: `execution`
 - invariant: `No heuristics. Structural invariants only.`
 
 ### 1) Investigate the problem
-- Continue Phase 5 by removing remaining inline edge boilerplate in relation projection.
+- Unify edge emission across engine and relations so both flow through one structural primitive layer.
 
 ### 2) Gather facts
-- `project/relations.rs` previously had inline conditional edge pushes for:
-- parent `Contains`
-- assoc-item `AssocItem`
-- impl `ImplFor`
-- impl `ImplRef`
-- A new structural relation-template dispatcher is now implemented:
-- `RelationTemplate` enum
-- `relation_templates(def_kind)` mapping
-- per-template emission helpers (`push_parent_contains`, `maybe_push_parent_assoc_item`, `maybe_push_impl_for`, `maybe_push_impl_ref`)
+- Added shared module: `canon-capture/src/project/edge_emit.rs`.
+- `edge_emit` now owns common `EdgeHint` construction:
+- `push`, `push_contains`, `push_resolves`, `push_reexports`,
+- `push_assoc_item`, `push_impl_for`, `push_impl_ref`.
+- Migrated `engine.rs` (`use_item` edge path) to `edge_emit`.
+- Migrated `relations.rs` template dispatch helpers to `edge_emit`.
 
 ### 3) Break down the facts
-- Relation edge emission is now table-driven in shape rather than ad-hoc branching.
-- Emitted edge semantics are preserved: same edge kinds and same gating conditions.
-- Phase 5 now has two active migrated surfaces:
-- `engine/use_item` via `RuleEdge`
-- `relations.rs` via `RelationTemplate`
+- Shared primitive layer removes duplicate `EdgeHint` constructors in multiple modules.
+- Relation-template dispatch remains active; only emission backend changed.
+- Rule-edge template dispatch remains active for `use_item`; only emission backend changed.
 
 ### 4) Write it to a state file
 - State overwritten to current checkpoint.
 
 ### 5) Sort structural and categorical patterns
-- Pattern A: edge category declarations now drive execution paths.
-- Pattern B: concrete edge push behavior is centralized in narrow helpers.
-- Pattern C: remaining edge work should target cross-module harmonization (shared template helpers) while preserving current invariants.
+- Pattern A: edge declaration and edge emission are now separated.
+- Pattern B: rule/template systems decide *what* edges to emit.
+- Pattern C: `edge_emit` decides *how* edges are constructed.
 
 ### 6) Write it to state file
 - Files changed this slice:
+- `canon-capture/src/project/edge_emit.rs` (new)
+- `canon-capture/src/project/mod.rs`
+- `canon-capture/src/project/engine.rs`
 - `canon-capture/src/project/relations.rs`
 - `PLAN.md`
 - `AGENT_STATE.md`
 - `PROJECT_STATUS.md`
 
 ### 7) Solve the state file
-- Completed relation-template migration slice with no fallback or heuristic behavior.
+- Completed shared edge primitive unification without fallback or heuristic logic.
 
 ### 8) Emit and project the solution incrementally
 - Validation performed:
@@ -53,12 +51,13 @@
 - `test_1` capture -> orchestration -> emitted `cargo build`: pass
 - LOC snapshot:
 - `item.rs`: `1391`
-- `engine.rs`: `460`
+- `engine.rs`: `449`
 - `rules.rs`: `279`
-- `relations.rs`: `144`
-- `canon-capture/src` total: `4802`
+- `relations.rs`: `129`
+- `edge_emit.rs`: `36`
+- `canon-capture/src` total: `4813`
 
 ### 9) Repeat step 3
 - Next slice:
-- converge `RuleEdge` and relation-template paths into shared edge-emission primitives
-- continue Phase 5 until remaining inline edge boilerplate is removed
+- migrate remaining inline edge constructors in `project/body.rs` to `edge_emit`
+- continue Phase 5 until project-level edge construction sites are consolidated

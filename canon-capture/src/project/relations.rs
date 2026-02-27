@@ -1,9 +1,10 @@
-use crate::types::{EdgeHint, EdgeKind};
+use crate::types::EdgeHint;
 use rustc_hir::def::DefKind;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
 
 use crate::index::Index;
+use crate::project::edge_emit;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RelationTemplate {
@@ -38,11 +39,7 @@ fn push_parent_contains(
     let parent = tcx.opt_parent(def_id)?;
     let pid = *index.def_to_node.get(&parent)?;
     let parent_u32 = pid.index() as u32;
-    edges.push(EdgeHint {
-        src: parent_u32,
-        dst: id_u32,
-        kind: EdgeKind::Contains,
-    });
+    edge_emit::push_contains(edges, parent_u32, id_u32);
     Some(parent_u32)
 }
 
@@ -65,11 +62,7 @@ fn maybe_push_parent_assoc_item(
     let Some(src) = parent_u32 else {
         return;
     };
-    edges.push(EdgeHint {
-        src,
-        dst: id_u32,
-        kind: EdgeKind::AssocItem,
-    });
+    edge_emit::push_assoc_item(edges, src, id_u32);
 }
 
 fn maybe_push_impl_for(
@@ -86,11 +79,7 @@ fn maybe_push_impl_for(
     let Some(&struct_node) = index.def_to_node.get(&adt_def_id) else {
         return;
     };
-    edges.push(EdgeHint {
-        src: id_u32,
-        dst: struct_node.index() as u32,
-        kind: EdgeKind::ImplFor,
-    });
+    edge_emit::push_impl_for(edges, id_u32, struct_node.index() as u32);
 }
 
 fn maybe_push_impl_ref(
@@ -106,11 +95,7 @@ fn maybe_push_impl_ref(
     else {
         return;
     };
-    edges.push(EdgeHint {
-        src: id_u32,
-        dst: trait_node.index() as u32,
-        kind: EdgeKind::ImplRef,
-    });
+    edge_emit::push_impl_ref(edges, id_u32, trait_node.index() as u32);
 }
 
 /// Relations derivable from item metadata (module parent, impl target, etc.).

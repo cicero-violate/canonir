@@ -4,8 +4,9 @@ use rustc_span::def_id::DefId;
 
 use crate::index::Index;
 use crate::norm;
-use crate::types::{EdgeHint, EdgeKind, EnumVariant, Node, NodeId, NodeKind, StructKind, Visibility};
+use crate::types::{EdgeHint, EnumVariant, Node, NodeId, NodeKind, StructKind, Visibility};
 
+use super::edge_emit;
 use super::helpers;
 use super::item;
 use super::rules::{DefMeta, RuleEdge, RuleSpec, RULES};
@@ -423,26 +424,14 @@ fn lower_use_item(
 
         if has_rule_edge(rule, RuleEdge::Contains) {
             if let Some(parent) = parent_src {
-                edges.push(EdgeHint {
-                    src: parent,
-                    dst: node_id.index() as u32,
-                    kind: EdgeKind::Contains,
-                });
+                edge_emit::push_contains(&mut edges, parent, node_id.index() as u32);
             }
         }
         if has_rule_edge(rule, RuleEdge::Resolves) {
             if let Some(&target_node) = index.def_to_node.get(target_did) {
-                edges.push(EdgeHint {
-                    src: node_id.index() as u32,
-                    dst: target_node.index() as u32,
-                    kind: EdgeKind::Resolves,
-                });
+                edge_emit::push_resolves(&mut edges, node_id.index() as u32, target_node.index() as u32);
                 if has_rule_edge(rule, RuleEdge::Reexports) && is_public_vis(&vis) {
-                    edges.push(EdgeHint {
-                        src: node_id.index() as u32,
-                        dst: target_node.index() as u32,
-                        kind: EdgeKind::Reexports,
-                    });
+                    edge_emit::push_reexports(&mut edges, node_id.index() as u32, target_node.index() as u32);
                 }
             }
         }
