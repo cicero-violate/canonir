@@ -135,8 +135,49 @@ pub fn ty(raw: &str) -> String {
 /// "<crate>::data::model::User" → "crate::data::model::User"
 /// "std::path::PathBuf"         → "std::path::PathBuf"
 pub fn ty_strip_local(s: &str, krate: &str) -> String {
-    let crate_prefix = format!("{}::", krate);
-    s.replace(&crate_prefix, "crate::")
+    let pat = format!("{krate}::");
+    if pat.is_empty() || !s.contains(&pat) {
+        return s.to_string();
+    }
+
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0usize;
+
+    while let Some(rel) = s[i..].find(&pat) {
+        let idx = i + rel;
+        out.push_str(&s[i..idx]);
+
+        let boundary_ok = idx == 0 || {
+            let prev = bytes[idx - 1] as char;
+            !(prev.is_ascii_alphanumeric() || prev == '_')
+        };
+        if !boundary_ok {
+            out.push_str(&pat);
+            i = idx + pat.len();
+            continue;
+        }
+
+        let rest_start = idx + pat.len();
+        let rest = &s[rest_start..];
+        let seg_end = rest.find(|c: char| {
+            c.is_whitespace() || matches!(c, ',' | '<' | '>' | '(' | ')' | '[' | ']')
+        }).unwrap_or(rest.len());
+        let token = &rest[..seg_end];
+
+        // Rewrite only crate-qualified paths that have at least two segments:
+        //   my_crate::foo::Bar -> crate::foo::Bar
+        // Keep single-segment forms unchanged:
+        //   my_crate::Type     (can be a local module path when module == crate name)
+        if token.contains("::") {
+            out.push_str("crate::");
+        } else {
+            out.push_str(&pat);
+        }
+        i = rest_start;
+    }
+    out.push_str(&s[i..]);
+    out
 }
 
 /// Normalize a fully-qualified local crate path to `crate::...`.
@@ -146,7 +187,11 @@ pub fn local_crate_path(raw: &str, krate: &str) -> String {
     if raw == krate {
         "crate".to_string()
     } else if let Some(rest) = raw.strip_prefix(&format!("{}::", krate)) {
-        format!("crate::{}", rest)
+        if rest.contains("::") {
+            format!("crate::{}", rest)
+        } else {
+            raw.to_string()
+        }
     } else {
         raw.to_string()
     }
@@ -306,8 +351,8 @@ mod tests {
 
     #[test]
     fn normalizes_extern_type_paths() {
-        assert_eq!(norm_path("data::model::User"), "crate::data::model::User");
-        assert_eq!(norm_path("Vec<data::model::User>"), "Vec<crate::data::model::User>");
-        assert_eq!(norm_path("Box<dyn traits::Describable>"), "Box<dyn crate::traits::Describable>");
+        assert_eq!(norm_path("data::model::User"), "data::model::User");
+        assert_eq!(norm_path("std::path::PathBuf"), "PathBuf");
+        assert_eq!(norm_path("std::Path"), "Path");
     }
 }

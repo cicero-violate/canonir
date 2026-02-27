@@ -35,7 +35,6 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
     type_solver::solve(ir)?;
     call_solver::solve(ir)?;
     cfg_solver::solve(ir)?;
-    // Avoid injecting synthetic use nodes in Canon mode for now.
     visibility_solver::solve(ir)?;
     impl_solver::solve(ir)?;
     trait_solver::solve(ir)?;

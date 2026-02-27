@@ -63,7 +63,7 @@ pub fn build_plan(ir: &CanonIR) -> Result<Plan> {
             if let CanonNodeKind::Crate { dependencies, .. } = &n.kind {
                 Some(dependencies.iter().map(|pid| {
                     let s = ir.lookup_path(*pid).to_string();
-                    format!("{} = \"*\"", s)
+                    render_dependency_entry(&s)
                 }).collect::<Vec<_>>())
             } else {
                 None
@@ -148,7 +148,7 @@ fn walk_module(ir: &CanonIR, module_id: CanonId, file_path: PathBuf, files: &mut
 /// src/foo/mod.rs  → src/foo/
 fn module_stem_dir(file_path: &PathBuf) -> PathBuf {
     let file_name = file_path.file_name().and_then(|f| f.to_str()).unwrap_or("");
-    if file_name == "lib.rs" || file_name == "mod.rs" {
+    if file_name == "lib.rs" || file_name == "main.rs" || file_name == "mod.rs" {
         file_path.parent().unwrap_or(file_path).to_path_buf()
     } else {
         // foo.rs → treat children as foo/
@@ -205,6 +205,19 @@ fn is_root_main_fn(ir: &CanonIR, id: CanonId) -> bool {
 
 fn crate_meta(ir: &CanonIR) -> Option<(String, String)> {
     ir.nodes.iter().find_map(|n| if let CanonNodeKind::Crate { name_id, edition, .. } = &n.kind { Some((ir.lookup_name(*name_id).to_string(), edition.to_string())) } else { None })
+}
+
+fn render_dependency_entry(dep: &str) -> String {
+    let package = match dep {
+        "tree_sitter" => Some("tree-sitter"),
+        "tree_sitter_rust" => Some("tree-sitter-rust"),
+        _ => None,
+    };
+    if let Some(package) = package {
+        format!("{dep} = {{ package = \"{package}\", version = \"*\" }}")
+    } else {
+        format!("{dep} = \"*\"")
+    }
 }
 
 

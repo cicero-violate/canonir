@@ -49,24 +49,273 @@ fn vis_flags(v: &Visibility) -> u32 {
     }
 }
 
+fn split_top_level<'a>(s: &'a str, delim: char) -> Vec<&'a str> {
+    let mut out: Vec<&str> = Vec::new();
+    let mut start = 0usize;
+    let mut angle = 0i32;
+    let mut paren = 0i32;
+    let mut bracket = 0i32;
+
+    for (idx, ch) in s.char_indices() {
+        match ch {
+            '<' => angle += 1,
+            '>' if angle > 0 => angle -= 1,
+            '(' => paren += 1,
+            ')' if paren > 0 => paren -= 1,
+            '[' => bracket += 1,
+            ']' if bracket > 0 => bracket -= 1,
+            _ => {}
+        }
+        if ch == delim && angle == 0 && paren == 0 && bracket == 0 {
+            out.push(s[start..idx].trim());
+            start = idx + ch.len_utf8();
+        }
+    }
+    out.push(s[start..].trim());
+    out
+}
+
+fn wrapped_by(s: &str, open: u8, close: u8) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() < 2 || bytes[0] != open || bytes[bytes.len() - 1] != close {
+        return false;
+    }
+    let mut depth = 0i32;
+    for (i, b) in bytes.iter().copied().enumerate() {
+        if b == open {
+            depth += 1;
+        } else if b == close {
+            depth -= 1;
+            if depth == 0 && i != bytes.len() - 1 {
+                return false;
+            }
+            if depth < 0 {
+                return false;
+            }
+        }
+    }
+    depth == 0
+}
+
+fn split_generic_args(s: &str) -> Option<(&str, &str)> {
+    let bytes = s.as_bytes();
+    let mut start = None;
+    let mut depth = 0i32;
+    let mut end = None;
+    for (i, b) in bytes.iter().copied().enumerate() {
+        if b == b'<' {
+            if depth == 0 {
+                start = Some(i);
+            }
+            depth += 1;
+        } else if b == b'>' {
+            if depth == 0 {
+                return None;
+            }
+            depth -= 1;
+            if depth == 0 {
+                end = Some(i);
+                break;
+            }
+        }
+    }
+    let (start, end) = (start?, end?);
+    if end != bytes.len() - 1 {
+        return None;
+    }
+    let root = s[..start].trim();
+    let args = s[start + 1..end].trim();
+    if root.is_empty() {
+        None
+    } else {
+        Some((root, args))
+    }
+}
+
+fn parse_array_len(raw: &str) -> Option<u64> {
+    let token = raw.trim();
+    if token.is_empty() {
+        return None;
+    }
+    let numeric = token.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    let numeric = numeric.replace('_', "");
+    numeric.parse::<u64>().ok()
+}
+
+fn normalize_type_text(raw: &str) -> String {
+    let normalize_leaf = |s: &str| norm::norm_path(&norm::ty(s));
+    let s = raw.trim();
+    if s.is_empty() {
+        return String::new();
+    }
+
+    if let Some(rest) = s.strip_prefix("&mut ") {
+        return format!("&mut {}", normalize_type_text(rest));
+    }
+    if let Some(rest) = s.strip_prefix('&') {
+        return format!("&{}", normalize_type_text(rest));
+    }
+    if let Some(rest) = s.strip_prefix("*const ") {
+        return format!("*const {}", normalize_type_text(rest));
+    }
+    if let Some(rest) = s.strip_prefix("*mut ") {
+        return format!("*mut {}", normalize_type_text(rest));
+    }
+    if let Some(rest) = s.strip_prefix("dyn ") {
+        let bounds: Vec<String> = split_top_level(rest, '+')
+            .into_iter()
+            .filter(|b| !b.is_empty())
+            .map(normalize_type_text)
+            .collect();
+        return if bounds.is_empty() { "dyn".to_string() } else { format!("dyn {}", bounds.join(" + ")) };
+    }
+    if let Some(rest) = s.strip_prefix("impl ") {
+        let bounds: Vec<String> = split_top_level(rest, '+')
+            .into_iter()
+            .filter(|b| !b.is_empty())
+            .map(normalize_type_text)
+            .collect();
+        return if bounds.is_empty() { "impl".to_string() } else { format!("impl {}", bounds.join(" + ")) };
+    }
+    if wrapped_by(s, b'(', b')') && s != "()" {
+        let inner = &s[1..s.len() - 1];
+        let parts = split_top_level(inner, ',');
+        let trailing = inner.trim_end().ends_with(',');
+        if parts.len() == 1 && !trailing {
+            return normalize_type_text(parts[0]);
+        }
+        let elems: Vec<String> = parts
+            .into_iter()
+            .filter(|p| !p.is_empty())
+            .map(normalize_type_text)
+            .collect();
+        if elems.len() == 1 {
+            return format!("({},)", elems[0]);
+        }
+        return format!("({})", elems.join(", "));
+    }
+    if wrapped_by(s, b'[', b']') {
+        let inner = &s[1..s.len() - 1];
+        let parts = split_top_level(inner, ';');
+        if parts.len() == 2 {
+            return format!("[{}; {}]", normalize_type_text(parts[0]), parts[1].trim());
+        }
+        return format!("[{}]", normalize_type_text(inner));
+    }
+    if let Some((root, args)) = split_generic_args(s) {
+        let args: Vec<String> = split_top_level(args, ',')
+            .into_iter()
+            .filter(|a| !a.is_empty())
+            .map(normalize_type_text)
+            .collect();
+        let root = normalize_leaf(root);
+        return format!("{}<{}>", root, args.join(", "));
+    }
+    normalize_leaf(s)
+}
+
+fn parse_fn_ptr(canon: &mut CanonIR, trimmed: &str) -> Option<TypeKind> {
+    let rest = trimmed.strip_prefix("fn(")?;
+    let mut depth = 1i32;
+    let mut close_idx = None;
+    for (i, ch) in rest.char_indices() {
+        if ch == '(' {
+            depth += 1;
+        } else if ch == ')' {
+            depth -= 1;
+            if depth == 0 {
+                close_idx = Some(i);
+                break;
+            }
+        }
+    }
+    let close_idx = close_idx?;
+    let params_src = &rest[..close_idx];
+    let tail = rest[close_idx + 1..].trim();
+
+    let params: Vec<CanonId> = split_top_level(params_src, ',')
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .enumerate()
+        .map(|(i, p)| {
+            let name_id = NameId(canon.name_intern.intern(&format!("__fnptr_arg{}", i)));
+            let ty = intern_ty(canon, p);
+            canon.push_node(CanonNodeKind::Param { name_id, ty, flags: 0 })
+        })
+        .collect();
+
+    let ret = if let Some(ret_ty) = tail.strip_prefix("->") {
+        intern_ty(canon, ret_ty.trim())
+    } else {
+        unit_ty(canon)
+    };
+    let sig_id = canon.push_node(CanonNodeKind::FnSig { generics: vec![], params, ret, where_clauses: vec![] });
+    Some(TypeKind::FnPtr(sig_id))
+}
+
 fn str_to_type_kind(canon: &mut CanonIR, ty: &str) -> TypeKind {
     let trimmed = ty.trim();
-    // Structured parsing for reference types before primitive/extern fallthrough.
-    if let Some(inner) = trimmed.strip_prefix("&mut ") {
-        let inner_id = intern_ty(canon, inner);
-        return TypeKind::Ref { lifetime: None, inner: inner_id, mutable: true };
+    if let Some(kind) = parse_fn_ptr(canon, trimmed) {
+        return kind;
     }
-    if let Some(inner) = trimmed.strip_prefix('&') {
+    if let Some(inner) = trimmed.strip_prefix("*mut ") {
         let inner_id = intern_ty(canon, inner);
-        return TypeKind::Ref { lifetime: None, inner: inner_id, mutable: false };
+        return TypeKind::RawPtr { inner: inner_id, mutable: true };
+    }
+    if let Some(inner) = trimmed.strip_prefix("*const ") {
+        let inner_id = intern_ty(canon, inner);
+        return TypeKind::RawPtr { inner: inner_id, mutable: false };
+    }
+    if wrapped_by(trimmed, b'(', b')') && trimmed != "()" {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        let parts = split_top_level(inner, ',');
+        let trailing = inner.trim_end().ends_with(',');
+        if parts.len() == 1 && !trailing {
+            return str_to_type_kind(canon, parts[0]);
+        }
+        let elems: Vec<CanonId> = parts.into_iter().filter(|p| !p.is_empty()).map(|p| intern_ty(canon, p)).collect();
+        return TypeKind::Tuple(elems);
+    }
+    if wrapped_by(trimmed, b'[', b']') {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        let parts = split_top_level(inner, ';');
+        if parts.len() == 2 {
+            let inner_id = intern_ty(canon, parts[0]);
+            if let Some(len) = parse_array_len(parts[1]) {
+                return TypeKind::Array { inner: inner_id, len };
+            }
+            let normalized = normalize_type_text(trimmed);
+            let pid = PathId(canon.path_intern.intern(&normalized));
+            return TypeKind::Extern(pid);
+        }
+        let inner_id = intern_ty(canon, inner);
+        return TypeKind::Slice(inner_id);
+    }
+    // Structured parsing for reference types before primitive/extern fallthrough.
+    if let Some(after_ref) = trimmed.strip_prefix('&') {
+        let mut rest = after_ref.trim_start();
+        let mut lifetime = None;
+        if rest.starts_with('\'') {
+            let mut split = rest.splitn(2, char::is_whitespace);
+            if let Some(lt) = split.next() {
+                let lt_id = NameId(canon.name_intern.intern(lt));
+                lifetime = Some(canon.push_node(CanonNodeKind::Lifetime { name_id: lt_id }));
+            }
+            rest = split.next().map(str::trim_start).unwrap_or("");
+        }
+        let (mutable, inner) = if let Some(inner) = rest.strip_prefix("mut ") { (true, inner) } else { (false, rest) };
+        let inner_id = intern_ty(canon, inner);
+        return TypeKind::Ref { lifetime, inner: inner_id, mutable };
     }
     if let Some(inner) = trimmed.strip_prefix("dyn ") {
-        let name_id = NameId(canon.name_intern.intern(inner));
+        let normalized = normalize_type_text(inner);
+        let name_id = NameId(canon.name_intern.intern(&normalized));
         let trait_id = canon.push_node(CanonNodeKind::TypeRef { name_id });
         return TypeKind::DynTrait(trait_id);
     }
     if let Some(inner) = trimmed.strip_prefix("impl ") {
-        let name_id = NameId(canon.name_intern.intern(inner));
+        let normalized = normalize_type_text(inner);
+        let name_id = NameId(canon.name_intern.intern(&normalized));
         let trait_id = canon.push_node(CanonNodeKind::TypeRef { name_id });
         return TypeKind::ImplTrait(trait_id);
     }
@@ -91,7 +340,7 @@ fn str_to_type_kind(canon: &mut CanonIR, ty: &str) -> TypeKind {
         "()" => TypeKind::Primitive(PrimTy::Unit),
         "!" => TypeKind::Primitive(PrimTy::Never),
         other => {
-            let normalized = norm::norm_path(other);
+            let normalized = normalize_type_text(other);
             let pid = PathId(canon.path_intern.intern(&normalized));
             TypeKind::Extern(pid)
         }
@@ -551,8 +800,7 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
     for path in &mut canon.path_intern.vec {
         let mut normalized = norm::local_crate_path(path, &local_crate);
         for root in &local_module_roots {
-            eprintln!("DEBUG norm root={root} path={path:?}");
-        let root_prefix = format!("{root}::");
+            let root_prefix = format!("{root}::");
             if normalized.starts_with(&root_prefix) {
                 normalized = format!("crate::{normalized}");
             }
@@ -568,4 +816,51 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
     canon.path_intern.restore_index();
 
     canon
+}
+
+#[cfg(test)]
+mod tests {
+    use super::str_to_type_kind;
+    use canon::node::{PrimTy, TypeKind};
+    use canon::CanonIR;
+
+    #[test]
+    fn parses_tuple_array_slice_and_grouped_types() {
+        let mut ir = CanonIR::new();
+
+        let tuple = str_to_type_kind(&mut ir, "(u8, &str)");
+        assert!(matches!(tuple, TypeKind::Tuple(items) if items.len() == 2));
+
+        let array = str_to_type_kind(&mut ir, "[u8; 32]");
+        assert!(matches!(array, TypeKind::Array { len: 32, .. }));
+
+        let slice = str_to_type_kind(&mut ir, "[u8]");
+        assert!(matches!(slice, TypeKind::Slice(_)));
+
+        let grouped = str_to_type_kind(&mut ir, "(u8)");
+        assert!(matches!(grouped, TypeKind::Primitive(PrimTy::U8)));
+    }
+
+    #[test]
+    fn parses_fn_ptr_and_raw_ptr() {
+        let mut ir = CanonIR::new();
+
+        let fn_ptr = str_to_type_kind(&mut ir, "fn(u8, &str) -> bool");
+        assert!(matches!(fn_ptr, TypeKind::FnPtr(_)));
+
+        let raw_ptr = str_to_type_kind(&mut ir, "*const u8");
+        assert!(matches!(raw_ptr, TypeKind::RawPtr { mutable: false, .. }));
+    }
+
+    #[test]
+    fn normalizes_generic_extern_text() {
+        let mut ir = CanonIR::new();
+        let ty = str_to_type_kind(&mut ir, "std::vec::Vec<std::option::Option<u8>>");
+        match ty {
+            TypeKind::Extern(path_id) => {
+                assert_eq!(ir.lookup_path(path_id), "Vec<Option<u8>>");
+            }
+            _ => panic!("expected extern type"),
+        }
+    }
 }

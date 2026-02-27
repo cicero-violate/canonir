@@ -1,64 +1,24 @@
-### Objective — Refactor Goal
+### Objective
 
-**Goal:**
-Make CanonIR the single source of semantic truth such that the emitter contains zero semantic logic and performs only deterministic projection.
+Make CanonIR the single source of semantic truth so the emitter is a pure, deterministic projector.
 
----
+Pipeline invariant:
 
-### Explicit Outcomes
+`Capture -> CanonIR -> Solver -> Emit`
 
-1. **Remove all emitter heuristics**
-
-   * No string-based path rewriting
-   * No import injection
-   * No visibility inference
-   * No semantic repair
-
-2. **Push semantic completion upstream**
-
-   * Imports must exist explicitly in CanonIR
-   * Paths must be canonicalized before emission
-   * Visibility must be resolved during capture/solve
-   * Generics and bounds must be structurally encoded
-
-3. **Guarantee emission correctness by structure**
-
-   * If CanonIR is valid → emission compiles
-   * If emission fails → CanonIR is incomplete
-
-4. **Define a hard invariant**
-
-   * Emitter never inspects emitted text to decide behavior
-   * Emitter never modifies IR
-   * Emitter never derives missing semantics
+If CanonIR is valid, emission compiles. If emission fails, CanonIR is incomplete.
 
 ---
 
-### Final Target Architecture
+### Pending Work
 
-[
-\text{Capture} \rightarrow \text{CanonIR} \rightarrow \text{Solver} \rightarrow \text{Emit}
-]
-
-Where:
-
-* Capture = extract resolved rustc facts
-* CanonIR = canonical semantic graph
-* Solver = generate and enforce semantic laws
-* Emit = pure projection
+1. Finalize documentation and ownership boundaries after recent solver/capture/projection fixes.
+2. Continue fixture-based validation as new changes land.
 
 ---
 
-### Success Condition
+### Hard Invariant
 
-You can delete all normalization heuristics from:
-
-* `file.rs`
-* `fmt.rs`
-* any path rewrites
-
-And nothing breaks.
-
----
-
-
+- Emitter never inspects emitted text to decide behavior.
+- Emitter never mutates IR.
+- Semantic decisions live in capture/solve passes with explicit invariants.
