@@ -27,9 +27,10 @@ pub(crate) fn lower_call_terminator<'tcx>(
             if dest == "__ret" {
                 stmts.push(Stmt::Assign {
                     lhs: "__ret".to_string(),
-                    rhs: "__canon_call_gap__".to_string(),
+                    rhs: "__canon_suppressed__".to_string(),
                 });
                 defined.insert("__ret".to_string());
+                suppressed_sentinel_names.insert("__ret".to_string());
             } else {
                 mir_util::emit_suppressed_for_name(
                     &dest,
@@ -47,9 +48,10 @@ pub(crate) fn lower_call_terminator<'tcx>(
                 if dest == "__ret" {
                     stmts.push(Stmt::Assign {
                         lhs: "__ret".to_string(),
-                        rhs: "__canon_call_gap__".to_string(),
+                        rhs: "__canon_suppressed__".to_string(),
                     });
                     defined.insert("__ret".to_string());
+                    suppressed_sentinel_names.insert("__ret".to_string());
                 } else {
                     mir_util::emit_suppressed_for_name(
                         dest,
@@ -80,9 +82,10 @@ pub(crate) fn lower_call_terminator<'tcx>(
             if dest == "__ret" {
                 stmts.push(Stmt::Assign {
                     lhs: "__ret".to_string(),
-                    rhs: "__canon_call_gap__".to_string(),
+                    rhs: "__canon_suppressed__".to_string(),
                 });
                 defined.insert("__ret".to_string());
+                suppressed_sentinel_names.insert("__ret".to_string());
             } else {
                 mir_util::emit_suppressed_for_name(
                     dest,

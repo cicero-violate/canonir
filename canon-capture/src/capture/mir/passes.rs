@@ -165,16 +165,9 @@ fn pass_lower_match_dest_to_suppressed(mut emitted: Vec<EmittedBlock>) -> Vec<Em
     for block in &mut emitted {
         for stmt in &mut block.block.stmts {
             if let Stmt::Match { dest: Some(dest) } = stmt {
-                *stmt = if dest == "__ret" {
-                    Stmt::Assign {
-                        lhs: "__ret".to_string(),
-                        rhs: "__canon_switch_gap__".to_string(),
-                    }
-                } else {
-                    Stmt::Assign {
-                        lhs: dest.clone(),
-                        rhs: "__canon_suppressed__".to_string(),
-                    }
+                *stmt = Stmt::Assign {
+                    lhs: dest.clone(),
+                    rhs: "__canon_suppressed__".to_string(),
                 };
             }
         }

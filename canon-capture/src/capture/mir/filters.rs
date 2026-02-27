@@ -43,6 +43,8 @@ pub(crate) fn is_filtered_internal_call_path(path: &str) -> bool {
             | "core::hint::must_use"
             | "std::io::_print"
             | "std::io::_eprint"
+            | "core::fmt::Arguments::new"
+            | "std::fmt::Arguments::new"
             | "core::fmt::Arguments::new_v1"
             | "std::fmt::Arguments::new_v1"
             | "core::fmt::Arguments::new_v1_formatted"

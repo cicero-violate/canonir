@@ -25,8 +25,7 @@ pub(crate) fn mir_operand_label_for_arg(
 fn constant_is_implicit_zst_value(constant: &mir::ConstOperand<'_>) -> bool {
     matches!(
         constant.const_.ty().kind(),
-        ty::TyKind::FnDef(..)
-            | ty::TyKind::Closure(..)
+        ty::TyKind::Closure(..)
             | ty::TyKind::Coroutine(..)
             | ty::TyKind::CoroutineClosure(..)
     )

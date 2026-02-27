@@ -8,12 +8,12 @@ Only direct facts from tool output are recorded.
 - liveness facts:
   - 6:INFO liveness_solver: pruned 4 dead function(s) from emit_order
 - emitted structural surface:
-  - canon suppressed binding count: 1
-  - canon suppressed __ret count: 0
+  - canon suppressed binding count: 10
+  - canon suppressed __ret count: 9
   - canon suppressed non-__ret count: 1
   - canon match gap count: 0
-  - canon call gap count: 1
-  - canon switch gap count: 8
+  - canon call gap count: 0
+  - canon switch gap count: 0
   - unresolved gap total: 10
   - unresolved __ret gap count: 9
   - unreachable count: 0
@@ -27,8 +27,8 @@ Only direct facts from tool output are recorded.
   - extractor.rs:42 :: fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
   - extractor.rs:80 :: fn fn_signature(node: Node, src: &[u8]) -> String {
   - extractor.rs:97 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:113 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:129 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:113 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:129 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
 
 ## fixture=repomap step=build_emit
 - log: /workspace/ai_sandbox/canon/.run_script_logs/repomap_build_emit.log
@@ -44,12 +44,12 @@ Only direct facts from tool output are recorded.
   - 60:error: this function depends on never type fallback being `()`
   - 126:error: could not compile `repomap` (bin "repomap") due to 9 previous errors
 - emitted structural surface:
-  - canon suppressed binding count: 1
-  - canon suppressed __ret count: 0
+  - canon suppressed binding count: 10
+  - canon suppressed __ret count: 9
   - canon suppressed non-__ret count: 1
   - canon match gap count: 0
-  - canon call gap count: 1
-  - canon switch gap count: 8
+  - canon call gap count: 0
+  - canon switch gap count: 0
   - unresolved gap total: 10
   - unresolved __ret gap count: 9
   - unreachable count: 0
@@ -63,19 +63,19 @@ Only direct facts from tool output are recorded.
   - extractor.rs:42 :: fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
   - extractor.rs:80 :: fn fn_signature(node: Node, src: &[u8]) -> String {
   - extractor.rs:97 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:113 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:129 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:113 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:129 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
 
 ## fixture=repomap step=diff
 - log: /workspace/ai_sandbox/canon/.run_script_logs/repomap_diff.log
 - no invariant-signature lines detected; inspect full log.
 - emitted structural surface:
-  - canon suppressed binding count: 1
-  - canon suppressed __ret count: 0
+  - canon suppressed binding count: 10
+  - canon suppressed __ret count: 9
   - canon suppressed non-__ret count: 1
   - canon match gap count: 0
-  - canon call gap count: 1
-  - canon switch gap count: 8
+  - canon call gap count: 0
+  - canon switch gap count: 0
   - unresolved gap total: 10
   - unresolved __ret gap count: 9
   - unreachable count: 0
@@ -89,6 +89,6 @@ Only direct facts from tool output are recorded.
   - extractor.rs:42 :: fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
   - extractor.rs:80 :: fn fn_signature(node: Node, src: &[u8]) -> String {
   - extractor.rs:97 :: fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:113 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
-  - extractor.rs:129 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:113 :: fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+  - extractor.rs:129 :: fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
 
