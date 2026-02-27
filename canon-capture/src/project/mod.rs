@@ -4,8 +4,10 @@ use rustc_span::def_id::DefId;
 use crate::{index::Index, Partial};
 
 pub mod body;
+pub mod engine;
 pub mod item;
 pub mod relations;
+pub mod rules;
 
 /// Project a single definition into a Partial (nodes + local edge hints).
 pub fn project_def(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Partial {

@@ -13,10 +13,18 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::index::Index;
 use crate::norm;
+use crate::project::engine;
 
 /// Structural projection: DefId -> NodeKind using HIR/ty queries.
 /// All strings are canonicalized via norm:: before NodeKind construction.
 pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>, Vec<EdgeHint>) {
+    if let Some(out) = engine::lower_def(tcx, def_id, index) {
+        return out;
+    }
+    project_item_legacy(tcx, def_id, index)
+}
+
+pub(crate) fn project_item_legacy(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>, Vec<EdgeHint>) {
     let Some(&id) = index.def_to_node.get(&def_id) else {
         return (Vec::new(), vec![]);
     };
@@ -24,38 +32,11 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
     let name = norm::short(&full_path).to_string();
     let raw_span = tcx.def_span(def_id);
     let span_str = norm::span(tcx, raw_span);
-    let file_str = norm::file(tcx, raw_span);
 
     let vis = map_vis(tcx, def_id, tcx.visibility(def_id));
     let (generics, where_clauses) = map_generics(tcx, def_id);
 
     let kind = match tcx.def_kind(def_id) {
-        DefKind::Mod => {
-            let file = norm::module_file(tcx, def_id);
-            // An inline module lives in the same file as its declaration span.
-            let decl_file = norm::file(tcx, raw_span);
-            let inline = file == decl_file
-                && def_id.as_local().map_or(false, |local| if let rustc_hir::Node::Item(item) = tcx.hir_node_by_def_id(local) { matches!(item.kind, rustc_hir::ItemKind::Mod(_, _)) } else { false });
-            NodeKind::Module { path: norm::module_path(tcx, def_id), file, vis, inline }
-        }
-        DefKind::Struct | DefKind::Union => {
-            let adt = tcx.adt_def(def_id);
-            let variant = adt.non_enum_variant();
-            let struct_kind = match variant.ctor_kind() {
-                Some(rustc_hir::def::CtorKind::Fn) => StructKind::Tuple,
-                Some(rustc_hir::def::CtorKind::Const) => StructKind::Unit,
-                _ => StructKind::Named,
-            };
-            let fields = map_fields(tcx, variant.fields.iter(), false);
-            let derives = collect_derives(tcx, def_id);
-            NodeKind::Struct { name, vis, generics, fields, derives, attrs: Vec::new(), where_clauses, struct_kind }
-        }
-        DefKind::Enum => {
-            let adt = tcx.adt_def(def_id);
-            let variants = adt.variants().iter().map(|v| EnumVariant { name: v.name.to_string(), fields: map_fields(tcx, v.fields.iter(), true) }).collect();
-            let derives = collect_derives(tcx, def_id);
-            NodeKind::Enum { name, vis, generics, variants, derives, attrs: Vec::new(), where_clauses }
-        }
         DefKind::Trait => {
             let methods = collect_trait_methods(tcx, def_id);
             NodeKind::Trait { name, vis, generics, methods, attrs: Vec::new(), where_clauses, unsafe_: false }
@@ -64,28 +45,6 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
             let for_trait = tcx.impl_opt_trait_ref(def_id).map(|eb| TypeExpr::Path(norm::path(tcx, eb.skip_binder().def_id)));
             let for_struct = lower_ty(tcx, tcx.type_of(def_id).instantiate_identity());
             NodeKind::Impl { for_struct, for_trait, generics, attrs: Vec::new(), where_clauses, unsafe_: false }
-        }
-        DefKind::Fn => {
-            let sig = tcx.fn_sig(def_id).skip_binder();
-            let returns_unit = sig.output().skip_binder().is_unit();
-            let params = map_params(tcx, def_id, sig.inputs().skip_binder());
-            let async_ = tcx.asyncness(def_id).is_async();
-            let ret = declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, sig.output().skip_binder()));
-            let unsafe_ = sig.safety() == Safety::Unsafe;
-            let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-            let body = mir_body_structural(tcx, def_id, &param_names, returns_unit);
-            NodeKind::Function { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ }
-        }
-        DefKind::AssocFn => {
-            let sig = tcx.fn_sig(def_id).skip_binder();
-            let returns_unit = sig.output().skip_binder().is_unit();
-            let params = map_params(tcx, def_id, sig.inputs().skip_binder());
-            let async_ = tcx.asyncness(def_id).is_async();
-            let ret = declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, sig.output().skip_binder()));
-            let unsafe_ = sig.safety() == Safety::Unsafe;
-            let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-            let body = mir_body_structural(tcx, def_id, &param_names, returns_unit);
-            NodeKind::Method { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ }
         }
         DefKind::AssocTy => {
             let default_ty = if !matches!(tcx.associated_item(def_id).container, ty::AssocContainer::Trait) {
@@ -107,111 +66,13 @@ pub fn project_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
             };
             NodeKind::AssocConst { name, vis, ty: ty_expr, default_value, attrs: Vec::new() }
         }
-        DefKind::Const => {
-            let ty_expr = declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
-            let value = hir_init_src(tcx, def_id);
-            NodeKind::Const { name, vis, ty: ty_expr, value, attrs: Vec::new() }
-        }
-        DefKind::Static { mutability, .. } => {
-            let ty_expr = declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
-            let value = hir_init_src(tcx, def_id);
-            let mutable = mutability == rustc_hir::Mutability::Mut;
-            NodeKind::Static { name, vis, ty: ty_expr, value, mutable, attrs: Vec::new() }
-        }
-        DefKind::TyAlias => NodeKind::TypeAlias {
-            name,
-            vis,
-            generics,
-            ty: declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| lower_ty(tcx, tcx.type_of(def_id).instantiate_identity())),
-            attrs: Vec::new(),
-            where_clauses,
-        },
-         DefKind::Use => {
-             let Some(local) = def_id.as_local() else {
-                 return (Vec::new(), vec![]);
-             };
-             let rustc_hir::Node::Item(item) = tcx.hir_node_by_def_id(local) else {
-                 return (Vec::new(), vec![]);
-             };
-             let rustc_hir::ItemKind::Use(use_path, use_kind) = item.kind else {
-                 return (Vec::new(), vec![]);
-             };
-
-             let mut nodes: Vec<Node> = Vec::new();
-             let mut edges: Vec<EdgeHint> = Vec::new();
-             let glob = matches!(use_kind, rustc_hir::UseKind::Glob);
-             let parent_src = tcx.opt_parent(def_id).and_then(|p| index.def_to_node.get(&p)).map(|nid| nid.index() as u32);
-
-             for (ordinal, res) in use_path.res.iter().flatten().enumerate() {
-                 let rustc_hir::def::Res::Def(_, target_did) = res else {
-                     continue;
-                 };
-                 let path = norm::path(tcx, *target_did);
-                 if path.is_empty() {
-                     continue;
-                 }
-                 let node_id = if ordinal == 0 { id } else { synthetic_use_id(id, ordinal as u32) };
-                 let alias = match use_kind {
-                     rustc_hir::UseKind::Single(ident) if ordinal == 0 => {
-                         let leaf = path.rsplit("::").next().unwrap_or("");
-                         if ident.name.as_str() != leaf {
-                             Some(ident.to_string())
-                         } else {
-                             None
-                         }
-                     }
-                     _ => None,
-                 };
-                 nodes.push(Node {
-                     id: node_id,
-                     kind: NodeKind::Use {
-                         vis: vis.clone(),
-                         path,
-                         alias,
-                         glob,
-                     },
-                     span: Some(span_str.clone()),
-                 });
-
-                 if let Some(parent) = parent_src {
-                     edges.push(EdgeHint {
-                         src: parent,
-                         dst: node_id.index() as u32,
-                         kind: EdgeKind::Contains,
-                     });
-                 }
-                 if let Some(&target_node) = index.def_to_node.get(target_did) {
-                     edges.push(EdgeHint {
-                         src: node_id.index() as u32,
-                         dst: target_node.index() as u32,
-                         kind: EdgeKind::Resolves,
-                     });
-                     if is_public_vis(&vis) {
-                         edges.push(EdgeHint {
-                             src: node_id.index() as u32,
-                             dst: target_node.index() as u32,
-                             kind: EdgeKind::Reexports,
-                         });
-                     }
-                 }
-             }
-             return (nodes, edges);
-         }
          _ => return (Vec::new(), vec![]),
     };
 
     (vec![Node { id, kind, span: Some(span_str) }], vec![])
 }
 
-fn synthetic_use_id(base: crate::types::NodeId, ordinal: u32) -> crate::types::NodeId {
-    crate::types::NodeId(1_000_000_000u32 + base.0.saturating_mul(1024) + ordinal)
-}
-
-fn is_public_vis(v: &Visibility) -> bool {
-    !matches!(v, Visibility::Private)
-}
-
-fn map_vis(tcx: TyCtxt<'_>, def_id: DefId, v: ty::Visibility<DefId>) -> Visibility {
+pub(crate) fn map_vis(tcx: TyCtxt<'_>, def_id: DefId, v: ty::Visibility<DefId>) -> Visibility {
     match v {
         ty::Visibility::Public => Visibility::Public,
         ty::Visibility::Restricted(restricted) => {
@@ -236,7 +97,7 @@ fn map_vis(tcx: TyCtxt<'_>, def_id: DefId, v: ty::Visibility<DefId>) -> Visibili
 /// Inline bounds: read from HIR `GenericParam.bounds` (written as `<T: Bound>`).
 /// Where clauses: read from HIR `Generics.predicates` with `origin == WhereClause`.
 /// Both are source snippets — exactly what the user wrote, no path normalization.
-fn map_generics(tcx: TyCtxt<'_>, def_id: DefId) -> (Vec<GenericParam>, Vec<String>) {
+pub(crate) fn map_generics(tcx: TyCtxt<'_>, def_id: DefId) -> (Vec<GenericParam>, Vec<String>) {
     let supported = matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn | DefKind::Struct | DefKind::Enum | DefKind::Trait | DefKind::Impl { .. } | DefKind::TyAlias);
     if !supported {
         return (Vec::new(), Vec::new());
@@ -350,7 +211,7 @@ fn map_generics_ty_fallback(tcx: TyCtxt<'_>, def_id: DefId) -> (Vec<GenericParam
     (params, Vec::new())
 }
 
-fn map_params<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, inputs: &[ty::Ty<'tcx>]) -> Vec<Param> {
+pub(crate) fn map_params<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, inputs: &[ty::Ty<'tcx>]) -> Vec<Param> {
     let declared_tys = declared_fn_param_types(tcx, def_id).unwrap_or_default();
     let hir_names: Vec<Option<String>> = def_id
         .as_local()
@@ -391,7 +252,7 @@ fn map_params<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, inputs: &[ty::Ty<'tcx>]) -
         .collect()
 }
 
-fn map_fields<'a, I>(tcx: TyCtxt<'a>, fields: I, in_enum: bool) -> Vec<Field>
+pub(crate) fn map_fields<'a, I>(tcx: TyCtxt<'a>, fields: I, in_enum: bool) -> Vec<Field>
 where I: Iterator<Item = &'a ty::FieldDef> {
     fields
         .map(|f| {
@@ -447,7 +308,7 @@ fn map_trait_method_params<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, inputs: &[ty:
 }
 
 /// Slice the source text of a Const or Static initializer expression.
-fn hir_init_src(tcx: TyCtxt<'_>, def_id: DefId) -> String {
+pub(crate) fn hir_init_src(tcx: TyCtxt<'_>, def_id: DefId) -> String {
     let Some(local) = def_id.as_local() else { return String::new() };
     let Some(body) = tcx.hir_maybe_body_owned_by(local) else { return String::new() };
     let span = body.value.span;
@@ -473,7 +334,7 @@ fn collect_trait_methods(tcx: TyCtxt<'_>, trait_def_id: DefId) -> Vec<TraitMetho
         .collect()
 }
 
-fn declared_item_ty_expr(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TypeExpr> {
+pub(crate) fn declared_item_ty_expr(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TypeExpr> {
     let local = def_id.as_local()?;
     let node = tcx.hir_node_by_def_id(local);
     let ty = match node {
@@ -531,7 +392,7 @@ fn declared_fn_param_types(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Vec<TypeExp
     )
 }
 
-fn declared_fn_return_type_expr(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TypeExpr> {
+pub(crate) fn declared_fn_return_type_expr(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TypeExpr> {
     let local = def_id.as_local()?;
     let output = match tcx.hir_node_by_def_id(local) {
         rustc_hir::Node::Item(item) => match &item.kind {
@@ -562,7 +423,7 @@ fn declared_fn_return_type_expr(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TypeEx
     }
 }
 
-fn lower_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> TypeExpr {
+pub(crate) fn lower_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> TypeExpr {
     match ty.kind() {
         ty::TyKind::Bool => TypeExpr::Primitive(PrimType::Bool),
         ty::TyKind::Char => TypeExpr::Primitive(PrimType::Char),
@@ -735,7 +596,7 @@ fn render_type_expr(_tcx: TyCtxt<'_>, expr: &TypeExpr) -> String {
     }
 }
 
-fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String], returns_unit: bool) -> Body {
+pub(crate) fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String], returns_unit: bool) -> Body {
     let Some(local_def) = def_id.as_local() else {
         return Body::None;
     };
@@ -2103,7 +1964,7 @@ const INTERNAL_DERIVE_TRAITS: &[&str] = &["StructuralPartialEq", "TrivialClone"]
 
 /// Extract derive macro names from automatically_derived impls.
 /// Filters out compiler-internal side-effect traits that are not user-writable macros.
-fn collect_derives(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<String> {
+pub(crate) fn collect_derives(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<String> {
     let mut derives = Vec::new();
     for impl_did in tcx.all_local_trait_impls(()).values().flatten().copied() {
         let impl_def_id = impl_did.to_def_id();

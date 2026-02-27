@@ -7,56 +7,60 @@
 - objective: `Replace large procedural lowering in item.rs with rule-table + engine architecture while preserving behavior.`
 
 ## BASELINE
-status: `pending`
+status: `done`
 
-1. Record LOC baselines:
+1. Record LOC baselines: `done`
 - `canon-capture/src/project/item.rs`
 - `canon-capture` crate total LOC
-2. Record behavior baselines:
+2. Record behavior baselines: `done`
 - `cargo check`
 - fixture pipeline/build matrix used in current validation flow
-3. Freeze invariants:
+3. Freeze invariants: `done`
 - output node/edge/body shape equivalence for covered DefKinds
 - no fallback/raw-path reintroduction
 
 ## PHASE_1_DOMAIN_MODEL
-status: `pending`
+status: `done`
 
-1. Add `project/rules.rs` with canonical rule schema:
+1. Add `project/rules.rs` with canonical rule schema: `done`
 - `RuleSpec`
 - `RulePred`
 - `RuleEmit`
 - `RuleEdge`
 - optional narrow hook handles
-2. Add `DefMeta` shape (analyzed def facts) and canonical fragment output type.
-3. Keep all code compile-safe with placeholders and no behavior switch yet.
+2. Add `DefMeta` shape (analyzed def facts) and canonical fragment output type. `done`
+3. Keep all code compile-safe with placeholders and no behavior switch yet. `done`
 
 ## PHASE_2_ENGINE_CORE
-status: `pending`
+status: `done`
 
-1. Add `project/engine.rs` with:
+1. Add `project/engine.rs` with: `done`
 - `analyze_def(tcx, def_id) -> DefMeta`
 - `lower_def(tcx, def_id, index) -> (Vec<Node>, Vec<EdgeHint>)`
-2. Implement deterministic rule match and dispatch order.
-3. Keep MIR body lowering delegated to existing body lowering path.
+2. Implement deterministic rule match and dispatch order. `done`
+3. Keep MIR body lowering delegated to existing body lowering path. `done`
 
 ## PHASE_3_RULE_BOOTSTRAP
-status: `pending`
+status: `done`
 
-1. Encode first DefKind set in rules (low-risk, high-volume boilerplate):
-- module
-- struct
-- enum
-- const/static/type alias/use/type ref/lifetime
-2. Move repeated field extraction into shared helpers used by rules.
-3. Keep legacy code path for uncovered DefKinds.
+1. Encode first DefKind set in rules (low-risk, high-volume boilerplate): `done`
+- module `done`
+- struct `done`
+- enum `done`
+- const `done`
+- static `done`
+- type alias `done`
+- use `done`
+- type ref/lifetime `pending` (not def-driven in current lowering flow)
+2. Move repeated field extraction into shared helpers used by rules. `pending`
+3. Keep legacy code path for uncovered DefKinds. `done`
 
 ## PHASE_4_FUNCTION_PATH_MIGRATION
-status: `pending`
+status: `in_progress`
 
-1. Migrate function/assoc-fn lowering metadata path into rules+engine.
-2. Keep body lowering call boundary unchanged (`mir_body_structural` remains isolated).
-3. Ensure async/unsafe/generics/where-clause wiring preserved.
+1. Migrate function/assoc-fn lowering metadata path into rules+engine. `done`
+2. Keep body lowering call boundary unchanged (`mir_body_structural` remains isolated). `done`
+3. Ensure async/unsafe/generics/where-clause wiring preserved. `done`
 
 ## PHASE_5_EDGE_TEMPLATE_MIGRATION
 status: `pending`
