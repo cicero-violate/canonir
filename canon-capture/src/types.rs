@@ -76,6 +76,10 @@ pub enum TypeExpr {
     Param(String),
     DynTrait(String),
     ImplTrait(String),
+    AppliedPath {
+        base: String,
+        args: Vec<TypeExpr>,
+    },
     Path(String),
 }
 

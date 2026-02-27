@@ -619,11 +619,15 @@ fn lower_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> TypeExpr {
             let ret = Box::new(lower_ty(tcx, sig.output()));
             TypeExpr::FnPtr { params, ret }
         }
-        ty::TyKind::Adt(adt, args) => TypeExpr::Path(render_path_with_args(
-            tcx,
-            norm::path(tcx, adt.did()),
-            args.types().map(|t| lower_ty(tcx, t)).collect(),
-        )),
+        ty::TyKind::Adt(adt, args) => {
+            let base = norm::path(tcx, adt.did());
+            let lowered_args: Vec<TypeExpr> = args.types().map(|t| lower_ty(tcx, t)).collect();
+            if lowered_args.is_empty() {
+                TypeExpr::Path(base)
+            } else {
+                TypeExpr::AppliedPath { base, args: lowered_args }
+            }
+        }
         ty::TyKind::Param(param) => TypeExpr::Param(param.name.as_str().to_string()),
         ty::TyKind::Dynamic(preds, _) => {
             let principal = preds
@@ -649,14 +653,6 @@ fn lower_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> TypeExpr {
         }
         _ => panic!("unsupported structural type variant: {ty:?}"),
     }
-}
-
-fn render_path_with_args(tcx: TyCtxt<'_>, base: String, args: Vec<TypeExpr>) -> String {
-    if args.is_empty() {
-        return base;
-    }
-    let rendered = args.iter().map(|a| render_type_expr(tcx, a)).collect::<Vec<_>>().join(", ");
-    format!("{base}<{rendered}>")
 }
 
 fn render_type_expr(_tcx: TyCtxt<'_>, expr: &TypeExpr) -> String {
@@ -724,6 +720,10 @@ fn render_type_expr(_tcx: TyCtxt<'_>, expr: &TypeExpr) -> String {
         TypeExpr::Param(name) => name.clone(),
         TypeExpr::DynTrait(path) => format!("dyn {path}"),
         TypeExpr::ImplTrait(path) => format!("impl {path}"),
+        TypeExpr::AppliedPath { base, args } => {
+            let rendered = args.iter().map(|a| render_type_expr(_tcx, a)).collect::<Vec<_>>().join(", ");
+            format!("{base}<{rendered}>")
+        }
         TypeExpr::Path(path) => path.clone(),
     }
 }

@@ -75,6 +75,10 @@ impl std::hash::Hash for TypeKind {
             TypeKind::ImplTrait(id) => id.hash(state),
             TypeKind::DynTrait(id) => id.hash(state),
             TypeKind::Param(name_id) => name_id.hash(state),
+            TypeKind::Applied { base, args } => {
+                base.hash(state);
+                args.hash(state);
+            }
             TypeKind::Extern(path_id) => path_id.hash(state),
             TypeKind::Unresolved(path_id) => path_id.hash(state),
             TypeKind::TypeRef { name_id } => name_id.hash(state),

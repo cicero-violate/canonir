@@ -202,6 +202,10 @@ fn render_type_expr(expr: &TypeExpr) -> String {
         TypeExpr::Param(name) => name.clone(),
         TypeExpr::DynTrait(path) => format!("dyn {path}"),
         TypeExpr::ImplTrait(path) => format!("impl {path}"),
+        TypeExpr::AppliedPath { base, args } => {
+            let rendered = args.iter().map(render_type_expr).collect::<Vec<_>>().join(", ");
+            format!("{base}<{rendered}>")
+        }
         TypeExpr::Path(path) => path.clone(),
     }
 }
@@ -263,6 +267,12 @@ fn intern_ty_expr(canon: &mut CanonIR, ty: &TypeExpr) -> CanonId {
             let name_id = NameId(canon.name_intern.intern(path));
             let trait_id = canon.push_node(CanonNodeKind::TypeRef { name_id });
             TypeKind::ImplTrait(trait_id)
+        }
+        TypeExpr::AppliedPath { base, args } => {
+            let base_path = canon.intern_path(base);
+            let base_ty = canon.intern_type(TypeKind::Extern(base_path));
+            let args: Vec<CanonId> = args.iter().map(|arg| intern_ty_expr(canon, arg)).collect();
+            TypeKind::Applied { base: base_ty, args }
         }
         TypeExpr::Path(path) => TypeKind::Extern(canon.intern_path(path)),
     };

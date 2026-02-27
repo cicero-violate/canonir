@@ -77,6 +77,8 @@ pub enum TypeKind {
     DynTrait(CanonId),
     /// Generic param — e.g. `T`.  Stored as NameId.
     Param(NameId),
+    /// Generic application root + concrete args.
+    Applied { base: CanonId, args: Vec<CanonId> },
     /// External / unresolved type (escape hatch, e.g. `std::collections::HashMap`)
     /// PathId points into path_intern.
     Extern(PathId),

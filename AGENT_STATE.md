@@ -1,44 +1,49 @@
 # Agent State
 
-## 2026-02-27 — Current Cycle (next-plan continuation and blocker identification)
+## 2026-02-27 — Current Cycle (schema-level instantiation invariant)
 
 ### 1) Investigate the problem
-- Next unresolved plan items are primarily:
-  - Phase 4.6 (`Instantiates` derivation without heuristics),
-  - Phase 5.3 (remove dependency underscore→hyphen heuristic in projection).
+- The remaining structural gap was `type_solver` deriving `Instantiates` by splitting type-path text.
 
 ### 2) Gather facts
-- `canon-analyzer/src/solver/type_solver.rs` still derives `Instantiates` via string parsing helpers (`split_generic_path`, `split_top_level`, text normalization).
-- `canon-projection/src/layout/mod.rs` still uses `render_dependency_entry` underscore→hyphen conversion heuristic for Cargo deps.
-- Current IR shape for dependency roots is path-root only (`Crate.dependencies: Vec<PathId>`), with no explicit structural package-name field per dependency.
-- Current IR type representation for external paths does not always preserve structural generic-arg decomposition for all declaration-origin types.
+- `type_solver` used string helpers (`split_generic_path`, `split_top_level`, `normalize_type_text`).
+- Capture had no explicit canonical shape for generic application roots + args.
+- Dependency package invariant was already completed in prior cycle (`declared_dependencies` + `dependency_packages`).
 
 ### 3) Break down the facts
-- Cannot remove these heuristics cleanly without introducing missing structural invariants:
-  1. Dependency invariant missing: explicit per-dependency Cargo package name (when Rust crate name != package name).
-  2. Type instantiation invariant missing: explicit generic argument structure available at Canon layer for all relevant external/local type references.
+- Without an explicit applied-type representation, solver is forced into text parsing.
+- Correct invariant: represent applied types structurally and derive `Instantiates` from that structure.
 
 ### 4) Write it to a state file
-- This file is the overwritten cycle snapshot.
+- This file is overwritten with the new cycle state.
 
 ### 5) Sort structural and categorical patterns
-- Structural pattern A: heuristic logic remains exactly where schema does not yet carry required structural data.
-- Structural pattern B: removing heuristics now without adding invariants would regress emission correctness.
-- Categorical pattern A: this is a schema/invariant gap, not an implementation bug.
+- Structural pattern A: heuristic code exists where the schema does not encode decomposition.
+- Structural pattern B: once decomposition is in schema (`base`, `args`), solver logic becomes direct graph derivation.
 
 ### 6) Write it to state file
-- Acceptance criteria for next slice:
-  - add explicit structural representation for dependency package mapping,
-  - add explicit structural representation for instantiation arg links,
-  - then remove projection/type-solver heuristics.
+- Implemented invariants:
+  - `TypeKind::Applied { base: CanonId, args: Vec<CanonId> }`
+  - `TypeExpr::AppliedPath { base: String, args: Vec<TypeExpr> }` in capture model
+  - `lower_ty` emits `AppliedPath` for ADT types with generic args
+  - canon assembly lowers `AppliedPath` into `TypeKind::Applied`
+  - projection renders `TypeKind::Applied` directly
+  - analyzer `type_solver` now derives `Instantiates` from `Applied`, without text parsing
 
 ### 7) Solve the state file
-- No heuristic-removal patch was applied in this cycle because it would violate structural correctness without new invariants.
+- Removed string-based `Instantiates` derivation from `type_solver`.
+- Replaced it with structural derivation:
+  - applied type -> generic def (when resolvable structurally)
+  - applied type -> each arg type
 
 ### 8) Emit and project the solution incrementally
-- Previous cycle validations remain green:
-  - `emit/repomap cargo build` passes after declaration/body invariant fixes.
+- Validation:
+  - workspace `cargo check` passes
+  - `run_capture.sh` on `capture/repomap` passes
+  - `cargo run -p orchestration -- <input> <output>` for repomap passes
+  - emitted `emit/repomap` `cargo build` passes
 
 ### 9) Repeat step 3
-- Next actionable structural task:
-  - introduce missing invariants in `canon` schema and capture/analyzer wiring, then remove remaining heuristic surfaces in `layout/mod.rs` and `type_solver.rs`.
+- Remaining pending plan work:
+  - Phase 3.5: reduce remaining body-level `CfgOp::Raw` emission for method/field/struct literal surfaces.
+  - Documentation/status cleanup still listed in `EXECUTION_STATUS.md` (ownership/boundary docs).
