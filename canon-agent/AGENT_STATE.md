@@ -1,7 +1,7 @@
 # AGENT_STATE
 
 ## Current Phase
-Pipeline operational — Reasoner change_payload → StateChange → CodeDelta emission
+Reasoner prompt fixed — awaiting first real on-disk file mutation
 
 ## What Was Built This Session
 - `src/evolution/mod.rs`: `apply_admitted_deltas` fully implemented
@@ -16,14 +16,18 @@ Pipeline operational — Reasoner change_payload → StateChange → CodeDelta e
   - Pushed into ir_with_delta before Mutate stage runs
   - Judge admission_id resolved: matches delta_id if echoed, else falls back
   - No more unknown delta panics
+- `src/llm_provider.rs`: Reasoner prompt schema fixed
+  - Removed ambiguous uppercase example keys from change_payload block
+  - Now emits one clean concrete add_module example
+  - LLM will produce a parseable ChangePayload on every tick
 
 ## System Condition
 - Full agent loop running and stable
 - All 5 nodes fire per tick via ChatGPT/calpico WS on 8787
 - Pipeline: Observe→Reason→Prove→Judge→Mutate completes without panic
-- `apply_admitted_deltas` emits non-empty Vec<CodeDelta> when Reasoner emits change_payload
-- `execute_deltas` gates on cargo check, rolls back via git stash on failure
-- IR written to disk after each successful tick
+- Reasoner prompt now instructs LLM to emit valid change_payload JSON
+- Previous issue: payload deserialized as None due to ambiguous prompt schema
+- Fix applied: single concrete add_module example, no extra noise keys
 
 ## Active Invariants
 - No heuristic mutation
@@ -34,19 +38,10 @@ Pipeline operational — Reasoner change_payload → StateChange → CodeDelta e
 - git stash rollback on any failure
 
 ## Immediate Next Move
-Update Reasoner LLM prompt (via calpico/graph.json system prompt) to emit:
-```json
-{
-  "rationale": "...",
-  "change_payload": {
-    "type": "add_module",
-    "module_id": "...",
-    "name": "...",
-    "visibility": "public",
-    "description": "..."
-  }
-}
-```
+Run ./run.sh and verify:
+1. ir.json delta has payload.type = "add_module"
+2. A new src/<module_id>.rs file appears on disk
+3. cargo check passes
 
 ## Constraint
 Execution artifacts must originate from IR transition, not CLI surface.
