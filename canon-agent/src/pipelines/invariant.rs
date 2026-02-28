@@ -48,7 +48,6 @@ struct InvariantPromptConfig {
     retry_addendum: String,
     agent_goal_path: String,
     patch_format_path: String,
-    mir_sources: Vec<String>,
     instruction: String,
 }
 
@@ -59,7 +58,6 @@ struct PromptConfig {
     retry_addendum: String,
     agent_goal: String,
     patch_format: String,
-    mir_source_relpaths: Vec<String>,
     instruction: String,
 }
 
@@ -88,7 +86,6 @@ impl PromptConfig {
             retry_addendum: cfg.retry_addendum,
             agent_goal,
             patch_format,
-            mir_source_relpaths: cfg.mir_sources,
             instruction: cfg.instruction,
         })
     }
@@ -100,7 +97,6 @@ impl PromptConfig {
         surface_json: &str,
         first_gap: &str,
         gap_src: &str,
-        mir_sources: &str,
         capture_dir: &Path,
         delta_feedback: &str,
         last_patch_diff_summary: &str,
@@ -184,17 +180,7 @@ impl PromptConfig {
         self.retry_addendum.replace("{{RETRY_ERROR}}", error)
     }
 
-    /// Load MIR sources relative to capture_dir.
-    fn load_mir_sources(&self, capture_dir: &Path) -> String {
-        load_specific_sources(capture_dir, &self.mir_source_relpaths.iter().map(|s| s.as_str()).collect::<Vec<_>>())
-    }
-
-    fn load_mir_sources_all(&self, capture_dirs: &[std::path::PathBuf]) -> String {
-        capture_dirs.iter()
-            .map(|dir| self.load_mir_sources(dir))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
+    // MIR sources removed.
 }
 
 // ---------------------------------------------------------------------------
@@ -307,11 +293,23 @@ impl Pipeline for InvariantPipeline {
         let request = InvariantPlanRequest {
             surface: surface_before.clone(),
             gap_file_src,
-            instruction: self.config.instruction
-                .replace("{{CWD}}", &format!("{:?}", ctx.cwd))
-                .replace("{{TARGET_GAP}}", &surface_before.ret_gap_sites.first()
+            instruction: format!(
+                "CURRENT WORKING DIRECTORY (CWD): {}\n\
+                You MUST inspect the real filesystem before patching.\n\
+                Use bash commands such as:\n\
+                - ls -la\n\
+                - rg\n\
+                - sed\n\
+                - awk\n\
+                - perl\n\
+                Read actual source files before modifying them.\n\
+                DO NOT guess.\n\
+                Target gap: {}\n",
+                ctx.cwd[0].display(),
+                surface_before.ret_gap_sites.first()
                     .map(|s| format!("{}:{} {}", s.file, s.line, s.enclosing_fn))
-                    .unwrap_or_default()),
+                    .unwrap_or_default()
+            ),
         };
 
         // ----------------------------------------------------------------
@@ -594,7 +592,7 @@ async fn plan_via_llm(
         .map(|s| format!("{}:{} — {}", s.file, s.line, s.enclosing_fn))
         .unwrap_or_else(|| "(none)".into());
 
-    let mir_sources = config.load_mir_sources_all(all_capture_dirs);
+    let mir_sources = String::new();
 
     let prev_tick = tick.saturating_sub(1);
 
@@ -614,33 +612,87 @@ async fn plan_via_llm(
     )
     .unwrap_or_else(|_| "(none)".into());
 
+    // ----------------------------------------------------------------
+    // REAL CANON-CAPTURE SNAPSHOT: inject structural lowering context
+    // ----------------------------------------------------------------
+    let capture_snapshot = {
+        let mut out = String::new();
+
+        let cmds = [
+            r#"rg -n "__ret" canon-capture/src"#,
+            r#"rg -n "suppressed binding" canon-capture/src"#,
+            r#"ls -R canon-capture/src"#,
+        ];
+
+        for cmd in cmds {
+            let result = Command::new("bash")
+                .arg("-c")
+                .arg(cmd)
+                .current_dir(capture_dir)
+                .output();
+
+            match result {
+                Ok(o) => {
+                    out.push_str(&format!("$ {}\n", cmd));
+                    out.push_str(&String::from_utf8_lossy(&o.stdout));
+                    out.push_str("\n\n");
+                }
+                Err(_) => {
+                    out.push_str(&format!("$ {} (failed)\n\n", cmd));
+                }
+            }
+        }
+
+        out
+    };
+
     let prompt = {
         let mut sent = bootstrap_sent.lock().await;
         if !*sent {
             *sent = true;
-            config.render_bootstrap(
-                tick,
-                &surface_json,
-                &first_gap,
-                gap_src,
-                &mir_sources,
-                capture_dir,
-                &delta_feedback,
-                &last_patch_diff_summary,
-                request.surface.unresolved_ret_gap_count as u64,
+            format!(
+                "REAL CANON-CAPTURE SNAPSHOT:\n{}\n\n{}",
+                capture_snapshot,
+                config.render_bootstrap(
+                    tick,
+                    &surface_json,
+                    &first_gap,
+                    gap_src,
+                    &mir_sources,
+                    capture_dir,
+                    &delta_feedback,
+                    &last_patch_diff_summary,
+                    request.surface.unresolved_ret_gap_count as u64,
+                )
             )
         } else {
-            config.render_delta(
-                tick,
-                &first_gap,
-                &delta_feedback,
-                &last_patch_diff_summary,
-                request.surface.unresolved_ret_gap_count as u64,
-                gap_src,
-                &mir_sources,
+            format!(
+                "REAL CANON-CAPTURE SNAPSHOT:\n{}\n\n{}",
+                capture_snapshot,
+                config.render_delta(
+                    tick,
+                    &first_gap,
+                    &delta_feedback,
+                    &last_patch_diff_summary,
+                    request.surface.unresolved_ret_gap_count as u64,
+                    gap_src,
+                    &mir_sources,
+                )
             )
         }
     };
+
+    // ------------------------------------------------------------
+    // ALWAYS prepend explicit patchable directory information
+    // ------------------------------------------------------------
+    let cwd_block = format!(
+        "CURRENT WORKING DIRECTORY (CWD): {}\n\
+         The agent has full access inside this directory.\n\
+         It may use apply_patch and bash.\n\n",
+        capture_dir.display()
+    );
+
+    let prompt = format!("{cwd_block}{prompt}");
 
     // Store for retry path — retry appends to this, not re-sends it
     *last_prompt_out = Some(prompt.clone());
@@ -706,19 +758,6 @@ async fn plan_via_llm(
     // Structural guardrails: return structured rejection instead of aborting tick.
     for delta in &response.deltas {
         if let CodeDelta::ApplyPatch { patch } = delta {
-            if patch.contains("*** Update File:") {
-                for line in patch.lines() {
-                    if let Some(rest) = line.strip_prefix("*** Update File: ") {
-                        if !rest.trim().starts_with("src/") {
-                            return Err(anyhow::anyhow!(
-                                "GUARDRAIL_REJECTION: Patch attempted to modify non-src file: {}",
-                                rest
-                            ));
-                        }
-                    }
-                }
-            }
-
             // Only reject if an ADDED line introduces the suppressed binding sentinel.
             // Minus lines are removals — those are fine and should not be blocked.
             let adds_suppressed = patch.lines().any(|line| {
@@ -744,7 +783,7 @@ async fn plan_via_llm(
 /// ApplyPatch deltas are run via the `apply_patch` tool.
 /// Bash deltas are run via sh with the capture dir as cwd.
 fn act(deltas: &[CodeDelta], capture_dirs: &[PathBuf]) -> Result<()> {
-    let capture_dir = &capture_dirs[0];
+    let capture_dir = &capture_dirs[0]; // Bash runs in primary dir
     for delta in deltas {
         match delta {
             CodeDelta::Bash { command } => {
@@ -777,25 +816,36 @@ fn act(deltas: &[CodeDelta], capture_dirs: &[PathBuf]) -> Result<()> {
 
                 anyhow::ensure!(status.success(), "readonly bash exited with {}", status);
             }
-           CodeDelta::ApplyPatch { patch } => {
-               eprintln!("[invariant] apply_patch ({} bytes)", patch.len());
-               // Unescape literal \n sequences the LLM emits inside JSON strings,
-               // then write to a temp file and invoke apply_patch.
-               let expanded = patch.replace("\\n", "\n").replace("\\t", "\t");
-               use std::io::Write as _;
-               eprintln!("[invariant] apply_patch raw repr: {:?}", &expanded[..expanded.len().min(200)]);
-               let mut child = Command::new("apply_patch")
-                   .stdin(std::process::Stdio::piped())
-                   .current_dir(capture_dir)
-                   .spawn()
-                   .context("apply_patch failed to spawn")?;
-               if let Some(mut stdin) = child.stdin.take() {
-                   stdin.write_all(expanded.as_bytes())
-                       .context("apply_patch: failed to write patch to stdin")?;
-               }
-               let out = child.wait_with_output()
-                   .context("apply_patch: wait failed")?;
-               anyhow::ensure!(out.status.success(), "apply_patch exited with {}", out.status);
+            CodeDelta::ApplyPatch { patch } => {
+                eprintln!("[invariant] apply_patch ({} bytes)", patch.len());
+                let expanded = patch.replace("\\n", "\n").replace("\\t", "\t");
+                use std::io::Write as _;
+                eprintln!("[invariant] apply_patch raw repr: {:?}", &expanded[..expanded.len().min(200)]);
+                // Try each patchable dir — use first that succeeds.
+                let mut last_err = String::new();
+                let mut applied = false;
+                for dir in capture_dirs {
+                    let mut child = Command::new("apply_patch")
+                        .stdin(std::process::Stdio::piped())
+                        .current_dir(dir)
+                        .spawn()
+                        .context("apply_patch failed to spawn")?;
+                    if let Some(mut stdin) = child.stdin.take() {
+                        stdin.write_all(expanded.as_bytes())
+                            .context("apply_patch: failed to write patch to stdin")?;
+                    }
+                    let out = child.wait_with_output()
+                        .context("apply_patch: wait failed")?;
+                    if out.status.success() {
+                        applied = true;
+                        eprintln!("[invariant] apply_patch succeeded in {:?}", dir);
+                        break;
+                    }
+                    last_err = format!("apply_patch failed in {:?}: {}", dir, out.status);
+                }
+                if !applied {
+                    anyhow::bail!("{}", last_err);
+                }
             }
         }
     }
