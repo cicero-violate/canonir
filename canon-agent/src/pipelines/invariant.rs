@@ -167,6 +167,7 @@ impl PromptConfig {
         last_patch_diff_summary: &str,
         gap_count: u64,
         gap_src: &str,
+	current_patchable_sources: &str,
     ) -> String {
         self.delta_template
             .replace("{{TICK}}", &tick.to_string())
