@@ -157,7 +157,8 @@ pub async fn run_agent(
             };
             eprintln!("[runner]   → calling node {node_id} (stage={:?})", input.stage);
             const GPT_URL: &str =
-                "https://chatgpt.com/gg/699d3878fbd0819a9d73741b03e8128e";
+		"https://chatgpt.com/gg/699d3878fbd0819a9d73741b03e8128e";
+		"https://chatgpt.com/?temporary-chat=true";
 
             match call_llm(bridge, &input, Some(GPT_URL)).await {
                 Ok(output) => {
