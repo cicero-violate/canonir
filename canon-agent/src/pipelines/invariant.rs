@@ -108,7 +108,6 @@ impl PromptConfig {
                 .replace("{{SURFACE}}", surface_json)
                 .replace("{{TARGET_GAP}}", first_gap)
                 .replace("{{EMITTED_SRC}}", gap_src)
-                .replace("{{MIR_SRC}}", mir_sources)
                 .replace("{{CWD}}", &capture_dir.display().to_string())
                 .replace("{{STRUCTURAL_DELTA_FEEDBACK}}", delta_feedback)
                 .replace("{{LAST_PATCH_DIFF_SUMMARY}}", last_patch_diff_summary)
@@ -136,7 +135,6 @@ impl PromptConfig {
         surface_json: &str,
         first_gap: &str,
         gap_src: &str,
-        mir_sources: &str,
         capture_dir: &Path,
         delta_feedback: &str,
         last_patch_diff_summary: &str,
@@ -147,7 +145,6 @@ impl PromptConfig {
             .replace("{{SURFACE}}", surface_json)
             .replace("{{TARGET_GAP}}", first_gap)
             .replace("{{EMITTED_SRC}}", gap_src)
-            .replace("{{MIR_SRC}}", mir_sources)
             .replace("{{CWD}}", &capture_dir.display().to_string())
             .replace("{{STRUCTURAL_DELTA_FEEDBACK}}", delta_feedback)
             .replace("{{LAST_PATCH_DIFF_SUMMARY}}", last_patch_diff_summary)
@@ -172,7 +169,6 @@ impl PromptConfig {
             .replace("{{STRUCTURAL_DELTA_FEEDBACK}}", delta_feedback)
            .replace("{{LAST_PATCH_DIFF_SUMMARY}}", last_patch_diff_summary)
             .replace("{{EMITTED_SRC}}", gap_src)
-            .replace("{{MIR_SRC}}", current_patchable_sources)
     }
     /// Render a retry addendum — appended to the original prompt.
     /// Does NOT re-send surface, MIR, or any bootstrap context.
@@ -591,8 +587,6 @@ async fn plan_via_llm(
         .first()
         .map(|s| format!("{}:{} — {}", s.file, s.line, s.enclosing_fn))
         .unwrap_or_else(|| "(none)".into());
-
-    let mir_sources = String::new();
 
     let prev_tick = tick.saturating_sub(1);
 
