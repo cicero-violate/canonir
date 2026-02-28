@@ -344,7 +344,8 @@ impl Pipeline for RefactorPipeline {
                     continue;
                 }
             };
-            const GPT_URL: &str = "https://chatgpt.com/?temporary-chat=true";
+            // const GPT_URL: &str = "https://chatgpt.com/?temporary-chat=true";
+            const GPT_URL: &str = "https://chatgpt.com/gg/699d3878fbd0819a9d73741b03e8128e";
             match call_llm(&self.bridge, &input, Some(GPT_URL)).await {
                 Ok(output) => {
                     stage_outputs.push(output.clone());
