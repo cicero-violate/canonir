@@ -8,4 +8,4 @@ bat -n PLAN.md
 # bat -n /workspace/ai_sandbox/canon/EXECUTION_REF.md
 # bat -n /workspace/ai_sandbox/canon/AGENT_STATE.md
 
-# tree --gitignore -I 'chatgpt_rustsandbox'
+tree --gitignore -I 'chatgpt_rustsandbox'
