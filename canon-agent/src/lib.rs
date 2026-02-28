@@ -6,8 +6,6 @@ pub mod io;
 pub mod llm_provider;
 pub mod meta;
 pub mod observe;
-pub mod pipeline;
-pub mod refactor;
 pub mod reward;
 pub mod runner;
 pub mod slice;
@@ -56,3 +54,4 @@ pub mod runtime {
         }
     }
 }
+pub mod pipelines;

@@ -5,7 +5,7 @@ use canon_agent::layout::FileTopology;
 use canon_agent::runner::{run_agent, RunnerConfig};
 use canon_agent::ws_server;
 use canon_agent::call::AgentCallOutput;
-use canon_agent::refactor::RefactorProposal;
+use canon_agent::pipelines::refactor::RefactorProposal;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -20,6 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  canon-agent show-graph <graph.json>");
         println!("  canon-agent run-pipeline <ir.json> <layout.json> <proposal.json> <outputs.json>");
         println!("  canon-agent run-agent <ir.json> <layout.json> <graph.json> <workspace>");
+        println!("  canon-agent run-invariant <capture_dir> <emit_dir> <orchestration_bin>");
     };
 
     if args.len() < 2 {
@@ -134,5 +135,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    if args[1].as_str() == "run-invariant" {
+        if args.len() != 5 { usage(); return Ok(()); }
+        let capture_dir       = PathBuf::from(&args[2]);
+        let emit_dir          = PathBuf::from(&args[3]);
+        let orchestration_bin = PathBuf::from(&args[4]);
+
+        let addr = "127.0.0.1:9100".parse()?;
+        let bridge = ws_server::spawn(addr);
+
+        let pipeline = canon_agent::pipelines::invariant::InvariantPipeline { bridge };
+        let ctx = canon_agent::pipelines::PipelineContext {
+            capture_dir,
+            emit_dir,
+            orchestration_bin,
+            workspace: PathBuf::from("."),
+            tick: 1,
+        };
+
+        let law = Word::new("genesis").unwrap();
+
+        let meta = CanonicalMeta {
+            version: "0.1.0".into(),
+            law_revision: law.clone(),
+            description: "Initial system state".into(),
+        };
+
+        let version_contract = VersionContract {
+            current: "0.1.0".into(),
+            compatible_with: vec![],
+            migration_proofs: vec![],
+        };
+
+        let project = Project {
+            name: Word::new("canon-agent").unwrap(),
+            version: "0.1.0".into(),
+            language: Language::Rust,
+        };
+
+        let mut ir = SystemState::new(meta, version_contract, project);
+        let mut layout = canon_agent::layout::FileTopology::default();
+
+        use canon_agent::pipelines::Pipeline;
+        let outcome = pipeline.run_tick(&ctx, &mut ir, &mut layout).await?;
+        eprintln!("[main] invariant tick done — {}", outcome.summary);
+        eprintln!("[main] reward={:.4} advanced={}", outcome.reward, outcome.advanced);
+    }
+
     Ok(())
 }
+use canon_agent::ir::{
+    CanonicalMeta,
+    VersionContract,
+    Word,
+    Project,
+    Language,
+};

@@ -10,7 +10,7 @@
 //!
 //! No LLM calls. No unsafe. Pure construction.
 use super::capability::{CapabilityEdge, AgentGraph, CapabilityKind, AgentNode, IrField};
-use super::refactor::{RefactorKind, RefactorProposal, RefactorTarget};
+use super::pipelines::refactor::{RefactorKind, RefactorProposal, RefactorTarget};
 use crate::ir::PipelineStage;
 /// Default proof_confidence on all bootstrapped edges.
 /// Must satisfy c^(chain_length-1) >= base_trust_threshold.

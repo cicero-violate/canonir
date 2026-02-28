@@ -62,6 +62,47 @@ pub struct SystemState {
     #[serde(default)]
     pub goal_mutations: Vec<GoalMutation>,
 }
+
+impl SystemState {
+    pub fn new(meta: CanonicalMeta, version_contract: VersionContract, project: Project) -> Self {
+        Self {
+            meta,
+            version_contract,
+            project,
+            modules: Vec::new(),
+            module_edges: Vec::new(),
+            structs: Vec::new(),
+            enums: Vec::new(),
+            traits: Vec::new(),
+            impls: Vec::new(),
+            functions: Vec::new(),
+            call_edges: Vec::new(),
+            tick_graphs: Vec::new(),
+            system_graphs: Vec::new(),
+            loop_policies: Vec::new(),
+            ticks: Vec::new(),
+            tick_epochs: Vec::new(),
+            policy_parameters: Vec::new(),
+            plans: Vec::new(),
+            executions: Vec::new(),
+            admissions: Vec::new(),
+            applied_deltas: Vec::new(),
+            gpu_functions: Vec::new(),
+            proposals: Vec::new(),
+            judgments: Vec::new(),
+            judgment_predicates: Vec::new(),
+            deltas: Vec::new(),
+            proofs: Vec::new(),
+            learning: Vec::new(),
+            errors: Vec::new(),
+            dependencies: Vec::new(),
+            file_hashes: HashMap::new(),
+            reward_deltas: Vec::new(),
+            world_model: WorldModel::default(),
+            goal_mutations: Vec::new(),
+        }
+    }
+}
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct CanonicalMeta {

@@ -17,8 +17,7 @@ use super::capability::AgentGraph;
 use super::dispatcher::AgentScheduler;
 use super::llm_provider::{call_llm, LlmProviderError};
 use super::meta::evolve_capability_graph;
-use super::pipeline::{record_refactor_reward, run_refactor_pipeline, RefactorError};
-use super::refactor::{RefactorKind, RefactorProposal, RefactorTarget};
+use super::pipelines::refactor::{record_refactor_reward, run_refactor_pipeline, RefactorError, RefactorKind, RefactorProposal, RefactorTarget};
 use super::reward::NodeRewardLedger;
 use super::ws_server::WsBridge;
 use crate::io::{load_capability_graph, save_capability_graph};
@@ -219,7 +218,7 @@ pub async fn run_agent(
                     }
                 }
             }
-            Err(super::pipeline::RefactorError::StageSkipped { stage }) => {
+            Err(super::pipelines::refactor::RefactorError::StageSkipped { stage }) => {
                 eprintln!(
                     "[runner] tick {tick_number} — pipeline incomplete: stage {stage} skipped (trust building)"
                 );

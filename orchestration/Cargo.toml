@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+canon_telemetry = { path = "../canon_telemetry" }
+walkdir = "2"
 canon = { path = "../canon" }
 canon-analyzer = { path = "../canon-analyzer" }
 canon-projection = { path = "../canon-projection" }

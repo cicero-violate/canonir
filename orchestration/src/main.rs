@@ -74,6 +74,34 @@ fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBu
     canon_projection::emit_to_disk(&canon_ir, &canon_plan, &out_dir).context("canon emit failed")?;
     println!("Canon emitted {} file(s) to {:?}", canon_plan.files.len(), out_dir);
 
+    println!("Scanning emitted structural surface...");
+    match canon_telemetry::scan_emit_dir(&out_dir).context("structural surface scan failed")? {
+        Some(surface) => {
+            surface.print_report();
+            let snap_surface_path = out_dir.join("canon_structural_surface.json");
+            std::fs::write(
+                &snap_surface_path,
+                serde_json::to_string_pretty(&surface).context("surface serialize failed")?,
+            )
+            .context("surface snapshot write failed")?;
+            println!("Structural surface snapshot written to {:?}", snap_surface_path);
+        }
+        None => {
+            println!("  (no src/ dir found under emit dir, skipping surface scan)");
+        }
+    }
+
+    println!("Running cargo build on emitted source...");
+    let build_report = canon_telemetry::build(&out_dir, true).context("cargo build invocation failed")?;
+    build_report.print_report();
+    let build_report_path = out_dir.join("canon_build_report.json");
+    std::fs::write(
+        &build_report_path,
+        serde_json::to_string_pretty(&build_report).context("build report serialize failed")?,
+    )
+    .context("build report write failed")?;
+    println!("Build report written to {:?}", build_report_path);
+
     let canon_snap_path = out_dir.join("canon_ir_solved.json");
     let canon_snap = serde_json::to_string_pretty(&canon_ir).context("canon serialize failed")?;
     std::fs::create_dir_all(&out_dir)?;

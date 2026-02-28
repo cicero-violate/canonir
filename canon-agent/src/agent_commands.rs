@@ -1,7 +1,6 @@
 use crate::call::AgentCallOutput;
 use crate::io::{load_capability_graph, save_capability_graph};
-use crate::pipeline::run_refactor_pipeline;
-use crate::refactor::RefactorProposal;
+use crate::pipelines::refactor::{run_refactor_pipeline, RefactorProposal};
 use crate::reward::NodeRewardLedger;
 use crate::layout::FileTopology;
 use crate::ir::SystemState;
