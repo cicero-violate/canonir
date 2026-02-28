@@ -113,3 +113,5 @@ test_projects/chatgpt_rustsandbox/
 *.bin
 *.log
 *.tmp
+
+chrome-dev-profile/
