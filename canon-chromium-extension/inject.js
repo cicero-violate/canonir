@@ -82,13 +82,71 @@
     });
   };
 
+  // ── Signal content.js that bridge is installed — wait for editor ─────────
+  function signalReadyWhenEditorExists() {
+    const editor = document.querySelector('div[contenteditable="true"]');
+    if (editor) {
+      console.log("[INJ] editor found, signalling BRIDGE_READY");
+      window.postMessage({ type: "BRIDGE_READY" }, "*");
+      return;
+    }
+    console.log("[INJ] editor not yet in DOM, waiting via MutationObserver");
+    const observer = new MutationObserver(() => {
+      const ed = document.querySelector('div[contenteditable="true"]');
+      if (ed) {
+        observer.disconnect();
+        console.log("[INJ] editor appeared, signalling BRIDGE_READY");
+        window.postMessage({ type: "BRIDGE_READY" }, "*");
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+  signalReadyWhenEditorExists();
+
   // ── OUTBOUND_SUBMIT handler (Rust → ChatGPT input) ───────────────────────
+  function waitForEditor(callback) {
+    const editor = document.querySelector('div[contenteditable="true"]');
+    if (editor) { callback(editor); return; }
+    const observer = new MutationObserver(() => {
+      const ed = document.querySelector('div[contenteditable="true"]');
+      if (ed) { observer.disconnect(); callback(ed); }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  function waitForSendBtn(callback) {
+    const btn = document.querySelector('button[data-testid="send-button"]');
+    if (btn && !btn.disabled) { callback(btn); return; }
+    const observer = new MutationObserver(() => {
+      const b = document.querySelector('button[data-testid="send-button"]');
+      if (b && !b.disabled) { observer.disconnect(); callback(b); }
+    });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+  }
+
+  function submitViaEnter() {
+    const editor = document.querySelector('div[contenteditable="true"]');
+    if (!editor) return;
+
+    editor.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        which: 13,
+        keyCode: 13,
+        bubbles: true,
+        cancelable: true
+      })
+    );
+  }
+
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     if (event.data?.type !== "OUTBOUND_SUBMIT") return;
 
     const { text, mode } = event.data.payload || {};
     if (typeof text !== "string") return;
+    console.log("[INJ] OUTBOUND_SUBMIT received, text length:", text.length, "mode:", mode);
 
     window.__promptInjectionMode = mode || "auto";
 
@@ -106,28 +164,23 @@
     // AUTO MODE
     if (text) {
       window.__pendingPromptInjection = text;
-      const editor = document.querySelector('div[contenteditable="true"]');
-      if (editor) {
+      waitForEditor((editor) => {
+        console.log("[INJ] editor ready, setting <PROMPT> then waiting for send button");
         editor.textContent = "<PROMPT>";
         editor.dispatchEvent(new Event("input", { bubbles: true }));
-      }
+        waitForSendBtn((sendBtn) => {
+          if (window.__promptInjectionQueue?.length > 0) {
+            window.__pendingPromptInjection = window.__promptInjectionQueue.join("\n\n");
+            window.__promptInjectionQueue = [];
+          }
+          console.log("[INJ] send button ready, clicking");
+	  if (sendBtn && !sendBtn.disabled) {
+	    sendBtn.click();
+	  } else {
+	    submitViaEnter();
+	  }
+        });
+      });
     }
-
-    setTimeout(() => {
-      if (window.__promptInjectionQueue?.length > 0) {
-        window.__pendingPromptInjection = window.__promptInjectionQueue.join("\n\n");
-        window.__promptInjectionQueue = [];
-      }
-      const sendBtn = document.querySelector('button[data-testid="send-button"]');
-      if (sendBtn && !sendBtn.disabled) {
-        sendBtn.click();
-      } else {
-        const editor = document.querySelector('div[contenteditable="true"]');
-        if (editor) editor.dispatchEvent(new KeyboardEvent("keydown", {
-          key: "Enter", code: "Enter", which: 13, keyCode: 13,
-          bubbles: true, cancelable: true
-        }));
-      }
-    }, 100);
   });
 })();
