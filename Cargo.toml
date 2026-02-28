@@ -7,7 +7,7 @@ members = [
   "rustc_capture",
   "canon",
   "canon-analyzer",
-  "canon-projection",
+  "canon-projection", "canon-agent",
 ]
 exclude = [
   "test_projects",
