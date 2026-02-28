@@ -183,7 +183,18 @@ fn required_fields_for_stage(stage: &str) -> &'static str {
   "rationale": "<string>",
   "proposed_kind": "<split_module|merge_modules|move_artifact|rename_artifact|add_edge|remove_edge>",
   "target_artifact_id": "<string>",
-  "destination_id": "<string|null>"
+  "destination_id": "<string|null>",
+  "change_payload": {
+    "type": "<add_module|add_struct|add_field|add_trait|add_trait_function|add_impl|add_function|add_enum|add_enum_variant|update_struct_visibility|remove_field|rename_artifact|add_module_edge|add_call_edge|record_reward>",
+    "...fields per type — examples below...": null,
+    "ADD_MODULE":    { "module_id": "<id>", "name": "<name>", "visibility": "<public|private|pub_crate|pub_super>", "description": "<string>" },
+    "ADD_STRUCT":    { "module": "<module_id>", "struct_id": "<id>", "name": "<name>" },
+    "ADD_FIELD":     { "struct_id": "<id>", "field": { "name": "<name>", "ty": { "name": "<type>", "kind": "scalar", "params": [], "ref_kind": "none" } } },
+    "ADD_TRAIT":     { "module": "<module_id>", "trait_id": "<id>", "name": "<name>" },
+    "ADD_FUNCTION":  { "function_id": "<id>", "impl_id": "<id>", "signature": { "name": "<name>", "visibility": "public", "is_async": false, "is_unsafe": false, "inputs": [], "outputs": [], "generics": [], "where_clauses": [], "lifetime_params": [], "trait_function": "<trait_fn_id>", "doc": null } },
+    "ADD_MODULE_EDGE": { "from": "<module_id>", "to": "<module_id>", "rationale": "<string>" },
+    "RENAME_ARTIFACT": { "kind": "<module|struct|function>", "old_id": "<id>", "new_id": "<id>" }
+  }
 }"#
         }
 
