@@ -24,6 +24,7 @@ use crate::{
     layout::FileTopology,
 };
 use serde_json::Value;
+use crate::ir::{StateChange, DeltaKind, PipelineStage as IrPipelineStage, ChangePayload};
 /// Which stage the pipeline is currently at.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefactorStage {
@@ -132,6 +133,44 @@ pub fn run_refactor_pipeline(
         RefactorStage::Reason,
     )?;
     proposal.rationale = rationale;
+
+    // Construct StateChange from Reason stage (optional change_payload)
+    let (ir_with_delta, delta_id) = {
+        let mut ir_clone = ir.clone();
+        let delta_id = format!("delta-tick-{}", stage_outputs.len());
+
+        let payload: Option<ChangePayload> = reasoner_out
+            .payload
+            .get("change_payload")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+        let proof_hint = stage_outputs
+            .get(2)
+            .and_then(|o| o.proof_id.clone())
+            .or_else(|| {
+                stage_outputs
+                    .get(2)
+                    .and_then(|o| o.payload.get("proof_id"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| format!("proof-{}", delta_id));
+
+        let state_change = StateChange {
+            id: delta_id.clone(),
+            kind: DeltaKind::Structure,
+            stage: IrPipelineStage::Act,
+            append_only: true,
+            proof: proof_hint,
+            description: proposal.rationale.clone(),
+            related_function: None,
+            payload,
+            proof_object_hash: None,
+        };
+
+        ir_clone.deltas.push(state_change);
+        (ir_clone, delta_id)
+    };
     let prover_out = require_stage(stage_outputs, 2, RefactorStage::Prove)?;
     let proof_id = prover_out
         .proof_id
@@ -168,9 +207,15 @@ pub fn run_refactor_pipeline(
         .and_then(|v| v.as_str())
         .ok_or(RefactorError::MissingAdmission)?
         .to_string();
-    let proof_ids: Vec<String> = ir.proofs.iter().map(|p| p.id.clone()).collect();
+    let resolved_id = if ir_with_delta.deltas.iter().any(|d| d.id == admission_id) {
+        admission_id.clone()
+    } else {
+        delta_id.clone()
+    };
+
+    let proof_ids: Vec<String> = ir_with_delta.proofs.iter().map(|p| p.id.clone()).collect();
     let (candidate, code_deltas) =
-        apply_admitted_deltas(ir, &[admission_id.clone()])
+        apply_admitted_deltas(&ir_with_delta, &[resolved_id])
             .map_err(RefactorError::Evolution)?;
     enforce_lyapunov_bound(ir, &candidate, &proof_ids, DEFAULT_TOPOLOGY_THETA)
         .map_err(RefactorError::TopologyDrift)?;
