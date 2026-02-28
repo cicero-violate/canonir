@@ -652,7 +652,6 @@ async fn plan_via_llm(
                     &surface_json,
                     &first_gap,
                     gap_src,
-                    &mir_sources,
                     capture_dir,
                     &delta_feedback,
                     &last_patch_diff_summary,
@@ -670,7 +669,6 @@ async fn plan_via_llm(
                     &last_patch_diff_summary,
                     request.surface.unresolved_ret_gap_count as u64,
                     gap_src,
-                    &mir_sources,
                 )
             )
         }
