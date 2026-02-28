@@ -47,6 +47,24 @@ impl From<WsBridgeError> for LlmProviderError {
     }
 }
 
+/// Send a fully-formed prompt string to the LLM and return the extracted
+/// JSON payload. Bypasses PromptBuilder — caller owns the full prompt.
+pub async fn call_llm_raw(
+    bridge: &WsBridge,
+    prompt: String,
+) -> Result<Value, LlmProviderError> {
+    bridge.wait_for_connection().await;
+    let tab_id = bridge
+        .open_fresh_tab_with_url("https://chatgpt.com/".to_string())
+        .await
+        .map_err(LlmProviderError::Transport)?;
+    let raw = bridge
+        .send_turn(tab_id, prompt)
+        .await
+        .map_err(LlmProviderError::Transport)?;
+    JsonExtractor::extract(&raw)
+}
+
 /// ------------------------------------------------------------------------
 /// Public Entry Point
 /// ------------------------------------------------------------------------

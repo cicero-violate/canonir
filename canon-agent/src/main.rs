@@ -141,7 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     migration_proofs: vec![],
                 },
                 Project {
-                    name: Word::new("canon-agent").expect("valid word"),
+                    name: Word::new("canon_agent").expect("valid word"),
                     version: "0.1.0".into(),
                     language: Language::Rust,
                 },

@@ -17,8 +17,8 @@
 use super::{Pipeline, PipelineContext, PipelineOutcome};
 use crate::ir::{CodeDelta, SystemState};
 use crate::layout::FileTopology;
+use crate::llm_provider::call_llm_raw;
 use crate::ws_server::WsBridge;
-use crate::emit_shell::emit_shell;
 use anyhow::{Context, Result};
 use canon_telemetry::StructuralSurface;
 use serde::{Deserialize, Serialize};
@@ -215,23 +215,52 @@ async fn plan_via_llm(
     request: &InvariantPlanRequest,
     tick: u64,
 ) -> Result<InvariantPlanResponse> {
-    use crate::call::AgentCallInput;
-    let payload = serde_json::to_value(request)?;
-    let input = AgentCallInput {
-        call_id: format!("invariant-tick-{tick}"),
-        node_id: "invariant-planner".into(),
-        ir_slice: serde_json::Value::Null,
-        predecessor_outputs: vec![],
-        stage: crate::ir::PipelineStage::Act,
-    };
+    let surface_json = serde_json::to_string_pretty(&request.surface)?;
+    let gap_src = request.gap_file_src.as_deref().unwrap_or("(source unavailable)");
+    let first_gap = request
+        .surface
+        .ret_gap_sites
+        .first()
+        .map(|s| format!("{}:{} — {}", s.file, s.line, s.enclosing_fn))
+        .unwrap_or_else(|| "(none)".into());
 
-    // We inject the full request as the system prompt context via bridge.
-    // call_llm sends input to the extension; extension returns AgentCallOutput.
-    let output = crate::llm_provider::call_llm(bridge, &input, None).await
+    let prompt = format!(
+        "You are a Rust structural invariant agent.\n\
+\n\
+Your task is to fix ONE unresolved `__ret` gap in canon-emitted Rust source.\n\
+\n\
+## Structural Surface (tick {tick})\n\
+```json\n{surface_json}\n```\n\
+\n\
+## Target gap site\n\
+{first_gap}\n\
+\n\
+## Source file at gap site\n\
+```rust\n{gap_src}\n```\n\
+\n\
+## Instructions\n\
+{instruction}\n\
+\n\
+## Required Output\n\
+Respond with ONE fenced ```json block only. Must include fields:\n\
+{{\n\
+  \"deltas\": [\n\
+    {{ \"ApplyPatch\": {{ \"patch\": \"<patch string in apply_patch format>\" }} }}\n\
+  ],\n\
+  \"rationale\": \"<string>\"\n\
+}}",
+        tick = tick,
+        surface_json = surface_json,
+        first_gap = first_gap,
+        gap_src = gap_src,
+        instruction = request.instruction,
+    );
+
+    let payload = call_llm_raw(bridge, prompt)
+        .await
         .map_err(|e| anyhow::anyhow!("llm error: {e}"))?;
 
-    // The LLM must return JSON with 'deltas' and 'rationale' in its payload.
-    let response: InvariantPlanResponse = serde_json::from_value(output.payload)
+    let response: InvariantPlanResponse = serde_json::from_value(payload)
         .context("LLM payload did not match InvariantPlanResponse schema")?;
 
     Ok(response)
