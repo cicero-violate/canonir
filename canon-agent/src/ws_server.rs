@@ -219,6 +219,22 @@ impl WsBridge {
         //     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         // }
     }
+
+    // --- anchor: inside impl WsBridge ---
+    async fn open_tab(&self) -> Result<(), WsBridgeError> {
+        let st = self.state.lock().await;
+        let tx = st.tx_out.clone().ok_or(WsBridgeError::NotConnected)?;
+
+        let frame = json!({
+            "type": "OPEN_TAB",
+            "url": AGENT_TAB_URL
+        });
+
+        tx.send(Message::Text(frame.to_string().into()))
+            .await
+            .map_err(|_| WsBridgeError::NotConnected)
+    }
+
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +284,8 @@ async fn accept_loop(listener: TcpListener, state: Arc<Mutex<ServerState>>) {
             }
         }
     }
+
+
 }
 
 /// Drive one WebSocket connection to completion.
