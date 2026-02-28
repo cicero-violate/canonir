@@ -4,6 +4,7 @@ members = [
   "canon-capture",
   "canon-mutation",
   "orchestration",
+  "canon_telemetry",
   "rustc_capture",
   "canon",
   "canon-analyzer",
