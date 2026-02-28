@@ -98,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 workspace: workspace.clone(),
             };
 
-            let addr = "127.0.0.1:9000".parse()?;
+            let addr = "127.0.0.1:8787".parse()?;
             let bridge = ws_server::spawn(addr);
 
             eprintln!("[main] starting run-agent loop");
