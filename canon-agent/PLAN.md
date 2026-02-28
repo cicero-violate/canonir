@@ -1,42 +1,266 @@
-# PLAN
+## Refactor Plan → Codex-Style Deterministic Loop
 
-## Objective
-Verify first real on-disk file mutation from Reasoner change_payload.
+---
 
-## Completed
+### Variables
 
-- apply_admitted_deltas: ChangePayload → CodeDelta::ApplyPatch (all variants)
-- pipeline.rs: Reasoner change_payload deserialized → StateChange appended to IR
-- Judge admission_id fallback to deterministic delta_id
-- executor: apply_patch + cargo check + git stash rollback
-- llm_provider.rs: Reasoner prompt fixed — single clean add_module example
-
-## Verification Steps
-
-Run ./run.sh, then after first tick check:
-```bash
-python3 -c "
-import json
-ir = json.load(open('ir.json'))
-for d in ir.get('deltas', []):
-    print(d['id'], d.get('payload'))
-"
 ```
-Expected: payload.type = "add_module" with module_id, name, visibility, description.
-
-Then check disk:
-```bash
-git status src/
+S  = SystemState (surface_before, build_before, logs)
+P  = PromptBuilder
+M  = Model (Codex)
+R  = RawModelOutput
+J  = ParsedJSON
+A  = Applicator (apply_patch + bash)
+V  = Verifier (build + structural scan)
+F  = Feedback
+Δ  = GapDelta = gaps_before − gaps_after
 ```
-Expected: new untracked file src/<module_id>.rs
 
-## FileTopology Convention
-π(module_id) = src/<module_id>.rs
-Full FileTopology from repomap deferred — convention sufficient for current phase.
+---
 
-## Success Criteria
-- Reasoner emits parseable change_payload on every tick
-- At least one tick writes a new src/<module_id>.rs file
-- cargo check passes after the patch
-- IR written to disk with structural change recorded
-- No manual patch content — all derived from ChangePayload fields
+### Core Loop Equation
+
+```
+S₀ given
+
+For i ∈ [0..N]:
+
+  promptᵢ   = P(Sᵢ)
+  Rᵢ        = M(promptᵢ)
+  Jᵢ        = parse(Rᵢ)
+  applyᵢ    = A(Jᵢ)
+  Sᵢ₊₁      = V(applyᵢ)
+  Fᵢ        = derive_feedback(Sᵢ, Sᵢ₊₁)
+
+Stop if Δᵢ > 0 ∧ build_ok
+```
+
+Explanation:
+Turn the pipeline into a pure state transition machine with deterministic phases and structured IO.
+
+---
+
+# Phase 1 — Separate the Loop Engine
+
+### Goal
+
+Decouple orchestration logic from LLM logic.
+
+### Actions
+
+1. Extract loop driver:
+
+   * `fn codex_loop(state: S) -> S`
+2. Move:
+
+   * plan_via_llm
+   * act
+   * verification
+     into separate modules:
+
+   ```
+   pipeline/
+     loop.rs
+     prompt.rs
+     model.rs
+     apply.rs
+     verify.rs
+   ```
+
+---
+
+# Phase 2 — Enforce Structured Model Contract
+
+### Replace free-form prompt with schema-bound output
+
+Define:
+
+```rust
+struct CodexResponse {
+    patches: Vec<Patch>,
+    commands: Vec<String>,
+    rationale: String,
+}
+```
+
+Enforce:
+
+```
+M(prompt) → STRICT JSON ONLY
+```
+
+Equation:
+
+```
+Valid(J) = schema_check(J)
+If ¬Valid → reject → retry
+```
+
+This eliminates heuristic extraction and makes the loop mechanical.
+
+---
+
+# Phase 3 — Make State Explicit
+
+Current pipeline is partially implicit via filesystem.
+
+Refactor into:
+
+```rust
+struct LoopState {
+    surface_before: StructuralSurface,
+    surface_after: Option<StructuralSurface>,
+    build_status: BuildResult,
+    last_diff_summary: String,
+    gap_delta: i64,
+}
+```
+
+Equation:
+
+```
+Sᵢ₊₁ = verify(applyᵢ, Sᵢ)
+```
+
+No hidden state in logs. Everything becomes state transition.
+
+---
+
+# Phase 4 — Deterministic Feedback Builder
+
+Replace ad-hoc diff text with structured feedback object:
+
+```
+F = {
+   gap_delta: Δ,
+   per_file_delta: Vec<(file, delta)>,
+   per_fn_delta: Vec<(fn, delta)>,
+   build_ok: bool
+}
+```
+
+Prompt becomes:
+
+```
+promptᵢ = TEMPLATE(context, Fᵢ₋₁)
+```
+
+Not concatenated strings. Structured embedding.
+
+---
+
+# Phase 5 — Remove Multi-Step Nested Loop
+
+Current design:
+
+```
+for step in 0..MAX_STEPS
+```
+
+Replace with single atomic Codex tick:
+
+```
+One model call per iteration.
+If failure → next iteration.
+```
+
+Equation:
+
+```
+Iteration = atomic
+No inner retry loop.
+```
+
+Codex pipelines work best with short atomic cycles.
+
+---
+
+# Phase 6 — Guardrails as Validators, Not Prompt Rules
+
+Move:
+
+```
+if patch.contains("canon suppressed binding") → reject
+```
+
+Into:
+
+```
+fn validate(J) -> Result
+```
+
+Equation:
+
+```
+J_valid = Valid_schema(J) ∧ Valid_semantics(J)
+```
+
+This keeps prompt clean and enforcement mechanical.
+
+---
+
+# Phase 7 — Explicit Stop Conditions
+
+Define convergence formally:
+
+```
+Stop if:
+  unresolved_ret_gap_count == 0
+OR
+  i == max_iters
+OR
+  stagnation_count > k
+```
+
+Where:
+
+```
+stagnation = (Δ == 0)
+```
+
+---
+
+# Phase 8 — Clean Architecture
+
+Final architecture:
+
+```
+CodexLoop
+  ├── PromptBuilder
+  ├── ModelClient
+  ├── ResponseParser
+  ├── Validator
+  ├── Applicator
+  ├── Verifier
+  └── FeedbackBuilder
+```
+
+Each component pure and testable.
+
+---
+
+# Final System Equation
+
+```
+Good = max(Intelligence, Determinism, Transparency)
+
+LoopGoodness =
+  (Δ > 0) * 0.5 +
+  (build_ok) * 0.2 +
+  (schema_valid) * 0.3
+```
+
+Maximize:
+
+```
+max(Intelligence, Efficiency, Correctness, Alignment,
+    Robustness, Performance, Scalability,
+    Determinism, Transparency, Collaboration,
+    Empowerment, Benefit, Learning, FutureProofing)
+```
+
+= Good
+
+---
+
+If desired, next step: I can generate the exact module boundaries and Rust skeleton for this refactor.
