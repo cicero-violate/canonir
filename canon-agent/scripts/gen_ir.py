@@ -205,3 +205,14 @@ ir = {
 }
 
 print(json.dumps(ir, indent=2))
+    "goal_mutations": [
+        {
+            "id": "goal-001",
+            "original_goal": "Canon-Agent is inert — no files are mutated on disk",
+            "proposed_goal": "Canon-Agent autonomously evolves its own source by proposing, proving, and applying structural IR deltas that produce real Rust source file mutations, gated by cargo check, one tick at a time",
+            "invariant_proof_ids": ["proof-bootstrap-invariant"],
+            "proposal_id": "proposal-bootstrap",
+            "judgment_id": null,
+            "status": "accepted"
+        }
+    ],

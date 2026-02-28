@@ -143,6 +143,17 @@ pub fn run_refactor_pipeline(
             .payload
             .get("change_payload")
             .and_then(|v| serde_json::from_value(v.clone()).ok());
+        if let Some(raw) = reasoner_out.payload.get("change_payload") {
+            if payload.is_none() {
+                eprintln!("[pipeline] WARN: change_payload present but failed to deserialize: {}",
+                    serde_json::to_string(raw).unwrap_or_default());
+            } else {
+                eprintln!("[pipeline] change_payload deserialized OK: type={:?}",
+                    raw.get("type").and_then(|v| v.as_str()).unwrap_or("?"));
+            }
+        } else {
+            eprintln!("[pipeline] WARN: Reasoner emitted no change_payload field");
+        }
 
         let proof_hint = stage_outputs
             .get(2)

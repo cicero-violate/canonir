@@ -7,12 +7,13 @@
 //!       { "type": "TAB_CLOSED", "tabId": n }
 //!       { "type": "CHUNK", "tabId": n, "raw": "..." }
 //!   - Outbound JSON frames to extension:
-//!       { "type": "OUTBOUND_SUBMIT", "tabId": n, "payload": { "text": "...", "mode": "auto" } }
+//!       { "type": "OPEN_TAB" }
 //!       { "type": "CLOSE_TAB", "tabId": n }
+//!       { "type": "TURN", "tabId": n, "text": "..." }
 //!
 //!   - Per-tab chunk buffers accumulate raw SSE lines / WS frames.
-//!   - When a chunk contains "data: [DONE]" or {"type":"message_stream_complete"}
-//!     the buffer is flushed and the waiting oneshot is resolved.
+//!   - When a chunk contains "data: [DONE]" the buffer is flushed and
+//!     the waiting oneshot is resolved with the full assembled text.
 //!
 //!   - WsBridge is a cheap clone handle — callers use it to send turns
 //!     and await responses without owning the server task.
@@ -31,10 +32,6 @@ use tokio_tungstenite::tungstenite::Message;
 
 /// How long to wait for a response before giving up.
 const RESPONSE_TIMEOUT_SECS: u64 = 120;
-
-/// The target group chat URL — calpico transport.
-pub const AGENT_TAB_URL: &str =
-    "https://chatgpt.com/gg/699d3878fbd0819a9d73741b03e8128e";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -80,12 +77,7 @@ struct ServerState {
 
 impl ServerState {
     fn new() -> Self {
-        Self {
-            tab_buffers: HashMap::new(),
-            pending: HashMap::new(),
-            live_tabs: Vec::new(),
-            tx_out: None,
-        }
+        Self { tab_buffers: HashMap::new(), pending: HashMap::new(), live_tabs: Vec::new(), tx_out: None }
     }
 
     fn first_tab(&self) -> Option<u32> {
@@ -100,13 +92,8 @@ pub struct WsBridge {
 }
 
 impl WsBridge {
-    /// Send an OUTBOUND_SUBMIT to the given tab and wait for the assembled response.
-    /// inject.js handles OUTBOUND_SUBMIT { text, mode: "auto" } by:
-    ///   1. setting window.__pendingPromptInjection = text
-    ///   2. setting editor content to "<PROMPT>"
-    ///   3. clicking the send button
-    /// request_hook_group.js intercepts the outgoing calpico fetch and replaces
-    /// content.text === "<PROMPT>" with the pending injection.
+    /// Send a TURN to the given tab (or first live tab if tabId is None)
+    /// and wait for the assembled response.
     pub async fn send_turn(&self, tab_id: Option<u32>, text: String) -> Result<String, WsBridgeError> {
         let (tx, rx) = oneshot::channel::<String>();
 
@@ -124,30 +111,28 @@ impl WsBridge {
             st.pending.insert(target, tx);
             st.tab_buffers.insert(target, Vec::new());
 
-            let frame = json!({
-                "type": "OUTBOUND_SUBMIT",
-                "tabId": target,
-                "payload": { "text": text, "mode": "auto" }
-            });
-            out_tx
-                .send(Message::Text(frame.to_string().into()))
-                .await
-                .map_err(|_| WsBridgeError::NotConnected)?;
+            let frame = json!({ "type": "TURN", "tabId": target, "text": text });
+            out_tx.send(Message::Text(frame.to_string().into())).await.map_err(|_| WsBridgeError::NotConnected)?;
 
             target
         };
 
-        eprintln!("[ws] OUTBOUND_SUBMIT sent to tab {target}");
+        eprintln!("[ws] TURN sent to tab {target}");
 
         // Wait for the assembled response with a timeout.
         match tokio::time::timeout(std::time::Duration::from_secs(RESPONSE_TIMEOUT_SECS), rx).await {
             Ok(Ok(text)) => Ok(text),
             Ok(Err(_)) => Err(WsBridgeError::Cancelled),
-            Err(_) => {
-                eprintln!("[ws] tab {target} timed out after {RESPONSE_TIMEOUT_SECS}s");
-                Err(WsBridgeError::Timeout)
-            }
+            Err(_) => Err(WsBridgeError::Timeout),
         }
+    }
+
+    /// Send an OPEN_TAB command to the extension.
+    pub async fn open_tab(&self) -> Result<(), WsBridgeError> {
+        let st = self.state.lock().await;
+        let tx = st.tx_out.clone().ok_or(WsBridgeError::NotConnected)?;
+        let frame = json!({ "type": "OPEN_TAB" });
+        tx.send(Message::Text(frame.to_string().into())).await.map_err(|_| WsBridgeError::NotConnected)
     }
 
     /// Send a CLOSE_TAB command to the extension.
@@ -155,9 +140,7 @@ impl WsBridge {
         let st = self.state.lock().await;
         let tx = st.tx_out.clone().ok_or(WsBridgeError::NotConnected)?;
         let frame = json!({ "type": "CLOSE_TAB", "tabId": tab_id });
-        tx.send(Message::Text(frame.to_string().into()))
-            .await
-            .map_err(|_| WsBridgeError::NotConnected)
+        tx.send(Message::Text(frame.to_string().into())).await.map_err(|_| WsBridgeError::NotConnected)
     }
 
     /// Block until the extension has an open WS connection.
@@ -186,8 +169,8 @@ impl WsBridge {
         }
     }
 
-    /// Returns the first already-connected tab id.
-    /// Keep AGENT_TAB_URL open in Chrome — the extension auto-connects it.
+    /// Open a fresh ChatGPT tab and wait until it registers, returning its tab_id.
+    /// Each call produces a new stateless conversation context.
     pub async fn open_fresh_tab(&self) -> Result<u32, WsBridgeError> {
         // Snapshot existing tab ids so we can detect the new one.
         let before: Vec<u32> = {
@@ -209,32 +192,7 @@ impl WsBridge {
             }
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
-        // loop {
-        //     {
-        //         let st = self.state.lock().await;
-        //         if let Some(&id) = st.live_tabs.first() {
-        //             return Ok(id);
-        //         }
-        //     }
-        //     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        // }
     }
-
-    // --- anchor: inside impl WsBridge ---
-    async fn open_tab(&self) -> Result<(), WsBridgeError> {
-        let st = self.state.lock().await;
-        let tx = st.tx_out.clone().ok_or(WsBridgeError::NotConnected)?;
-
-        let frame = json!({
-            "type": "OPEN_TAB",
-            "url": AGENT_TAB_URL
-        });
-
-        tx.send(Message::Text(frame.to_string().into()))
-            .await
-            .map_err(|_| WsBridgeError::NotConnected)
-    }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -284,8 +242,6 @@ async fn accept_loop(listener: TcpListener, state: Arc<Mutex<ServerState>>) {
             }
         }
     }
-
-
 }
 
 /// Drive one WebSocket connection to completion.
@@ -365,7 +321,7 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             }
         }
 
-        "CHUNK" => {
+    "CHUNK" => {
             let tab_id = match msg.get("tabId").and_then(|v| v.as_u64()) {
                 Some(id) => id as u32,
                 None => return,
@@ -385,9 +341,7 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             }
 
             if done {
-                if let (Some(buffer), Some(tx)) =
-                    (st.tab_buffers.remove(&tab_id), st.pending.remove(&tab_id))
-                {
+                if let (Some(buffer), Some(tx)) = (st.tab_buffers.remove(&tab_id), st.pending.remove(&tab_id)) {
                     let assembled = buffer.join("");
                     eprintln!("[ws] tab {tab_id} done — {} bytes", assembled.len());
                     let _ = tx.send(assembled);

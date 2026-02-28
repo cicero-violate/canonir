@@ -1,23 +1,14 @@
-//! Calpico WS frame parser — extracts plain text from ChatGPT frames.
+//! Dual-transport frame parser — handles both private SSE and calpico frames.
 //!
-//! Observed frame shapes (calpico conduit WebSocket):
+//! Private SSE (/backend-api/f/conversation):
+//!   data: {"id":"...","object":"chat.completion.chunk","choices":[{"delta":{"content":"token"}}]}
+//!   data: [DONE]
 //!
-//!   1. Opening append (first content token):
-//!      {"o": "append", "p": "/message/content/parts/0", "v": "text"}
-//!
-//!   2. Bare token (all subsequent tokens — no "o", no "p"):
-//!      {"v": "token text"}
-//!
-//!   3. Terminal patch (end of turn, may carry a final append):
-//!      {"o": "patch", "p": "", "v": [{"o":"append","p":"/message/content/parts/0","v":"text"}, ...]}
-//!
-//!   4. Done sentinel:
-//!      {"type": "message_stream_complete"}
-//!
-//!   5. Control / structural frames (ignored):
-//!      {"type": "input_message"|"message_marker"|"server_ste_metadata"|...}
-//!      {"c": N, "o": "add", "p": "", "v": {...}}   <- bootstrap diffs
-//!      "v1"                                         <- version tag (plain string)
+//! Calpico (/backend-api/calpico):
+//!   1. {"o": "append", "p": "/message/content/parts/0", "v": "text"}
+//!   2. {"v": "token text"}
+//!   3. {"o": "patch", "p": "", "v": [{"o":"append","p":"/message/content/parts/0","v":"text"}]}
+//!   4. {"type": "message_stream_complete"}  ← done sentinel
 
 use serde_json::Value;
 
@@ -34,6 +25,19 @@ pub fn extract_sse_delta(raw: &str) -> Option<String> {
 
     let v: Value = serde_json::from_str(data).ok()?;
     let obj = v.as_object()?;
+
+    // ── Private SSE shape ────────────────────────────────────────────────────
+    // {"id":"...","object":"chat.completion.chunk","choices":[{"delta":{"content":"token"}}]}
+    if obj.get("object").and_then(|v| v.as_str()) == Some("chat.completion.chunk") {
+        let content = obj
+            .get("choices")
+            .and_then(|c| c.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|c| c.get("delta"))
+            .and_then(|d| d.get("content"))
+            .and_then(|v| v.as_str());
+        return content.map(|s| s.to_string());
+    }
 
     // Frames with an explicit "o" (operation) field — shapes 1 and 3.
     if let Some(op) = obj.get("o").and_then(|o| o.as_str()) {
