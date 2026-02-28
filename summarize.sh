@@ -11,3 +11,4 @@ bat -n /workspace/ai_sandbox/canon/GOAL.md
 # bat -n /workspace/ai_sandbox/canon/AGENT_STATE.md
 
 tree --gitignore -I 'chatgpt_rustsandbox'
+
