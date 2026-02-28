@@ -1,63 +1,97 @@
-/// Background: pure relay between Rust WS and content scripts
+// Background: single shared WS relay between Rust and all content scripts.
+// All messages tagged with tabId. TAB_READY (not TAB_OPENED) gates Rust TURN dispatch.
 
-const RUST_WS = "ws://127.0.0.1:8787";
+const RUST_WS = "ws://127.0.0.1:9100";
 
-// tabId → { ws, queue }
-const tabConnections = new Map();
+let ws   = null;
+let queue = [];
+let pingInterval = null;
 
-function connectTab(tabId) {
-  const existing = tabConnections.get(tabId);
-  if (existing?.ws?.readyState === WebSocket.OPEN ||
-      existing?.ws?.readyState === WebSocket.CONNECTING) return;
+// tabId → reqId: tracks which reqId to attach when content signals READY
+const pendingOpenReqIds = new Map();
 
-  const ws   = new WebSocket(RUST_WS);
-  const conn = { ws, queue: [] };
-  tabConnections.set(tabId, conn);
+function connect() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
+  ws = new WebSocket(RUST_WS);
 
   ws.onopen = () => {
-    // Flush queued messages
-    while (conn.queue.length) ws.send(conn.queue.shift());
-    // Report tab to Rust
-    chrome.tabs.get(tabId, (tab) => {
-      if (chrome.runtime.lastError) return;
-      ws.send(JSON.stringify({ type: "TAB_OPENED", tabId, url: tab?.url || "" }));
-    });
+    console.log("[BG] WS connected to Rust");
+    while (queue.length) ws.send(queue.shift());
+    if (pingInterval) clearInterval(pingInterval);
+    pingInterval = setInterval(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "PING" }));
+      }
+    }, 20000);
   };
 
   ws.onmessage = (ev) => {
     try {
+      console.log("[BG] ws.onmessage fired, data length:", ev.data?.length, "preview:", ev.data?.substring?.(0,80));
       const msg = JSON.parse(ev.data);
-      handleRustMessage(tabId, msg);
+      handleRustMessage(msg);
     } catch (e) {
       console.warn("[BG] WS parse error", e);
     }
   };
 
-  ws.onclose = () => tabConnections.delete(tabId);
+  ws.onclose = () => {
+    console.warn("[BG] WS closed — reconnecting in 1s");
+    if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+    ws = null;
+    setTimeout(connect, 1000);
+  };
+
   ws.onerror = () => { try { ws.close(); } catch {} };
 }
 
-function sendToRust(tabId, payload) {
-  const conn = tabConnections.get(tabId);
-  const raw  = typeof payload === "string" ? payload : JSON.stringify(payload);
-  if (conn?.ws?.readyState === WebSocket.OPEN) {
-    conn.ws.send(raw);
+// ── Retry sendMessage with exponential backoff ───────────────────────────
+function sendToTab(tabId, message, attempts = 6, delayMs = 150) {
+  chrome.tabs.sendMessage(tabId, message, (response) => {
+    const err = chrome.runtime.lastError;
+    if (err || !response?.ok) {
+      if (attempts <= 1) {
+        console.warn(`[BG] sendToTab tab=${tabId} failed after all retries:`, err?.message);
+        return;
+      }
+      console.warn(`[BG] sendToTab tab=${tabId} retry in ${delayMs}ms (${attempts - 1} left):`, err?.message);
+      setTimeout(() => sendToTab(tabId, message, attempts - 1, delayMs * 2), delayMs);
+    }
+  });
+}
+
+function sendToRust(msg) {
+  const raw = typeof msg === "string" ? msg : JSON.stringify(msg);
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(raw);
   } else {
-    conn?.queue.push(raw);
-    connectTab(tabId);
+    queue.push(raw);
+    connect();
   }
 }
 
-// Content script → Background
+// ── Content script → Background ──────────────────────────────────────────
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender?.tab?.id;
   if (!tabId) { sendResponse({ ok: false, error: "no tabId" }); return true; }
 
   if (message?.type === "INBOUND_MESSAGE") {
-    const raw = typeof message.payload === "string"
-      ? message.payload
-      : JSON.stringify(message.payload ?? "");
-    sendToRust(tabId, raw);
+    sendToRust({
+      type:    "INBOUND_MESSAGE",
+      tabId,
+      payload: typeof message.payload === "string"
+        ? message.payload
+        : JSON.stringify(message.payload ?? "")
+    });
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (message?.type === "CONTENT_READY") {
+    const reqId = pendingOpenReqIds.get(tabId) ?? null;
+    pendingOpenReqIds.delete(tabId);
+    sendToRust({ type: "TAB_READY", tabId, url: message.url, reqId });
     sendResponse({ ok: true });
     return true;
   }
@@ -66,61 +100,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
-// Rust → Content script
-function handleRustMessage(tabId, msg) {
+// ── Rust → Content script ────────────────────────────────────────────────
+function handleRustMessage(msg) {
   if (msg?.type === "OPEN_TAB") {
     if (!msg.url || typeof msg.url !== "string") return;
     const reqId = msg.reqId ?? null;
 
-    chrome.tabs.create({ url: msg.url, active: true }, (tab) => {
+    chrome.tabs.create({ url: msg.url, active: false }, (tab) => {
       if (!tab?.id) return;
       const newTabId = tab.id;
+      if (reqId !== null) pendingOpenReqIds.set(newTabId, reqId);
 
+      // Informational only
       chrome.tabs.onUpdated.addListener(function listener(id, changeInfo) {
         if (id !== newTabId) return;
         const url = changeInfo.url || "";
         if (!url.startsWith("https://chatgpt.com")) return;
         chrome.tabs.onUpdated.removeListener(listener);
-
-        const requester = tabConnections.get(tabId);
-        if (requester?.ws?.readyState === WebSocket.OPEN) {
-          requester.ws.send(JSON.stringify({ type: "TAB_OPENED", tabId: newTabId, url, reqId }));
-        }
-        connectTab(newTabId);
+        sendToRust({ type: "TAB_OPENED", tabId: newTabId, url, reqId });
       });
     });
     return;
   }
 
   if (msg?.type === "OUTBOUND_SUBMIT") {
-    const targetTabId = msg.tabId ?? tabId;
-    chrome.tabs.sendMessage(
-      targetTabId,
-      { type: "OUTBOUND_SUBMIT", payload: msg.payload },
-      () => void chrome.runtime.lastError
-    );
+    const targetTabId = msg.tabId;
+    if (!targetTabId) return;
+    sendToTab(targetTabId, { type: "OUTBOUND_SUBMIT", payload: msg.payload });
     return;
   }
 
   if (msg?.type === "TURN") {
-    const targetTabId = msg.tabId ?? tabId;
-    chrome.tabs.sendMessage(
-      targetTabId,
-      { type: "OUTBOUND_SUBMIT", payload: { text: msg.text, mode: "auto" } },
-      () => void chrome.runtime.lastError
-    );
+    const targetTabId = msg.tabId;
+    if (!targetTabId) return;
+    console.log("[BG] TURN → sendToTab", targetTabId, "text length:", msg.text?.length);
+    sendToTab(targetTabId, { type: "OUTBOUND_SUBMIT", payload: { text: msg.text, mode: "auto" } });
     return;
   }
 }
 
-// Tab lifecycle
+// ── Tab lifecycle ────────────────────────────────────────────────────────
 chrome.tabs.onRemoved.addListener((tabId) => {
-  const conn = tabConnections.get(tabId);
-  if (conn?.ws) {
-    try {
-      conn.ws.send(JSON.stringify({ type: "TAB_CLOSED", tabId }));
-      conn.ws.close();
-    } catch {}
-  }
-  tabConnections.delete(tabId);
+  pendingOpenReqIds.delete(tabId);
+  sendToRust({ type: "TAB_CLOSED", tabId });
 });
+
+// ── Re-inject content scripts into existing chatgpt tabs on startup ──────
+chrome.tabs.query({ url: ["https://chatgpt.com/*", "https://chat.openai.com/*"] }, (tabs) => {
+  for (const tab of tabs) {
+    chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["content.js"]
+    }).catch(() => {});
+  }
+});
+
+connect();

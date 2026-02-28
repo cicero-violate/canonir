@@ -79,7 +79,7 @@ pub async fn call_llm(
     eprintln!("Routing TURN to tab_id={}", tab_id);
 
     let raw_response = bridge
-        .send_turn(Some(tab_id), prompt)
+        .send_turn(tab_id, prompt)
         .await
         .map_err(LlmProviderError::Transport)?;
 

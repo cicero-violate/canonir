@@ -1,63 +1,112 @@
-//! Dual-transport frame parser — handles both private SSE and calpico frames.
+//! Dual-transport frame parser — handles both private SSE (/c path)
+//! and Calpico Group-DM frames (/gg path).
 //!
-//! Private SSE (/backend-api/f/conversation):
-//!   data: {"id":"...","object":"chat.completion.chunk","choices":[{"delta":{"content":"token"}}]}
+//! /c path (private SSE):
+//!   data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"token"}}]}
 //!   data: [DONE]
 //!
-//! Calpico (/backend-api/calpico):
-//!   1. {"o": "append", "p": "/message/content/parts/0", "v": "text"}
-//!   2. {"v": "token text"}
-//!   3. {"o": "patch", "p": "", "v": [{"o":"append","p":"/message/content/parts/0","v":"text"}]}
-//!   4. {"type": "message_stream_complete"}  ← done sentinel
+//! /gg path (Calpico Group-DM over WebSocket):
+//!   Array envelope: [{"type":"message","topic_id":"calpico-chatgpt","payload":{...}}]
+//!
+//!   Relevant payload types:
+//!     "calpico-message-add"  → full snapshot of a message (role + content.text)
+//!     "calpico-is-responding-heartbeat" → ignore
+//!     "calpico-room-read"               → ignore
+//!
+//! Key distinction:
+//!   /c  frames are *deltas* — append to buffer, fire done on [DONE].
+//!   /gg frames are *snapshots* — replace buffer, fire done on the same frame
+//!       (each calpico-message-add with role=assistant is a complete message so far;
+//!        we treat it as both the content and the done signal so the oneshot fires
+//!        on the most-recent delivery).
 
 use serde_json::Value;
 
-/// Extract content text from one raw calpico WS frame.
-///
-/// Returns `Some(text)` for frames that carry assistant content tokens.
-/// Returns `None` for control frames, structural bootstraps, and the done sentinel.
-pub fn extract_sse_delta(raw: &str) -> Option<String> {
+/// The result of parsing one inbound frame.
+#[derive(Debug)]
+pub enum FrameResult {
+    /// Append this text fragment to the tab buffer (SSE /c path).
+    Delta(String),
+    /// Replace the tab buffer with this full text AND resolve the pending
+    /// oneshot immediately (/gg path — each delivery is self-contained).
+    Snapshot(String),
+    /// End-of-stream sentinel for the /c path (data: [DONE] or message_stream_complete).
+    Done,
+    /// Frame carries no useful content — discard.
+    Ignore,
+}
+
+/// Classify one raw frame.
+pub fn classify_frame(raw: &str) -> FrameResult {
     let data = raw.strip_prefix("data: ").unwrap_or(raw).trim();
 
-    if data.is_empty() || data == "[DONE]" {
-        return None;
+    if data.is_empty() {
+        return FrameResult::Ignore;
     }
 
-    let v: Value = serde_json::from_str(data).ok()?;
-    let obj = v.as_object()?;
+    // ── Legacy /c done sentinels ──────────────────────────────────────────────
+    if data == "[DONE]" {
+        return FrameResult::Done;
+    }
 
-    // ── Private SSE shape ────────────────────────────────────────────────────
-    // {"id":"...","object":"chat.completion.chunk","choices":[{"delta":{"content":"token"}}]}
+    let v: Value = match serde_json::from_str(data) {
+        Ok(v) => v,
+        Err(_) => return FrameResult::Ignore,
+    };
+
+    // ── /gg path: array envelope ──────────────────────────────────────────────
+    // [{"type":"message","topic_id":"calpico-chatgpt","payload":{...}}]
+    if let Some(arr) = v.as_array() {
+        return classify_calpico_array(arr);
+    }
+
+    let obj = match v.as_object() {
+        Some(o) => o,
+        None => return FrameResult::Ignore,
+    };
+
+    // ── /c path: message_stream_complete ─────────────────────────────────────
+    if obj.get("type").and_then(|t| t.as_str()) == Some("message_stream_complete") {
+        return FrameResult::Done;
+    }
+
+    // ── /c path: chat.completion.chunk ────────────────────────────────────────
     if obj.get("object").and_then(|v| v.as_str()) == Some("chat.completion.chunk") {
         let content = obj
-            .get("choices")
-            .and_then(|c| c.as_array())
+            .get("choices").and_then(|c| c.as_array())
             .and_then(|arr| arr.first())
             .and_then(|c| c.get("delta"))
             .and_then(|d| d.get("content"))
             .and_then(|v| v.as_str());
-        return content.map(|s| s.to_string());
+        return match content {
+            Some(s) if !s.is_empty() => FrameResult::Delta(s.to_string()),
+            _ => FrameResult::Ignore,
+        };
     }
 
-    // Frames with an explicit "o" (operation) field — shapes 1 and 3.
+    // ── Legacy calpico shapes (non-array, non-chunk) ──────────────────────────
+    // Shape 1/3: explicit "o" operation field.
     if let Some(op) = obj.get("o").and_then(|o| o.as_str()) {
         match op {
             "append" => {
-                // Shape 1: only emit if path targets the content parts array.
                 let p = obj.get("p").and_then(|p| p.as_str()).unwrap_or("");
                 if p.contains("parts") {
-                    return obj.get("v").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    if let Some(s) = obj.get("v").and_then(|v| v.as_str()) {
+                        if !s.is_empty() {
+                            return FrameResult::Delta(s.to_string());
+                        }
+                    }
                 }
-                return None;
+                return FrameResult::Ignore;
             }
             "patch" => {
-                // Shape 3: terminal patch — collect all inner appends to parts.
-                let arr = obj.get("v").and_then(|v| v.as_array())?;
+                let arr = match obj.get("v").and_then(|v| v.as_array()) {
+                    Some(a) => a,
+                    None => return FrameResult::Ignore,
+                };
                 let mut out = String::new();
                 for item in arr {
-                    if item.get("o").and_then(|o| o.as_str()) != Some("append") {
-                        continue;
-                    }
+                    if item.get("o").and_then(|o| o.as_str()) != Some("append") { continue; }
                     let p = item.get("p").and_then(|p| p.as_str()).unwrap_or("");
                     if p.contains("parts") {
                         if let Some(s) = item.get("v").and_then(|v| v.as_str()) {
@@ -65,31 +114,27 @@ pub fn extract_sse_delta(raw: &str) -> Option<String> {
                         }
                     }
                 }
-                return if out.is_empty() { None } else { Some(out) };
+                return if out.is_empty() { FrameResult::Ignore } else { FrameResult::Delta(out) };
             }
-            _ => return None,
+            _ => return FrameResult::Ignore,
         }
     }
 
-    // Shape 2: bare token frame {"v": "text"}.
-    // Guard against structural bootstrap frames that carry "c", "p", or "type".
+    // Shape 2: bare token {"v": "text"} — guard against structural frames.
     if obj.contains_key("type") || obj.contains_key("c") || obj.contains_key("p") {
-        return None;
+        return FrameResult::Ignore;
     }
     if let Some(text) = obj.get("v").and_then(|v| v.as_str()) {
         if !text.is_empty() {
-            return Some(text.to_string());
+            return FrameResult::Delta(text.to_string());
         }
     }
 
-    // Shape 4: array-valued bare frame {"v": [{...}, ...]} — no outer "o".
-    // Collect all inner appends targeting content parts.
+    // Shape 4: array-valued bare frame {"v": [{...}]} without outer "o".
     if let Some(arr) = obj.get("v").and_then(|v| v.as_array()) {
         let mut out = String::new();
         for item in arr {
-            if item.get("o").and_then(|o| o.as_str()) != Some("append") {
-                continue;
-            }
+            if item.get("o").and_then(|o| o.as_str()) != Some("append") { continue; }
             let p = item.get("p").and_then(|p| p.as_str()).unwrap_or("");
             if p.contains("parts") {
                 if let Some(s) = item.get("v").and_then(|v| v.as_str()) {
@@ -98,23 +143,91 @@ pub fn extract_sse_delta(raw: &str) -> Option<String> {
             }
         }
         if !out.is_empty() {
-            return Some(out);
+            return FrameResult::Delta(out);
         }
     }
 
-    None
+    FrameResult::Ignore
 }
 
-/// Returns true if this frame signals end of the assistant turn.
-pub fn is_done(raw: &str) -> bool {
-    let data = raw.strip_prefix("data: ").unwrap_or(raw).trim();
-    if data == "[DONE]" {
-        return true;
+// ---------------------------------------------------------------------------
+// /gg path — Calpico array envelope parser
+// ---------------------------------------------------------------------------
+
+
+// ---------------------------------------------------------------------------
+// Compat shims — keep old call-sites compiling during transition
+// ---------------------------------------------------------------------------
+
+/// Legacy shim: extract a text delta from a frame (returns None for snapshots/done/ignore).
+/// Callers that need snapshot semantics should call `classify_frame` directly.
+pub fn extract_sse_delta(raw: &str) -> Option<String> {
+    match classify_frame(raw) {
+        FrameResult::Delta(s) => Some(s),
+        _ => None,
     }
-    if let Ok(v) = serde_json::from_str::<Value>(data) {
-        if v.get("type").and_then(|t| t.as_str()) == Some("message_stream_complete") {
-            return true;
+}
+
+/// Legacy shim: returns true for Done frames only.
+pub fn is_done(raw: &str) -> bool {
+    matches!(classify_frame(raw), FrameResult::Done)
+}
+fn classify_calpico_array(arr: &[Value]) -> FrameResult {
+    // Frame shape (from wire):
+    // [0].type                                            == "message"
+    // [0].payload.type                                    == "calpico-message-add"
+    // [0].payload.payload.message.role                    == "assistant"
+    // [0].payload.payload.message.raw_messages[0].author.role == "assistant"
+    // [0].payload.payload.message.raw_messages[0].channel == "final"
+    // [0].payload.payload.message.raw_messages[0].content.parts[0] == "<full text>"
+    for envelope in arr {
+        if envelope.get("type").and_then(|t| t.as_str()) != Some("message") {
+            continue;
+        }
+        let payload = match envelope.get("payload") {
+            Some(p) => p,
+            None => continue,
+        };
+        if payload.get("type").and_then(|t| t.as_str()) != Some("calpico-message-add") {
+            continue;
+        }
+        let msg = match payload.get("payload").and_then(|p| p.get("message")) {
+            Some(m) => m,
+            None => continue,
+        };
+        // Top-level role guard.
+        if msg.get("role").and_then(|r| r.as_str()) != Some("assistant") {
+            continue;
+        }
+        // Walk raw_messages — take the first "final" channel entry from assistant.
+        let raw_messages = match msg.get("raw_messages").and_then(|v| v.as_array()) {
+            Some(a) => a,
+            None => continue,
+        };
+        for raw_msg in raw_messages {
+            let author_role = raw_msg
+                .get("author").and_then(|a| a.get("role")).and_then(|r| r.as_str())
+                .unwrap_or("");
+            if author_role != "assistant" {
+                continue;
+            }
+            let channel = raw_msg.get("channel").and_then(|c| c.as_str()).unwrap_or("");
+            if channel != "final" {
+                continue;
+            }
+            // content.parts[0] is the full assembled text.
+            let text = raw_msg
+                .get("content")
+                .and_then(|c| c.get("parts"))
+                .and_then(|p| p.as_array())
+                .and_then(|a| a.first())
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !text.is_empty() {
+                eprintln!("[sse] calpico snapshot {} bytes", text.len());
+                return FrameResult::Snapshot(text.to_string());
+            }
         }
     }
-    false
+    FrameResult::Ignore
 }

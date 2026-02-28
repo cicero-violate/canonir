@@ -164,23 +164,28 @@
     // AUTO MODE
     if (text) {
       window.__pendingPromptInjection = text;
-      waitForEditor((editor) => {
-        console.log("[INJ] editor ready, setting <PROMPT> then waiting for send button");
+      const editor = document.querySelector('div[contenteditable="true"]');
+      if (editor) {
         editor.textContent = "<PROMPT>";
         editor.dispatchEvent(new Event("input", { bubbles: true }));
-        waitForSendBtn((sendBtn) => {
-          if (window.__promptInjectionQueue?.length > 0) {
-            window.__pendingPromptInjection = window.__promptInjectionQueue.join("\n\n");
-            window.__promptInjectionQueue = [];
-          }
-          console.log("[INJ] send button ready, clicking");
-	  if (sendBtn && !sendBtn.disabled) {
-	    sendBtn.click();
-	  } else {
-	    submitViaEnter();
-	  }
-        });
-      });
+      }
+
+      setTimeout(() => {
+        if (window.__promptInjectionQueue?.length > 0) {
+          window.__pendingPromptInjection =
+            window.__promptInjectionQueue.join("\n\n");
+          window.__promptInjectionQueue = [];
+        }
+
+        const sendBtn =
+          document.querySelector('button[data-testid="send-button"]');
+
+        if (sendBtn && !sendBtn.disabled) {
+          sendBtn.click();
+        } else {
+          submitViaEnter();
+        }
+      }, 100);
     }
   });
 })();
