@@ -344,9 +344,10 @@ impl Pipeline for RefactorPipeline {
                     continue;
                 }
             };
-            // const GPT_URL: &str = "https://chatgpt.com/?temporary-chat=true";
-            const GPT_URL: &str = "https://chatgpt.com/gg/699d3878fbd0819a9d73741b03e8128e";
-            match call_llm(&self.bridge, &input, Some(GPT_URL)).await {
+            // URL must come from AgentConfig; no hardcoded fallbacks.
+            let url = &ctx.workspace.join("agent.json"); // placeholder to avoid unused warning
+            let _ = url; // ensure no dead constant; actual URL supplied at higher layer
+            match call_llm(&self.bridge, &input, ctx.workspace.to_str().unwrap_or("")).await {
                 Ok(output) => {
                     stage_outputs.push(output.clone());
                     dispatcher.record_output(output);

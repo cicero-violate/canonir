@@ -31,6 +31,8 @@ use crate::executor::{execute_deltas, ExecutorError};
 pub struct RunnerConfig {
     /// How many pipeline ticks to run before stopping (0 = run forever).
     pub max_ticks: u64,
+    /// ChatGPT tab URL to open for each LLM call.
+    pub chatgpt_url: String,
     /// Fire meta-tick every N ticks (0 = never).
     pub meta_tick_interval: u64,
     /// Update policy every N ticks (0 = never).
@@ -52,6 +54,7 @@ impl RunnerConfig {
     pub fn new(graph_out: PathBuf, ledger_out: PathBuf, ir_out: PathBuf) -> Self {
         Self {
             max_ticks: 0,
+            chatgpt_url: String::new(),
             meta_tick_interval: 10,
             policy_update_interval: 5,
             ledger_alpha: 0.1,
@@ -155,11 +158,7 @@ pub async fn run_agent(
                 }
             };
             eprintln!("[runner]   → calling node {node_id} (stage={:?})", input.stage);
-            const GPT_URL: &str =
-		"https://chatgpt.com/gg/699d3878fbd0819a9d73741b03e8128e";
-		// "https://chatgpt.com/?temporary-chat=true";
-
-            match call_llm(bridge, &input, Some(GPT_URL)).await {
+            match call_llm(bridge, &input, &config.chatgpt_url).await {
                 Ok(output) => {
                     eprintln!("[runner]   ✓ node {node_id} responded");
                     tick_stats.nodes_called += 1;

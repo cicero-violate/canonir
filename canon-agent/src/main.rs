@@ -3,6 +3,7 @@ use canon_agent::bootstrap::{seed_capability_graph, seed_refactor_proposal};
 use canon_agent::ir::SystemState;
 use canon_agent::layout::FileTopology;
 use canon_agent::runner::{run_agent, RunnerConfig};
+use canon_agent::agent_config::AgentConfig;
 use canon_agent::ws_server;
 use canon_agent::call::AgentCallOutput;
 use canon_agent::pipelines::refactor::RefactorProposal;
@@ -20,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  canon-agent show-graph <graph.json>");
         println!("  canon-agent run-pipeline <ir.json> <layout.json> <proposal.json> <outputs.json>");
         println!("  canon-agent run-agent <ir.json> <layout.json> <graph.json> <workspace>");
-        println!("  canon-agent run-invariant <capture_dir> <emit_dir> <orchestration_bin>");
+        println!("  canon-agent run-invariant <cwd> <capture_dir> <emit_dir> <orchestration_bin> [max_ticks=20]");
     };
 
     if args.len() < 2 {
@@ -78,10 +79,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|| "core".to_string());
             let proposal = seed_refactor_proposal(&target_module);
 
+            let agent_cfg = AgentConfig::load(&workspace)
+                .map_err(|e| { eprintln!("[main] fatal: {e}"); e })?;
+
+            eprintln!("[main] chatgpt_url : {}", agent_cfg.chatgpt_url);
+
             let config = RunnerConfig {
-                max_ticks: 0,
-                meta_tick_interval: 10,
-                policy_update_interval: 5,
+                max_ticks: agent_cfg.max_ticks.unwrap_or(0),
+                chatgpt_url: agent_cfg.chatgpt_url.clone(),
+                meta_tick_interval: agent_cfg.meta_tick_interval.unwrap_or(10),
+                policy_update_interval: agent_cfg.policy_update_interval.unwrap_or(5),
                 ledger_alpha: 0.1,
                 base_trust_threshold: 0.5,
                 graph_out:  workspace.join("graph.json"),
@@ -111,22 +118,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         "run-invariant" => {
-            if args.len() != 5 { usage(); return Ok(()); }
-            let capture_dir       = PathBuf::from(&args[2]);
-            let emit_dir          = PathBuf::from(&args[3]);
-            let orchestration_bin = PathBuf::from(&args[4]);
+            if args.len() < 6 { usage(); return Ok(()); }
+            let cwd               = PathBuf::from(&args[2]);
+            let capture_dir       = PathBuf::from(&args[3]);
+            let emit_dir          = PathBuf::from(&args[4]);
+            let orchestration_bin = PathBuf::from(&args[5]);
+            let max_ticks: u64    = args.get(6).and_then(|s| s.parse().ok()).unwrap_or(20);
 
             let addr = "127.0.0.1:9100".parse()?;
             let bridge = ws_server::spawn(addr);
 
-            let pipeline = canon_agent::pipelines::invariant::InvariantPipeline { bridge };
-            let ctx = canon_agent::pipelines::PipelineContext {
-                capture_dir,
-                emit_dir,
-                orchestration_bin,
-                workspace: PathBuf::from("."),
-                tick: 1,
-            };
+            // ControlDomain = canon-agent directory (where binary is launched)
+            let control_root = std::env::current_dir()?;
+            let agent_cfg = AgentConfig::load(&control_root)
+                .map_err(|e| { eprintln!("[main] fatal: {e}"); e })?;
+
+            eprintln!(
+                "[main] invariant chatgpt_url (control_root={}): {}",
+                control_root.display(),
+                agent_cfg.chatgpt_url
+            );
+
+            let pipeline =
+                canon_agent::pipelines::invariant::InvariantPipeline::new(
+                    bridge,
+                    agent_cfg.chatgpt_url,
+                );
 
             // InvariantPipeline operates purely on files — ir and layout are unused.
             let mut ir = SystemState::new(
@@ -149,9 +166,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut layout = FileTopology::default();
 
             use canon_agent::pipelines::Pipeline;
-            let outcome = pipeline.run_tick(&ctx, &mut ir, &mut layout).await?;
-            eprintln!("[main] invariant tick done — {}", outcome.summary);
-            eprintln!("[main] reward={:.4} advanced={}", outcome.reward, outcome.advanced);
+            for tick in 1..=max_ticks {
+                let ctx = canon_agent::pipelines::PipelineContext {
+                    cwd: cwd.clone(),
+                    capture_dir: capture_dir.clone(),
+                    emit_dir: emit_dir.clone(),
+                    orchestration_bin: orchestration_bin.clone(),
+                    workspace: cwd.clone(),
+                    tick,
+                };
+
+                let outcome = pipeline.run_tick(&ctx, &mut ir, &mut layout).await?;
+                eprintln!("[main] tick {tick} done — {}", outcome.summary);
+                eprintln!("[main] reward={:.4} advanced={}", outcome.reward, outcome.advanced);
+
+                if outcome.summary.contains("done") {
+                    eprintln!("[main] goal reached — stopping");
+                    break;
+                }
+            }
         }
 
         _ => {

@@ -24,7 +24,9 @@ use std::path::PathBuf;
 /// Everything a pipeline tick needs to read and act on the world.
 #[derive(Debug, Clone)]
 pub struct PipelineContext {
-    /// Capture directory containing canon_capture.json and src/.
+    /// The codebase the agent is allowed to patch (e.g. canon-capture).
+    pub cwd: PathBuf,
+    /// Capture directory containing canon_capture.json — input to orchestration.
     pub capture_dir: PathBuf,
     /// Emit directory where orchestration writes its output.
     pub emit_dir: PathBuf,

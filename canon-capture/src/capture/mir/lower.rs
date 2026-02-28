@@ -70,7 +70,6 @@ fn stage_build_plan<'tcx>(
     let switch_analysis = mir_analysis::analyze_switch_structure(body);
     let call_feed_locals = mir_analysis::compute_call_feed_locals(tcx, body, &resolver);
     let mut defined: HashSet<String> = param_names.iter().cloned().collect();
-    defined.insert("__ret".to_string());
     let mut suppressed_sentinel_names: HashSet<String> = HashSet::new();
     let suppressed_dest_sentinels = mir_analysis::collect_suppressed_dest_sentinels(
         body,
@@ -140,6 +139,9 @@ fn stage_emit_draft<'tcx>(
             plan,
             &mut stmts,
         );
+        if !returns_unit && bb.terminator.is_none() && !plan.defined.contains("__ret") {
+            mir_util::emit_suppressed_ret_binding(&mut stmts, &mut plan.defined);
+        }
         emitted_blocks.push(mir_passes::make_normal_block(stmts, term));
     }
 
@@ -219,7 +221,7 @@ fn stage_lower_block_terminator<'tcx>(
             has_match_dest,
         )
     } else {
-        mir_terminator::lower_non_call_terminator(
+        let term = mir_terminator::lower_non_call_terminator(
             tcx,
             term_ref,
             returns_unit,
@@ -229,7 +231,11 @@ fn stage_lower_block_terminator<'tcx>(
             &mut plan.defined,
             has_ret_binding,
             has_match_dest,
-        )
+        );
+        if !returns_unit && !plan.defined.contains("__ret") {
+            mir_util::emit_suppressed_ret_binding(stmts, &mut plan.defined);
+        }
+        term
     }
 }
 

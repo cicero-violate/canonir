@@ -52,10 +52,11 @@ impl From<WsBridgeError> for LlmProviderError {
 pub async fn call_llm_raw(
     bridge: &WsBridge,
     prompt: String,
+    url: &str,
 ) -> Result<Value, LlmProviderError> {
     bridge.wait_for_connection().await;
     let tab_id = bridge
-        .open_fresh_tab_with_url("https://chatgpt.com/".to_string())
+        .open_fresh_tab_with_url(url.to_string())
         .await
         .map_err(LlmProviderError::Transport)?;
     let raw = bridge
@@ -72,27 +73,17 @@ pub async fn call_llm_raw(
 pub async fn call_llm(
     bridge: &WsBridge,
     input: &AgentCallInput,
-    target_url: Option<&str>,
+    url: &str,
 ) -> Result<AgentCallOutput, LlmProviderError> {
     let prompt = PromptBuilder::new(input).build();
 
     bridge.wait_for_connection().await;
 
-    eprintln!("call_llm target_url = {:?}", target_url);
-
-    let tab_id = if let Some(url) = target_url {
-        eprintln!("Opening fresh tab with URL: {}", url);
-        bridge
-            .open_fresh_tab_with_url(url.to_string())
-            .await
-            .map_err(LlmProviderError::Transport)?
-    } else {
-        eprintln!("Opening fresh default ChatGPT tab");
-        bridge
-            .open_fresh_tab_with_url("https://chatgpt.com/".to_string())
-            .await
-            .map_err(LlmProviderError::Transport)?
-    };
+    eprintln!("call_llm url = {}", url);
+    let tab_id = bridge
+        .open_fresh_tab_with_url(url.to_string())
+        .await
+        .map_err(LlmProviderError::Transport)?;
 
     eprintln!("Routing TURN to tab_id={}", tab_id);
 

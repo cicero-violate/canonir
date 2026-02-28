@@ -60,6 +60,15 @@ pub struct InvariantPipeline {
     bootstrapped: std::sync::Mutex<bool>,
 }
 
+impl InvariantPipeline {
+    pub fn new(bridge: WsBridge, chatgpt_url: String) -> Self {
+        Self {
+            bridge,
+            chatgpt_url,
+            bootstrapped: std::sync::Mutex::new(false),
+        }
+    }
+}
 #[async_trait::async_trait]
 impl Pipeline for InvariantPipeline {
     fn name(&self) -> &str {
@@ -255,16 +264,56 @@ async fn plan_via_llm(
         "src/capture/mir/util.rs",
     ]);
 
-    let prompt = format!(
-        agent_goal = agent_goal,
-        tick = tick,
-        surface_json = surface_json,
-        first_gap = first_gap,
-        gap_src = gap_src,
-        cwd = capture_dir.display(),
-        mir_sources = mir_sources,
-        patch_format = patch_format,
-    );
+    let bootstrap_template = std::fs::read_to_string(
+        "/workspace/ai_sandbox/canon/canon-agent-tools/INVARIANT_BOOTSTRAP.md",
+    ).unwrap_or_default();
+
+    let delta_template = std::fs::read_to_string(
+        "/workspace/ai_sandbox/canon/canon-agent-tools/INVARIANT_DELTA.md",
+    ).unwrap_or_default();
+
+    static BOOT: std::sync::Once = std::sync::Once::new();
+    let mut first = false;
+    BOOT.call_once(|| first = true);
+
+    let prompt = if first {
+        format!(
+            "{bootstrap}\n\
+---\n\
+## Structural Surface (tick {tick})\n\
+```json\n\
+{surface}\n\
+```\n\
+## Target gap\n\
+{gap}\n\
+## Emitted source (read-only)\n\
+```rust\n\
+{src}\n\
+```\n\
+## canon-capture MIR source\n\
+Working directory: `{cwd}`\n\
+{mir}",
+            bootstrap = bootstrap_template,
+            tick = tick,
+            surface = surface_json,
+            gap = first_gap,
+            src = gap_src,
+            cwd = capture_dir.display(),
+            mir = mir_sources,
+        )
+    } else {
+        format!(
+            "{delta}\n\
+---\n\
+TICK {tick}\n\
+__ret gaps remaining: {gaps}\n\
+next target: {gap}",
+            delta = delta_template,
+            tick = tick,
+            gaps = request.surface.unresolved_ret_gap_count,
+            gap = first_gap,
+        )
+    };
 
     let payload = call_llm_raw(bridge, prompt, url)
         .await
@@ -350,6 +399,11 @@ fn build_delta_prompt(
         .unwrap_or_else(|| "(none)".into());
 
     format!(
+        "TICK {tick}\n\
+__ret gaps remaining: {gaps}\n\
+build: {build}\n\
+next target: {first_gap}\n\
+Respond with ONE fenced ```json block only.",
         tick = tick,
         gaps = surface.unresolved_ret_gap_count,
         build = if build_ok { "OK" } else { "FAIL" },
@@ -430,16 +484,39 @@ async fn plan_via_llm_with_error(
         .map(|s| format!("{}:{} — {}", s.file, s.line, s.enclosing_fn))
         .unwrap_or_else(|| "(none)".into());
 
+    let bootstrap_template = std::fs::read_to_string(
+        "/workspace/ai_sandbox/canon/canon-agent-tools/INVARIANT_BOOTSTRAP.md",
+    ).unwrap_or_default();
+
     let prompt = format!(
-        agent_goal = agent_goal,
-        tick = tick,
+        "{bootstrap}\n\
+---\n\
+## PREVIOUS PATCH FAILED\n\
+Error:\n\
+```\n\
+{error}\n\
+```\n\
+## Structural Surface (tick {tick})\n\
+```json\n\
+{surface}\n\
+```\n\
+## Target gap\n\
+{gap}\n\
+## Emitted source (read-only)\n\
+```rust\n\
+{src}\n\
+```\n\
+## canon-capture MIR source\n\
+Working directory: `{cwd}`\n\
+{mir}",
+        bootstrap = bootstrap_template,
         error = error,
-        surface_json = surface_json,
-        first_gap = first_gap,
-        gap_src = gap_src,
+        tick = tick,
+        surface = surface_json,
+        gap = first_gap,
+        src = gap_src,
         cwd = capture_dir.display(),
-        mir_sources = mir_sources,
-        patch_format = patch_format,
+        mir = mir_sources,
     );
 
     let payload = call_llm_raw(bridge, prompt, url)

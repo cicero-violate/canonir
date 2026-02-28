@@ -8,6 +8,7 @@ pub mod meta;
 pub mod observe;
 pub mod reward;
 pub mod runner;
+pub mod agent_config;
 pub mod slice;
 pub mod sse;
 pub mod ws_server;

@@ -114,14 +114,11 @@ impl ServerState {
     fn send(&self, msg: Value) -> Result<(), WsBridgeError> {
         let tx = self.out_tx.as_ref().ok_or(WsBridgeError::NotConnected)?;
         let raw = msg.to_string();
-        eprintln!("[ws] state.send() enqueuing {} bytes", raw.len());
         match tx.try_send(Message::Text(raw.into())) {
             Ok(()) => {
-                eprintln!("[ws] state.send() try_send OK");
                 Ok(())
             }
             Err(e) => {
-                eprintln!("[ws] state.send() try_send FAILED: {e}");
                 Err(WsBridgeError::NotConnected)
             }
         }
@@ -164,8 +161,6 @@ impl WsBridge {
 
         {
             let mut st = self.state.lock().await;
-            eprintln!("[ws] send_turn acquiring lock for tab {tab_id}");
-            eprintln!("[ws] send_turn out_tx is_some={}", st.out_tx.is_some());
             st.pending.insert(tab_id, tx);
             st.tab_buffers.insert(tab_id, Vec::new());
 
@@ -173,20 +168,14 @@ impl WsBridge {
 
             match st.send(frame.clone()) {
                 Ok(()) => {
-                    eprintln!("[ws] send_turn frame sent immediately for tab {tab_id}");
                 }
                 Err(_) => {
                     // Socket is down — buffer the frame for replay on reconnect.
-                    eprintln!(
-                        "[ws] send_turn WS not connected — buffering TURN for tab {tab_id} \
-                         (will replay on reconnect)"
-                    );
                     st.turn_replay_queue.push(frame);
                 }
             }
         }
 
-        eprintln!("[ws] TURN dispatched for tab {tab_id} (waiting for response)");
 
         match tokio::time::timeout(
             std::time::Duration::from_secs(RESPONSE_TIMEOUT_SECS),
@@ -231,11 +220,9 @@ pub fn spawn(addr: SocketAddr) -> WsBridge {
         loop {
             match TcpListener::bind(addr).await {
                 Ok(listener) => {
-                    eprintln!("[ws] listening on {addr}");
                     accept_loop(listener, state.clone()).await;
                 }
                 Err(e) => {
-                    eprintln!("[ws] bind error: {e} — retrying in 2s");
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 }
             }
@@ -249,11 +236,9 @@ async fn accept_loop(listener: TcpListener, state: Arc<Mutex<ServerState>>) {
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
-                eprintln!("[ws] extension connected from {peer}");
                 handle_connection(stream, state.clone()).await;
-                eprintln!("[ws] extension disconnected");
             }
-            Err(e) => eprintln!("[ws] accept error: {e}"),
+            Err(_e) => {},
         }
     }
 }
@@ -261,7 +246,7 @@ async fn accept_loop(listener: TcpListener, state: Arc<Mutex<ServerState>>) {
 async fn handle_connection(stream: TcpStream, state: Arc<Mutex<ServerState>>) {
     let ws = match accept_async(stream).await {
         Ok(ws) => ws,
-        Err(e) => { eprintln!("[ws] handshake error: {e}"); return; }
+        Err(_e) => { return; }
     };
 
     let (mut sink, mut source) = ws.split();
@@ -274,7 +259,6 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<ServerState>>) {
         // Drain any TURN frames that were buffered while the socket was down.
         let queued: Vec<Value> = st.turn_replay_queue.drain(..).collect();
         if !queued.is_empty() {
-            eprintln!("[ws] replaying {} buffered TURN frame(s) on reconnect", queued.len());
             for frame in queued {
                 let _ = tx_out.try_send(Message::Text(frame.to_string().into()));
             }
@@ -283,13 +267,11 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<ServerState>>) {
 
     let sink_task = tokio::spawn(async move {
         while let Some(msg) = rx_out.recv().await {
-            eprintln!("[ws] sink_task: got msg from channel, forwarding to socket");
             match sink.send(msg).await {
-                Ok(()) => eprintln!("[ws] sink_task: socket send OK"),
-                Err(e) => { eprintln!("[ws] sink_task: socket send ERR: {e}"); break; }
+                Ok(()) => {}
+                Err(_e) => { break; }
             }
         }
-        eprintln!("[ws] sink_task: recv returned None — channel closed");
     });
 
     while let Some(result) = source.next().await {
@@ -305,7 +287,6 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<ServerState>>) {
     {
         let mut st = state.lock().await;
         st.out_tx = None;
-        eprintln!("[ws] connection closed — out_tx cleared");
     }
 }
 
@@ -317,7 +298,6 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
     let msg: Value = match serde_json::from_str(raw) {
         Ok(v)  => v,
         Err(_) => {
-            eprintln!("[ws] non-JSON frame: {}", &raw[..raw.len().min(120)]);
             return;
         }
     };
@@ -336,7 +316,6 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             let url    = msg.get("url").and_then(|v| v.as_str()).unwrap_or("");
             let mut st = state.lock().await;
             st.live_tabs.insert(tab_id);
-            eprintln!("[ws] TAB_OPENED tab={tab_id} url={url} (informational)");
         }
 
         "TAB_CLOSED" => {
@@ -348,7 +327,6 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             st.live_tabs.remove(&tab_id);
             st.tab_buffers.remove(&tab_id);
             st.pending.remove(&tab_id);
-            eprintln!("[ws] TAB_CLOSED tab={tab_id}");
         }
 
         "TAB_READY" => {
@@ -360,7 +338,6 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             let req_id = msg.get("reqId").and_then(|v| v.as_u64());
 
             let mut st = state.lock().await;
-            eprintln!("[ws] TAB_READY tab={tab_id} url={url}");
 
             if let Some(rid) = req_id {
                 if let Some(tx) = st.pending_open.remove(&rid) {
@@ -395,7 +372,6 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
                 }
                 FrameResult::Snapshot(text) => {
                     // /gg path: full accumulated text — replace buffer and resolve immediately.
-                    eprintln!("[ws] tab {tab_id} snapshot {} bytes — resolving", text.len());
                     st.tab_buffers.insert(tab_id, vec![text.clone()]);
                     if let Some(tx) = st.pending.remove(&tab_id) {
                         let _ = tx.send(text);
@@ -408,7 +384,6 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
                         st.pending.remove(&tab_id),
                     ) {
                         let assembled = buf.join("");
-                        eprintln!("[ws] tab {tab_id} done — {} bytes", assembled.len());
                         let _ = tx.send(assembled);
                     }
                 }
@@ -416,6 +391,6 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             }
         }
 
-        other => eprintln!("[ws] unknown frame type: {other}"),
+        _other => {},
     }
 }

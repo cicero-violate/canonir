@@ -58,12 +58,7 @@ pub(crate) fn lower_call_terminator<'tcx>(
             });
             defined.insert(dest);
         } else if dest == "__ret" {
-            stmts.push(Stmt::Assign {
-                lhs: "__ret".to_string(),
-                rhs: "__canon_suppressed__".to_string(),
-            });
             defined.insert("__ret".to_string());
-            suppressed_sentinel_names.insert("__ret".to_string());
         } else {
             mir_util::emit_suppressed_for_name(
                 &dest,
@@ -88,7 +83,6 @@ pub(crate) fn lower_call_terminator<'tcx>(
                     rhs: "__canon_suppressed__".to_string(),
                 });
                 defined.insert("__ret".to_string());
-                suppressed_sentinel_names.insert("__ret".to_string());
             } else {
                 mir_util::emit_suppressed_for_name(
                     &dest,
@@ -103,14 +97,7 @@ pub(crate) fn lower_call_terminator<'tcx>(
     {
         if !mir_guard::structural_guard(&method_stmt, defined, suppressed_sentinel_names) {
             if let Stmt::MethodCall { dest: Some(dest), .. } = &method_stmt {
-                if dest == "__ret" {
-                    stmts.push(Stmt::Assign {
-                        lhs: "__ret".to_string(),
-                        rhs: "__canon_suppressed__".to_string(),
-                    });
-                    defined.insert("__ret".to_string());
-                    suppressed_sentinel_names.insert("__ret".to_string());
-                } else {
+                if dest != "__ret" {
                     mir_util::emit_suppressed_for_name(
                         dest,
                         stmts,
@@ -143,7 +130,6 @@ pub(crate) fn lower_call_terminator<'tcx>(
                     rhs: "__canon_suppressed__".to_string(),
                 });
                 defined.insert("__ret".to_string());
-                suppressed_sentinel_names.insert("__ret".to_string());
             } else {
                 mir_util::emit_suppressed_for_name(
                     dest,
@@ -162,12 +148,8 @@ pub(crate) fn lower_call_terminator<'tcx>(
                 stmts,
             );
         } else {
-            if !has_match_dest {
-                stmts.push(Stmt::Match {
-                    dest: Some("__ret".to_string()),
-                });
-            }
-            defined.insert("__ret".to_string());
+            // Do not fabricate or implicitly define __ret here.
+            // __ret must only be defined by structurally valid lowering paths.
         }
     }
 
@@ -242,12 +224,14 @@ fn lower_return_terminator(
 ) {
     if returns_unit {
         stmts.push(Stmt::Return(None));
-    } else if has_ret_binding && !has_match_dest {
+    } else {
+        if !defined.contains("__ret") {
+            stmts.push(Stmt::Assign {
+                lhs: "__ret".to_string(),
+                rhs: "__canon_suppressed__".to_string(),
+            });
+            defined.insert("__ret".to_string());
+        }
         stmts.push(Stmt::Return(Some("__ret".to_string())));
-    } else if !has_match_dest && !has_ret_binding {
-        stmts.push(Stmt::Match {
-            dest: Some("__ret".to_string()),
-        });
-        defined.insert("__ret".to_string());
     }
 }
