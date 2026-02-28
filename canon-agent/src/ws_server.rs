@@ -27,6 +27,9 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -69,19 +72,32 @@ struct ServerState {
     tab_buffers: HashMap<u32, Vec<String>>,
     /// tabId → oneshot sender waiting for a completed response.
     pending: HashMap<u32, oneshot::Sender<String>>,
-    /// Ordered list of live tab IDs (first = preferred).
-    live_tabs: Vec<u32>,
-    /// Sender half of the outbound channel (to extension).
-    tx_out: Option<mpsc::Sender<Message>>,
+    /// Single controlled ChatGPT tab.
+    controlled_tab: Option<u32>,
+    /// All active WS connections (conn_id → tx)
+    connections: HashMap<u64, mpsc::Sender<Message>>,
+
+    /// Authoritative control-plane connection
+    control_conn: Option<u64>,
+
+    /// req_id → oneshot sender for OPEN_TAB correlation
+    pending_open: HashMap<u64, oneshot::Sender<u32>>,
 }
 
 impl ServerState {
     fn new() -> Self {
-        Self { tab_buffers: HashMap::new(), pending: HashMap::new(), live_tabs: Vec::new(), tx_out: None }
+        Self {
+            tab_buffers: HashMap::new(),
+            pending: HashMap::new(),
+            controlled_tab: None,
+            connections: HashMap::new(),
+            control_conn: None,
+            pending_open: HashMap::new(),
+        }
     }
 
-    fn first_tab(&self) -> Option<u32> {
-        self.live_tabs.first().copied()
+    fn controlled(&self) -> Option<u32> {
+        self.controlled_tab
     }
 }
 
@@ -89,6 +105,7 @@ impl ServerState {
 #[derive(Clone)]
 pub struct WsBridge {
     state: Arc<Mutex<ServerState>>,
+    next_req_id: Arc<AtomicU64>,
 }
 
 impl WsBridge {
@@ -100,12 +117,15 @@ impl WsBridge {
         let target = {
             let mut st = self.state.lock().await;
 
-            let target = match tab_id.or_else(|| st.first_tab()) {
+            let target = match tab_id.or_else(|| st.controlled()) {
                 Some(id) => id,
                 None => return Err(WsBridgeError::NoTab),
             };
 
-            let out_tx = st.tx_out.clone().ok_or(WsBridgeError::NotConnected)?;
+            let control = st.control_conn.ok_or(WsBridgeError::NotConnected)?;
+            let out_tx = st.connections.get(&control)
+                .cloned()
+                .ok_or(WsBridgeError::NotConnected)?;
 
             // Register the oneshot before sending so no chunk is missed.
             st.pending.insert(target, tx);
@@ -130,15 +150,34 @@ impl WsBridge {
     /// Send an OPEN_TAB command to the extension.
     pub async fn open_tab(&self) -> Result<(), WsBridgeError> {
         let st = self.state.lock().await;
-        let tx = st.tx_out.clone().ok_or(WsBridgeError::NotConnected)?;
+        let control = st.control_conn.ok_or(WsBridgeError::NotConnected)?;
+        let tx = st.connections.get(&control)
+            .cloned()
+            .ok_or(WsBridgeError::NotConnected)?;
         let frame = json!({ "type": "OPEN_TAB" });
         tx.send(Message::Text(frame.to_string().into())).await.map_err(|_| WsBridgeError::NotConnected)
+    }
+
+    /// Send an OPEN_TAB command with explicit URL.
+    pub async fn open_tab_with_url(&self, url: String) -> Result<(), WsBridgeError> {
+        let st = self.state.lock().await;
+        let control = st.control_conn.ok_or(WsBridgeError::NotConnected)?;
+        let tx = st.connections.get(&control)
+            .cloned()
+            .ok_or(WsBridgeError::NotConnected)?;
+        let frame = json!({ "type": "OPEN_TAB", "url": url });
+        tx.send(Message::Text(frame.to_string().into()))
+            .await
+            .map_err(|_| WsBridgeError::NotConnected)
     }
 
     /// Send a CLOSE_TAB command to the extension.
     pub async fn close_tab(&self, tab_id: u32) -> Result<(), WsBridgeError> {
         let st = self.state.lock().await;
-        let tx = st.tx_out.clone().ok_or(WsBridgeError::NotConnected)?;
+        let control = st.control_conn.ok_or(WsBridgeError::NotConnected)?;
+        let tx = st.connections.get(&control)
+            .cloned()
+            .ok_or(WsBridgeError::NotConnected)?;
         let frame = json!({ "type": "CLOSE_TAB", "tabId": tab_id });
         tx.send(Message::Text(frame.to_string().into())).await.map_err(|_| WsBridgeError::NotConnected)
     }
@@ -148,7 +187,7 @@ impl WsBridge {
         loop {
             {
                 let st = self.state.lock().await;
-                if st.tx_out.is_some() {
+                if !st.connections.is_empty() {
                     return;
                 }
             }
@@ -156,42 +195,40 @@ impl WsBridge {
         }
     }
 
-    /// Block until at least one live ChatGPT tab is registered.
-    pub async fn wait_for_tab(&self) {
-        loop {
-            {
-                let st = self.state.lock().await;
-                if !st.live_tabs.is_empty() {
-                    return;
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        }
-    }
+    // wait_for_tab removed — deterministic single-tab ownership
 
-    /// Open a fresh ChatGPT tab and wait until it registers, returning its tab_id.
-    /// Each call produces a new stateless conversation context.
-    pub async fn open_fresh_tab(&self) -> Result<u32, WsBridgeError> {
-        // Snapshot existing tab ids so we can detect the new one.
-        let before: Vec<u32> = {
+    // open_fresh_tab removed — use open_fresh_tab_with_url with reqId correlation
+
+    /// Open a fresh tab with explicit URL and return its tab_id.
+    pub async fn open_fresh_tab_with_url(&self, url: String) -> Result<u32, WsBridgeError> {
+        let req_id = self.next_req_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel::<u32>();
+
+        {
+            let mut st = self.state.lock().await;
+            st.pending_open.insert(req_id, tx);
+        }
+
+        let tx_out = {
             let st = self.state.lock().await;
-            st.live_tabs.clone()
+            let control = st.control_conn.ok_or(WsBridgeError::NotConnected)?;
+            st.connections.get(&control)
+                .cloned()
+                .ok_or(WsBridgeError::NotConnected)?
         };
 
-        self.open_tab().await?;
+        let frame = json!({
+            "type": "OPEN_TAB",
+            "url": url,
+            "reqId": req_id
+        });
 
-        // Poll until a tab_id appears that wasn't in `before`.
-        loop {
-            {
-                let st = self.state.lock().await;
-                for id in &st.live_tabs {
-                    if !before.contains(id) {
-                        return Ok(*id);
-                    }
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        }
+        tx_out
+            .send(Message::Text(frame.to_string().into()))
+            .await
+            .map_err(|_| WsBridgeError::NotConnected)?;
+
+        rx.await.map_err(|_| WsBridgeError::Cancelled)
     }
 }
 
@@ -203,7 +240,10 @@ impl WsBridge {
 /// Returns a WsBridge handle immediately — the server runs concurrently.
 pub fn spawn(addr: SocketAddr) -> WsBridge {
     let state = Arc::new(Mutex::new(ServerState::new()));
-    let bridge = WsBridge { state: state.clone() };
+    let bridge = WsBridge {
+        state: state.clone(),
+        next_req_id: Arc::new(AtomicU64::new(1)),
+    };
 
     tokio::spawn(async move {
         loop {
@@ -233,9 +273,7 @@ async fn accept_loop(listener: TcpListener, state: Arc<Mutex<ServerState>>) {
                 handle_connection(stream, state.clone()).await;
                 eprintln!("[ws] extension disconnected");
 
-                // Clear the outbound sender so callers get NotConnected.
-                let mut st = state.lock().await;
-                st.tx_out = None;
+                // Connection cleanup handled inside handle_connection
             }
             Err(e) => {
                 eprintln!("[ws] accept error: {e}");
@@ -258,7 +296,18 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<ServerState>>) {
 
     // Outbound channel: server state → sink task → extension.
     let (tx_out, mut rx_out) = mpsc::channel::<Message>(64);
-    state.lock().await.tx_out = Some(tx_out);
+
+    let conn_id = NEXT_CONN_ID.fetch_add(1, Ordering::Relaxed);
+
+    {
+        let mut st = state.lock().await;
+        st.connections.insert(conn_id, tx_out);
+
+        // Elect first connection as control-plane
+        if st.control_conn.is_none() {
+            st.control_conn = Some(conn_id);
+        }
+    }
 
     // Sink task: drains rx_out into the WS sink.
     let sink_task = tokio::spawn(async move {
@@ -281,6 +330,16 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<ServerState>>) {
     }
 
     sink_task.abort();
+
+    // Cleanup connection on disconnect
+    {
+        let mut st = state.lock().await;
+        st.connections.remove(&conn_id);
+
+        if st.control_conn == Some(conn_id) {
+            st.control_conn = st.connections.keys().next().copied();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -302,11 +361,21 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
         "TAB_OPENED" => {
             if let Some(tab_id) = msg.get("tabId").and_then(|v| v.as_u64()) {
                 let tab_id = tab_id as u32;
+                let url = msg.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                let req_id = msg.get("reqId").and_then(|v| v.as_u64());
                 let mut st = state.lock().await;
-                if !st.live_tabs.contains(&tab_id) {
-                    st.live_tabs.push(tab_id);
+                // Boot phase: first valid OPEN_TAB response becomes controlled tab
+                if st.controlled_tab.is_none() {
+                    st.controlled_tab = Some(tab_id);
                 }
-                eprintln!("[ws] tab opened: {tab_id}");
+
+                if let Some(rid) = req_id {
+                    if let Some(tx) = st.pending_open.remove(&rid) {
+                        let _ = tx.send(tab_id);
+                    }
+                }
+
+                eprintln!("[ws] tab opened: {tab_id} url={url}");
             }
         }
 
@@ -314,7 +383,9 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             if let Some(tab_id) = msg.get("tabId").and_then(|v| v.as_u64()) {
                 let tab_id = tab_id as u32;
                 let mut st = state.lock().await;
-                st.live_tabs.retain(|&id| id != tab_id);
+                if st.controlled_tab == Some(tab_id) {
+                    st.controlled_tab = None;
+                }
                 st.tab_buffers.remove(&tab_id);
                 st.pending.remove(&tab_id);
                 eprintln!("[ws] tab closed: {tab_id}");
@@ -351,6 +422,7 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
 
         other => {
             eprintln!("[ws] unknown frame type: {other}");
+            eprintln!("[ws] full frame: {}", msg);
         }
     }
 }

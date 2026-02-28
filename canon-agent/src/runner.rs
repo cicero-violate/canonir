@@ -156,7 +156,10 @@ pub async fn run_agent(
                 }
             };
             eprintln!("[runner]   → calling node {node_id} (stage={:?})", input.stage);
-            match call_llm(bridge, &input).await {
+            const GPT_URL: &str =
+                "https://chatgpt.com/gg/699d3878fbd0819a9d73741b03e8128e";
+
+            match call_llm(bridge, &input, Some(GPT_URL)).await {
                 Ok(output) => {
                     eprintln!("[runner]   ✓ node {node_id} responded");
                     tick_stats.nodes_called += 1;

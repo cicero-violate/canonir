@@ -51,10 +51,37 @@ impl From<WsBridgeError> for LlmProviderError {
 /// Public Entry Point
 /// ------------------------------------------------------------------------
 
-pub async fn call_llm(bridge: &WsBridge, input: &AgentCallInput) -> Result<AgentCallOutput, LlmProviderError> {
+pub async fn call_llm(
+    bridge: &WsBridge,
+    input: &AgentCallInput,
+    target_url: Option<&str>,
+) -> Result<AgentCallOutput, LlmProviderError> {
     let prompt = PromptBuilder::new(input).build();
 
-    let raw_response = bridge.send_turn(Some(bridge.open_fresh_tab().await?), prompt).await.map_err(LlmProviderError::Transport)?;
+    bridge.wait_for_connection().await;
+
+    eprintln!("call_llm target_url = {:?}", target_url);
+
+    let tab_id = if let Some(url) = target_url {
+        eprintln!("Opening fresh tab with URL: {}", url);
+        bridge
+            .open_fresh_tab_with_url(url.to_string())
+            .await
+            .map_err(LlmProviderError::Transport)?
+    } else {
+        eprintln!("Opening fresh default ChatGPT tab");
+        bridge
+            .open_fresh_tab_with_url("https://chatgpt.com/".to_string())
+            .await
+            .map_err(LlmProviderError::Transport)?
+    };
+
+    eprintln!("Routing TURN to tab_id={}", tab_id);
+
+    let raw_response = bridge
+        .send_turn(Some(tab_id), prompt)
+        .await
+        .map_err(LlmProviderError::Transport)?;
 
     let payload = JsonExtractor::extract(&raw_response)?;
 
