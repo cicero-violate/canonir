@@ -114,4 +114,4 @@ test_projects/chatgpt_rustsandbox/
 *.log
 *.tmp
 
-chrome-dev-profile/
+chrome-dev-profile/algorithms/src/optimization/_example_bin
