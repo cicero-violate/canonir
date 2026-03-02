@@ -18,8 +18,16 @@ pub fn run_exit_check(command: &str, cwd: &Path) -> Result<ObserveResult> {
         .output()
         .with_context(|| format!("failed to spawn exit-check: {}", command))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stderr.trim().is_empty() {
+        if !combined.is_empty() {
+            combined.push('\n');
+        }
+        combined.push_str("--- stderr ---\n");
+        combined.push_str(&stderr);
+    }
     let exit_code = output.status.code().unwrap_or(-1);
 
-    Ok(ObserveResult { exit_code, stdout })
+    Ok(ObserveResult { exit_code, stdout: combined })
 }

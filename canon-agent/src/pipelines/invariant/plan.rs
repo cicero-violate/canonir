@@ -122,6 +122,7 @@ pub struct PlanRequest<'a> {
     pub exit_check_output: &'a str,
     pub is_bootstrap: bool,
     pub current_phase: Option<&'a Phase>,
+    pub stagnation_pressure: &'a str,
 }
 
 pub async fn plan_via_llm(
@@ -150,6 +151,7 @@ pub async fn plan_via_llm(
         req.last_error,
         req.rationale_history,
         req.exit_check_output,
+        req.stagnation_pressure,
     );
 
     std::fs::write(log_dir.join("prompt.txt"), &prompt).ok();

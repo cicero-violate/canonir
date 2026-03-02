@@ -26,6 +26,12 @@ pub struct RawAgent {
     pub retry_addendum: String,
     #[serde(default)]
     pub guardrails: Vec<RawGuardrail>,
+    /// How many consecutive non-act ticks before the stagnation pressure suffix fires.
+    #[serde(default = "default_stagnation_threshold")]
+    pub stagnation_threshold: usize,
+    /// Optional path (relative to AGENT_PROMPTS_DIR) for a goal/context file injected as {{GOAL}}.
+    #[serde(default)]
+    pub goal_file: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,6 +49,8 @@ pub struct RawGuardrail {
     pub message: String,
 }
 
+fn default_stagnation_threshold() -> usize { 4 }
+
 // ---------------------------------------------------------------------------
 // Resolved config
 // ---------------------------------------------------------------------------
@@ -55,6 +63,9 @@ pub struct AgentConfig {
     pub templates: Templates,
     pub retry_addendum: String,
     pub guardrails: Vec<RawGuardrail>,
+    pub stagnation_threshold: usize,
+    /// Loaded content of the goal file, or empty string.
+    pub goal: String,
 }
 
 pub struct Templates {
@@ -86,6 +97,13 @@ impl AgentConfig {
             rationale_history_len: a.rationale_history_len,
             retry_addendum: a.retry_addendum,
             guardrails: a.guardrails,
+            stagnation_threshold: a.stagnation_threshold,
+            goal: if a.goal_file.is_empty() {
+                String::new()
+            } else {
+                std::fs::read_to_string(dir.join(&a.goal_file))
+                    .unwrap_or_default()
+            },
             templates: Templates {
                 bootstrap: load(&a.templates.bootstrap)?,
                 observe:   load(&a.templates.observe)?,
@@ -110,6 +128,7 @@ impl AgentConfig {
         last_error: &str,
         rationale_history: &str,
         exit_check_output: &str,
+        stagnation_pressure: &str,
     ) -> String {
         template
             .replace("{{TICK}}", &tick.to_string())
@@ -119,6 +138,8 @@ impl AgentConfig {
             .replace("{{LAST_ERROR}}", last_error)
             .replace("{{RATIONALE_HISTORY}}", rationale_history)
             .replace("{{EXIT_CHECK_OUTPUT}}", exit_check_output)
+            .replace("{{GOAL}}", &self.goal)
+            .replace("{{STAGNATION_PRESSURE}}", stagnation_pressure)
     }
 
     pub fn render_retry_addendum(&self, error: &str) -> String {

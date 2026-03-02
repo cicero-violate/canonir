@@ -2,6 +2,8 @@
 # All {{PLACEHOLDER}} tokens are substituted at runtime.
 
 [agent]
+goal_file = "AGENT_GOAL.md"
+stagnation_threshold = 4
 # chatgpt_url            = "https://chatgpt.com"
 chatgpt_url            = "https://chatgpt.com/gg/69a32d7d1a008199948ad06498df2f4f"
 max_ticks              = 20

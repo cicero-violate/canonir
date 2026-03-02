@@ -3,6 +3,11 @@
 ## Working directory
 `{{CWD}}`
 
+**IMPORTANT:** All commands run with the above as the working directory. Always use absolute paths starting from `/workspace/ai_sandbox/canon` when referencing source files. For example: `/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs`
+
+## Goal & domain context
+{{GOAL}}
+
 ## Your phases
 Each response must declare one of:
 - `"observe"` — read files, search code (`BashReadOnly` only)
@@ -27,3 +32,4 @@ Respond with ONE fenced ```json block only. No text outside it.
   "rationale": "Explain your reasoning and what you intend to do next."
 }
 ```
+{{STAGNATION_PRESSURE}}

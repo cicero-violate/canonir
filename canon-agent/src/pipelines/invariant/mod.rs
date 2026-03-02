@@ -21,13 +21,23 @@ use std::collections::VecDeque;
 
 const RETRY_LIMIT: usize = 3;
 
+/// Appended to prompts when the agent has stagnated in observe/plan too long.
+const STAGNATION_PRESSURE: &str =
+    "\n\n\u{26a0}\u{fe0f}  STAGNATION DETECTED: You have spent many ticks observing or planning \
+     without acting. You MUST choose phase `act` this tick and emit at least one `ApplyPatch` or \
+     `Bash` delta. Do NOT choose observe or plan.";
+
 pub struct AgentPipeline {
     pub bridge: WsBridge,
     config: AgentConfig,
     tab_id: tokio::sync::Mutex<Option<u32>>,
     bootstrap_sent: tokio::sync::Mutex<bool>,
-    /// Ring buffer of recent rationales for {{RATIONALE_HISTORY}}.
+    /// Ring buffer of recent rationales for RATIONALE_HISTORY.
     rationale_history: tokio::sync::Mutex<VecDeque<String>>,
+    /// Count of consecutive ticks where the LLM chose observe or plan.
+    stagnation_counter: tokio::sync::Mutex<usize>,
+    /// Count of ticks consumed by plan phase (free ticks, for observability).
+    plan_tick_credits: tokio::sync::Mutex<usize>,
 }
 
 impl AgentPipeline {
@@ -39,6 +49,8 @@ impl AgentPipeline {
             tab_id: tokio::sync::Mutex::new(None),
             bootstrap_sent: tokio::sync::Mutex::new(false),
             rationale_history: tokio::sync::Mutex::new(VecDeque::new()),
+            stagnation_counter: tokio::sync::Mutex::new(0),
+            plan_tick_credits: tokio::sync::Mutex::new(0),
         }
     }
 
@@ -87,7 +99,7 @@ impl Pipeline for AgentPipeline {
 
         std::fs::write(log_dir.join("exit_check_output.txt"), &observe_result.stdout).ok();
 
-        // Load bash output persisted by the previous tick's act phase
+        // Load bash output persisted by the previous tick's act phase.
         let prev_log_dir = cwd
             .join("agent_logs")
             .join(format!("tick_{}", ctx.tick.saturating_sub(1)));
@@ -108,7 +120,16 @@ impl Pipeline for AgentPipeline {
         let rationale_history = self.rationale_history_str().await;
         let is_bootstrap = !*self.bootstrap_sent.lock().await;
 
-        // Track last phase for template selection on retries
+        // Snapshot stagnation count before the plan call so the pressure string
+        // is stable for the entire retry loop of this tick.
+        let stagnation_count = *self.stagnation_counter.lock().await;
+        let stagnation_pressure = if stagnation_count >= self.config.stagnation_threshold {
+            STAGNATION_PRESSURE
+        } else {
+            ""
+        };
+
+        // Track last phase for template selection on retries.
         let mut last_error: Option<String> = None;
         let mut response = None;
         let mut current_phase: Option<Phase> = None;
@@ -126,6 +147,7 @@ impl Pipeline for AgentPipeline {
                     exit_check_output: &observe_result.stdout,
                     is_bootstrap,
                     current_phase: current_phase.as_ref(),
+                    stagnation_pressure,
                 };
                 plan_via_llm(&self.bridge, &self.config, &req, &log_dir, &self.tab_id).await
             };
@@ -142,7 +164,7 @@ impl Pipeline for AgentPipeline {
             }
         }
 
-        // Mark bootstrap sent after first successful plan
+        // Mark bootstrap sent after first successful plan.
         if is_bootstrap && response.is_some() {
             *self.bootstrap_sent.lock().await = true;
         }
@@ -167,13 +189,22 @@ impl Pipeline for AgentPipeline {
             response.phase.to_string(),
         ).ok();
 
-        // -----------------------------------------------------------------------
-        // 3. Act — execute deltas (skip for Plan phase)
-        // -----------------------------------------------------------------------
-        let mut act_failed = false;
-        let mut bash_output = String::new();
+       // -----------------------------------------------------------------------
+       // 3. Act — execute deltas (skip for Plan phase)
+       // -----------------------------------------------------------------------
+       let mut act_failed = false;
+       let mut bash_output = String::new();
 
-        if response.phase != Phase::Plan {
+        // Act: execute Bash/ApplyPatch deltas.
+        // Observe/Verify: execute BashReadOnly deltas only if any were emitted.
+        // Plan: no deltas, skip entirely.
+        // Observe/Verify execution failures are non-fatal (soft error, reward stays 0).
+        let run_deltas = match response.phase {
+            Phase::Act => true,
+            Phase::Observe | Phase::Verify => !response.deltas.is_empty(),
+            Phase::Plan => false,
+        };
+        if run_deltas {
             match act::act(&response.deltas, &ctx.cwd) {
                 Ok(out) => {
                     bash_output = out;
@@ -182,7 +213,10 @@ impl Pipeline for AgentPipeline {
                     }
                 }
                 Err(e) => {
-                    act_failed = true;
+                    let is_fatal = response.phase == Phase::Act;
+                    if is_fatal {
+                        act_failed = true;
+                    }
                     std::fs::write(log_dir.join("act_error.txt"), e.to_string()).ok();
                 }
             }
@@ -200,14 +234,33 @@ impl Pipeline for AgentPipeline {
         }
 
         // -----------------------------------------------------------------------
-        // 5. Score
+        // 5. Update stagnation counter
+        // -----------------------------------------------------------------------
+        {
+            let mut sc = self.stagnation_counter.lock().await;
+            if response.phase == Phase::Act || response.phase == Phase::Verify {
+                *sc = 0;
+            } else {
+                *sc += 1;
+            }
+        }
+
+        // Plan ticks are "free" — record credit for observability.
+        if response.phase == Phase::Plan {
+            let mut credits = self.plan_tick_credits.lock().await;
+            *credits += 1;
+        }
+
+        // -----------------------------------------------------------------------
+        // 6. Score
         // -----------------------------------------------------------------------
         let reward = score::compute_reward(exit_ok, act_failed);
         let advanced = exit_ok && !act_failed;
+        let plan_credits = *self.plan_tick_credits.lock().await;
 
         let summary = format!(
-            "tick={} phase={} exit_ok={} act_failed={} reward={:.1}",
-            ctx.tick, response.phase, exit_ok, act_failed, reward,
+            "tick={} phase={} exit_ok={} act_failed={} reward={:.1} stagnation={} plan_credits={}",
+            ctx.tick, response.phase, exit_ok, act_failed, reward, stagnation_count, plan_credits,
         );
         println!("[agent] {}", summary);
 
