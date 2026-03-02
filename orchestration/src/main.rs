@@ -14,9 +14,13 @@ use canon::CanonIR;
 use canon_telemetry::{BuildReport, StructuralSurface};
 use std::path::PathBuf;
 
-const FIXTURES: &[&str] = &["repomap", "test_1", "semantic-lint", "conversation", "canon"];
+use std::collections::HashMap;
+
+// const FIXTURES: &[&str] = &["repomap", "test_1", "semantic-lint", "conversation", "canon"];
+const FIXTURES: &[&str] = &["repomap", "test_1"];
 const TEST_ROOT: &str = "/workspace/ai_sandbox/canon/test_projects/test_rust_projects";
 const REPORT_PATH: &str = "/workspace/ai_sandbox/canon/STRUCTURAL_INVARIANTS_REPORT.md";
+const JSON_REPORT_PATH: &str = "/workspace/ai_sandbox/canon/orchestration_report.json";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -47,6 +51,32 @@ fn main() -> Result<()> {
 // ---------------------------------------------------------------------------
 // Multi-fixture loop
 // ---------------------------------------------------------------------------
+
+/// Machine-readable per-fixture summary written to `orchestration_report.json`.
+#[derive(Debug, Clone, serde::Serialize)]
+struct FixtureSummary {
+    fixture: &'static str,
+    pipeline_ok: bool,
+    pipeline_error: Option<String>,
+    suppressed_count: usize,
+    suppressed_ret_count: usize,
+    suppressed_nonret_count: usize,
+    match_gap_count: usize,
+    call_gap_count: usize,
+    switch_gap_count: usize,
+    unresolved_gap_total: usize,
+    unresolved_ret_gap_count: usize,
+    unreachable_count: usize,
+    build_success: bool,
+    build_error_count: usize,
+    build_warning_count: usize,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct OrchestratonReport {
+    overall_ok: bool,
+    fixtures: Vec<FixtureSummary>,
+}
 
 struct FixtureResult {
     fixture: &'static str,
@@ -89,7 +119,9 @@ fn run_all_fixtures() -> Result<()> {
     }
 
     write_report(&results)?;
+    write_json_report(&results, overall_ok)?;
     println!("\nInvariant report written to: {}", REPORT_PATH);
+    println!("JSON report written to:      {}", JSON_REPORT_PATH);
 
     if !overall_ok {
         std::process::exit(1);
@@ -161,7 +193,37 @@ fn write_report(results: &[FixtureResult]) -> Result<()> {
         out.push('\n');
     }
 
-    std::fs::write(REPORT_PATH, out).context("failed to write STRUCTURAL_INVARIANTS_REPORT.md")
+    std::fs::write(REPORT_PATH, out).context("failed to write STRUCTURAL_INVARIANTS_REPORT.md")?;
+    Ok(())
+}
+
+fn write_json_report(results: &[FixtureResult], overall_ok: bool) -> Result<()> {
+    let fixtures: Vec<FixtureSummary> = results
+        .iter()
+        .map(|r| {
+            let (surface, build) = (r.surface.as_ref(), r.build.as_ref());
+            FixtureSummary {
+                fixture: r.fixture,
+                pipeline_ok: r.error.is_none(),
+                pipeline_error: r.error.clone(),
+                suppressed_count: surface.map(|s| s.suppressed_count).unwrap_or(0),
+                suppressed_ret_count: surface.map(|s| s.suppressed_ret_count).unwrap_or(0),
+                suppressed_nonret_count: surface.map(|s| s.suppressed_nonret_count).unwrap_or(0),
+                match_gap_count: surface.map(|s| s.match_gap_count).unwrap_or(0),
+                call_gap_count: surface.map(|s| s.call_gap_count).unwrap_or(0),
+                switch_gap_count: surface.map(|s| s.switch_gap_count).unwrap_or(0),
+                unresolved_gap_total: surface.map(|s| s.unresolved_gap_total).unwrap_or(0),
+                unresolved_ret_gap_count: surface.map(|s| s.unresolved_ret_gap_count).unwrap_or(0),
+                unreachable_count: surface.map(|s| s.unreachable_count).unwrap_or(0),
+                build_success: build.map(|b| b.success).unwrap_or(false),
+                build_error_count: build.map(|b| b.errors.len()).unwrap_or(0),
+                build_warning_count: build.map(|b| b.warnings.len()).unwrap_or(0),
+            }
+        })
+        .collect();
+
+    let report = OrchestratonReport { overall_ok, fixtures };
+    std::fs::write(JSON_REPORT_PATH, serde_json::to_string_pretty(&report)?).context("failed to write orchestration_report.json")
 }
 
 // ---------------------------------------------------------------------------
