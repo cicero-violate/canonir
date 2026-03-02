@@ -4,8 +4,8 @@
 # Usage: ./run_capture.sh <path/to/project> <output.json>
 #
 # Example:
-  # ./run_capture.sh test_projects/test_captured_project \
-  #     test_projects/test_captured_project/canon_ir_captured.json
+# ./run_capture.sh test_projects/test_captured_project \
+#     test_projects/test_captured_project/canon_ir_captured.json
 
 set -euo pipefail
 
