@@ -53,14 +53,19 @@ Rules:
 Before emitting any `ApplyPatch` delta you MUST have previously issued a
 `BashReadOnly` with `sed -n '<start>,<end>p'` (or equivalent) that covers
 the **exact lines** you intend to use as context anchors in the patch.
-**Do NOT write context lines from memory or inference.** If you have not
-read the target lines in this tick or a prior observe tick, emit an
-`observe` phase first to read them, then act in the next tick.
+**Do NOT write context lines from memory or inference.**
+**EXCEPTION — injected error sample:** If `## Concrete error sample` appears
+in your **Structural progress** block this tick, that sample IS your anchor.
+You MAY emit an ApplyPatch targeting the exact lines shown there without
+a prior `sed` read. Then immediately follow with a `BashReadOnly`
+`cargo check -p <crate>` in the same response
+to measure ΔE. This is the $P \rightarrow B$ protocol: patch then check,
+same tick. Do not defer the check to the next tick.
 ### After patching Rust files (MANDATORY)
 If any of your `ApplyPatch` deltas touch a `.rs` file, your **next phase
 must be `verify`** and you must run `cargo check -p <crate_name> 2>&1`
 as the first `BashReadOnly` delta in that verify tick — always with `--message-format=json`:
-`cargo check -p <crate_name> --message-format=json 2>&1`. Do not observe or
+`cargo check -p <crate_name>`. Do not observe or
 plan between an act and its compile verification.
 
 {{STAGNATION_PRESSURE}}
