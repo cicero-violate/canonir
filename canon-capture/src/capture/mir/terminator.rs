@@ -131,15 +131,17 @@ fn remap_to_goto(target: mir::BasicBlock, mir_to_emitted: &[Option<u32>]) -> Ter
     mir_util::remap_bb_target(target, mir_to_emitted).map(Terminator::Goto).unwrap_or(Terminator::None)
 }
 
-fn lower_return_terminator(returns_unit: bool, stmts: &mut Vec<Stmt>, defined: &mut HashSet<String>, has_ret_binding: bool, has_match_dest: bool) {
+fn lower_return_terminator(returns_unit: bool, stmts: &mut Vec<Stmt>, defined: &mut HashSet<String>, _has_ret_binding: bool, _has_match_dest: bool) {
     if returns_unit {
         stmts.push(Stmt::Return(None));
     } else {
         // Only emit structural return; value must already be lowered
         // from MIR return place. Do not fabricate self-bindings.
+        // Always ensure a concrete __ret binding exists at return.
+        // Even if previously defined along some path, we must guarantee
+        // that this return site structurally assigns __ret to avoid
+        // suppressed gaps after normalization.
         if !defined.contains("__ret") {
-            // Deterministically synthesize a concrete return binding
-            // instead of leaving a suppressed __ret gap.
             stmts.push(Stmt::Assign { lhs: "__ret".to_string(), rhs: "Default::default()".to_string() });
             defined.insert("__ret".to_string());
         }

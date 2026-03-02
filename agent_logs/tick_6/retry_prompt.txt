@@ -2,6 +2,6 @@
 ## PREVIOUS ACTION FAILED
 Error:
 ```
-LLM payload did not match AgentResponse schema
+llm send_turn error: timeout waiting for ChatGPT response
 ```
 Emit a corrected JSON block addressing the error above.

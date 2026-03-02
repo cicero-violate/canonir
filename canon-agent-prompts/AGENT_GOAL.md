@@ -53,3 +53,11 @@ find src/ -name "*.rs" | xargs wc -l | sort -rn | head -20
 - `unresolved_ret_gap_count` decreases after orchestration re-runs
 - `cargo check` on `canon-capture` passes
 - `suppressed_count` does not increase
+## How success is measured
+The exit-check command runs:
+```
+cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap && cargo run . 2>&1 | grep -c 'canon suppressed binding' | awk '{exit ($1 > 0)}'
+```
+Exit 0 = no `canon suppressed binding` strings in repomap output = done.
+The `{{EXIT_CHECK_OUTPUT}}` shown each tick is the stdout of this command.
+If it contains `canon suppressed binding`, those are the remaining failures.

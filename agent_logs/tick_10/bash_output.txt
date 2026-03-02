@@ -1,61 +1,18 @@
-$ rg -n "materialize_return_local|resolve_ret_gaps_with" -S .
-./agent_logs/tick_8/bash_output.txt:23:        lower::materialize_return_local(&mut body);
-./agent_logs/tick_8/bash_output.txt:28:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-./agent_logs/tick_8/bash_output.txt:50:        lower::materialize_return_local(&mut body);
-./agent_logs/tick_8/bash_output.txt:55:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-./agent_logs/tick_8/bash_output.txt:104:$ rg -n "pub\s+fn\s+materialize_return_local|pub\s+fn\s+resolve_ret_gaps_with" -S
-./canon-capture/src/capture/engine.rs:181:        lower::materialize_return_local(&mut body);
-./canon-capture/src/capture/engine.rs:186:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-./canon-capture/src/capture/engine.rs:208:        lower::materialize_return_local(&mut body);
-./canon-capture/src/capture/engine.rs:213:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-./agent_logs/tick_8/prompt.txt:328:[T-4] Engine calls materialize_return_local and resolve_ret_gaps_with after MIR structural lowering. If gaps still exist in emitted Rust, the issue likely lies in these helpers or their interaction with stage_finalize_body_with_ret_fallback. Inspect their definitions and the full lower.rs to verify whether __ret assignments are being dropped, overwritten, or structurally bypassed.
-./agent_logs/tick_8/prompt.txt:330:[T-3] The search for materialize_return_local and resolve_ret_gaps_with returned no results, which is suspicious because engine.rs calls them. This suggests either they are defined elsewhere (possibly re-exported or in another module) or missing entirely. Also inspect stmts_have_ret_binding/match helpers and the remainder of lower.rs to verify whether return-detection logic is inconsistent, leading to false negatives and missed __ret synthesis.
-./agent_logs/tick_8/prompt.txt:332:[T-2] engine.rs invokes materialize_return_local and resolve_ret_gaps_with, but earlier search did not reveal their definitions inside capture/mir. Verify whether these functions are actually defined (possibly in another module or re-exported) or missing entirely. If missing, that would explain why __ret gaps persist despite intended post-processing.
-./agent_logs/tick_8/prompt.txt:334:[T-1] materialize_return_local and resolve_ret_gaps_with are not defined in capture/mir, which is a structural red flag given engine.rs calls them. Before concluding they are missing, inspect util.rs and expr.rs for any return-place or __ret-specific helpers that might implicitly perform this role. In particular, verify whether stmt_defines_ret or related utilities incorrectly classify return bindings, which could prevent fallback synthesis from triggering.
-./agent_logs/tick_4/prompt.txt:191:        lower::materialize_return_local(&mut body);
-./agent_logs/tick_4/prompt.txt:196:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-./agent_logs/tick_4/prompt.txt:218:        lower::materialize_return_local(&mut body);
-./agent_logs/tick_4/prompt.txt:223:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-./agent_logs/tick_4/bash_output.txt:1:$ rg -n "materialize_return_local|resolve_ret_gaps_with" canon-capture/src/capture/mir -n
-./agent_logs/tick_9/prompt.txt:32:        lower::materialize_return_local(&mut body);
-./agent_logs/tick_9/prompt.txt:37:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-./agent_logs/tick_9/prompt.txt:59:        lower::materialize_return_local(&mut body);
-./agent_logs/tick_9/prompt.txt:64:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-./agent_logs/tick_9/prompt.txt:113:$ rg -n "pub\s+fn\s+materialize_return_local|pub\s+fn\s+resolve_ret_gaps_with" -S
-./agent_logs/tick_9/prompt.txt:120:[T-5] Engine calls materialize_return_local and resolve_ret_gaps_with after MIR structural lowering. If gaps still exist in emitted Rust, the issue likely lies in these helpers or their interaction with stage_finalize_body_with_ret_fallback. Inspect their definitions and the full lower.rs to verify whether __ret assignments are being dropped, overwritten, or structurally bypassed.
-./agent_logs/tick_9/prompt.txt:122:[T-4] The search for materialize_return_local and resolve_ret_gaps_with returned no results, which is suspicious because engine.rs calls them. This suggests either they are defined elsewhere (possibly re-exported or in another module) or missing entirely. Also inspect stmts_have_ret_binding/match helpers and the remainder of lower.rs to verify whether return-detection logic is inconsistent, leading to false negatives and missed __ret synthesis.
-./agent_logs/tick_9/prompt.txt:124:[T-3] engine.rs invokes materialize_return_local and resolve_ret_gaps_with, but earlier search did not reveal their definitions inside capture/mir. Verify whether these functions are actually defined (possibly in another module or re-exported) or missing entirely. If missing, that would explain why __ret gaps persist despite intended post-processing.
-./agent_logs/tick_9/prompt.txt:126:[T-2] materialize_return_local and resolve_ret_gaps_with are not defined in capture/mir, which is a structural red flag given engine.rs calls them. Before concluding they are missing, inspect util.rs and expr.rs for any return-place or __ret-specific helpers that might implicitly perform this role. In particular, verify whether stmt_defines_ret or related utilities incorrectly classify return bindings, which could prevent fallback synthesis from triggering.
-./agent_logs/tick_9/prompt.txt:128:[T-1] engine.rs calls lower::materialize_return_local and lower::resolve_ret_gaps_with, but no definitions exist in capture/mir. Confirm exactly how they are referenced in engine.rs and whether they are expected to be public functions in lower.rs but are currently missing. If they are indeed absent, that would explain why post-lowering return gap resolution is not actually happening.
-./agent_logs/tick_3/bash_output.txt:182:        lower::materialize_return_local(&mut body);
-./agent_logs/tick_3/bash_output.txt:187:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-./agent_logs/tick_3/bash_output.txt:209:        lower::materialize_return_local(&mut body);
-./agent_logs/tick_3/bash_output.txt:214:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-./agent_logs/tick_10/prompt.txt:15:[T-5] The search for materialize_return_local and resolve_ret_gaps_with returned no results, which is suspicious because engine.rs calls them. This suggests either they are defined elsewhere (possibly re-exported or in another module) or missing entirely. Also inspect stmts_have_ret_binding/match helpers and the remainder of lower.rs to verify whether return-detection logic is inconsistent, leading to false negatives and missed __ret synthesis.
-./agent_logs/tick_10/prompt.txt:17:[T-4] engine.rs invokes materialize_return_local and resolve_ret_gaps_with, but earlier search did not reveal their definitions inside capture/mir. Verify whether these functions are actually defined (possibly in another module or re-exported) or missing entirely. If missing, that would explain why __ret gaps persist despite intended post-processing.
-./agent_logs/tick_10/prompt.txt:19:[T-3] materialize_return_local and resolve_ret_gaps_with are not defined in capture/mir, which is a structural red flag given engine.rs calls them. Before concluding they are missing, inspect util.rs and expr.rs for any return-place or __ret-specific helpers that might implicitly perform this role. In particular, verify whether stmt_defines_ret or related utilities incorrectly classify return bindings, which could prevent fallback synthesis from triggering.
-./agent_logs/tick_10/prompt.txt:21:[T-2] engine.rs calls lower::materialize_return_local and lower::resolve_ret_gaps_with, but no definitions exist in capture/mir. Confirm exactly how they are referenced in engine.rs and whether they are expected to be public functions in lower.rs but are currently missing. If they are indeed absent, that would explain why post-lowering return gap resolution is not actually happening.
-./agent_logs/tick_10/prompt.txt:23:[T-1] materialize_return_local and resolve_ret_gaps_with are invoked from engine.rs but are not defined anywhere in canon-capture/src (confirmed via global search). This means the intended post-structural return-gap resolution logic is never actually implemented, which directly explains persistent __ret gaps. The next step is to implement these two functions in capture/mir/lower.rs so that they (1) ensure a concrete __ret local is materialized into the Body::Blocks form and (2) replace any remaining missing or suppressed __ret bindings with a deterministic default expression, structurally, without introducing suppressed sentinels.
-./agent_logs/tick_7/prompt.txt:10:$ rg -n "fn materialize_return_local|fn resolve_ret_gaps_with" canon-capture/src -n
-./agent_logs/tick_7/prompt.txt:34:[T-3] Engine calls materialize_return_local and resolve_ret_gaps_with after MIR structural lowering. If gaps still exist in emitted Rust, the issue likely lies in these helpers or their interaction with stage_finalize_body_with_ret_fallback. Inspect their definitions and the full lower.rs to verify whether __ret assignments are being dropped, overwritten, or structurally bypassed.
-./agent_logs/tick_7/prompt.txt:36:[T-2] The search for materialize_return_local and resolve_ret_gaps_with returned no results, which is suspicious because engine.rs calls them. This suggests either they are defined elsewhere (possibly re-exported or in another module) or missing entirely. Also inspect stmts_have_ret_binding/match helpers and the remainder of lower.rs to verify whether return-detection logic is inconsistent, leading to false negatives and missed __ret synthesis.
-./agent_logs/tick_7/prompt.txt:38:[T-1] engine.rs invokes materialize_return_local and resolve_ret_gaps_with, but earlier search did not reveal their definitions inside capture/mir. Verify whether these functions are actually defined (possibly in another module or re-exported) or missing entirely. If missing, that would explain why __ret gaps persist despite intended post-processing.
-./agent_logs/tick_6/bash_output.txt:1:$ rg -n "fn materialize_return_local|fn resolve_ret_gaps_with" canon-capture/src -n
-./agent_logs/tick_6/prompt.txt:10:$ rg -n "materialize_return_local|resolve_ret_gaps_with" -S canon-capture/src
-./agent_logs/tick_6/prompt.txt:11:canon-capture/src/capture/engine.rs:181:        lower::materialize_return_local(&mut body);
-./agent_logs/tick_6/prompt.txt:12:canon-capture/src/capture/engine.rs:186:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-./agent_logs/tick_6/prompt.txt:13:canon-capture/src/capture/engine.rs:208:        lower::materialize_return_local(&mut body);
-./agent_logs/tick_6/prompt.txt:14:canon-capture/src/capture/engine.rs:213:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-./agent_logs/tick_6/prompt.txt:114:[T-2] Engine calls materialize_return_local and resolve_ret_gaps_with after MIR structural lowering. If gaps still exist in emitted Rust, the issue likely lies in these helpers or their interaction with stage_finalize_body_with_ret_fallback. Inspect their definitions and the full lower.rs to verify whether __ret assignments are being dropped, overwritten, or structurally bypassed.
-./agent_logs/tick_6/prompt.txt:116:[T-1] The search for materialize_return_local and resolve_ret_gaps_with returned no results, which is suspicious because engine.rs calls them. This suggests either they are defined elsewhere (possibly re-exported or in another module) or missing entirely. Also inspect stmts_have_ret_binding/match helpers and the remainder of lower.rs to verify whether return-detection logic is inconsistent, leading to false negatives and missed __ret synthesis.
-./agent_logs/tick_5/bash_output.txt:1:$ rg -n "materialize_return_local|resolve_ret_gaps_with" -S canon-capture/src
-./agent_logs/tick_5/bash_output.txt:2:canon-capture/src/capture/engine.rs:181:        lower::materialize_return_local(&mut body);
-./agent_logs/tick_5/bash_output.txt:3:canon-capture/src/capture/engine.rs:186:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-./agent_logs/tick_5/bash_output.txt:4:canon-capture/src/capture/engine.rs:208:        lower::materialize_return_local(&mut body);
-./agent_logs/tick_5/bash_output.txt:5:canon-capture/src/capture/engine.rs:213:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-./agent_logs/tick_5/prompt.txt:10:$ rg -n "materialize_return_local|resolve_ret_gaps_with" canon-capture/src/capture/mir -n
-./agent_logs/tick_5/prompt.txt:285:[T-1] Engine calls materialize_return_local and resolve_ret_gaps_with after MIR structural lowering. If gaps still exist in emitted Rust, the issue likely lies in these helpers or their interaction with stage_finalize_body_with_ret_fallback. Inspect their definitions and the full lower.rs to verify whether __ret assignments are being dropped, overwritten, or structurally bypassed.
+$ cargo test -p canon-capture 2>&1
+   Compiling canon-capture v0.1.0 (/workspace/ai_sandbox/canon/canon-capture)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.85s
+     Running unittests src/lib.rs (target/debug/deps/canon_capture-83a02123355bc149)
 
-$ rg -n "mod lower" -S canon-capture/src
-canon-capture/src/capture/mir/mod.rs:5:pub mod lower;
+running 2 tests
+test norm::tests::normalizes_extern_type_paths ... ok
+test norm::tests::normalizes_local_crate_path_prefixes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests canon_capture
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
 

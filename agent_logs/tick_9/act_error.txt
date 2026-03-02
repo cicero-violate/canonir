@@ -1,1 +1,1 @@
-readonly bash exited with exit status: 101: 
+apply_patch failed in "/workspace/ai_sandbox/canon": exit status: 1

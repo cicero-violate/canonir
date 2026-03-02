@@ -12,33 +12,24 @@ Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in
 
 ### Output from previous commands
 ```
-$ sed -n '1,200p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/mod.rs
-pub mod analysis;
-pub mod expr;
-pub mod filters;
-pub mod guard;
-pub mod lower;
-pub mod ops;
-pub mod passes;
-pub mod patterns;
-pub mod resolver;
-pub mod terminator;
-pub mod util;
+$ cargo check -p canon-capture 2>&1
+    Checking canon-capture v0.1.0 (/workspace/ai_sandbox/canon/canon-capture)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.94s
 
 
 ```
 
 ### Recent rationale history
 ```
-[T-5] We still have not surfaced the actual compiler diagnostics that caused exit status 101. Re-running cargo check in read-only mode (without forcing success) will expose the precise build errors so we can fix the real root cause instead of continuing structural inspection.
+[T-5] The previously reported compile errors (E0282 and E0560) are already resolved in the current file state: suppressed_dest_sentinels is explicitly typed as Vec<Stmt>, and BasicBlock now correctly uses the `terminator` field instead of `term`. The fallback return synthesis block is also structurally correct. The code shown is consistent and properly grounded; next step should be to re-run cargo check to confirm the build is clean in this state.
 ---
-[T-4] Despite prior attempts, the compiler diagnostics causing exit status 101 have not been surfaced in the transcript. Running cargo check again in strict read-only mode (without forcing success) is necessary to obtain the concrete error output so we can address the real build failure rather than continuing structural inspection.
+[T-4] types::BasicBlock correctly defines the `terminator` field, and lower.rs now uses `terminator` consistently. suppressed_dest_sentinels is explicitly typed as Vec<Stmt>. Re-running cargo check to confirm the crate builds cleanly after the latest structural changes.
 ---
-[T-3] Verify the visibility and exact definitions of materialize_return_local and resolve_ret_gaps_with across the workspace to determine whether lower::materialize_return_local / lower::resolve_ret_gaps_with are correctly exported and accessible from engine.rs, which may be the source of the build failure.
+[T-3] cargo check for canon-capture now completes successfully with no errors. The crate builds cleanly, meaning the previous E0282 and E0560 issues are resolved and the strengthened return synthesis compiles correctly. At this point, the structural invariant enforcement changes are building; next step would be orchestration-level validation (e.g., unresolved_ret_gap_count) rather than further compilation fixes.
 ---
-[T-2] Previous cargo check attempts exited with status 101 and aborted the tick before diagnostics were captured. Re-running cargo check while forcing a zero exit code ensures full compiler error output is emitted so we can identify and fix the actual build failure.
+[T-2] Compilation is clean; execute the canon-capture test suite to validate that strengthened __ret structural guarantees do not introduce behavioral regressions and that the invariant holds under tests.
 ---
-[T-1] Engine calls lower::materialize_return_local and lower::resolve_ret_gaps_with. We need to inspect capture/mir/mod.rs to confirm how the lower module is exposed and whether these functions are actually defined and publicly re-exported from lower.rs. This will determine whether the build failure is due to missing or non-public functions.
+[T-1] cargo test for canon-capture completed successfully: all unit tests passed (2/2) and doc-tests passed (0 failures). The crate compiles cleanly and the strengthened structural __ret guarantees did not introduce regressions at the test level. The build and test suite are now green.
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.

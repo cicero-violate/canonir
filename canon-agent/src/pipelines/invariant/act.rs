@@ -22,15 +22,27 @@ pub fn act(deltas: &[CodeDelta], capture_dirs: &[PathBuf]) -> Result<String> {
     for delta in deltas {
         match delta {
             CodeDelta::Bash { command } => {
-                let status = Command::new("bash")
+                let output = Command::new("bash")
                     .arg("-c")
                     .arg(command)
                     .current_dir(capture_dir)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .output()
                     .context("bash command failed to spawn")?;
-                anyhow::ensure!(status.success(), "bash command exited with {}", status);
+                let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.trim().is_empty() {
+                    if !combined.is_empty() { combined.push('\n'); }
+                    combined.push_str("--- stderr ---\n");
+                    combined.push_str(&stderr);
+                }
+                if !combined.trim().is_empty() {
+                    bash_output.push_str(&format!("$ {}\n", command));
+                    bash_output.push_str(&combined);
+                    bash_output.push('\n');
+                }
+                anyhow::ensure!(output.status.success(), "bash command exited with {}", output.status);
             }
 
             CodeDelta::BashReadOnly { command } => {

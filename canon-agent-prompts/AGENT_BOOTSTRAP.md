@@ -8,6 +8,17 @@
 ## Goal & domain context
 {{GOAL}}
 
+## Exit-check command (what "done" means)
+The loop terminates when this command exits 0:
+```
+cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap && cargo run . 2>&1 | grep -c 'canon suppressed binding' | awk '{exit ($1 > 0)}'
+```
+This runs the repomap tool against the canon-capture output and counts
+occurrences of the string `canon suppressed binding` in the result.
+Exit 0 = zero occurrences = success. Any occurrence = still failing.
+Your goal is to eliminate all `canon suppressed binding` strings from
+the repomap output by fixing the structural return lowering in canon-capture.
+
 ## Your phases
 Each response must declare one of:
 - `"observe"` — read files, search code (`BashReadOnly` only)
@@ -45,3 +56,17 @@ Respond with ONE fenced ```json block only. No text outside it.
 }
 ```
 {{STAGNATION_PRESSURE}}
+## ApplyPatch format (MANDATORY)
+The `patch` string must use this exact format — NOT unified diff (`---`/`+++`):
+```
+*** Begin Patch
+*** Update File: path/relative/to/repo/root/file.rs
+@@
+-    old line to remove
++    new line to add
+ unchanged context line
+*** End Patch
+```
+- Path relative to repo root `/workspace/ai_sandbox/canon`
+- Escape for JSON: replace each newline with `\n`
+- `@@` separates unrelated hunks; `-` removes, `+` adds, unprefixed = context

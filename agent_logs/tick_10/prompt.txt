@@ -19,15 +19,15 @@ $ rg -n "pub\s+fn\s+materialize_return_local|pub\s+fn\s+resolve_ret_gaps_with" /
 
 ### Recent rationale history
 ```
-[T-5] Previous cargo check exited with status 101, which caused the tick to fail. Re-run cargo check while forcing a zero exit code so that full compiler diagnostics are captured without terminating the orchestration loop.
+[T-5] Strengthen structural invariant at return sites by guaranteeing a concrete __ret assignment whenever a non-unit function returns. This ensures no suppressed __ret gap can survive normalization even if prior analysis incorrectly marked a path as having a return binding.
 ---
-[T-4] Capture the full compiler diagnostics for canon-capture to understand the root cause of the exit status 101 failure and determine whether it is a type error, borrow issue, or invariant-related break introduced by recent structural return changes.
+[T-4] Compilation is currently failing due to two concrete errors in lower.rs: (1) missing type annotation for suppressed_dest_sentinels (E0282), and (2) incorrect BasicBlock field name `term` instead of `terminator` (E0560). Re-read the exact current code around both locations to prepare a precisely grounded patch.
 ---
-[T-3] We still have not surfaced the actual compiler diagnostics that caused exit status 101. Re-running cargo check in read-only mode (without forcing success) will expose the precise build errors so we can fix the real root cause instead of continuing structural inspection.
+[T-3] The previously reported compile errors (E0282 and E0560) are already resolved in the current file state: suppressed_dest_sentinels is explicitly typed as Vec<Stmt>, and BasicBlock now correctly uses the `terminator` field instead of `term`. The fallback return synthesis block is also structurally correct. The code shown is consistent and properly grounded; next step should be to re-run cargo check to confirm the build is clean in this state.
 ---
-[T-2] Despite prior attempts, the compiler diagnostics causing exit status 101 have not been surfaced in the transcript. Running cargo check again in strict read-only mode (without forcing success) is necessary to obtain the concrete error output so we can address the real build failure rather than continuing structural inspection.
+[T-2] types::BasicBlock correctly defines the `terminator` field, and lower.rs now uses `terminator` consistently. suppressed_dest_sentinels is explicitly typed as Vec<Stmt>. Re-running cargo check to confirm the crate builds cleanly after the latest structural changes.
 ---
-[T-1] Verify the visibility and exact definitions of materialize_return_local and resolve_ret_gaps_with across the workspace to determine whether lower::materialize_return_local / lower::resolve_ret_gaps_with are correctly exported and accessible from engine.rs, which may be the source of the build failure.
+[T-1] cargo check for canon-capture now completes successfully with no errors. The crate builds cleanly, meaning the previous E0282 and E0560 issues are resolved and the strengthened return synthesis compiles correctly. At this point, the structural invariant enforcement changes are building; next step would be orchestration-level validation (e.g., unresolved_ret_gap_count) rather than further compilation fixes.
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.

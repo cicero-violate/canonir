@@ -1,392 +1,248 @@
-$ sed -n '220,320p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs
-            }
-        }
-    }
-
-    if !has_ret_binding || !has_return_stmt {
-        // Instead of emitting a separate fallback block (which may be unreachable
-        // in emitted Rust), inject a structural return directly into the last
-        // existing block to guarantee a concrete __ret binding.
-        if let Some(last) = blocks.last_mut() {
-            last.stmts.push(Stmt::Assign { lhs: "__ret".to_string(), rhs: default_expr });
-            last.stmts.push(Stmt::Return(Some("__ret".to_string())));
-        } else {
-            blocks.push(BasicBlock { stmts: vec![Stmt::Assign { lhs: "__ret".to_string(), rhs: default_expr }, Stmt::Return(Some("__ret".to_string()))], term: Terminator::None });
-        }
-    }
-
-    Body::Blocks(blocks)
+$ sed -n '160,260p' /workspace/ai_sandbox/canon/run_script.sh
+      /tmp/.inv_solver_warns.$$ \
+      /tmp/.inv_liveness.$$ \
+      /tmp/.inv_rust_errors.$$ \
+      /tmp/.inv_rust_errors_plain.$$ \
+      /tmp/.inv_signals.$$ \
+      /tmp/.inv_env.$$ \
+      /tmp/.inv_syntax.$$ \
+      /tmp/.inv_invariant_serde.$$ \
+      /tmp/.inv_invariant_alloc.$$ \
+      /tmp/.inv_invariant_offline.$$ || true
 }
 
-fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLowerCtx<'_, 'tcx>) {
-    let mir::StatementKind::Assign(boxed) = &stmt.kind else {
-        return;
+run_fixture() {
+    local fixture="$1"
+    local capture_dir="$ROOT/capture/$fixture"
+    local capture_json="$capture_dir/canon_capture.json"
+    local emit_dir="$ROOT/emit/$fixture"
+    local failed=0
+
+    run_step "$fixture" capture on_fail "$SCRIPT_DIR/run_capture.sh" "$capture_dir" "$capture_json" || failed=1
+    run_step "$fixture" clean on_fail rm -rf "$emit_dir" || failed=1
+    run_step "$fixture" orchestration always cargo run -p orchestration -- "$capture_json" "$emit_dir" || failed=1
+    run_step "$fixture" fmt_emit on_fail bash -lc "cd '$emit_dir' && cargo fmt" || failed=1
+    run_step "$fixture" fmt_capture on_fail bash -lc "cd '$capture_dir' && cargo fmt" || failed=1
+    run_step "$fixture" build_emit on_fail bash -lc "cd '$emit_dir' && CARGO_NET_OFFLINE='${CARGO_NET_OFFLINE:-true}' cargo build" || failed=1
+    run_step "$fixture" diff always python "$ROOT/diff_src_dirs.py" "$capture_dir/src" "$emit_dir/src" || failed=1
+
+    return $failed
+}
+
+declare -a FIXTURES=(repomap test_1 semantic-lint conversation canon)
+if [[ $# -gt 0 ]]; then
+    FIXTURES=("$1")
+fi
+
+overall=0
+for fixture in "${FIXTURES[@]}"; do
+    if ! run_fixture "$fixture"; then
+        overall=1
+    fi
+done
+
+echo "Invariant report written to: $REPORT"
+exit $overall
+
+$ sed -n '1,200p' /workspace/ai_sandbox/canon/canon_telemetry/src/lib.rs
+//! canon_telemetry — structural surface scanner for emitted canon source.
+//!
+//! Scans a canon-emitted `src/` directory and accumulates the invariant
+//! counters that `run_script.sh` used to compute via shell+rg.
+
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use std::io;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use walkdir::WalkDir;
+
+// ---------------------------------------------------------------------------
+// Pattern strings (compiled once via lazy statics)
+// ---------------------------------------------------------------------------
+
+macro_rules! pat {
+    ($e:expr) => {
+        Regex::new($e).expect("hardcoded regex")
     };
-    let (lhs, rvalue) = &**boxed;
-    let lhs_name = ctx.resolver.label_place(lhs);
-
-    match mir_patterns::dispatch_stmt_pattern(ctx.tcx, rvalue) {
-        MirOpKind::FieldAccess => {
-            if let Some(field_stmt) = mir_expr::mir_field_access_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver) {
-                if !mir_guard::structural_guard(&field_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
-                    if let Stmt::FieldAccess { dest: Some(dest), .. } = &field_stmt {
-                        mir_util::emit_suppressed_for_name(dest, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
-                    }
-                    return;
-                }
-                if let Stmt::FieldAccess { dest: Some(dest), .. } = &field_stmt {
-                    ctx.defined.insert(dest.clone());
-                }
-                ctx.stmts.push(field_stmt);
-                return;
-            }
-            // Fallback to generic assign lowering for projected field reads
-            // that are representable as pure expressions (for example `(*self).score`).
-        }
-        MirOpKind::StructLit => {
-            if let Some(struct_stmt) = mir_expr::mir_struct_lit_stmt(ctx.tcx, lhs, rvalue, ctx.resolver) {
-                if !mir_guard::structural_guard(&struct_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
-                    if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
-                        mir_util::emit_suppressed_for_name(dest, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
-                    }
-                    return;
-                }
-                if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
-                    ctx.defined.insert(dest.clone());
-                }
-                ctx.stmts.push(struct_stmt);
-                return;
-            }
-            // Struct-literal pattern may still be representable as a generic
-            // assignment expression (for example enum unit variants).
-        }
-        MirOpKind::OpaqueAggregate => {
-            // Do not emit suppressed bindings for opaque aggregates.
-            // Allow deterministic structural fallback to handle return.
-            return;
-        }
-        MirOpKind::ZeroArgEnumCtor => {
-            if let Some(assign_stmt) = mir_expr::mir_assign_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver, ctx.defined, ctx.suppressed_sentinel_names) {
-                if mir_guard::structural_guard(&assign_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
-                    if let Stmt::Assign { lhs, .. } = &assign_stmt {
-                        ctx.defined.insert(lhs.clone());
-                    }
-                    ctx.stmts.push(assign_stmt);
-                } else if let Some(lhs_name) = lhs_name.clone() {
-                    mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
-                }
-            } else if let Some(lhs_name) = lhs_name.clone() {
-                mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
-            }
-            return;
-        }
-        MirOpKind::ConstUse => {}
-        MirOpKind::ArrayAggregate => {
-            if let Some(lhs_name) = lhs_name.as_ref()
-                && ctx.defined.contains(lhs_name)
-            {
-                return;
-            }
-        }
-        MirOpKind::Assign => {}
-    }
-
-    if let Some(assign_stmt) = mir_expr::mir_assign_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver, ctx.defined, ctx.suppressed_sentinel_names) {
-        if !mir_guard::structural_guard(&assign_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
-            if let Stmt::Assign { lhs, .. } = &assign_stmt {
-                // Never emit suppressed binding for any assignment here.
-                // Structural fallback is responsible for synthesizing returns.
-            }
-            return;
-        }
-        if let Stmt::Assign { lhs, .. } = &assign_stmt {
-
-$ sed -n '300,380p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs
-        }
-        MirOpKind::ConstUse => {}
-        MirOpKind::ArrayAggregate => {
-            if let Some(lhs_name) = lhs_name.as_ref()
-                && ctx.defined.contains(lhs_name)
-            {
-                return;
-            }
-        }
-        MirOpKind::Assign => {}
-    }
-
-    if let Some(assign_stmt) = mir_expr::mir_assign_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver, ctx.defined, ctx.suppressed_sentinel_names) {
-        if !mir_guard::structural_guard(&assign_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
-            if let Stmt::Assign { lhs, .. } = &assign_stmt {
-                // Never emit suppressed binding for any assignment here.
-                // Structural fallback is responsible for synthesizing returns.
-            }
-            return;
-        }
-        if let Stmt::Assign { lhs, .. } = &assign_stmt {
-            ctx.defined.insert(lhs.clone());
-        }
-        ctx.stmts.push(assign_stmt);
-    } else if let Some(lhs_name) = lhs_name {
-        // Avoid suppressed emission for __ret; fallback handles return.
-        if lhs_name != "__ret" {
-            mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
-        }
-    }
 }
 
-fn stmts_have_ret_match(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(|stmt| matches!(stmt, Stmt::Match { dest: Some(dest) } if dest == "__ret"))
+// ---------------------------------------------------------------------------
+// Data model
+// ---------------------------------------------------------------------------
+
+/// One unresolved `__ret` gap site discovered in the emitted source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetGapSite {
+    /// Path relative to the scanned `src/` root.
+    pub file: String,
+    /// 1-based line number.
+    pub line: usize,
+    /// The nearest enclosing `fn` signature line, if found.
+    pub enclosing_fn: String,
 }
 
-fn stmts_have_ret_binding(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(mir_util::stmt_defines_ret)
+/// Structural surface counters for a single emitted canon source tree.
+///
+/// Corresponds to the shell variables computed in `run_script.sh`:
+///
+/// ```text
+/// S_sup   = suppressed_count
+/// S_ret   = suppressed_ret_count
+/// S_non   = suppressed_nonret_count  = S_sup - S_ret
+/// G_m     = match_gap_count
+/// G_c     = call_gap_count
+/// G_s     = switch_gap_count
+/// G_total = unresolved_gap_total     = S_sup + G_m + G_c + G_s
+/// R_gap   = unresolved_ret_gap_count
+/// U       = unreachable_count
+/// C_m     = match_comment_count
+/// C_g     = goto_comment_count
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StructuralSurface {
+    pub suppressed_count: usize,
+    pub suppressed_ret_count: usize,
+    pub suppressed_nonret_count: usize,
+    pub match_gap_count: usize,
+    pub call_gap_count: usize,
+    pub switch_gap_count: usize,
+    pub unresolved_gap_total: usize,
+    pub unresolved_ret_gap_count: usize,
+    pub unreachable_count: usize,
+    pub match_comment_count: usize,
+    pub goto_comment_count: usize,
+    pub ret_gap_sites: Vec<RetGapSite>,
 }
 
-// Post-structural return materialization hook.
-// Structural pipeline already guarantees deterministic __ret synthesis
-// via stage_finalize_body_with_ret_fallback. This hook exists so
-// engine.rs can invoke it without introducing suppressed bindings.
-pub(crate) fn materialize_return_local(_body: &mut Body) {
-    // No-op: structural fallback already guarantees a concrete __ret binding.
-}
-
-// Post-structural gap resolution hook.
-// Structural pipeline already injects a deterministic __ret assignment
-// when missing. This function intentionally performs no additional
-// mutation to avoid duplicating return synthesis logic.
-pub(crate) fn resolve_ret_gaps_with(_body: &mut Body, _default_expr: &str) {
-    if let Body::Blocks(blocks) = _body {
-        for bb in blocks.iter_mut() {
-            for stmt in bb.stmts.iter_mut() {
-                if let Stmt::Assign { lhs, rhs } = stmt {
-                    if lhs == "__ret" && rhs.contains("panic!(\"canon") {
-                        *rhs = _default_expr.to_string();
-                    }
-                }
+impl StructuralSurface {
+    /// Print the same human-readable block that `run_script.sh` wrote into
+    /// `STRUCTURAL_INVARIANTS_REPORT.md`.
+    pub fn print_report(&self) {
+        println!("- emitted structural surface:");
+        println!("  - canon suppressed binding count: {}", self.suppressed_count);
+        println!("  - canon suppressed __ret count: {}", self.suppressed_ret_count);
+        println!("  - canon suppressed non-__ret count: {}", self.suppressed_nonret_count);
+        println!("  - canon match gap count: {}", self.match_gap_count);
+        println!("  - canon call gap count: {}", self.call_gap_count);
+        println!("  - canon switch gap count: {}", self.switch_gap_count);
+        println!("  - unresolved gap total: {}", self.unresolved_gap_total);
+        println!("  - unresolved __ret gap count: {}", self.unresolved_ret_gap_count);
+        println!("  - unreachable count: {}", self.unreachable_count);
+        println!("  - // match count: {}", self.match_comment_count);
+        println!("  - // goto count: {}", self.goto_comment_count);
+        if !self.ret_gap_sites.is_empty() {
+            println!("- unresolved __ret gap sites:");
+            for site in &self.ret_gap_sites {
+                println!("  - {}:{} :: {}", site.file, site.line, site.enclosing_fn);
             }
         }
     }
 }
 
-$ sed -n '1,220p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/analysis.rs
-use rustc_middle::mir;
-use rustc_middle::ty::TyCtxt;
-use std::collections::{BTreeSet, HashMap};
+// ---------------------------------------------------------------------------
+// Scanner
+// ---------------------------------------------------------------------------
 
-use crate::capture::mir::guard as mir_guard;
-use crate::capture::mir::ops as mir_ops;
-use crate::capture::mir::resolver::LocalNameResolver;
-use crate::capture::mir::util as mir_util;
-use crate::types::Stmt;
-use std::collections::HashSet;
+/// Scan the emitted `src/` directory rooted at `src_root` and return the
+/// accumulated [`StructuralSurface`].
+///
+/// Every `.rs` file under `src_root` is read into memory and matched against
+/// the same patterns that `run_script.sh` used via `rg`.
+pub fn scan(src_root: &Path) -> io::Result<StructuralSurface> {
+    // Compile patterns once.
+    let re_suppressed = pat!(r"canon suppressed binding");
+    let re_suppressed_ret = pat!(r#"__ret\s*=\s*panic!\("canon suppressed binding"\)"#);
+    let re_match_gap = pat!(r"canon match result not lowered");
+    let re_call_gap = pat!(r"canon call result not lowered");
+    let re_switch_gap = pat!(r"canon switch result not lowered");
+    let re_ret_gap = pat!(r#"let mut __ret = panic!\("canon (?:suppressed binding|call result not lowered|switch result not lowered|match result not lowered)"\);"#);
+    let re_unreachable = pat!(r"unreachable!\(\);");
+    let re_match_comment = pat!(r"// match");
+    let re_goto_comment = pat!(r"// goto");
+    // Pattern to find enclosing fn signatures (mirrors the awk heuristic).
+    let re_fn_sig = pat!(r"^\s*(?:pub\s+)?fn\s+");
 
-pub(crate) struct SwitchAnalysis {
-    pub(crate) switch_sources: BTreeSet<usize>,
-    pub(crate) switchint_arm_blocks: BTreeSet<usize>,
-    pub(crate) switch_arm_writes_ret: BTreeSet<usize>,
-    pub(crate) switch_arm_returns: BTreeSet<usize>,
-    pub(crate) switch_source_writes_ret: HashMap<usize, bool>,
+    let mut surface = StructuralSurface::default();
+
+    for entry in WalkDir::new(src_root).into_iter().filter_map(|e| e.ok()).filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("rs")) {
+        let path = entry.path();
+        let rel = relative_path(src_root, path);
+        let content = std::fs::read_to_string(path)?;
+        let lines: Vec<&str> = content.lines().collect();
+
+        for (idx, line) in lines.iter().enumerate() {
+            let lineno = idx + 1; // 1-based
+
+            if re_suppressed.is_match(line) {
+                surface.suppressed_count += 1;
+            }
+            if re_suppressed_ret.is_match(line) {
+                surface.suppressed_ret_count += 1;
+            }
+            if re_match_gap.is_match(line) {
+                surface.match_gap_count += 1;
+            }
+            if re_call_gap.is_match(line) {
+                surface.call_gap_count += 1;
+            }
+            if re_switch_gap.is_match(line) {
+                surface.switch_gap_count += 1;
+            }
+            if re_unreachable.is_match(line) {
+                surface.unreachable_count += 1;
+            }
+            if re_match_comment.is_match(line) {
+                surface.match_comment_count += 1;
+            }
+            if re_goto_comment.is_match(line) {
+                surface.goto_comment_count += 1;
+            }
+            if re_ret_gap.is_match(line) {
+                surface.unresolved_ret_gap_count += 1;
+                let enclosing_fn = find_enclosing_fn(&lines, idx, &re_fn_sig);
+                surface.ret_gap_sites.push(RetGapSite { file: rel.clone(), line: lineno, enclosing_fn });
+            }
+        }
+    }
+
+    surface.suppressed_nonret_count = surface.suppressed_count.saturating_sub(surface.suppressed_ret_count);
+    surface.unresolved_gap_total = surface.suppressed_count + surface.match_gap_count + surface.call_gap_count + surface.switch_gap_count;
+
+    Ok(surface)
 }
 
-pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
-    let mut all_switch_sources: BTreeSet<usize> = BTreeSet::new();
-    let mut switch_succs_by_source: HashMap<usize, BTreeSet<usize>> = HashMap::new();
-    let mut preds: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); body.basic_blocks.len()];
-    let mut succs: Vec<Vec<usize>> = vec![Vec::new(); body.basic_blocks.len()];
-    for (idx, bb) in body.basic_blocks.iter_enumerated() {
-        if bb.is_cleanup {
-            continue;
-        }
-        let Some(term) = &bb.terminator else {
-            continue;
-        };
-        for succ in term.successors() {
-            if body.basic_blocks[succ].is_cleanup {
-                continue;
-            }
-            succs[idx.as_usize()].push(succ.as_usize());
-            preds[succ.as_usize()].insert(idx.as_usize());
-        }
-        if matches!(term.kind, mir::TerminatorKind::SwitchInt { .. }) {
-            let src = idx.as_usize();
-            all_switch_sources.insert(src);
-            let succ_set = switch_succs_by_source.entry(src).or_default();
-            for succ in term.successors() {
-                if body.basic_blocks[succ].is_cleanup {
-                    continue;
-                }
-                succ_set.insert(succ.as_usize());
-            }
-        }
-    }
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-    let mut switch_sources: BTreeSet<usize> = BTreeSet::new();
-    for src in &all_switch_sources {
-        let Some(succs0) = switch_succs_by_source.get(src) else {
-            continue;
-        };
-        let mut region: BTreeSet<usize> = BTreeSet::new();
-        let mut stack: Vec<usize> = succs0.iter().copied().collect();
-        while let Some(cur) = stack.pop() {
-            if !region.insert(cur) {
-                continue;
-            }
-            for next in &succs[cur] {
-                if !region.contains(next) {
-                    stack.push(*next);
-                }
-            }
-        }
-        if region_has_cycle(&region, &succs) {
-            switch_sources.insert(*src);
+/// Walk backwards from `line_idx` to find the nearest `fn` signature line.
+fn find_enclosing_fn(lines: &[&str], line_idx: usize, re_fn_sig: &Regex) -> String {
+    for i in (0..=line_idx).rev() {
+        if re_fn_sig.is_match(lines[i]) {
+            return lines[i].trim().to_owned();
         }
     }
-
-    let mut direct_switch_succ: BTreeSet<usize> = BTreeSet::new();
-    for src in &switch_sources {
-        if let Some(succ_set) = switch_succs_by_source.get(src) {
-            direct_switch_succ.extend(succ_set.iter().copied());
-        }
-    }
-
-    let mut switch_reachable: BTreeSet<usize> = direct_switch_succ.clone();
-    let mut frontier: Vec<usize> = direct_switch_succ.iter().copied().collect();
-    while let Some(cur) = frontier.pop() {
-        for sidx in &succs[cur] {
-            let sidx = *sidx;
-            if switch_reachable.insert(sidx) {
-                frontier.push(sidx);
-            }
-        }
-    }
-
-    let mut switchint_arm_blocks: BTreeSet<usize> = BTreeSet::new();
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for bb_idx in 0..body.basic_blocks.len() {
-            if switchint_arm_blocks.contains(&bb_idx) || !switch_reachable.contains(&bb_idx) {
-                continue;
-            }
-            let incoming = &preds[bb_idx];
-            if incoming.is_empty() {
-                continue;
-            }
-            let exclusively_switch_reachable = incoming.iter().all(|p| switch_sources.contains(p) || switchint_arm_blocks.contains(p) || direct_switch_succ.contains(p));
-            if exclusively_switch_reachable {
-                switchint_arm_blocks.insert(bb_idx);
-                changed = true;
-            }
-        }
-    }
-
-    let bb_writes_ret: Vec<bool> = body.basic_blocks.iter().map(mir_util::bb_writes_return_place).collect();
-    let mut switch_source_writes_ret: HashMap<usize, bool> = HashMap::new();
-    let mut switch_arm_writes_ret: BTreeSet<usize> = BTreeSet::new();
-    let mut switch_arm_returns: BTreeSet<usize> = BTreeSet::new();
-    for arm in &switchint_arm_blocks {
-        let arm_bb = mir::BasicBlock::from_usize(*arm);
-        if bb_writes_ret.get(*arm).copied().unwrap_or(false) {
-            switch_arm_writes_ret.insert(*arm);
-        }
-        if matches!(body.basic_blocks[arm_bb].terminator.as_ref().map(|t| &t.kind), Some(mir::TerminatorKind::Return)) {
-            switch_arm_returns.insert(*arm);
-        }
-    }
-    for src in &switch_sources {
-        let mut seen: BTreeSet<usize> = BTreeSet::new();
-        let mut stack: Vec<usize> = succs[*src].clone();
-        let mut writes_ret = false;
-        while let Some(cur) = stack.pop() {
-            if !switch_reachable.contains(&cur) || !seen.insert(cur) {
-                continue;
-            }
-            if bb_writes_ret.get(cur).copied().unwrap_or(false) {
-                writes_ret = true;
-                break;
-            }
-            for next in &succs[cur] {
-                if switch_reachable.contains(next) {
-                    stack.push(*next);
-                }
-            }
-        }
-        switch_source_writes_ret.insert(*src, writes_ret);
-    }
-
-    SwitchAnalysis { switch_sources, switchint_arm_blocks, switch_arm_writes_ret, switch_arm_returns, switch_source_writes_ret }
+    "fn <unknown>".to_owned()
 }
 
-fn region_has_cycle(region: &BTreeSet<usize>, succs: &[Vec<usize>]) -> bool {
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum Color {
-        White,
-        Gray,
-        Black,
-    }
-
-    fn dfs(cur: usize, region: &BTreeSet<usize>, succs: &[Vec<usize>], colors: &mut [Color]) -> bool {
-        colors[cur] = Color::Gray;
-        for &next in &succs[cur] {
-            if !region.contains(&next) {
-                continue;
-            }
-            match colors[next] {
-                Color::Gray => return true,
-                Color::White => {
-                    if dfs(next, region, succs, colors) {
-                        return true;
-                    }
-                }
-                Color::Black => {}
-            }
-        }
-        colors[cur] = Color::Black;
-        false
-    }
-
-    let mut colors = vec![Color::White; succs.len()];
-    for &node in region {
-        if colors[node] == Color::White && dfs(node, region, succs, &mut colors) {
-            return true;
-        }
-    }
-    false
+/// Return a `/`-separated path relative to `root`, falling back to the full
+/// path display if stripping fails.
+fn relative_path(root: &Path, full: &Path) -> String {
+    full.strip_prefix(root).map(|r| r.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/")).unwrap_or_else(|_| full.display().to_string())
 }
 
-pub(crate) fn compute_call_feed_locals<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, resolver: &LocalNameResolver) -> HashSet<String> {
-    let local_use_counts = mir_util::count_local_uses(body);
-    let mut filtered_arg_locals: HashSet<u32> = HashSet::new();
-    for bb in body.basic_blocks.iter() {
-        let Some(term_ref) = &bb.terminator else {
-            continue;
-        };
-        let mir::TerminatorKind::Call { func, args, .. } = &term_ref.kind else {
-            continue;
-        };
-        if !mir_ops::filtered_internal_call_target(tcx, func, resolver) {
-            continue;
-        }
-        for arg in args {
-            if let mir::Operand::Copy(place) | mir::Operand::Move(place) = &arg.node {
-                filtered_arg_locals.insert(place.local.as_u32());
-            }
-        }
-    }
-    let mut call_feed_locals: HashSet<String> = HashSet::new();
-    for local_u32 in filtered_arg_locals {
-        if local_use_counts.get(&local_u32).copied().unwrap_or(0) != 1 {
-            continue;
-        }
-        let local = mir::Local::from_u32(local_u32);
-        if let Some(name) = resolver.label_local(local) {
-            call_feed_locals.insert(name);
-        }
-    }
-    call_feed_locals
-}
+// ---------------------------------------------------------------------------
+// Convenience: scan from an emit dir (looks for `src/` inside it)
+// ---------------------------------------------------------------------------
 
-pub(crate) fn collect_suppressed_dest_sentinels(
-    body: &mir::Body<'_>, resolver: &LocalNameResolver, switch_analysis: &SwitchAnalysis, defined: &mut HashSet<String>, suppressed_sentinel_names: &mut HashSet<String>,
-) -> Vec<Stmt> {
+/// Like [`scan`] but accepts the emit output directory and appends `src/`
+/// automatically, matching the shell script's `emit_src="$ROOT/emit/$fixture/src"`.
+///
+/// Returns `None` if the `src/` subdirectory does not exist.
+pub fn scan_emit_dir(emit_dir: &Path) -> io::Result<Option<StructuralSurface>> {
+    let src = emit_dir.join("src");
+    if !src.is_dir() {
+        return Ok(None);
+    }
 

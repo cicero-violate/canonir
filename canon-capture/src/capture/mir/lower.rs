@@ -60,13 +60,16 @@ fn stage_build_plan<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, param_names
     let call_feed_locals = mir_analysis::compute_call_feed_locals(tcx, body, &resolver);
     let mut defined: HashSet<String> = param_names.iter().cloned().collect();
     let mut suppressed_sentinel_names: HashSet<String> = HashSet::new();
-    let suppressed_dest_sentinels = mir_analysis::collect_suppressed_dest_sentinels(body, &resolver, &switch_analysis, &mut defined, &mut suppressed_sentinel_names)
+    let suppressed_dest_sentinels: Vec<Stmt> = mir_analysis::collect_suppressed_dest_sentinels(body, &resolver, &switch_analysis, &mut defined, &mut suppressed_sentinel_names)
         .into_iter()
         .filter(|s| !matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret"))
         .collect();
 
     // Never allow suppressed sentinel for __ret; return must be lowered structurally.
-    let suppressed_dest_sentinels = suppressed_dest_sentinels.into_iter().filter(|s| !matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret")).collect();
+    let suppressed_dest_sentinels: Vec<Stmt> = suppressed_dest_sentinels
+        .into_iter()
+        .filter(|s| !matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret"))
+        .collect();
 
     let mut mir_to_emitted: Vec<Option<u32>> = vec![None; body.basic_blocks.len()];
     let mut next_emitted = 0u32;
@@ -229,7 +232,13 @@ fn stage_finalize_body_with_ret_fallback(tcx: TyCtxt<'_>, def_id: DefId, returns
             last.stmts.push(Stmt::Assign { lhs: "__ret".to_string(), rhs: default_expr });
             last.stmts.push(Stmt::Return(Some("__ret".to_string())));
         } else {
-            blocks.push(BasicBlock { stmts: vec![Stmt::Assign { lhs: "__ret".to_string(), rhs: default_expr }, Stmt::Return(Some("__ret".to_string()))], term: Terminator::None });
+            blocks.push(BasicBlock {
+                stmts: vec![
+                    Stmt::Assign { lhs: "__ret".to_string(), rhs: default_expr },
+                    Stmt::Return(Some("__ret".to_string())),
+                ],
+                terminator: Terminator::None,
+            });
         }
     }
 

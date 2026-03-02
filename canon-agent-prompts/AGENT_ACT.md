@@ -24,6 +24,24 @@ Use `ApplyPatch` or `Bash` to make changes.
 Respond with ONE fenced ```json block.
 `{"phase":"act","deltas":[...],"rationale":"..."}`
 
+### ApplyPatch format (MANDATORY)
+The `patch` string must use this exact format — NOT unified diff (`---`/`+++`):
+```
+*** Begin Patch
+*** Update File: path/relative/to/repo/root/file.rs
+@@
+-    old line to remove
++    new line to add
+ unchanged context line
+*** End Patch
+```
+Rules:
+- Path is relative to repo root `/workspace/ai_sandbox/canon`
+- `@@` separates unrelated hunks in the same file
+- `-` lines are removed, `+` lines are added, unprefixed lines are context
+- Use `*** Add File:` to create new files, `*** Delete File:` to remove
+- Escape the string for JSON: replace each newline with `\n`
+
 ### Patch grounding rule (MANDATORY)
 Before emitting any `ApplyPatch` delta you MUST have previously issued a
 `BashReadOnly` with `sed -n '<start>,<end>p'` (or equivalent) that covers

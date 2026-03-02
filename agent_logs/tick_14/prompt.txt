@@ -17,17 +17,28 @@ Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in
 
 ### Recent rationale history
 ```
-[T-5] Run cargo check on canon-capture to verify that the __ret suppression fix compiles cleanly and does not introduce type or borrow errors before re-running orchestration.
+[T-5] cargo check for canon-capture now completes successfully with no errors. The crate builds cleanly, meaning the previous E0282 and E0560 issues are resolved and the strengthened return synthesis compiles correctly. At this point, the structural invariant enforcement changes are building; next step would be orchestration-level validation (e.g., unresolved_ret_gap_count) rather than further compilation fixes.
 ---
-[T-4] The previous cargo check exited with status 101. Re-run it in read-only mode to capture the full compiler error output so we can diagnose the failure before applying any patches.
+[T-4] Compilation is clean; execute the canon-capture test suite to validate that strengthened __ret structural guarantees do not introduce behavioral regressions and that the invariant holds under tests.
 ---
-[T-3] Confirmed via search that materialize_return_local and resolve_ret_gaps_with are defined in capture/mir/lower.rs and referenced correctly from engine.rs. Module wiring (mod lower) is present in capture/mir/mod.rs. There is no duplication or missing symbol. The next step should focus on diagnosing the cargo check failure (exit 101) by capturing and inspecting the compiler error output, as structural wiring for return-gap handling is now consistent.
+[T-3] cargo test for canon-capture completed successfully: all unit tests passed (2/2) and doc-tests passed (0 failures). The crate compiles cleanly and the strengthened structural __ret guarantees did not introduce regressions at the test level. The build and test suite are now green.
 ---
-[T-2] Confirmed that materialize_return_local and resolve_ret_gaps_with are currently implemented as no-ops in lower.rs, and stage_finalize_body_with_ret_fallback performs deterministic __ret synthesis. No additional return-gap mutation logic exists beyond that stage. Structural return handling is centralized in stage_finalize_body_with_ret_fallback, and post-hooks are inert by design. Further action should focus on external compilation or orchestration diagnostics rather than additional MIR return logic changes.
+[T-2] cargo check for canon-capture succeeds with no errors. The crate builds cleanly, and prior fixes remain intact. No additional compiler issues are present at this stage.
 ---
-[T-1] We have confirmed return synthesis logic and hooks are structurally consistent. The remaining unknown is the cargo check failure (exit 101). Re-running cargo check in the correct working directory will surface the exact compiler errors so we can address the real failing invariant or type issue.
+[T-1] The current lower.rs tail confirms that materialize_return_local and resolve_ret_gaps_with are explicit no-ops, and structural __ret synthesis is fully handled inside stage_finalize_body_with_ret_fallback. No suppressed emission paths for __ret remain in lower_assign_statement. The structural invariant is now enforced entirely within the MIR lowering pipeline, and no further action is required in this region.
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
 `{"phase":"observe","deltas":[...],"rationale":"..."}`
+
+### BashReadOnly whitelisted commands
+Only the following command prefixes are permitted in `BashReadOnly` deltas:
+`rg`, `cat`, `ls`, `tree`, `sed`, `awk`, `perl`, `find`, `head`, `tail`,
+`wc`, `diff`, `stat`, `echo`, `pwd`, `cargo`
+
+For `cargo`, read-only invocations only: `cargo check -p <crate> 2>&1`,
+`cargo build -p <crate> 2>&1`, `cargo test -p <crate> 2>&1`.
+Any other command prefix will be rejected at runtime with an error.
+`cargo` commands automatically run from the repo root `/workspace/ai_sandbox/canon` —
+do NOT prefix them with `cd`.
 

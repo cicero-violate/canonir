@@ -2,6 +2,6 @@
 ## PREVIOUS ACTION FAILED
 Error:
 ```
-LLM payload did not match AgentResponse schema
+apply_patch failed in "/workspace/ai_sandbox/canon": exit status: 1
 ```
 Emit a corrected JSON block addressing the error above.

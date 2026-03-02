@@ -1,13 +1,4 @@
-$ sed -n '1,200p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/mod.rs
-pub mod analysis;
-pub mod expr;
-pub mod filters;
-pub mod guard;
-pub mod lower;
-pub mod ops;
-pub mod passes;
-pub mod patterns;
-pub mod resolver;
-pub mod terminator;
-pub mod util;
+$ cargo check -p canon-capture 2>&1
+    Checking canon-capture v0.1.0 (/workspace/ai_sandbox/canon/canon-capture)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.94s
 
