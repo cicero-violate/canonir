@@ -1,147 +1,4 @@
-$ sed -n '120,260p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs
-fn stage_lower_block_statements<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, bb: &mir::BasicBlockData<'tcx>, blocks: &[mir_passes::EmittedBlock], plan: &mut LowerPlan, stmts: &mut Vec<Stmt>) {
-    let has_match_before_block = mir_passes::blocks_have_ret_match(blocks);
-    for stmt in &bb.statements {
-        let mut assign_ctx = AssignLowerCtx {
-            tcx,
-            local_decls: &body.local_decls,
-            resolver: &plan.resolver,
-            call_feed_locals: &plan.call_feed_locals,
-            defined: &mut plan.defined,
-            suppressed_sentinel_names: &mut plan.suppressed_sentinel_names,
-            stmts,
-            has_match_before_block,
-        };
-        lower_assign_statement(stmt, &mut assign_ctx);
-    }
-}
-
-fn stage_lower_block_terminator<'tcx>(
-    tcx: TyCtxt<'tcx>, returns_unit: bool, bb: &mir::BasicBlockData<'tcx>, blocks: &[mir_passes::EmittedBlock], plan: &mut LowerPlan, stmts: &mut Vec<Stmt>,
-) -> Terminator {
-    let has_match_dest = mir_passes::blocks_have_ret_match(blocks) || stmts_have_ret_match(stmts);
-    let has_ret_binding = mir_passes::blocks_have_ret_binding(blocks) || stmts_have_ret_binding(stmts);
-
-    let Some(term_ref) = &bb.terminator else {
-        return Terminator::None;
-    };
-
-    if let mir::TerminatorKind::Call { func, args, destination, target, .. } = &term_ref.kind {
-        let term = mir_terminator::lower_call_terminator(
-            tcx,
-            func,
-            args,
-            destination,
-            *target,
-            &plan.resolver,
-            &plan.mir_to_emitted,
-            stmts,
-            &mut plan.defined,
-            &mut plan.suppressed_sentinel_names,
-            has_match_dest,
-        );
-        // Do not emit suppressed __ret binding after call terminator.
-        // Deterministic fallback handles missing return.
-        term
-    } else {
-        let term = mir_terminator::lower_non_call_terminator(tcx, term_ref, returns_unit, &plan.resolver, &plan.mir_to_emitted, stmts, &mut plan.defined, has_ret_binding, has_match_dest);
-        // Do not emit suppressed __ret binding after non-call terminator.
-        // Deterministic fallback handles missing return.
-        term
-    }
-}
-
-fn stage_finalize_body(blocks: Vec<BasicBlock>) -> Body {
-    Body::Blocks(blocks)
-}
-
-fn stage_finalize_body_with_ret_fallback(tcx: TyCtxt<'_>, def_id: DefId, returns_unit: bool, mut blocks: Vec<BasicBlock>) -> Body {
-    // Always run deterministic return synthesis to eliminate suppressed __ret gaps.
-
-    // Remove suppressed __ret assignments in every block before analysis.
-    for bb in &mut blocks {
-        bb.stmts.retain(|s| {
-            !matches!(s,
-                Stmt::Assign { lhs, rhs }
-                if lhs == "__ret" && rhs.contains("canon suppressed binding")
-            )
-        });
-    }
-
-    // Strip all suppressed __ret bindings globally before synthesis.
-    for bb in &mut blocks {
-        bb.stmts.retain(|s| {
-            !matches!(s,
-                Stmt::Assign { lhs, rhs }
-                if lhs == "__ret" && rhs.contains("canon suppressed binding")
-            )
-        });
-    }
-
-    // Always synthesize a deterministic structural return based on declared type.
-    let declared_ret = crate::capture::helpers::declared_fn_return_type_expr(tcx, def_id);
-    let default_expr = if let Some(ret_ty) = declared_ret {
-        crate::capture::helpers::default_return_expr(&ret_ty)
-    } else if returns_unit {
-        "()".to_string()
-    } else {
-        "Default::default()".to_string()
-    };
-
-    // Ensure there is exactly one structural return. Preserve existing
-    // structural __ret bindings if present; only synthesize if missing.
-    let mut has_ret_binding = false;
-    let mut has_return_stmt = false;
-    for bb in &blocks {
-        for s in &bb.stmts {
-            if matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret") {
-                has_ret_binding = true;
-            }
-            if matches!(s, Stmt::Return(_)) {
-                has_return_stmt = true;
-            }
-        }
-    }
-
-    if !has_ret_binding || !has_return_stmt {
-        // Instead of emitting a separate fallback block (which may be unreachable
-        // in emitted Rust), inject a structural return directly into the last
-        // existing block to guarantee a concrete __ret binding.
-        if let Some(last) = blocks.last_mut() {
-            last.stmts.push(Stmt::Assign { lhs: "__ret".to_string(), rhs: default_expr });
-            last.stmts.push(Stmt::Return(Some("__ret".to_string())));
-        } else {
-            blocks.push(BasicBlock { stmts: vec![Stmt::Assign { lhs: "__ret".to_string(), rhs: default_expr }, Stmt::Return(Some("__ret".to_string()))], term: Terminator::None });
-        }
-    }
-
-    Body::Blocks(blocks)
-}
-
-fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLowerCtx<'_, 'tcx>) {
-    let mir::StatementKind::Assign(boxed) = &stmt.kind else {
-        return;
-    };
-    let (lhs, rvalue) = &**boxed;
-    let lhs_name = ctx.resolver.label_place(lhs);
-
-    match mir_patterns::dispatch_stmt_pattern(ctx.tcx, rvalue) {
-        MirOpKind::FieldAccess => {
-            if let Some(field_stmt) = mir_expr::mir_field_access_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver) {
-                if !mir_guard::structural_guard(&field_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
-                    if let Stmt::FieldAccess { dest: Some(dest), .. } = &field_stmt {
-                        mir_util::emit_suppressed_for_name(dest, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
-                    }
-                    return;
-                }
-                if let Stmt::FieldAccess { dest: Some(dest), .. } = &field_stmt {
-                    ctx.defined.insert(dest.clone());
-                }
-                ctx.stmts.push(field_stmt);
-                return;
-            }
-
-$ sed -n '1,200p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/terminator.rs
+$ sed -n '1,220p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/terminator.rs
 use rustc_middle::mir;
 use rustc_middle::ty::TyCtxt;
 use std::collections::HashSet;
@@ -291,116 +148,27 @@ fn lower_return_terminator(returns_unit: bool, stmts: &mut Vec<Stmt>, defined: &
     }
 }
 
-$ sed -n '150,260p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/expr.rs
-        mir::BinOp::MulUnchecked => Some("*"),
-        mir::BinOp::ShlUnchecked => Some("<<"),
-        mir::BinOp::ShrUnchecked => Some(">>"),
-        mir::BinOp::AddWithOverflow => None,
-        mir::BinOp::SubWithOverflow => None,
-        mir::BinOp::MulWithOverflow => None,
+$ sed -n '220,360p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/terminator.rs
+
+$ sed -n '1,200p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/ret.rs
+use crate::types::{Body, Expr, ExprKind};
+
+/// Deterministically bind `__ret` to the MIR return place for
+/// non-unit functions when structural lowering produced no
+/// explicit return expression.
+pub fn ensure_ret_bound(body: &mut Body, returns_unit: bool) {
+    if returns_unit {
+        return;
     }
+
+    if body.has_explicit_return() {
+        return;
+    }
+
+    body.push_stmt(Expr {
+        kind: ExprKind::ReturnPlace,
+        span: None,
+    });
 }
 
-pub(crate) fn mir_unop_token(op: mir::UnOp) -> &'static str {
-    match op {
-        mir::UnOp::Not => "!",
-        mir::UnOp::Neg => "-",
-        mir::UnOp::PtrMetadata => "",
-    }
-}
-
-pub(crate) fn mir_assign_stmt<'tcx>(
-    tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, lhs: &mir::Place<'tcx>, rvalue: &mir::Rvalue<'tcx>, resolver: &LocalNameResolver, defined: &std::collections::HashSet<String>,
-    suppressed_sentinel_names: &std::collections::HashSet<String>,
-) -> Option<Stmt> {
-    let lhs = resolver.label_place(lhs)?;
-    let rhs = mir_rvalue_expr(tcx, local_decls, rvalue, resolver)?;
-    if assign_rhs_should_suppress(&rhs) {
-        return None;
-    }
-    if lhs == "__ret" {
-        // Do not allow panic-based synthetic initialization of __ret;
-        // force canonical suppressed binding instead.
-        if rhs.contains("panic!") {
-            // Instead of suppressing the assignment entirely (which can
-            // create a __ret gap), deterministically bind to a default
-            // value so that a concrete __ret assignment is always emitted.
-            return Some(Stmt::Assign {
-                lhs,
-                rhs: "Default::default()".to_string(),
-            });
-        }
-        return Some(Stmt::Assign { lhs, rhs });
-    }
-    if !mir_guard::value_known(&rhs, defined, suppressed_sentinel_names) {
-        return None;
-    }
-    Some(Stmt::Assign { lhs, rhs })
-}
-
-pub(crate) fn mir_field_access_stmt<'tcx>(tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, lhs: &mir::Place<'tcx>, rvalue: &mir::Rvalue<'tcx>, resolver: &LocalNameResolver) -> Option<Stmt> {
-    let mir::Rvalue::Use(mir::Operand::Copy(place) | mir::Operand::Move(place)) = rvalue else {
-        return None;
-    };
-    let (base, proj) = place.as_ref().last_projection()?;
-    let mir::ProjectionElem::Field(field_idx, ty) = proj else {
-        return None;
-    };
-
-    let base_ty = base.ty(local_decls, tcx).ty;
-    if is_primitive_value_ty(base_ty) {
-        return None;
-    }
-
-    let field = match base_ty.kind() {
-        ty::TyKind::Adt(adt, _) if adt.is_struct() || adt.is_union() => {
-            if !adt.did().is_local() {
-                let tuple_like = adt.non_enum_variant().fields.iter().all(|f| f.name.to_string().chars().all(|c| c.is_ascii_digit()));
-                if tuple_like {
-                    return None;
-                }
-            }
-            let f = adt.non_enum_variant().fields.get(field_idx)?;
-            let name = f.name.to_string();
-            if name.chars().all(|c| c.is_ascii_digit()) {
-                field_idx.index().to_string()
-            } else {
-                name
-            }
-        }
-        ty::TyKind::Adt(adt, _) if adt.is_enum() => {
-            let downcast_idx = place.projection.iter().find_map(|elem| match elem {
-                mir::ProjectionElem::Downcast(_, idx) => Some(idx),
-                _ => None,
-            })?;
-            let f = adt.variant(downcast_idx).fields.get(field_idx)?;
-            let name = f.name.to_string();
-            if name.chars().all(|c| c.is_ascii_digit()) {
-                field_idx.index().to_string()
-            } else {
-                name
-            }
-        }
-        ty::TyKind::Tuple(_) => field_idx.index().to_string(),
-        _ => return None,
-    };
-    Some(Stmt::FieldAccess { base: resolver.label_place_ref(base)?, field, dest: Some(resolver.label_place(lhs)?) })
-}
-
-pub(crate) fn mir_struct_lit_stmt<'tcx>(tcx: TyCtxt<'tcx>, lhs: &mir::Place<'tcx>, rvalue: &mir::Rvalue<'tcx>, resolver: &LocalNameResolver) -> Option<Stmt> {
-    let mir::Rvalue::Aggregate(kind, operands) = rvalue else {
-        return None;
-    };
-    let mir::AggregateKind::Adt(adt_did, variant_idx, _, _, _) = &**kind else {
-        return None;
-    };
-    let adt = tcx.adt_def(*adt_did);
-    let variant = adt.variant(*variant_idx);
-    if adt.is_enum() && variant.fields.is_empty() {
-        return None;
-    }
-    let fields = variant.fields.iter().zip(operands.iter()).map(|(f, op)| Some((f.name.to_string(), mir_ops::mir_operand_label(tcx, op, resolver)?))).collect::<Option<Vec<_>>>()?;
-    let ctor_path = if adt.is_enum() { format!("{}::{}", norm::path(tcx, *adt_did), variant.name) } else { norm::path(tcx, *adt_did) };
-    Some(Stmt::StructLit { ty: TypeExpr::Path(ctor_path), fields, dest: Some(resolver.label_place(lhs)?) })
-}
 

@@ -12,7 +12,7 @@ Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in
 
 ### Output from previous commands
 ```
-$ sed -n '1,220p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/passes.rs
+$ sed -n '1,260p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/passes.rs
 use std::collections::HashSet;
 
 use crate::capture::mir::analysis::SwitchAnalysis;
@@ -121,7 +121,11 @@ fn pass_lower_match_dest_to_suppressed(mut emitted: Vec<EmittedBlock>) -> Vec<Em
     for block in &mut emitted {
         for stmt in &mut block.block.stmts {
             if let Stmt::Match { dest: Some(dest) } = stmt {
-                *stmt = Stmt::Assign { lhs: dest.clone(), rhs: "__canon_suppressed__".to_string() };
+                // Never suppress matches that bind to __ret; return value
+                // must remain structurally assigned to preserve invariant.
+                if dest != "__ret" {
+                    *stmt = Stmt::Assign { lhs: dest.clone(), rhs: "__canon_suppressed__".to_string() };
+                }
             }
         }
     }
@@ -233,46 +237,139 @@ fn strip_quoted_literals(expr: &str) -> String {
             in_double = true;
             continue;
         }
-
-$ sed -n '200,360p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/passes.rs
-        }
-        if in_single {
-            if ch == '\'' {
-                in_single = false;
-            }
-            continue;
-        }
-        if in_double {
-            if ch == '"' {
-                in_double = false;
-            }
-            continue;
-        }
-        if ch == '\'' {
-            in_single = true;
-            continue;
-        }
-        if ch == '"' {
-            in_double = true;
-            continue;
-        }
         out.push(ch);
     }
     out
 }
+
+$ sed -n '260,420p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/passes.rs
+
+$ sed -n '120,220p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs
+fn stage_lower_block_statements<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, bb: &mir::BasicBlockData<'tcx>, blocks: &[mir_passes::EmittedBlock], plan: &mut LowerPlan, stmts: &mut Vec<Stmt>) {
+    let has_match_before_block = mir_passes::blocks_have_ret_match(blocks);
+    for stmt in &bb.statements {
+        let mut assign_ctx = AssignLowerCtx {
+            tcx,
+            local_decls: &body.local_decls,
+            resolver: &plan.resolver,
+            call_feed_locals: &plan.call_feed_locals,
+            defined: &mut plan.defined,
+            suppressed_sentinel_names: &mut plan.suppressed_sentinel_names,
+            stmts,
+            has_match_before_block,
+        };
+        lower_assign_statement(stmt, &mut assign_ctx);
+    }
+}
+
+fn stage_lower_block_terminator<'tcx>(
+    tcx: TyCtxt<'tcx>, returns_unit: bool, bb: &mir::BasicBlockData<'tcx>, blocks: &[mir_passes::EmittedBlock], plan: &mut LowerPlan, stmts: &mut Vec<Stmt>,
+) -> Terminator {
+    let has_match_dest = mir_passes::blocks_have_ret_match(blocks) || stmts_have_ret_match(stmts);
+    let has_ret_binding = mir_passes::blocks_have_ret_binding(blocks) || stmts_have_ret_binding(stmts);
+
+    let Some(term_ref) = &bb.terminator else {
+        return Terminator::None;
+    };
+
+    if let mir::TerminatorKind::Call { func, args, destination, target, .. } = &term_ref.kind {
+        let term = mir_terminator::lower_call_terminator(
+            tcx,
+            func,
+            args,
+            destination,
+            *target,
+            &plan.resolver,
+            &plan.mir_to_emitted,
+            stmts,
+            &mut plan.defined,
+            &mut plan.suppressed_sentinel_names,
+            has_match_dest,
+        );
+        // Do not emit suppressed __ret binding after call terminator.
+        // Deterministic fallback handles missing return.
+        term
+    } else {
+        let term = mir_terminator::lower_non_call_terminator(tcx, term_ref, returns_unit, &plan.resolver, &plan.mir_to_emitted, stmts, &mut plan.defined, has_ret_binding, has_match_dest);
+        // Do not emit suppressed __ret binding after non-call terminator.
+        // Deterministic fallback handles missing return.
+        term
+    }
+}
+
+fn stage_finalize_body(blocks: Vec<BasicBlock>) -> Body {
+    Body::Blocks(blocks)
+}
+
+fn stage_finalize_body_with_ret_fallback(tcx: TyCtxt<'_>, def_id: DefId, returns_unit: bool, mut blocks: Vec<BasicBlock>) -> Body {
+    // Always run deterministic return synthesis to eliminate suppressed __ret gaps.
+
+    // Remove suppressed __ret assignments in every block before analysis.
+    for bb in &mut blocks {
+        bb.stmts.retain(|s| {
+            !matches!(s,
+                Stmt::Assign { lhs, rhs }
+                if lhs == "__ret" && rhs.contains("canon suppressed binding")
+            )
+        });
+    }
+
+    // Strip all suppressed __ret bindings globally before synthesis.
+    for bb in &mut blocks {
+        bb.stmts.retain(|s| {
+            !matches!(s,
+                Stmt::Assign { lhs, rhs }
+                if lhs == "__ret" && rhs.contains("canon suppressed binding")
+            )
+        });
+    }
+
+    // Always synthesize a deterministic structural return based on declared type.
+    let declared_ret = crate::capture::helpers::declared_fn_return_type_expr(tcx, def_id);
+    let default_expr = if let Some(ret_ty) = declared_ret {
+        crate::capture::helpers::default_return_expr(&ret_ty)
+    } else if returns_unit {
+        "()".to_string()
+    } else {
+        "Default::default()".to_string()
+    };
+
+    // Ensure there is exactly one structural return. Preserve existing
+    // structural __ret bindings if present; only synthesize if missing.
+    let mut has_ret_binding = false;
+    let mut has_return_stmt = false;
+    for bb in &blocks {
+        for s in &bb.stmts {
+            if matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret") {
+                has_ret_binding = true;
+            }
+            if matches!(s, Stmt::Return(_)) {
+                has_return_stmt = true;
+            }
 
 
 ```
 
 ### Recent rationale history
 ```
-[T-3] Start by mapping all __ret-related logic, especially has_ret_binding and lower_return_terminator conditions. Then inspect call and match lowering paths that could fail to materialize a __ret assignment. Also identify largest source files to prioritize deep inspection if needed.
+[T-3] Bootstrap exploration to map all __ret-related logic and identify where has_ret_binding is computed, where return/call terminators are lowered, and which large source files are most likely to contain root-cause logic. This establishes the search surface before tracing why some MIR bodies fail to produce a structural __ret assignment.
 ---
-[T-2] We need to inspect (1) the return-synthesis region in lower.rs around has_ret_binding and the fallback block insertion, (2) lower_return_terminator to see when it emits Match { dest: Some("__ret") }, and (3) expr.rs handling of lhs == "__ret" to verify whether panic-based or suppressed initializations are being filtered or rewritten correctly. These are the most likely sources of missing structural __ret assignments.
+[T-2] Focus next on lower_call_terminator and lower_return_terminator implementations, since __ret gaps are only introduced when no structural assignment is emitted before return. Also inspect ret.rs to understand any explicit return-place materialization logic. The goal is to trace the exact path where a MIR return terminator fails to produce a concrete __ret assignment.
 ---
-[T-1] The invariant description points directly at pass_lower_match_dest_to_suppressed converting Match { dest: Some("__ret") } into a suppressed assignment. Since lower_return_terminator no longer emits Match but structural Assign+Return, we must inspect passes.rs to confirm whether any transformation is still suppressing __ret-producing statements (especially Match lowering) and inadvertently removing legitimate structural __ret bindings.
+[T-1] The terminator logic now deterministically assigns __ret if missing, so remaining gaps likely come from a later normalization or suppression pass. Inspect passes.rs to verify pass_lower_match_dest_to_suppressed and any transformations that could erase or suppress structural __ret bindings. Also re-examine lower.rs around has_ret_binding computation and draft normalization to ensure detection logic is correct and not misclassifying valid __ret assignments.
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
 `{"phase":"observe","deltas":[...],"rationale":"..."}`
+
+### BashReadOnly whitelisted commands
+Only the following command prefixes are permitted in `BashReadOnly` deltas:
+`rg`, `cat`, `ls`, `tree`, `sed`, `awk`, `perl`, `find`, `head`, `tail`,
+`wc`, `diff`, `stat`, `echo`, `pwd`, `cargo`
+
+For `cargo`, read-only invocations only: `cargo check -p <crate> 2>&1`,
+`cargo build -p <crate> 2>&1`, `cargo test -p <crate> 2>&1`.
+Any other command prefix will be rejected at runtime with an error.
+`cargo` commands automatically run from the repo root `/workspace/ai_sandbox/canon` —
+do NOT prefix them with `cd`.
 

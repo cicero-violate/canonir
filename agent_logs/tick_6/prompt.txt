@@ -351,17 +351,28 @@ fn is_public_vis(v: &Visibility) -> bool {
 
 ### Recent rationale history
 ```
-[T-5] Start by mapping all __ret-related logic, especially has_ret_binding and lower_return_terminator conditions. Then inspect call and match lowering paths that could fail to materialize a __ret assignment. Also identify largest source files to prioritize deep inspection if needed.
+[T-5] Focus next on lower_call_terminator and lower_return_terminator implementations, since __ret gaps are only introduced when no structural assignment is emitted before return. Also inspect ret.rs to understand any explicit return-place materialization logic. The goal is to trace the exact path where a MIR return terminator fails to produce a concrete __ret assignment.
 ---
-[T-4] We need to inspect (1) the return-synthesis region in lower.rs around has_ret_binding and the fallback block insertion, (2) lower_return_terminator to see when it emits Match { dest: Some("__ret") }, and (3) expr.rs handling of lhs == "__ret" to verify whether panic-based or suppressed initializations are being filtered or rewritten correctly. These are the most likely sources of missing structural __ret assignments.
+[T-4] The terminator logic now deterministically assigns __ret if missing, so remaining gaps likely come from a later normalization or suppression pass. Inspect passes.rs to verify pass_lower_match_dest_to_suppressed and any transformations that could erase or suppress structural __ret bindings. Also re-examine lower.rs around has_ret_binding computation and draft normalization to ensure detection logic is correct and not misclassifying valid __ret assignments.
 ---
-[T-3] The invariant description points directly at pass_lower_match_dest_to_suppressed converting Match { dest: Some("__ret") } into a suppressed assignment. Since lower_return_terminator no longer emits Match but structural Assign+Return, we must inspect passes.rs to confirm whether any transformation is still suppressing __ret-producing statements (especially Match lowering) and inadvertently removing legitimate structural __ret bindings.
+[T-3] Continue inspecting stage_finalize_body_with_ret_fallback to see the full synthesis condition and whether it can accidentally duplicate or miss __ret bindings. Also inspect the tail of lower.rs for any additional __ret-related helpers (e.g., stmts_have_ret_binding / stmts_have_ret_match). Finally, re-examine analysis.rs to ensure switch-arm detection or suppressed sentinel collection is not incorrectly excluding legitimate __ret assignments.
 ---
-[T-2] We have confirmed that match lowering rewrites Match { dest: Some("__ret") } into suppressed assignments and that return terminators synthesize Assign+Return structurally. However, stage_finalize_body_with_ret_fallback operates on Vec<BasicBlock> before normalization passes, while match-dest suppression occurs during normalization. We must now inspect the exact ordering in lower.rs: where make_body_draft/normalize_blocks is called relative to stage_finalize_body_with_ret_fallback. If fallback runs before normalization, the pass may reintroduce suppressed __ret via match lowering. Inspect the body assembly flow in lower.rs to confirm pipeline order.
+[T-2] Stagnation detected after extensive structural inspection. Execute cargo check for canon-capture to surface the concrete compiler diagnostics behind the exit status 101 failure so we can address the actual build error causing the invariant pipeline to fail.
 ---
-[T-1] pass_lower_match_dest_to_suppressed was unconditionally converting Match { dest: Some("__ret") } into a suppressed assignment, reintroducing __ret gaps after structural fallback. By exempting __ret from suppression, we preserve legitimate structural return bindings and prevent unresolved_ret_gap_count from increasing while keeping other suppression behavior intact.
+[T-1] Previous cargo check exited with status 101, which caused the tick to fail. Re-run cargo check while forcing a zero exit code so that full compiler diagnostics are captured without terminating the orchestration loop.
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
 `{"phase":"observe","deltas":[...],"rationale":"..."}`
+
+### BashReadOnly whitelisted commands
+Only the following command prefixes are permitted in `BashReadOnly` deltas:
+`rg`, `cat`, `ls`, `tree`, `sed`, `awk`, `perl`, `find`, `head`, `tail`,
+`wc`, `diff`, `stat`, `echo`, `pwd`, `cargo`
+
+For `cargo`, read-only invocations only: `cargo check -p <crate> 2>&1`,
+`cargo build -p <crate> 2>&1`, `cargo test -p <crate> 2>&1`.
+Any other command prefix will be rejected at runtime with an error.
+`cargo` commands automatically run from the repo root `/workspace/ai_sandbox/canon` —
+do NOT prefix them with `cd`.
 

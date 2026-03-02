@@ -13,23 +13,25 @@ Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in
 ### Output from previous commands
 ```
 $ rg -n "has_ret_binding" /workspace/ai_sandbox/canon/canon-capture/src
+/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/terminator.rs:100:    has_ret_binding: bool, has_match_dest: bool,
+/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/terminator.rs:106:            lower_return_terminator(returns_unit, stmts, defined, has_ret_binding, has_match_dest);
+/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/terminator.rs:134:fn lower_return_terminator(returns_unit: bool, stmts: &mut Vec<Stmt>, defined: &mut HashSet<String>, has_ret_binding: bool, has_match_dest: bool) {
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:141:    let has_ret_binding = mir_passes::blocks_have_ret_binding(blocks) || stmts_have_ret_binding(stmts);
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:165:        let term = mir_terminator::lower_non_call_terminator(tcx, term_ref, returns_unit, &plan.resolver, &plan.mir_to_emitted, stmts, &mut plan.defined, has_ret_binding, has_match_dest);
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:211:    let mut has_ret_binding = false;
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:216:                has_ret_binding = true;
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:224:    if !has_ret_binding || !has_return_stmt {
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/terminator.rs:100:    has_ret_binding: bool, has_match_dest: bool,
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/terminator.rs:106:            lower_return_terminator(returns_unit, stmts, defined, has_ret_binding, has_match_dest);
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/terminator.rs:134:fn lower_return_terminator(returns_unit: bool, stmts: &mut Vec<Stmt>, defined: &mut HashSet<String>, has_ret_binding: bool, has_match_dest: bool) {
 
 $ rg -n "__ret" /workspace/ai_sandbox/canon/canon-capture/src
 /workspace/ai_sandbox/canon/canon-capture/src/capture/engine.rs:182:        // Deterministically replace remaining __ret gaps with a concrete return
 /workspace/ai_sandbox/canon/canon-capture/src/capture/engine.rs:209:        // Deterministically replace remaining __ret gaps with a concrete return
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/passes.rs:77:    blocks.iter().any(|bb| bb.block.stmts.iter().any(|stmt| matches!(stmt, Stmt::Match { dest: Some(dest) } if dest == "__ret")))
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/passes.rs:123:                    if rhs == "__canon_suppressed__" && lhs != "__ret" && !used.contains(lhs)
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/guard.rs:8:            let allow_suppressed_inputs = matches!(dest, Some(dest) if dest == "__ret");
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/guard.rs:33:    defined.contains(value) || value == "__ret" || is_structural_expr(value)
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/guard.rs:37:    if lhs == "__ret" || defined.contains(lhs) {
+/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/expr.rs:176:    if lhs == "__ret" {
+/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/expr.rs:177:        // Do not allow panic-based synthetic initialization of __ret;
+/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/expr.rs:181:            // create a __ret gap), deterministically bind to a default
+/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/expr.rs:182:            // value so that a concrete __ret assignment is always emitted.
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/analysis.rs:238:            if dest_name != "__ret" {
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/analysis.rs:247:                    if lhs_name != "__ret" {
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/util.rs:45:        Stmt::Assign { lhs, .. } => lhs == "__ret",
@@ -60,10 +62,11 @@ $ rg -n "__ret" /workspace/ai_sandbox/canon/canon-capture/src
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/terminator.rs:143:            stmts.push(Stmt::Assign { lhs: "__ret".to_string(), rhs: "Default::default()".to_string() });
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/terminator.rs:144:            defined.insert("__ret".to_string());
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/terminator.rs:146:        stmts.push(Stmt::Return(Some("__ret".to_string())));
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/expr.rs:176:    if lhs == "__ret" {
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/expr.rs:177:        // Do not allow panic-based synthetic initialization of __ret;
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/expr.rs:181:            // create a __ret gap), deterministically bind to a default
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/expr.rs:182:            // value so that a concrete __ret assignment is always emitted.
+/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/resolver.rs:12:        insert_unique_name(&mut by_local, &mut owner_by_name, 0, "__ret".to_string());
+/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/passes.rs:77:    blocks.iter().any(|bb| bb.block.stmts.iter().any(|stmt| matches!(stmt, Stmt::Match { dest: Some(dest) } if dest == "__ret")))
+/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/passes.rs:109:                // Never suppress matches that bind to __ret; return value
+/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/passes.rs:111:                if dest != "__ret" {
+/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/passes.rs:127:                    if rhs == "__canon_suppressed__" && lhs != "__ret" && !used.contains(lhs)
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:65:        .filter(|s| !matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret"))
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:68:    // Never allow suppressed sentinel for __ret; return must be lowered structurally.
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:69:    let suppressed_dest_sentinels = suppressed_dest_sentinels.into_iter().filter(|s| !matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret")).collect();
@@ -89,7 +92,6 @@ $ rg -n "__ret" /workspace/ai_sandbox/canon/canon-capture/src
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:345:    // No-op: structural fallback already guarantees a concrete __ret binding.
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:349:// Structural pipeline already injects a deterministic __ret assignment
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:357:                    if lhs == "__ret" && rhs.contains("panic!(\"canon") {
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/resolver.rs:12:        insert_unique_name(&mut by_local, &mut owner_by_name, 0, "__ret".to_string());
 
 $ rg -n "lower_return" /workspace/ai_sandbox/canon/canon-capture/src
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/terminator.rs:106:            lower_return_terminator(returns_unit, stmts, defined, has_ret_binding, has_match_dest);
@@ -100,7 +102,7 @@ $ rg -n "lower_call" /workspace/ai_sandbox/canon/canon-capture/src
 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:148:        let term = mir_terminator::lower_call_terminator(
 
 $ find /workspace/ai_sandbox/canon/canon-capture/src -name "*.rs" -print0 | xargs -0 wc -l | sort -rn | head -20
-  5218 total
+  5222 total
    893 /workspace/ai_sandbox/canon/canon-capture/src/canon_assemble.rs
    624 /workspace/ai_sandbox/canon/canon-capture/src/capture/helpers.rs
    364 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs
@@ -109,7 +111,7 @@ $ find /workspace/ai_sandbox/canon/canon-capture/src -name "*.rs" -print0 | xarg
    341 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/expr.rs
    329 /workspace/ai_sandbox/canon/canon-capture/src/capture/engine.rs
    255 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/analysis.rs
-   224 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/passes.rs
+   228 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/passes.rs
    189 /workspace/ai_sandbox/canon/canon-capture/src/capture/rules.rs
    171 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/ops.rs
    148 /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/terminator.rs
@@ -126,9 +128,20 @@ $ find /workspace/ai_sandbox/canon/canon-capture/src -name "*.rs" -print0 | xarg
 
 ### Recent rationale history
 ```
-[T-1] Start by mapping all __ret-related logic, especially has_ret_binding and lower_return_terminator conditions. Then inspect call and match lowering paths that could fail to materialize a __ret assignment. Also identify largest source files to prioritize deep inspection if needed.
+[T-1] Bootstrap exploration to map all __ret-related logic and identify where has_ret_binding is computed, where return/call terminators are lowered, and which large source files are most likely to contain root-cause logic. This establishes the search surface before tracing why some MIR bodies fail to produce a structural __ret assignment.
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
 `{"phase":"observe","deltas":[...],"rationale":"..."}`
+
+### BashReadOnly whitelisted commands
+Only the following command prefixes are permitted in `BashReadOnly` deltas:
+`rg`, `cat`, `ls`, `tree`, `sed`, `awk`, `perl`, `find`, `head`, `tail`,
+`wc`, `diff`, `stat`, `echo`, `pwd`, `cargo`
+
+For `cargo`, read-only invocations only: `cargo check -p <crate> 2>&1`,
+`cargo build -p <crate> 2>&1`, `cargo test -p <crate> 2>&1`.
+Any other command prefix will be rejected at runtime with an error.
+`cargo` commands automatically run from the repo root `/workspace/ai_sandbox/canon` —
+do NOT prefix them with `cd`.
 

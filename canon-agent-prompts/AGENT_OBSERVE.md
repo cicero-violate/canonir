@@ -31,4 +31,6 @@ Only the following command prefixes are permitted in `BashReadOnly` deltas:
 For `cargo`, read-only invocations only: `cargo check -p <crate> 2>&1`,
 `cargo build -p <crate> 2>&1`, `cargo test -p <crate> 2>&1`.
 Any other command prefix will be rejected at runtime with an error.
+`cargo` commands automatically run from the repo root `/workspace/ai_sandbox/canon` —
+do NOT prefix them with `cd`.
 {{STAGNATION_PRESSURE}}

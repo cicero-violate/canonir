@@ -26,6 +26,7 @@ you MUST emit a `BashReadOnly` delta running:
 cargo check -p <crate_name> 2>&1
 from the repo root `/workspace/ai_sandbox/canon` before anything else.
 Use the absolute path form: `cd /workspace/ai_sandbox/canon && cargo check -p <crate_name> 2>&1`
+Simply: `cargo check -p <crate_name> 2>&1` — cargo runs automatically from the repo root.
 See the observe phase for the full `BashReadOnly` whitelist.
 If the output contains `^error`, your patch broke the build — state the
 compiler errors in your rationale and do NOT consider the task done.

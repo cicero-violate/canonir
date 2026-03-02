@@ -39,10 +39,17 @@ pub fn act(deltas: &[CodeDelta], capture_dirs: &[PathBuf]) -> Result<String> {
                 if !is_allowed {
                     anyhow::bail!("BashReadOnly rejected non-whitelisted command: {}", command);
                 }
+                // cargo commands must run from the workspace root, not the
+                // capture_dir, so they can resolve -p <crate> correctly.
+                let run_dir = if trimmed.starts_with("cargo") {
+                    std::path::Path::new("/workspace/ai_sandbox/canon")
+                } else {
+                    capture_dir.as_path()
+                };
                 let output = Command::new("bash")
                     .arg("-c")
                     .arg(trimmed)
-                    .current_dir(capture_dir)
+                    .current_dir(run_dir)
                     .output()
                     .context("readonly bash failed to spawn")?;
                 // exit code 1 = rg no match (warn only), 2+ = real error

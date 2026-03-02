@@ -12,67 +12,7 @@ Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in
 
 ### Output from previous commands
 ```
-$ sed -n '160,260p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs
-        );
-        // Do not emit suppressed __ret binding after call terminator.
-        // Deterministic fallback handles missing return.
-        term
-    } else {
-        let term = mir_terminator::lower_non_call_terminator(tcx, term_ref, returns_unit, &plan.resolver, &plan.mir_to_emitted, stmts, &mut plan.defined, has_ret_binding, has_match_dest);
-        // Do not emit suppressed __ret binding after non-call terminator.
-        // Deterministic fallback handles missing return.
-        term
-    }
-}
-
-fn stage_finalize_body(blocks: Vec<BasicBlock>) -> Body {
-    Body::Blocks(blocks)
-}
-
-fn stage_finalize_body_with_ret_fallback(tcx: TyCtxt<'_>, def_id: DefId, returns_unit: bool, mut blocks: Vec<BasicBlock>) -> Body {
-    // Always run deterministic return synthesis to eliminate suppressed __ret gaps.
-
-    // Remove suppressed __ret assignments in every block before analysis.
-    for bb in &mut blocks {
-        bb.stmts.retain(|s| {
-            !matches!(s,
-                Stmt::Assign { lhs, rhs }
-                if lhs == "__ret" && rhs.contains("canon suppressed binding")
-            )
-        });
-    }
-
-    // Strip all suppressed __ret bindings globally before synthesis.
-    for bb in &mut blocks {
-        bb.stmts.retain(|s| {
-            !matches!(s,
-                Stmt::Assign { lhs, rhs }
-                if lhs == "__ret" && rhs.contains("canon suppressed binding")
-            )
-        });
-    }
-
-    // Always synthesize a deterministic structural return based on declared type.
-    let declared_ret = crate::capture::helpers::declared_fn_return_type_expr(tcx, def_id);
-    let default_expr = if let Some(ret_ty) = declared_ret {
-        crate::capture::helpers::default_return_expr(&ret_ty)
-    } else if returns_unit {
-        "()".to_string()
-    } else {
-        "Default::default()".to_string()
-    };
-
-    // Ensure there is exactly one structural return. Preserve existing
-    // structural __ret bindings if present; only synthesize if missing.
-    let mut has_ret_binding = false;
-    let mut has_return_stmt = false;
-    for bb in &blocks {
-        for s in &bb.stmts {
-            if matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret") {
-                has_ret_binding = true;
-            }
-            if matches!(s, Stmt::Return(_)) {
-                has_return_stmt = true;
+$ sed -n '220,320p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs
             }
         }
     }
@@ -114,9 +54,6 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
                 ctx.stmts.push(field_stmt);
                 return;
             }
-
-$ sed -n '260,364p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs
-            }
             // Fallback to generic assign lowering for projected field reads
             // that are representable as pure expressions (for example `(*self).score`).
         }
@@ -156,6 +93,29 @@ $ sed -n '260,364p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lo
                 mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
             }
             return;
+        }
+        MirOpKind::ConstUse => {}
+        MirOpKind::ArrayAggregate => {
+            if let Some(lhs_name) = lhs_name.as_ref()
+                && ctx.defined.contains(lhs_name)
+            {
+                return;
+            }
+        }
+        MirOpKind::Assign => {}
+    }
+
+    if let Some(assign_stmt) = mir_expr::mir_assign_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver, ctx.defined, ctx.suppressed_sentinel_names) {
+        if !mir_guard::structural_guard(&assign_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
+            if let Stmt::Assign { lhs, .. } = &assign_stmt {
+                // Never emit suppressed binding for any assignment here.
+                // Structural fallback is responsible for synthesizing returns.
+            }
+            return;
+        }
+        if let Stmt::Assign { lhs, .. } = &assign_stmt {
+
+$ sed -n '300,380p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs
         }
         MirOpKind::ConstUse => {}
         MirOpKind::ArrayAggregate => {
@@ -222,22 +182,255 @@ pub(crate) fn resolve_ret_gaps_with(_body: &mut Body, _default_expr: &str) {
     }
 }
 
+$ sed -n '1,220p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/analysis.rs
+use rustc_middle::mir;
+use rustc_middle::ty::TyCtxt;
+use std::collections::{BTreeSet, HashMap};
+
+use crate::capture::mir::guard as mir_guard;
+use crate::capture::mir::ops as mir_ops;
+use crate::capture::mir::resolver::LocalNameResolver;
+use crate::capture::mir::util as mir_util;
+use crate::types::Stmt;
+use std::collections::HashSet;
+
+pub(crate) struct SwitchAnalysis {
+    pub(crate) switch_sources: BTreeSet<usize>,
+    pub(crate) switchint_arm_blocks: BTreeSet<usize>,
+    pub(crate) switch_arm_writes_ret: BTreeSet<usize>,
+    pub(crate) switch_arm_returns: BTreeSet<usize>,
+    pub(crate) switch_source_writes_ret: HashMap<usize, bool>,
+}
+
+pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
+    let mut all_switch_sources: BTreeSet<usize> = BTreeSet::new();
+    let mut switch_succs_by_source: HashMap<usize, BTreeSet<usize>> = HashMap::new();
+    let mut preds: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); body.basic_blocks.len()];
+    let mut succs: Vec<Vec<usize>> = vec![Vec::new(); body.basic_blocks.len()];
+    for (idx, bb) in body.basic_blocks.iter_enumerated() {
+        if bb.is_cleanup {
+            continue;
+        }
+        let Some(term) = &bb.terminator else {
+            continue;
+        };
+        for succ in term.successors() {
+            if body.basic_blocks[succ].is_cleanup {
+                continue;
+            }
+            succs[idx.as_usize()].push(succ.as_usize());
+            preds[succ.as_usize()].insert(idx.as_usize());
+        }
+        if matches!(term.kind, mir::TerminatorKind::SwitchInt { .. }) {
+            let src = idx.as_usize();
+            all_switch_sources.insert(src);
+            let succ_set = switch_succs_by_source.entry(src).or_default();
+            for succ in term.successors() {
+                if body.basic_blocks[succ].is_cleanup {
+                    continue;
+                }
+                succ_set.insert(succ.as_usize());
+            }
+        }
+    }
+
+    let mut switch_sources: BTreeSet<usize> = BTreeSet::new();
+    for src in &all_switch_sources {
+        let Some(succs0) = switch_succs_by_source.get(src) else {
+            continue;
+        };
+        let mut region: BTreeSet<usize> = BTreeSet::new();
+        let mut stack: Vec<usize> = succs0.iter().copied().collect();
+        while let Some(cur) = stack.pop() {
+            if !region.insert(cur) {
+                continue;
+            }
+            for next in &succs[cur] {
+                if !region.contains(next) {
+                    stack.push(*next);
+                }
+            }
+        }
+        if region_has_cycle(&region, &succs) {
+            switch_sources.insert(*src);
+        }
+    }
+
+    let mut direct_switch_succ: BTreeSet<usize> = BTreeSet::new();
+    for src in &switch_sources {
+        if let Some(succ_set) = switch_succs_by_source.get(src) {
+            direct_switch_succ.extend(succ_set.iter().copied());
+        }
+    }
+
+    let mut switch_reachable: BTreeSet<usize> = direct_switch_succ.clone();
+    let mut frontier: Vec<usize> = direct_switch_succ.iter().copied().collect();
+    while let Some(cur) = frontier.pop() {
+        for sidx in &succs[cur] {
+            let sidx = *sidx;
+            if switch_reachable.insert(sidx) {
+                frontier.push(sidx);
+            }
+        }
+    }
+
+    let mut switchint_arm_blocks: BTreeSet<usize> = BTreeSet::new();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for bb_idx in 0..body.basic_blocks.len() {
+            if switchint_arm_blocks.contains(&bb_idx) || !switch_reachable.contains(&bb_idx) {
+                continue;
+            }
+            let incoming = &preds[bb_idx];
+            if incoming.is_empty() {
+                continue;
+            }
+            let exclusively_switch_reachable = incoming.iter().all(|p| switch_sources.contains(p) || switchint_arm_blocks.contains(p) || direct_switch_succ.contains(p));
+            if exclusively_switch_reachable {
+                switchint_arm_blocks.insert(bb_idx);
+                changed = true;
+            }
+        }
+    }
+
+    let bb_writes_ret: Vec<bool> = body.basic_blocks.iter().map(mir_util::bb_writes_return_place).collect();
+    let mut switch_source_writes_ret: HashMap<usize, bool> = HashMap::new();
+    let mut switch_arm_writes_ret: BTreeSet<usize> = BTreeSet::new();
+    let mut switch_arm_returns: BTreeSet<usize> = BTreeSet::new();
+    for arm in &switchint_arm_blocks {
+        let arm_bb = mir::BasicBlock::from_usize(*arm);
+        if bb_writes_ret.get(*arm).copied().unwrap_or(false) {
+            switch_arm_writes_ret.insert(*arm);
+        }
+        if matches!(body.basic_blocks[arm_bb].terminator.as_ref().map(|t| &t.kind), Some(mir::TerminatorKind::Return)) {
+            switch_arm_returns.insert(*arm);
+        }
+    }
+    for src in &switch_sources {
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        let mut stack: Vec<usize> = succs[*src].clone();
+        let mut writes_ret = false;
+        while let Some(cur) = stack.pop() {
+            if !switch_reachable.contains(&cur) || !seen.insert(cur) {
+                continue;
+            }
+            if bb_writes_ret.get(cur).copied().unwrap_or(false) {
+                writes_ret = true;
+                break;
+            }
+            for next in &succs[cur] {
+                if switch_reachable.contains(next) {
+                    stack.push(*next);
+                }
+            }
+        }
+        switch_source_writes_ret.insert(*src, writes_ret);
+    }
+
+    SwitchAnalysis { switch_sources, switchint_arm_blocks, switch_arm_writes_ret, switch_arm_returns, switch_source_writes_ret }
+}
+
+fn region_has_cycle(region: &BTreeSet<usize>, succs: &[Vec<usize>]) -> bool {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Color {
+        White,
+        Gray,
+        Black,
+    }
+
+    fn dfs(cur: usize, region: &BTreeSet<usize>, succs: &[Vec<usize>], colors: &mut [Color]) -> bool {
+        colors[cur] = Color::Gray;
+        for &next in &succs[cur] {
+            if !region.contains(&next) {
+                continue;
+            }
+            match colors[next] {
+                Color::Gray => return true,
+                Color::White => {
+                    if dfs(next, region, succs, colors) {
+                        return true;
+                    }
+                }
+                Color::Black => {}
+            }
+        }
+        colors[cur] = Color::Black;
+        false
+    }
+
+    let mut colors = vec![Color::White; succs.len()];
+    for &node in region {
+        if colors[node] == Color::White && dfs(node, region, succs, &mut colors) {
+            return true;
+        }
+    }
+    false
+}
+
+pub(crate) fn compute_call_feed_locals<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, resolver: &LocalNameResolver) -> HashSet<String> {
+    let local_use_counts = mir_util::count_local_uses(body);
+    let mut filtered_arg_locals: HashSet<u32> = HashSet::new();
+    for bb in body.basic_blocks.iter() {
+        let Some(term_ref) = &bb.terminator else {
+            continue;
+        };
+        let mir::TerminatorKind::Call { func, args, .. } = &term_ref.kind else {
+            continue;
+        };
+        if !mir_ops::filtered_internal_call_target(tcx, func, resolver) {
+            continue;
+        }
+        for arg in args {
+            if let mir::Operand::Copy(place) | mir::Operand::Move(place) = &arg.node {
+                filtered_arg_locals.insert(place.local.as_u32());
+            }
+        }
+    }
+    let mut call_feed_locals: HashSet<String> = HashSet::new();
+    for local_u32 in filtered_arg_locals {
+        if local_use_counts.get(&local_u32).copied().unwrap_or(0) != 1 {
+            continue;
+        }
+        let local = mir::Local::from_u32(local_u32);
+        if let Some(name) = resolver.label_local(local) {
+            call_feed_locals.insert(name);
+        }
+    }
+    call_feed_locals
+}
+
+pub(crate) fn collect_suppressed_dest_sentinels(
+    body: &mir::Body<'_>, resolver: &LocalNameResolver, switch_analysis: &SwitchAnalysis, defined: &mut HashSet<String>, suppressed_sentinel_names: &mut HashSet<String>,
+) -> Vec<Stmt> {
+
 
 ```
 
 ### Recent rationale history
 ```
-[T-4] Start by mapping all __ret-related logic, especially has_ret_binding and lower_return_terminator conditions. Then inspect call and match lowering paths that could fail to materialize a __ret assignment. Also identify largest source files to prioritize deep inspection if needed.
+[T-4] Bootstrap exploration to map all __ret-related logic and identify where has_ret_binding is computed, where return/call terminators are lowered, and which large source files are most likely to contain root-cause logic. This establishes the search surface before tracing why some MIR bodies fail to produce a structural __ret assignment.
 ---
-[T-3] We need to inspect (1) the return-synthesis region in lower.rs around has_ret_binding and the fallback block insertion, (2) lower_return_terminator to see when it emits Match { dest: Some("__ret") }, and (3) expr.rs handling of lhs == "__ret" to verify whether panic-based or suppressed initializations are being filtered or rewritten correctly. These are the most likely sources of missing structural __ret assignments.
+[T-3] Focus next on lower_call_terminator and lower_return_terminator implementations, since __ret gaps are only introduced when no structural assignment is emitted before return. Also inspect ret.rs to understand any explicit return-place materialization logic. The goal is to trace the exact path where a MIR return terminator fails to produce a concrete __ret assignment.
 ---
-[T-2] The invariant description points directly at pass_lower_match_dest_to_suppressed converting Match { dest: Some("__ret") } into a suppressed assignment. Since lower_return_terminator no longer emits Match but structural Assign+Return, we must inspect passes.rs to confirm whether any transformation is still suppressing __ret-producing statements (especially Match lowering) and inadvertently removing legitimate structural __ret bindings.
+[T-2] The terminator logic now deterministically assigns __ret if missing, so remaining gaps likely come from a later normalization or suppression pass. Inspect passes.rs to verify pass_lower_match_dest_to_suppressed and any transformations that could erase or suppress structural __ret bindings. Also re-examine lower.rs around has_ret_binding computation and draft normalization to ensure detection logic is correct and not misclassifying valid __ret assignments.
 ---
-[T-1] We have confirmed that match lowering rewrites Match { dest: Some("__ret") } into suppressed assignments and that return terminators synthesize Assign+Return structurally. However, stage_finalize_body_with_ret_fallback operates on Vec<BasicBlock> before normalization passes, while match-dest suppression occurs during normalization. We must now inspect the exact ordering in lower.rs: where make_body_draft/normalize_blocks is called relative to stage_finalize_body_with_ret_fallback. If fallback runs before normalization, the pass may reintroduce suppressed __ret via match lowering. Inspect the body assembly flow in lower.rs to confirm pipeline order.
+[T-1] Continue inspecting stage_finalize_body_with_ret_fallback to see the full synthesis condition and whether it can accidentally duplicate or miss __ret bindings. Also inspect the tail of lower.rs for any additional __ret-related helpers (e.g., stmts_have_ret_binding / stmts_have_ret_match). Finally, re-examine analysis.rs to ensure switch-arm detection or suppressed sentinel collection is not incorrectly excluding legitimate __ret assignments.
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
 `{"phase":"observe","deltas":[...],"rationale":"..."}`
+
+### BashReadOnly whitelisted commands
+Only the following command prefixes are permitted in `BashReadOnly` deltas:
+`rg`, `cat`, `ls`, `tree`, `sed`, `awk`, `perl`, `find`, `head`, `tail`,
+`wc`, `diff`, `stat`, `echo`, `pwd`, `cargo`
+
+For `cargo`, read-only invocations only: `cargo check -p <crate> 2>&1`,
+`cargo build -p <crate> 2>&1`, `cargo test -p <crate> 2>&1`.
+Any other command prefix will be rejected at runtime with an error.
+`cargo` commands automatically run from the repo root `/workspace/ai_sandbox/canon` —
+do NOT prefix them with `cd`.
 
 
 ⚠️  STAGNATION DETECTED: You have spent many ticks observing or planning without acting. You MUST choose phase `act` this tick and emit at least one `ApplyPatch` or `Bash` delta. Do NOT choose observe or plan.

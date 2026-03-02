@@ -12,121 +12,46 @@ Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in
 
 ### Output from previous commands
 ```
-$ sed -n '260,420p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs
-            }
-            // Fallback to generic assign lowering for projected field reads
-            // that are representable as pure expressions (for example `(*self).score`).
-        }
-        MirOpKind::StructLit => {
-            if let Some(struct_stmt) = mir_expr::mir_struct_lit_stmt(ctx.tcx, lhs, rvalue, ctx.resolver) {
-                if !mir_guard::structural_guard(&struct_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
-                    if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
-                        mir_util::emit_suppressed_for_name(dest, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
-                    }
-                    return;
-                }
-                if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
-                    ctx.defined.insert(dest.clone());
-                }
-                ctx.stmts.push(struct_stmt);
-                return;
-            }
-            // Struct-literal pattern may still be representable as a generic
-            // assignment expression (for example enum unit variants).
-        }
-        MirOpKind::OpaqueAggregate => {
-            // Do not emit suppressed bindings for opaque aggregates.
-            // Allow deterministic structural fallback to handle return.
-            return;
-        }
-        MirOpKind::ZeroArgEnumCtor => {
-            if let Some(assign_stmt) = mir_expr::mir_assign_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver, ctx.defined, ctx.suppressed_sentinel_names) {
-                if mir_guard::structural_guard(&assign_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
-                    if let Stmt::Assign { lhs, .. } = &assign_stmt {
-                        ctx.defined.insert(lhs.clone());
-                    }
-                    ctx.stmts.push(assign_stmt);
-                } else if let Some(lhs_name) = lhs_name.clone() {
-                    mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
-                }
-            } else if let Some(lhs_name) = lhs_name.clone() {
-                mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
-            }
-            return;
-        }
-        MirOpKind::ConstUse => {}
-        MirOpKind::ArrayAggregate => {
-            if let Some(lhs_name) = lhs_name.as_ref()
-                && ctx.defined.contains(lhs_name)
-            {
-                return;
-            }
-        }
-        MirOpKind::Assign => {}
-    }
-
-    if let Some(assign_stmt) = mir_expr::mir_assign_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver, ctx.defined, ctx.suppressed_sentinel_names) {
-        if !mir_guard::structural_guard(&assign_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
-            if let Stmt::Assign { lhs, .. } = &assign_stmt {
-                // Never emit suppressed binding for any assignment here.
-                // Structural fallback is responsible for synthesizing returns.
-            }
-            return;
-        }
-        if let Stmt::Assign { lhs, .. } = &assign_stmt {
-            ctx.defined.insert(lhs.clone());
-        }
-        ctx.stmts.push(assign_stmt);
-    } else if let Some(lhs_name) = lhs_name {
-        // Avoid suppressed emission for __ret; fallback handles return.
-        if lhs_name != "__ret" {
-            mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
-        }
-    }
-}
-
-fn stmts_have_ret_match(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(|stmt| matches!(stmt, Stmt::Match { dest: Some(dest) } if dest == "__ret"))
-}
-
-fn stmts_have_ret_binding(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(mir_util::stmt_defines_ret)
-}
-
-// Post-structural return materialization hook.
-// Structural pipeline already guarantees deterministic __ret synthesis
-// via stage_finalize_body_with_ret_fallback. This hook exists so
-// engine.rs can invoke it without introducing suppressed bindings.
-pub(crate) fn materialize_return_local(_body: &mut Body) {
-    // No-op: structural fallback already guarantees a concrete __ret binding.
-}
-
-// Post-structural gap resolution hook.
-// Structural pipeline already injects a deterministic __ret assignment
-// when missing. This function intentionally performs no additional
-// mutation to avoid duplicating return synthesis logic.
-pub(crate) fn resolve_ret_gaps_with(_body: &mut Body, _default_expr: &str) {
-    // No-op: handled during stage_finalize_body_with_ret_fallback.
-}
-
-$ sed -n '420,520p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs
+$ sed -n '1,200p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/mod.rs
+pub mod analysis;
+pub mod expr;
+pub mod filters;
+pub mod guard;
+pub mod lower;
+pub mod ops;
+pub mod passes;
+pub mod patterns;
+pub mod resolver;
+pub mod terminator;
+pub mod util;
 
 
 ```
 
 ### Recent rationale history
 ```
-[T-5] Re-verified current mir_assign_stmt behavior: when lhs == "__ret" and rhs contains "panic!", the function now returns None, meaning no structural assignment is emitted at that point. However, deterministic fallback in stage_finalize_body_with_ret_fallback guarantees a concrete __ret assignment if missing. Combined with the earlier fix preventing suppression of Match { dest: Some("__ret") }, there are no remaining code paths that silently suppress structural __ret bindings. The invariant enforcement path is now structurally consistent.
+[T-5] We still have not surfaced the actual compiler diagnostics that caused exit status 101. Re-running cargo check in read-only mode (without forcing success) will expose the precise build errors so we can fix the real root cause instead of continuing structural inspection.
 ---
-[T-4] Confirmed that engine.rs invokes materialize_return_local and resolve_ret_gaps_with only after mir_body_structural completes. No additional public definitions of these functions exist (rg returned no matches), so the only active implementations are the ones in lower.rs. Given the prior fix preventing suppression of Match { dest: Some("__ret") }, and deterministic fallback ensuring a structural Assign+Return when missing, the return invariant path is now consistent across lowering, normalization, and engine post-processing.
+[T-4] Despite prior attempts, the compiler diagnostics causing exit status 101 have not been surfaced in the transcript. Running cargo check again in strict read-only mode (without forcing success) is necessary to obtain the concrete error output so we can address the real build failure rather than continuing structural inspection.
 ---
-[T-3] Run cargo check on canon-capture to verify that the __ret suppression fix compiles cleanly and does not introduce type or borrow errors before re-running orchestration.
+[T-3] Verify the visibility and exact definitions of materialize_return_local and resolve_ret_gaps_with across the workspace to determine whether lower::materialize_return_local / lower::resolve_ret_gaps_with are correctly exported and accessible from engine.rs, which may be the source of the build failure.
 ---
-[T-2] The previous cargo check exited with status 101. Re-run it in read-only mode to capture the full compiler error output so we can diagnose the failure before applying any patches.
+[T-2] Previous cargo check attempts exited with status 101 and aborted the tick before diagnostics were captured. Re-running cargo check while forcing a zero exit code ensures full compiler error output is emitted so we can identify and fix the actual build failure.
 ---
-[T-1] Confirmed via search that materialize_return_local and resolve_ret_gaps_with are defined in capture/mir/lower.rs and referenced correctly from engine.rs. Module wiring (mod lower) is present in capture/mir/mod.rs. There is no duplication or missing symbol. The next step should focus on diagnosing the cargo check failure (exit 101) by capturing and inspecting the compiler error output, as structural wiring for return-gap handling is now consistent.
+[T-1] Engine calls lower::materialize_return_local and lower::resolve_ret_gaps_with. We need to inspect capture/mir/mod.rs to confirm how the lower module is exposed and whether these functions are actually defined and publicly re-exported from lower.rs. This will determine whether the build failure is due to missing or non-public functions.
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
 `{"phase":"observe","deltas":[...],"rationale":"..."}`
+
+### BashReadOnly whitelisted commands
+Only the following command prefixes are permitted in `BashReadOnly` deltas:
+`rg`, `cat`, `ls`, `tree`, `sed`, `awk`, `perl`, `find`, `head`, `tail`,
+`wc`, `diff`, `stat`, `echo`, `pwd`, `cargo`
+
+For `cargo`, read-only invocations only: `cargo check -p <crate> 2>&1`,
+`cargo build -p <crate> 2>&1`, `cargo test -p <crate> 2>&1`.
+Any other command prefix will be rejected at runtime with an error.
+`cargo` commands automatically run from the repo root `/workspace/ai_sandbox/canon` —
+do NOT prefix them with `cd`.
 
