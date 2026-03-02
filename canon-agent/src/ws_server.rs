@@ -19,10 +19,10 @@
 //! WsBridge is a cheap-clone handle for callers.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::fs;
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use super::sse::{classify_frame, FrameResult};
 use futures_util::{SinkExt, StreamExt};
@@ -50,9 +50,9 @@ impl std::fmt::Display for WsBridgeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             WsBridgeError::NotConnected => write!(f, "extension not connected"),
-            WsBridgeError::NoTab       => write!(f, "no live ChatGPT tab"),
-            WsBridgeError::Timeout     => write!(f, "timeout waiting for ChatGPT response"),
-            WsBridgeError::Cancelled   => write!(f, "response channel cancelled"),
+            WsBridgeError::NoTab => write!(f, "no live ChatGPT tab"),
+            WsBridgeError::Timeout => write!(f, "timeout waiting for ChatGPT response"),
+            WsBridgeError::Cancelled => write!(f, "response channel cancelled"),
         }
     }
 }
@@ -101,13 +101,13 @@ impl ServerState {
         }
 
         Self {
-            out_tx:            None,
-            tab_buffers:       HashMap::new(),
-            pending:           HashMap::new(),
-            pending_open:      HashMap::new(),
-            live_tabs:         std::collections::HashSet::new(),
+            out_tx: None,
+            tab_buffers: HashMap::new(),
+            pending: HashMap::new(),
+            pending_open: HashMap::new(),
+            live_tabs: std::collections::HashSet::new(),
             turn_replay_queue: Vec::new(),
-            frame_counter:     0,
+            frame_counter: 0,
         }
     }
 
@@ -115,12 +115,8 @@ impl ServerState {
         let tx = self.out_tx.as_ref().ok_or(WsBridgeError::NotConnected)?;
         let raw = msg.to_string();
         match tx.try_send(Message::Text(raw.into())) {
-            Ok(()) => {
-                Ok(())
-            }
-            Err(e) => {
-                Err(WsBridgeError::NotConnected)
-            }
+            Ok(()) => Ok(()),
+            Err(e) => Err(WsBridgeError::NotConnected),
         }
     }
 }
@@ -131,7 +127,7 @@ impl ServerState {
 
 #[derive(Clone)]
 pub struct WsBridge {
-    state:       Arc<Mutex<ServerState>>,
+    state: Arc<Mutex<ServerState>>,
     next_req_id: Arc<AtomicU64>,
 }
 
@@ -167,8 +163,7 @@ impl WsBridge {
             let frame = json!({ "type": "TURN", "tabId": tab_id, "text": text });
 
             match st.send(frame.clone()) {
-                Ok(()) => {
-                }
+                Ok(()) => {}
                 Err(_) => {
                     // Socket is down — buffer the frame for replay on reconnect.
                     st.turn_replay_queue.push(frame);
@@ -176,14 +171,10 @@ impl WsBridge {
             }
         }
 
-
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(RESPONSE_TIMEOUT_SECS),
-            rx,
-        ).await {
+        match tokio::time::timeout(std::time::Duration::from_secs(RESPONSE_TIMEOUT_SECS), rx).await {
             Ok(Ok(text)) => Ok(text),
-            Ok(Err(_))   => Err(WsBridgeError::Cancelled),
-            Err(_)       => Err(WsBridgeError::Timeout),
+            Ok(Err(_)) => Err(WsBridgeError::Cancelled),
+            Err(_) => Err(WsBridgeError::Timeout),
         }
     }
 
@@ -192,7 +183,9 @@ impl WsBridge {
         loop {
             {
                 let st = self.state.lock().await;
-                if st.out_tx.is_some() { return; }
+                if st.out_tx.is_some() {
+                    return;
+                }
             }
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
@@ -211,10 +204,7 @@ impl WsBridge {
 
 pub fn spawn(addr: SocketAddr) -> WsBridge {
     let state = Arc::new(Mutex::new(ServerState::new()));
-    let bridge = WsBridge {
-        state:       state.clone(),
-        next_req_id: Arc::new(AtomicU64::new(1)),
-    };
+    let bridge = WsBridge { state: state.clone(), next_req_id: Arc::new(AtomicU64::new(1)) };
 
     tokio::spawn(async move {
         loop {
@@ -238,7 +228,7 @@ async fn accept_loop(listener: TcpListener, state: Arc<Mutex<ServerState>>) {
             Ok((stream, peer)) => {
                 handle_connection(stream, state.clone()).await;
             }
-            Err(_e) => {},
+            Err(_e) => {}
         }
     }
 }
@@ -246,7 +236,9 @@ async fn accept_loop(listener: TcpListener, state: Arc<Mutex<ServerState>>) {
 async fn handle_connection(stream: TcpStream, state: Arc<Mutex<ServerState>>) {
     let ws = match accept_async(stream).await {
         Ok(ws) => ws,
-        Err(_e) => { return; }
+        Err(_e) => {
+            return;
+        }
     };
 
     let (mut sink, mut source) = ws.split();
@@ -269,7 +261,9 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<ServerState>>) {
         while let Some(msg) = rx_out.recv().await {
             match sink.send(msg).await {
                 Ok(()) => {}
-                Err(_e) => { break; }
+                Err(_e) => {
+                    break;
+                }
             }
         }
     });
@@ -296,7 +290,7 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<ServerState>>) {
 
 async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
     let msg: Value = match serde_json::from_str(raw) {
-        Ok(v)  => v,
+        Ok(v) => v,
         Err(_) => {
             return;
         }
@@ -313,7 +307,7 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
                 Some(id) => id as u32,
                 None => return,
             };
-            let url    = msg.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            let url = msg.get("url").and_then(|v| v.as_str()).unwrap_or("");
             let mut st = state.lock().await;
             st.live_tabs.insert(tab_id);
         }
@@ -334,7 +328,7 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
                 Some(id) => id as u32,
                 None => return,
             };
-            let url    = msg.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            let url = msg.get("url").and_then(|v| v.as_str()).unwrap_or("");
             let req_id = msg.get("reqId").and_then(|v| v.as_u64());
 
             let mut st = state.lock().await;
@@ -358,13 +352,7 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
 
             let mut st = state.lock().await;
 
-            // Dump every inbound payload for analysis
-            st.frame_counter += 1;
-            let fname = format!("./frames/{:06}_tab{}.json", st.frame_counter, tab_id);
-            let dump = serde_json::from_str::<serde_json::Value>(&payload)
-                .map(|v| serde_json::to_string_pretty(&v).unwrap_or_else(|_| payload.clone()))
-                .unwrap_or_else(|_| payload.clone());
-            let _ = fs::write(&fname, &dump);
+            // Silence frame dumping
 
             match classify_frame(&payload) {
                 FrameResult::Delta(text) => {
@@ -379,10 +367,7 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
                     st.tab_buffers.remove(&tab_id);
                 }
                 FrameResult::Done => {
-                    if let (Some(buf), Some(tx)) = (
-                        st.tab_buffers.remove(&tab_id),
-                        st.pending.remove(&tab_id),
-                    ) {
+                    if let (Some(buf), Some(tx)) = (st.tab_buffers.remove(&tab_id), st.pending.remove(&tab_id)) {
                         let assembled = buf.join("");
                         let _ = tx.send(assembled);
                     }
@@ -391,6 +376,6 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             }
         }
 
-        _other => {},
+        _other => {}
     }
 }

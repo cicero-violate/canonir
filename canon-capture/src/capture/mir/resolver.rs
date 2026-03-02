@@ -20,12 +20,7 @@ impl LocalNameResolver {
             let mir::VarDebugInfoContents::Place(place) = &dbg.value else {
                 continue;
             };
-            let projection_ok = place.projection.is_empty()
-                || (place.projection.len() == 1
-                    && matches!(
-                        place.projection[0],
-                        mir::ProjectionElem::Field(..) | mir::ProjectionElem::Deref
-                    ));
+            let projection_ok = place.projection.is_empty() || (place.projection.len() == 1 && matches!(place.projection[0], mir::ProjectionElem::Field(..) | mir::ProjectionElem::Deref));
             if !projection_ok {
                 continue;
             }
@@ -42,29 +37,16 @@ impl LocalNameResolver {
             if by_local.contains_key(&local.as_u32()) {
                 continue;
             }
-            insert_unique_name(
-                &mut by_local,
-                &mut owner_by_name,
-                local.as_u32(),
-                format!("_v{}", local.as_u32()),
-            );
+            insert_unique_name(&mut by_local, &mut owner_by_name, local.as_u32(), format!("_v{}", local.as_u32()));
         }
         Self { by_local }
     }
 
     pub(crate) fn label_place(&self, place: &mir::Place<'_>) -> Option<String> {
-        if place
-            .projection
-            .iter()
-            .any(|p| matches!(p, mir::ProjectionElem::Downcast(..)))
-        {
+        if place.projection.iter().any(|p| matches!(p, mir::ProjectionElem::Downcast(..))) {
             return None;
         }
-        if place
-            .projection
-            .iter()
-            .any(|p| matches!(p, mir::ProjectionElem::OpaqueCast(..) | mir::ProjectionElem::UnwrapUnsafeBinder(..)))
-        {
+        if place.projection.iter().any(|p| matches!(p, mir::ProjectionElem::OpaqueCast(..) | mir::ProjectionElem::UnwrapUnsafeBinder(..))) {
             return None;
         }
         if !place.projection.is_empty() {
@@ -82,18 +64,10 @@ impl LocalNameResolver {
     }
 
     pub(crate) fn label_place_ref(&self, place: mir::PlaceRef<'_>) -> Option<String> {
-        if place
-            .projection
-            .iter()
-            .any(|p| matches!(p, mir::ProjectionElem::Downcast(..)))
-        {
+        if place.projection.iter().any(|p| matches!(p, mir::ProjectionElem::Downcast(..))) {
             return None;
         }
-        if place
-            .projection
-            .iter()
-            .any(|p| matches!(p, mir::ProjectionElem::OpaqueCast(..) | mir::ProjectionElem::UnwrapUnsafeBinder(..)))
-        {
+        if place.projection.iter().any(|p| matches!(p, mir::ProjectionElem::OpaqueCast(..) | mir::ProjectionElem::UnwrapUnsafeBinder(..))) {
             return None;
         }
         if !place.projection.is_empty() {
@@ -125,12 +99,7 @@ fn is_value_name_safe(s: &str) -> bool {
     true
 }
 
-fn insert_unique_name(
-    by_local: &mut HashMap<u32, String>,
-    owner_by_name: &mut HashMap<String, u32>,
-    local_idx: u32,
-    preferred: String,
-) {
+fn insert_unique_name(by_local: &mut HashMap<u32, String>, owner_by_name: &mut HashMap<String, u32>, local_idx: u32, preferred: String) {
     if let Some(existing) = owner_by_name.get(&preferred) {
         if *existing == local_idx {
             by_local.insert(local_idx, preferred);

@@ -1,20 +1,27 @@
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use super::reward::RewardRecord;
 use super::world_model::WorldModel;
 use super::{
-    admission::{AppliedDeltaRecord, AdmissionPolicy},
+    admission::{AdmissionPolicy, AppliedDeltaRecord},
     artifacts::{EnumNode, ImplBlock, Module, ModuleEdge, Struct, Trait},
-    delta::StateChange, errors::ErrorArtifact, functions::Function, goals::GoalMutation,
-    gpu::GpuFunction, graphs::{CallEdge, SystemGraph, ExecutionGraph},
+    delta::StateChange,
+    errors::ErrorArtifact,
+    functions::Function,
+    goals::GoalMutation,
+    gpu::GpuFunction,
+    graphs::{CallEdge, ExecutionGraph, SystemGraph},
     ids::{PolicyParameterId, ProofId},
     judgment::{Decision, Rule},
-    learning::Learning, policy::PolicyParameters, project::{ExternalDependency, Project},
-    proofs::Proof, proposal::Proposal,
-    timeline::{ExecutionRecord, LoopPolicy, Plan, Tick, ExecutionEpoch},
+    learning::Learning,
+    policy::PolicyParameters,
+    project::{ExternalDependency, Project},
+    proofs::Proof,
+    proposal::Proposal,
+    timeline::{ExecutionEpoch, ExecutionRecord, LoopPolicy, Plan, Tick},
     word::Word,
 };
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct SystemState {

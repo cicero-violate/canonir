@@ -1,0 +1,70 @@
+## Tick 25 — observe phase
+
+### Exit-check output
+```
+
+```
+
+### Output from previous commands
+```
+$ rg -n "pub\(crate\) fn materialize_return_local|pub\(crate\) fn resolve_ret_gaps_with" canon-capture/src/capture/mir/lower.rs
+
+$ sed -n '300,380p' canon-capture/src/capture/mir/lower.rs
+        }
+        MirOpKind::ConstUse => {}
+        MirOpKind::ArrayAggregate => {
+            if let Some(lhs_name) = lhs_name.as_ref()
+                && ctx.defined.contains(lhs_name)
+            {
+                return;
+            }
+        }
+        MirOpKind::Assign => {}
+    }
+
+    if let Some(assign_stmt) = mir_expr::mir_assign_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver, ctx.defined, ctx.suppressed_sentinel_names) {
+        if !mir_guard::structural_guard(&assign_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
+            if let Stmt::Assign { lhs, .. } = &assign_stmt {
+                // Never emit suppressed binding for any assignment here.
+                // Structural fallback is responsible for synthesizing returns.
+            }
+            return;
+        }
+        if let Stmt::Assign { lhs, .. } = &assign_stmt {
+            ctx.defined.insert(lhs.clone());
+        }
+        ctx.stmts.push(assign_stmt);
+    } else if let Some(lhs_name) = lhs_name {
+        // Avoid suppressed emission for __ret; fallback handles return.
+        if lhs_name != "__ret" {
+            mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
+        }
+    }
+}
+
+fn stmts_have_ret_match(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|stmt| matches!(stmt, Stmt::Match { dest: Some(dest) } if dest == "__ret"))
+}
+
+fn stmts_have_ret_binding(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(mir_util::stmt_defines_ret)
+}
+
+
+```
+
+### Recent rationale history
+```
+[T-5] The previous turn failed due to a timeout while waiting for a response. No repository state was changed and no commands were executed. Re-emitting a minimal valid JSON block to satisfy the required protocol and allow the loop to proceed.
+---
+[T-4] Re-confirm that materialize_return_local and resolve_ret_gaps_with remain undefined in the current workspace state after the timeout recovery, ensuring no partial edits were introduced before proceeding to implementation.
+---
+[T-3] Search confirms materialize_return_local and resolve_ret_gaps_with are still only referenced from engine.rs and remain undefined in capture/mir/lower.rs. No partial implementations exist. Observation is complete and the workspace is stable. The next correct step is to enter the act phase and implement both missing pub(crate) functions in lower.rs so engine.rs can link and deterministic __ret materialization/gap resolution can execute.
+---
+[T-2] Implement the previously missing materialize_return_local and resolve_ret_gaps_with functions directly in lower.rs. The first ensures a structural __ret binding exists without suppressed sentinels. The second deterministically replaces placeholder or suppressed __ret assignments with the provided default expression, guaranteeing a concrete return binding for engine.rs post-processing.
+---
+[T-1] Verify that the newly added materialize_return_local and resolve_ret_gaps_with functions are present in lower.rs and correctly inserted at the end of the file before proceeding to a verify phase.
+```
+
+Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
+`{"phase":"observe","deltas":[...],"rationale":"..."}`

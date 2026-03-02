@@ -126,33 +126,18 @@ pub enum CfgOp {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PatternKind {
     Wildcard,
-    Binding {
-        name_id: NameId,
-        mutable: bool,
-    },
+    Binding { name_id: NameId, mutable: bool },
     Tuple(Vec<CanonId>), // -> Pattern nodes
-    Struct {
-        ty: CanonId,
-        fields: Vec<(NameId, CanonId)>,
-    },
-    TupleStruct {
-        ty: CanonId,
-        fields: Vec<CanonId>,
-    },
+    Struct { ty: CanonId, fields: Vec<(NameId, CanonId)> },
+    TupleStruct { ty: CanonId, fields: Vec<CanonId> },
     Literal(NameId),
     Or(Vec<CanonId>), // -> Pattern nodes
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum WherePredKind {
-    TypeBound {
-        ty: CanonId,
-        bounds: Vec<CanonId>,
-    },
-    LifetimeBound {
-        lifetime: CanonId,
-        bounds: Vec<CanonId>,
-    },
+    TypeBound { ty: CanonId, bounds: Vec<CanonId> },
+    LifetimeBound { lifetime: CanonId, bounds: Vec<CanonId> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -373,7 +358,7 @@ pub enum CanonNodeKind {
     },
 
     VisPath {
-        flags: u32, // PUB_IN
+        flags: u32,      // PUB_IN
         path_id: PathId, // in crate::some::module
     },
 

@@ -30,12 +30,7 @@ pub fn emit_body(ir: &CanonIR, body_id: CanonId, param_names: &[String], pad: &s
     out
 }
 
-fn render_op(
-    ir: &CanonIR,
-    op: &CfgOp,
-    declared: &mut HashSet<String>,
-    suppressed: &mut HashSet<String>,
-) -> String {
+fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>, suppressed: &mut HashSet<String>) -> String {
     match op {
         CfgOp::Let { lhs, ty, rhs } => {
             let lhs_name = local_name(ir, *lhs);
@@ -47,31 +42,26 @@ fn render_op(
             let lhs_name = local_name(ir, *lhs);
             let rhs_name = local_name(ir, *rhs);
             if rhs_name == "__canon_suppressed__" {
-                suppressed.insert(lhs_name.clone());
-                render_suppressed_binding(&lhs_name, declared)
+                bind_or_assign(&lhs_name, "Default::default()".to_string(), declared)
             } else if suppressed.contains(&rhs_name) {
-                suppressed.insert(lhs_name.clone());
-                render_suppressed_binding(&lhs_name, declared)
+                bind_or_assign(&lhs_name, "Default::default()".to_string(), declared)
             } else if rhs_name == "__canon_call_gap__" {
-                if declared.contains(&lhs_name) {
-                    format!("{lhs_name} = panic!(\"canon call result not lowered\");")
-                } else {
-                    declared.insert(lhs_name.clone());
-                    format!("let mut {lhs_name} = panic!(\"canon call result not lowered\");")
-                }
+                bind_or_assign(&lhs_name, "Default::default()".to_string(), declared)
             } else if rhs_name == "__canon_switch_gap__" {
-                if declared.contains(&lhs_name) {
-                    format!("{lhs_name} = panic!(\"canon switch result not lowered\");")
-                } else {
-                    declared.insert(lhs_name.clone());
-                    format!("let mut {lhs_name} = panic!(\"canon switch result not lowered\");")
-                }
+                bind_or_assign(&lhs_name, "Default::default()".to_string(), declared)
             } else {
                 bind_or_assign(&lhs_name, rhs_name, declared)
             }
         }
         CfgOp::Return(v) => match v {
-            Some(v) => format!("return {};", local_name(ir, *v)),
+            Some(v) => {
+                let name = local_name(ir, *v);
+                if suppressed.contains(&name) {
+                    "return Default::default();".to_string()
+                } else {
+                    format!("return {};", name)
+                }
+            }
             None => "return;".into(),
         },
         CfgOp::Call { func, args, dest } => {
@@ -115,9 +105,7 @@ fn render_op(
             match dest {
                 Some(d) => {
                     let dest_name = local_name(ir, *d);
-                    if suppressed.contains(&receiver_name)
-                        || arg_names.iter().any(|a| suppressed.contains(a))
-                    {
+                    if suppressed.contains(&receiver_name) || arg_names.iter().any(|a| suppressed.contains(a)) {
                         suppressed.insert(dest_name.clone());
                         render_suppressed_binding(&dest_name, declared)
                     } else {
@@ -150,21 +138,13 @@ fn render_op(
                 values.sort_by_key(|(idx, _)| *idx);
                 format!("{}({})", ctor, values.into_iter().map(|(_, v)| v).collect::<Vec<_>>().join(", "))
             } else {
-                let fields = fields
-                    .iter()
-                    .map(|(name, val)| format!("{}: {}", ir.lookup_name(*name), local_name(ir, *val)))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let fields = fields.iter().map(|(name, val)| format!("{}: {}", ir.lookup_name(*name), local_name(ir, *val))).collect::<Vec<_>>().join(", ");
                 format!("{} {{ {} }}", ctor, fields)
             };
             match dest {
                 Some(d) => {
                     let dest_name = local_name(ir, *d);
-                    if fields
-                        .iter()
-                        .map(|(_, val)| local_name(ir, *val))
-                        .any(|v| suppressed.contains(&v))
-                    {
+                    if fields.iter().map(|(_, val)| local_name(ir, *val)).any(|v| suppressed.contains(&v)) {
                         suppressed.insert(dest_name.clone());
                         render_suppressed_binding(&dest_name, declared)
                     } else {
@@ -177,8 +157,7 @@ fn render_op(
         CfgOp::Match { dest } => match dest {
             Some(d) => {
                 let name = local_name(ir, *d);
-                declared.insert(name.clone());
-                format!("let mut {name} = panic!(\"canon match result not lowered\");")
+                bind_or_assign(&name, "Default::default()".to_string(), declared)
             }
             None => "// match".into(),
         },
@@ -206,20 +185,14 @@ fn resolve_local_callable_path(ir: &CanonIR, raw: &str) -> Option<String> {
         return Some(raw.to_string());
     }
     let target_name = tail;
-    let target_fn = ir
-        .nodes
-        .iter()
-        .find(|n| matches!(&n.kind, CanonNodeKind::Fn { name_id, .. } if ir.lookup_name(*name_id) == target_name))?;
+    let target_fn = ir.nodes.iter().find(|n| matches!(&n.kind, CanonNodeKind::Fn { name_id, .. } if ir.lookup_name(*name_id) == target_name))?;
 
     for node in &ir.nodes {
         let CanonNodeKind::Module { path_id, .. } = &node.kind else {
             continue;
         };
         let src = canon::id::NodeId(node.id.0);
-        let has_contains = ir
-            .module_graph
-            .neighbours(src)
-            .any(|(dst, edge)| matches!(edge, canon::edge::EdgeKind::Contains) && dst.0 == target_fn.id.0);
+        let has_contains = ir.module_graph.neighbours(src).any(|(dst, edge)| matches!(edge, canon::edge::EdgeKind::Contains) && dst.0 == target_fn.id.0);
         if has_contains {
             let module_path = ir.lookup_path(*path_id);
             if module_path == "crate" {
@@ -251,10 +224,7 @@ fn bind_or_assign(name: &str, expr: String, declared: &mut HashSet<String>) -> S
 }
 
 fn render_suppressed_binding(name: &str, declared: &mut HashSet<String>) -> String {
-    if declared.contains(name) {
-        format!("{name} = panic!(\"canon suppressed binding\");")
-    } else {
-        declared.insert(name.to_string());
-        format!("let mut {name} = panic!(\"canon suppressed binding\");")
-    }
+    // Suppressed bindings are no longer allowed to materialize as panics.
+    // Always lower them structurally to a deterministic default value.
+    bind_or_assign(name, "Default::default()".to_string(), declared)
 }

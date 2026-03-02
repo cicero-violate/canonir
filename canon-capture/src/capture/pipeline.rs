@@ -16,9 +16,7 @@ fn project_def(tcx: TyCtxt<'_>, def_id: DefId, index: &crate::index::Index) -> P
     }
 
     if !matches!(tcx.def_kind(def_id), DefKind::Use) {
-        partial
-            .edge_hints
-            .extend(relations::project_relations(tcx, def_id, index));
+        partial.edge_hints.extend(relations::project_relations(tcx, def_id, index));
     }
 
     let (body_nodes, body_edges) = body::project_body(tcx, def_id, index);
@@ -31,11 +29,7 @@ fn project_def(tcx: TyCtxt<'_>, def_id: DefId, index: &crate::index::Index) -> P
 pub fn capture(tcx: TyCtxt<'_>) -> Result<CanonIR> {
     let idx = index::build_index(tcx);
 
-    let partials: Vec<Partial> = idx
-        .def_ids
-        .iter()
-        .map(|d| project_def(tcx, *d, &idx))
-        .collect();
+    let partials: Vec<Partial> = idx.def_ids.iter().map(|d| project_def(tcx, *d, &idx)).collect();
 
     let canon = canon_assemble::canon_assemble(tcx, &idx, partials);
     super::validate::structural::validate(&canon)?;

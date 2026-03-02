@@ -1,0 +1,1 @@
+../../../../home/cicero-arch-omen/ai_sandbox/chatgpt-website/chatgpt_agent/cards/tools/gpt_5_2_prompt_shell.md

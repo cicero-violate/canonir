@@ -1,6 +1,6 @@
+use super::ids::{JudgmentId, JudgmentPredicateId, ProposalId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use super::ids::{JudgmentId, JudgmentPredicateId, ProposalId};
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Decision {

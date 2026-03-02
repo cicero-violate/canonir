@@ -10,7 +10,7 @@ pub fn emit_shell(deltas: &[CodeDelta]) -> String {
                 out.push_str(patch);
                 out.push_str("\nEOF\n\n");
             }
-            CodeDelta::Bash { command } => {
+            CodeDelta::Bash { command } | CodeDelta::BashReadOnly { command } => {
                 out.push_str(command);
                 out.push('\n');
             }

@@ -1,0 +1,125 @@
+$ wc -l canon-capture/src/capture/mir/lower.rs
+338 canon-capture/src/capture/mir/lower.rs
+
+$ sed -n '1,120p' canon-capture/src/capture/mir/lower.rs
+use crate::types::{BasicBlock, Body, Stmt, Terminator};
+use rustc_middle::mir;
+use rustc_middle::ty::{self, TyCtxt};
+use rustc_span::def_id::DefId;
+use std::collections::HashSet;
+
+use crate::capture::mir::analysis as mir_analysis;
+use crate::capture::mir::expr as mir_expr;
+use crate::capture::mir::guard as mir_guard;
+use crate::capture::mir::passes as mir_passes;
+use crate::capture::mir::patterns as mir_patterns;
+use crate::capture::mir::patterns::MirOpKind;
+use crate::capture::mir::terminator as mir_terminator;
+use crate::capture::mir::util as mir_util;
+
+use super::resolver::LocalNameResolver;
+
+struct LowerPlan {
+    resolver: LocalNameResolver,
+    mir_to_emitted: Vec<Option<u32>>,
+    switch_analysis: mir_analysis::SwitchAnalysis,
+    call_feed_locals: HashSet<String>,
+    defined: HashSet<String>,
+    suppressed_sentinel_names: HashSet<String>,
+    suppressed_dest_sentinels: Vec<Stmt>,
+}
+
+struct AssignLowerCtx<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
+    local_decls: &'a mir::LocalDecls<'tcx>,
+    resolver: &'a LocalNameResolver,
+    call_feed_locals: &'a HashSet<String>,
+    defined: &'a mut HashSet<String>,
+    suppressed_sentinel_names: &'a mut HashSet<String>,
+    stmts: &'a mut Vec<Stmt>,
+    has_match_before_block: bool,
+}
+
+pub(crate) fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String], returns_unit: bool) -> Body {
+    let Some(local_def) = def_id.as_local() else {
+        return Body::None;
+    };
+    if !tcx.is_mir_available(local_def) {
+        return Body::None;
+    }
+    let body = match tcx.hir_body_const_context(local_def) {
+        Some(rustc_hir::ConstContext::ConstFn) | Some(rustc_hir::ConstContext::Const { .. }) | Some(rustc_hir::ConstContext::Static(_)) => tcx.mir_for_ctfe(local_def),
+        None => tcx.optimized_mir(local_def),
+    };
+
+    let mut plan = stage_build_plan(tcx, body, param_names);
+    let draft = stage_emit_draft(tcx, body, returns_unit, &mut plan);
+    let blocks = stage_normalize_draft(draft);
+    stage_finalize_body_with_ret_fallback(tcx, def_id, returns_unit, blocks)
+}
+
+fn stage_build_plan<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, param_names: &[String]) -> LowerPlan {
+    let resolver = LocalNameResolver::new(body, param_names);
+    let switch_analysis = mir_analysis::analyze_switch_structure(body);
+    let call_feed_locals = mir_analysis::compute_call_feed_locals(tcx, body, &resolver);
+    let mut defined: HashSet<String> = param_names.iter().cloned().collect();
+    let mut suppressed_sentinel_names: HashSet<String> = HashSet::new();
+    let suppressed_dest_sentinels = mir_analysis::collect_suppressed_dest_sentinels(body, &resolver, &switch_analysis, &mut defined, &mut suppressed_sentinel_names)
+        .into_iter()
+        .filter(|s| !matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret"))
+        .collect();
+
+    // Never allow suppressed sentinel for __ret; return must be lowered structurally.
+    let suppressed_dest_sentinels = suppressed_dest_sentinels.into_iter().filter(|s| !matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret")).collect();
+
+    let mut mir_to_emitted: Vec<Option<u32>> = vec![None; body.basic_blocks.len()];
+    let mut next_emitted = 0u32;
+    for (mir_idx, bb) in body.basic_blocks.iter_enumerated() {
+        if bb.is_cleanup {
+            continue;
+        }
+        mir_to_emitted[mir_idx.as_usize()] = Some(next_emitted);
+        next_emitted += 1;
+    }
+
+    LowerPlan { resolver, mir_to_emitted, switch_analysis, call_feed_locals, defined, suppressed_sentinel_names, suppressed_dest_sentinels }
+}
+
+fn stage_emit_draft<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, returns_unit: bool, plan: &mut LowerPlan) -> mir_passes::BodyDraft {
+    let emitted_block_capacity = plan.mir_to_emitted.iter().filter(|slot| slot.is_some()).count();
+    let mut emitted_blocks: Vec<mir_passes::EmittedBlock> = Vec::with_capacity(emitted_block_capacity);
+
+    // Do NOT pre-mark __ret as defined. It must be structurally assigned
+    // by lowering or by deterministic fallback to avoid masked gaps.
+
+    for (mir_idx, bb) in body.basic_blocks.iter_enumerated() {
+        if bb.is_cleanup {
+            continue;
+        }
+        if let Some(block) = mir_passes::emit_special_block(returns_unit, mir_idx.as_usize(), &emitted_blocks, &plan.switch_analysis, &mut plan.defined) {
+            emitted_blocks.push(block);
+            continue;
+        }
+
+        let mut stmts = stage_prepare_block_stmts();
+        stage_lower_block_statements(tcx, body, bb, &emitted_blocks, plan, &mut stmts);
+        let term = stage_lower_block_terminator(tcx, returns_unit, bb, &emitted_blocks, plan, &mut stmts);
+        // Do not emit suppressed __ret bindings at block end.
+        // Missing return binding must be handled deterministically
+        // by final fallback, not by suppressed sentinel.
+        emitted_blocks.push(mir_passes::make_normal_block(stmts, term));
+    }
+
+    mir_passes::make_body_draft(emitted_blocks, std::mem::take(&mut plan.suppressed_dest_sentinels))
+}
+
+fn stage_normalize_draft(draft: mir_passes::BodyDraft) -> Vec<BasicBlock> {
+    mir_passes::NormalizationPipeline::canonical().run(draft)
+}
+
+fn stage_prepare_block_stmts() -> Vec<Stmt> {
+    Vec::new()
+}
+
+fn stage_lower_block_statements<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, bb: &mir::BasicBlockData<'tcx>, blocks: &[mir_passes::EmittedBlock], plan: &mut LowerPlan, stmts: &mut Vec<Stmt>) {
+

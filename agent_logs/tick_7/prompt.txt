@@ -1,0 +1,42 @@
+## Tick 7 — observe phase
+
+### Exit-check output
+```
+
+```
+
+### Output from previous commands
+```
+$ rg -n "fn materialize_return_local|fn resolve_ret_gaps_with" canon-capture/src -n
+
+$ sed -n '1,200p' canon-capture/src/capture/mir/mod.rs 2>/dev/null || true
+pub mod analysis;
+pub mod expr;
+pub mod filters;
+pub mod guard;
+pub mod lower;
+pub mod ops;
+pub mod passes;
+pub mod patterns;
+pub mod resolver;
+pub mod terminator;
+pub mod util;
+
+
+```
+
+### Recent rationale history
+```
+[T-5] Since __ret is central to the invariant and there is a dedicated ret.rs plus logic in terminator.rs and lower.rs handling return synthesis, inspect these files to understand the intended structural return binding path before planning any changes.
+---
+[T-4] The fallback logic in lower.rs looks structurally correct, so the remaining gaps may be introduced later in the pipeline (e.g., engine-level post-processing or emission). Inspect engine.rs to see if __ret gaps are rewritten or reintroduced, and inspect types.rs to confirm how Body/Stmt/Return are represented and whether ReturnPlace or Expr-based returns are bypassing structural __ret assignment.
+---
+[T-3] Engine calls materialize_return_local and resolve_ret_gaps_with after MIR structural lowering. If gaps still exist in emitted Rust, the issue likely lies in these helpers or their interaction with stage_finalize_body_with_ret_fallback. Inspect their definitions and the full lower.rs to verify whether __ret assignments are being dropped, overwritten, or structurally bypassed.
+---
+[T-2] The search for materialize_return_local and resolve_ret_gaps_with returned no results, which is suspicious because engine.rs calls them. This suggests either they are defined elsewhere (possibly re-exported or in another module) or missing entirely. Also inspect stmts_have_ret_binding/match helpers and the remainder of lower.rs to verify whether return-detection logic is inconsistent, leading to false negatives and missed __ret synthesis.
+---
+[T-1] engine.rs invokes materialize_return_local and resolve_ret_gaps_with, but earlier search did not reveal their definitions inside capture/mir. Verify whether these functions are actually defined (possibly in another module or re-exported) or missing entirely. If missing, that would explain why __ret gaps persist despite intended post-processing.
+```
+
+Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
+`{"phase":"observe","deltas":[...],"rationale":"..."}`

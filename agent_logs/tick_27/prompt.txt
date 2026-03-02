@@ -1,0 +1,140 @@
+## Tick 27 — observe phase
+
+### Exit-check output
+```
+
+```
+
+### Output from previous commands
+```
+$ sed -n '150,260p' canon-capture/src/capture/engine.rs
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
+    let default_value = {
+        let v = helpers::hir_init_src(tcx, def_id);
+        if v.trim().is_empty() {
+            None
+        } else {
+            Some(v)
+        }
+    };
+    let kind = NodeKind::AssocConst { name, vis, ty: ty_expr, default_value, attrs: Vec::new() };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_fn_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
+    let sig = tcx.fn_sig(def_id).skip_binder();
+    let returns_unit = sig.output().skip_binder().is_unit();
+    let params = helpers::map_params(tcx, def_id, sig.inputs().skip_binder());
+    let async_ = tcx.asyncness(def_id).is_async();
+    let ret = helpers::declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, sig.output().skip_binder()));
+    let unsafe_ = sig.safety() == rustc_hir::Safety::Unsafe;
+    let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+    let mut body = lower::mir_body_structural(tcx, def_id, &param_names, returns_unit);
+    if !returns_unit {
+        lower::materialize_return_local(&mut body);
+        // Deterministically replace remaining __ret gaps with a concrete return
+        // value derived from the declared return type, eliminating suppressed
+        // return bindings at the structural level.
+        let default_expr = helpers::default_return_expr(&ret);
+        lower::resolve_ret_gaps_with(&mut body, &default_expr);
+    }
+    let kind = NodeKind::Function { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_assoc_fn_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
+    let sig = tcx.fn_sig(def_id).skip_binder();
+    let returns_unit = sig.output().skip_binder().is_unit();
+    let params = helpers::map_params(tcx, def_id, sig.inputs().skip_binder());
+    let async_ = tcx.asyncness(def_id).is_async();
+    let ret = helpers::declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, sig.output().skip_binder()));
+    let unsafe_ = sig.safety() == rustc_hir::Safety::Unsafe;
+    let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+    let mut body = lower::mir_body_structural(tcx, def_id, &param_names, returns_unit);
+    if !returns_unit {
+        lower::materialize_return_local(&mut body);
+        // Deterministically replace remaining __ret gaps with a concrete return
+        // value derived from the declared return type, eliminating suppressed
+        // return bindings at the structural level.
+        let default_expr = helpers::default_return_expr(&ret);
+        lower::resolve_ret_gaps_with(&mut body, &default_expr);
+    }
+    let kind = NodeKind::Method { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_const_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
+    let value = helpers::hir_init_src(tcx, def_id);
+    let kind = NodeKind::Const { name, vis, ty: ty_expr, value, attrs: Vec::new() };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_ty_alias_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
+    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
+    let kind = NodeKind::TypeAlias { name, vis, generics, ty: ty_expr, attrs: Vec::new(), where_clauses };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_static_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
+    let value = helpers::hir_init_src(tcx, def_id);
+    let mutable = matches!(tcx.def_kind(def_id), DefKind::Static { mutability: rustc_hir::Mutability::Mut, .. });
+    let kind = NodeKind::Static { name, vis, ty: ty_expr, value, mutable, attrs: Vec::new() };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_use_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index, rule: &RuleSpec) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let local = def_id.as_local()?;
+    let rustc_hir::Node::Item(item_hir) = tcx.hir_node_by_def_id(local) else {
+        return Some((Vec::new(), Vec::new()));
+
+
+```
+
+### Recent rationale history
+```
+[T-5] Search confirms materialize_return_local and resolve_ret_gaps_with are still only referenced from engine.rs and remain undefined in capture/mir/lower.rs. No partial implementations exist. Observation is complete and the workspace is stable. The next correct step is to enter the act phase and implement both missing pub(crate) functions in lower.rs so engine.rs can link and deterministic __ret materialization/gap resolution can execute.
+---
+[T-4] Implement the previously missing materialize_return_local and resolve_ret_gaps_with functions directly in lower.rs. The first ensures a structural __ret binding exists without suppressed sentinels. The second deterministically replaces placeholder or suppressed __ret assignments with the provided default expression, guaranteeing a concrete return binding for engine.rs post-processing.
+---
+[T-3] Verify that the newly added materialize_return_local and resolve_ret_gaps_with functions are present in lower.rs and correctly inserted at the end of the file before proceeding to a verify phase.
+---
+[T-2] Confirm that the two functions are still undefined anywhere in the workspace and that lower.rs length remains unchanged, ensuring no partial insertion occurred before proceeding to implement them.
+---
+[T-1] Inspect the exact call sites in engine.rs to confirm the expected signatures and semantics of materialize_return_local and resolve_ret_gaps_with before moving to the act phase. This ensures the new implementations in lower.rs match how they are invoked.
+```
+
+Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
+`{"phase":"observe","deltas":[...],"rationale":"..."}`

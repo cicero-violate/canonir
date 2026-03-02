@@ -2,8 +2,8 @@ use crate::types::{Body, EdgeHint, Node};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
 
-use crate::index::Index;
 use crate::capture::engine;
+use crate::index::Index;
 
 /// Structural projection: DefId -> NodeKind using rule engine.
 /// Legacy path is retained as compatibility shim.
@@ -25,11 +25,6 @@ pub(crate) fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &
     crate::capture::mir::lower::mir_body_structural(tcx, def_id, param_names, returns_unit)
 }
 
-pub(crate) fn mir_body_structural_legacy(
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-    param_names: &[String],
-    returns_unit: bool,
-) -> Body {
+pub(crate) fn mir_body_structural_legacy(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String], returns_unit: bool) -> Body {
     crate::capture::mir::lower::mir_body_structural(tcx, def_id, param_names, returns_unit)
 }

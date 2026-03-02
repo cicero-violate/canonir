@@ -1,0 +1,15 @@
+$ rg -n "fn materialize_return_local|fn resolve_ret_gaps_with" canon-capture/src -n
+
+$ sed -n '1,200p' canon-capture/src/capture/mir/mod.rs 2>/dev/null || true
+pub mod analysis;
+pub mod expr;
+pub mod filters;
+pub mod guard;
+pub mod lower;
+pub mod ops;
+pub mod passes;
+pub mod patterns;
+pub mod resolver;
+pub mod terminator;
+pub mod util;
+

@@ -9,12 +9,7 @@ pub fn validate(canon: &CanonIR) -> Result<()> {
 }
 
 fn validate_no_alloc_artifacts(canon: &CanonIR) -> Result<()> {
-    if canon
-        .name_intern
-        .vec
-        .iter()
-        .any(|s| s.contains("{alloc") || s.starts_with("alloc") || s.contains("promoted["))
-    {
+    if canon.name_intern.vec.iter().any(|s| s.contains("{alloc") || s.starts_with("alloc") || s.contains("promoted[")) {
         bail!("Invariant violation: MIR alloc/debug artifact leaked into Canon name interner");
     }
     Ok(())

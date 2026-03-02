@@ -47,13 +47,7 @@ fn is_zero_arg_enum_ctor_pattern(tcx: TyCtxt<'_>, rvalue: &mir::Rvalue<'_>) -> b
         return false;
     };
     if let rustc_middle::ty::TyKind::FnDef(did, _) = c.const_.ty().kind() {
-        if matches!(
-            tcx.def_kind(*did),
-            rustc_hir::def::DefKind::Ctor(
-                rustc_hir::def::CtorOf::Variant,
-                rustc_hir::def::CtorKind::Const
-            )
-        ) {
+        if matches!(tcx.def_kind(*did), rustc_hir::def::DefKind::Ctor(rustc_hir::def::CtorOf::Variant, rustc_hir::def::CtorKind::Const)) {
             return true;
         }
     }
@@ -64,10 +58,7 @@ fn is_zero_arg_enum_ctor_pattern(tcx: TyCtxt<'_>, rvalue: &mir::Rvalue<'_>) -> b
         return false;
     }
     if let mir::Const::Val(v, ty) = c.const_ {
-        if v.try_to_scalar_int().is_some()
-            && matches!(ty.kind(), rustc_middle::ty::TyKind::Adt(adt2, _) if adt2.is_enum())
-            && adt.variants().iter().any(|var| var.fields.is_empty())
-        {
+        if v.try_to_scalar_int().is_some() && matches!(ty.kind(), rustc_middle::ty::TyKind::Adt(adt2, _) if adt2.is_enum()) && adt.variants().iter().any(|var| var.fields.is_empty()) {
             return true;
         }
     }
@@ -79,30 +70,12 @@ fn is_array_aggregate_pattern(_tcx: TyCtxt<'_>, rvalue: &mir::Rvalue<'_>) -> boo
 }
 
 static MIR_PATTERNS: &[MirPattern] = &[
-    MirPattern {
-        kind: MirOpKind::FieldAccess,
-        predicate: is_field_access_pattern,
-    },
-    MirPattern {
-        kind: MirOpKind::StructLit,
-        predicate: is_struct_lit_pattern,
-    },
-    MirPattern {
-        kind: MirOpKind::OpaqueAggregate,
-        predicate: is_opaque_aggregate_pattern,
-    },
-    MirPattern {
-        kind: MirOpKind::ZeroArgEnumCtor,
-        predicate: is_zero_arg_enum_ctor_pattern,
-    },
-    MirPattern {
-        kind: MirOpKind::ArrayAggregate,
-        predicate: is_array_aggregate_pattern,
-    },
-    MirPattern {
-        kind: MirOpKind::ConstUse,
-        predicate: |_tcx, rvalue| matches!(rvalue, mir::Rvalue::Use(mir::Operand::Constant(_))),
-    },
+    MirPattern { kind: MirOpKind::FieldAccess, predicate: is_field_access_pattern },
+    MirPattern { kind: MirOpKind::StructLit, predicate: is_struct_lit_pattern },
+    MirPattern { kind: MirOpKind::OpaqueAggregate, predicate: is_opaque_aggregate_pattern },
+    MirPattern { kind: MirOpKind::ZeroArgEnumCtor, predicate: is_zero_arg_enum_ctor_pattern },
+    MirPattern { kind: MirOpKind::ArrayAggregate, predicate: is_array_aggregate_pattern },
+    MirPattern { kind: MirOpKind::ConstUse, predicate: |_tcx, rvalue| matches!(rvalue, mir::Rvalue::Use(mir::Operand::Constant(_))) },
 ];
 
 pub fn dispatch_stmt_pattern<'tcx>(tcx: TyCtxt<'tcx>, rvalue: &mir::Rvalue<'tcx>) -> MirOpKind {

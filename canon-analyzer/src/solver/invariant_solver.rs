@@ -34,12 +34,7 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
     for (src, neighbours) in global_adj.iter().enumerate() {
         for &dst in neighbours {
             if src >= v || dst >= v {
-                bail!(
-                    "invariant_solver: dangling edge in graph_csr: {} -> {} (|V|={})",
-                    src,
-                    dst,
-                    v
-                );
+                bail!("invariant_solver: dangling edge in graph_csr: {} -> {} (|V|={})", src, dst, v);
             }
         }
     }
@@ -47,12 +42,7 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
     for (src, neighbours) in global_rev_adj.iter().enumerate() {
         for &dst in neighbours {
             if src >= v || dst >= v {
-                bail!(
-                    "invariant_solver: dangling edge in graph_csr_rev: {} -> {} (|V|={})",
-                    src,
-                    dst,
-                    v
-                );
+                bail!("invariant_solver: dangling edge in graph_csr_rev: {} -> {} (|V|={})", src, dst, v);
             }
         }
     }
@@ -74,13 +64,7 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
             let dst_tag = node_kind_tag(dst_kind);
             let rename_src_ok = matches!(src_kind, CanonNodeKind::Use { .. } | CanonNodeKind::ExternCrate { .. });
             if !rename_src_ok {
-                bail!(
-                    "invariant_solver: illegal Renames edge {} ({}) -> {} ({}): source must be Use/ExternCrate",
-                    src_idx,
-                    src_tag,
-                    dst_idx,
-                    dst_tag
-                );
+                bail!("invariant_solver: illegal Renames edge {} ({}) -> {} ({}): source must be Use/ExternCrate", src_idx, src_tag, dst_idx, dst_tag);
             }
             let allowed_cross_kind = matches!(src_kind, CanonNodeKind::Use { .. } | CanonNodeKind::ExternCrate { .. });
             if src_tag != dst_tag && !allowed_cross_kind {

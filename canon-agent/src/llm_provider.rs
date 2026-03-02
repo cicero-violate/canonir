@@ -49,20 +49,10 @@ impl From<WsBridgeError> for LlmProviderError {
 
 /// Send a fully-formed prompt string to the LLM and return the extracted
 /// JSON payload. Bypasses PromptBuilder — caller owns the full prompt.
-pub async fn call_llm_raw(
-    bridge: &WsBridge,
-    prompt: String,
-    url: &str,
-) -> Result<Value, LlmProviderError> {
+pub async fn call_llm_raw(bridge: &WsBridge, prompt: String, url: &str) -> Result<Value, LlmProviderError> {
     bridge.wait_for_connection().await;
-    let tab_id = bridge
-        .open_fresh_tab_with_url(url.to_string())
-        .await
-        .map_err(LlmProviderError::Transport)?;
-    let raw = bridge
-        .send_turn(tab_id, prompt)
-        .await
-        .map_err(LlmProviderError::Transport)?;
+    let tab_id = bridge.open_fresh_tab_with_url(url.to_string()).await.map_err(LlmProviderError::Transport)?;
+    let raw = bridge.send_turn(tab_id, prompt).await.map_err(LlmProviderError::Transport)?;
     JsonExtractor::extract(&raw)
 }
 
@@ -70,27 +60,17 @@ pub async fn call_llm_raw(
 /// Public Entry Point
 /// ------------------------------------------------------------------------
 
-pub async fn call_llm(
-    bridge: &WsBridge,
-    input: &AgentCallInput,
-    url: &str,
-) -> Result<AgentCallOutput, LlmProviderError> {
+pub async fn call_llm(bridge: &WsBridge, input: &AgentCallInput, url: &str) -> Result<AgentCallOutput, LlmProviderError> {
     let prompt = PromptBuilder::new(input).build();
 
     bridge.wait_for_connection().await;
 
-    eprintln!("call_llm url = {}", url);
-    let tab_id = bridge
-        .open_fresh_tab_with_url(url.to_string())
-        .await
-        .map_err(LlmProviderError::Transport)?;
+    // clean mode: suppress call_llm url log
+    let tab_id = bridge.open_fresh_tab_with_url(url.to_string()).await.map_err(LlmProviderError::Transport)?;
 
-    eprintln!("Routing TURN to tab_id={}", tab_id);
+    // clean mode: suppress TURN routing log
 
-    let raw_response = bridge
-        .send_turn(tab_id, prompt)
-        .await
-        .map_err(LlmProviderError::Transport)?;
+    let raw_response = bridge.send_turn(tab_id, prompt).await.map_err(LlmProviderError::Transport)?;
 
     let payload = JsonExtractor::extract(&raw_response)?;
 
@@ -164,7 +144,7 @@ impl<'a> PromptBuilder<'a> {
 /// JSON Extraction
 /// ------------------------------------------------------------------------
 
-struct JsonExtractor;
+pub struct JsonExtractor;
 
 impl JsonExtractor {
     pub fn extract(text: &str) -> Result<Value, LlmProviderError> {

@@ -54,32 +54,16 @@ pub enum PrimType {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypeExpr {
     Primitive(PrimType),
-    Ref {
-        lifetime: Option<String>,
-        inner: Box<TypeExpr>,
-        mutable: bool,
-    },
-    RawPtr {
-        inner: Box<TypeExpr>,
-        mutable: bool,
-    },
-    Array {
-        inner: Box<TypeExpr>,
-        len: Option<u64>,
-    },
+    Ref { lifetime: Option<String>, inner: Box<TypeExpr>, mutable: bool },
+    RawPtr { inner: Box<TypeExpr>, mutable: bool },
+    Array { inner: Box<TypeExpr>, len: Option<u64> },
     Slice(Box<TypeExpr>),
     Tuple(Vec<TypeExpr>),
-    FnPtr {
-        params: Vec<TypeExpr>,
-        ret: Box<TypeExpr>,
-    },
+    FnPtr { params: Vec<TypeExpr>, ret: Box<TypeExpr> },
     Param(String),
     DynTrait(String),
     ImplTrait(String),
-    AppliedPath {
-        base: String,
-        args: Vec<TypeExpr>,
-    },
+    AppliedPath { base: String, args: Vec<TypeExpr> },
     Path(String),
 }
 
@@ -110,30 +94,11 @@ pub enum Stmt {
     Let { pat: String, ty: Option<TypeExpr>, init: Option<String> },
     Assign { lhs: String, rhs: String },
     Expr(String),
-    Call {
-        func: String,
-        args: Vec<String>,
-        dest: Option<String>,
-    },
-    FieldAccess {
-        base: String,
-        field: String,
-        dest: Option<String>,
-    },
-    MethodCall {
-        receiver: String,
-        method: String,
-        args: Vec<String>,
-        dest: Option<String>,
-    },
-    StructLit {
-        ty: TypeExpr,
-        fields: Vec<(String, String)>,
-        dest: Option<String>,
-    },
-    Match {
-        dest: Option<String>,
-    },
+    Call { func: String, args: Vec<String>, dest: Option<String> },
+    FieldAccess { base: String, field: String, dest: Option<String> },
+    MethodCall { receiver: String, method: String, args: Vec<String>, dest: Option<String> },
+    StructLit { ty: TypeExpr, fields: Vec<(String, String)>, dest: Option<String> },
+    Match { dest: Option<String> },
     Return(Option<String>),
 }
 

@@ -1,0 +1,190 @@
+TICK 2 | gaps remaining: 7 | next: extractor.rs:19 — pub fn extract_symbols(src: &str) -> Vec<Symbol> {
+delta feedback: {
+  "per_file_ret_delta": [
+    [
+      "extractor.rs",
+      0
+    ],
+    [
+      "repomap.rs",
+      0
+    ]
+  ],
+  "per_fn_ret_delta": [
+    [
+      "extractor.rs::fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {",
+      0
+    ],
+    [
+      "extractor.rs::fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {",
+      0
+    ],
+    [
+      "repomap.rs::pub fn build_repomap(root_dir: &Path) -> Vec<FileMap> {",
+      0
+    ],
+    [
+      "extractor.rs::pub fn extract_symbols(src: &str) -> Vec<Symbol> {",
+      0
+    ],
+    [
+      "extractor.rs::fn field_text<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {",
+      0
+    ],
+    [
+      "extractor.rs::fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {",
+      0
+    ],
+    [
+      "extractor.rs::fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {",
+      0
+    ]
+  ],
+  "suppressed_ret_delta": 0
+}
+last patch diff: no change (gaps_before=7 gaps_after=7)
+
+## Emitted source at gap site (read-only)
+```rust
+use crate::symbol::Symbol;
+
+use tree_sitter::Node;
+
+use tree_sitter::Parser;
+
+pub fn extract_symbols(src: &str) -> Vec<Symbol> {
+    let mut parser = tree_sitter::Parser::new();
+    let mut _v5 = &mut parser;
+    let mut _v7 = tree_sitter_rust::LANGUAGE.into();
+    let mut _v6 = &_v7;
+    let mut _v4 = _v5.set_language(_v6);
+    let mut _v8 = "failed to load Rust grammar";
+    let mut _v3 = _v4.expect(_v8);
+    let mut _v11 = &mut parser;
+    let mut _v13 = "parse failed";
+    let mut _v14 = panic!("canon suppressed binding");
+    let mut _v16 = src.as_bytes();
+    let mut __ret = panic!("canon suppressed binding");
+    return __ret;
+}
+
+fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
+    let mut _v112 = false;
+    let mut _v111 = false;
+    let mut _v110 = false;
+    let mut _v109 = false;
+    let mut _v108 = false;
+    let mut _v107 = false;
+    let mut _v106 = false;
+    _v112 = true;
+    let mut _v5 = &root;
+    let mut cursor = _v5.walk();
+    let mut _v8 = &root;
+    let mut _v9 = &mut cursor;
+    let mut _v7 = _v8.children(_v9);
+    let mut _v6 = _v7.into_iter();
+    let mut iter = _v6;
+    let mut _v12 = &mut iter;
+    let mut _v11 = _v12.next();
+    _v112 = false;
+    let mut __ret = panic!("canon suppressed binding");
+    _v112 = false;
+    return __ret;
+}
+
+fn field_text<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
+    let mut _v5 = &node;
+    let mut _v4 = _v5.child_by_field_name(field);
+    let mut __ret = panic!("canon suppressed binding");
+    return __ret;
+}
+
+fn fn_signature(node: Node, src: &[u8]) -> String {
+    let mut _v5 = "name";
+    let mut _v4 = crate::extractor::field_text(node, _v5, src);
+    let mut _v6 = "?";
+    let mut name = _v4.unwrap_or(_v6);
+    let mut _v10 = &node;
+    let mut _v9 = _v10.child_by_field_name("parameters");
+    let mut _v12 = "()";
+    let mut _v16 = &node;
+    let mut _v15 = _v16.child_by_field_name("return_type");
+    let mut _v21 = &name;
+    let mut _v28 = b"\x03fn \xc0\xc0\xc0\x00";
+    let mut _v18 = std::string::String::new();
+    let mut __ret = _v18;
+    return __ret;
+}
+
+fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
+    let mut _v28 = false;
+    _v28 = true;
+    let mut _v5 = &body;
+    let mut cursor = _v5.walk();
+    let mut _v8 = &body;
+    let mut _v9 = &mut cursor;
+    let mut _v7 = _v8.children(_v9);
+    let mut _v6 = _v7.into_iter();
+    let mut iter = _v6;
+    let mut _v12 = &mut iter;
+    let mut _v11 = _v12.next();
+    _v28 = false;
+    let mut __ret = panic!("canon suppressed binding");
+    _v28 = false;
+    return __ret;
+}
+
+fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
+    let mut _v4 = &node;
+    let mut _v3 = _v4.utf8_text(src);
+    let mut _v5 = "";
+    let mut __ret = _v3.unwrap_or(_v5);
+    return __ret;
+}
+
+fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+    let mut _v23 = false;
+    _v23 = true;
+    let mut _v5 = &body;
+    let mut cursor = _v5.walk();
+    let mut _v8 = &body;
+    let mut _v9 = &mut cursor;
+    let mut _v7 = _v8.children(_v9);
+    let mut _v6 = _v7.into_iter();
+    let mut iter = _v6;
+    let mut _v12 = &mut iter;
+    let mut _v11 = _v12.next();
+    _v23 = false;
+    let mut __ret = panic!("canon suppressed binding");
+    _v23 = false;
+    return __ret;
+}
+
+fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
+    let mut _v28 = false;
+    _v28 = true;
+    let mut _v5 = &body;
+    let mut cursor = _v5.walk();
+    let mut _v8 = &body;
+    let mut _v9 = &mut cursor;
+    let mut _v7 = _v8.children(_v9);
+    let mut _v6 = _v7.into_iter();
+    let mut iter = _v6;
+    let mut _v12 = &mut iter;
+    let mut _v11 = _v12.next();
+    _v28 = false;
+    let mut __ret = panic!("canon suppressed binding");
+    _v28 = false;
+    return __ret;
+}
+```
+
+Emit ONE fenced ```json block with schema: {"deltas":[...],"rationale":"..."}
+---
+## PREVIOUS PATCH FAILED
+Error:
+```
+apply_patch exited with exit status: 1
+```
+Emit a corrected JSON block addressing the error above.
+Only the delta is needed — do not repeat the full surface or MIR context.

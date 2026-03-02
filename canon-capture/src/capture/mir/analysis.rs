@@ -101,11 +101,7 @@ pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
             if incoming.is_empty() {
                 continue;
             }
-            let exclusively_switch_reachable = incoming.iter().all(|p| {
-                switch_sources.contains(p)
-                    || switchint_arm_blocks.contains(p)
-                    || direct_switch_succ.contains(p)
-            });
+            let exclusively_switch_reachable = incoming.iter().all(|p| switch_sources.contains(p) || switchint_arm_blocks.contains(p) || direct_switch_succ.contains(p));
             if exclusively_switch_reachable {
                 switchint_arm_blocks.insert(bb_idx);
                 changed = true;
@@ -113,11 +109,7 @@ pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
         }
     }
 
-    let bb_writes_ret: Vec<bool> = body
-        .basic_blocks
-        .iter()
-        .map(mir_util::bb_writes_return_place)
-        .collect();
+    let bb_writes_ret: Vec<bool> = body.basic_blocks.iter().map(mir_util::bb_writes_return_place).collect();
     let mut switch_source_writes_ret: HashMap<usize, bool> = HashMap::new();
     let mut switch_arm_writes_ret: BTreeSet<usize> = BTreeSet::new();
     let mut switch_arm_returns: BTreeSet<usize> = BTreeSet::new();
@@ -126,10 +118,7 @@ pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
         if bb_writes_ret.get(*arm).copied().unwrap_or(false) {
             switch_arm_writes_ret.insert(*arm);
         }
-        if matches!(
-            body.basic_blocks[arm_bb].terminator.as_ref().map(|t| &t.kind),
-            Some(mir::TerminatorKind::Return)
-        ) {
+        if matches!(body.basic_blocks[arm_bb].terminator.as_ref().map(|t| &t.kind), Some(mir::TerminatorKind::Return)) {
             switch_arm_returns.insert(*arm);
         }
     }
@@ -154,13 +143,7 @@ pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
         switch_source_writes_ret.insert(*src, writes_ret);
     }
 
-    SwitchAnalysis {
-        switch_sources,
-        switchint_arm_blocks,
-        switch_arm_writes_ret,
-        switch_arm_returns,
-        switch_source_writes_ret,
-    }
+    SwitchAnalysis { switch_sources, switchint_arm_blocks, switch_arm_writes_ret, switch_arm_returns, switch_source_writes_ret }
 }
 
 fn region_has_cycle(region: &BTreeSet<usize>, succs: &[Vec<usize>]) -> bool {
@@ -171,12 +154,7 @@ fn region_has_cycle(region: &BTreeSet<usize>, succs: &[Vec<usize>]) -> bool {
         Black,
     }
 
-    fn dfs(
-        cur: usize,
-        region: &BTreeSet<usize>,
-        succs: &[Vec<usize>],
-        colors: &mut [Color],
-    ) -> bool {
+    fn dfs(cur: usize, region: &BTreeSet<usize>, succs: &[Vec<usize>], colors: &mut [Color]) -> bool {
         colors[cur] = Color::Gray;
         for &next in &succs[cur] {
             if !region.contains(&next) {
@@ -205,11 +183,7 @@ fn region_has_cycle(region: &BTreeSet<usize>, succs: &[Vec<usize>]) -> bool {
     false
 }
 
-pub(crate) fn compute_call_feed_locals<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    body: &mir::Body<'tcx>,
-    resolver: &LocalNameResolver,
-) -> HashSet<String> {
+pub(crate) fn compute_call_feed_locals<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, resolver: &LocalNameResolver) -> HashSet<String> {
     let local_use_counts = mir_util::count_local_uses(body);
     let mut filtered_arg_locals: HashSet<u32> = HashSet::new();
     for bb in body.basic_blocks.iter() {
@@ -242,11 +216,7 @@ pub(crate) fn compute_call_feed_locals<'tcx>(
 }
 
 pub(crate) fn collect_suppressed_dest_sentinels(
-    body: &mir::Body<'_>,
-    resolver: &LocalNameResolver,
-    switch_analysis: &SwitchAnalysis,
-    defined: &mut HashSet<String>,
-    suppressed_sentinel_names: &mut HashSet<String>,
+    body: &mir::Body<'_>, resolver: &LocalNameResolver, switch_analysis: &SwitchAnalysis, defined: &mut HashSet<String>, suppressed_sentinel_names: &mut HashSet<String>,
 ) -> Vec<Stmt> {
     let mut suppressed_dest_sentinels: Vec<Stmt> = Vec::new();
     for (bb_idx, bb) in body.basic_blocks.iter_enumerated() {
@@ -254,37 +224,23 @@ pub(crate) fn collect_suppressed_dest_sentinels(
             continue;
         }
         let idx = bb_idx.as_usize();
-        if !switch_analysis.switchint_arm_blocks.contains(&idx)
-            && !switch_analysis.switch_sources.contains(&idx)
-        {
+        if !switch_analysis.switchint_arm_blocks.contains(&idx) && !switch_analysis.switch_sources.contains(&idx) {
             continue;
         }
-        if switch_analysis.switch_arm_writes_ret.contains(&idx)
-            || switch_analysis.switch_arm_returns.contains(&idx)
-        {
+        if switch_analysis.switch_arm_writes_ret.contains(&idx) || switch_analysis.switch_arm_returns.contains(&idx) {
             continue;
         }
         if let Some(term) = &bb.terminator
             && let mir::TerminatorKind::Call { destination, .. } = &term.kind
             && let Some(dest_name) = mir_util::label_place_dest(resolver, destination)
         {
-            mir_guard::emit_suppressed_binding(
-                &dest_name,
-                defined,
-                suppressed_sentinel_names,
-                &mut suppressed_dest_sentinels,
-            );
+            mir_guard::emit_suppressed_binding(&dest_name, defined, suppressed_sentinel_names, &mut suppressed_dest_sentinels);
         }
         for stmt in &bb.statements {
             if let mir::StatementKind::Assign(boxed) = &stmt.kind {
                 let (lhs, _) = &**boxed;
                 if let Some(lhs_name) = mir_util::label_place_dest(resolver, lhs) {
-                    mir_guard::emit_suppressed_binding(
-                        &lhs_name,
-                        defined,
-                        suppressed_sentinel_names,
-                        &mut suppressed_dest_sentinels,
-                    );
+                    mir_guard::emit_suppressed_binding(&lhs_name, defined, suppressed_sentinel_names, &mut suppressed_dest_sentinels);
                 }
             }
         }

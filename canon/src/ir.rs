@@ -284,27 +284,15 @@ impl CanonIR {
     }
 
     /// Outgoing neighbors with a specific kind code.
-    pub fn out_neighbors_with_kind(
-        &self,
-        node: CanonId,
-        kind_code: u16,
-    ) -> impl Iterator<Item = u32> + '_ {
+    pub fn out_neighbors_with_kind(&self, node: CanonId, kind_code: u16) -> impl Iterator<Item = u32> + '_ {
         let (cols, kinds) = self.out_edge_slices(node);
-        cols.iter()
-            .zip(kinds.iter())
-            .filter_map(move |(dst, k)| if *k == kind_code { Some(*dst) } else { None })
+        cols.iter().zip(kinds.iter()).filter_map(move |(dst, k)| if *k == kind_code { Some(*dst) } else { None })
     }
 
     /// Incoming neighbors with a specific kind code.
-    pub fn in_neighbors_with_kind(
-        &self,
-        node: CanonId,
-        kind_code: u16,
-    ) -> impl Iterator<Item = u32> + '_ {
+    pub fn in_neighbors_with_kind(&self, node: CanonId, kind_code: u16) -> impl Iterator<Item = u32> + '_ {
         let (cols, kinds) = self.in_edge_slices(node);
-        cols.iter()
-            .zip(kinds.iter())
-            .filter_map(move |(src, k)| if *k == kind_code { Some(*src) } else { None })
+        cols.iter().zip(kinds.iter()).filter_map(move |(src, k)| if *k == kind_code { Some(*src) } else { None })
     }
 
     /// Validate structural CSR invariants for global forward + reverse payloads.
@@ -339,11 +327,7 @@ fn build_csr(node_count: usize, edges: &[(u32, u32, EdgeKind)], reverse: bool) -
         row_ptr[node + 1] = edge_pos as u32;
     }
 
-    CanonCsr {
-        row_ptr,
-        col_idx,
-        kind,
-    }
+    CanonCsr { row_ptr, col_idx, kind }
 }
 
 pub fn edge_kind_code(kind: &EdgeKind) -> u16 {
@@ -379,11 +363,7 @@ fn csr_edge_slices<'a>(csr: &'a CanonCsr, node_count: usize, node: CanonId) -> (
 
 fn validate_csr(label: &str, csr: &CanonCsr, node_count: usize) -> Result<(), String> {
     if csr.row_ptr.len() != node_count + 1 {
-        return Err(format!(
-            "{label}: row_ptr length {}, expected {}",
-            csr.row_ptr.len(),
-            node_count + 1
-        ));
+        return Err(format!("{label}: row_ptr length {}, expected {}", csr.row_ptr.len(), node_count + 1));
     }
     if csr.row_ptr.first().copied().unwrap_or(1) != 0 {
         return Err(format!("{label}: row_ptr must start at 0"));
@@ -394,19 +374,11 @@ fn validate_csr(label: &str, csr: &CanonCsr, node_count: usize) -> Result<(), St
         }
     }
     if csr.col_idx.len() != csr.kind.len() {
-        return Err(format!(
-            "{label}: col_idx length {} != kind length {}",
-            csr.col_idx.len(),
-            csr.kind.len()
-        ));
+        return Err(format!("{label}: col_idx length {} != kind length {}", csr.col_idx.len(), csr.kind.len()));
     }
     let edge_count = csr.col_idx.len() as u32;
     if csr.row_ptr[node_count] != edge_count {
-        return Err(format!(
-            "{label}: row_ptr[N] {} != edge_count {}",
-            csr.row_ptr[node_count],
-            edge_count
-        ));
+        return Err(format!("{label}: row_ptr[N] {} != edge_count {}", csr.row_ptr[node_count], edge_count));
     }
     if csr.col_idx.iter().any(|dst| (*dst as usize) >= node_count) {
         return Err(format!("{label}: col_idx contains out-of-range node id"));

@@ -68,10 +68,7 @@ fn apply_rename(ir: &mut CanonIR, idx: usize, new_name: &str) {
         match &mut node.kind {
             CanonNodeKind::Use { alias, .. } => *alias = Some(new_id),
             _ => {
-                eprintln!(
-                    "WARN name_solver: rename edge targeted non-Use node {}, rename ignored",
-                    idx
-                );
+                eprintln!("WARN name_solver: rename edge targeted non-Use node {}, rename ignored", idx);
             }
         }
     }

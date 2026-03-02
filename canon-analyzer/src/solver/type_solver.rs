@@ -88,10 +88,7 @@ fn collect_local_type_paths(ir: &CanonIR) -> HashMap<String, u32> {
                 continue;
             };
             let Some(name_id) = (match kind {
-                CanonNodeKind::Struct { name_id, .. }
-                | CanonNodeKind::Enum { name_id, .. }
-                | CanonNodeKind::Trait { name_id, .. }
-                | CanonNodeKind::TypeAlias { name_id, .. } => Some(*name_id),
+                CanonNodeKind::Struct { name_id, .. } | CanonNodeKind::Enum { name_id, .. } | CanonNodeKind::Trait { name_id, .. } | CanonNodeKind::TypeAlias { name_id, .. } => Some(*name_id),
                 _ => None,
             }) else {
                 continue;
@@ -109,9 +106,7 @@ fn resolve_applied_base_def(ir: &CanonIR, base: CanonId, local_type_by_path: &Ha
     };
     match kind {
         TypeKind::Adt(id) => Some(id.0),
-        TypeKind::Extern(path_id) | TypeKind::Unresolved(path_id) => {
-            local_type_by_path.get(ir.lookup_path(*path_id)).copied()
-        }
+        TypeKind::Extern(path_id) | TypeKind::Unresolved(path_id) => local_type_by_path.get(ir.lookup_path(*path_id)).copied(),
         _ => None,
     }
 }

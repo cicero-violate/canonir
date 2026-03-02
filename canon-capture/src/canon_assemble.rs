@@ -1,7 +1,4 @@
-use crate::types::{
-    Body, EdgeHint, EdgeKind as ModelEdgeKind, EnumVariant, Field, GenericParam, Node, NodeId, NodeKind, PrimType, StructKind, TraitMethod, TypeExpr,
-    Visibility,
-};
+use crate::types::{Body, EdgeHint, EdgeKind as ModelEdgeKind, EnumVariant, Field, GenericParam, Node, NodeId, NodeKind, PrimType, StructKind, TraitMethod, TypeExpr, Visibility};
 use crate::{index::Index, Partial};
 use canon::{
     csr_graph::CsrGraph,
@@ -67,14 +64,8 @@ fn load_declared_dependency_specs(canon: &mut CanonIR) -> Vec<DependencySpec> {
             _ => None,
         };
         let crate_root = canon.intern_path(&crate_root);
-        let package_name = package_name
-            .as_deref()
-            .filter(|pkg| !pkg.is_empty())
-            .map(|pkg| NameId(canon.name_intern.intern(pkg)));
-        out.push(DependencySpec {
-            crate_root,
-            package_name,
-        });
+        let package_name = package_name.as_deref().filter(|pkg| !pkg.is_empty()).map(|pkg| NameId(canon.name_intern.intern(pkg)));
+        out.push(DependencySpec { crate_root, package_name });
     }
 
     out
@@ -249,12 +240,7 @@ fn intern_ty_expr(canon: &mut CanonIR, ty: &TypeExpr) -> CanonId {
                 })
                 .collect();
             let ret = intern_ty_expr(canon, ret);
-            let sig_id = canon.push_node(CanonNodeKind::FnSig {
-                generics: vec![],
-                params,
-                ret,
-                where_clauses: vec![],
-            });
+            let sig_id = canon.push_node(CanonNodeKind::FnSig { generics: vec![], params, ret, where_clauses: vec![] });
             TypeKind::FnPtr(sig_id)
         }
         TypeExpr::Param(name) => TypeKind::Param(NameId(canon.name_intern.intern(name))),
@@ -396,61 +382,31 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                         Stmt::FieldAccess { base, field, dest } => {
                             let ty = unit_ty(canon);
                             let base_name = NameId(canon.name_intern.intern(base));
-                            let base_id = canon.push_node(CanonNodeKind::Local {
-                                name_id: base_name,
-                                ty,
-                                flags: 0,
-                            });
+                            let base_id = canon.push_node(CanonNodeKind::Local { name_id: base_name, ty, flags: 0 });
                             let field_id = NameId(canon.name_intern.intern(field));
                             let dest_id = dest.as_deref().map(|name| {
                                 let name_id = NameId(canon.name_intern.intern(name));
-                                canon.push_node(CanonNodeKind::Local {
-                                    name_id,
-                                    ty,
-                                    flags: 0,
-                                })
+                                canon.push_node(CanonNodeKind::Local { name_id, ty, flags: 0 })
                             });
                             CfgOp::FieldAccess { base: base_id, field: field_id, dest: dest_id }
                         }
-                        Stmt::MethodCall {
-                            receiver,
-                            method,
-                            args,
-                            dest,
-                        } => {
+                        Stmt::MethodCall { receiver, method, args, dest } => {
                             let ty = unit_ty(canon);
                             let receiver_name = NameId(canon.name_intern.intern(receiver));
-                            let receiver_id = canon.push_node(CanonNodeKind::Local {
-                                name_id: receiver_name,
-                                ty,
-                                flags: 0,
-                            });
+                            let receiver_id = canon.push_node(CanonNodeKind::Local { name_id: receiver_name, ty, flags: 0 });
                             let arg_ids: Vec<CanonId> = args
                                 .iter()
                                 .map(|arg| {
                                     let arg_name = NameId(canon.name_intern.intern(arg));
-                                    canon.push_node(CanonNodeKind::Local {
-                                        name_id: arg_name,
-                                        ty,
-                                        flags: 0,
-                                    })
+                                    canon.push_node(CanonNodeKind::Local { name_id: arg_name, ty, flags: 0 })
                                 })
                                 .collect();
                             let method_id = NameId(canon.name_intern.intern(method));
                             let dest_id = dest.as_deref().map(|name| {
                                 let name_id = NameId(canon.name_intern.intern(name));
-                                canon.push_node(CanonNodeKind::Local {
-                                    name_id,
-                                    ty,
-                                    flags: 0,
-                                })
+                                canon.push_node(CanonNodeKind::Local { name_id, ty, flags: 0 })
                             });
-                            CfgOp::MethodCall {
-                                receiver: receiver_id,
-                                method: method_id,
-                                args: arg_ids,
-                                dest: dest_id,
-                            }
+                            CfgOp::MethodCall { receiver: receiver_id, method: method_id, args: arg_ids, dest: dest_id }
                         }
                         Stmt::StructLit { ty, fields, dest } => {
                             let ty_id = intern_ty_expr(canon, ty);
@@ -460,29 +416,14 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                                 .map(|(field, value)| {
                                     let field_name = NameId(canon.name_intern.intern(field));
                                     let value_name = NameId(canon.name_intern.intern(value));
-                                    (
-                                        field_name,
-                                        canon.push_node(CanonNodeKind::Local {
-                                            name_id: value_name,
-                                            ty: value_ty,
-                                            flags: 0,
-                                        }),
-                                    )
+                                    (field_name, canon.push_node(CanonNodeKind::Local { name_id: value_name, ty: value_ty, flags: 0 }))
                                 })
                                 .collect();
                             let dest_id = dest.as_deref().map(|name| {
                                 let name_id = NameId(canon.name_intern.intern(name));
-                                canon.push_node(CanonNodeKind::Local {
-                                    name_id,
-                                    ty: value_ty,
-                                    flags: 0,
-                                })
+                                canon.push_node(CanonNodeKind::Local { name_id, ty: value_ty, flags: 0 })
                             });
-                            CfgOp::StructLit {
-                                ty: ty_id,
-                                fields: lowered_fields,
-                                dest: dest_id,
-                            }
+                            CfgOp::StructLit { ty: ty_id, fields: lowered_fields, dest: dest_id }
                         }
                         Stmt::Match { dest } => {
                             let ty = unit_ty(canon);
@@ -584,21 +525,10 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
         let canon_kind = match &node.kind {
             NodeKind::Crate { name, edition } => {
                 let name_id = NameId(canon.name_intern.intern(name));
-                let cargo_name = if name.contains('_') {
-                    Some(NameId(canon.name_intern.intern(&name.replace('_', "-"))))
-                } else {
-                    None
-                };
+                let cargo_name = if name.contains('_') { Some(NameId(canon.name_intern.intern(&name.replace('_', "-")))) } else { None };
                 let ed: u32 = edition.parse().unwrap_or(2021);
                 let declared_dependencies = load_declared_dependency_specs(&mut canon);
-                CanonNodeKind::Crate {
-                    name_id,
-                    cargo_name,
-                    edition: ed,
-                    dependencies: vec![],
-                    dependency_packages: vec![],
-                    declared_dependencies,
-                }
+                CanonNodeKind::Crate { name_id, cargo_name, edition: ed, dependencies: vec![], dependency_packages: vec![], declared_dependencies }
             }
             NodeKind::Module { path, vis, inline, .. } => {
                 let path_id = canon.intern_path(path);
@@ -847,9 +777,10 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
         let k = map_edge_kind(&hint.kind);
         all_edges.push((src, dst, k.clone()));
         match &hint.kind {
-            ModelEdgeKind::Renames
-            | ModelEdgeKind::Resolves => name_edges.push((src, dst, k)),
-            ModelEdgeKind::TypeOf | ModelEdgeKind::TypeUnifies | ModelEdgeKind::ImplTrait | ModelEdgeKind::DynTrait | ModelEdgeKind::ImplRef | ModelEdgeKind::Instantiates => type_edges.push((src, dst, k)),
+            ModelEdgeKind::Renames | ModelEdgeKind::Resolves => name_edges.push((src, dst, k)),
+            ModelEdgeKind::TypeOf | ModelEdgeKind::TypeUnifies | ModelEdgeKind::ImplTrait | ModelEdgeKind::DynTrait | ModelEdgeKind::ImplRef | ModelEdgeKind::Instantiates => {
+                type_edges.push((src, dst, k))
+            }
             ModelEdgeKind::Calls => call_edges.push((src, dst, k)),
             ModelEdgeKind::Contains | ModelEdgeKind::ImplFor | ModelEdgeKind::AssocItem => module_edges.push((src, dst, k)),
             ModelEdgeKind::CfgEdge | ModelEdgeKind::CfgBranch { .. } => cfg_edges.push((src, dst, k)),
@@ -876,10 +807,7 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
     canon.region_graph = CsrGraph::from_edges(node_data.clone(), to_raw(region_edges));
     canon.value_graph = CsrGraph::from_edges(node_data.clone(), to_raw(value_edges));
     canon.macro_graph = CsrGraph::from_edges(node_data, to_raw(macro_edges));
-    let all_raw: Vec<(u32, u32, CanonEdgeKind)> = all_edges
-        .into_iter()
-        .map(|(s, d, k)| (s.0, d.0, k))
-        .collect();
+    let all_raw: Vec<(u32, u32, CanonEdgeKind)> = all_edges.into_iter().map(|(s, d, k)| (s.0, d.0, k)).collect();
     canon.rebuild_global_csr_from_edges(&all_raw);
 
     // Canonicalize Impl payload links from structural edges:
@@ -930,10 +858,7 @@ pub fn canon_assemble(tcx: TyCtxt<'_>, index: &Index, parts: Vec<Partial>) -> Ca
                 continue;
             };
             let Some(name_id) = (match kind {
-                CanonNodeKind::Struct { name_id, .. }
-                | CanonNodeKind::Enum { name_id, .. }
-                | CanonNodeKind::Trait { name_id, .. }
-                | CanonNodeKind::TypeAlias { name_id, .. } => Some(*name_id),
+                CanonNodeKind::Struct { name_id, .. } | CanonNodeKind::Enum { name_id, .. } | CanonNodeKind::Trait { name_id, .. } | CanonNodeKind::TypeAlias { name_id, .. } => Some(*name_id),
                 _ => None,
             }) else {
                 continue;

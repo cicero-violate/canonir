@@ -62,7 +62,7 @@ pub fn execute_deltas(deltas: &[CodeDelta], workspace: &Path) -> Result<(), Exec
     for (i, delta) in deltas.iter().enumerate() {
         let result = match delta {
             CodeDelta::ApplyPatch { patch } => run_apply_patch(patch, workspace, i),
-            CodeDelta::Bash { command } => run_bash(command, workspace, i),
+            CodeDelta::Bash { command } | CodeDelta::BashReadOnly { command } => run_bash(command, workspace, i),
         };
         if let Err(e) = result {
             // Something failed mid-way — restore the tree before returning.
@@ -72,11 +72,7 @@ pub fn execute_deltas(deltas: &[CodeDelta], workspace: &Path) -> Result<(), Exec
     }
 
     // 3. Compile gate.
-    let check = Command::new("cargo")
-        .args(["check"])
-        .current_dir(workspace)
-        .output()
-        .map_err(|e| ExecutorError::CheckFailed(e.to_string()))?;
+    let check = Command::new("cargo").args(["check"]).current_dir(workspace).output().map_err(|e| ExecutorError::CheckFailed(e.to_string()))?;
 
     if !check.status.success() {
         let stderr = String::from_utf8_lossy(&check.stderr).into_owned();
@@ -85,11 +81,7 @@ pub fn execute_deltas(deltas: &[CodeDelta], workspace: &Path) -> Result<(), Exec
     }
 
     // 4. Success — discard the stash, keep changes on disk.
-    let drop = Command::new("git")
-        .args(["stash", "drop"])
-        .current_dir(workspace)
-        .output()
-        .map_err(|e| ExecutorError::StashDropFailed(e.to_string()))?;
+    let drop = Command::new("git").args(["stash", "drop"]).current_dir(workspace).output().map_err(|e| ExecutorError::StashDropFailed(e.to_string()))?;
 
     if !drop.status.success() {
         let stderr = String::from_utf8_lossy(&drop.stderr).into_owned();
@@ -102,11 +94,7 @@ pub fn execute_deltas(deltas: &[CodeDelta], workspace: &Path) -> Result<(), Exec
 // ── internals ────────────────────────────────────────────────────────────────
 
 fn git_stash(workspace: &Path) -> Result<(), ExecutorError> {
-    let out = Command::new("git")
-        .args(["stash"])
-        .current_dir(workspace)
-        .output()
-        .map_err(|e| ExecutorError::StashFailed(e.to_string()))?;
+    let out = Command::new("git").args(["stash"]).current_dir(workspace).output().map_err(|e| ExecutorError::StashFailed(e.to_string()))?;
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -116,11 +104,7 @@ fn git_stash(workspace: &Path) -> Result<(), ExecutorError> {
 }
 
 fn rollback(workspace: &Path) -> Result<(), ExecutorError> {
-    let out = Command::new("git")
-        .args(["stash", "pop"])
-        .current_dir(workspace)
-        .output()
-        .map_err(|e| ExecutorError::RollbackFailed(e.to_string()))?;
+    let out = Command::new("git").args(["stash", "pop"]).current_dir(workspace).output().map_err(|e| ExecutorError::RollbackFailed(e.to_string()))?;
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -130,28 +114,14 @@ fn rollback(workspace: &Path) -> Result<(), ExecutorError> {
 }
 
 fn run_apply_patch(patch: &str, workspace: &Path, index: usize) -> Result<(), ExecutorError> {
-    let mut child = Command::new("apply_patch")
-        .stdin(Stdio::piped())
-        .stderr(Stdio::piped())
-        .current_dir(workspace)
-        .spawn()
-        .map_err(|e| ExecutorError::PatchFailed {
-            index,
-            stderr: e.to_string(),
-        })?;
+    let mut child = Command::new("apply_patch").stdin(Stdio::piped()).stderr(Stdio::piped()).current_dir(workspace).spawn().map_err(|e| ExecutorError::PatchFailed { index, stderr: e.to_string() })?;
 
     if let Some(stdin) = child.stdin.take() {
         let mut stdin = stdin;
-        stdin.write_all(patch.as_bytes()).map_err(|e| ExecutorError::PatchFailed {
-            index,
-            stderr: e.to_string(),
-        })?;
+        stdin.write_all(patch.as_bytes()).map_err(|e| ExecutorError::PatchFailed { index, stderr: e.to_string() })?;
     }
 
-    let out = child.wait_with_output().map_err(|e| ExecutorError::PatchFailed {
-        index,
-        stderr: e.to_string(),
-    })?;
+    let out = child.wait_with_output().map_err(|e| ExecutorError::PatchFailed { index, stderr: e.to_string() })?;
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -161,23 +131,11 @@ fn run_apply_patch(patch: &str, workspace: &Path, index: usize) -> Result<(), Ex
 }
 
 fn run_bash(command: &str, workspace: &Path, index: usize) -> Result<(), ExecutorError> {
-    let out = Command::new("sh")
-        .args(["-c", command])
-        .current_dir(workspace)
-        .output()
-        .map_err(|e| ExecutorError::BashFailed {
-            index,
-            command: command.to_string(),
-            stderr: e.to_string(),
-        })?;
+    let out = Command::new("sh").args(["-c", command]).current_dir(workspace).output().map_err(|e| ExecutorError::BashFailed { index, command: command.to_string(), stderr: e.to_string() })?;
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-        return Err(ExecutorError::BashFailed {
-            index,
-            command: command.to_string(),
-            stderr,
-        });
+        return Err(ExecutorError::BashFailed { index, command: command.to_string(), stderr });
     }
     Ok(())
 }

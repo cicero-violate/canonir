@@ -1,0 +1,311 @@
+$ sed -n '1,260p' canon-capture/src/capture/mir/util.rs
+use rustc_middle::mir;
+use rustc_middle::mir::visit::Visitor;
+use std::collections::{HashMap, HashSet};
+
+use crate::capture::mir::guard as mir_guard;
+use crate::capture::mir::resolver::LocalNameResolver;
+use crate::types::Stmt;
+
+pub(crate) fn label_place_dest(resolver: &LocalNameResolver, place: &mir::Place<'_>) -> Option<String> {
+    if let Some(name) = resolver.label_place(place) {
+        return Some(name);
+    }
+    let has_unsafe_proj = place.projection.iter().any(|p| matches!(p, mir::ProjectionElem::Downcast(..) | mir::ProjectionElem::OpaqueCast(..) | mir::ProjectionElem::UnwrapUnsafeBinder(..)));
+    if has_unsafe_proj {
+        return None;
+    }
+    resolver.label_local(place.local)
+}
+
+pub(crate) fn remap_bb_target(target: mir::BasicBlock, mir_to_emitted: &[Option<u32>]) -> Option<u32> {
+    mir_to_emitted.get(target.as_usize()).and_then(|slot| *slot)
+}
+
+pub(crate) fn bb_writes_return_place(bb: &mir::BasicBlockData<'_>) -> bool {
+    for stmt in &bb.statements {
+        let mir::StatementKind::Assign(boxed) = &stmt.kind else {
+            continue;
+        };
+        let (lhs, _) = &**boxed;
+        if lhs.local.as_u32() == 0 {
+            return true;
+        }
+    }
+    let Some(term) = &bb.terminator else {
+        return false;
+    };
+    if let mir::TerminatorKind::Call { destination, .. } = &term.kind {
+        return destination.local.as_u32() == 0;
+    }
+    false
+}
+
+pub(crate) fn stmt_defines_ret(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Assign { lhs, .. } => lhs == "__ret",
+        Stmt::Call { dest: Some(dest), .. } => dest == "__ret",
+        Stmt::FieldAccess { dest: Some(dest), .. } => dest == "__ret",
+        Stmt::MethodCall { dest: Some(dest), .. } => dest == "__ret",
+        Stmt::StructLit { dest: Some(dest), .. } => dest == "__ret",
+        Stmt::Match { dest: Some(dest) } => dest == "__ret",
+        _ => false,
+    }
+}
+
+pub(crate) fn emit_suppressed_ret_binding(stmts: &mut Vec<Stmt>, defined: &mut HashSet<String>) {
+    stmts.push(Stmt::Assign { lhs: "__ret".to_string(), rhs: "__canon_suppressed__".to_string() });
+    defined.insert("__ret".to_string());
+}
+
+pub(crate) fn emit_suppressed_for_name(name: &str, stmts: &mut Vec<Stmt>, defined: &mut HashSet<String>, suppressed_sentinel_names: &mut HashSet<String>) {
+    // Never suppress __ret; return must be lowered structurally.
+    if name == "__ret" {
+        return;
+    }
+    if name == "__ret" {
+        emit_suppressed_ret_binding(stmts, defined);
+    } else {
+        mir_guard::emit_suppressed_binding(name, defined, suppressed_sentinel_names, stmts);
+    }
+}
+
+pub(crate) fn count_local_uses<'tcx>(body: &mir::Body<'tcx>) -> HashMap<u32, usize> {
+    struct Counter {
+        counts: HashMap<u32, usize>,
+    }
+    impl<'tcx> Visitor<'tcx> for Counter {
+        fn visit_local(&mut self, local: mir::Local, context: rustc_middle::mir::visit::PlaceContext, location: rustc_middle::mir::Location) {
+            if context.is_use() {
+                *self.counts.entry(local.as_u32()).or_insert(0) += 1;
+            }
+            self.super_local(local, context, location);
+        }
+    }
+    let mut counter = Counter { counts: HashMap::new() };
+    counter.visit_body(body);
+    counter.counts
+}
+
+$ sed -n '1,220p' canon-capture/src/capture/mir/expr.rs
+use rustc_abi::{FieldIdx, VariantIdx};
+use rustc_middle::mir;
+use rustc_middle::ty::{self, TyCtxt};
+
+use crate::capture::helpers::{lower_ty, render_type_expr};
+use crate::capture::mir::filters;
+use crate::capture::mir::guard as mir_guard;
+use crate::capture::mir::ops as mir_ops;
+use crate::capture::mir::resolver::LocalNameResolver;
+use crate::norm;
+use crate::types::{Stmt, TypeExpr};
+
+pub(crate) fn render_projected_place_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, place: &mir::Place<'tcx>, resolver: &LocalNameResolver) -> Option<String> {
+    if place.projection.is_empty() {
+        return resolver.label_place(place);
+    }
+    let mut expr = resolver.label_local(place.local)?;
+    let mut cursor_ty = local_decls[place.local].ty;
+    let mut pending_downcast: Option<(VariantIdx, ty::Ty<'tcx>)> = None;
+    for elem in place.projection.iter() {
+        match elem {
+            mir::ProjectionElem::Deref => {
+                expr = format!("*{expr}");
+                cursor_ty = match cursor_ty.kind() {
+                    ty::TyKind::Ref(_, inner, _) => *inner,
+                    ty::TyKind::RawPtr(inner, _) => *inner,
+                    _ => cursor_ty.builtin_deref(true)?,
+                };
+            }
+            mir::ProjectionElem::Downcast(variant_name, variant_idx) => {
+                let _ = variant_name;
+                pending_downcast = Some((variant_idx, cursor_ty));
+            }
+            mir::ProjectionElem::Field(field_idx, field_ty) => {
+                let field = if let Some(downcast) = pending_downcast.take() {
+                    expr = render_downcast_field_expr(tcx, &expr, downcast.1, downcast.0, field_idx)?;
+                    String::new()
+                } else {
+                    match cursor_ty.kind() {
+                        ty::TyKind::Adt(adt, _) => {
+                            if !adt.did().is_local() {
+                                let tuple_like = adt.non_enum_variant().fields.iter().all(|f| f.name.to_string().chars().all(|c| c.is_ascii_digit()));
+                                if tuple_like {
+                                    return None;
+                                }
+                            }
+                            let f = adt.non_enum_variant().fields.get(field_idx)?;
+                            let name = f.name.to_string();
+                            if name.chars().all(|c| c.is_ascii_digit()) {
+                                field_idx.index().to_string()
+                            } else {
+                                name
+                            }
+                        }
+                        ty::TyKind::Tuple(_) => field_idx.index().to_string(),
+                        _ => return None,
+                    }
+                };
+                if !field.is_empty() {
+                    expr = format!("({expr}).{field}");
+                }
+                cursor_ty = field_ty;
+            }
+            mir::ProjectionElem::Index(local) => {
+                let idx = resolver.label_local(local)?;
+                expr = format!("{expr}[{idx}]");
+                cursor_ty = match cursor_ty.kind() {
+                    ty::TyKind::Array(inner, _) | ty::TyKind::Slice(inner) => *inner,
+                    _ => cursor_ty,
+                };
+            }
+            mir::ProjectionElem::OpaqueCast(..) | mir::ProjectionElem::UnwrapUnsafeBinder(..) => {}
+            _ => return None,
+        }
+    }
+    if let Some(downcast) = pending_downcast {
+        let ty::TyKind::Adt(adt, _) = downcast.1.kind() else {
+            return None;
+        };
+        if !adt.is_enum() {
+            return None;
+        }
+        let enum_path = norm::path(tcx, adt.did());
+        let variant = adt.variant(downcast.0);
+        let variant_path = format!("{enum_path}::{}", variant.name);
+        expr = format!("match {expr} {{ {variant_path} => (), _ => panic!(\"canon downcast projection mismatch\") }}");
+    }
+    Some(expr)
+}
+
+fn render_downcast_field_expr<'tcx>(tcx: TyCtxt<'tcx>, base_expr: &str, enum_ty: ty::Ty<'tcx>, variant_idx: VariantIdx, field_idx: FieldIdx) -> Option<String> {
+    let ty::TyKind::Adt(adt, _) = enum_ty.kind() else {
+        return None;
+    };
+    if !adt.is_enum() {
+        return None;
+    }
+    let variant = adt.variant(variant_idx);
+    let enum_path = norm::path(tcx, adt.did());
+    let variant_path = format!("{enum_path}::{}", variant.name);
+    let idx = field_idx.index();
+    if idx >= variant.fields.len() {
+        return None;
+    }
+
+    let bindings: Vec<String> = (0..variant.fields.len()).map(|i| format!("__canon_f{i}")).collect();
+    let select = bindings[idx].clone();
+    let pattern = match &variant.fields {
+        fields if fields.is_empty() => variant_path.clone(),
+        fields
+            if fields.iter().all(|f| {
+                let name = f.name.to_string();
+                !name.is_empty() && !name.chars().all(|c| c.is_ascii_digit())
+            }) =>
+        {
+            let named = fields.iter().zip(bindings.iter()).map(|(f, b)| format!("{}: {b}", f.name)).collect::<Vec<_>>().join(", ");
+            format!("{variant_path} {{ {named} }}")
+        }
+        _ => {
+            let tuple = bindings.join(", ");
+            format!("{variant_path}({tuple})")
+        }
+    };
+
+    Some(format!("match {base_expr} {{ {pattern} => {select}, _ => panic!(\"canon downcast projection mismatch\") }}"))
+}
+
+pub(crate) fn mir_binop_token(op: mir::BinOp) -> Option<&'static str> {
+    match op {
+        mir::BinOp::Add => Some("+"),
+        mir::BinOp::Sub => Some("-"),
+        mir::BinOp::Mul => Some("*"),
+        mir::BinOp::Div => Some("/"),
+        mir::BinOp::Rem => Some("%"),
+        mir::BinOp::BitXor => Some("^"),
+        mir::BinOp::BitAnd => Some("&"),
+        mir::BinOp::BitOr => Some("|"),
+        mir::BinOp::Shl => Some("<<"),
+        mir::BinOp::Shr => Some(">>"),
+        mir::BinOp::Eq => Some("=="),
+        mir::BinOp::Lt => Some("<"),
+        mir::BinOp::Le => Some("<="),
+        mir::BinOp::Ne => Some("!="),
+        mir::BinOp::Ge => Some(">="),
+        mir::BinOp::Gt => Some(">"),
+        mir::BinOp::Cmp => None,
+        mir::BinOp::Offset => None,
+        mir::BinOp::AddUnchecked => Some("+"),
+        mir::BinOp::SubUnchecked => Some("-"),
+        mir::BinOp::MulUnchecked => Some("*"),
+        mir::BinOp::ShlUnchecked => Some("<<"),
+        mir::BinOp::ShrUnchecked => Some(">>"),
+        mir::BinOp::AddWithOverflow => None,
+        mir::BinOp::SubWithOverflow => None,
+        mir::BinOp::MulWithOverflow => None,
+    }
+}
+
+pub(crate) fn mir_unop_token(op: mir::UnOp) -> &'static str {
+    match op {
+        mir::UnOp::Not => "!",
+        mir::UnOp::Neg => "-",
+        mir::UnOp::PtrMetadata => "",
+    }
+}
+
+pub(crate) fn mir_assign_stmt<'tcx>(
+    tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, lhs: &mir::Place<'tcx>, rvalue: &mir::Rvalue<'tcx>, resolver: &LocalNameResolver, defined: &std::collections::HashSet<String>,
+    suppressed_sentinel_names: &std::collections::HashSet<String>,
+) -> Option<Stmt> {
+    let lhs = resolver.label_place(lhs)?;
+    let rhs = mir_rvalue_expr(tcx, local_decls, rvalue, resolver)?;
+    if assign_rhs_should_suppress(&rhs) {
+        return None;
+    }
+    if lhs == "__ret" {
+        // Do not allow panic-based synthetic initialization of __ret;
+        // force canonical suppressed binding instead.
+        if rhs.contains("panic!") {
+            return None;
+        }
+        return Some(Stmt::Assign { lhs, rhs });
+    }
+    if !mir_guard::value_known(&rhs, defined, suppressed_sentinel_names) {
+        return None;
+    }
+    Some(Stmt::Assign { lhs, rhs })
+}
+
+pub(crate) fn mir_field_access_stmt<'tcx>(tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, lhs: &mir::Place<'tcx>, rvalue: &mir::Rvalue<'tcx>, resolver: &LocalNameResolver) -> Option<Stmt> {
+    let mir::Rvalue::Use(mir::Operand::Copy(place) | mir::Operand::Move(place)) = rvalue else {
+        return None;
+    };
+    let (base, proj) = place.as_ref().last_projection()?;
+    let mir::ProjectionElem::Field(field_idx, ty) = proj else {
+        return None;
+    };
+
+    let base_ty = base.ty(local_decls, tcx).ty;
+    if is_primitive_value_ty(base_ty) {
+        return None;
+    }
+
+    let field = match base_ty.kind() {
+        ty::TyKind::Adt(adt, _) if adt.is_struct() || adt.is_union() => {
+            if !adt.did().is_local() {
+                let tuple_like = adt.non_enum_variant().fields.iter().all(|f| f.name.to_string().chars().all(|c| c.is_ascii_digit()));
+                if tuple_like {
+                    return None;
+                }
+            }
+            let f = adt.non_enum_variant().fields.get(field_idx)?;
+            let name = f.name.to_string();
+            if name.chars().all(|c| c.is_ascii_digit()) {
+                field_idx.index().to_string()
+            } else {
+                name
+            }
+        }
+        ty::TyKind::Adt(adt, _) if adt.is_enum() => {
+

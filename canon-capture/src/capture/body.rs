@@ -1,14 +1,14 @@
 use crate::types::{EdgeHint, Node, NodeId, NodeKind};
 use rustc_hir as hir;
-use rustc_middle::mir::{self};
 use rustc_middle::mir::visit::Visitor;
+use rustc_middle::mir::{self};
 use rustc_middle::ty::TyCtxt;
-use rustc_span::def_id::LOCAL_CRATE;
 use rustc_span::def_id::DefId;
+use rustc_span::def_id::LOCAL_CRATE;
 
+use crate::capture::edge_emit;
 use crate::index::Index;
 use crate::norm;
-use crate::capture::edge_emit;
 
 /// MIR/body projection: emit CFG edges, call edges, and const deps as EdgeHints.
 ///
@@ -43,11 +43,7 @@ pub fn project_body(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
     let mut hints = Vec::new();
 
     // Collect external DefId paths referenced anywhere in MIR operands.
-    let mut collector = ExternalDefCollector {
-        tcx,
-        crate_name: &crate_name,
-        out: &mut pathrefs,
-    };
+    let mut collector = ExternalDefCollector { tcx, crate_name: &crate_name, out: &mut pathrefs };
     collector.visit_body(body);
 
     for bb_data in body.basic_blocks.iter() {
@@ -94,11 +90,7 @@ pub fn project_body(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> (Vec<Node>
     let mut nodes: Vec<Node> = Vec::new();
     for (ordinal, path) in pathrefs.into_iter().enumerate() {
         let node_id = synthetic_body_pathref_id(id, ordinal as u32);
-        nodes.push(Node {
-            id: node_id,
-            kind: NodeKind::PathRef { path },
-            span: None,
-        });
+        nodes.push(Node { id: node_id, kind: NodeKind::PathRef { path }, span: None });
         edge_emit::push_contains(&mut hints, caller_id, node_id.index() as u32);
     }
 

@@ -25,9 +25,7 @@ impl AgentConfig {
     /// Load from `<workspace>/agent.json`. Errors if missing or malformed.
     pub fn load(workspace: &Path) -> Result<Self, String> {
         let path = workspace.join("agent.json");
-        let raw = std::fs::read(&path)
-            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-        serde_json::from_slice(&raw)
-            .map_err(|e| format!("failed to parse {}: {e}", path.display()))
+        let raw = std::fs::read(&path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        serde_json::from_slice(&raw).map_err(|e| format!("failed to parse {}: {e}", path.display()))
     }
 }

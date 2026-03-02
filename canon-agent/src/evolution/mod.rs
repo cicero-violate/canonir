@@ -1,9 +1,7 @@
 pub mod lyapunov;
 mod structural;
-pub use lyapunov::{
-    enforce_lyapunov_bound, StructureDriftError, StructureMetrics, DEFAULT_TOPOLOGY_THETA,
-};
 use crate::ir::{ChangePayload, CodeDelta, DeltaId, SystemState, Visibility};
+pub use lyapunov::{enforce_lyapunov_bound, StructureDriftError, StructureMetrics, DEFAULT_TOPOLOGY_THETA};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -41,10 +39,10 @@ fn module_path(module_id: &str) -> String {
 
 fn vis_str(v: Visibility) -> &'static str {
     match v {
-        Visibility::Public   => "pub ",
+        Visibility::Public => "pub ",
         Visibility::PubCrate => "pub(crate) ",
         Visibility::PubSuper => "pub(super) ",
-        Visibility::Private  => "",
+        Visibility::Private => "",
     }
 }
 
@@ -282,20 +280,13 @@ fn payload_to_code_delta(payload: &ChangePayload) -> CodeDelta {
     }
 }
 
-pub fn apply_admitted_deltas(
-    ir: &SystemState,
-    admission_ids: &[String],
-) -> Result<(SystemState, Vec<CodeDelta>), EvolutionError> {
+pub fn apply_admitted_deltas(ir: &SystemState, admission_ids: &[String]) -> Result<(SystemState, Vec<CodeDelta>), EvolutionError> {
     let mut next = ir.clone();
     let mut code_deltas: Vec<CodeDelta> = Vec::new();
 
     for aid in admission_ids {
         // Look up the StateChange by id match.
-        let delta = ir
-            .deltas
-            .iter()
-            .find(|d| &d.id == aid)
-            .ok_or_else(|| EvolutionError::UnknownDelta(aid.clone()))?;
+        let delta = ir.deltas.iter().find(|d| &d.id == aid).ok_or_else(|| EvolutionError::UnknownDelta(aid.clone()))?;
 
         // Apply structural mutation to IR₁.
         structural::apply_structural_delta(&mut next, delta)?;

@@ -7,8 +7,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 use std::process::Command;
+use walkdir::WalkDir;
 
 // ---------------------------------------------------------------------------
 // Pattern strings (compiled once via lazy statics)
@@ -105,15 +105,11 @@ impl StructuralSurface {
 pub fn scan(src_root: &Path) -> io::Result<StructuralSurface> {
     // Compile patterns once.
     let re_suppressed = pat!(r"canon suppressed binding");
-    let re_suppressed_ret = pat!(
-        r#"__ret\s*=\s*panic!\("canon suppressed binding"\)"#
-    );
+    let re_suppressed_ret = pat!(r#"__ret\s*=\s*panic!\("canon suppressed binding"\)"#);
     let re_match_gap = pat!(r"canon match result not lowered");
     let re_call_gap = pat!(r"canon call result not lowered");
     let re_switch_gap = pat!(r"canon switch result not lowered");
-    let re_ret_gap = pat!(
-        r#"let mut __ret = panic!\("canon (?:suppressed binding|call result not lowered|switch result not lowered|match result not lowered)"\);"#
-    );
+    let re_ret_gap = pat!(r#"let mut __ret = panic!\("canon (?:suppressed binding|call result not lowered|switch result not lowered|match result not lowered)"\);"#);
     let re_unreachable = pat!(r"unreachable!\(\);");
     let re_match_comment = pat!(r"// match");
     let re_goto_comment = pat!(r"// goto");
@@ -122,11 +118,7 @@ pub fn scan(src_root: &Path) -> io::Result<StructuralSurface> {
 
     let mut surface = StructuralSurface::default();
 
-    for entry in WalkDir::new(src_root)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("rs"))
-    {
+    for entry in WalkDir::new(src_root).into_iter().filter_map(|e| e.ok()).filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("rs")) {
         let path = entry.path();
         let rel = relative_path(src_root, path);
         let content = std::fs::read_to_string(path)?;
@@ -162,21 +154,13 @@ pub fn scan(src_root: &Path) -> io::Result<StructuralSurface> {
             if re_ret_gap.is_match(line) {
                 surface.unresolved_ret_gap_count += 1;
                 let enclosing_fn = find_enclosing_fn(&lines, idx, &re_fn_sig);
-                surface.ret_gap_sites.push(RetGapSite {
-                    file: rel.clone(),
-                    line: lineno,
-                    enclosing_fn,
-                });
+                surface.ret_gap_sites.push(RetGapSite { file: rel.clone(), line: lineno, enclosing_fn });
             }
         }
     }
 
-    surface.suppressed_nonret_count =
-        surface.suppressed_count.saturating_sub(surface.suppressed_ret_count);
-    surface.unresolved_gap_total = surface.suppressed_count
-        + surface.match_gap_count
-        + surface.call_gap_count
-        + surface.switch_gap_count;
+    surface.suppressed_nonret_count = surface.suppressed_count.saturating_sub(surface.suppressed_ret_count);
+    surface.unresolved_gap_total = surface.suppressed_count + surface.match_gap_count + surface.call_gap_count + surface.switch_gap_count;
 
     Ok(surface)
 }
@@ -198,14 +182,7 @@ fn find_enclosing_fn(lines: &[&str], line_idx: usize, re_fn_sig: &Regex) -> Stri
 /// Return a `/`-separated path relative to `root`, falling back to the full
 /// path display if stripping fails.
 fn relative_path(root: &Path, full: &Path) -> String {
-    full.strip_prefix(root)
-        .map(|r| {
-            r.components()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join("/")
-        })
-        .unwrap_or_else(|_| full.display().to_string())
+    full.strip_prefix(root).map(|r| r.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/")).unwrap_or_else(|_| full.display().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -281,10 +258,7 @@ impl BuildReport {
 /// `offline` mirrors `CARGO_NET_OFFLINE=true` used in `run_script.sh`.
 pub fn build(emit_dir: &Path, offline: bool) -> io::Result<BuildReport> {
     let mut cmd = Command::new("cargo");
-    cmd.arg("build")
-        .arg("--message-format")
-        .arg("json")
-        .current_dir(emit_dir);
+    cmd.arg("build").arg("--message-format").arg("json").current_dir(emit_dir);
     if offline {
         cmd.env("CARGO_NET_OFFLINE", "true");
     }
@@ -295,10 +269,7 @@ pub fn build(emit_dir: &Path, offline: bool) -> io::Result<BuildReport> {
     let success = output.status.success();
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    let mut report = BuildReport {
-        success,
-        ..Default::default()
-    };
+    let mut report = BuildReport { success, ..Default::default() };
 
     for raw_line in stdout.lines() {
         let line = raw_line.trim();
@@ -317,27 +288,13 @@ pub fn build(emit_dir: &Path, offline: bool) -> io::Result<BuildReport> {
             Some(m) => m,
             None => continue,
         };
-        let level = msg
-            .get("level")
-            .and_then(|l| l.as_str())
-            .unwrap_or("unknown")
-            .to_owned();
-        let message = msg
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("")
-            .to_owned();
-        let rendered = msg
-            .get("rendered")
-            .and_then(|r| r.as_str())
-            .map(|s| s.to_owned());
+        let level = msg.get("level").and_then(|l| l.as_str()).unwrap_or("unknown").to_owned();
+        let message = msg.get("message").and_then(|m| m.as_str()).unwrap_or("").to_owned();
+        let rendered = msg.get("rendered").and_then(|r| r.as_str()).map(|s| s.to_owned());
 
         // Extract primary span location.
-        let primary_span = msg
-            .get("spans")
-            .and_then(|s| s.as_array())
-            .and_then(|spans| spans.iter().find(|s| s.get("is_primary").and_then(|p| p.as_bool()).unwrap_or(false)))
-            .map(|span| SpanLocation {
+        let primary_span =
+            msg.get("spans").and_then(|s| s.as_array()).and_then(|spans| spans.iter().find(|s| s.get("is_primary").and_then(|p| p.as_bool()).unwrap_or(false))).map(|span| SpanLocation {
                 file: span.get("file_name").and_then(|f| f.as_str()).unwrap_or("").to_owned(),
                 line_start: span.get("line_start").and_then(|l| l.as_u64()).unwrap_or(0) as u32,
                 line_end: span.get("line_end").and_then(|l| l.as_u64()).unwrap_or(0) as u32,

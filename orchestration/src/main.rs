@@ -79,11 +79,7 @@ fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBu
         Some(surface) => {
             surface.print_report();
             let snap_surface_path = out_dir.join("canon_structural_surface.json");
-            std::fs::write(
-                &snap_surface_path,
-                serde_json::to_string_pretty(&surface).context("surface serialize failed")?,
-            )
-            .context("surface snapshot write failed")?;
+            std::fs::write(&snap_surface_path, serde_json::to_string_pretty(&surface).context("surface serialize failed")?).context("surface snapshot write failed")?;
             println!("Structural surface snapshot written to {:?}", snap_surface_path);
         }
         None => {
@@ -95,11 +91,7 @@ fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBu
     let build_report = canon_telemetry::build(&out_dir, true).context("cargo build invocation failed")?;
     build_report.print_report();
     let build_report_path = out_dir.join("canon_build_report.json");
-    std::fs::write(
-        &build_report_path,
-        serde_json::to_string_pretty(&build_report).context("build report serialize failed")?,
-    )
-    .context("build report write failed")?;
+    std::fs::write(&build_report_path, serde_json::to_string_pretty(&build_report).context("build report serialize failed")?).context("build report write failed")?;
     println!("Build report written to {:?}", build_report_path);
 
     let canon_snap_path = out_dir.join("canon_ir_solved.json");

@@ -27,9 +27,7 @@ pub(crate) fn strip_instance_generics(raw: &str) -> String {
 
 pub(crate) fn is_zero_arg_enum_ctor_expr_str(expr: &str) -> bool {
     let expr = strip_instance_generics(expr);
-    expr == "std::option::Option::None"
-        || expr == "core::option::Option::None"
-        || expr == "Option::None"
+    expr == "std::option::Option::None" || expr == "core::option::Option::None" || expr == "Option::None"
 }
 
 pub(crate) fn is_internal_mir_const_repr(s: &str) -> bool {

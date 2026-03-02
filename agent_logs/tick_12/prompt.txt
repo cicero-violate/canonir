@@ -1,0 +1,27 @@
+## Tick 12 — observe phase
+
+### Exit-check output
+```
+
+```
+
+### Output from previous commands
+```
+
+```
+
+### Recent rationale history
+```
+[T-5] materialize_return_local and resolve_ret_gaps_with are not defined in capture/mir, which is a structural red flag given engine.rs calls them. Before concluding they are missing, inspect util.rs and expr.rs for any return-place or __ret-specific helpers that might implicitly perform this role. In particular, verify whether stmt_defines_ret or related utilities incorrectly classify return bindings, which could prevent fallback synthesis from triggering.
+---
+[T-4] engine.rs calls lower::materialize_return_local and lower::resolve_ret_gaps_with, but no definitions exist in capture/mir. Confirm exactly how they are referenced in engine.rs and whether they are expected to be public functions in lower.rs but are currently missing. If they are indeed absent, that would explain why post-lowering return gap resolution is not actually happening.
+---
+[T-3] materialize_return_local and resolve_ret_gaps_with are invoked from engine.rs but are not defined anywhere in canon-capture/src (confirmed via global search). This means the intended post-structural return-gap resolution logic is never actually implemented, which directly explains persistent __ret gaps. The next step is to implement these two functions in capture/mir/lower.rs so that they (1) ensure a concrete __ret local is materialized into the Body::Blocks form and (2) replace any remaining missing or suppressed __ret bindings with a deterministic default expression, structurally, without introducing suppressed sentinels.
+---
+[T-2] Re-confirm at workspace scope that materialize_return_local and resolve_ret_gaps_with are truly undefined (not hidden in another crate/module or behind cfg). Also verify how lower is exposed from capture/mir to ensure any missing functions must be implemented directly in lower.rs.
+---
+[T-1] Global search confirms materialize_return_local and resolve_ret_gaps_with are referenced only from engine.rs and do not exist anywhere in the workspace. The lower module is correctly exposed via capture/mir/mod.rs, so these functions must be implemented in capture/mir/lower.rs. The next step is to add concrete implementations there that operate on Body::Blocks to (1) ensure a structural __ret binding exists and (2) deterministically replace any remaining missing or suppressed return gaps with the provided default expression.
+```
+
+Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
+`{"phase":"observe","deltas":[...],"rationale":"..."}`

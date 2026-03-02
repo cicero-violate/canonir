@@ -33,11 +33,7 @@ pub(crate) struct NormalizationPipeline {
 
 impl NormalizationPipeline {
     pub(crate) fn canonical() -> Self {
-        Self {
-            prologue: pass_inject_suppressed_prologue,
-            normalize: pass_lower_match_and_prune_bindings,
-            finalize: pass_strip_roles,
-        }
+        Self { prologue: pass_inject_suppressed_prologue, normalize: pass_lower_match_and_prune_bindings, finalize: pass_strip_roles }
     }
 
     pub(crate) fn run(&self, draft: BodyDraft) -> Vec<BasicBlock> {
@@ -47,54 +43,25 @@ impl NormalizationPipeline {
     }
 }
 
-pub(crate) fn make_body_draft(
-    emitted_blocks: Vec<EmittedBlock>,
-    suppressed_dest_sentinels: Vec<Stmt>,
-) -> BodyDraft {
-    BodyDraft {
-        emitted_blocks,
-        suppressed_dest_sentinels,
-    }
+pub(crate) fn make_body_draft(emitted_blocks: Vec<EmittedBlock>, suppressed_dest_sentinels: Vec<Stmt>) -> BodyDraft {
+    BodyDraft { emitted_blocks, suppressed_dest_sentinels }
 }
 
-pub(crate) fn emit_special_block(
-    returns_unit: bool,
-    mir_idx_usize: usize,
-    blocks: &[EmittedBlock],
-    switch_analysis: &SwitchAnalysis,
-    defined: &mut HashSet<String>,
-) -> Option<EmittedBlock> {
+pub(crate) fn emit_special_block(returns_unit: bool, mir_idx_usize: usize, blocks: &[EmittedBlock], switch_analysis: &SwitchAnalysis, defined: &mut HashSet<String>) -> Option<EmittedBlock> {
     if switch_analysis.switch_sources.contains(&mir_idx_usize) {
         let _ = (returns_unit, blocks, defined);
-        return Some(EmittedBlock {
-            role: BlockRole::SwitchSource,
-            block: BasicBlock {
-                stmts: Vec::new(),
-                terminator: Terminator::Unreachable,
-            },
-        });
+        return Some(EmittedBlock { role: BlockRole::SwitchSource, block: BasicBlock { stmts: Vec::new(), terminator: Terminator::Unreachable } });
     }
     if switch_analysis.switchint_arm_blocks.contains(&mir_idx_usize) {
-        if switch_analysis.switch_arm_writes_ret.contains(&mir_idx_usize)
-            || switch_analysis.switch_arm_returns.contains(&mir_idx_usize)
-        {
+        if switch_analysis.switch_arm_writes_ret.contains(&mir_idx_usize) || switch_analysis.switch_arm_returns.contains(&mir_idx_usize) {
             return None;
         }
-        return Some(EmittedBlock {
-            role: BlockRole::SwitchArm,
-            block: BasicBlock {
-                stmts: Vec::new(),
-                terminator: Terminator::None,
-            },
-        });
+        return Some(EmittedBlock { role: BlockRole::SwitchArm, block: BasicBlock { stmts: Vec::new(), terminator: Terminator::None } });
     }
     None
 }
 
-pub(crate) fn normalize_blocks(
-    emitted: Vec<EmittedBlock>,
-    suppressed_dest_sentinels: Vec<Stmt>,
-) -> Vec<BasicBlock> {
+pub(crate) fn normalize_blocks(emitted: Vec<EmittedBlock>, suppressed_dest_sentinels: Vec<Stmt>) -> Vec<BasicBlock> {
     normalize_draft(make_body_draft(emitted, suppressed_dest_sentinels))
 }
 
@@ -103,34 +70,18 @@ pub(crate) fn normalize_draft(draft: BodyDraft) -> Vec<BasicBlock> {
 }
 
 pub(crate) fn make_normal_block(stmts: Vec<Stmt>, term: Terminator) -> EmittedBlock {
-    EmittedBlock {
-        role: BlockRole::Normal,
-        block: BasicBlock {
-            stmts,
-            terminator: term,
-        },
-    }
+    EmittedBlock { role: BlockRole::Normal, block: BasicBlock { stmts, terminator: term } }
 }
 
 pub(crate) fn blocks_have_ret_match(blocks: &[EmittedBlock]) -> bool {
-    blocks.iter().any(|bb| {
-        bb.block
-            .stmts
-            .iter()
-            .any(|stmt| matches!(stmt, Stmt::Match { dest: Some(dest) } if dest == "__ret"))
-    })
+    blocks.iter().any(|bb| bb.block.stmts.iter().any(|stmt| matches!(stmt, Stmt::Match { dest: Some(dest) } if dest == "__ret")))
 }
 
 pub(crate) fn blocks_have_ret_binding(blocks: &[EmittedBlock]) -> bool {
-    blocks
-        .iter()
-        .any(|bb| bb.block.stmts.iter().any(mir_util::stmt_defines_ret))
+    blocks.iter().any(|bb| bb.block.stmts.iter().any(mir_util::stmt_defines_ret))
 }
 
-fn pass_inject_suppressed_prologue(
-    mut emitted: Vec<EmittedBlock>,
-    suppressed_dest_sentinels: Vec<Stmt>,
-) -> Vec<EmittedBlock> {
+fn pass_inject_suppressed_prologue(mut emitted: Vec<EmittedBlock>, suppressed_dest_sentinels: Vec<Stmt>) -> Vec<EmittedBlock> {
     if suppressed_dest_sentinels.is_empty() {
         return emitted;
     }
@@ -155,10 +106,7 @@ fn pass_lower_match_dest_to_suppressed(mut emitted: Vec<EmittedBlock>) -> Vec<Em
     for block in &mut emitted {
         for stmt in &mut block.block.stmts {
             if let Stmt::Match { dest: Some(dest) } = stmt {
-                *stmt = Stmt::Assign {
-                    lhs: dest.clone(),
-                    rhs: "__canon_suppressed__".to_string(),
-                };
+                *stmt = Stmt::Assign { lhs: dest.clone(), rhs: "__canon_suppressed__".to_string() };
             }
         }
     }

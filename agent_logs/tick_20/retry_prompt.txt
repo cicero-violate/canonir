@@ -1,0 +1,7 @@
+---
+## PREVIOUS ACTION FAILED
+Error:
+```
+llm send_turn error: timeout waiting for ChatGPT response
+```
+Emit a corrected JSON block addressing the error above.

@@ -1,0 +1,326 @@
+CURRENT WORKING DIRECTORY (CWD): /workspace/ai_sandbox/canon
+The agent has full access inside this directory.
+It may use apply_patch and bash.
+
+REAL CANON-CAPTURE SNAPSHOT:
+$ rg -n "__ret" canon-capture/src
+canon-capture/src/capture/engine.rs:262:        // Deterministically replace remaining __ret gaps with a concrete return
+canon-capture/src/capture/engine.rs:301:        // Deterministically replace remaining __ret gaps with a concrete return
+canon-capture/src/capture/mir/guard.rs:12:            let allow_suppressed_inputs = matches!(dest, Some(dest) if dest == "__ret");
+canon-capture/src/capture/mir/guard.rs:56:    defined.contains(value) || value == "__ret" || is_structural_expr(value)
+canon-capture/src/capture/mir/guard.rs:65:    if lhs == "__ret" || defined.contains(lhs) {
+canon-capture/src/capture/mir/util.rs:55:        Stmt::Assign { lhs, .. } => lhs == "__ret",
+canon-capture/src/capture/mir/util.rs:56:        Stmt::Call { dest: Some(dest), .. } => dest == "__ret",
+canon-capture/src/capture/mir/util.rs:57:        Stmt::FieldAccess { dest: Some(dest), .. } => dest == "__ret",
+canon-capture/src/capture/mir/util.rs:58:        Stmt::MethodCall { dest: Some(dest), .. } => dest == "__ret",
+canon-capture/src/capture/mir/util.rs:59:        Stmt::StructLit { dest: Some(dest), .. } => dest == "__ret",
+canon-capture/src/capture/mir/util.rs:60:        Stmt::Match { dest: Some(dest) } => dest == "__ret",
+canon-capture/src/capture/mir/util.rs:70:        lhs: "__ret".to_string(),
+canon-capture/src/capture/mir/util.rs:73:    defined.insert("__ret".to_string());
+canon-capture/src/capture/mir/util.rs:82:    // Never suppress __ret; return must be lowered structurally.
+canon-capture/src/capture/mir/util.rs:83:    if name == "__ret" {
+canon-capture/src/capture/mir/util.rs:86:    if name == "__ret" {
+canon-capture/src/capture/mir/terminator.rs:60:        } else if dest == "__ret" {
+canon-capture/src/capture/mir/terminator.rs:61:            defined.insert("__ret".to_string());
+canon-capture/src/capture/mir/terminator.rs:80:            if dest != "__ret" {
+canon-capture/src/capture/mir/terminator.rs:94:                if dest != "__ret" {
+canon-capture/src/capture/mir/terminator.rs:121:            if dest != "__ret" {
+canon-capture/src/capture/mir/terminator.rs:131:        if dest_name != "__ret" {
+canon-capture/src/capture/mir/terminator.rs:139:            // Do not fabricate or implicitly define __ret here.
+canon-capture/src/capture/mir/terminator.rs:140:            // __ret must only be defined by structurally valid lowering paths.
+canon-capture/src/capture/mir/terminator.rs:148:            // Do not implicitly fabricate a suppressed __ret here.
+canon-capture/src/capture/mir/terminator.rs:149:            // __ret must be defined by structurally valid lowering paths
+canon-capture/src/capture/mir/terminator.rs:169:            // Do NOT fabricate __ret here.
+canon-capture/src/capture/mir/terminator.rs:225:        if !defined.contains("__ret") {
+canon-capture/src/capture/mir/terminator.rs:227:            // instead of leaving a suppressed __ret gap.
+canon-capture/src/capture/mir/terminator.rs:229:                lhs: "__ret".to_string(),
+canon-capture/src/capture/mir/terminator.rs:232:            defined.insert("__ret".to_string());
+canon-capture/src/capture/mir/terminator.rs:234:        stmts.push(Stmt::Return(Some("__ret".to_string())));
+canon-capture/src/capture/mir/expr.rs:212:    if lhs == "__ret" {
+canon-capture/src/capture/mir/expr.rs:213:        // Do not allow panic-based synthetic initialization of __ret;
+canon-capture/src/capture/mir/ret.rs:3:/// Deterministically bind `__ret` to the MIR return place for
+canon-capture/src/capture/mir/lower.rs:83:        !matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret")
+canon-capture/src/capture/mir/lower.rs:87:    // Never allow suppressed sentinel for __ret; return must be lowered structurally.
+canon-capture/src/capture/mir/lower.rs:91:            !matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret")
+canon-capture/src/capture/mir/lower.rs:130:    // Do NOT pre-mark __ret as defined. It must be structurally assigned
+canon-capture/src/capture/mir/lower.rs:158:        // Do not emit suppressed __ret bindings at block end.
+canon-capture/src/capture/mir/lower.rs:239:        // Do not emit suppressed __ret binding after call terminator.
+canon-capture/src/capture/mir/lower.rs:254:        // Do not emit suppressed __ret binding after non-call terminator.
+canon-capture/src/capture/mir/lower.rs:270:    // Always run deterministic return synthesis to eliminate suppressed __ret gaps.
+canon-capture/src/capture/mir/lower.rs:272:    // Remove suppressed __ret assignments in every block before analysis.
+canon-capture/src/capture/mir/lower.rs:277:                if lhs == "__ret" && rhs.contains("canon suppressed binding")
+canon-capture/src/capture/mir/lower.rs:282:    // Strip all suppressed __ret bindings globally before synthesis.
+canon-capture/src/capture/mir/lower.rs:287:                if lhs == "__ret" && rhs.contains("canon suppressed binding")
+canon-capture/src/capture/mir/lower.rs:303:    // structural __ret bindings if present; only synthesize if missing.
+canon-capture/src/capture/mir/lower.rs:308:            if matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret") {
+canon-capture/src/capture/mir/lower.rs:319:        // guarantee a concrete __ret binding and Return on all paths.
+canon-capture/src/capture/mir/lower.rs:323:                    lhs: "__ret".to_string(),
+canon-capture/src/capture/mir/lower.rs:326:                Stmt::Return(Some("__ret".to_string())),
+canon-capture/src/capture/mir/lower.rs:467:        // Avoid suppressed emission for __ret; fallback handles return.
+canon-capture/src/capture/mir/lower.rs:468:        if lhs_name != "__ret" {
+canon-capture/src/capture/mir/lower.rs:482:        .any(|stmt| matches!(stmt, Stmt::Match { dest: Some(dest) } if dest == "__ret"))
+canon-capture/src/capture/mir/resolver.rs:12:        insert_unique_name(&mut by_local, &mut owner_by_name, 0, "__ret".to_string());
+canon-capture/src/capture/mir/passes.rs:120:            .any(|stmt| matches!(stmt, Stmt::Match { dest: Some(dest) } if dest == "__ret"))
+canon-capture/src/capture/mir/passes.rs:175:                    if rhs == "__canon_suppressed__" && lhs != "__ret" && !used.contains(lhs)
+
+
+$ rg -n "suppressed binding" canon-capture/src
+canon-capture/src/capture/helpers.rs:546:/// This must never panic and must not introduce suppressed bindings.
+canon-capture/src/capture/mir/lower.rs:277:                if lhs == "__ret" && rhs.contains("canon suppressed binding")
+canon-capture/src/capture/mir/lower.rs:287:                if lhs == "__ret" && rhs.contains("canon suppressed binding")
+canon-capture/src/capture/mir/lower.rs:399:            // Do not emit suppressed bindings for opaque aggregates.
+canon-capture/src/capture/mir/lower.rs:457:                // Never emit suppressed binding for any assignment here.
+canon-capture/src/capture/mir/expr.rs:214:        // force canonical suppressed binding instead.
+
+
+$ ls -R canon-capture/src
+canon-capture/src:
+canon_assemble.rs
+capture
+index.rs
+lib.rs
+norm.rs
+project
+types.rs
+
+canon-capture/src/capture:
+body.rs
+edge_emit.rs
+engine.rs
+fragments.rs
+helpers.rs
+mir
+mod.rs
+pipeline.rs
+relations.rs
+rules.rs
+validate
+
+canon-capture/src/capture/mir:
+analysis.rs
+expr.rs
+filters.rs
+guard.rs
+lower.rs
+mod.rs
+ops.rs
+passes.rs
+patterns.rs
+resolver.rs
+ret.rs
+terminator.rs
+util.rs
+
+canon-capture/src/capture/validate:
+mod.rs
+structural.rs
+
+canon-capture/src/project:
+body.rs
+edge_emit.rs
+engine.rs
+helpers.rs
+item.rs
+mir_engine.rs
+mir_patterns.rs
+mod.rs
+relations.rs
+rules.rs
+
+
+
+
+TICK 3 | gaps remaining: 7 | next: extractor.rs:19 — pub fn extract_symbols(src: &str) -> Vec<Symbol> {
+delta feedback: {
+  "per_file_ret_delta": [
+    [
+      "extractor.rs",
+      0
+    ],
+    [
+      "repomap.rs",
+      0
+    ]
+  ],
+  "per_fn_ret_delta": [
+    [
+      "extractor.rs::fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {",
+      0
+    ],
+    [
+      "extractor.rs::pub fn extract_symbols(src: &str) -> Vec<Symbol> {",
+      0
+    ],
+    [
+      "repomap.rs::pub fn build_repomap(root_dir: &Path) -> Vec<FileMap> {",
+      0
+    ],
+    [
+      "extractor.rs::fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {",
+      0
+    ],
+    [
+      "extractor.rs::fn field_text<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {",
+      0
+    ],
+    [
+      "extractor.rs::fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {",
+      0
+    ],
+    [
+      "extractor.rs::fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {",
+      0
+    ]
+  ],
+  "suppressed_ret_delta": 0
+}
+last patch diff: no change (gaps_before=7 gaps_after=7)
+
+## Emitted source at gap site (read-only)
+```rust
+use crate::symbol::Symbol;
+
+use tree_sitter::Node;
+
+use tree_sitter::Parser;
+
+pub fn extract_symbols(src: &str) -> Vec<Symbol> {
+    let mut parser = tree_sitter::Parser::new();
+    let mut _v5 = &mut parser;
+    let mut _v7 = tree_sitter_rust::LANGUAGE.into();
+    let mut _v6 = &_v7;
+    let mut _v4 = _v5.set_language(_v6);
+    let mut _v8 = "failed to load Rust grammar";
+    let mut _v3 = _v4.expect(_v8);
+    let mut _v11 = &mut parser;
+    let mut _v13 = "parse failed";
+    let mut _v14 = panic!("canon suppressed binding");
+    let mut _v16 = src.as_bytes();
+    let mut __ret = panic!("canon suppressed binding");
+    return __ret;
+}
+
+fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
+    let mut _v112 = false;
+    let mut _v111 = false;
+    let mut _v110 = false;
+    let mut _v109 = false;
+    let mut _v108 = false;
+    let mut _v107 = false;
+    let mut _v106 = false;
+    _v112 = true;
+    let mut _v5 = &root;
+    let mut cursor = _v5.walk();
+    let mut _v8 = &root;
+    let mut _v9 = &mut cursor;
+    let mut _v7 = _v8.children(_v9);
+    let mut _v6 = _v7.into_iter();
+    let mut iter = _v6;
+    let mut _v12 = &mut iter;
+    let mut _v11 = _v12.next();
+    _v112 = false;
+    let mut __ret = panic!("canon suppressed binding");
+    _v112 = false;
+    return __ret;
+}
+
+fn field_text<'a>(node: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
+    let mut _v5 = &node;
+    let mut _v4 = _v5.child_by_field_name(field);
+    let mut __ret = panic!("canon suppressed binding");
+    return __ret;
+}
+
+fn fn_signature(node: Node, src: &[u8]) -> String {
+    let mut _v5 = "name";
+    let mut _v4 = crate::extractor::field_text(node, _v5, src);
+    let mut _v6 = "?";
+    let mut name = _v4.unwrap_or(_v6);
+    let mut _v10 = &node;
+    let mut _v9 = _v10.child_by_field_name("parameters");
+    let mut _v12 = "()";
+    let mut _v16 = &node;
+    let mut _v15 = _v16.child_by_field_name("return_type");
+    let mut _v21 = &name;
+    let mut _v28 = b"\x03fn \xc0\xc0\xc0\x00";
+    let mut _v18 = std::string::String::new();
+    let mut __ret = _v18;
+    return __ret;
+}
+
+fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
+    let mut _v28 = false;
+    _v28 = true;
+    let mut _v5 = &body;
+    let mut cursor = _v5.walk();
+    let mut _v8 = &body;
+    let mut _v9 = &mut cursor;
+    let mut _v7 = _v8.children(_v9);
+    let mut _v6 = _v7.into_iter();
+    let mut iter = _v6;
+    let mut _v12 = &mut iter;
+    let mut _v11 = _v12.next();
+    _v28 = false;
+    let mut __ret = panic!("canon suppressed binding");
+    _v28 = false;
+    return __ret;
+}
+
+fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+    let mut _v23 = false;
+    _v23 = true;
+    let mut _v5 = &body;
+    let mut cursor = _v5.walk();
+    let mut _v8 = &body;
+    let mut _v9 = &mut cursor;
+    let mut _v7 = _v8.children(_v9);
+    let mut _v6 = _v7.into_iter();
+    let mut iter = _v6;
+    let mut _v12 = &mut iter;
+    let mut _v11 = _v12.next();
+    _v23 = false;
+    let mut __ret = panic!("canon suppressed binding");
+    _v23 = false;
+    return __ret;
+}
+
+fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
+    let mut _v28 = false;
+    _v28 = true;
+    let mut _v5 = &body;
+    let mut cursor = _v5.walk();
+    let mut _v8 = &body;
+    let mut _v9 = &mut cursor;
+    let mut _v7 = _v8.children(_v9);
+    let mut _v6 = _v7.into_iter();
+    let mut iter = _v6;
+    let mut _v12 = &mut iter;
+    let mut _v11 = _v12.next();
+    _v28 = false;
+    let mut __ret = panic!("canon suppressed binding");
+    _v28 = false;
+    return __ret;
+}
+
+fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
+    let mut _v4 = &node;
+    let mut _v3 = _v4.utf8_text(src);
+    let mut _v5 = "";
+    let mut __ret = _v3.unwrap_or(_v5);
+    return __ret;
+}
+```
+
+## Current patchable sources (use EXACT lines from these for patch context)
+
+
+Emit ONE fenced ```json block with schema: {"deltas":[...],"rationale":"..."}
+
+---
+## PREVIOUS PATCH FAILED
+Error:
+```
+apply_patch failed in "/workspace/ai_sandbox/canon": exit status: 1
+```
+Emit a corrected JSON block addressing the error above.
+Only the delta is needed — do not repeat the full surface or MIR context.

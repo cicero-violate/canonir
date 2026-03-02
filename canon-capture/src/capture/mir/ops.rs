@@ -4,19 +4,15 @@ use rustc_middle::ty::{self, TyCtxt};
 use crate::capture::helpers::{lower_ty, render_type_expr};
 use crate::capture::mir::filters;
 use crate::capture::mir::resolver::LocalNameResolver;
-use crate::types::Stmt;
 use crate::norm;
+use crate::types::Stmt;
 
 pub(crate) enum ArgLabel {
     Value(String),
     Omit,
 }
 
-pub(crate) fn mir_operand_label_for_arg(
-    tcx: TyCtxt<'_>,
-    operand: &mir::Operand<'_>,
-    resolver: &LocalNameResolver,
-) -> Option<ArgLabel> {
+pub(crate) fn mir_operand_label_for_arg(tcx: TyCtxt<'_>, operand: &mir::Operand<'_>, resolver: &LocalNameResolver) -> Option<ArgLabel> {
     match operand {
         mir::Operand::Constant(c) if constant_is_implicit_zst_value(c) => Some(ArgLabel::Omit),
         _ => mir_operand_label(tcx, operand, resolver).map(ArgLabel::Value),
@@ -24,19 +20,10 @@ pub(crate) fn mir_operand_label_for_arg(
 }
 
 fn constant_is_implicit_zst_value(constant: &mir::ConstOperand<'_>) -> bool {
-    matches!(
-        constant.const_.ty().kind(),
-        ty::TyKind::Closure(..)
-            | ty::TyKind::Coroutine(..)
-            | ty::TyKind::CoroutineClosure(..)
-    )
+    matches!(constant.const_.ty().kind(), ty::TyKind::Closure(..) | ty::TyKind::Coroutine(..) | ty::TyKind::CoroutineClosure(..))
 }
 
-pub(crate) fn mir_operand_label(
-    tcx: TyCtxt<'_>,
-    operand: &mir::Operand<'_>,
-    resolver: &LocalNameResolver,
-) -> Option<String> {
+pub(crate) fn mir_operand_label(tcx: TyCtxt<'_>, operand: &mir::Operand<'_>, resolver: &LocalNameResolver) -> Option<String> {
     match operand {
         mir::Operand::Copy(place) | mir::Operand::Move(place) => label_operand_place(place, resolver),
         mir::Operand::Constant(c) => {
@@ -70,11 +57,7 @@ fn label_operand_place(place: &mir::Place<'_>, resolver: &LocalNameResolver) -> 
     None
 }
 
-pub(crate) fn mir_call_args_labels<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
-    resolver: &LocalNameResolver,
-) -> Option<Vec<String>> {
+pub(crate) fn mir_call_args_labels<'tcx>(tcx: TyCtxt<'tcx>, args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>], resolver: &LocalNameResolver) -> Option<Vec<String>> {
     let mut out = Vec::with_capacity(args.len());
     for arg in args {
         match mir_operand_label_for_arg(tcx, &arg.node, resolver)? {
@@ -85,62 +68,37 @@ pub(crate) fn mir_call_args_labels<'tcx>(
     Some(out)
 }
 
-pub(crate) fn filtered_internal_call_target<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    func: &mir::Operand<'tcx>,
-    resolver: &LocalNameResolver,
-) -> bool {
+pub(crate) fn filtered_internal_call_target<'tcx>(tcx: TyCtxt<'tcx>, func: &mir::Operand<'tcx>, resolver: &LocalNameResolver) -> bool {
     if let Some(path) = call_target_path(tcx, func)
         && filters::is_filtered_internal_call_path(&path)
     {
         return true;
     }
-    mir_operand_label(tcx, func, resolver)
-        .map(|path| filters::is_filtered_internal_call_path(&path))
-        .unwrap_or(false)
+    mir_operand_label(tcx, func, resolver).map(|path| filters::is_filtered_internal_call_path(&path)).unwrap_or(false)
 }
 
-pub(crate) fn call_target_path<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    func: &mir::Operand<'tcx>,
-) -> Option<String> {
+pub(crate) fn call_target_path<'tcx>(tcx: TyCtxt<'tcx>, func: &mir::Operand<'tcx>) -> Option<String> {
     let (did, _) = func.const_fn_def()?;
     Some(norm::path(tcx, did))
 }
 
-pub(crate) fn is_format_call_target<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    func: &mir::Operand<'tcx>,
-) -> bool {
+pub(crate) fn is_format_call_target<'tcx>(tcx: TyCtxt<'tcx>, func: &mir::Operand<'tcx>) -> bool {
     let Some(path) = call_target_path(tcx, func) else {
         return false;
     };
-    matches!(path.as_str(), "std::fmt::format" | "core::fmt::format" | "alloc::fmt::format")
-        || (path.contains("fmt::") && path.ends_with("::format"))
+    matches!(path.as_str(), "std::fmt::format" | "core::fmt::format" | "alloc::fmt::format") || (path.contains("fmt::") && path.ends_with("::format"))
 }
 
-pub(crate) fn is_deref_call_target<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    func: &mir::Operand<'tcx>,
-    resolver: &LocalNameResolver,
-) -> bool {
-    let by_path = call_target_path(tcx, func)
-        .map(|p| p.contains("ops::deref::Deref::deref"))
-        .unwrap_or(false);
+pub(crate) fn is_deref_call_target<'tcx>(tcx: TyCtxt<'tcx>, func: &mir::Operand<'tcx>, resolver: &LocalNameResolver) -> bool {
+    let by_path = call_target_path(tcx, func).map(|p| p.contains("ops::deref::Deref::deref")).unwrap_or(false);
     if by_path {
         return true;
     }
-    mir_operand_label(tcx, func, resolver)
-        .map(|f| f.ends_with("::deref"))
-        .unwrap_or(false)
+    mir_operand_label(tcx, func, resolver).map(|f| f.ends_with("::deref")).unwrap_or(false)
 }
 
 pub(crate) fn mir_method_call_stmt<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    func: &mir::Operand<'tcx>,
-    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
-    resolver: &LocalNameResolver,
-    dest: String,
+    tcx: TyCtxt<'tcx>, func: &mir::Operand<'tcx>, args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>], resolver: &LocalNameResolver, dest: String,
 ) -> Option<Stmt> {
     if args.is_empty() {
         return None;
@@ -160,12 +118,7 @@ pub(crate) fn mir_method_call_stmt<'tcx>(
         };
         let method = tcx.item_name(did).to_string();
         let args = mir_call_args_labels(tcx, &args[1..], resolver)?;
-        return Some(Stmt::MethodCall {
-            receiver,
-            method,
-            args,
-            dest: Some(dest),
-        });
+        return Some(Stmt::MethodCall { receiver, method, args, dest: Some(dest) });
     }
 
     let func_label = mir_operand_label(tcx, func, resolver)?;
@@ -175,28 +128,16 @@ pub(crate) fn mir_method_call_stmt<'tcx>(
         ArgLabel::Omit => return None,
     };
     let args = mir_call_args_labels(tcx, &args[1..], resolver)?;
-    Some(Stmt::MethodCall {
-        receiver,
-        method,
-        args,
-        dest: Some(dest),
-    })
+    Some(Stmt::MethodCall { receiver, method, args, dest: Some(dest) })
 }
 
 pub(crate) fn mir_call_stmt<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    func: &mir::Operand<'tcx>,
-    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
-    resolver: &LocalNameResolver,
-    dest: String,
+    tcx: TyCtxt<'tcx>, func: &mir::Operand<'tcx>, args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>], resolver: &LocalNameResolver, dest: String,
 ) -> Option<Stmt> {
     let func = if let Some((did, _)) = func.const_fn_def() {
         if matches!(tcx.def_kind(did), rustc_hir::def::DefKind::AssocFn) {
             let assoc = tcx.associated_item(did);
-            if matches!(
-                assoc.container,
-                ty::AssocContainer::InherentImpl | ty::AssocContainer::TraitImpl(_)
-            ) {
+            if matches!(assoc.container, ty::AssocContainer::InherentImpl | ty::AssocContainer::TraitImpl(_)) {
                 let impl_did = assoc.container_id(tcx);
                 let self_ty = tcx.type_of(impl_did).instantiate_identity();
                 let self_path = render_type_expr(tcx, &lower_ty(tcx, self_ty));
@@ -215,11 +156,7 @@ pub(crate) fn mir_call_stmt<'tcx>(
         return None;
     }
     let args = mir_call_args_labels(tcx, args, resolver)?;
-    Some(Stmt::Call {
-        func,
-        args,
-        dest: Some(dest),
-    })
+    Some(Stmt::Call { func, args, dest: Some(dest) })
 }
 
 fn dynamic_trait_method_name(func_label: &str) -> Option<String> {

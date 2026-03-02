@@ -1,0 +1,27 @@
+## Tick 28 — observe phase
+
+### Exit-check output
+```
+
+```
+
+### Output from previous commands
+```
+
+```
+
+### Recent rationale history
+```
+[T-5] Implement the previously missing materialize_return_local and resolve_ret_gaps_with functions directly in lower.rs. The first ensures a structural __ret binding exists without suppressed sentinels. The second deterministically replaces placeholder or suppressed __ret assignments with the provided default expression, guaranteeing a concrete return binding for engine.rs post-processing.
+---
+[T-4] Verify that the newly added materialize_return_local and resolve_ret_gaps_with functions are present in lower.rs and correctly inserted at the end of the file before proceeding to a verify phase.
+---
+[T-3] Confirm that the two functions are still undefined anywhere in the workspace and that lower.rs length remains unchanged, ensuring no partial insertion occurred before proceeding to implement them.
+---
+[T-2] Inspect the exact call sites in engine.rs to confirm the expected signatures and semantics of materialize_return_local and resolve_ret_gaps_with before moving to the act phase. This ensures the new implementations in lower.rs match how they are invoked.
+---
+[T-1] Re-inspect the definitions of Body, BasicBlock, Stmt, and Terminator to ensure the upcoming implementations of materialize_return_local and resolve_ret_gaps_with correctly mutate the structural MIR representation.
+```
+
+Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
+`{"phase":"observe","deltas":[...],"rationale":"..."}`

@@ -1,0 +1,34 @@
+# Generic agent pipeline configuration
+# All {{PLACEHOLDER}} tokens are substituted at runtime.
+
+[agent]
+# chatgpt_url            = "https://chatgpt.com"
+chatgpt_url            = "https://chatgpt.com/gg/69a32d7d1a008199948ad06498df2f4f"
+max_ticks              = 20
+exit_check_command     = "cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap && cargo run . 2>&1 | grep -c 'canon suppressed binding' | awk '{exit ($1 > 0)}'"
+rationale_history_len  = 5
+
+# Appended as the next turn when a previous response caused an error.
+retry_addendum = """
+---
+## PREVIOUS ACTION FAILED
+Error:
+```
+{{RETRY_ERROR}}
+```
+Emit a corrected JSON block addressing the error above.
+"""
+
+# Sent once on first turn (bootstrap).
+# After that the LLM's chosen phase determines the template.
+[agent.templates]
+bootstrap = "AGENT_BOOTSTRAP.md"
+observe   = "AGENT_OBSERVE.md"
+plan      = "AGENT_PLAN.md"
+act       = "AGENT_ACT.md"
+verify    = "AGENT_VERIFY.md"
+
+# Each entry forbids a pattern on any + line inside an ApplyPatch delta.
+[[agent.guardrails]]
+forbidden_pattern = "canon suppressed binding"
+message           = "Reintroduction of suppressed binding is forbidden. Lower the return structurally instead."

@@ -7,8 +7,8 @@
 // Data types (was src/refactor.rs)
 // ---------------------------------------------------------------------------
 
-use serde::{Deserialize, Serialize};
 use crate::ir::PipelineStage;
+use serde::{Deserialize, Serialize};
 
 /// What kind of structural change the refactor proposes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -44,23 +44,8 @@ pub struct RefactorProposal {
 }
 
 impl RefactorProposal {
-    pub fn new(
-        id: impl Into<String>,
-        kind: RefactorKind,
-        target: RefactorTarget,
-        rationale: impl Into<String>,
-        stage: PipelineStage,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            kind,
-            target,
-            destination_id: None,
-            rationale: rationale.into(),
-            ir_proposal_id: None,
-            proof_id: None,
-            stage,
-        }
+    pub fn new(id: impl Into<String>, kind: RefactorKind, target: RefactorTarget, rationale: impl Into<String>, stage: PipelineStage) -> Self {
+        Self { id: id.into(), kind, target, destination_id: None, rationale: rationale.into(), ir_proposal_id: None, proof_id: None, stage }
     }
 
     pub fn is_proven(&self) -> bool {
@@ -77,18 +62,16 @@ impl RefactorProposal {
 // ---------------------------------------------------------------------------
 
 use super::super::call::AgentCallOutput;
-use super::super::reward::{NodeRewardLedger, PipelineNodeOutcome};
-use super::super::evolution::{
-    apply_admitted_deltas, enforce_lyapunov_bound, EvolutionError, DEFAULT_TOPOLOGY_THETA,
-};
-use super::super::ir::{SystemState, CodeDelta, StateChange, DeltaKind, PipelineStage as IrPipelineStage, ChangePayload};
-use super::super::layout::FileTopology;
-use super::{Pipeline, PipelineContext, PipelineOutcome};
 use super::super::capability::AgentGraph;
 use super::super::dispatcher::AgentScheduler;
+use super::super::evolution::{apply_admitted_deltas, enforce_lyapunov_bound, EvolutionError, DEFAULT_TOPOLOGY_THETA};
+use super::super::ir::{ChangePayload, CodeDelta, DeltaKind, PipelineStage as IrPipelineStage, StateChange, SystemState};
+use super::super::layout::FileTopology;
 use super::super::llm_provider::call_llm;
-use super::super::ws_server::WsBridge;
+use super::super::reward::{NodeRewardLedger, PipelineNodeOutcome};
 use super::super::runtime::reward::compute_pipeline_reward;
+use super::super::ws_server::WsBridge;
+use super::{Pipeline, PipelineContext, PipelineOutcome};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -109,12 +92,12 @@ pub enum RefactorStage {
 impl std::fmt::Display for RefactorStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RefactorStage::Observe   => write!(f, "Observe"),
-            RefactorStage::Reason    => write!(f, "Reason"),
-            RefactorStage::Prove     => write!(f, "Prove"),
-            RefactorStage::Judge     => write!(f, "Judge"),
-            RefactorStage::Mutate    => write!(f, "Mutate"),
-            RefactorStage::Complete  => write!(f, "Complete"),
+            RefactorStage::Observe => write!(f, "Observe"),
+            RefactorStage::Reason => write!(f, "Reason"),
+            RefactorStage::Prove => write!(f, "Prove"),
+            RefactorStage::Judge => write!(f, "Judge"),
+            RefactorStage::Mutate => write!(f, "Mutate"),
+            RefactorStage::Complete => write!(f, "Complete"),
         }
     }
 }
@@ -137,18 +120,13 @@ pub enum RefactorError {
 impl std::fmt::Display for RefactorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RefactorError::MissingPayloadField { stage, field } =>
-                write!(f, "stage {stage}: missing payload field `{field}`"),
-            RefactorError::MissingProof =>
-                write!(f, "Prove stage: proof_id not populated"),
-            RefactorError::Rejected { rationale } =>
-                write!(f, "Judge stage: proposal rejected — {rationale}"),
+            RefactorError::MissingPayloadField { stage, field } => write!(f, "stage {stage}: missing payload field `{field}`"),
+            RefactorError::MissingProof => write!(f, "Prove stage: proof_id not populated"),
+            RefactorError::Rejected { rationale } => write!(f, "Judge stage: proposal rejected — {rationale}"),
             RefactorError::TopologyDrift(e) => write!(f, "Mutate stage: {e}"),
-            RefactorError::Evolution(e)     => write!(f, "Mutate stage: {e}"),
-            RefactorError::MissingAdmission =>
-                write!(f, "Judge stage: admission_id not found in payload"),
-            RefactorError::StageSkipped { stage } =>
-                write!(f, "stage {stage}: node skipped (insufficient trust)"),
+            RefactorError::Evolution(e) => write!(f, "Mutate stage: {e}"),
+            RefactorError::MissingAdmission => write!(f, "Judge stage: admission_id not found in payload"),
+            RefactorError::StageSkipped { stage } => write!(f, "stage {stage}: node skipped (insufficient trust)"),
         }
     }
 }
@@ -173,12 +151,7 @@ pub struct RefactorResult {
 // Core pipeline function
 // ---------------------------------------------------------------------------
 
-pub fn run_refactor_pipeline(
-    ir: &SystemState,
-    layout: &FileTopology,
-    mut proposal: RefactorProposal,
-    stage_outputs: &[AgentCallOutput],
-) -> Result<RefactorResult, RefactorError> {
+pub fn run_refactor_pipeline(ir: &SystemState, layout: &FileTopology, mut proposal: RefactorProposal, stage_outputs: &[AgentCallOutput]) -> Result<RefactorResult, RefactorError> {
     let observer_out = require_stage(stage_outputs, 0, RefactorStage::Observe)?;
     extract_str_field(&observer_out.payload, "observation", RefactorStage::Observe)?;
 
@@ -189,17 +162,12 @@ pub fn run_refactor_pipeline(
     let (ir_with_delta, delta_id) = {
         let mut ir_clone = ir.clone();
         let delta_id = format!("delta-tick-{}", stage_outputs.len());
-        let payload: Option<ChangePayload> = reasoner_out
-            .payload
-            .get("change_payload")
-            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        let payload: Option<ChangePayload> = reasoner_out.payload.get("change_payload").and_then(|v| serde_json::from_value(v.clone()).ok());
         if let Some(raw) = reasoner_out.payload.get("change_payload") {
             if payload.is_none() {
-                eprintln!("[pipeline] WARN: change_payload present but failed to deserialize: {}",
-                    serde_json::to_string(raw).unwrap_or_default());
+                eprintln!("[pipeline] WARN: change_payload present but failed to deserialize: {}", serde_json::to_string(raw).unwrap_or_default());
             } else {
-                eprintln!("[pipeline] change_payload deserialized OK: type={:?}",
-                    raw.get("type").and_then(|v| v.as_str()).unwrap_or("?"));
+                eprintln!("[pipeline] change_payload deserialized OK: type={:?}", raw.get("type").and_then(|v| v.as_str()).unwrap_or("?"));
             }
         } else {
             eprintln!("[pipeline] WARN: Reasoner emitted no change_payload field");
@@ -207,13 +175,7 @@ pub fn run_refactor_pipeline(
         let proof_hint = stage_outputs
             .get(2)
             .and_then(|o| o.proof_id.clone())
-            .or_else(|| {
-                stage_outputs
-                    .get(2)
-                    .and_then(|o| o.payload.get("proof_id"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
+            .or_else(|| stage_outputs.get(2).and_then(|o| o.payload.get("proof_id")).and_then(|v| v.as_str()).map(|s| s.to_string()))
             .unwrap_or_else(|| format!("proof-{}", delta_id));
         let state_change = StateChange {
             id: delta_id.clone(),
@@ -231,68 +193,36 @@ pub fn run_refactor_pipeline(
     };
 
     let prover_out = require_stage(stage_outputs, 2, RefactorStage::Prove)?;
-    let proof_id = prover_out
-        .proof_id
-        .clone()
-        .or_else(|| {
-            prover_out.payload.get("proof_id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        })
-        .ok_or(RefactorError::MissingProof)?;
+    let proof_id = prover_out.proof_id.clone().or_else(|| prover_out.payload.get("proof_id").and_then(|v| v.as_str()).map(|s| s.to_string())).ok_or(RefactorError::MissingProof)?;
     proposal.proof_id = Some(proof_id);
 
     let judge_out = require_stage(stage_outputs, 3, RefactorStage::Judge)?;
     let decision = extract_str_field(&judge_out.payload, "decision", RefactorStage::Judge)?;
     if decision.to_lowercase() != "accept" {
-        let rationale = judge_out.payload.get("rationale")
-            .and_then(|v| v.as_str())
-            .unwrap_or("no rationale provided")
-            .to_string();
+        let rationale = judge_out.payload.get("rationale").and_then(|v| v.as_str()).unwrap_or("no rationale provided").to_string();
         return Err(RefactorError::Rejected { rationale });
     }
 
-    let admission_id = judge_out.payload.get("admission_id")
-        .and_then(|v| v.as_str())
-        .ok_or(RefactorError::MissingAdmission)?
-        .to_string();
+    let admission_id = judge_out.payload.get("admission_id").and_then(|v| v.as_str()).ok_or(RefactorError::MissingAdmission)?.to_string();
 
-    let resolved_id = if ir_with_delta.deltas.iter().any(|d| d.id == admission_id) {
-        admission_id.clone()
-    } else {
-        delta_id.clone()
-    };
+    let resolved_id = if ir_with_delta.deltas.iter().any(|d| d.id == admission_id) { admission_id.clone() } else { delta_id.clone() };
 
     let proof_ids: Vec<String> = ir_with_delta.proofs.iter().map(|p| p.id.clone()).collect();
-    let (candidate, code_deltas) =
-        apply_admitted_deltas(&ir_with_delta, &[resolved_id])
-            .map_err(RefactorError::Evolution)?;
+    let (candidate, code_deltas) = apply_admitted_deltas(&ir_with_delta, &[resolved_id]).map_err(RefactorError::Evolution)?;
 
-    enforce_lyapunov_bound(ir, &candidate, &proof_ids, DEFAULT_TOPOLOGY_THETA)
-        .map_err(RefactorError::TopologyDrift)?;
+    enforce_lyapunov_bound(ir, &candidate, &proof_ids, DEFAULT_TOPOLOGY_THETA).map_err(RefactorError::TopologyDrift)?;
 
     let next_layout = layout.clone();
     let reward = compute_pipeline_reward(ir, &candidate, 0.0, 0.0);
 
-    Ok(RefactorResult {
-        ir: candidate,
-        layout: next_layout,
-        proposal,
-        admission_id,
-        reward,
-        code_deltas,
-    })
+    Ok(RefactorResult { ir: candidate, layout: next_layout, proposal, admission_id, reward, code_deltas })
 }
 
 // ---------------------------------------------------------------------------
 // Reward recording
 // ---------------------------------------------------------------------------
 
-pub fn record_refactor_reward(
-    ledger: &mut NodeRewardLedger,
-    node_id: &str,
-    result: Result<&RefactorResult, &RefactorError>,
-) -> f64 {
+pub fn record_refactor_reward(ledger: &mut NodeRewardLedger, node_id: &str, result: Result<&RefactorResult, &RefactorError>) -> f64 {
     let outcome = match result {
         Ok(r) => PipelineNodeOutcome::Accepted { reward: r.reward },
         Err(RefactorError::Rejected { .. }) => PipelineNodeOutcome::Rejected { penalty: 1.0 },
@@ -319,21 +249,16 @@ pub struct RefactorPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for RefactorPipeline {
-    fn name(&self) -> &str { "refactor" }
+    fn name(&self) -> &str {
+        "refactor"
+    }
 
-    async fn run_tick(
-        &self,
-        ctx: &PipelineContext,
-        ir: &mut SystemState,
-        layout: &mut FileTopology,
-    ) -> anyhow::Result<PipelineOutcome> {
+    async fn run_tick(&self, ctx: &PipelineContext, ir: &mut SystemState, layout: &mut FileTopology) -> anyhow::Result<PipelineOutcome> {
         let mut graph = self.graph.lock().await;
         let mut ledger = self.ledger.lock().await;
 
-        let mut dispatcher = AgentScheduler::new(&graph, ir)
-            .with_trust_threshold(self.trust_threshold);
-        let order = dispatcher.topological_call_order()
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut dispatcher = AgentScheduler::new(&graph, ir).with_trust_threshold(self.trust_threshold);
+        let order = dispatcher.topological_call_order().map_err(|e| anyhow::anyhow!("{e}"))?;
 
         let mut stage_outputs: Vec<AgentCallOutput> = Vec::new();
         for node_id in &order {
@@ -359,11 +284,7 @@ impl Pipeline for RefactorPipeline {
         }
 
         if stage_outputs.is_empty() {
-            return Ok(PipelineOutcome {
-                reward: 0.0,
-                summary: "no stage outputs".into(),
-                advanced: false,
-            });
+            return Ok(PipelineOutcome { reward: 0.0, summary: "no stage outputs".into(), advanced: false });
         }
 
         let mut proposal = self.proposal_seed.clone();
@@ -377,17 +298,9 @@ impl Pipeline for RefactorPipeline {
             Ok(r) => {
                 *ir = r.ir.clone();
                 *layout = r.layout.clone();
-                Ok(PipelineOutcome {
-                    reward: r.reward,
-                    summary: format!("admission={} reward={:.4}", r.admission_id, r.reward),
-                    advanced: true,
-                })
+                Ok(PipelineOutcome { reward: r.reward, summary: format!("admission={} reward={:.4}", r.admission_id, r.reward), advanced: true })
             }
-            Err(e) => Ok(PipelineOutcome {
-                reward: -0.5,
-                summary: format!("pipeline error: {e}"),
-                advanced: false,
-            }),
+            Err(e) => Ok(PipelineOutcome { reward: -0.5, summary: format!("pipeline error: {e}"), advanced: false }),
         }
     }
 }
@@ -396,24 +309,10 @@ impl Pipeline for RefactorPipeline {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn require_stage(
-    outputs: &[AgentCallOutput],
-    idx: usize,
-    stage: RefactorStage,
-) -> Result<&AgentCallOutput, RefactorError> {
+fn require_stage(outputs: &[AgentCallOutput], idx: usize, stage: RefactorStage) -> Result<&AgentCallOutput, RefactorError> {
     outputs.get(idx).ok_or_else(|| RefactorError::StageSkipped { stage })
 }
 
-fn extract_str_field(
-    payload: &Value,
-    field: &str,
-    stage: RefactorStage,
-) -> Result<String, RefactorError> {
-    payload.get(field)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| RefactorError::MissingPayloadField {
-            stage,
-            field: field.to_string(),
-        })
+fn extract_str_field(payload: &Value, field: &str, stage: RefactorStage) -> Result<String, RefactorError> {
+    payload.get(field).and_then(|v| v.as_str()).map(|s| s.to_string()).ok_or_else(|| RefactorError::MissingPayloadField { stage, field: field.to_string() })
 }

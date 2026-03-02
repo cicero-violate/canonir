@@ -103,11 +103,7 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
                 matches!(ir.nodes.get(*idx).map(|n| &n.kind), Some(CanonNodeKind::Fn { .. }))
                     && direct_parents
                         .get(*idx)
-                        .map(|parents| {
-                            parents.iter().any(|p| {
-                                matches!(ir.nodes.get(*p).map(|n| &n.kind), Some(CanonNodeKind::Trait { .. }) | Some(CanonNodeKind::Impl { .. }))
-                            })
-                        })
+                        .map(|parents| parents.iter().any(|p| matches!(ir.nodes.get(*p).map(|n| &n.kind), Some(CanonNodeKind::Trait { .. }) | Some(CanonNodeKind::Impl { .. }))))
                         .unwrap_or(false)
             });
             if all_assoc_methods {

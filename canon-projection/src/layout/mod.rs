@@ -59,30 +59,26 @@ pub fn build_plan(ir: &CanonIR) -> Result<Plan> {
     }
 
     if let Some((name, edition)) = crate_meta(ir) {
-        let deps = ir.nodes.iter().find_map(|n| {
-            if let CanonNodeKind::Crate {
-                dependencies,
-                dependency_packages,
-                ..
-            } = &n.kind
-            {
-                Some(
-                    dependencies
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, pid)| {
-                            let package = dependency_packages
-                                .get(idx)
-                                .and_then(|id| *id)
-                                .map(|id| ir.lookup_name(id));
-                            render_dependency_entry(ir.lookup_path(*pid), package)
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            } else {
-                None
-            }
-        }).unwrap_or_default();
+        let deps = ir
+            .nodes
+            .iter()
+            .find_map(|n| {
+                if let CanonNodeKind::Crate { dependencies, dependency_packages, .. } = &n.kind {
+                    Some(
+                        dependencies
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, pid)| {
+                                let package = dependency_packages.get(idx).and_then(|id| *id).map(|id| ir.lookup_name(id));
+                                render_dependency_entry(ir.lookup_path(*pid), package)
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
         files.push(FilePlan { path: PathBuf::from("Cargo.toml"), items: vec![ItemPlan::CargoToml { name, edition, has_binary: false, dependencies: deps }] });
     }
 
@@ -235,7 +231,6 @@ fn render_dependency_entry(dep: &str, package: Option<&str>) -> String {
         format!("{dep} = \"*\"")
     }
 }
-
 
 /// Fallback flat emit when no root module is found.
 fn flat_root_items(ir: &CanonIR) -> Vec<CanonId> {

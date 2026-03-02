@@ -16,26 +16,13 @@ enum RelationTemplate {
 
 fn relation_templates(def_kind: DefKind) -> &'static [RelationTemplate] {
     match def_kind {
-        DefKind::Impl { .. } => &[
-            RelationTemplate::ParentContains,
-            RelationTemplate::ImplFor,
-            RelationTemplate::ImplRef,
-        ],
-        DefKind::AssocFn | DefKind::AssocTy | DefKind::AssocConst => &[
-            RelationTemplate::ParentContains,
-            RelationTemplate::ParentAssocItem,
-        ],
+        DefKind::Impl { .. } => &[RelationTemplate::ParentContains, RelationTemplate::ImplFor, RelationTemplate::ImplRef],
+        DefKind::AssocFn | DefKind::AssocTy | DefKind::AssocConst => &[RelationTemplate::ParentContains, RelationTemplate::ParentAssocItem],
         _ => &[RelationTemplate::ParentContains],
     }
 }
 
-fn push_parent_contains(
-    edges: &mut Vec<EdgeHint>,
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-    id_u32: u32,
-    index: &Index,
-) -> Option<u32> {
+fn push_parent_contains(edges: &mut Vec<EdgeHint>, tcx: TyCtxt<'_>, def_id: DefId, id_u32: u32, index: &Index) -> Option<u32> {
     let parent = tcx.opt_parent(def_id)?;
     let pid = *index.def_to_node.get(&parent)?;
     let parent_u32 = pid.index() as u32;
@@ -43,20 +30,11 @@ fn push_parent_contains(
     Some(parent_u32)
 }
 
-fn maybe_push_parent_assoc_item(
-    edges: &mut Vec<EdgeHint>,
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-    parent_u32: Option<u32>,
-    id_u32: u32,
-) {
+fn maybe_push_parent_assoc_item(edges: &mut Vec<EdgeHint>, tcx: TyCtxt<'_>, def_id: DefId, parent_u32: Option<u32>, id_u32: u32) {
     let Some(parent) = tcx.opt_parent(def_id) else {
         return;
     };
-    if !matches!(
-        tcx.def_kind(def_id),
-        DefKind::AssocFn | DefKind::AssocTy | DefKind::AssocConst
-    ) {
+    if !matches!(tcx.def_kind(def_id), DefKind::AssocFn | DefKind::AssocTy | DefKind::AssocConst) {
         return;
     }
     if !matches!(tcx.def_kind(parent), DefKind::Trait | DefKind::Impl { .. }) {
@@ -68,13 +46,7 @@ fn maybe_push_parent_assoc_item(
     edge_emit::push_assoc_item(edges, src, id_u32);
 }
 
-fn maybe_push_impl_for(
-    edges: &mut Vec<EdgeHint>,
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-    id_u32: u32,
-    index: &Index,
-) {
+fn maybe_push_impl_for(edges: &mut Vec<EdgeHint>, tcx: TyCtxt<'_>, def_id: DefId, id_u32: u32, index: &Index) {
     let self_ty = tcx.type_of(def_id).instantiate_identity();
     let Some(adt_def_id) = self_ty.ty_adt_def().map(|adt| adt.did()) else {
         return;
@@ -85,17 +57,8 @@ fn maybe_push_impl_for(
     edge_emit::push_impl_for(edges, id_u32, struct_node.index() as u32);
 }
 
-fn maybe_push_impl_ref(
-    edges: &mut Vec<EdgeHint>,
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-    id_u32: u32,
-    index: &Index,
-) {
-    let Some(&trait_node) = tcx
-        .impl_opt_trait_ref(def_id)
-        .and_then(|eb| index.def_to_node.get(&eb.skip_binder().def_id))
-    else {
+fn maybe_push_impl_ref(edges: &mut Vec<EdgeHint>, tcx: TyCtxt<'_>, def_id: DefId, id_u32: u32, index: &Index) {
+    let Some(&trait_node) = tcx.impl_opt_trait_ref(def_id).and_then(|eb| index.def_to_node.get(&eb.skip_binder().def_id)) else {
         return;
     };
     edge_emit::push_impl_ref(edges, id_u32, trait_node.index() as u32);

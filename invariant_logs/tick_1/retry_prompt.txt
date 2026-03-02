@@ -1,0 +1,8 @@
+---
+## PREVIOUS PATCH FAILED
+Error:
+```
+bash command exited with exit status: 101
+```
+Emit a corrected JSON block addressing the error above.
+Only the delta is needed — do not repeat the full surface or MIR context.

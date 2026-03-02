@@ -10,7 +10,7 @@
 //! The runner is pipeline-agnostic — it drives ticks and manages
 //! the reward ledger; the pipeline decides what happens inside each tick.
 
-pub mod invariant;
+pub mod invariant; // now a directory module: src/pipelines/invariant/
 pub mod refactor;
 
 use crate::ir::SystemState;
@@ -25,7 +25,9 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub struct PipelineContext {
     /// The codebase the agent is allowed to patch (e.g. canon-capture).
-    pub cwd: PathBuf,
+    /// Patchable working directories. First entry is primary (used for logs).
+    /// All entries are valid patch targets.
+    pub cwd: Vec<PathBuf>,
     /// Capture directory containing canon_capture.json — input to orchestration.
     pub capture_dir: PathBuf,
     /// Emit directory where orchestration writes its output.
@@ -71,10 +73,5 @@ pub trait Pipeline: Send + Sync {
 
     /// Run one tick.  Receives the shared context and the current IR/layout
     /// (may be ignored by pipelines that operate purely on files).
-    async fn run_tick(
-        &self,
-        ctx: &PipelineContext,
-        ir: &mut SystemState,
-        layout: &mut FileTopology,
-    ) -> anyhow::Result<PipelineOutcome>;
+    async fn run_tick(&self, ctx: &PipelineContext, ir: &mut SystemState, layout: &mut FileTopology) -> anyhow::Result<PipelineOutcome>;
 }

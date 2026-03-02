@@ -1,5 +1,5 @@
-use anyhow::Result;
 use algorithms::graph::csr::Csr;
+use anyhow::Result;
 use canon::id::NodeId;
 use canon::node::CanonId;
 use canon::CanonIR;
@@ -9,6 +9,7 @@ pub mod call_solver;
 pub mod cfg_solver;
 pub mod const_solver;
 pub mod cycle_diag_solver;
+pub mod dep_solver;
 pub mod drop_solver;
 pub mod exhaustiveness_solver;
 pub mod generic_solver;
@@ -17,7 +18,6 @@ pub mod invariant_solver;
 pub mod liveness_solver;
 pub mod macro_solver;
 pub mod module_solver;
-pub mod dep_solver;
 pub mod name_solver;
 pub mod provenance_solver;
 pub mod return_solver;
@@ -80,7 +80,5 @@ fn graph_csr_to_adj(csr: &canon::ir::CanonCsr) -> Vec<Vec<usize>> {
     let row_ptr: Vec<i32> = csr.row_ptr.iter().map(|&x| x as i32).collect();
     let col_idx: Vec<i32> = csr.col_idx.iter().map(|&x| x as i32).collect();
     let graph = Csr { row_ptr, col_idx };
-    (0..graph.vertex_count())
-        .map(|i| graph.neighbours(i).iter().map(|&dst| dst as usize).collect())
-        .collect()
+    (0..graph.vertex_count()).map(|i| graph.neighbours(i).iter().map(|&dst| dst as usize).collect()).collect()
 }

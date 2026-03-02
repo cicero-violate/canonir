@@ -4,10 +4,7 @@ use canon::node::{CanonNodeKind, NameId};
 use std::collections::HashMap;
 
 /// Stdlib / language pseudo-crate roots that must not appear as Cargo dependencies.
-const BUILTIN_ROOTS: &[&str] = &[
-    "std", "core", "alloc", "proc_macro",
-    "crate", "self", "super",
-];
+const BUILTIN_ROOTS: &[&str] = &["std", "core", "alloc", "proc_macro", "crate", "self", "super"];
 
 /// Populate `Crate.dependencies` from the Use nodes present in the IR.
 ///
@@ -24,12 +21,7 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
     let mut crate_name = String::new();
     let mut declared_packages: HashMap<String, Option<String>> = HashMap::new();
     for n in &ir.nodes {
-        if let CanonNodeKind::Crate {
-            name_id,
-            declared_dependencies,
-            ..
-        } = &n.kind
-        {
+        if let CanonNodeKind::Crate { name_id, declared_dependencies, .. } = &n.kind {
             crate_name = ir.lookup_name(*name_id).to_string();
             for dep in declared_dependencies {
                 let root = ir.lookup_path(dep.crate_root).to_string();
@@ -78,20 +70,12 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
     let mut package_ids: Vec<Option<NameId>> = Vec::new();
     for root in &extern_roots {
         path_ids.push(ir.intern_path(root));
-        let pkg_id = declared_packages
-            .get(root)
-            .and_then(|p| p.as_deref())
-            .map(|pkg| NameId(ir.name_intern.intern(pkg)));
+        let pkg_id = declared_packages.get(root).and_then(|p| p.as_deref()).map(|pkg| NameId(ir.name_intern.intern(pkg)));
         package_ids.push(pkg_id);
     }
 
     for node in ir.nodes.iter_mut() {
-        if let CanonNodeKind::Crate {
-            dependencies,
-            dependency_packages,
-            ..
-        } = &mut node.kind
-        {
+        if let CanonNodeKind::Crate { dependencies, dependency_packages, .. } = &mut node.kind {
             *dependencies = path_ids.clone();
             *dependency_packages = package_ids.clone();
             break;

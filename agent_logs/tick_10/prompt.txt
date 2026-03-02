@@ -1,0 +1,27 @@
+## Tick 10 — observe phase
+
+### Exit-check output
+```
+
+```
+
+### Output from previous commands
+```
+
+```
+
+### Recent rationale history
+```
+[T-5] The search for materialize_return_local and resolve_ret_gaps_with returned no results, which is suspicious because engine.rs calls them. This suggests either they are defined elsewhere (possibly re-exported or in another module) or missing entirely. Also inspect stmts_have_ret_binding/match helpers and the remainder of lower.rs to verify whether return-detection logic is inconsistent, leading to false negatives and missed __ret synthesis.
+---
+[T-4] engine.rs invokes materialize_return_local and resolve_ret_gaps_with, but earlier search did not reveal their definitions inside capture/mir. Verify whether these functions are actually defined (possibly in another module or re-exported) or missing entirely. If missing, that would explain why __ret gaps persist despite intended post-processing.
+---
+[T-3] materialize_return_local and resolve_ret_gaps_with are not defined in capture/mir, which is a structural red flag given engine.rs calls them. Before concluding they are missing, inspect util.rs and expr.rs for any return-place or __ret-specific helpers that might implicitly perform this role. In particular, verify whether stmt_defines_ret or related utilities incorrectly classify return bindings, which could prevent fallback synthesis from triggering.
+---
+[T-2] engine.rs calls lower::materialize_return_local and lower::resolve_ret_gaps_with, but no definitions exist in capture/mir. Confirm exactly how they are referenced in engine.rs and whether they are expected to be public functions in lower.rs but are currently missing. If they are indeed absent, that would explain why post-lowering return gap resolution is not actually happening.
+---
+[T-1] materialize_return_local and resolve_ret_gaps_with are invoked from engine.rs but are not defined anywhere in canon-capture/src (confirmed via global search). This means the intended post-structural return-gap resolution logic is never actually implemented, which directly explains persistent __ret gaps. The next step is to implement these two functions in capture/mir/lower.rs so that they (1) ensure a concrete __ret local is materialized into the Body::Blocks form and (2) replace any remaining missing or suppressed __ret bindings with a deterministic default expression, structurally, without introducing suppressed sentinels.
+```
+
+Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
+`{"phase":"observe","deltas":[...],"rationale":"..."}`

@@ -1,0 +1,6 @@
+$ rg -n "materialize_return_local|resolve_ret_gaps_with" canon-capture/src
+canon-capture/src/capture/engine.rs:181:        lower::materialize_return_local(&mut body);
+canon-capture/src/capture/engine.rs:186:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
+canon-capture/src/capture/engine.rs:208:        lower::materialize_return_local(&mut body);
+canon-capture/src/capture/engine.rs:213:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
+

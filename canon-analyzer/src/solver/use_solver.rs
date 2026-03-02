@@ -22,10 +22,7 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
         .iter()
         .filter_map(|n| {
             if let CanonNodeKind::Module { path_id, .. } = &n.kind {
-                ir.lookup_path(*path_id)
-                    .strip_prefix("crate::")
-                    .and_then(|rest| rest.split("::").next())
-                    .map(|s| s.to_string())
+                ir.lookup_path(*path_id).strip_prefix("crate::").and_then(|rest| rest.split("::").next()).map(|s| s.to_string())
             } else {
                 None
             }
@@ -70,12 +67,7 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
             if root != "crate" && !local_module_roots.contains(root) {
                 continue;
             }
-            eprintln!(
-                "WARN use_solver: unresolved use at node {} in module {} path {}",
-                site_idx,
-                parent_mod,
-                path
-            );
+            eprintln!("WARN use_solver: unresolved use at node {} in module {} path {}", site_idx, parent_mod, path);
         } else {
             eprintln!("WARN use_solver: unresolved use-like node {}", site_idx);
         }

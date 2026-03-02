@@ -160,9 +160,7 @@ pub fn ty_strip_local(s: &str, krate: &str) -> String {
 
         let rest_start = idx + pat.len();
         let rest = &s[rest_start..];
-        let seg_end = rest.find(|c: char| {
-            c.is_whitespace() || matches!(c, ',' | '<' | '>' | '(' | ')' | '[' | ']')
-        }).unwrap_or(rest.len());
+        let seg_end = rest.find(|c: char| c.is_whitespace() || matches!(c, ',' | '<' | '>' | '(' | ')' | '[' | ']')).unwrap_or(rest.len());
         let token = &rest[..seg_end];
 
         // Rewrite only crate-qualified paths that have at least two segments:

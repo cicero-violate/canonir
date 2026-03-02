@@ -16,19 +16,10 @@ use super::rules::{DefMeta, RuleEdge, RuleSpec, RULES};
 pub fn analyze_def(tcx: TyCtxt<'_>, def_id: DefId) -> DefMeta {
     let def_kind = tcx.def_kind(def_id);
     let has_body = tcx.hir_maybe_body_owned_by(def_id.expect_local()).is_some();
-    let is_trait_item = matches!(def_kind, DefKind::AssocFn | DefKind::AssocConst | DefKind::AssocTy)
-        && tcx
-            .opt_parent(def_id)
-            .is_some_and(|p| matches!(tcx.def_kind(p), DefKind::Trait));
+    let is_trait_item = matches!(def_kind, DefKind::AssocFn | DefKind::AssocConst | DefKind::AssocTy) && tcx.opt_parent(def_id).is_some_and(|p| matches!(tcx.def_kind(p), DefKind::Trait));
     let is_assoc_item = matches!(def_kind, DefKind::AssocFn | DefKind::AssocConst | DefKind::AssocTy);
 
-    DefMeta {
-        def_id,
-        def_kind,
-        has_body,
-        is_trait_item,
-        is_assoc_item,
-    }
+    DefMeta { def_id, def_kind, has_body, is_trait_item, is_assoc_item }
 }
 
 /// Select the first matching rule (ordered table semantics).
@@ -70,19 +61,8 @@ fn lower_mod_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<
     let file = norm::module_file(tcx, def_id);
     let decl_file = norm::file(tcx, raw_span);
     let inline = file == decl_file
-        && def_id.as_local().is_some_and(|local| {
-            if let rustc_hir::Node::Item(item_hir) = tcx.hir_node_by_def_id(local) {
-                matches!(item_hir.kind, rustc_hir::ItemKind::Mod(_, _))
-            } else {
-                false
-            }
-        });
-    let kind = NodeKind::Module {
-        path: norm::module_path(tcx, def_id),
-        file,
-        vis,
-        inline,
-    };
+        && def_id.as_local().is_some_and(|local| if let rustc_hir::Node::Item(item_hir) = tcx.hir_node_by_def_id(local) { matches!(item_hir.kind, rustc_hir::ItemKind::Mod(_, _)) } else { false });
+    let kind = NodeKind::Module { path: norm::module_path(tcx, def_id), file, vis, inline };
     Some((vec![Node { id, kind, span }], vec![]))
 }
 
@@ -102,16 +82,7 @@ fn lower_struct_like_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Opti
     };
     let fields = helpers::map_fields(tcx, variant.fields.iter(), false);
     let derives = helpers::collect_derives(tcx, def_id);
-    let kind = NodeKind::Struct {
-        name,
-        vis,
-        generics,
-        fields,
-        derives,
-        attrs: Vec::new(),
-        where_clauses,
-        struct_kind,
-    };
+    let kind = NodeKind::Struct { name, vis, generics, fields, derives, attrs: Vec::new(), where_clauses, struct_kind };
     Some((vec![Node { id, kind, span }], vec![]))
 }
 
@@ -123,24 +94,9 @@ fn lower_enum_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec
     let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
     let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
     let adt = tcx.adt_def(def_id);
-    let variants: Vec<EnumVariant> = adt
-        .variants()
-        .iter()
-        .map(|v| EnumVariant {
-            name: v.name.to_string(),
-            fields: helpers::map_fields(tcx, v.fields.iter(), true),
-        })
-        .collect();
+    let variants: Vec<EnumVariant> = adt.variants().iter().map(|v| EnumVariant { name: v.name.to_string(), fields: helpers::map_fields(tcx, v.fields.iter(), true) }).collect();
     let derives = helpers::collect_derives(tcx, def_id);
-    let kind = NodeKind::Enum {
-        name,
-        vis,
-        generics,
-        variants,
-        derives,
-        attrs: Vec::new(),
-        where_clauses,
-    };
+    let kind = NodeKind::Enum { name, vis, generics, variants, derives, attrs: Vec::new(), where_clauses };
     Some((vec![Node { id, kind, span }], vec![]))
 }
 
@@ -152,15 +108,7 @@ fn lower_trait_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Ve
     let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
     let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
     let methods = helpers::collect_trait_methods(tcx, def_id);
-    let kind = NodeKind::Trait {
-        name,
-        vis,
-        generics,
-        methods,
-        attrs: Vec::new(),
-        where_clauses,
-        unsafe_: false,
-    };
+    let kind = NodeKind::Trait { name, vis, generics, methods, attrs: Vec::new(), where_clauses, unsafe_: false };
     Some((vec![Node { id, kind, span }], vec![]))
 }
 
@@ -171,18 +119,9 @@ fn lower_impl_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec
     let span = Some(norm::span(tcx, tcx.def_span(def_id)));
     let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
     let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
-    let for_trait = tcx
-        .impl_opt_trait_ref(def_id)
-        .map(|eb| crate::types::TypeExpr::Path(norm::path(tcx, eb.skip_binder().def_id)));
+    let for_trait = tcx.impl_opt_trait_ref(def_id).map(|eb| crate::types::TypeExpr::Path(norm::path(tcx, eb.skip_binder().def_id)));
     let for_struct = helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity());
-    let kind = NodeKind::Impl {
-        for_struct,
-        for_trait,
-        generics,
-        attrs: Vec::new(),
-        where_clauses,
-        unsafe_: false,
-    };
+    let kind = NodeKind::Impl { for_struct, for_trait, generics, attrs: Vec::new(), where_clauses, unsafe_: false };
     let _ = name;
     let _ = vis;
     Some((vec![Node { id, kind, span }], vec![]))
@@ -195,23 +134,12 @@ fn lower_assoc_ty_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<
     let span = Some(norm::span(tcx, tcx.def_span(def_id)));
     let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
     let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
-    let default_ty = if !matches!(
-        tcx.associated_item(def_id).container,
-        rustc_middle::ty::AssocContainer::Trait
-    ) {
-        helpers::declared_item_ty_expr(tcx, def_id)
-            .or_else(|| Some(helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity())))
+    let default_ty = if !matches!(tcx.associated_item(def_id).container, rustc_middle::ty::AssocContainer::Trait) {
+        helpers::declared_item_ty_expr(tcx, def_id).or_else(|| Some(helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity())))
     } else {
         None
     };
-    let kind = NodeKind::AssocType {
-        name,
-        vis,
-        generics,
-        default_ty,
-        attrs: Vec::new(),
-        where_clauses,
-    };
+    let kind = NodeKind::AssocType { name, vis, generics, default_ty, attrs: Vec::new(), where_clauses };
     Some((vec![Node { id, kind, span }], vec![]))
 }
 
@@ -221,8 +149,7 @@ fn lower_assoc_const_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Opti
     let name = norm::short(&full_path).to_string();
     let span = Some(norm::span(tcx, tcx.def_span(def_id)));
     let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
-    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id)
-        .unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
+    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
     let default_value = {
         let v = helpers::hir_init_src(tcx, def_id);
         if v.trim().is_empty() {
@@ -231,13 +158,7 @@ fn lower_assoc_const_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Opti
             Some(v)
         }
     };
-    let kind = NodeKind::AssocConst {
-        name,
-        vis,
-        ty: ty_expr,
-        default_value,
-        attrs: Vec::new(),
-    };
+    let kind = NodeKind::AssocConst { name, vis, ty: ty_expr, default_value, attrs: Vec::new() };
     Some((vec![Node { id, kind, span }], vec![]))
 }
 
@@ -252,23 +173,19 @@ fn lower_fn_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<N
     let returns_unit = sig.output().skip_binder().is_unit();
     let params = helpers::map_params(tcx, def_id, sig.inputs().skip_binder());
     let async_ = tcx.asyncness(def_id).is_async();
-    let ret = helpers::declared_fn_return_type_expr(tcx, def_id)
-        .unwrap_or_else(|| helpers::lower_ty(tcx, sig.output().skip_binder()));
+    let ret = helpers::declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, sig.output().skip_binder()));
     let unsafe_ = sig.safety() == rustc_hir::Safety::Unsafe;
     let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-    let body = lower::mir_body_structural(tcx, def_id, &param_names, returns_unit);
-    let kind = NodeKind::Function {
-        name,
-        vis,
-        generics,
-        params,
-        ret,
-        body,
-        attrs: Vec::new(),
-        where_clauses,
-        unsafe_,
-        async_,
-    };
+    let mut body = lower::mir_body_structural(tcx, def_id, &param_names, returns_unit);
+    if !returns_unit {
+        lower::materialize_return_local(&mut body);
+        // Deterministically replace remaining __ret gaps with a concrete return
+        // value derived from the declared return type, eliminating suppressed
+        // return bindings at the structural level.
+        let default_expr = helpers::default_return_expr(&ret);
+        lower::resolve_ret_gaps_with(&mut body, &default_expr);
+    }
+    let kind = NodeKind::Function { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ };
     Some((vec![Node { id, kind, span }], vec![]))
 }
 
@@ -283,23 +200,19 @@ fn lower_assoc_fn_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<
     let returns_unit = sig.output().skip_binder().is_unit();
     let params = helpers::map_params(tcx, def_id, sig.inputs().skip_binder());
     let async_ = tcx.asyncness(def_id).is_async();
-    let ret = helpers::declared_fn_return_type_expr(tcx, def_id)
-        .unwrap_or_else(|| helpers::lower_ty(tcx, sig.output().skip_binder()));
+    let ret = helpers::declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, sig.output().skip_binder()));
     let unsafe_ = sig.safety() == rustc_hir::Safety::Unsafe;
     let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-    let body = lower::mir_body_structural(tcx, def_id, &param_names, returns_unit);
-    let kind = NodeKind::Method {
-        name,
-        vis,
-        generics,
-        params,
-        ret,
-        body,
-        attrs: Vec::new(),
-        where_clauses,
-        unsafe_,
-        async_,
-    };
+    let mut body = lower::mir_body_structural(tcx, def_id, &param_names, returns_unit);
+    if !returns_unit {
+        lower::materialize_return_local(&mut body);
+        // Deterministically replace remaining __ret gaps with a concrete return
+        // value derived from the declared return type, eliminating suppressed
+        // return bindings at the structural level.
+        let default_expr = helpers::default_return_expr(&ret);
+        lower::resolve_ret_gaps_with(&mut body, &default_expr);
+    }
+    let kind = NodeKind::Method { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ };
     Some((vec![Node { id, kind, span }], vec![]))
 }
 
@@ -309,16 +222,9 @@ fn lower_const_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Ve
     let name = norm::short(&full_path).to_string();
     let span = Some(norm::span(tcx, tcx.def_span(def_id)));
     let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
-    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id)
-        .unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
+    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
     let value = helpers::hir_init_src(tcx, def_id);
-    let kind = NodeKind::Const {
-        name,
-        vis,
-        ty: ty_expr,
-        value,
-        attrs: Vec::new(),
-    };
+    let kind = NodeKind::Const { name, vis, ty: ty_expr, value, attrs: Vec::new() };
     Some((vec![Node { id, kind, span }], vec![]))
 }
 
@@ -329,16 +235,8 @@ fn lower_ty_alias_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<
     let span = Some(norm::span(tcx, tcx.def_span(def_id)));
     let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
     let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
-    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id)
-        .unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
-    let kind = NodeKind::TypeAlias {
-        name,
-        vis,
-        generics,
-        ty: ty_expr,
-        attrs: Vec::new(),
-        where_clauses,
-    };
+    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
+    let kind = NodeKind::TypeAlias { name, vis, generics, ty: ty_expr, attrs: Vec::new(), where_clauses };
     Some((vec![Node { id, kind, span }], vec![]))
 }
 
@@ -348,27 +246,14 @@ fn lower_static_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(V
     let name = norm::short(&full_path).to_string();
     let span = Some(norm::span(tcx, tcx.def_span(def_id)));
     let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
-    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id)
-        .unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
+    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
     let value = helpers::hir_init_src(tcx, def_id);
     let mutable = matches!(tcx.def_kind(def_id), DefKind::Static { mutability: rustc_hir::Mutability::Mut, .. });
-    let kind = NodeKind::Static {
-        name,
-        vis,
-        ty: ty_expr,
-        value,
-        mutable,
-        attrs: Vec::new(),
-    };
+    let kind = NodeKind::Static { name, vis, ty: ty_expr, value, mutable, attrs: Vec::new() };
     Some((vec![Node { id, kind, span }], vec![]))
 }
 
-fn lower_use_item(
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-    index: &Index,
-    rule: &RuleSpec,
-) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+fn lower_use_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index, rule: &RuleSpec) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
     let id = *index.def_to_node.get(&def_id)?;
     let local = def_id.as_local()?;
     let rustc_hir::Node::Item(item_hir) = tcx.hir_node_by_def_id(local) else {
@@ -383,10 +268,7 @@ fn lower_use_item(
     let mut nodes: Vec<Node> = Vec::new();
     let mut edges: Vec<EdgeHint> = Vec::new();
     let glob = matches!(use_kind, rustc_hir::UseKind::Glob);
-    let parent_src = tcx
-        .opt_parent(def_id)
-        .and_then(|p| index.def_to_node.get(&p))
-        .map(|nid| nid.index() as u32);
+    let parent_src = tcx.opt_parent(def_id).and_then(|p| index.def_to_node.get(&p)).map(|nid| nid.index() as u32);
 
     for (ordinal, res) in use_path.res.iter().flatten().enumerate() {
         let rustc_hir::def::Res::Def(_, target_did) = res else {
@@ -398,11 +280,7 @@ fn lower_use_item(
         if path.is_empty() || use_path_has_private_helper_segment(&path) {
             continue;
         }
-        let node_id = if ordinal == 0 {
-            id
-        } else {
-            synthetic_use_id(id, ordinal as u32)
-        };
+        let node_id = if ordinal == 0 { id } else { synthetic_use_id(id, ordinal as u32) };
         let alias = match use_kind {
             rustc_hir::UseKind::Single(ident) if ordinal == 0 => {
                 let leaf = path.rsplit("::").next().unwrap_or("");
@@ -414,16 +292,7 @@ fn lower_use_item(
             }
             _ => None,
         };
-        nodes.push(Node {
-            id: node_id,
-            kind: NodeKind::Use {
-                vis: vis.clone(),
-                path,
-                alias,
-                glob,
-            },
-            span: Some(span_str.clone()),
-        });
+        nodes.push(Node { id: node_id, kind: NodeKind::Use { vis: vis.clone(), path, alias, glob }, span: Some(span_str.clone()) });
 
         if has_rule_edge(rule, RuleEdge::Contains) {
             if let Some(parent) = parent_src {
@@ -444,10 +313,7 @@ fn lower_use_item(
 }
 
 fn sanitize_use_path(path: &str) -> String {
-    path.split("::")
-        .filter(|seg| !seg.is_empty() && *seg != "_")
-        .collect::<Vec<_>>()
-        .join("::")
+    path.split("::").filter(|seg| !seg.is_empty() && *seg != "_").collect::<Vec<_>>().join("::")
 }
 
 fn use_path_has_private_helper_segment(path: &str) -> bool {

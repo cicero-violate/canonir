@@ -50,26 +50,17 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
 
         match (for_trait, implref_targets.as_slice()) {
             (Some(expected), [actual]) if expected.0 != *actual => {
-                eprintln!(
-                    "WARN impl_solver: Impl[{}] for_trait field {:?} mismatches type_graph ImplRef {:?}",
-                    idx, expected, actual
-                );
+                eprintln!("WARN impl_solver: Impl[{}] for_trait field {:?} mismatches type_graph ImplRef {:?}", idx, expected, actual);
             }
             (Some(_), []) => {
                 eprintln!("WARN impl_solver: Impl[{}] missing ImplRef edge in type_graph", idx);
             }
             (None, [actual, ..]) => {
-                eprintln!(
-                    "WARN impl_solver: inherent Impl[{}] has unexpected ImplRef edge(s) {:?}",
-                    idx, implref_targets
-                );
+                eprintln!("WARN impl_solver: inherent Impl[{}] has unexpected ImplRef edge(s) {:?}", idx, implref_targets);
                 let _ = actual;
             }
             (_, [_, _, ..]) => {
-                eprintln!(
-                    "WARN impl_solver: Impl[{}] has multiple ImplRef edges {:?}",
-                    idx, implref_targets
-                );
+                eprintln!("WARN impl_solver: Impl[{}] has multiple ImplRef edges {:?}", idx, implref_targets);
             }
             _ => {}
         }

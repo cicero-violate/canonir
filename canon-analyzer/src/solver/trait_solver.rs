@@ -73,10 +73,7 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
             }
             if let Some(field_trait) = for_trait {
                 if !ids.contains(&field_trait.0) {
-                    eprintln!(
-                        "WARN trait_solver: Impl[{}] for_trait {:?} mismatches type_graph {:?}",
-                        idx, field_trait, ids
-                    );
+                    eprintln!("WARN trait_solver: Impl[{}] for_trait {:?} mismatches type_graph {:?}", idx, field_trait, ids);
                 }
             }
         }

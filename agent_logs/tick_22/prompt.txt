@@ -1,0 +1,33 @@
+## Tick 22 — observe phase
+
+### Exit-check output
+```
+
+```
+
+### Output from previous commands
+```
+$ rg -n "materialize_return_local|resolve_ret_gaps_with" canon-capture/src
+canon-capture/src/capture/engine.rs:181:        lower::materialize_return_local(&mut body);
+canon-capture/src/capture/engine.rs:186:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
+canon-capture/src/capture/engine.rs:208:        lower::materialize_return_local(&mut body);
+canon-capture/src/capture/engine.rs:213:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
+
+
+```
+
+### Recent rationale history
+```
+[T-5] The end of lower.rs contains no additional helper stubs or related return-handling functions, confirming that materialize_return_local and resolve_ret_gaps_with are entirely absent. All structural return-detection and normalization logic has already been inspected, and Body/BasicBlock/Stmt representations are fully understood. Therefore, no further observation is required. The next step is to implement the two missing public functions in capture/mir/lower.rs so engine.rs can successfully link and execute deterministic return-gap resolution.
+---
+[T-4] Re-confirm total file length and re-open the top of lower.rs to determine clean insertion points and visibility context (pub(crate) vs pub) before implementing the two missing public functions.
+---
+[T-3] File length and full contents of lower.rs are now confirmed (338 lines) with no existing stubs for materialize_return_local or resolve_ret_gaps_with. The appropriate insertion point is after stage_finalize_body_with_ret_fallback or at the end of the file as new pub(crate) functions, matching mir_body_structural visibility. All structural return handling and normalization logic has been inspected, and Body/BasicBlock/Stmt representations are clear. The next step is to enter the act phase and implement the two missing functions in lower.rs so engine.rs can correctly perform deterministic __ret materialization and gap resolution.
+---
+[T-2] The previous turn failed due to a timeout while waiting for a response. No repository state was changed and no commands were executed. Re-emitting a minimal valid JSON block to satisfy the required protocol and allow the loop to proceed.
+---
+[T-1] Re-confirm that materialize_return_local and resolve_ret_gaps_with remain undefined in the current workspace state after the timeout recovery, ensuring no partial edits were introduced before proceeding to implementation.
+```
+
+Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
+`{"phase":"observe","deltas":[...],"rationale":"..."}`

@@ -92,4 +92,5 @@ pub struct ValuePort {
 pub enum CodeDelta {
     ApplyPatch { patch: String },
     Bash { command: String },
+    BashReadOnly { command: String },
 }

@@ -21,11 +21,7 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
             continue;
         };
         let CanonNodeKind::Body { blocks } = &ir.node(*body_id).kind else {
-            bail!(
-                "return_solver: non-unit function `{}` (node {}) body is not structural blocks",
-                ir.lookup_name(*name_id),
-                idx
-            );
+            bail!("return_solver: non-unit function `{}` (node {}) body is not structural blocks", ir.lookup_name(*name_id), idx);
         };
 
         let mut ret_write_count = 0usize;
@@ -45,10 +41,7 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
                             block_returnish[bb_idx] = true;
                         }
                     }
-                    CfgOp::Call { dest: Some(dest), .. }
-                    | CfgOp::FieldAccess { dest: Some(dest), .. }
-                    | CfgOp::MethodCall { dest: Some(dest), .. }
-                    | CfgOp::StructLit { dest: Some(dest), .. } => {
+                    CfgOp::Call { dest: Some(dest), .. } | CfgOp::FieldAccess { dest: Some(dest), .. } | CfgOp::MethodCall { dest: Some(dest), .. } | CfgOp::StructLit { dest: Some(dest), .. } => {
                         if local_is_ret(ir, *dest) {
                             ret_write_count += 1;
                             block_returnish[bb_idx] = true;
@@ -99,12 +92,7 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
         let reachable = reachable_blocks(&outgoing);
         for bb_idx in reachable {
             if outgoing[bb_idx].is_empty() && !block_returnish[bb_idx] {
-                bail!(
-                    "return_solver: non-unit function `{}` (node {}) has terminal block {} without return-producing op",
-                    ir.lookup_name(*name_id),
-                    idx,
-                    bb_idx
-                );
+                bail!("return_solver: non-unit function `{}` (node {}) has terminal block {} without return-producing op", ir.lookup_name(*name_id), idx, bb_idx);
             }
         }
     }

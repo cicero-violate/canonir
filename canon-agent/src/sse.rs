@@ -72,12 +72,7 @@ pub fn classify_frame(raw: &str) -> FrameResult {
 
     // ── /c path: chat.completion.chunk ────────────────────────────────────────
     if obj.get("object").and_then(|v| v.as_str()) == Some("chat.completion.chunk") {
-        let content = obj
-            .get("choices").and_then(|c| c.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|c| c.get("delta"))
-            .and_then(|d| d.get("content"))
-            .and_then(|v| v.as_str());
+        let content = obj.get("choices").and_then(|c| c.as_array()).and_then(|arr| arr.first()).and_then(|c| c.get("delta")).and_then(|d| d.get("content")).and_then(|v| v.as_str());
         return match content {
             Some(s) if !s.is_empty() => FrameResult::Delta(s.to_string()),
             _ => FrameResult::Ignore,
@@ -106,7 +101,9 @@ pub fn classify_frame(raw: &str) -> FrameResult {
                 };
                 let mut out = String::new();
                 for item in arr {
-                    if item.get("o").and_then(|o| o.as_str()) != Some("append") { continue; }
+                    if item.get("o").and_then(|o| o.as_str()) != Some("append") {
+                        continue;
+                    }
                     let p = item.get("p").and_then(|p| p.as_str()).unwrap_or("");
                     if p.contains("parts") {
                         if let Some(s) = item.get("v").and_then(|v| v.as_str()) {
@@ -134,7 +131,9 @@ pub fn classify_frame(raw: &str) -> FrameResult {
     if let Some(arr) = obj.get("v").and_then(|v| v.as_array()) {
         let mut out = String::new();
         for item in arr {
-            if item.get("o").and_then(|o| o.as_str()) != Some("append") { continue; }
+            if item.get("o").and_then(|o| o.as_str()) != Some("append") {
+                continue;
+            }
             let p = item.get("p").and_then(|p| p.as_str()).unwrap_or("");
             if p.contains("parts") {
                 if let Some(s) = item.get("v").and_then(|v| v.as_str()) {
@@ -153,7 +152,6 @@ pub fn classify_frame(raw: &str) -> FrameResult {
 // ---------------------------------------------------------------------------
 // /gg path — Calpico array envelope parser
 // ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // Compat shims — keep old call-sites compiling during transition
@@ -205,9 +203,7 @@ fn classify_calpico_array(arr: &[Value]) -> FrameResult {
             None => continue,
         };
         for raw_msg in raw_messages {
-            let author_role = raw_msg
-                .get("author").and_then(|a| a.get("role")).and_then(|r| r.as_str())
-                .unwrap_or("");
+            let author_role = raw_msg.get("author").and_then(|a| a.get("role")).and_then(|r| r.as_str()).unwrap_or("");
             if author_role != "assistant" {
                 continue;
             }
@@ -216,15 +212,9 @@ fn classify_calpico_array(arr: &[Value]) -> FrameResult {
                 continue;
             }
             // content.parts[0] is the full assembled text.
-            let text = raw_msg
-                .get("content")
-                .and_then(|c| c.get("parts"))
-                .and_then(|p| p.as_array())
-                .and_then(|a| a.first())
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let text = raw_msg.get("content").and_then(|c| c.get("parts")).and_then(|p| p.as_array()).and_then(|a| a.first()).and_then(|v| v.as_str()).unwrap_or("");
             if !text.is_empty() {
-                eprintln!("[sse] calpico snapshot {} bytes", text.len());
+                // Snapshot logging disabled — too noisy during invariant runs.
                 return FrameResult::Snapshot(text.to_string());
             }
         }

@@ -1,17 +1,15 @@
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 use super::reward::RewardRecord;
 use super::{
     artifacts::{EnumVariant, Field, TraitFunction},
     functions::FunctionSignature,
-    ids::{
-        DeltaId, EnumId, ExecutionRecordId, FunctionId, ImplId, ModuleId, StructId,
-        TraitId,
-    },
-    timeline::ExecutionEvent, types::{ValuePort, Visibility},
+    ids::{DeltaId, EnumId, ExecutionRecordId, FunctionId, ImplId, ModuleId, StructId, TraitId},
+    timeline::ExecutionEvent,
+    types::{ValuePort, Visibility},
     word::Word,
 };
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct StateChange {
@@ -37,27 +35,13 @@ pub enum DeltaKind {
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChangePayload {
-    AddModule {
-        module_id: ModuleId,
-        name: Word,
-        visibility: Visibility,
-        description: String,
-    },
+    AddModule { module_id: ModuleId, name: Word, visibility: Visibility, description: String },
     AddStruct { module: ModuleId, struct_id: StructId, name: Word },
     AddField { struct_id: StructId, field: Field },
     AddTrait { module: ModuleId, trait_id: TraitId, name: Word },
     AddTraitFunction { trait_id: TraitId, function: TraitFunction },
-    AddImpl {
-        module: ModuleId,
-        impl_id: ImplId,
-        struct_id: StructId,
-        trait_id: TraitId,
-    },
-    AddFunction {
-        function_id: FunctionId,
-        impl_id: ImplId,
-        signature: FunctionSignature,
-    },
+    AddImpl { module: ModuleId, impl_id: ImplId, struct_id: StructId, trait_id: TraitId },
+    AddFunction { function_id: FunctionId, impl_id: ImplId, signature: FunctionSignature },
     AddModuleEdge { from: ModuleId, to: ModuleId, rationale: String },
     AddCallEdge { caller: FunctionId, callee: FunctionId },
     AttachExecutionEvent { execution_id: ExecutionRecordId, event: ExecutionEvent },

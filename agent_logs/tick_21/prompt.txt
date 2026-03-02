@@ -1,0 +1,27 @@
+## Tick 21 — observe phase
+
+### Exit-check output
+```
+
+```
+
+### Output from previous commands
+```
+
+```
+
+### Recent rationale history
+```
+[T-5] Before implementing materialize_return_local and resolve_ret_gaps_with, inspect the end of lower.rs to determine an appropriate insertion point and confirm there are no existing partial stubs or related helpers defined later in the file.
+---
+[T-4] The end of lower.rs contains no additional helper stubs or related return-handling functions, confirming that materialize_return_local and resolve_ret_gaps_with are entirely absent. All structural return-detection and normalization logic has already been inspected, and Body/BasicBlock/Stmt representations are fully understood. Therefore, no further observation is required. The next step is to implement the two missing public functions in capture/mir/lower.rs so engine.rs can successfully link and execute deterministic return-gap resolution.
+---
+[T-3] Re-confirm total file length and re-open the top of lower.rs to determine clean insertion points and visibility context (pub(crate) vs pub) before implementing the two missing public functions.
+---
+[T-2] File length and full contents of lower.rs are now confirmed (338 lines) with no existing stubs for materialize_return_local or resolve_ret_gaps_with. The appropriate insertion point is after stage_finalize_body_with_ret_fallback or at the end of the file as new pub(crate) functions, matching mir_body_structural visibility. All structural return handling and normalization logic has been inspected, and Body/BasicBlock/Stmt representations are clear. The next step is to enter the act phase and implement the two missing functions in lower.rs so engine.rs can correctly perform deterministic __ret materialization and gap resolution.
+---
+[T-1] The previous turn failed due to a timeout while waiting for a response. No repository state was changed and no commands were executed. Re-emitting a minimal valid JSON block to satisfy the required protocol and allow the loop to proceed.
+```
+
+Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
+`{"phase":"observe","deltas":[...],"rationale":"..."}`

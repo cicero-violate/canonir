@@ -1,0 +1,27 @@
+## Tick 18 — observe phase
+
+### Exit-check output
+```
+
+```
+
+### Output from previous commands
+```
+
+```
+
+### Recent rationale history
+```
+[T-5] All relevant return-detection logic has now been inspected: blocks_have_ret_binding, blocks_have_ret_match, stmts_have_ret_binding, stmt_defines_ret, and the normalization passes that may rewrite or prune suppressed bindings. Global search confirms materialize_return_local and resolve_ret_gaps_with are referenced only from engine.rs and do not exist anywhere in the workspace. Therefore, the next step is to implement these two missing public functions in capture/mir/lower.rs. materialize_return_local should operate on Body::Blocks to ensure a structural __ret binding is present (without introducing suppressed sentinels), and resolve_ret_gaps_with should deterministically replace any remaining missing or suppressed return bindings with the provided default expression, aligning with stmt_defines_ret and normalization behavior. No further observation is needed before implementing them.
+---
+[T-4] Before implementing materialize_return_local and resolve_ret_gaps_with, inspect the exact definitions of Body, BasicBlock, and Stmt in types.rs to ensure the new functions mutate Body::Blocks correctly and align with existing structural return representations.
+---
+[T-3] The structural representation of Body, BasicBlock, and Stmt has now been fully inspected. Body::Blocks holds Vec<BasicBlock>, each BasicBlock contains stmts: Vec<Stmt> and a Terminator. Stmt::Return(Option<String>) and Stmt::Assign { lhs, rhs } are the relevant forms for __ret handling. There are no hidden return-local abstractions. With confirmation that materialize_return_local and resolve_ret_gaps_with are missing and must operate directly on Body::Blocks, the next step is to implement these two public functions in capture/mir/lower.rs. materialize_return_local should ensure that any Return(None) or Terminator::Return in non-unit contexts becomes an explicit Stmt::Return(Some("__ret")) and that a structural __ret binding exists. resolve_ret_gaps_with should scan for missing or suppressed __ret assignments and replace them deterministically with the provided default expression, without introducing suppressed sentinels or duplicate bindings. No further observation is required before moving to the act phase.
+---
+[T-2] Before implementing materialize_return_local and resolve_ret_gaps_with, inspect the end of lower.rs to determine an appropriate insertion point and confirm there are no existing partial stubs or related helpers defined later in the file.
+---
+[T-1] The end of lower.rs contains no additional helper stubs or related return-handling functions, confirming that materialize_return_local and resolve_ret_gaps_with are entirely absent. All structural return-detection and normalization logic has already been inspected, and Body/BasicBlock/Stmt representations are fully understood. Therefore, no further observation is required. The next step is to implement the two missing public functions in capture/mir/lower.rs so engine.rs can successfully link and execute deterministic return-gap resolution.
+```
+
+Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
+`{"phase":"observe","deltas":[...],"rationale":"..."}`

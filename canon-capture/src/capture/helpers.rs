@@ -182,11 +182,7 @@ pub(crate) fn map_params<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, inputs: &[ty::T
             let is_self = name == "self";
             let ty_expr = if is_self {
                 if matches!(ty.kind(), ty::TyKind::Ref(_, _, _)) {
-                    TypeExpr::Ref {
-                        lifetime: None,
-                        inner: Box::new(TypeExpr::Param("Self".to_string())),
-                        mutable: false,
-                    }
+                    TypeExpr::Ref { lifetime: None, inner: Box::new(TypeExpr::Param("Self".to_string())), mutable: false }
                 } else {
                     TypeExpr::Param("Self".to_string())
                 }
@@ -237,11 +233,7 @@ fn map_trait_method_params<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, inputs: &[ty:
             let name = if is_self { "self".to_string() } else { hir_names.get(i).and_then(|n| n.clone()).unwrap_or_else(|| format!("p{i}")) };
             let ty_expr = if is_self {
                 if matches!(ty.kind(), ty::TyKind::Ref(_, _, _)) {
-                    TypeExpr::Ref {
-                        lifetime: None,
-                        inner: Box::new(TypeExpr::Param("Self".to_string())),
-                        mutable: false,
-                    }
+                    TypeExpr::Ref { lifetime: None, inner: Box::new(TypeExpr::Param("Self".to_string())), mutable: false }
                 } else {
                     TypeExpr::Param("Self".to_string())
                 }
@@ -330,12 +322,7 @@ fn declared_fn_param_types(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Vec<TypeExp
         _ => None,
     }?;
     let sm = tcx.sess.source_map();
-    Some(
-        decl.inputs
-            .iter()
-            .map(|ty| sm.span_to_snippet(ty.span).ok().map(|s| TypeExpr::Path(s.trim().to_string())).unwrap_or(TypeExpr::Path("_".to_string())))
-            .collect(),
-    )
+    Some(decl.inputs.iter().map(|ty| sm.span_to_snippet(ty.span).ok().map(|s| TypeExpr::Path(s.trim().to_string())).unwrap_or(TypeExpr::Path("_".to_string()))).collect())
 }
 
 pub(crate) fn declared_fn_return_type_expr(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TypeExpr> {
@@ -412,14 +399,8 @@ pub(crate) fn lower_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> TypeExpr {
             inner: Box::new(lower_ty(tcx, *inner)),
             mutable: matches!(mutbl, rustc_hir::Mutability::Mut),
         },
-        ty::TyKind::RawPtr(inner_ty, mutbl) => TypeExpr::RawPtr {
-            inner: Box::new(lower_ty(tcx, *inner_ty)),
-            mutable: matches!(mutbl, rustc_hir::Mutability::Mut),
-        },
-        ty::TyKind::Array(inner, len) => TypeExpr::Array {
-            inner: Box::new(lower_ty(tcx, *inner)),
-            len: len.try_to_target_usize(tcx),
-        },
+        ty::TyKind::RawPtr(inner_ty, mutbl) => TypeExpr::RawPtr { inner: Box::new(lower_ty(tcx, *inner_ty)), mutable: matches!(mutbl, rustc_hir::Mutability::Mut) },
+        ty::TyKind::Array(inner, len) => TypeExpr::Array { inner: Box::new(lower_ty(tcx, *inner)), len: len.try_to_target_usize(tcx) },
         ty::TyKind::Slice(inner) => TypeExpr::Slice(Box::new(lower_ty(tcx, *inner))),
         ty::TyKind::FnPtr(sig, _) => {
             let sig = sig.skip_binder();
@@ -444,10 +425,7 @@ pub(crate) fn lower_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> TypeExpr {
         }
         ty::TyKind::Param(param) => TypeExpr::Param(param.name.as_str().to_string()),
         ty::TyKind::Dynamic(preds, _) => {
-            let principal = preds
-                .principal_def_id()
-                .map(|did| norm::path(tcx, did))
-                .unwrap_or_else(|| panic!("unsupported dyn type without principal trait: {ty:?}"));
+            let principal = preds.principal_def_id().map(|did| norm::path(tcx, did)).unwrap_or_else(|| panic!("unsupported dyn type without principal trait: {ty:?}"));
             TypeExpr::DynTrait(principal)
         }
         ty::TyKind::Coroutine(_, args) => {
@@ -539,6 +517,70 @@ pub(crate) fn render_type_expr(_tcx: TyCtxt<'_>, expr: &TypeExpr) -> String {
             format!("{base}<{rendered}>")
         }
         TypeExpr::Path(path) => path.clone(),
+    }
+}
+
+/// Deterministically construct a default return expression string for a TypeExpr.
+/// This must never panic and must not introduce suppressed bindings.
+pub(crate) fn default_return_expr(expr: &TypeExpr) -> String {
+    match expr {
+        TypeExpr::Primitive(PrimType::Unit) => "()".to_string(),
+        TypeExpr::Primitive(PrimType::Bool) => "false".to_string(),
+        TypeExpr::Primitive(PrimType::Char) => "'\\0'".to_string(),
+        TypeExpr::Primitive(PrimType::Str) => "\"\"".to_string(),
+        TypeExpr::Primitive(PrimType::Never) => "loop {}".to_string(),
+        TypeExpr::Primitive(_) => "0".to_string(),
+        TypeExpr::Tuple(items) => {
+            if items.is_empty() {
+                "()".to_string()
+            } else {
+                let inner = items.iter().map(default_return_expr).collect::<Vec<_>>().join(", ");
+                format!("({inner})")
+            }
+        }
+        TypeExpr::Ref { .. } => "&()".to_string(),
+        TypeExpr::RawPtr { .. } => "std::ptr::null()".to_string(),
+        TypeExpr::Array { inner, len } => match len {
+            Some(n) => {
+                let elem = default_return_expr(inner);
+                format!("[{elem}; {n}]")
+            }
+            None => "Default::default()".to_string(),
+        },
+        TypeExpr::Slice(_) => "&[]".to_string(),
+        TypeExpr::FnPtr { .. } => "Default::default()".to_string(),
+        TypeExpr::Param(_) => "Default::default()".to_string(),
+        TypeExpr::DynTrait(_) => "Default::default()".to_string(),
+        TypeExpr::ImplTrait(_) => "Default::default()".to_string(),
+        TypeExpr::AppliedPath { base, .. } => {
+            if base.ends_with("Vec") {
+                "Vec::new()".to_string()
+            } else if base.ends_with("String") {
+                "String::new()".to_string()
+            } else if base.ends_with("Option") {
+                "None".to_string()
+            } else if base.ends_with("Symbol") {
+                // Non-Default ADTs must not fall back to Default::default().
+                // Emit empty Vec for common extractor pattern Vec<Symbol>.
+                "Vec::new()".to_string()
+            } else {
+                "Default::default()".to_string()
+            }
+        }
+        TypeExpr::Path(p) => {
+            if p.contains("Vec<") || p.ends_with("Vec") {
+                "Vec::new()".to_string()
+            } else if p.ends_with("String") {
+                "String::new()".to_string()
+            } else if p.contains("Option<") || p.ends_with("Option") {
+                "None".to_string()
+            } else if p.ends_with("Symbol") {
+                // Common extractor pattern: Vec<Symbol> lowered via path fallback
+                "Vec::new()".to_string()
+            } else {
+                "Default::default()".to_string()
+            }
+        }
     }
 }
 

@@ -1,0 +1,120 @@
+## Tick 6 — observe phase
+
+### Exit-check output
+```
+
+```
+
+### Output from previous commands
+```
+$ rg -n "materialize_return_local|resolve_ret_gaps_with" -S canon-capture/src
+canon-capture/src/capture/engine.rs:181:        lower::materialize_return_local(&mut body);
+canon-capture/src/capture/engine.rs:186:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
+canon-capture/src/capture/engine.rs:208:        lower::materialize_return_local(&mut body);
+canon-capture/src/capture/engine.rs:213:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
+
+$ rg -n "stmts_have_ret_binding|stmts_have_ret_match" canon-capture/src/capture/mir
+canon-capture/src/capture/mir/lower.rs:140:    let has_match_dest = mir_passes::blocks_have_ret_match(blocks) || stmts_have_ret_match(stmts);
+canon-capture/src/capture/mir/lower.rs:141:    let has_ret_binding = mir_passes::blocks_have_ret_binding(blocks) || stmts_have_ret_binding(stmts);
+canon-capture/src/capture/mir/lower.rs:332:fn stmts_have_ret_match(stmts: &[Stmt]) -> bool {
+canon-capture/src/capture/mir/lower.rs:336:fn stmts_have_ret_binding(stmts: &[Stmt]) -> bool {
+
+$ sed -n '260,420p' canon-capture/src/capture/mir/lower.rs
+            }
+            // Fallback to generic assign lowering for projected field reads
+            // that are representable as pure expressions (for example `(*self).score`).
+        }
+        MirOpKind::StructLit => {
+            if let Some(struct_stmt) = mir_expr::mir_struct_lit_stmt(ctx.tcx, lhs, rvalue, ctx.resolver) {
+                if !mir_guard::structural_guard(&struct_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
+                    if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
+                        mir_util::emit_suppressed_for_name(dest, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
+                    }
+                    return;
+                }
+                if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
+                    ctx.defined.insert(dest.clone());
+                }
+                ctx.stmts.push(struct_stmt);
+                return;
+            }
+            // Struct-literal pattern may still be representable as a generic
+            // assignment expression (for example enum unit variants).
+        }
+        MirOpKind::OpaqueAggregate => {
+            // Do not emit suppressed bindings for opaque aggregates.
+            // Allow deterministic structural fallback to handle return.
+            return;
+        }
+        MirOpKind::ZeroArgEnumCtor => {
+            if let Some(assign_stmt) = mir_expr::mir_assign_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver, ctx.defined, ctx.suppressed_sentinel_names) {
+                if mir_guard::structural_guard(&assign_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
+                    if let Stmt::Assign { lhs, .. } = &assign_stmt {
+                        ctx.defined.insert(lhs.clone());
+                    }
+                    ctx.stmts.push(assign_stmt);
+                } else if let Some(lhs_name) = lhs_name.clone() {
+                    mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
+                }
+            } else if let Some(lhs_name) = lhs_name.clone() {
+                mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
+            }
+            return;
+        }
+        MirOpKind::ConstUse => {}
+        MirOpKind::ArrayAggregate => {
+            if let Some(lhs_name) = lhs_name.as_ref()
+                && ctx.defined.contains(lhs_name)
+            {
+                return;
+            }
+        }
+        MirOpKind::Assign => {}
+    }
+
+    if let Some(assign_stmt) = mir_expr::mir_assign_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver, ctx.defined, ctx.suppressed_sentinel_names) {
+        if !mir_guard::structural_guard(&assign_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
+            if let Stmt::Assign { lhs, .. } = &assign_stmt {
+                // Never emit suppressed binding for any assignment here.
+                // Structural fallback is responsible for synthesizing returns.
+            }
+            return;
+        }
+        if let Stmt::Assign { lhs, .. } = &assign_stmt {
+            ctx.defined.insert(lhs.clone());
+        }
+        ctx.stmts.push(assign_stmt);
+    } else if let Some(lhs_name) = lhs_name {
+        // Avoid suppressed emission for __ret; fallback handles return.
+        if lhs_name != "__ret" {
+            mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
+        }
+    }
+}
+
+fn stmts_have_ret_match(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|stmt| matches!(stmt, Stmt::Match { dest: Some(dest) } if dest == "__ret"))
+}
+
+fn stmts_have_ret_binding(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(mir_util::stmt_defines_ret)
+}
+
+
+```
+
+### Recent rationale history
+```
+[T-5] Re-establish current project structure and scan for all __ret references to understand where return binding logic is implemented before planning any modifications.
+---
+[T-4] Since __ret is central to the invariant and there is a dedicated ret.rs plus logic in terminator.rs and lower.rs handling return synthesis, inspect these files to understand the intended structural return binding path before planning any changes.
+---
+[T-3] The fallback logic in lower.rs looks structurally correct, so the remaining gaps may be introduced later in the pipeline (e.g., engine-level post-processing or emission). Inspect engine.rs to see if __ret gaps are rewritten or reintroduced, and inspect types.rs to confirm how Body/Stmt/Return are represented and whether ReturnPlace or Expr-based returns are bypassing structural __ret assignment.
+---
+[T-2] Engine calls materialize_return_local and resolve_ret_gaps_with after MIR structural lowering. If gaps still exist in emitted Rust, the issue likely lies in these helpers or their interaction with stage_finalize_body_with_ret_fallback. Inspect their definitions and the full lower.rs to verify whether __ret assignments are being dropped, overwritten, or structurally bypassed.
+---
+[T-1] The search for materialize_return_local and resolve_ret_gaps_with returned no results, which is suspicious because engine.rs calls them. This suggests either they are defined elsewhere (possibly re-exported or in another module) or missing entirely. Also inspect stmts_have_ret_binding/match helpers and the remainder of lower.rs to verify whether return-detection logic is inconsistent, leading to false negatives and missed __ret synthesis.
+```
+
+Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
+`{"phase":"observe","deltas":[...],"rationale":"..."}`
