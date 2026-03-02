@@ -1,15 +1,239 @@
-$ rg -n "fn materialize_return_local|fn resolve_ret_gaps_with" canon-capture/src -n
+$ sed -n '220,360p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/analysis.rs
+) -> Vec<Stmt> {
+    let mut suppressed_dest_sentinels: Vec<Stmt> = Vec::new();
+    for (bb_idx, bb) in body.basic_blocks.iter_enumerated() {
+        if bb.is_cleanup {
+            continue;
+        }
+        let idx = bb_idx.as_usize();
+        if !switch_analysis.switchint_arm_blocks.contains(&idx) && !switch_analysis.switch_sources.contains(&idx) {
+            continue;
+        }
+        if switch_analysis.switch_arm_writes_ret.contains(&idx) || switch_analysis.switch_arm_returns.contains(&idx) {
+            continue;
+        }
+        if let Some(term) = &bb.terminator
+            && let mir::TerminatorKind::Call { destination, .. } = &term.kind
+            && let Some(dest_name) = mir_util::label_place_dest(resolver, destination)
+        {
+            mir_guard::emit_suppressed_binding(&dest_name, defined, suppressed_sentinel_names, &mut suppressed_dest_sentinels);
+        }
+        for stmt in &bb.statements {
+            if let mir::StatementKind::Assign(boxed) = &stmt.kind {
+                let (lhs, _) = &**boxed;
+                if let Some(lhs_name) = mir_util::label_place_dest(resolver, lhs) {
+                    mir_guard::emit_suppressed_binding(&lhs_name, defined, suppressed_sentinel_names, &mut suppressed_dest_sentinels);
+                }
+            }
+        }
+    }
+    suppressed_dest_sentinels
+}
 
-$ sed -n '1,200p' canon-capture/src/capture/mir/mod.rs 2>/dev/null || true
-pub mod analysis;
-pub mod expr;
-pub mod filters;
-pub mod guard;
-pub mod lower;
-pub mod ops;
-pub mod passes;
-pub mod patterns;
-pub mod resolver;
-pub mod terminator;
-pub mod util;
+$ sed -n '220,360p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/expr.rs
+        ty::TyKind::Adt(adt, _) if adt.is_enum() => {
+            let downcast_idx = place.projection.iter().find_map(|elem| match elem {
+                mir::ProjectionElem::Downcast(_, idx) => Some(idx),
+                _ => None,
+            })?;
+            let f = adt.variant(downcast_idx).fields.get(field_idx)?;
+            let name = f.name.to_string();
+            if name.chars().all(|c| c.is_ascii_digit()) {
+                field_idx.index().to_string()
+            } else {
+                name
+            }
+        }
+        ty::TyKind::Tuple(_) => field_idx.index().to_string(),
+        _ => return None,
+    };
+    Some(Stmt::FieldAccess { base: resolver.label_place_ref(base)?, field, dest: Some(resolver.label_place(lhs)?) })
+}
+
+pub(crate) fn mir_struct_lit_stmt<'tcx>(tcx: TyCtxt<'tcx>, lhs: &mir::Place<'tcx>, rvalue: &mir::Rvalue<'tcx>, resolver: &LocalNameResolver) -> Option<Stmt> {
+    let mir::Rvalue::Aggregate(kind, operands) = rvalue else {
+        return None;
+    };
+    let mir::AggregateKind::Adt(adt_did, variant_idx, _, _, _) = &**kind else {
+        return None;
+    };
+    let adt = tcx.adt_def(*adt_did);
+    let variant = adt.variant(*variant_idx);
+    if adt.is_enum() && variant.fields.is_empty() {
+        return None;
+    }
+    let fields = variant.fields.iter().zip(operands.iter()).map(|(f, op)| Some((f.name.to_string(), mir_ops::mir_operand_label(tcx, op, resolver)?))).collect::<Option<Vec<_>>>()?;
+    let ctor_path = if adt.is_enum() { format!("{}::{}", norm::path(tcx, *adt_did), variant.name) } else { norm::path(tcx, *adt_did) };
+    Some(Stmt::StructLit { ty: TypeExpr::Path(ctor_path), fields, dest: Some(resolver.label_place(lhs)?) })
+}
+
+fn assign_rhs_should_suppress(rhs: &str) -> bool {
+    filters::is_zero_arg_enum_ctor_expr_str(rhs) || rhs.contains("SizedTypeProperties") || rhs.contains("std::alloc::Global") || rhs.contains("alloc::Global")
+}
+
+fn mir_rvalue_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, rvalue: &mir::Rvalue<'tcx>, resolver: &LocalNameResolver) -> Option<String> {
+    match rvalue {
+        mir::Rvalue::Use(op) => match op {
+            mir::Operand::Copy(place) | mir::Operand::Move(place) => {
+                if place.projection.is_empty() {
+                    resolver.label_place(place)
+                } else {
+                    render_projected_place_expr(tcx, local_decls, place, resolver)
+                }
+            }
+            _ => mir_ops::mir_operand_label(tcx, op, resolver),
+        },
+        mir::Rvalue::Ref(_, borrow_kind, place) => {
+            let place = render_projected_place_expr(tcx, local_decls, place, resolver)?;
+            Some(match borrow_kind {
+                mir::BorrowKind::Mut { .. } => format!("&mut {place}"),
+                _ => format!("&{place}"),
+            })
+        }
+        mir::Rvalue::RawPtr(raw_ptr_kind, place) => {
+            let place = render_projected_place_expr(tcx, local_decls, place, resolver)?;
+            Some(if matches!(raw_ptr_kind, mir::RawPtrKind::Mut) { format!("&mut {place}") } else { format!("&{place}") })
+        }
+        mir::Rvalue::BinaryOp(op, boxed) => {
+            let (lhs, rhs) = &**boxed;
+            let lhs = mir_ops::mir_operand_label(tcx, lhs, resolver)?;
+            let rhs = mir_ops::mir_operand_label(tcx, rhs, resolver)?;
+            match *op {
+                mir::BinOp::AddWithOverflow => Some(format!("({lhs}).overflowing_add({rhs})")),
+                mir::BinOp::SubWithOverflow => Some(format!("({lhs}).overflowing_sub({rhs})")),
+                mir::BinOp::MulWithOverflow => Some(format!("({lhs}).overflowing_mul({rhs})")),
+                _ => Some(format!("({lhs} {} {rhs})", mir_binop_token(*op)?)),
+            }
+        }
+        mir::Rvalue::UnaryOp(op, operand) => Some(format!("({}{})", mir_unop_token(*op), mir_ops::mir_operand_label(tcx, operand, resolver)?)),
+        mir::Rvalue::Cast(_, operand, ty) => Some(format!("({} as {})", mir_ops::mir_operand_label(tcx, operand, resolver)?, render_type_expr(tcx, &lower_ty(tcx, *ty)))),
+        mir::Rvalue::Aggregate(kind, operands) => match &**kind {
+            mir::AggregateKind::Adt(adt_did, variant_idx, _, _, _) => {
+                let adt = tcx.adt_def(*adt_did);
+                let variant = adt.variant(*variant_idx);
+                if !variant.fields.is_empty() || !operands.is_empty() {
+                    return None;
+                }
+                if adt.is_enum() {
+                    Some(format!("{}::{}", norm::path(tcx, *adt_did), variant.name))
+                } else {
+                    Some(norm::path(tcx, *adt_did))
+                }
+            }
+            mir::AggregateKind::Tuple => {
+                let elems = operands.iter().map(|op| mir_ops::mir_operand_label(tcx, op, resolver)).collect::<Option<Vec<_>>>()?;
+                if elems.len() == 1 {
+                    Some(format!("({},)", elems[0]))
+                } else {
+                    Some(format!("({})", elems.join(", ")))
+                }
+            }
+            mir::AggregateKind::Array(_) => {
+                let elems = operands.iter().map(|op| mir_ops::mir_operand_label(tcx, op, resolver)).collect::<Option<Vec<_>>>()?;
+                Some(format!("[{}]", elems.join(", ")))
+            }
+            _ => None,
+        },
+        mir::Rvalue::Repeat(operand, count) => {
+            let count = count.try_to_target_usize(tcx)?;
+            Some(format!("[{}; {count}]", mir_ops::mir_operand_label(tcx, operand, resolver)?))
+        }
+        mir::Rvalue::Discriminant(place) => Some(format!("{} as isize", resolver.label_place(place)?)),
+        mir::Rvalue::CopyForDeref(place) => resolver.label_place(place),
+        _ => None,
+    }
+}
+
+fn is_primitive_value_ty(ty: ty::Ty<'_>) -> bool {
+    matches!(ty.kind(), ty::TyKind::Bool | ty::TyKind::Char | ty::TyKind::Int(..) | ty::TyKind::Uint(..) | ty::TyKind::Float(..) | ty::TyKind::Str | ty::TyKind::Never)
+}
+
+$ sed -n '1,200p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/util.rs
+use rustc_middle::mir;
+use rustc_middle::mir::visit::Visitor;
+use std::collections::{HashMap, HashSet};
+
+use crate::capture::mir::guard as mir_guard;
+use crate::capture::mir::resolver::LocalNameResolver;
+use crate::types::Stmt;
+
+pub(crate) fn label_place_dest(resolver: &LocalNameResolver, place: &mir::Place<'_>) -> Option<String> {
+    if let Some(name) = resolver.label_place(place) {
+        return Some(name);
+    }
+    let has_unsafe_proj = place.projection.iter().any(|p| matches!(p, mir::ProjectionElem::Downcast(..) | mir::ProjectionElem::OpaqueCast(..) | mir::ProjectionElem::UnwrapUnsafeBinder(..)));
+    if has_unsafe_proj {
+        return None;
+    }
+    resolver.label_local(place.local)
+}
+
+pub(crate) fn remap_bb_target(target: mir::BasicBlock, mir_to_emitted: &[Option<u32>]) -> Option<u32> {
+    mir_to_emitted.get(target.as_usize()).and_then(|slot| *slot)
+}
+
+pub(crate) fn bb_writes_return_place(bb: &mir::BasicBlockData<'_>) -> bool {
+    for stmt in &bb.statements {
+        let mir::StatementKind::Assign(boxed) = &stmt.kind else {
+            continue;
+        };
+        let (lhs, _) = &**boxed;
+        if lhs.local.as_u32() == 0 {
+            return true;
+        }
+    }
+    let Some(term) = &bb.terminator else {
+        return false;
+    };
+    if let mir::TerminatorKind::Call { destination, .. } = &term.kind {
+        return destination.local.as_u32() == 0;
+    }
+    false
+}
+
+pub(crate) fn stmt_defines_ret(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Assign { lhs, .. } => lhs == "__ret",
+        Stmt::Call { dest: Some(dest), .. } => dest == "__ret",
+        Stmt::FieldAccess { dest: Some(dest), .. } => dest == "__ret",
+        Stmt::MethodCall { dest: Some(dest), .. } => dest == "__ret",
+        Stmt::StructLit { dest: Some(dest), .. } => dest == "__ret",
+        Stmt::Match { dest: Some(dest) } => dest == "__ret",
+        _ => false,
+    }
+}
+
+pub(crate) fn emit_suppressed_ret_binding(stmts: &mut Vec<Stmt>, defined: &mut HashSet<String>) {
+    stmts.push(Stmt::Assign { lhs: "__ret".to_string(), rhs: "__canon_suppressed__".to_string() });
+    defined.insert("__ret".to_string());
+}
+
+pub(crate) fn emit_suppressed_for_name(name: &str, stmts: &mut Vec<Stmt>, defined: &mut HashSet<String>, suppressed_sentinel_names: &mut HashSet<String>) {
+    // Never suppress __ret; return must be lowered structurally.
+    if name == "__ret" {
+        return;
+    }
+    if name == "__ret" {
+        emit_suppressed_ret_binding(stmts, defined);
+    } else {
+        mir_guard::emit_suppressed_binding(name, defined, suppressed_sentinel_names, stmts);
+    }
+}
+
+pub(crate) fn count_local_uses<'tcx>(body: &mir::Body<'tcx>) -> HashMap<u32, usize> {
+    struct Counter {
+        counts: HashMap<u32, usize>,
+    }
+    impl<'tcx> Visitor<'tcx> for Counter {
+        fn visit_local(&mut self, local: mir::Local, context: rustc_middle::mir::visit::PlaceContext, location: rustc_middle::mir::Location) {
+            if context.is_use() {
+                *self.counts.entry(local.as_u32()).or_insert(0) += 1;
+            }
+            self.super_local(local, context, location);
+        }
+    }
+    let mut counter = Counter { counts: HashMap::new() };
+    counter.visit_body(body);
+    counter.counts
+}
 

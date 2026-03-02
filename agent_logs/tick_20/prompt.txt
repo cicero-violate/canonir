@@ -1,5 +1,10 @@
 ## Tick 20 — observe phase
 
+**Working directory (all commands run here):** `/workspace/ai_sandbox/canon`
+**Repo root for source files:** `/workspace/ai_sandbox/canon`
+
+Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in all commands.
+
 ### Exit-check output
 ```
 
@@ -12,16 +17,19 @@
 
 ### Recent rationale history
 ```
-[T-5] The structural representation of Body, BasicBlock, and Stmt has now been fully inspected. Body::Blocks holds Vec<BasicBlock>, each BasicBlock contains stmts: Vec<Stmt> and a Terminator. Stmt::Return(Option<String>) and Stmt::Assign { lhs, rhs } are the relevant forms for __ret handling. There are no hidden return-local abstractions. With confirmation that materialize_return_local and resolve_ret_gaps_with are missing and must operate directly on Body::Blocks, the next step is to implement these two public functions in capture/mir/lower.rs. materialize_return_local should ensure that any Return(None) or Terminator::Return in non-unit contexts becomes an explicit Stmt::Return(Some("__ret")) and that a structural __ret binding exists. resolve_ret_gaps_with should scan for missing or suppressed __ret assignments and replace them deterministically with the provided default expression, without introducing suppressed sentinels or duplicate bindings. No further observation is required before moving to the act phase.
+[T-5] The previous cargo check exited with status 101, which stopped execution before emitting diagnostics. Re-run cargo check while capturing stderr and forcing a zero exit (|| true) so the full compiler error output is surfaced for diagnosis.
 ---
-[T-4] Before implementing materialize_return_local and resolve_ret_gaps_with, inspect the end of lower.rs to determine an appropriate insertion point and confirm there are no existing partial stubs or related helpers defined later in the file.
+[T-4] Telemetry confirms unresolved_ret_gap_count is computed by grepping emitted Rust for `let mut __ret = panic!("canon ...)`. Since MIR lowering now avoids suppressed __ret and stage_finalize_body_with_ret_fallback injects structural `Assign + Return`, any remaining unresolved gaps must originate in code generation (emit stage), not MIR lowering. Next debugging focus should shift to the Rust emission layer that materializes `let mut __ret = panic!(...)` scaffolding in orchestration output.
 ---
-[T-3] The end of lower.rs contains no additional helper stubs or related return-handling functions, confirming that materialize_return_local and resolve_ret_gaps_with are entirely absent. All structural return-detection and normalization logic has already been inspected, and Body/BasicBlock/Stmt representations are fully understood. Therefore, no further observation is required. The next step is to implement the two missing public functions in capture/mir/lower.rs so engine.rs can successfully link and execute deterministic return-gap resolution.
+[T-3] Telemetry shows unresolved_ret_gap_count is driven by emitted Rust containing `let mut __ret = panic!("canon ...)`. MIR lowering and structural fallback now synthesize Assign+Return deterministically, so remaining gaps likely originate in the Rust emission/orchestration layer that still materializes panic-based __ret scaffolding. Search for the emission site that generates this pattern and inspect how __ret is initialized during code generation.
 ---
-[T-2] Re-confirm total file length and re-open the top of lower.rs to determine clean insertion points and visibility context (pub(crate) vs pub) before implementing the two missing public functions.
+[T-2] The previous failure was due to a timeout waiting for the model response, not a Bash or patch error. Re-emitting a minimal, well-formed JSON block to allow the orchestration loop to proceed without triggering long-running commands.
 ---
-[T-1] File length and full contents of lower.rs are now confirmed (338 lines) with no existing stubs for materialize_return_local or resolve_ret_gaps_with. The appropriate insertion point is after stage_finalize_body_with_ret_fallback or at the end of the file as new pub(crate) functions, matching mir_body_structural visibility. All structural return handling and normalization logic has been inspected, and Body/BasicBlock/Stmt representations are clear. The next step is to enter the act phase and implement the two missing functions in lower.rs so engine.rs can correctly perform deterministic __ret materialization and gap resolution.
+[T-1] run_script.sh confirms unresolved_ret_gap_count is computed purely from emitted Rust containing `let mut __ret = panic!("canon ...")`. Since MIR structural fallback no longer emits suppressed __ret, remaining gaps must be introduced during Rust emission under emit/. These searches isolate the exact emission sites generating the panic-based __ret initializer so we can fix them at the source.
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
 `{"phase":"observe","deltas":[...],"rationale":"..."}`
+
+
+⚠️  STAGNATION DETECTED: You have spent many ticks observing or planning without acting. You MUST choose phase `act` this tick and emit at least one `ApplyPatch` or `Bash` delta. Do NOT choose observe or plan.

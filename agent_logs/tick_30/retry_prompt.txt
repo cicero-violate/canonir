@@ -1,0 +1,7 @@
+---
+## PREVIOUS ACTION FAILED
+Error:
+```
+LLM payload did not match AgentResponse schema
+```
+Emit a corrected JSON block addressing the error above.

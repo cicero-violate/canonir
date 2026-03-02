@@ -1,5 +1,10 @@
 ## Tick 8 — observe phase
 
+**Working directory (all commands run here):** `/workspace/ai_sandbox/canon`
+**Repo root for source files:** `/workspace/ai_sandbox/canon`
+
+Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in all commands.
+
 ### Exit-check output
 ```
 
@@ -323,16 +328,17 @@ pub(crate) fn mir_field_access_stmt<'tcx>(tcx: TyCtxt<'tcx>, local_decls: &mir::
 
 ### Recent rationale history
 ```
-[T-5] The fallback logic in lower.rs looks structurally correct, so the remaining gaps may be introduced later in the pipeline (e.g., engine-level post-processing or emission). Inspect engine.rs to see if __ret gaps are rewritten or reintroduced, and inspect types.rs to confirm how Body/Stmt/Return are represented and whether ReturnPlace or Expr-based returns are bypassing structural __ret assignment.
+[T-5] The invariant description points directly at pass_lower_match_dest_to_suppressed converting Match { dest: Some("__ret") } into a suppressed assignment. Since lower_return_terminator no longer emits Match but structural Assign+Return, we must inspect passes.rs to confirm whether any transformation is still suppressing __ret-producing statements (especially Match lowering) and inadvertently removing legitimate structural __ret bindings.
 ---
-[T-4] Engine calls materialize_return_local and resolve_ret_gaps_with after MIR structural lowering. If gaps still exist in emitted Rust, the issue likely lies in these helpers or their interaction with stage_finalize_body_with_ret_fallback. Inspect their definitions and the full lower.rs to verify whether __ret assignments are being dropped, overwritten, or structurally bypassed.
+[T-4] We have confirmed that match lowering rewrites Match { dest: Some("__ret") } into suppressed assignments and that return terminators synthesize Assign+Return structurally. However, stage_finalize_body_with_ret_fallback operates on Vec<BasicBlock> before normalization passes, while match-dest suppression occurs during normalization. We must now inspect the exact ordering in lower.rs: where make_body_draft/normalize_blocks is called relative to stage_finalize_body_with_ret_fallback. If fallback runs before normalization, the pass may reintroduce suppressed __ret via match lowering. Inspect the body assembly flow in lower.rs to confirm pipeline order.
 ---
-[T-3] The search for materialize_return_local and resolve_ret_gaps_with returned no results, which is suspicious because engine.rs calls them. This suggests either they are defined elsewhere (possibly re-exported or in another module) or missing entirely. Also inspect stmts_have_ret_binding/match helpers and the remainder of lower.rs to verify whether return-detection logic is inconsistent, leading to false negatives and missed __ret synthesis.
+[T-3] pass_lower_match_dest_to_suppressed was unconditionally converting Match { dest: Some("__ret") } into a suppressed assignment, reintroducing __ret gaps after structural fallback. By exempting __ret from suppression, we preserve legitimate structural return bindings and prevent unresolved_ret_gap_count from increasing while keeping other suppression behavior intact.
 ---
-[T-2] engine.rs invokes materialize_return_local and resolve_ret_gaps_with, but earlier search did not reveal their definitions inside capture/mir. Verify whether these functions are actually defined (possibly in another module or re-exported) or missing entirely. If missing, that would explain why __ret gaps persist despite intended post-processing.
+[T-2] Reviewed engine.rs to confirm pipeline order. mir_body_structural is called first, then materialize_return_local (no-op), then resolve_ret_gaps_with, all before the NodeKind::Function is constructed. Normalization (including pass_lower_match_dest_to_suppressed) occurs inside mir_body_structural via the MIR lowering pipeline. Therefore, suppressing Match { dest: Some("__ret") } was happening during normalization, after structural return synthesis, reintroducing __ret gaps. The previous patch correctly targets that suppression point.
 ---
-[T-1] materialize_return_local and resolve_ret_gaps_with are not defined in capture/mir, which is a structural red flag given engine.rs calls them. Before concluding they are missing, inspect util.rs and expr.rs for any return-place or __ret-specific helpers that might implicitly perform this role. In particular, verify whether stmt_defines_ret or related utilities incorrectly classify return bindings, which could prevent fallback synthesis from triggering.
+[T-1] Inspected analysis.rs, expr.rs, and util.rs for any additional paths that could reintroduce suppressed __ret bindings. Confirmed that emit_suppressed_for_name explicitly avoids suppressing "__ret", and stmt_defines_ret correctly treats structural Assign/Call/Match with dest "__ret" as valid return bindings. No additional suppression paths targeting __ret were found. The only unconditional suppression of Match { dest: Some("__ret") } was in pass_lower_match_dest_to_suppressed, which has now been corrected.
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
 `{"phase":"observe","deltas":[...],"rationale":"..."}`
+

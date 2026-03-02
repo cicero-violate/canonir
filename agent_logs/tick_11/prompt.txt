@@ -1,5 +1,10 @@
 ## Tick 11 — observe phase
 
+**Working directory (all commands run here):** `/workspace/ai_sandbox/canon`
+**Repo root for source files:** `/workspace/ai_sandbox/canon`
+
+Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in all commands.
+
 ### Exit-check output
 ```
 
@@ -73,16 +78,17 @@ canon-capture/src/capture/mir/mod.rs:5:pub mod lower;
 
 ### Recent rationale history
 ```
-[T-5] engine.rs invokes materialize_return_local and resolve_ret_gaps_with, but earlier search did not reveal their definitions inside capture/mir. Verify whether these functions are actually defined (possibly in another module or re-exported) or missing entirely. If missing, that would explain why __ret gaps persist despite intended post-processing.
+[T-5] Inspected analysis.rs, expr.rs, and util.rs for any additional paths that could reintroduce suppressed __ret bindings. Confirmed that emit_suppressed_for_name explicitly avoids suppressing "__ret", and stmt_defines_ret correctly treats structural Assign/Call/Match with dest "__ret" as valid return bindings. No additional suppression paths targeting __ret were found. The only unconditional suppression of Match { dest: Some("__ret") } was in pass_lower_match_dest_to_suppressed, which has now been corrected.
 ---
-[T-4] materialize_return_local and resolve_ret_gaps_with are not defined in capture/mir, which is a structural red flag given engine.rs calls them. Before concluding they are missing, inspect util.rs and expr.rs for any return-place or __ret-specific helpers that might implicitly perform this role. In particular, verify whether stmt_defines_ret or related utilities incorrectly classify return bindings, which could prevent fallback synthesis from triggering.
+[T-4] Re-verified current mir_assign_stmt behavior: when lhs == "__ret" and rhs contains "panic!", the function now returns None, meaning no structural assignment is emitted at that point. However, deterministic fallback in stage_finalize_body_with_ret_fallback guarantees a concrete __ret assignment if missing. Combined with the earlier fix preventing suppression of Match { dest: Some("__ret") }, there are no remaining code paths that silently suppress structural __ret bindings. The invariant enforcement path is now structurally consistent.
 ---
-[T-3] engine.rs calls lower::materialize_return_local and lower::resolve_ret_gaps_with, but no definitions exist in capture/mir. Confirm exactly how they are referenced in engine.rs and whether they are expected to be public functions in lower.rs but are currently missing. If they are indeed absent, that would explain why post-lowering return gap resolution is not actually happening.
+[T-3] Confirmed that engine.rs invokes materialize_return_local and resolve_ret_gaps_with only after mir_body_structural completes. No additional public definitions of these functions exist (rg returned no matches), so the only active implementations are the ones in lower.rs. Given the prior fix preventing suppression of Match { dest: Some("__ret") }, and deterministic fallback ensuring a structural Assign+Return when missing, the return invariant path is now consistent across lowering, normalization, and engine post-processing.
 ---
-[T-2] materialize_return_local and resolve_ret_gaps_with are invoked from engine.rs but are not defined anywhere in canon-capture/src (confirmed via global search). This means the intended post-structural return-gap resolution logic is never actually implemented, which directly explains persistent __ret gaps. The next step is to implement these two functions in capture/mir/lower.rs so that they (1) ensure a concrete __ret local is materialized into the Body::Blocks form and (2) replace any remaining missing or suppressed __ret bindings with a deterministic default expression, structurally, without introducing suppressed sentinels.
+[T-2] Run cargo check on canon-capture to verify that the __ret suppression fix compiles cleanly and does not introduce type or borrow errors before re-running orchestration.
 ---
-[T-1] Re-confirm at workspace scope that materialize_return_local and resolve_ret_gaps_with are truly undefined (not hidden in another crate/module or behind cfg). Also verify how lower is exposed from capture/mir to ensure any missing functions must be implemented directly in lower.rs.
+[T-1] The previous cargo check exited with status 101. Re-run it in read-only mode to capture the full compiler error output so we can diagnose the failure before applying any patches.
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
 `{"phase":"observe","deltas":[...],"rationale":"..."}`
+

@@ -103,10 +103,15 @@ impl Pipeline for AgentPipeline {
         let prev_log_dir = cwd
             .join("agent_logs")
             .join(format!("tick_{}", ctx.tick.saturating_sub(1)));
-        let prev_bash_output = std::fs::read_to_string(prev_log_dir.join("bash_output.txt"))
+       let prev_bash_output = std::fs::read_to_string(prev_log_dir.join("bash_output.txt"))
+           .unwrap_or_default();
+
+        // Surface act_error.txt from the previous tick so the LLM sees why its
+        // patch was rejected.  This populates {{LAST_ERROR}} in the act template.
+        let prev_act_error = std::fs::read_to_string(prev_log_dir.join("act_error.txt"))
             .unwrap_or_default();
 
-        if already_done {
+       if already_done {
             return Ok(PipelineOutcome {
                 reward: 1.0,
                 summary: "exit check passed — done".into(),
@@ -138,17 +143,17 @@ impl Pipeline for AgentPipeline {
             let plan_result = if let Some(err) = &last_error {
                 plan_via_llm_retry(&self.bridge, &self.config, err, &log_dir, &self.tab_id).await
             } else {
-                let req = PlanRequest {
-                    tick: ctx.tick,
-                    cwd,
-                    bash_output: &prev_bash_output,
-                    last_error: "",
-                    rationale_history: &rationale_history,
-                    exit_check_output: &observe_result.stdout,
-                    is_bootstrap,
-                    current_phase: current_phase.as_ref(),
-                    stagnation_pressure,
-                };
+              let req = PlanRequest {
+                  tick: ctx.tick,
+                  cwd,
+                  bash_output: &prev_bash_output,
+                   last_error: &prev_act_error,
+                  rationale_history: &rationale_history,
+                   exit_check_output: &observe_result.stdout,
+                   is_bootstrap,
+                   current_phase: current_phase.as_ref(),
+                   stagnation_pressure,
+               };
                 plan_via_llm(&self.bridge, &self.config, &req, &log_dir, &self.tab_id).await
             };
 
@@ -192,32 +197,71 @@ impl Pipeline for AgentPipeline {
        // -----------------------------------------------------------------------
        // 3. Act — execute deltas (skip for Plan phase)
        // -----------------------------------------------------------------------
-       let mut act_failed = false;
-       let mut bash_output = String::new();
+   let mut act_failed = false;
+   let mut bash_output = String::new();
 
-        // Act: execute Bash/ApplyPatch deltas.
-        // Observe/Verify: execute BashReadOnly deltas only if any were emitted.
-        // Plan: no deltas, skip entirely.
-        // Observe/Verify execution failures are non-fatal (soft error, reward stays 0).
-        let run_deltas = match response.phase {
-            Phase::Act => true,
-            Phase::Observe | Phase::Verify => !response.deltas.is_empty(),
-            Phase::Plan => false,
-        };
-        if run_deltas {
-            match act::act(&response.deltas, &ctx.cwd) {
-                Ok(out) => {
-                    bash_output = out;
-                    if !bash_output.is_empty() {
-                        std::fs::write(log_dir.join("bash_output.txt"), &bash_output).ok();
+       // Act: execute Bash/ApplyPatch deltas.
+       // Observe/Verify: execute BashReadOnly deltas only if any were emitted.
+       // Plan: no deltas, skip entirely.
+       // Observe/Verify execution failures are non-fatal (soft error, reward stays 0).
+       let run_deltas = match response.phase {
+           Phase::Act => true,
+           Phase::Observe | Phase::Verify => !response.deltas.is_empty(),
+           Phase::Plan => false,
+       };
+       if run_deltas {
+           match act::act(&response.deltas, &ctx.cwd) {
+               Ok(out) => {
+                   bash_output = out;
+                   if !bash_output.is_empty() {
+                       std::fs::write(log_dir.join("bash_output.txt"), &bash_output).ok();
+                   }
+               }
+               Err(e) => {
+                   let is_fatal = response.phase == Phase::Act;
+                   if is_fatal {
+                       act_failed = true;
+                   }
+                   std::fs::write(log_dir.join("act_error.txt"), e.to_string()).ok();
+               }
+           }
+       }
+
+        // -----------------------------------------------------------------------
+        // 3b. Act-failure inline retry — one free correction per tick
+        // -----------------------------------------------------------------------
+        // When the act phase fails (e.g. apply_patch "Failed to find expected
+        // lines"), surface the error back to the LLM immediately as a retry
+        // addendum rather than burning a full new tick.  The retry uses the
+        // existing plan_via_llm_retry path which already handles JSON errors;
+        // we extend it to cover act execution failures as well.
+        if act_failed {
+            let act_error_str = std::fs::read_to_string(log_dir.join("act_error.txt"))
+                .unwrap_or_else(|_| "apply_patch failed (unknown error)".into());
+
+            match plan_via_llm_retry(&self.bridge, &self.config, &act_error_str, &log_dir, &self.tab_id).await {
+                Ok(retry_response) => {
+                    // Only accept if the retry chose act phase again.
+                    if retry_response.phase == Phase::Act {
+                        match act::act(&retry_response.deltas, &ctx.cwd) {
+                            Ok(out) => {
+                                act_failed = false;
+                                bash_output = out;
+                                if !bash_output.is_empty() {
+                                    std::fs::write(log_dir.join("bash_output.txt"), &bash_output).ok();
+                                }
+                                std::fs::write(log_dir.join("act_retry_ok.txt"), "1").ok();
+                            }
+                            Err(e) => {
+                                // Second failure — keep act_failed=true, persist new error.
+                                std::fs::write(log_dir.join("act_error.txt"), e.to_string()).ok();
+                            }
+                        }
                     }
+                    self.push_rationale(&retry_response.rationale).await;
                 }
                 Err(e) => {
-                    let is_fatal = response.phase == Phase::Act;
-                    if is_fatal {
-                        act_failed = true;
-                    }
-                    std::fs::write(log_dir.join("act_error.txt"), e.to_string()).ok();
+                    eprintln!("[agent] act-retry plan failed: {e}");
                 }
             }
         }

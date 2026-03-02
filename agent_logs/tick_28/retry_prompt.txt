@@ -1,0 +1,7 @@
+---
+## PREVIOUS ACTION FAILED
+Error:
+```
+json extract error: no fenced json block found
+```
+Emit a corrected JSON block addressing the error above.

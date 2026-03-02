@@ -106,7 +106,11 @@ fn pass_lower_match_dest_to_suppressed(mut emitted: Vec<EmittedBlock>) -> Vec<Em
     for block in &mut emitted {
         for stmt in &mut block.block.stmts {
             if let Stmt::Match { dest: Some(dest) } = stmt {
-                *stmt = Stmt::Assign { lhs: dest.clone(), rhs: "__canon_suppressed__".to_string() };
+                // Never suppress matches that bind to __ret; return value
+                // must remain structurally assigned to preserve invariant.
+                if dest != "__ret" {
+                    *stmt = Stmt::Assign { lhs: dest.clone(), rhs: "__canon_suppressed__".to_string() };
+                }
             }
         }
     }

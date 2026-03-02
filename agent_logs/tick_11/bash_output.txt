@@ -1,0 +1,99 @@
+$ sed -n '260,420p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs
+            }
+            // Fallback to generic assign lowering for projected field reads
+            // that are representable as pure expressions (for example `(*self).score`).
+        }
+        MirOpKind::StructLit => {
+            if let Some(struct_stmt) = mir_expr::mir_struct_lit_stmt(ctx.tcx, lhs, rvalue, ctx.resolver) {
+                if !mir_guard::structural_guard(&struct_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
+                    if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
+                        mir_util::emit_suppressed_for_name(dest, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
+                    }
+                    return;
+                }
+                if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
+                    ctx.defined.insert(dest.clone());
+                }
+                ctx.stmts.push(struct_stmt);
+                return;
+            }
+            // Struct-literal pattern may still be representable as a generic
+            // assignment expression (for example enum unit variants).
+        }
+        MirOpKind::OpaqueAggregate => {
+            // Do not emit suppressed bindings for opaque aggregates.
+            // Allow deterministic structural fallback to handle return.
+            return;
+        }
+        MirOpKind::ZeroArgEnumCtor => {
+            if let Some(assign_stmt) = mir_expr::mir_assign_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver, ctx.defined, ctx.suppressed_sentinel_names) {
+                if mir_guard::structural_guard(&assign_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
+                    if let Stmt::Assign { lhs, .. } = &assign_stmt {
+                        ctx.defined.insert(lhs.clone());
+                    }
+                    ctx.stmts.push(assign_stmt);
+                } else if let Some(lhs_name) = lhs_name.clone() {
+                    mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
+                }
+            } else if let Some(lhs_name) = lhs_name.clone() {
+                mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
+            }
+            return;
+        }
+        MirOpKind::ConstUse => {}
+        MirOpKind::ArrayAggregate => {
+            if let Some(lhs_name) = lhs_name.as_ref()
+                && ctx.defined.contains(lhs_name)
+            {
+                return;
+            }
+        }
+        MirOpKind::Assign => {}
+    }
+
+    if let Some(assign_stmt) = mir_expr::mir_assign_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver, ctx.defined, ctx.suppressed_sentinel_names) {
+        if !mir_guard::structural_guard(&assign_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
+            if let Stmt::Assign { lhs, .. } = &assign_stmt {
+                // Never emit suppressed binding for any assignment here.
+                // Structural fallback is responsible for synthesizing returns.
+            }
+            return;
+        }
+        if let Stmt::Assign { lhs, .. } = &assign_stmt {
+            ctx.defined.insert(lhs.clone());
+        }
+        ctx.stmts.push(assign_stmt);
+    } else if let Some(lhs_name) = lhs_name {
+        // Avoid suppressed emission for __ret; fallback handles return.
+        if lhs_name != "__ret" {
+            mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
+        }
+    }
+}
+
+fn stmts_have_ret_match(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|stmt| matches!(stmt, Stmt::Match { dest: Some(dest) } if dest == "__ret"))
+}
+
+fn stmts_have_ret_binding(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(mir_util::stmt_defines_ret)
+}
+
+// Post-structural return materialization hook.
+// Structural pipeline already guarantees deterministic __ret synthesis
+// via stage_finalize_body_with_ret_fallback. This hook exists so
+// engine.rs can invoke it without introducing suppressed bindings.
+pub(crate) fn materialize_return_local(_body: &mut Body) {
+    // No-op: structural fallback already guarantees a concrete __ret binding.
+}
+
+// Post-structural gap resolution hook.
+// Structural pipeline already injects a deterministic __ret assignment
+// when missing. This function intentionally performs no additional
+// mutation to avoid duplicating return synthesis logic.
+pub(crate) fn resolve_ret_gaps_with(_body: &mut Body, _default_expr: &str) {
+    // No-op: handled during stage_finalize_body_with_ret_fallback.
+}
+
+$ sed -n '420,520p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs
+

@@ -1,5 +1,10 @@
 ## Tick 17 — observe phase
 
+**Working directory (all commands run here):** `/workspace/ai_sandbox/canon`
+**Repo root for source files:** `/workspace/ai_sandbox/canon`
+
+Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in all commands.
+
 ### Exit-check output
 ```
 
@@ -14,16 +19,17 @@ $ sed -n '420,700p' canon-capture/src/capture/mir/lower.rs
 
 ### Recent rationale history
 ```
-[T-5] Before implementing materialize_return_local and resolve_ret_gaps_with, inspect passes.rs to understand how return bindings and matches are detected at the block level (blocks_have_ret_binding / blocks_have_ret_match). This ensures new implementations align with existing detection logic and do not conflict with normalization or block analysis.
+[T-5] We have confirmed return synthesis logic and hooks are structurally consistent. The remaining unknown is the cargo check failure (exit 101). Re-running cargo check in the correct working directory will surface the exact compiler errors so we can address the real failing invariant or type issue.
 ---
-[T-4] All relevant return-detection logic has now been inspected: blocks_have_ret_binding, blocks_have_ret_match, stmts_have_ret_binding, stmt_defines_ret, and the normalization passes that may rewrite or prune suppressed bindings. Global search confirms materialize_return_local and resolve_ret_gaps_with are referenced only from engine.rs and do not exist anywhere in the workspace. Therefore, the next step is to implement these two missing public functions in capture/mir/lower.rs. materialize_return_local should operate on Body::Blocks to ensure a structural __ret binding is present (without introducing suppressed sentinels), and resolve_ret_gaps_with should deterministically replace any remaining missing or suppressed return bindings with the provided default expression, aligning with stmt_defines_ret and normalization behavior. No further observation is needed before implementing them.
+[T-4] Exit-check output is empty, and previous cargo invocation did not capture compiler diagnostics. Run cargo check for the canon-capture crate from the workspace root to surface the exact compilation errors causing exit status 101.
 ---
-[T-3] Before implementing materialize_return_local and resolve_ret_gaps_with, inspect the exact definitions of Body, BasicBlock, and Stmt in types.rs to ensure the new functions mutate Body::Blocks correctly and align with existing structural return representations.
+[T-3] Run cargo check for the canon-capture crate from the workspace root to capture the compiler errors causing exit status 101 so we can diagnose and fix the build failure.
 ---
-[T-2] The structural representation of Body, BasicBlock, and Stmt has now been fully inspected. Body::Blocks holds Vec<BasicBlock>, each BasicBlock contains stmts: Vec<Stmt> and a Terminator. Stmt::Return(Option<String>) and Stmt::Assign { lhs, rhs } are the relevant forms for __ret handling. There are no hidden return-local abstractions. With confirmation that materialize_return_local and resolve_ret_gaps_with are missing and must operate directly on Body::Blocks, the next step is to implement these two public functions in capture/mir/lower.rs. materialize_return_local should ensure that any Return(None) or Terminator::Return in non-unit contexts becomes an explicit Stmt::Return(Some("__ret")) and that a structural __ret binding exists. resolve_ret_gaps_with should scan for missing or suppressed __ret assignments and replace them deterministically with the provided default expression, without introducing suppressed sentinels or duplicate bindings. No further observation is required before moving to the act phase.
+[T-2] The previous cargo check exited with status 101, which stopped execution before emitting diagnostics. Re-run cargo check while capturing stderr and forcing a zero exit (|| true) so the full compiler error output is surfaced for diagnosis.
 ---
-[T-1] Before implementing materialize_return_local and resolve_ret_gaps_with, inspect the end of lower.rs to determine an appropriate insertion point and confirm there are no existing partial stubs or related helpers defined later in the file.
+[T-1] Telemetry confirms unresolved_ret_gap_count is computed by grepping emitted Rust for `let mut __ret = panic!("canon ...)`. Since MIR lowering now avoids suppressed __ret and stage_finalize_body_with_ret_fallback injects structural `Assign + Return`, any remaining unresolved gaps must originate in code generation (emit stage), not MIR lowering. Next debugging focus should shift to the Rust emission layer that materializes `let mut __ret = panic!(...)` scaffolding in orchestration output.
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
 `{"phase":"observe","deltas":[...],"rationale":"..."}`
+

@@ -12,6 +12,7 @@ use std::process::Stdio;
 const READONLY_WHITELIST: &[&str] = &[
     "rg", "cat", "ls", "tree", "sed", "awk", "perl",
     "find", "head", "tail", "wc", "diff", "stat", "echo", "pwd",
+    "cargo",
 ];
 
 pub fn act(deltas: &[CodeDelta], capture_dirs: &[PathBuf]) -> Result<String> {
@@ -73,10 +74,15 @@ pub fn act(deltas: &[CodeDelta], capture_dirs: &[PathBuf]) -> Result<String> {
                     }
 
                     let out = child.wait_with_output().context("apply_patch: wait failed")?;
-                    if out.status.success() {
+               if out.status.success() {
                         applied = true;
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        if !stdout.trim().is_empty() {
+                            bash_output.push_str(&stdout);
+                            bash_output.push('\n');
+                        }
                         break;
-                    }
+               }
                     last_err = format!("apply_patch failed in {:?}: {}", dir, out.status);
                 }
 

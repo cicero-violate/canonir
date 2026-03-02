@@ -1,5 +1,10 @@
 ## Tick 19 — observe phase
 
+**Working directory (all commands run here):** `/workspace/ai_sandbox/canon`
+**Repo root for source files:** `/workspace/ai_sandbox/canon`
+
+Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in all commands.
+
 ### Exit-check output
 ```
 
@@ -7,146 +12,85 @@
 
 ### Output from previous commands
 ```
-$ wc -l canon-capture/src/capture/mir/lower.rs
-338 canon-capture/src/capture/mir/lower.rs
-
-$ sed -n '1,120p' canon-capture/src/capture/mir/lower.rs
-use crate::types::{BasicBlock, Body, Stmt, Terminator};
-use rustc_middle::mir;
-use rustc_middle::ty::{self, TyCtxt};
-use rustc_span::def_id::DefId;
-use std::collections::HashSet;
-
-use crate::capture::mir::analysis as mir_analysis;
-use crate::capture::mir::expr as mir_expr;
-use crate::capture::mir::guard as mir_guard;
-use crate::capture::mir::passes as mir_passes;
-use crate::capture::mir::patterns as mir_patterns;
-use crate::capture::mir::patterns::MirOpKind;
-use crate::capture::mir::terminator as mir_terminator;
-use crate::capture::mir::util as mir_util;
-
-use super::resolver::LocalNameResolver;
-
-struct LowerPlan {
-    resolver: LocalNameResolver,
-    mir_to_emitted: Vec<Option<u32>>,
-    switch_analysis: mir_analysis::SwitchAnalysis,
-    call_feed_locals: HashSet<String>,
-    defined: HashSet<String>,
-    suppressed_sentinel_names: HashSet<String>,
-    suppressed_dest_sentinels: Vec<Stmt>,
-}
-
-struct AssignLowerCtx<'a, 'tcx> {
-    tcx: TyCtxt<'tcx>,
-    local_decls: &'a mir::LocalDecls<'tcx>,
-    resolver: &'a LocalNameResolver,
-    call_feed_locals: &'a HashSet<String>,
-    defined: &'a mut HashSet<String>,
-    suppressed_sentinel_names: &'a mut HashSet<String>,
-    stmts: &'a mut Vec<Stmt>,
-    has_match_before_block: bool,
-}
-
-pub(crate) fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &[String], returns_unit: bool) -> Body {
-    let Some(local_def) = def_id.as_local() else {
-        return Body::None;
-    };
-    if !tcx.is_mir_available(local_def) {
-        return Body::None;
-    }
-    let body = match tcx.hir_body_const_context(local_def) {
-        Some(rustc_hir::ConstContext::ConstFn) | Some(rustc_hir::ConstContext::Const { .. }) | Some(rustc_hir::ConstContext::Static(_)) => tcx.mir_for_ctfe(local_def),
-        None => tcx.optimized_mir(local_def),
-    };
-
-    let mut plan = stage_build_plan(tcx, body, param_names);
-    let draft = stage_emit_draft(tcx, body, returns_unit, &mut plan);
-    let blocks = stage_normalize_draft(draft);
-    stage_finalize_body_with_ret_fallback(tcx, def_id, returns_unit, blocks)
-}
-
-fn stage_build_plan<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, param_names: &[String]) -> LowerPlan {
-    let resolver = LocalNameResolver::new(body, param_names);
-    let switch_analysis = mir_analysis::analyze_switch_structure(body);
-    let call_feed_locals = mir_analysis::compute_call_feed_locals(tcx, body, &resolver);
-    let mut defined: HashSet<String> = param_names.iter().cloned().collect();
-    let mut suppressed_sentinel_names: HashSet<String> = HashSet::new();
-    let suppressed_dest_sentinels = mir_analysis::collect_suppressed_dest_sentinels(body, &resolver, &switch_analysis, &mut defined, &mut suppressed_sentinel_names)
-        .into_iter()
-        .filter(|s| !matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret"))
-        .collect();
-
-    // Never allow suppressed sentinel for __ret; return must be lowered structurally.
-    let suppressed_dest_sentinels = suppressed_dest_sentinels.into_iter().filter(|s| !matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret")).collect();
-
-    let mut mir_to_emitted: Vec<Option<u32>> = vec![None; body.basic_blocks.len()];
-    let mut next_emitted = 0u32;
-    for (mir_idx, bb) in body.basic_blocks.iter_enumerated() {
-        if bb.is_cleanup {
-            continue;
-        }
-        mir_to_emitted[mir_idx.as_usize()] = Some(next_emitted);
-        next_emitted += 1;
-    }
-
-    LowerPlan { resolver, mir_to_emitted, switch_analysis, call_feed_locals, defined, suppressed_sentinel_names, suppressed_dest_sentinels }
-}
-
-fn stage_emit_draft<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, returns_unit: bool, plan: &mut LowerPlan) -> mir_passes::BodyDraft {
-    let emitted_block_capacity = plan.mir_to_emitted.iter().filter(|slot| slot.is_some()).count();
-    let mut emitted_blocks: Vec<mir_passes::EmittedBlock> = Vec::with_capacity(emitted_block_capacity);
-
-    // Do NOT pre-mark __ret as defined. It must be structurally assigned
-    // by lowering or by deterministic fallback to avoid masked gaps.
-
-    for (mir_idx, bb) in body.basic_blocks.iter_enumerated() {
-        if bb.is_cleanup {
-            continue;
-        }
-        if let Some(block) = mir_passes::emit_special_block(returns_unit, mir_idx.as_usize(), &emitted_blocks, &plan.switch_analysis, &mut plan.defined) {
-            emitted_blocks.push(block);
-            continue;
-        }
-
-        let mut stmts = stage_prepare_block_stmts();
-        stage_lower_block_statements(tcx, body, bb, &emitted_blocks, plan, &mut stmts);
-        let term = stage_lower_block_terminator(tcx, returns_unit, bb, &emitted_blocks, plan, &mut stmts);
-        // Do not emit suppressed __ret bindings at block end.
-        // Missing return binding must be handled deterministically
-        // by final fallback, not by suppressed sentinel.
-        emitted_blocks.push(mir_passes::make_normal_block(stmts, term));
-    }
-
-    mir_passes::make_body_draft(emitted_blocks, std::mem::take(&mut plan.suppressed_dest_sentinels))
-}
-
-fn stage_normalize_draft(draft: mir_passes::BodyDraft) -> Vec<BasicBlock> {
-    mir_passes::NormalizationPipeline::canonical().run(draft)
-}
-
-fn stage_prepare_block_stmts() -> Vec<Stmt> {
-    Vec::new()
-}
-
-fn stage_lower_block_statements<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, bb: &mir::BasicBlockData<'tcx>, blocks: &[mir_passes::EmittedBlock], plan: &mut LowerPlan, stmts: &mut Vec<Stmt>) {
+$ sed -n '100,160p' /workspace/ai_sandbox/canon/run_script.sh
+            sed 's/^/  - evidence: /' /tmp/.inv_invariant_alloc.$$
+        fi
+        if rg -n "attempting to make an HTTP request, but --offline was specified|no matching package named" "$log" >/tmp/.inv_invariant_offline.$$ 2>/dev/null; then
+            found=1
+            echo "- non-structural blockers:"
+            echo "  - Offline dependency resolution failure; not a capture/projection structural invariant."
+            sed 's/^/  - evidence: /' /tmp/.inv_invariant_offline.$$
+        fi
+        if [[ $found -eq 0 ]]; then
+            echo "- no invariant-signature lines detected; inspect full log."
+        fi
+        # Emitted-source structural surface (always useful even when logs are green).
+        local emit_src="$ROOT/emit/$fixture/src"
+        if [[ -d "$emit_src" ]]; then
+            local suppressed_count suppressed_ret_count suppressed_nonret_count match_gap_count call_gap_count switch_gap_count unresolved_ret_gap_count unresolved_gap_total unreachable_count match_comment_count goto_comment_count
+            suppressed_count=$(rg -n 'canon suppressed binding' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
+            suppressed_ret_count=$(rg -n '__ret\s*=\s*panic!\("canon suppressed binding"\)' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
+            suppressed_nonret_count=$((suppressed_count - suppressed_ret_count))
+            match_gap_count=$(rg -n 'canon match result not lowered' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
+            call_gap_count=$(rg -n 'canon call result not lowered' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
+            switch_gap_count=$(rg -n 'canon switch result not lowered' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
+            unresolved_ret_gap_count=$(rg -n 'let mut __ret = panic!\("canon (suppressed binding|call result not lowered|switch result not lowered|match result not lowered)"\);' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
+            unresolved_gap_total=$((suppressed_count + match_gap_count + call_gap_count + switch_gap_count))
+            unreachable_count=$(rg -n 'unreachable!\(\);' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
+            match_comment_count=$(rg -n '// match' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
+            goto_comment_count=$(rg -n '// goto' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
+            echo "- emitted structural surface:"
+            echo "  - canon suppressed binding count: $suppressed_count"
+            echo "  - canon suppressed __ret count: $suppressed_ret_count"
+            echo "  - canon suppressed non-__ret count: $suppressed_nonret_count"
+            echo "  - canon match gap count: $match_gap_count"
+            echo "  - canon call gap count: $call_gap_count"
+            echo "  - canon switch gap count: $switch_gap_count"
+            echo "  - unresolved gap total: $unresolved_gap_total"
+            echo "  - unresolved __ret gap count: $unresolved_ret_gap_count"
+            echo "  - unreachable count: $unreachable_count"
+            echo "  - // match count: $match_comment_count"
+            echo "  - // goto count: $goto_comment_count"
+            if [[ "$unresolved_ret_gap_count" -gt 0 ]]; then
+                echo "- unresolved __ret gap sites:"
+                while IFS= read -r hit; do
+                    local file line fn
+                    file="${hit%%:*}"
+                    line="${hit#*:}"
+                    line="${line%%:*}"
+                    fn=$(awk -v target="$line" '
+                        /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]/ { last=$0 }
+                        NR >= target { print last; exit }
+                    ' "$file")
+                    if [[ -z "$fn" ]]; then
+                        fn="fn <unknown>"
+                    fi
+                    echo "  - ${file#$emit_src/}:$line :: $fn"
+                done < <(rg -n 'let mut __ret = panic!\("canon (suppressed binding|call result not lowered|switch result not lowered|match result not lowered)"\);' "$emit_src" -g '*.rs')
+            fi
+        fi
+        echo
+    } >> "$REPORT"
+    rm -f \
+      /tmp/.inv_return_solver.$$ \
+      /tmp/.inv_solver_warns.$$ \
 
 
 ```
 
 ### Recent rationale history
 ```
-[T-5] Before implementing materialize_return_local and resolve_ret_gaps_with, inspect the exact definitions of Body, BasicBlock, and Stmt in types.rs to ensure the new functions mutate Body::Blocks correctly and align with existing structural return representations.
+[T-5] Run cargo check for the canon-capture crate from the workspace root to capture the compiler errors causing exit status 101 so we can diagnose and fix the build failure.
 ---
-[T-4] The structural representation of Body, BasicBlock, and Stmt has now been fully inspected. Body::Blocks holds Vec<BasicBlock>, each BasicBlock contains stmts: Vec<Stmt> and a Terminator. Stmt::Return(Option<String>) and Stmt::Assign { lhs, rhs } are the relevant forms for __ret handling. There are no hidden return-local abstractions. With confirmation that materialize_return_local and resolve_ret_gaps_with are missing and must operate directly on Body::Blocks, the next step is to implement these two public functions in capture/mir/lower.rs. materialize_return_local should ensure that any Return(None) or Terminator::Return in non-unit contexts becomes an explicit Stmt::Return(Some("__ret")) and that a structural __ret binding exists. resolve_ret_gaps_with should scan for missing or suppressed __ret assignments and replace them deterministically with the provided default expression, without introducing suppressed sentinels or duplicate bindings. No further observation is required before moving to the act phase.
+[T-4] The previous cargo check exited with status 101, which stopped execution before emitting diagnostics. Re-run cargo check while capturing stderr and forcing a zero exit (|| true) so the full compiler error output is surfaced for diagnosis.
 ---
-[T-3] Before implementing materialize_return_local and resolve_ret_gaps_with, inspect the end of lower.rs to determine an appropriate insertion point and confirm there are no existing partial stubs or related helpers defined later in the file.
+[T-3] Telemetry confirms unresolved_ret_gap_count is computed by grepping emitted Rust for `let mut __ret = panic!("canon ...)`. Since MIR lowering now avoids suppressed __ret and stage_finalize_body_with_ret_fallback injects structural `Assign + Return`, any remaining unresolved gaps must originate in code generation (emit stage), not MIR lowering. Next debugging focus should shift to the Rust emission layer that materializes `let mut __ret = panic!(...)` scaffolding in orchestration output.
 ---
-[T-2] The end of lower.rs contains no additional helper stubs or related return-handling functions, confirming that materialize_return_local and resolve_ret_gaps_with are entirely absent. All structural return-detection and normalization logic has already been inspected, and Body/BasicBlock/Stmt representations are fully understood. Therefore, no further observation is required. The next step is to implement the two missing public functions in capture/mir/lower.rs so engine.rs can successfully link and execute deterministic return-gap resolution.
+[T-2] Telemetry shows unresolved_ret_gap_count is driven by emitted Rust containing `let mut __ret = panic!("canon ...)`. MIR lowering and structural fallback now synthesize Assign+Return deterministically, so remaining gaps likely originate in the Rust emission/orchestration layer that still materializes panic-based __ret scaffolding. Search for the emission site that generates this pattern and inspect how __ret is initialized during code generation.
 ---
-[T-1] Re-confirm total file length and re-open the top of lower.rs to determine clean insertion points and visibility context (pub(crate) vs pub) before implementing the two missing public functions.
+[T-1] The previous failure was due to a timeout waiting for the model response, not a Bash or patch error. Re-emitting a minimal, well-formed JSON block to allow the orchestration loop to proceed without triggering long-running commands.
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
 `{"phase":"observe","deltas":[...],"rationale":"..."}`
+

@@ -1,93 +1,334 @@
-$ rg -n "materialize_return_local|resolve_ret_gaps_with" -S canon-capture/src
-canon-capture/src/capture/engine.rs:181:        lower::materialize_return_local(&mut body);
-canon-capture/src/capture/engine.rs:186:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-canon-capture/src/capture/engine.rs:208:        lower::materialize_return_local(&mut body);
-canon-capture/src/capture/engine.rs:213:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
+$ sed -n '1,260p' /workspace/ai_sandbox/canon/canon-capture/src/capture/engine.rs
+use rustc_hir::def::DefKind;
+use rustc_middle::ty::TyCtxt;
+use rustc_span::def_id::DefId;
 
-$ rg -n "stmts_have_ret_binding|stmts_have_ret_match" canon-capture/src/capture/mir
-canon-capture/src/capture/mir/lower.rs:140:    let has_match_dest = mir_passes::blocks_have_ret_match(blocks) || stmts_have_ret_match(stmts);
-canon-capture/src/capture/mir/lower.rs:141:    let has_ret_binding = mir_passes::blocks_have_ret_binding(blocks) || stmts_have_ret_binding(stmts);
-canon-capture/src/capture/mir/lower.rs:332:fn stmts_have_ret_match(stmts: &[Stmt]) -> bool {
-canon-capture/src/capture/mir/lower.rs:336:fn stmts_have_ret_binding(stmts: &[Stmt]) -> bool {
+use crate::index::Index;
+use crate::norm;
+use crate::types::{EdgeHint, EnumVariant, Node, NodeId, NodeKind, StructKind, Visibility};
 
-$ sed -n '260,420p' canon-capture/src/capture/mir/lower.rs
-            }
-            // Fallback to generic assign lowering for projected field reads
-            // that are representable as pure expressions (for example `(*self).score`).
-        }
-        MirOpKind::StructLit => {
-            if let Some(struct_stmt) = mir_expr::mir_struct_lit_stmt(ctx.tcx, lhs, rvalue, ctx.resolver) {
-                if !mir_guard::structural_guard(&struct_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
-                    if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
-                        mir_util::emit_suppressed_for_name(dest, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
-                    }
-                    return;
-                }
-                if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
-                    ctx.defined.insert(dest.clone());
-                }
-                ctx.stmts.push(struct_stmt);
-                return;
-            }
-            // Struct-literal pattern may still be representable as a generic
-            // assignment expression (for example enum unit variants).
-        }
-        MirOpKind::OpaqueAggregate => {
-            // Do not emit suppressed bindings for opaque aggregates.
-            // Allow deterministic structural fallback to handle return.
-            return;
-        }
-        MirOpKind::ZeroArgEnumCtor => {
-            if let Some(assign_stmt) = mir_expr::mir_assign_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver, ctx.defined, ctx.suppressed_sentinel_names) {
-                if mir_guard::structural_guard(&assign_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
-                    if let Stmt::Assign { lhs, .. } = &assign_stmt {
-                        ctx.defined.insert(lhs.clone());
-                    }
-                    ctx.stmts.push(assign_stmt);
-                } else if let Some(lhs_name) = lhs_name.clone() {
-                    mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
-                }
-            } else if let Some(lhs_name) = lhs_name.clone() {
-                mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
-            }
-            return;
-        }
-        MirOpKind::ConstUse => {}
-        MirOpKind::ArrayAggregate => {
-            if let Some(lhs_name) = lhs_name.as_ref()
-                && ctx.defined.contains(lhs_name)
-            {
-                return;
-            }
-        }
-        MirOpKind::Assign => {}
-    }
+use crate::capture::edge_emit;
+use crate::capture::helpers;
+use crate::capture::mir::lower;
 
-    if let Some(assign_stmt) = mir_expr::mir_assign_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver, ctx.defined, ctx.suppressed_sentinel_names) {
-        if !mir_guard::structural_guard(&assign_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
-            if let Stmt::Assign { lhs, .. } = &assign_stmt {
-                // Never emit suppressed binding for any assignment here.
-                // Structural fallback is responsible for synthesizing returns.
-            }
-            return;
-        }
-        if let Stmt::Assign { lhs, .. } = &assign_stmt {
-            ctx.defined.insert(lhs.clone());
-        }
-        ctx.stmts.push(assign_stmt);
-    } else if let Some(lhs_name) = lhs_name {
-        // Avoid suppressed emission for __ret; fallback handles return.
-        if lhs_name != "__ret" {
-            mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
-        }
+use super::rules::{DefMeta, RuleEdge, RuleSpec, RULES};
+
+/// Analyze one definition into reusable metadata for rule matching.
+pub fn analyze_def(tcx: TyCtxt<'_>, def_id: DefId) -> DefMeta {
+    let def_kind = tcx.def_kind(def_id);
+    let has_body = tcx.hir_maybe_body_owned_by(def_id.expect_local()).is_some();
+    let is_trait_item = matches!(def_kind, DefKind::AssocFn | DefKind::AssocConst | DefKind::AssocTy) && tcx.opt_parent(def_id).is_some_and(|p| matches!(tcx.def_kind(p), DefKind::Trait));
+    let is_assoc_item = matches!(def_kind, DefKind::AssocFn | DefKind::AssocConst | DefKind::AssocTy);
+
+    DefMeta { def_id, def_kind, has_body, is_trait_item, is_assoc_item }
+}
+
+/// Select the first matching rule (ordered table semantics).
+pub fn select_rule<'a>(meta: &DefMeta, rules: &'a [RuleSpec]) -> Option<&'a RuleSpec> {
+    rules.iter().find(|r| r.pred.matches(meta))
+}
+
+/// Engine entrypoint.
+pub fn lower_def(_tcx: TyCtxt<'_>, def_id: DefId, _index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let meta = analyze_def(_tcx, def_id);
+    let rule = select_rule(&meta, RULES)?;
+    match &rule.emit {
+        super::rules::RuleEmit::Template("mod_item") => lower_mod_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("struct_like_item") => lower_struct_like_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("enum_item") => lower_enum_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("trait_item") => lower_trait_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("impl_item") => lower_impl_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("assoc_ty_item") => lower_assoc_ty_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("assoc_const_item") => lower_assoc_const_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("fn_item") => lower_fn_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("assoc_fn_item") => lower_assoc_fn_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("const_item") => lower_const_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("static_item") => lower_static_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("ty_alias_item") => lower_ty_alias_item(_tcx, def_id, _index),
+        super::rules::RuleEmit::Template("use_item") => lower_use_item(_tcx, def_id, _index, rule),
+        _ => None,
     }
 }
 
-fn stmts_have_ret_match(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(|stmt| matches!(stmt, Stmt::Match { dest: Some(dest) } if dest == "__ret"))
+fn has_rule_edge(rule: &RuleSpec, edge: RuleEdge) -> bool {
+    rule.edges.contains(&edge)
 }
 
-fn stmts_have_ret_binding(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(mir_util::stmt_defines_ret)
+fn lower_mod_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let raw_span = tcx.def_span(def_id);
+    let span = Some(norm::span(tcx, raw_span));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let file = norm::module_file(tcx, def_id);
+    let decl_file = norm::file(tcx, raw_span);
+    let inline = file == decl_file
+        && def_id.as_local().is_some_and(|local| if let rustc_hir::Node::Item(item_hir) = tcx.hir_node_by_def_id(local) { matches!(item_hir.kind, rustc_hir::ItemKind::Mod(_, _)) } else { false });
+    let kind = NodeKind::Module { path: norm::module_path(tcx, def_id), file, vis, inline };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_struct_like_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
+    let adt = tcx.adt_def(def_id);
+    let variant = adt.non_enum_variant();
+    let struct_kind = match variant.ctor_kind() {
+        Some(rustc_hir::def::CtorKind::Fn) => StructKind::Tuple,
+        Some(rustc_hir::def::CtorKind::Const) => StructKind::Unit,
+        _ => StructKind::Named,
+    };
+    let fields = helpers::map_fields(tcx, variant.fields.iter(), false);
+    let derives = helpers::collect_derives(tcx, def_id);
+    let kind = NodeKind::Struct { name, vis, generics, fields, derives, attrs: Vec::new(), where_clauses, struct_kind };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_enum_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
+    let adt = tcx.adt_def(def_id);
+    let variants: Vec<EnumVariant> = adt.variants().iter().map(|v| EnumVariant { name: v.name.to_string(), fields: helpers::map_fields(tcx, v.fields.iter(), true) }).collect();
+    let derives = helpers::collect_derives(tcx, def_id);
+    let kind = NodeKind::Enum { name, vis, generics, variants, derives, attrs: Vec::new(), where_clauses };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_trait_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
+    let methods = helpers::collect_trait_methods(tcx, def_id);
+    let kind = NodeKind::Trait { name, vis, generics, methods, attrs: Vec::new(), where_clauses, unsafe_: false };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_impl_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
+    let for_trait = tcx.impl_opt_trait_ref(def_id).map(|eb| crate::types::TypeExpr::Path(norm::path(tcx, eb.skip_binder().def_id)));
+    let for_struct = helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity());
+    let kind = NodeKind::Impl { for_struct, for_trait, generics, attrs: Vec::new(), where_clauses, unsafe_: false };
+    let _ = name;
+    let _ = vis;
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_assoc_ty_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
+    let default_ty = if !matches!(tcx.associated_item(def_id).container, rustc_middle::ty::AssocContainer::Trait) {
+        helpers::declared_item_ty_expr(tcx, def_id).or_else(|| Some(helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity())))
+    } else {
+        None
+    };
+    let kind = NodeKind::AssocType { name, vis, generics, default_ty, attrs: Vec::new(), where_clauses };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_assoc_const_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
+    let default_value = {
+        let v = helpers::hir_init_src(tcx, def_id);
+        if v.trim().is_empty() {
+            None
+        } else {
+            Some(v)
+        }
+    };
+    let kind = NodeKind::AssocConst { name, vis, ty: ty_expr, default_value, attrs: Vec::new() };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_fn_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
+    let sig = tcx.fn_sig(def_id).skip_binder();
+    let returns_unit = sig.output().skip_binder().is_unit();
+    let params = helpers::map_params(tcx, def_id, sig.inputs().skip_binder());
+    let async_ = tcx.asyncness(def_id).is_async();
+    let ret = helpers::declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, sig.output().skip_binder()));
+    let unsafe_ = sig.safety() == rustc_hir::Safety::Unsafe;
+    let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+    let mut body = lower::mir_body_structural(tcx, def_id, &param_names, returns_unit);
+    if !returns_unit {
+        lower::materialize_return_local(&mut body);
+        // Deterministically replace remaining __ret gaps with a concrete return
+        // value derived from the declared return type, eliminating suppressed
+        // return bindings at the structural level.
+        let default_expr = helpers::default_return_expr(&ret);
+        lower::resolve_ret_gaps_with(&mut body, &default_expr);
+    }
+    let kind = NodeKind::Function { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_assoc_fn_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
+    let sig = tcx.fn_sig(def_id).skip_binder();
+    let returns_unit = sig.output().skip_binder().is_unit();
+    let params = helpers::map_params(tcx, def_id, sig.inputs().skip_binder());
+    let async_ = tcx.asyncness(def_id).is_async();
+    let ret = helpers::declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, sig.output().skip_binder()));
+    let unsafe_ = sig.safety() == rustc_hir::Safety::Unsafe;
+    let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+    let mut body = lower::mir_body_structural(tcx, def_id, &param_names, returns_unit);
+    if !returns_unit {
+        lower::materialize_return_local(&mut body);
+        // Deterministically replace remaining __ret gaps with a concrete return
+        // value derived from the declared return type, eliminating suppressed
+        // return bindings at the structural level.
+        let default_expr = helpers::default_return_expr(&ret);
+        lower::resolve_ret_gaps_with(&mut body, &default_expr);
+    }
+    let kind = NodeKind::Method { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_const_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
+    let value = helpers::hir_init_src(tcx, def_id);
+    let kind = NodeKind::Const { name, vis, ty: ty_expr, value, attrs: Vec::new() };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_ty_alias_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
+    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
+    let kind = NodeKind::TypeAlias { name, vis, generics, ty: ty_expr, attrs: Vec::new(), where_clauses };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_static_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let full_path = norm::path(tcx, def_id);
+    let name = norm::short(&full_path).to_string();
+    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
+    let value = helpers::hir_init_src(tcx, def_id);
+    let mutable = matches!(tcx.def_kind(def_id), DefKind::Static { mutability: rustc_hir::Mutability::Mut, .. });
+    let kind = NodeKind::Static { name, vis, ty: ty_expr, value, mutable, attrs: Vec::new() };
+    Some((vec![Node { id, kind, span }], vec![]))
+}
+
+fn lower_use_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index, rule: &RuleSpec) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
+    let id = *index.def_to_node.get(&def_id)?;
+    let local = def_id.as_local()?;
+    let rustc_hir::Node::Item(item_hir) = tcx.hir_node_by_def_id(local) else {
+        return Some((Vec::new(), Vec::new()));
+
+$ sed -n '260,380p' /workspace/ai_sandbox/canon/canon-capture/src/capture/engine.rs
+        return Some((Vec::new(), Vec::new()));
+    };
+    let rustc_hir::ItemKind::Use(use_path, use_kind) = item_hir.kind else {
+        return Some((Vec::new(), Vec::new()));
+    };
+    let raw_span = tcx.def_span(def_id);
+    let span_str = norm::span(tcx, raw_span);
+    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut edges: Vec<EdgeHint> = Vec::new();
+    let glob = matches!(use_kind, rustc_hir::UseKind::Glob);
+    let parent_src = tcx.opt_parent(def_id).and_then(|p| index.def_to_node.get(&p)).map(|nid| nid.index() as u32);
+
+    for (ordinal, res) in use_path.res.iter().flatten().enumerate() {
+        let rustc_hir::def::Res::Def(_, target_did) = res else {
+            continue;
+        };
+        let path = sanitize_use_path(&norm::path(tcx, *target_did));
+        // Invariant: macro-private helper segments (for example `_serde`) are
+        // compiler/internal scaffolding and must not cross the capture boundary.
+        if path.is_empty() || use_path_has_private_helper_segment(&path) {
+            continue;
+        }
+        let node_id = if ordinal == 0 { id } else { synthetic_use_id(id, ordinal as u32) };
+        let alias = match use_kind {
+            rustc_hir::UseKind::Single(ident) if ordinal == 0 => {
+                let leaf = path.rsplit("::").next().unwrap_or("");
+                if ident.name.as_str() != leaf {
+                    Some(ident.to_string())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        nodes.push(Node { id: node_id, kind: NodeKind::Use { vis: vis.clone(), path, alias, glob }, span: Some(span_str.clone()) });
+
+        if has_rule_edge(rule, RuleEdge::Contains) {
+            if let Some(parent) = parent_src {
+                edge_emit::push_contains(&mut edges, parent, node_id.index() as u32);
+            }
+        }
+        if has_rule_edge(rule, RuleEdge::Resolves) {
+            if let Some(&target_node) = index.def_to_node.get(target_did) {
+                edge_emit::push_resolves(&mut edges, node_id.index() as u32, target_node.index() as u32);
+                if has_rule_edge(rule, RuleEdge::Reexports) && is_public_vis(&vis) {
+                    edge_emit::push_reexports(&mut edges, node_id.index() as u32, target_node.index() as u32);
+                }
+            }
+        }
+    }
+
+    Some((nodes, edges))
+}
+
+fn sanitize_use_path(path: &str) -> String {
+    path.split("::").filter(|seg| !seg.is_empty() && *seg != "_").collect::<Vec<_>>().join("::")
+}
+
+fn use_path_has_private_helper_segment(path: &str) -> bool {
+    path.split("::").any(|seg| seg.starts_with('_'))
+}
+
+fn synthetic_use_id(base: NodeId, ordinal: u32) -> NodeId {
+    NodeId(1_000_000_000u32 + base.0.saturating_mul(1024) + ordinal)
+}
+
+fn is_public_vis(v: &Visibility) -> bool {
+    !matches!(v, Visibility::Private)
 }
 

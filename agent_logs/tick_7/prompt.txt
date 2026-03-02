@@ -1,5 +1,10 @@
 ## Tick 7 — observe phase
 
+**Working directory (all commands run here):** `/workspace/ai_sandbox/canon`
+**Repo root for source files:** `/workspace/ai_sandbox/canon`
+
+Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in all commands.
+
 ### Exit-check output
 ```
 
@@ -7,36 +12,261 @@
 
 ### Output from previous commands
 ```
-$ rg -n "fn materialize_return_local|fn resolve_ret_gaps_with" canon-capture/src -n
+$ sed -n '220,360p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/analysis.rs
+) -> Vec<Stmt> {
+    let mut suppressed_dest_sentinels: Vec<Stmt> = Vec::new();
+    for (bb_idx, bb) in body.basic_blocks.iter_enumerated() {
+        if bb.is_cleanup {
+            continue;
+        }
+        let idx = bb_idx.as_usize();
+        if !switch_analysis.switchint_arm_blocks.contains(&idx) && !switch_analysis.switch_sources.contains(&idx) {
+            continue;
+        }
+        if switch_analysis.switch_arm_writes_ret.contains(&idx) || switch_analysis.switch_arm_returns.contains(&idx) {
+            continue;
+        }
+        if let Some(term) = &bb.terminator
+            && let mir::TerminatorKind::Call { destination, .. } = &term.kind
+            && let Some(dest_name) = mir_util::label_place_dest(resolver, destination)
+        {
+            mir_guard::emit_suppressed_binding(&dest_name, defined, suppressed_sentinel_names, &mut suppressed_dest_sentinels);
+        }
+        for stmt in &bb.statements {
+            if let mir::StatementKind::Assign(boxed) = &stmt.kind {
+                let (lhs, _) = &**boxed;
+                if let Some(lhs_name) = mir_util::label_place_dest(resolver, lhs) {
+                    mir_guard::emit_suppressed_binding(&lhs_name, defined, suppressed_sentinel_names, &mut suppressed_dest_sentinels);
+                }
+            }
+        }
+    }
+    suppressed_dest_sentinels
+}
 
-$ sed -n '1,200p' canon-capture/src/capture/mir/mod.rs 2>/dev/null || true
-pub mod analysis;
-pub mod expr;
-pub mod filters;
-pub mod guard;
-pub mod lower;
-pub mod ops;
-pub mod passes;
-pub mod patterns;
-pub mod resolver;
-pub mod terminator;
-pub mod util;
+$ sed -n '220,360p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/expr.rs
+        ty::TyKind::Adt(adt, _) if adt.is_enum() => {
+            let downcast_idx = place.projection.iter().find_map(|elem| match elem {
+                mir::ProjectionElem::Downcast(_, idx) => Some(idx),
+                _ => None,
+            })?;
+            let f = adt.variant(downcast_idx).fields.get(field_idx)?;
+            let name = f.name.to_string();
+            if name.chars().all(|c| c.is_ascii_digit()) {
+                field_idx.index().to_string()
+            } else {
+                name
+            }
+        }
+        ty::TyKind::Tuple(_) => field_idx.index().to_string(),
+        _ => return None,
+    };
+    Some(Stmt::FieldAccess { base: resolver.label_place_ref(base)?, field, dest: Some(resolver.label_place(lhs)?) })
+}
+
+pub(crate) fn mir_struct_lit_stmt<'tcx>(tcx: TyCtxt<'tcx>, lhs: &mir::Place<'tcx>, rvalue: &mir::Rvalue<'tcx>, resolver: &LocalNameResolver) -> Option<Stmt> {
+    let mir::Rvalue::Aggregate(kind, operands) = rvalue else {
+        return None;
+    };
+    let mir::AggregateKind::Adt(adt_did, variant_idx, _, _, _) = &**kind else {
+        return None;
+    };
+    let adt = tcx.adt_def(*adt_did);
+    let variant = adt.variant(*variant_idx);
+    if adt.is_enum() && variant.fields.is_empty() {
+        return None;
+    }
+    let fields = variant.fields.iter().zip(operands.iter()).map(|(f, op)| Some((f.name.to_string(), mir_ops::mir_operand_label(tcx, op, resolver)?))).collect::<Option<Vec<_>>>()?;
+    let ctor_path = if adt.is_enum() { format!("{}::{}", norm::path(tcx, *adt_did), variant.name) } else { norm::path(tcx, *adt_did) };
+    Some(Stmt::StructLit { ty: TypeExpr::Path(ctor_path), fields, dest: Some(resolver.label_place(lhs)?) })
+}
+
+fn assign_rhs_should_suppress(rhs: &str) -> bool {
+    filters::is_zero_arg_enum_ctor_expr_str(rhs) || rhs.contains("SizedTypeProperties") || rhs.contains("std::alloc::Global") || rhs.contains("alloc::Global")
+}
+
+fn mir_rvalue_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, rvalue: &mir::Rvalue<'tcx>, resolver: &LocalNameResolver) -> Option<String> {
+    match rvalue {
+        mir::Rvalue::Use(op) => match op {
+            mir::Operand::Copy(place) | mir::Operand::Move(place) => {
+                if place.projection.is_empty() {
+                    resolver.label_place(place)
+                } else {
+                    render_projected_place_expr(tcx, local_decls, place, resolver)
+                }
+            }
+            _ => mir_ops::mir_operand_label(tcx, op, resolver),
+        },
+        mir::Rvalue::Ref(_, borrow_kind, place) => {
+            let place = render_projected_place_expr(tcx, local_decls, place, resolver)?;
+            Some(match borrow_kind {
+                mir::BorrowKind::Mut { .. } => format!("&mut {place}"),
+                _ => format!("&{place}"),
+            })
+        }
+        mir::Rvalue::RawPtr(raw_ptr_kind, place) => {
+            let place = render_projected_place_expr(tcx, local_decls, place, resolver)?;
+            Some(if matches!(raw_ptr_kind, mir::RawPtrKind::Mut) { format!("&mut {place}") } else { format!("&{place}") })
+        }
+        mir::Rvalue::BinaryOp(op, boxed) => {
+            let (lhs, rhs) = &**boxed;
+            let lhs = mir_ops::mir_operand_label(tcx, lhs, resolver)?;
+            let rhs = mir_ops::mir_operand_label(tcx, rhs, resolver)?;
+            match *op {
+                mir::BinOp::AddWithOverflow => Some(format!("({lhs}).overflowing_add({rhs})")),
+                mir::BinOp::SubWithOverflow => Some(format!("({lhs}).overflowing_sub({rhs})")),
+                mir::BinOp::MulWithOverflow => Some(format!("({lhs}).overflowing_mul({rhs})")),
+                _ => Some(format!("({lhs} {} {rhs})", mir_binop_token(*op)?)),
+            }
+        }
+        mir::Rvalue::UnaryOp(op, operand) => Some(format!("({}{})", mir_unop_token(*op), mir_ops::mir_operand_label(tcx, operand, resolver)?)),
+        mir::Rvalue::Cast(_, operand, ty) => Some(format!("({} as {})", mir_ops::mir_operand_label(tcx, operand, resolver)?, render_type_expr(tcx, &lower_ty(tcx, *ty)))),
+        mir::Rvalue::Aggregate(kind, operands) => match &**kind {
+            mir::AggregateKind::Adt(adt_did, variant_idx, _, _, _) => {
+                let adt = tcx.adt_def(*adt_did);
+                let variant = adt.variant(*variant_idx);
+                if !variant.fields.is_empty() || !operands.is_empty() {
+                    return None;
+                }
+                if adt.is_enum() {
+                    Some(format!("{}::{}", norm::path(tcx, *adt_did), variant.name))
+                } else {
+                    Some(norm::path(tcx, *adt_did))
+                }
+            }
+            mir::AggregateKind::Tuple => {
+                let elems = operands.iter().map(|op| mir_ops::mir_operand_label(tcx, op, resolver)).collect::<Option<Vec<_>>>()?;
+                if elems.len() == 1 {
+                    Some(format!("({},)", elems[0]))
+                } else {
+                    Some(format!("({})", elems.join(", ")))
+                }
+            }
+            mir::AggregateKind::Array(_) => {
+                let elems = operands.iter().map(|op| mir_ops::mir_operand_label(tcx, op, resolver)).collect::<Option<Vec<_>>>()?;
+                Some(format!("[{}]", elems.join(", ")))
+            }
+            _ => None,
+        },
+        mir::Rvalue::Repeat(operand, count) => {
+            let count = count.try_to_target_usize(tcx)?;
+            Some(format!("[{}; {count}]", mir_ops::mir_operand_label(tcx, operand, resolver)?))
+        }
+        mir::Rvalue::Discriminant(place) => Some(format!("{} as isize", resolver.label_place(place)?)),
+        mir::Rvalue::CopyForDeref(place) => resolver.label_place(place),
+        _ => None,
+    }
+}
+
+fn is_primitive_value_ty(ty: ty::Ty<'_>) -> bool {
+    matches!(ty.kind(), ty::TyKind::Bool | ty::TyKind::Char | ty::TyKind::Int(..) | ty::TyKind::Uint(..) | ty::TyKind::Float(..) | ty::TyKind::Str | ty::TyKind::Never)
+}
+
+$ sed -n '1,200p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/util.rs
+use rustc_middle::mir;
+use rustc_middle::mir::visit::Visitor;
+use std::collections::{HashMap, HashSet};
+
+use crate::capture::mir::guard as mir_guard;
+use crate::capture::mir::resolver::LocalNameResolver;
+use crate::types::Stmt;
+
+pub(crate) fn label_place_dest(resolver: &LocalNameResolver, place: &mir::Place<'_>) -> Option<String> {
+    if let Some(name) = resolver.label_place(place) {
+        return Some(name);
+    }
+    let has_unsafe_proj = place.projection.iter().any(|p| matches!(p, mir::ProjectionElem::Downcast(..) | mir::ProjectionElem::OpaqueCast(..) | mir::ProjectionElem::UnwrapUnsafeBinder(..)));
+    if has_unsafe_proj {
+        return None;
+    }
+    resolver.label_local(place.local)
+}
+
+pub(crate) fn remap_bb_target(target: mir::BasicBlock, mir_to_emitted: &[Option<u32>]) -> Option<u32> {
+    mir_to_emitted.get(target.as_usize()).and_then(|slot| *slot)
+}
+
+pub(crate) fn bb_writes_return_place(bb: &mir::BasicBlockData<'_>) -> bool {
+    for stmt in &bb.statements {
+        let mir::StatementKind::Assign(boxed) = &stmt.kind else {
+            continue;
+        };
+        let (lhs, _) = &**boxed;
+        if lhs.local.as_u32() == 0 {
+            return true;
+        }
+    }
+    let Some(term) = &bb.terminator else {
+        return false;
+    };
+    if let mir::TerminatorKind::Call { destination, .. } = &term.kind {
+        return destination.local.as_u32() == 0;
+    }
+    false
+}
+
+pub(crate) fn stmt_defines_ret(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Assign { lhs, .. } => lhs == "__ret",
+        Stmt::Call { dest: Some(dest), .. } => dest == "__ret",
+        Stmt::FieldAccess { dest: Some(dest), .. } => dest == "__ret",
+        Stmt::MethodCall { dest: Some(dest), .. } => dest == "__ret",
+        Stmt::StructLit { dest: Some(dest), .. } => dest == "__ret",
+        Stmt::Match { dest: Some(dest) } => dest == "__ret",
+        _ => false,
+    }
+}
+
+pub(crate) fn emit_suppressed_ret_binding(stmts: &mut Vec<Stmt>, defined: &mut HashSet<String>) {
+    stmts.push(Stmt::Assign { lhs: "__ret".to_string(), rhs: "__canon_suppressed__".to_string() });
+    defined.insert("__ret".to_string());
+}
+
+pub(crate) fn emit_suppressed_for_name(name: &str, stmts: &mut Vec<Stmt>, defined: &mut HashSet<String>, suppressed_sentinel_names: &mut HashSet<String>) {
+    // Never suppress __ret; return must be lowered structurally.
+    if name == "__ret" {
+        return;
+    }
+    if name == "__ret" {
+        emit_suppressed_ret_binding(stmts, defined);
+    } else {
+        mir_guard::emit_suppressed_binding(name, defined, suppressed_sentinel_names, stmts);
+    }
+}
+
+pub(crate) fn count_local_uses<'tcx>(body: &mir::Body<'tcx>) -> HashMap<u32, usize> {
+    struct Counter {
+        counts: HashMap<u32, usize>,
+    }
+    impl<'tcx> Visitor<'tcx> for Counter {
+        fn visit_local(&mut self, local: mir::Local, context: rustc_middle::mir::visit::PlaceContext, location: rustc_middle::mir::Location) {
+            if context.is_use() {
+                *self.counts.entry(local.as_u32()).or_insert(0) += 1;
+            }
+            self.super_local(local, context, location);
+        }
+    }
+    let mut counter = Counter { counts: HashMap::new() };
+    counter.visit_body(body);
+    counter.counts
+}
 
 
 ```
 
 ### Recent rationale history
 ```
-[T-5] Since __ret is central to the invariant and there is a dedicated ret.rs plus logic in terminator.rs and lower.rs handling return synthesis, inspect these files to understand the intended structural return binding path before planning any changes.
+[T-5] We need to inspect (1) the return-synthesis region in lower.rs around has_ret_binding and the fallback block insertion, (2) lower_return_terminator to see when it emits Match { dest: Some("__ret") }, and (3) expr.rs handling of lhs == "__ret" to verify whether panic-based or suppressed initializations are being filtered or rewritten correctly. These are the most likely sources of missing structural __ret assignments.
 ---
-[T-4] The fallback logic in lower.rs looks structurally correct, so the remaining gaps may be introduced later in the pipeline (e.g., engine-level post-processing or emission). Inspect engine.rs to see if __ret gaps are rewritten or reintroduced, and inspect types.rs to confirm how Body/Stmt/Return are represented and whether ReturnPlace or Expr-based returns are bypassing structural __ret assignment.
+[T-4] The invariant description points directly at pass_lower_match_dest_to_suppressed converting Match { dest: Some("__ret") } into a suppressed assignment. Since lower_return_terminator no longer emits Match but structural Assign+Return, we must inspect passes.rs to confirm whether any transformation is still suppressing __ret-producing statements (especially Match lowering) and inadvertently removing legitimate structural __ret bindings.
 ---
-[T-3] Engine calls materialize_return_local and resolve_ret_gaps_with after MIR structural lowering. If gaps still exist in emitted Rust, the issue likely lies in these helpers or their interaction with stage_finalize_body_with_ret_fallback. Inspect their definitions and the full lower.rs to verify whether __ret assignments are being dropped, overwritten, or structurally bypassed.
+[T-3] We have confirmed that match lowering rewrites Match { dest: Some("__ret") } into suppressed assignments and that return terminators synthesize Assign+Return structurally. However, stage_finalize_body_with_ret_fallback operates on Vec<BasicBlock> before normalization passes, while match-dest suppression occurs during normalization. We must now inspect the exact ordering in lower.rs: where make_body_draft/normalize_blocks is called relative to stage_finalize_body_with_ret_fallback. If fallback runs before normalization, the pass may reintroduce suppressed __ret via match lowering. Inspect the body assembly flow in lower.rs to confirm pipeline order.
 ---
-[T-2] The search for materialize_return_local and resolve_ret_gaps_with returned no results, which is suspicious because engine.rs calls them. This suggests either they are defined elsewhere (possibly re-exported or in another module) or missing entirely. Also inspect stmts_have_ret_binding/match helpers and the remainder of lower.rs to verify whether return-detection logic is inconsistent, leading to false negatives and missed __ret synthesis.
+[T-2] pass_lower_match_dest_to_suppressed was unconditionally converting Match { dest: Some("__ret") } into a suppressed assignment, reintroducing __ret gaps after structural fallback. By exempting __ret from suppression, we preserve legitimate structural return bindings and prevent unresolved_ret_gap_count from increasing while keeping other suppression behavior intact.
 ---
-[T-1] engine.rs invokes materialize_return_local and resolve_ret_gaps_with, but earlier search did not reveal their definitions inside capture/mir. Verify whether these functions are actually defined (possibly in another module or re-exported) or missing entirely. If missing, that would explain why __ret gaps persist despite intended post-processing.
+[T-1] Reviewed engine.rs to confirm pipeline order. mir_body_structural is called first, then materialize_return_local (no-op), then resolve_ret_gaps_with, all before the NodeKind::Function is constructed. Normalization (including pass_lower_match_dest_to_suppressed) occurs inside mir_body_structural via the MIR lowering pipeline. Therefore, suppressing Match { dest: Some("__ret") } was happening during normalization, after structural return synthesis, reintroducing __ret gaps. The previous patch correctly targets that suppression point.
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
 `{"phase":"observe","deltas":[...],"rationale":"..."}`
+

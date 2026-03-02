@@ -15,6 +15,18 @@ Each response must declare one of:
 - `"act"`     — mutate files (`ApplyPatch`, `Bash`)
 - `"verify"`  — confirm fix (`BashReadOnly`; triggers exit check)
 
+## Patch grounding rule (MANDATORY for every act phase)
+Before emitting any `ApplyPatch` delta you MUST have issued a `BashReadOnly`
+with `sed -n '<start>,<end>p'` covering the **exact context lines** you will
+use as anchors in the patch — either in this tick or a prior observe tick.
+Never write patch context lines from memory or inference; always read first.
+
+## BashReadOnly whitelisted commands
+Only these prefixes are permitted: `rg`, `cat`, `ls`, `tree`, `sed`, `awk`,
+`perl`, `find`, `head`, `tail`, `wc`, `diff`, `stat`, `echo`, `pwd`, `cargo`
+(`cargo` for read-only ops only: `check`, `build`, `test`).
+Anything else is rejected at runtime.
+
 ## Current exit-check output
 ```
 {{EXIT_CHECK_OUTPUT}}

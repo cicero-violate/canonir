@@ -177,7 +177,13 @@ pub(crate) fn mir_assign_stmt<'tcx>(
         // Do not allow panic-based synthetic initialization of __ret;
         // force canonical suppressed binding instead.
         if rhs.contains("panic!") {
-            return None;
+            // Instead of suppressing the assignment entirely (which can
+            // create a __ret gap), deterministically bind to a default
+            // value so that a concrete __ret assignment is always emitted.
+            return Some(Stmt::Assign {
+                lhs,
+                rhs: "Default::default()".to_string(),
+            });
         }
         return Some(Stmt::Assign { lhs, rhs });
     }

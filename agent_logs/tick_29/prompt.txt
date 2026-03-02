@@ -1,5 +1,10 @@
 ## Tick 29 — observe phase
 
+**Working directory (all commands run here):** `/workspace/ai_sandbox/canon`
+**Repo root for source files:** `/workspace/ai_sandbox/canon`
+
+Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in all commands.
+
 ### Exit-check output
 ```
 
@@ -12,16 +17,17 @@
 
 ### Recent rationale history
 ```
-[T-5] Verify that the newly added materialize_return_local and resolve_ret_gaps_with functions are present in lower.rs and correctly inserted at the end of the file before proceeding to a verify phase.
+[T-5] The current lower.rs still shows resolve_ret_gaps_with as a no-op, confirming that the previous rewrite patch did not apply. There is no panic-based __ret rewrite logic present in the file. Therefore, unresolved_ret_gap_count will continue to be driven by emitted `let mut __ret = panic!("canon ...")` patterns. The next corrective action must target the actual location that emits those panic-based initializers, rather than assuming post-structural rewriting is active.
 ---
-[T-4] Confirm that the two functions are still undefined anywhere in the workspace and that lower.rs length remains unchanged, ensuring no partial insertion occurred before proceeding to implement them.
+[T-4] Previous sed output still showed resolve_ret_gaps_with as a no-op, which suggests the rewrite patch did not apply. Re-locate the function definition and print its current body to confirm the actual on-disk implementation before proceeding.
 ---
-[T-3] Inspect the exact call sites in engine.rs to confirm the expected signatures and semantics of materialize_return_local and resolve_ret_gaps_with before moving to the act phase. This ensures the new implementations in lower.rs match how they are invoked.
+[T-3] Confirmed via search that materialize_return_local and resolve_ret_gaps_with are not defined in lower.rs (no pub(crate) fn matches), and the shown region contains only MIR assignment lowering and return-detection helpers. There is still no panic-based __ret rewrite logic present. Therefore, any reduction in unresolved_ret_gap_count must come from modifying the code path that emits `let mut __ret = panic!("canon ...")` rather than relying on post-structural hooks in lower.rs.
 ---
-[T-2] Re-inspect the definitions of Body, BasicBlock, Stmt, and Terminator to ensure the upcoming implementations of materialize_return_local and resolve_ret_gaps_with correctly mutate the structural MIR representation.
+[T-2] engine.rs still invokes materialize_return_local and resolve_ret_gaps_with, but lower.rs contains no implementations beyond earlier no-op hooks (and currently none are visible in the scanned region). There is no panic-based __ret rewrite logic present anywhere in lower.rs. Therefore, unresolved_ret_gap_count—computed by grepping for `let mut __ret = panic!("canon ...")` in emitted Rust—cannot be reduced by the current structural fallback or no-op hooks. The actual emission site of those panic-based initializers must be located and corrected, as post-structural rewriting is not active in the current filesystem state.
 ---
-[T-1] Confirm the exact shape of Terminator variants and full Stmt/BasicBlock definitions (especially return-related forms) so the new functions can correctly rewrite Return(None), ensure __ret bindings, and handle block terminators without breaking structural invariants.
+[T-1] Previous response did not include the required fenced JSON block. This corrected response emits a properly formatted JSON object as required by the controller.
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
 `{"phase":"observe","deltas":[...],"rationale":"..."}`
+

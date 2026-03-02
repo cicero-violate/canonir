@@ -234,13 +234,19 @@ pub(crate) fn collect_suppressed_dest_sentinels(
             && let mir::TerminatorKind::Call { destination, .. } = &term.kind
             && let Some(dest_name) = mir_util::label_place_dest(resolver, destination)
         {
-            mir_guard::emit_suppressed_binding(&dest_name, defined, suppressed_sentinel_names, &mut suppressed_dest_sentinels);
+            // Never suppress the structural return binding
+            if dest_name != "__ret" {
+                mir_guard::emit_suppressed_binding(&dest_name, defined, suppressed_sentinel_names, &mut suppressed_dest_sentinels);
+            }
         }
         for stmt in &bb.statements {
             if let mir::StatementKind::Assign(boxed) = &stmt.kind {
                 let (lhs, _) = &**boxed;
                 if let Some(lhs_name) = mir_util::label_place_dest(resolver, lhs) {
-                    mir_guard::emit_suppressed_binding(&lhs_name, defined, suppressed_sentinel_names, &mut suppressed_dest_sentinels);
+                    // Never suppress the structural return binding
+                    if lhs_name != "__ret" {
+                        mir_guard::emit_suppressed_binding(&lhs_name, defined, suppressed_sentinel_names, &mut suppressed_dest_sentinels);
+                    }
                 }
             }
         }
