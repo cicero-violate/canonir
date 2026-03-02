@@ -1,35 +1,54 @@
 ## Tick 17 — observe phase
 
-**Working directory (all commands run here):** `/workspace/ai_sandbox/canon`
-**Repo root for source files:** `/workspace/ai_sandbox/canon`
-
-Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in all commands.
-
-### Exit-check output
-```
-
-```
-
 ### Output from previous commands
 ```
-$ sed -n '420,700p' canon-capture/src/capture/mir/lower.rs
-
-
+$ rg -n '"\(\)"\.to_string\(\)' canon-capture/src/capture
+canon-capture/src/capture/helpers.rs:470:            PrimType::Unit => "()".to_string(),
+canon-capture/src/capture/helpers.rs:499:                "()".to_string()
+canon-capture/src/capture/helpers.rs:527:        TypeExpr::Primitive(PrimType::Unit) => "()".to_string(),
+canon-capture/src/capture/helpers.rs:535:                "()".to_string()
+canon-capture/src/capture/helpers.rs:548:            None => "()".to_string(),
+canon-capture/src/capture/helpers.rs:551:        TypeExpr::FnPtr { .. } => "()".to_string(),
+canon-capture/src/capture/helpers.rs:552:        TypeExpr::Param(_) => "()".to_string(),
+canon-capture/src/capture/helpers.rs:553:        TypeExpr::DynTrait(_) => "()".to_string(),
+canon-capture/src/capture/helpers.rs:554:        TypeExpr::ImplTrait(_) => "()".to_string(),
+canon-capture/src/capture/helpers.rs:567:                "()".to_string()
+canon-capture/src/capture/helpers.rs:581:                "()".to_string()
+canon-capture/src/capture/mir/terminator.rs:32:                rhs: "()".to_string(),
+canon-capture/src/capture/mir/terminator.rs:47:                rhs: "()".to_string(),
+canon-capture/src/capture/mir/terminator.rs:64:                    rhs: "()".to_string(),
+canon-capture/src/capture/mir/terminator.rs:77:                        rhs: "()".to_string(),
+canon-capture/src/capture/mir/terminator.rs:100:                    rhs: "()".to_string(),
+canon-capture/src/capture/mir/terminator.rs:110:                rhs: "()".to_string(),
+canon-capture/src/capture/mir/passes.rs:119:                        rhs: "()".to_string(),
 ```
 
 ### Recent rationale history
 ```
-[T-5] We have confirmed return synthesis logic and hooks are structurally consistent. The remaining unknown is the cargo check failure (exit 101). Re-running cargo check in the correct working directory will surface the exact compiler errors so we can address the real failing invariant or type issue.
+[T-5] Continue through `mir_rvalue_expr` to see which Rvalue variants return `None`, triggering the `"()"` fallback in `mir_assign_stmt`. We need to identify which common aggregates (Vec, String, Option, iterators) are currently unhandled and therefore collapsing to unit.
 ---
-[T-4] Exit-check output is empty, and previous cargo invocation did not capture compiler diagnostics. Run cargo check for the canon-capture crate from the workspace root to surface the exact compilation errors causing exit status 101.
+[T-4] The root cause of widespread `()` pollution is the silent fallback to unit in `mir_assign_stmt` whenever `mir_rvalue_expr` returns None. This collapses non-unit values (Vec, Option, iterators, etc.) into `()`, breaking type flow across the entire emitted program. The fix is to stop fabricating `()` at the expression layer and instead return `None`, allowing higher-level lowering logic to handle suppression deterministically without destroying type information.
 ---
-[T-3] Run cargo check for the canon-capture crate from the workspace root to capture the compiler errors causing exit status 101 so we can diagnose and fix the build failure.
+[T-3] Re-run the full orchestration pipeline after removing the unit fallback in mir_assign_stmt to verify that unit pollution is eliminated and that all fixtures emit gap-free, compiling Rust.
 ---
-[T-2] The previous cargo check exited with status 101, which stopped execution before emitting diagnostics. Re-run cargo check while capturing stderr and forcing a zero exit (|| true) so the full compiler error output is surfaced for diagnosis.
+[T-2] The build still shows pervasive `()` pollution, meaning unit is still being fabricated elsewhere. Search the capture pipeline for remaining explicit "()" assignment fallbacks (outside mir_assign_stmt) that may still be collapsing non-unit values to unit.
 ---
-[T-1] Telemetry confirms unresolved_ret_gap_count is computed by grepping emitted Rust for `let mut __ret = panic!("canon ...)`. Since MIR lowering now avoids suppressed __ret and stage_finalize_body_with_ret_fallback injects structural `Assign + Return`, any remaining unresolved gaps must originate in code generation (emit stage), not MIR lowering. Next debugging focus should shift to the Rust emission layer that materializes `let mut __ret = panic!(...)` scaffolding in orchestration output.
+[T-1] The previous search pattern was too specific. We need to search for any remaining explicit `"()".to_string()` fabrications across the capture layer (terminator, lower, passes, etc.) that may still be introducing unit fallbacks and polluting non-unit value flow.
+```
+
+### Structural progress
+```
+gap_count=0 (prev=0, trend=n/a (first tick))
+compile=ok errors=0
+stagnation=2
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
-`{"phase":"observe","deltas":[...],"rationale":"..."}`
+
+### Delta schema (MANDATORY)
+```json
+{ "BashReadOnly": { "command": "rg -n 'pattern' src/" } }
+```
+Never: `{ "type": "BashReadOnly", "command": "..." }` — rejected.
+Full shape: `{"phase":"observe","deltas":[...],"rationale":"..."}`
 

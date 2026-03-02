@@ -20,7 +20,11 @@ pub(crate) fn render_projected_place_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: 
     for elem in place.projection.iter() {
         match elem {
             mir::ProjectionElem::Deref => {
-                expr = format!("*{expr}");
+                // Avoid eagerly materializing `*expr` in the rendered output.
+                // Emitting explicit deref here interacts poorly with enum
+                // downcast projection, producing `match *self` and moving out
+                // of borrowed values. Instead, keep the base expression
+                // unchanged and only advance the type cursor.
                 cursor_ty = match cursor_ty.kind() {
                     ty::TyKind::Ref(_, inner, _) => *inner,
                     ty::TyKind::RawPtr(inner, _) => *inner,
@@ -83,7 +87,10 @@ pub(crate) fn render_projected_place_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: 
         let enum_path = norm::path(tcx, adt.did());
         let variant = adt.variant(downcast.0);
         let variant_path = format!("{enum_path}::{}", variant.name);
-        expr = format!("match {expr} {{ {variant_path} => (), _ => panic!(\"canon downcast projection mismatch\") }}");
+        // Match on a reference to avoid moving out of borrowed values (e.g., &self).
+        expr = format!(
+            "match &{expr} {{ {variant_path} => (), _ => panic!(\"canon downcast projection mismatch\") }}"
+        );
     }
     Some(expr)
 }
@@ -122,7 +129,15 @@ fn render_downcast_field_expr<'tcx>(tcx: TyCtxt<'tcx>, base_expr: &str, enum_ty:
         }
     };
 
-    Some(format!("match {base_expr} {{ {pattern} => {select}, _ => panic!(\"canon downcast projection mismatch\") }}"))
+    // Match on a reference to avoid moving out of borrowed enum values (e.g., &self).
+    // This prevents generated code like `match *self` from moving non-Copy fields.
+    // Ensure we never accidentally match on a dereferenced value like `*self`.
+    // If the base expression already starts with a deref, strip the leading `*`
+    // and match on a reference to the underlying expression instead.
+    let safe_base = base_expr.strip_prefix('*').unwrap_or(base_expr);
+    Some(format!(
+        "match &{safe_base} {{ {pattern} => {select}, _ => panic!(\"canon downcast projection mismatch\") }}"
+    ))
 }
 
 pub(crate) fn mir_binop_token(op: mir::BinOp) -> Option<&'static str> {
@@ -169,7 +184,16 @@ pub(crate) fn mir_assign_stmt<'tcx>(
     suppressed_sentinel_names: &std::collections::HashSet<String>,
 ) -> Option<Stmt> {
     let lhs = resolver.label_place(lhs)?;
-    let rhs = mir_rvalue_expr(tcx, local_decls, rvalue, resolver)?;
+    // If we cannot render the rvalue into a concrete expression, do NOT
+    // silently collapse it to unit. That destroys type information and
+    // propagates `()` into non-unit locals (Vec, Option, String, etc.),
+    // leading to downstream type errors in emitted Rust.
+    // Instead, return None so the caller can decide whether to
+    // structurally suppress or handle the assignment.
+    let rhs = match mir_rvalue_expr(tcx, local_decls, rvalue, resolver) {
+        Some(expr) => expr,
+        None => return None,
+    };
     if assign_rhs_should_suppress(&rhs) {
         return None;
     }
@@ -177,13 +201,10 @@ pub(crate) fn mir_assign_stmt<'tcx>(
         // Do not allow panic-based synthetic initialization of __ret;
         // force canonical suppressed binding instead.
         if rhs.contains("panic!") {
-            // Instead of suppressing the assignment entirely (which can
-            // create a __ret gap), deterministically bind to a default
-            // value so that a concrete __ret assignment is always emitted.
-            return Some(Stmt::Assign {
-                lhs,
-                rhs: "Default::default()".to_string(),
-            });
+            // Do not downgrade panic-based structural expressions to unit.
+            // Preserve the diverging expression to maintain correct typing
+            // and avoid propagating `()` into non-unit locals.
+            return Some(Stmt::Assign { lhs, rhs });
         }
         return Some(Stmt::Assign { lhs, rhs });
     }

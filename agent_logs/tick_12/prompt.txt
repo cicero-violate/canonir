@@ -1,48 +1,177 @@
 ## Tick 12 — observe phase
 
-**Working directory (all commands run here):** `/workspace/ai_sandbox/canon`
-**Repo root for source files:** `/workspace/ai_sandbox/canon`
-
-Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in all commands.
-
-### Exit-check output
-```
-
-```
-
 ### Output from previous commands
 ```
-$ cargo check -p canon-capture 2>&1
-    Checking canon-capture v0.1.0 (/workspace/ai_sandbox/canon/canon-capture)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.94s
+$ sed -n '200,340p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/expr.rs
+        // force canonical suppressed binding instead.
+        if rhs.contains("panic!") {
+            // Instead of introducing an untyped Default::default() (which
+            // causes downstream type inference failures), emit a unit
+            // literal as a conservative structural fallback. Higher-level
+            // return synthesis will inject a typed default if needed.
+            return Some(Stmt::Assign {
+                lhs,
+                rhs: "()".to_string(),
+            });
+        }
+        return Some(Stmt::Assign { lhs, rhs });
+    }
+    if !mir_guard::value_known(&rhs, defined, suppressed_sentinel_names) {
+        return None;
+    }
+    Some(Stmt::Assign { lhs, rhs })
+}
 
+pub(crate) fn mir_field_access_stmt<'tcx>(tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, lhs: &mir::Place<'tcx>, rvalue: &mir::Rvalue<'tcx>, resolver: &LocalNameResolver) -> Option<Stmt> {
+    let mir::Rvalue::Use(mir::Operand::Copy(place) | mir::Operand::Move(place)) = rvalue else {
+        return None;
+    };
+    let (base, proj) = place.as_ref().last_projection()?;
+    let mir::ProjectionElem::Field(field_idx, ty) = proj else {
+        return None;
+    };
 
+    let base_ty = base.ty(local_decls, tcx).ty;
+    if is_primitive_value_ty(base_ty) {
+        return None;
+    }
+
+    let field = match base_ty.kind() {
+        ty::TyKind::Adt(adt, _) if adt.is_struct() || adt.is_union() => {
+            if !adt.did().is_local() {
+                let tuple_like = adt.non_enum_variant().fields.iter().all(|f| f.name.to_string().chars().all(|c| c.is_ascii_digit()));
+                if tuple_like {
+                    return None;
+                }
+            }
+            let f = adt.non_enum_variant().fields.get(field_idx)?;
+            let name = f.name.to_string();
+            if name.chars().all(|c| c.is_ascii_digit()) {
+                field_idx.index().to_string()
+            } else {
+                name
+            }
+        }
+        ty::TyKind::Adt(adt, _) if adt.is_enum() => {
+            let downcast_idx = place.projection.iter().find_map(|elem| match elem {
+                mir::ProjectionElem::Downcast(_, idx) => Some(idx),
+                _ => None,
+            })?;
+            let f = adt.variant(downcast_idx).fields.get(field_idx)?;
+            let name = f.name.to_string();
+            if name.chars().all(|c| c.is_ascii_digit()) {
+                field_idx.index().to_string()
+            } else {
+                name
+            }
+        }
+        ty::TyKind::Tuple(_) => field_idx.index().to_string(),
+        _ => return None,
+    };
+    Some(Stmt::FieldAccess { base: resolver.label_place_ref(base)?, field, dest: Some(resolver.label_place(lhs)?) })
+}
+
+pub(crate) fn mir_struct_lit_stmt<'tcx>(tcx: TyCtxt<'tcx>, lhs: &mir::Place<'tcx>, rvalue: &mir::Rvalue<'tcx>, resolver: &LocalNameResolver) -> Option<Stmt> {
+    let mir::Rvalue::Aggregate(kind, operands) = rvalue else {
+        return None;
+    };
+    let mir::AggregateKind::Adt(adt_did, variant_idx, _, _, _) = &**kind else {
+        return None;
+    };
+    let adt = tcx.adt_def(*adt_did);
+    let variant = adt.variant(*variant_idx);
+    if adt.is_enum() && variant.fields.is_empty() {
+        return None;
+    }
+    let fields = variant.fields.iter().zip(operands.iter()).map(|(f, op)| Some((f.name.to_string(), mir_ops::mir_operand_label(tcx, op, resolver)?))).collect::<Option<Vec<_>>>()?;
+    let ctor_path = if adt.is_enum() { format!("{}::{}", norm::path(tcx, *adt_did), variant.name) } else { norm::path(tcx, *adt_did) };
+    Some(Stmt::StructLit { ty: TypeExpr::Path(ctor_path), fields, dest: Some(resolver.label_place(lhs)?) })
+}
+
+fn assign_rhs_should_suppress(rhs: &str) -> bool {
+    filters::is_zero_arg_enum_ctor_expr_str(rhs) || rhs.contains("SizedTypeProperties") || rhs.contains("std::alloc::Global") || rhs.contains("alloc::Global")
+}
+
+fn mir_rvalue_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, rvalue: &mir::Rvalue<'tcx>, resolver: &LocalNameResolver) -> Option<String> {
+    match rvalue {
+        mir::Rvalue::Use(op) => match op {
+            mir::Operand::Copy(place) | mir::Operand::Move(place) => {
+                if place.projection.is_empty() {
+                    resolver.label_place(place)
+                } else {
+                    render_projected_place_expr(tcx, local_decls, place, resolver)
+                }
+            }
+            _ => mir_ops::mir_operand_label(tcx, op, resolver),
+        },
+        mir::Rvalue::Ref(_, borrow_kind, place) => {
+            let place = render_projected_place_expr(tcx, local_decls, place, resolver)?;
+            Some(match borrow_kind {
+                mir::BorrowKind::Mut { .. } => format!("&mut {place}"),
+                _ => format!("&{place}"),
+            })
+        }
+        mir::Rvalue::RawPtr(raw_ptr_kind, place) => {
+            let place = render_projected_place_expr(tcx, local_decls, place, resolver)?;
+            Some(if matches!(raw_ptr_kind, mir::RawPtrKind::Mut) { format!("&mut {place}") } else { format!("&{place}") })
+        }
+        mir::Rvalue::BinaryOp(op, boxed) => {
+            let (lhs, rhs) = &**boxed;
+            let lhs = mir_ops::mir_operand_label(tcx, lhs, resolver)?;
+            let rhs = mir_ops::mir_operand_label(tcx, rhs, resolver)?;
+            match *op {
+                mir::BinOp::AddWithOverflow => Some(format!("({lhs}).overflowing_add({rhs})")),
+                mir::BinOp::SubWithOverflow => Some(format!("({lhs}).overflowing_sub({rhs})")),
+                mir::BinOp::MulWithOverflow => Some(format!("({lhs}).overflowing_mul({rhs})")),
+                _ => Some(format!("({lhs} {} {rhs})", mir_binop_token(*op)?)),
+            }
+        }
+        mir::Rvalue::UnaryOp(op, operand) => Some(format!("({}{})", mir_unop_token(*op), mir_ops::mir_operand_label(tcx, operand, resolver)?)),
+        mir::Rvalue::Cast(_, operand, ty) => Some(format!("({} as {})", mir_ops::mir_operand_label(tcx, operand, resolver)?, render_type_expr(tcx, &lower_ty(tcx, *ty)))),
+        mir::Rvalue::Aggregate(kind, operands) => match &**kind {
+            mir::AggregateKind::Adt(adt_did, variant_idx, _, _, _) => {
+                let adt = tcx.adt_def(*adt_did);
+                let variant = adt.variant(*variant_idx);
+                if !variant.fields.is_empty() || !operands.is_empty() {
+                    return None;
+                }
+                if adt.is_enum() {
+                    Some(format!("{}::{}", norm::path(tcx, *adt_did), variant.name))
+                } else {
+                    Some(norm::path(tcx, *adt_did))
+                }
+            }
+            mir::AggregateKind::Tuple => {
+                let elems = operands.iter().map(|op| mir_ops::mir_operand_label(tcx, op, resolver)).collect::<Option<Vec<_>>>()?;
+                if elems.len() == 1 {
 ```
 
 ### Recent rationale history
 ```
-[T-5] The previously reported compile errors (E0282 and E0560) are already resolved in the current file state: suppressed_dest_sentinels is explicitly typed as Vec<Stmt>, and BasicBlock now correctly uses the `terminator` field instead of `term`. The fallback return synthesis block is also structurally correct. The code shown is consistent and properly grounded; next step should be to re-run cargo check to confirm the build is clean in this state.
+[T-5] Enforce the structural invariant at the authoritative return-lowering site. If `__ret` was not previously bound along the current path, synthesize a concrete assignment using a diverging expression (`panic!`) to preserve type context and avoid unit pollution. This guarantees a real `Stmt::Assign` to `__ret` before every non-unit `Return`, eliminating undefined `__ret` gaps while maintaining Rust type correctness.
 ---
-[T-4] types::BasicBlock correctly defines the `terminator` field, and lower.rs now uses `terminator` consistently. suppressed_dest_sentinels is explicitly typed as Vec<Stmt>. Re-running cargo check to confirm the crate builds cleanly after the latest structural changes.
+[T-4] Run the full orchestration pipeline across all fixtures to validate that the enforced __ret binding invariant eliminates return gaps and that emitted Rust compiles cleanly without suppressed bindings.
 ---
-[T-3] cargo check for canon-capture now completes successfully with no errors. The crate builds cleanly, meaning the previous E0282 and E0560 issues are resolved and the strengthened return synthesis compiles correctly. At this point, the structural invariant enforcement changes are building; next step would be orchestration-level validation (e.g., unresolved_ret_gap_count) rather than further compilation fixes.
+[T-3] The current failures show widespread unit (`()`) propagation (e.g., `_v10.expect(...)` where `_v10` is `()`). This indicates the problem is not just missing `__ret`, but earlier MIR lowering emitting `()`-typed assignments. Inspect the emitted `extractor.rs` for the concrete failing function to trace where unit values originate in the value-flow.
 ---
-[T-2] Compilation is clean; execute the canon-capture test suite to validate that strengthened __ret structural guarantees do not introduce behavioral regressions and that the invariant holds under tests.
+[T-2] The emitted extractor shows locals like `symbols = ();`, `methods = ();`, etc., meaning MIR expression lowering is fabricating unit for non-unit aggregates (Vec, String, Option). The root cause is likely in `mir_expr::mir_assign_stmt` or related expression lowering. Inspect expr.rs to see where non-structural expressions fall back to `()`.
 ---
-[T-1] cargo test for canon-capture completed successfully: all unit tests passed (2/2) and doc-tests passed (0 failures). The crate compiles cleanly and the strengthened structural __ret guarantees did not introduce regressions at the test level. The build and test suite are now green.
+[T-1] Continue inspecting `mir_assign_stmt` to see how `__ret` is treated and how rvalues that fail to render are handled. The fallback to `"()"` in `mir_assign_stmt` is likely the direct source of unit pollution for non-unit locals like `symbols`, `methods`, etc.
+```
+
+### Structural progress
+```
+gap_count=0 (prev=0, trend=n/a (first tick))
+compile=ok errors=0
+stagnation=3
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
-`{"phase":"observe","deltas":[...],"rationale":"..."}`
 
-### BashReadOnly whitelisted commands
-Only the following command prefixes are permitted in `BashReadOnly` deltas:
-`rg`, `cat`, `ls`, `tree`, `sed`, `awk`, `perl`, `find`, `head`, `tail`,
-`wc`, `diff`, `stat`, `echo`, `pwd`, `cargo`
-
-For `cargo`, read-only invocations only: `cargo check -p <crate> 2>&1`,
-`cargo build -p <crate> 2>&1`, `cargo test -p <crate> 2>&1`.
-Any other command prefix will be rejected at runtime with an error.
-`cargo` commands automatically run from the repo root `/workspace/ai_sandbox/canon` —
-do NOT prefix them with `cd`.
+### Delta schema (MANDATORY)
+```json
+{ "BashReadOnly": { "command": "rg -n 'pattern' src/" } }
+```
+Never: `{ "type": "BashReadOnly", "command": "..." }` — rejected.
+Full shape: `{"phase":"observe","deltas":[...],"rationale":"..."}`
 

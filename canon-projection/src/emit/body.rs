@@ -35,20 +35,25 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>, suppresse
         CfgOp::Let { lhs, ty, rhs } => {
             let lhs_name = local_name(ir, *lhs);
             declared.insert(lhs_name.clone());
-            let rhs_expr = rhs.map(|r| local_name(ir, r)).unwrap_or_else(|| "Default::default()".into());
-            format!("let {}: {} = {};", lhs_name, render_type_id(ir, *ty), rhs_expr)
+            if let Some(r) = rhs {
+                let rhs_expr = local_name(ir, *r);
+                format!("let {}: {} = {};", lhs_name, render_type_id(ir, *ty), rhs_expr)
+            } else {
+                // Do not default-initialize to unit; emit a declaration only.
+                format!("let {}: {};", lhs_name, render_type_id(ir, *ty))
+            }
         }
         CfgOp::Assign { lhs, rhs } => {
             let lhs_name = local_name(ir, *lhs);
             let rhs_name = local_name(ir, *rhs);
-            if rhs_name == "__canon_suppressed__" {
-                bind_or_assign(&lhs_name, "Default::default()".to_string(), declared)
-            } else if suppressed.contains(&rhs_name) {
-                bind_or_assign(&lhs_name, "Default::default()".to_string(), declared)
-            } else if rhs_name == "__canon_call_gap__" {
-                bind_or_assign(&lhs_name, "Default::default()".to_string(), declared)
-            } else if rhs_name == "__canon_switch_gap__" {
-                bind_or_assign(&lhs_name, "Default::default()".to_string(), declared)
+            if rhs_name == "__canon_suppressed__"
+                || suppressed.contains(&rhs_name)
+                || rhs_name == "__canon_call_gap__"
+                || rhs_name == "__canon_switch_gap__"
+            {
+                // Do not materialize unit `()` for structural gaps.
+                // Emit a commented placeholder to avoid unit-typed pollution.
+                bind_or_assign(&lhs_name, "panic!(\"canon gap\")".to_string(), declared)
             } else {
                 bind_or_assign(&lhs_name, rhs_name, declared)
             }
@@ -57,7 +62,11 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>, suppresse
             Some(v) => {
                 let name = local_name(ir, *v);
                 if suppressed.contains(&name) {
-                    "return Default::default();".to_string()
+                    "return ();".to_string()
+                } else if name == "__ret" && !declared.contains("__ret") {
+                    // Do not fabricate a unit-typed __ret. Assume upstream lowering
+                    // ensured a valid binding for non-unit returns.
+                    "return __ret;".to_string()
                 } else {
                     format!("return {};", name)
                 }
@@ -157,7 +166,7 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>, suppresse
         CfgOp::Match { dest } => match dest {
             Some(d) => {
                 let name = local_name(ir, *d);
-                bind_or_assign(&name, "Default::default()".to_string(), declared)
+                bind_or_assign(&name, "()".to_string(), declared)
             }
             None => "// match".into(),
         },
@@ -219,12 +228,18 @@ fn bind_or_assign(name: &str, expr: String, declared: &mut HashSet<String>) -> S
         format!("{name} = {expr};")
     } else {
         declared.insert(name.to_string());
-        format!("let mut {name} = {expr};")
+        if name == "__ret" {
+            // Declare __ret without forcing a unit initializer.
+            // It must be initialized by a real assignment before return.
+            format!("let mut {name}; {name} = {expr};")
+        } else {
+            format!("let mut {name} = {expr};")
+        }
     }
 }
 
 fn render_suppressed_binding(name: &str, declared: &mut HashSet<String>) -> String {
     // Suppressed bindings are no longer allowed to materialize as panics.
     // Always lower them structurally to a deterministic default value.
-    bind_or_assign(name, "Default::default()".to_string(), declared)
+    bind_or_assign(name, "panic!(\"canon gap\")".to_string(), declared)
 }

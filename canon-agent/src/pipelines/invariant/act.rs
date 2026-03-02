@@ -64,14 +64,24 @@ pub fn act(deltas: &[CodeDelta], capture_dirs: &[PathBuf]) -> Result<String> {
                     .current_dir(run_dir)
                     .output()
                     .context("readonly bash failed to spawn")?;
-                // exit code 1 = rg no match (warn only), 2+ = real error
-                if output.status.code().unwrap_or(2) >= 2 {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    anyhow::bail!("readonly bash exited with {}: {}", output.status, stderr);
-                }
-                bash_output.push_str(&format!("$ {}\n", trimmed));
-                bash_output.push_str(&String::from_utf8_lossy(&output.stdout));
-                bash_output.push('\n');
+               // exit code 1 = rg no match (warn only), 2+ = real error
+               if output.status.code().unwrap_or(2) >= 2 {
+                   let stderr = String::from_utf8_lossy(&output.stderr);
+                   anyhow::bail!("readonly bash exited with {}: {}", output.status, stderr);
+               }
+               bash_output.push_str(&format!("$ {}\n", trimmed));
+               bash_output.push_str(&String::from_utf8_lossy(&output.stdout));
+               // exit code 1 (e.g. rg no match) — surface so LLM sees the result
+               let code = output.status.code().unwrap_or(1);
+               if code == 1 {
+                   let stderr = String::from_utf8_lossy(&output.stderr);
+                   if !stderr.trim().is_empty() {
+                       bash_output.push_str("--- stderr ---\n");
+                       bash_output.push_str(&stderr);
+                   }
+                   bash_output.push_str(&format!("[exit code {}]\n", code));
+               }
+               bash_output.push('\n');
             }
 
             CodeDelta::ApplyPatch { patch } => {
@@ -93,21 +103,37 @@ pub fn act(deltas: &[CodeDelta], capture_dirs: &[PathBuf]) -> Result<String> {
                     }
 
                     let out = child.wait_with_output().context("apply_patch: wait failed")?;
-               if out.status.success() {
-                        applied = true;
-                        let stdout = String::from_utf8_lossy(&out.stdout);
-                        if !stdout.trim().is_empty() {
-                            bash_output.push_str(&stdout);
-                            bash_output.push('\n');
-                        }
-                        break;
-               }
-                    last_err = format!("apply_patch failed in {:?}: {}", dir, out.status);
+              if out.status.success() {
+                       applied = true;
+                       let stdout = String::from_utf8_lossy(&out.stdout);
+                       if !stdout.trim().is_empty() {
+                           bash_output.push_str(&stdout);
+                           bash_output.push('\n');
+                       }
+                       break;
+              }
+                   last_err = format!("apply_patch failed in {:?}: {}", dir, out.status);
                 }
 
-                if !applied {
-                    anyhow::bail!("{}", last_err);
+               if !applied {
+                   anyhow::bail!("{}", last_err);
+               }
+
+                // Always emit a confirmation so the LLM sees which files were patched.
+                let patched_files: Vec<&str> = expanded
+                    .lines()
+                    .filter(|l| {
+                        l.starts_with("*** Add File:")
+                            || l.starts_with("*** Update File:")
+                            || l.starts_with("*** Delete File:")
+                    })
+                    .map(|l| l.splitn(2, ": ").nth(1).unwrap_or(l).trim())
+                    .collect();
+                bash_output.push_str("[apply_patch] \u{2713} applied patch to:\n");
+                for f in &patched_files {
+                    bash_output.push_str(&format!("  {}\n", f));
                 }
+                bash_output.push('\n');
             }
         }
     }

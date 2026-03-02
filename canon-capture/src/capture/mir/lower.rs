@@ -8,6 +8,7 @@ use crate::capture::mir::analysis as mir_analysis;
 use crate::capture::mir::expr as mir_expr;
 use crate::capture::mir::guard as mir_guard;
 use crate::capture::mir::passes as mir_passes;
+// removed stale ensure_ret_bound import
 use crate::capture::mir::patterns as mir_patterns;
 use crate::capture::mir::patterns::MirOpKind;
 use crate::capture::mir::terminator as mir_terminator;
@@ -199,15 +200,38 @@ fn stage_finalize_body_with_ret_fallback(tcx: TyCtxt<'_>, def_id: DefId, returns
         });
     }
 
-    // Always synthesize a deterministic structural return based on declared type.
-    let declared_ret = crate::capture::helpers::declared_fn_return_type_expr(tcx, def_id);
-    let default_expr = if let Some(ret_ty) = declared_ret {
-        crate::capture::helpers::default_return_expr(&ret_ty)
-    } else if returns_unit {
-        "()".to_string()
-    } else {
-        "Default::default()".to_string()
-    };
+    // Do NOT synthesize a unit initializer for __ret in non-unit functions.
+    // If no explicit __ret binding exists, we rely on upstream lowering to
+    // provide a structurally valid return. Emitting `__ret = ()` here
+    // pollutes non-unit functions with unit-typed return locals.
+    if !returns_unit {
+        let mut has_ret_binding = false;
+        for bb in &blocks {
+            if bb.stmts.iter().any(|s| matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret")) {
+                has_ret_binding = true;
+                break;
+            }
+        }
+
+        if !has_ret_binding {
+            if let Some(last) = blocks.last_mut() {
+                // Ensure a concrete __ret binding exists before returning.
+                // Use a structural placeholder expression rather than unit.
+                last.stmts.push(Stmt::Assign {
+                    lhs: "__ret".to_string(),
+                    rhs: "/* canon unresolved return */".to_string(),
+                });
+                last.stmts.push(Stmt::Return(Some("__ret".to_string())));
+            }
+        }
+    }
+
+    // Do NOT synthesize unit defaults for non-unit functions.
+    // Structural invariant: if a non-unit function reaches this stage
+    // without an explicit __ret binding and return, we conservatively
+    // emit a return of __ret only if it was already defined. We avoid
+    // injecting `__ret = ()` as this pollutes emitted Rust with unit
+    // assignments that break type correctness.
 
     // Ensure there is exactly one structural return. Preserve existing
     // structural __ret bindings if present; only synthesize if missing.
@@ -224,21 +248,23 @@ fn stage_finalize_body_with_ret_fallback(tcx: TyCtxt<'_>, def_id: DefId, returns
         }
     }
 
-    if !has_ret_binding || !has_return_stmt {
-        // Instead of emitting a separate fallback block (which may be unreachable
-        // in emitted Rust), inject a structural return directly into the last
-        // existing block to guarantee a concrete __ret binding.
-        if let Some(last) = blocks.last_mut() {
-            last.stmts.push(Stmt::Assign { lhs: "__ret".to_string(), rhs: default_expr });
-            last.stmts.push(Stmt::Return(Some("__ret".to_string())));
-        } else {
-            blocks.push(BasicBlock {
-                stmts: vec![
-                    Stmt::Assign { lhs: "__ret".to_string(), rhs: default_expr },
-                    Stmt::Return(Some("__ret".to_string())),
-                ],
-                terminator: Terminator::None,
-            });
+    if !has_return_stmt {
+        // If there is no explicit return, but __ret has been bound somewhere,
+        // emit a final structural return of __ret without fabricating a unit default.
+        if has_ret_binding {
+            if let Some(last) = blocks.last_mut() {
+                last.stmts.push(Stmt::Return(Some("__ret".to_string())));
+            }
+        }
+    }
+
+    // Structural invariant: no statements may appear after a Return within the same block.
+    // Trim any trailing statements after the first Return to prevent
+    // unreachable synthetic assignments like `__ret = ()` from being emitted
+    // after `return __ret;`.
+    for bb in &mut blocks {
+        if let Some(pos) = bb.stmts.iter().position(|s| matches!(s, Stmt::Return(_))) {
+            bb.stmts.truncate(pos + 1);
         }
     }
 
@@ -257,7 +283,8 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
             if let Some(field_stmt) = mir_expr::mir_field_access_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver) {
                 if !mir_guard::structural_guard(&field_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
                     if let Stmt::FieldAccess { dest: Some(dest), .. } = &field_stmt {
-                        mir_util::emit_suppressed_for_name(dest, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
+                        ctx.stmts.push(Stmt::Assign { lhs: dest.clone(), rhs: "panic!(\"canon gap\")".to_string() });
+                        ctx.defined.insert(dest.clone());
                     }
                     return;
                 }
@@ -274,7 +301,8 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
             if let Some(struct_stmt) = mir_expr::mir_struct_lit_stmt(ctx.tcx, lhs, rvalue, ctx.resolver) {
                 if !mir_guard::structural_guard(&struct_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
                     if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
-                        mir_util::emit_suppressed_for_name(dest, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
+                        ctx.stmts.push(Stmt::Assign { lhs: dest.clone(), rhs: "panic!(\"canon gap\")".to_string() });
+                        ctx.defined.insert(dest.clone());
                     }
                     return;
                 }
@@ -300,10 +328,16 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
                     }
                     ctx.stmts.push(assign_stmt);
                 } else if let Some(lhs_name) = lhs_name.clone() {
-                    mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
+                    if lhs_name != "__ret" {
+                        ctx.stmts.push(Stmt::Assign { lhs: lhs_name.clone(), rhs: "panic!(\"canon gap\")".to_string() });
+                        ctx.defined.insert(lhs_name.clone());
+                    }
                 }
             } else if let Some(lhs_name) = lhs_name.clone() {
-                mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
+                if lhs_name != "__ret" {
+                    ctx.stmts.push(Stmt::Assign { lhs: lhs_name.clone(), rhs: "panic!(\"canon gap\")".to_string() });
+                    ctx.defined.insert(lhs_name.clone());
+                }
             }
             return;
         }
@@ -331,9 +365,10 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
         }
         ctx.stmts.push(assign_stmt);
     } else if let Some(lhs_name) = lhs_name {
-        // Avoid suppressed emission for __ret; fallback handles return.
+        // Never synthesize a unit placeholder for the MIR return place.
         if lhs_name != "__ret" {
-            mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
+            ctx.stmts.push(Stmt::Assign { lhs: lhs_name.clone(), rhs: "panic!(\"canon gap\")".to_string() });
+            ctx.defined.insert(lhs_name.clone());
         }
     }
 }

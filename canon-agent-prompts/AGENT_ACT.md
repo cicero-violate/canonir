@@ -1,15 +1,5 @@
 ## Tick {{TICK}} — act phase
 
-**Working directory (all commands run here):** `{{CWD}}`
-**Repo root for source files:** `/workspace/ai_sandbox/canon`
-
-Use absolute paths in all `Bash` commands. For `ApplyPatch`, paths inside the patch are relative to the repo root `/workspace/ai_sandbox/canon`.
-
-### Exit-check output
-```
-{{EXIT_CHECK_OUTPUT}}
-```
-
 ### Last error (if any)
 ```
 {{LAST_ERROR}}
@@ -20,9 +10,26 @@ Use absolute paths in all `Bash` commands. For `ApplyPatch`, paths inside the pa
 {{RATIONALE_HISTORY}}
 ```
 
+### Structural progress
+```
+{{PROGRESS}}
+```
+
 Use `ApplyPatch` or `Bash` to make changes.
 Respond with ONE fenced ```json block.
-`{"phase":"act","deltas":[...],"rationale":"..."}`
+
+### Delta schema (MANDATORY — serde externally-tagged enum)
+Each delta must use the variant name as the key. Examples:
+```json
+{ "ApplyPatch": { "patch": "*** Begin Patch\n*** Update File: path/to/file.rs\n@@\n-old\n+new\n*** End Patch" } }
+{ "Bash":        { "command": "cargo fmt" } }
+{ "BashReadOnly":{ "command": "rg -n 'foo' src/" } }
+```
+**WRONG** — never use a `"type"` field:
+```json
+{ "type": "ApplyPatch", "patch": "..." }
+```
+Full response shape: `{"phase":"act","deltas":[...],"rationale":"..."}`
 
 ### ApplyPatch format (MANDATORY)
 The `patch` string must use this exact format — NOT unified diff (`---`/`+++`):
@@ -52,7 +59,8 @@ read the target lines in this tick or a prior observe tick, emit an
 ### After patching Rust files (MANDATORY)
 If any of your `ApplyPatch` deltas touch a `.rs` file, your **next phase
 must be `verify`** and you must run `cargo check -p <crate_name> 2>&1`
-as the first `BashReadOnly` delta in that verify tick. Do not observe or
+as the first `BashReadOnly` delta in that verify tick — always with `--message-format=json`:
+`cargo check -p <crate_name> --message-format=json 2>&1`. Do not observe or
 plan between an act and its compile verification.
 
 {{STAGNATION_PRESSURE}}

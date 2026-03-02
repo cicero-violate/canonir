@@ -1,13 +1,5 @@
 ## Tick {{TICK}} — plan phase
 
-**Working directory (all commands run here):** `{{CWD}}`
-**Repo root for source files:** `/workspace/ai_sandbox/canon`
-
-### Exit-check output
-```
-{{EXIT_CHECK_OUTPUT}}
-```
-
 ### Output from previous commands
 ```
 {{BASH_OUTPUT}}

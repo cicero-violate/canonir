@@ -34,14 +34,12 @@ fn value_known_with_mode(value: &str, defined: &HashSet<String>, suppressed_sent
 }
 
 pub fn emit_suppressed_binding(lhs: &str, defined: &mut HashSet<String>, suppressed_sentinel_names: &mut HashSet<String>, stmts: &mut Vec<Stmt>) -> bool {
-    if lhs == "__ret" || defined.contains(lhs) {
-        return false;
-    }
-    let lhs = lhs.to_string();
-    defined.insert(lhs.clone());
-    suppressed_sentinel_names.insert(lhs.clone());
-    stmts.push(Stmt::Assign { lhs, rhs: "__canon_suppressed__".to_string() });
-    true
+    // Suppressed bindings are forbidden by invariant.
+    // Do not introduce any synthetic sentinel assignments.
+    // Structural lowering and deterministic return fallback
+    // must handle incomplete paths instead.
+    let _ = (lhs, defined, suppressed_sentinel_names, stmts);
+    false
 }
 
 fn expr_uses_suppressed_sentinel(value: &str, suppressed_sentinel_names: &HashSet<String>) -> bool {

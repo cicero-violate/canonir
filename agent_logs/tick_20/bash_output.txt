@@ -1,0 +1,4 @@
+
+[act retry failed] apply_patch failed in "/workspace/ai_sandbox/canon": exit status: 1
+
+[act failed] apply_patch failed in "/workspace/ai_sandbox/canon": exit status: 1

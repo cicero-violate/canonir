@@ -1,0 +1,7 @@
+---
+## PREVIOUS ACTION FAILED
+Error:
+```
+json extract error: invalid json payload: EOF while parsing a string at line 4 column 64
+```
+Emit a corrected JSON block addressing the error above.

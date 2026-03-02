@@ -1,1 +1,0 @@
-readonly bash exited with exit status: 2: sed: can't read canon-capture/src/capture/mir/types.rs: No such file or directory

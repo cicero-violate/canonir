@@ -1,2 +1,0 @@
-$ rg -n "pub\s+fn\s+materialize_return_local|pub\s+fn\s+resolve_ret_gaps_with" /workspace/ai_sandbox/canon -S
-

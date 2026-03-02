@@ -1,103 +1,63 @@
 ## Tick 13 — observe phase
 
-**Working directory (all commands run here):** `/workspace/ai_sandbox/canon`
-**Repo root for source files:** `/workspace/ai_sandbox/canon`
-
-Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in all commands.
-
-### Exit-check output
-```
-
-```
-
 ### Output from previous commands
 ```
-$ sed -n '300,420p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs
-        }
-        MirOpKind::ConstUse => {}
-        MirOpKind::ArrayAggregate => {
-            if let Some(lhs_name) = lhs_name.as_ref()
-                && ctx.defined.contains(lhs_name)
-            {
-                return;
+$ sed -n '340,520p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/expr.rs
+                if elems.len() == 1 {
+                    Some(format!("({},)", elems[0]))
+                } else {
+                    Some(format!("({})", elems.join(", ")))
+                }
             }
-        }
-        MirOpKind::Assign => {}
-    }
-
-    if let Some(assign_stmt) = mir_expr::mir_assign_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver, ctx.defined, ctx.suppressed_sentinel_names) {
-        if !mir_guard::structural_guard(&assign_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
-            if let Stmt::Assign { lhs, .. } = &assign_stmt {
-                // Never emit suppressed binding for any assignment here.
-                // Structural fallback is responsible for synthesizing returns.
+            mir::AggregateKind::Array(_) => {
+                let elems = operands.iter().map(|op| mir_ops::mir_operand_label(tcx, op, resolver)).collect::<Option<Vec<_>>>()?;
+                Some(format!("[{}]", elems.join(", ")))
             }
-            return;
+            _ => None,
+        },
+        mir::Rvalue::Repeat(operand, count) => {
+            let count = count.try_to_target_usize(tcx)?;
+            Some(format!("[{}; {count}]", mir_ops::mir_operand_label(tcx, operand, resolver)?))
         }
-        if let Stmt::Assign { lhs, .. } = &assign_stmt {
-            ctx.defined.insert(lhs.clone());
-        }
-        ctx.stmts.push(assign_stmt);
-    } else if let Some(lhs_name) = lhs_name {
-        // Avoid suppressed emission for __ret; fallback handles return.
-        if lhs_name != "__ret" {
-            mir_util::emit_suppressed_for_name(&lhs_name, ctx.stmts, ctx.defined, ctx.suppressed_sentinel_names);
-        }
+        mir::Rvalue::Discriminant(place) => Some(format!("{} as isize", resolver.label_place(place)?)),
+        mir::Rvalue::CopyForDeref(place) => resolver.label_place(place),
+        _ => None,
     }
 }
 
-fn stmts_have_ret_match(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(|stmt| matches!(stmt, Stmt::Match { dest: Some(dest) } if dest == "__ret"))
+fn is_primitive_value_ty(ty: ty::Ty<'_>) -> bool {
+    matches!(ty.kind(), ty::TyKind::Bool | ty::TyKind::Char | ty::TyKind::Int(..) | ty::TyKind::Uint(..) | ty::TyKind::Float(..) | ty::TyKind::Str | ty::TyKind::Never)
 }
-
-fn stmts_have_ret_binding(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(mir_util::stmt_defines_ret)
-}
-
-// Post-structural return materialization hook.
-// Structural pipeline already guarantees deterministic __ret synthesis
-// via stage_finalize_body_with_ret_fallback. This hook exists so
-// engine.rs can invoke it without introducing suppressed bindings.
-pub(crate) fn materialize_return_local(_body: &mut Body) {
-    // No-op: structural fallback already guarantees a concrete __ret binding.
-}
-
-// Post-structural gap resolution hook.
-// Structural pipeline already injects a deterministic __ret assignment
-// when missing. This function intentionally performs no additional
-// mutation to avoid duplicating return synthesis logic.
-pub(crate) fn resolve_ret_gaps_with(_body: &mut Body, _default_expr: &str) {
-    // No-op: handled during stage_finalize_body_with_ret_fallback.
-}
-
-$ sed -n '420,520p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs
-
-
 ```
 
 ### Recent rationale history
 ```
-[T-5] types::BasicBlock correctly defines the `terminator` field, and lower.rs now uses `terminator` consistently. suppressed_dest_sentinels is explicitly typed as Vec<Stmt>. Re-running cargo check to confirm the crate builds cleanly after the latest structural changes.
+[T-5] Run the full orchestration pipeline across all fixtures to validate that the enforced __ret binding invariant eliminates return gaps and that emitted Rust compiles cleanly without suppressed bindings.
 ---
-[T-4] cargo check for canon-capture now completes successfully with no errors. The crate builds cleanly, meaning the previous E0282 and E0560 issues are resolved and the strengthened return synthesis compiles correctly. At this point, the structural invariant enforcement changes are building; next step would be orchestration-level validation (e.g., unresolved_ret_gap_count) rather than further compilation fixes.
+[T-4] The current failures show widespread unit (`()`) propagation (e.g., `_v10.expect(...)` where `_v10` is `()`). This indicates the problem is not just missing `__ret`, but earlier MIR lowering emitting `()`-typed assignments. Inspect the emitted `extractor.rs` for the concrete failing function to trace where unit values originate in the value-flow.
 ---
-[T-3] Compilation is clean; execute the canon-capture test suite to validate that strengthened __ret structural guarantees do not introduce behavioral regressions and that the invariant holds under tests.
+[T-3] The emitted extractor shows locals like `symbols = ();`, `methods = ();`, etc., meaning MIR expression lowering is fabricating unit for non-unit aggregates (Vec, String, Option). The root cause is likely in `mir_expr::mir_assign_stmt` or related expression lowering. Inspect expr.rs to see where non-structural expressions fall back to `()`.
 ---
-[T-2] cargo test for canon-capture completed successfully: all unit tests passed (2/2) and doc-tests passed (0 failures). The crate compiles cleanly and the strengthened structural __ret guarantees did not introduce regressions at the test level. The build and test suite are now green.
+[T-2] Continue inspecting `mir_assign_stmt` to see how `__ret` is treated and how rvalues that fail to render are handled. The fallback to `"()"` in `mir_assign_stmt` is likely the direct source of unit pollution for non-unit locals like `symbols`, `methods`, etc.
 ---
-[T-1] cargo check for canon-capture succeeds with no errors. The crate builds cleanly, and prior fixes remain intact. No additional compiler issues are present at this stage.
+[T-1] Continue through `mir_rvalue_expr` to see which Rvalue variants return `None`, triggering the `"()"` fallback in `mir_assign_stmt`. We need to identify which common aggregates (Vec, String, Option, iterators) are currently unhandled and therefore collapsing to unit.
+```
+
+### Structural progress
+```
+gap_count=0 (prev=0, trend=n/a (first tick))
+compile=ok errors=0
+stagnation=4
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
-`{"phase":"observe","deltas":[...],"rationale":"..."}`
 
-### BashReadOnly whitelisted commands
-Only the following command prefixes are permitted in `BashReadOnly` deltas:
-`rg`, `cat`, `ls`, `tree`, `sed`, `awk`, `perl`, `find`, `head`, `tail`,
-`wc`, `diff`, `stat`, `echo`, `pwd`, `cargo`
+### Delta schema (MANDATORY)
+```json
+{ "BashReadOnly": { "command": "rg -n 'pattern' src/" } }
+```
+Never: `{ "type": "BashReadOnly", "command": "..." }` — rejected.
+Full shape: `{"phase":"observe","deltas":[...],"rationale":"..."}`
 
-For `cargo`, read-only invocations only: `cargo check -p <crate> 2>&1`,
-`cargo build -p <crate> 2>&1`, `cargo test -p <crate> 2>&1`.
-Any other command prefix will be rejected at runtime with an error.
-`cargo` commands automatically run from the repo root `/workspace/ai_sandbox/canon` —
-do NOT prefix them with `cd`.
 
+⚠️  STAGNATION DETECTED: You have spent many ticks observing or planning without acting. You MUST choose phase `act` this tick and emit at least one `ApplyPatch` or `Bash` delta. Do NOT choose observe or plan.

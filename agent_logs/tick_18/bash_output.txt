@@ -1,63 +1,201 @@
-$ sed -n '100,160p' /workspace/ai_sandbox/canon/run_script.sh
-            sed 's/^/  - evidence: /' /tmp/.inv_invariant_alloc.$$
-        fi
-        if rg -n "attempting to make an HTTP request, but --offline was specified|no matching package named" "$log" >/tmp/.inv_invariant_offline.$$ 2>/dev/null; then
-            found=1
-            echo "- non-structural blockers:"
-            echo "  - Offline dependency resolution failure; not a capture/projection structural invariant."
-            sed 's/^/  - evidence: /' /tmp/.inv_invariant_offline.$$
-        fi
-        if [[ $found -eq 0 ]]; then
-            echo "- no invariant-signature lines detected; inspect full log."
-        fi
-        # Emitted-source structural surface (always useful even when logs are green).
-        local emit_src="$ROOT/emit/$fixture/src"
-        if [[ -d "$emit_src" ]]; then
-            local suppressed_count suppressed_ret_count suppressed_nonret_count match_gap_count call_gap_count switch_gap_count unresolved_ret_gap_count unresolved_gap_total unreachable_count match_comment_count goto_comment_count
-            suppressed_count=$(rg -n 'canon suppressed binding' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
-            suppressed_ret_count=$(rg -n '__ret\s*=\s*panic!\("canon suppressed binding"\)' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
-            suppressed_nonret_count=$((suppressed_count - suppressed_ret_count))
-            match_gap_count=$(rg -n 'canon match result not lowered' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
-            call_gap_count=$(rg -n 'canon call result not lowered' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
-            switch_gap_count=$(rg -n 'canon switch result not lowered' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
-            unresolved_ret_gap_count=$(rg -n 'let mut __ret = panic!\("canon (suppressed binding|call result not lowered|switch result not lowered|match result not lowered)"\);' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
-            unresolved_gap_total=$((suppressed_count + match_gap_count + call_gap_count + switch_gap_count))
-            unreachable_count=$(rg -n 'unreachable!\(\);' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
-            match_comment_count=$(rg -n '// match' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
-            goto_comment_count=$(rg -n '// goto' "$emit_src" -g '*.rs' | wc -l | tr -d ' ')
-            echo "- emitted structural surface:"
-            echo "  - canon suppressed binding count: $suppressed_count"
-            echo "  - canon suppressed __ret count: $suppressed_ret_count"
-            echo "  - canon suppressed non-__ret count: $suppressed_nonret_count"
-            echo "  - canon match gap count: $match_gap_count"
-            echo "  - canon call gap count: $call_gap_count"
-            echo "  - canon switch gap count: $switch_gap_count"
-            echo "  - unresolved gap total: $unresolved_gap_total"
-            echo "  - unresolved __ret gap count: $unresolved_ret_gap_count"
-            echo "  - unreachable count: $unreachable_count"
-            echo "  - // match count: $match_comment_count"
-            echo "  - // goto count: $goto_comment_count"
-            if [[ "$unresolved_ret_gap_count" -gt 0 ]]; then
-                echo "- unresolved __ret gap sites:"
-                while IFS= read -r hit; do
-                    local file line fn
-                    file="${hit%%:*}"
-                    line="${hit#*:}"
-                    line="${line%%:*}"
-                    fn=$(awk -v target="$line" '
-                        /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]/ { last=$0 }
-                        NR >= target { print last; exit }
-                    ' "$file")
-                    if [[ -z "$fn" ]]; then
-                        fn="fn <unknown>"
-                    fi
-                    echo "  - ${file#$emit_src/}:$line :: $fn"
-                done < <(rg -n 'let mut __ret = panic!\("canon (suppressed binding|call result not lowered|switch result not lowered|match result not lowered)"\);' "$emit_src" -g '*.rs')
-            fi
-        fi
-        echo
-    } >> "$REPORT"
-    rm -f \
-      /tmp/.inv_return_solver.$$ \
-      /tmp/.inv_solver_warns.$$ \
+$ sed -n '1,200p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/passes.rs
+use std::collections::HashSet;
 
+use crate::capture::mir::analysis::SwitchAnalysis;
+use crate::capture::mir::util as mir_util;
+use crate::types::{BasicBlock, Stmt, Terminator};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BlockRole {
+    SwitchSource,
+    SwitchArm,
+    Normal,
+}
+
+pub(crate) struct EmittedBlock {
+    pub(crate) role: BlockRole,
+    pub(crate) block: BasicBlock,
+}
+
+pub(crate) struct BodyDraft {
+    pub(crate) emitted_blocks: Vec<EmittedBlock>,
+    pub(crate) suppressed_dest_sentinels: Vec<Stmt>,
+}
+
+pub(crate) type ProloguePass = fn(Vec<EmittedBlock>, Vec<Stmt>) -> Vec<EmittedBlock>;
+pub(crate) type NormalizePass = fn(Vec<EmittedBlock>) -> Vec<EmittedBlock>;
+pub(crate) type FinalizePass = fn(Vec<EmittedBlock>) -> Vec<BasicBlock>;
+
+pub(crate) struct NormalizationPipeline {
+    prologue: ProloguePass,
+    normalize: NormalizePass,
+    finalize: FinalizePass,
+}
+
+impl NormalizationPipeline {
+    pub(crate) fn canonical() -> Self {
+        Self { prologue: pass_inject_suppressed_prologue, normalize: pass_lower_match_and_prune_bindings, finalize: pass_strip_roles }
+    }
+
+    pub(crate) fn run(&self, draft: BodyDraft) -> Vec<BasicBlock> {
+        let emitted = (self.prologue)(draft.emitted_blocks, draft.suppressed_dest_sentinels);
+        let emitted = (self.normalize)(emitted);
+        (self.finalize)(emitted)
+    }
+}
+
+pub(crate) fn make_body_draft(emitted_blocks: Vec<EmittedBlock>, suppressed_dest_sentinels: Vec<Stmt>) -> BodyDraft {
+    BodyDraft { emitted_blocks, suppressed_dest_sentinels }
+}
+
+pub(crate) fn emit_special_block(returns_unit: bool, mir_idx_usize: usize, blocks: &[EmittedBlock], switch_analysis: &SwitchAnalysis, defined: &mut HashSet<String>) -> Option<EmittedBlock> {
+    if switch_analysis.switch_sources.contains(&mir_idx_usize) {
+        let _ = (returns_unit, blocks, defined);
+        return Some(EmittedBlock { role: BlockRole::SwitchSource, block: BasicBlock { stmts: Vec::new(), terminator: Terminator::Unreachable } });
+    }
+    if switch_analysis.switchint_arm_blocks.contains(&mir_idx_usize) {
+        if switch_analysis.switch_arm_writes_ret.contains(&mir_idx_usize) || switch_analysis.switch_arm_returns.contains(&mir_idx_usize) {
+            return None;
+        }
+        return Some(EmittedBlock { role: BlockRole::SwitchArm, block: BasicBlock { stmts: Vec::new(), terminator: Terminator::None } });
+    }
+    None
+}
+
+pub(crate) fn normalize_blocks(emitted: Vec<EmittedBlock>, suppressed_dest_sentinels: Vec<Stmt>) -> Vec<BasicBlock> {
+    normalize_draft(make_body_draft(emitted, suppressed_dest_sentinels))
+}
+
+pub(crate) fn normalize_draft(draft: BodyDraft) -> Vec<BasicBlock> {
+    NormalizationPipeline::canonical().run(draft)
+}
+
+pub(crate) fn make_normal_block(stmts: Vec<Stmt>, term: Terminator) -> EmittedBlock {
+    EmittedBlock { role: BlockRole::Normal, block: BasicBlock { stmts, terminator: term } }
+}
+
+pub(crate) fn blocks_have_ret_match(blocks: &[EmittedBlock]) -> bool {
+    blocks.iter().any(|bb| bb.block.stmts.iter().any(|stmt| matches!(stmt, Stmt::Match { dest: Some(dest) } if dest == "__ret")))
+}
+
+pub(crate) fn blocks_have_ret_binding(blocks: &[EmittedBlock]) -> bool {
+    blocks.iter().any(|bb| bb.block.stmts.iter().any(mir_util::stmt_defines_ret))
+}
+
+fn pass_inject_suppressed_prologue(mut emitted: Vec<EmittedBlock>, suppressed_dest_sentinels: Vec<Stmt>) -> Vec<EmittedBlock> {
+    if suppressed_dest_sentinels.is_empty() {
+        return emitted;
+    }
+    if let Some(first_normal_idx) = emitted.iter().position(|b| b.role == BlockRole::Normal) {
+        let mut merged = suppressed_dest_sentinels;
+        merged.append(&mut emitted[first_normal_idx].block.stmts);
+        emitted[first_normal_idx].block.stmts = merged;
+    }
+    emitted
+}
+
+fn pass_strip_roles(emitted: Vec<EmittedBlock>) -> Vec<BasicBlock> {
+    emitted.into_iter().map(|e| e.block).collect()
+}
+
+fn pass_lower_match_and_prune_bindings(emitted: Vec<EmittedBlock>) -> Vec<EmittedBlock> {
+    let emitted = pass_lower_match_dest_to_suppressed(emitted);
+    pass_prune_unused_suppressed_bindings(emitted)
+}
+
+fn pass_lower_match_dest_to_suppressed(mut emitted: Vec<EmittedBlock>) -> Vec<EmittedBlock> {
+    for block in &mut emitted {
+        for stmt in &mut block.block.stmts {
+            if let Stmt::Match { dest: Some(dest) } = stmt {
+                // Structural invariant: do not introduce suppressed bindings.
+                // Instead, lower non-__ret match destinations to a concrete
+                // default value so no suppressed placeholder is emitted.
+                if dest != "__ret" {
+                    // Avoid emitting untyped Default::default() for match
+                    // destinations, as this causes downstream type
+                    // inference failures. Use unit placeholder; structural
+                    // return synthesis handles typed defaults where needed.
+                    *stmt = Stmt::Assign {
+                        lhs: dest.clone(),
+                        rhs: "()".to_string(),
+                    };
+                }
+            }
+        }
+    }
+    emitted
+}
+
+fn pass_prune_unused_suppressed_bindings(emitted: Vec<EmittedBlock>) -> Vec<EmittedBlock> {
+    // Suppressed bindings are no longer introduced anywhere in the
+    // structural pipeline. Pruning logic that reasons about the
+    // "__canon_suppressed__" sentinel can cause accidental removal
+    // of required assignments if stale sentinels appear. Make this
+    // pass a no-op to preserve all structurally lowered bindings.
+    emitted
+}
+
+fn collect_used_value_names(blocks: &[EmittedBlock]) -> HashSet<String> {
+    let mut used = HashSet::new();
+    for block in blocks {
+        for stmt in &block.block.stmts {
+            record_stmt_uses(stmt, &mut used);
+        }
+        record_terminator_uses(&block.block.terminator, &mut used);
+    }
+    used
+}
+
+fn record_stmt_uses(stmt: &Stmt, used: &mut HashSet<String>) {
+    match stmt {
+        Stmt::Assign { rhs, .. } => extend_expr_tokens(rhs, used),
+        Stmt::Expr(expr) => extend_expr_tokens(expr, used),
+        Stmt::Call { args, .. } => {
+            for arg in args {
+                extend_expr_tokens(arg, used);
+            }
+        }
+        Stmt::FieldAccess { base, .. } => extend_expr_tokens(base, used),
+        Stmt::MethodCall { receiver, args, .. } => {
+            extend_expr_tokens(receiver, used);
+            for arg in args {
+                extend_expr_tokens(arg, used);
+            }
+        }
+        Stmt::StructLit { fields, .. } => {
+            for (_, value) in fields {
+                extend_expr_tokens(value, used);
+            }
+        }
+        Stmt::Return(Some(value)) => extend_expr_tokens(value, used),
+        Stmt::Let { init: Some(init), .. } => extend_expr_tokens(init, used),
+        _ => {}
+    }
+}
+
+fn record_terminator_uses(term: &Terminator, used: &mut HashSet<String>) {
+    if let Terminator::Branch { cond, .. } = term {
+        extend_expr_tokens(cond, used);
+    }
+}
+
+fn extend_expr_tokens(expr: &str, out: &mut HashSet<String>) {
+    let stripped = strip_quoted_literals(expr);
+    for tok in stripped.split(|c: char| !(c == '_' || c.is_ascii_alphanumeric())) {
+        if tok.is_empty() {
+            continue;
+        }
+        if tok.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        out.insert(tok.to_string());
+    }
+}
+
+fn strip_quoted_literals(expr: &str) -> String {
+    let mut out = String::with_capacity(expr.len());
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    for ch in expr.chars() {
+... [1 lines truncated] ...

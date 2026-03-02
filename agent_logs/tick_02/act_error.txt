@@ -1,0 +1,1 @@
+readonly bash exited with exit status: 2: rg: /workspace/ai_sandbox/canon/src/: IO error for operation on /workspace/ai_sandbox/canon/src/: No such file or directory (os error 2)

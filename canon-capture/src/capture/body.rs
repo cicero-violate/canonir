@@ -103,11 +103,20 @@ fn synthetic_body_pathref_id(base: NodeId, ordinal: u32) -> NodeId {
 
 fn push_external_path(tcx: TyCtxt<'_>, did: DefId, crate_name: &str, out: &mut Vec<String>) {
     let path = norm::path(tcx, did);
-    if path.is_empty() || path.starts_with("crate::") || path.starts_with("self::") || path.starts_with("super::") {
+    if path.is_empty()
+        || path.starts_with("crate::")
+        || path.starts_with("self::")
+        || path.starts_with("super::")
+    {
         return;
     }
     let root = path.split("::").next().unwrap_or("").trim();
     if root.is_empty() || root == crate_name {
+        return;
+    }
+    // Prevent private/helper segments (e.g., `_serde`, `_foo`) from
+    // crossing the capture boundary and reaching Canon path interner.
+    if path.split("::").any(|seg| seg.starts_with('_')) {
         return;
     }
     if matches!(root, "std" | "core" | "alloc" | "proc_macro" | "crate" | "self" | "super") {

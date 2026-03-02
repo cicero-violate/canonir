@@ -1,1 +1,0 @@
-readonly bash exited with exit status: 2: rg: canon-capture/src/capture/mir/types.rs: IO error for operation on canon-capture/src/capture/mir/types.rs: No such file or directory (os error 2)

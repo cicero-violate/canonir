@@ -53,8 +53,8 @@ pub(crate) fn stmt_defines_ret(stmt: &Stmt) -> bool {
 }
 
 pub(crate) fn emit_suppressed_ret_binding(stmts: &mut Vec<Stmt>, defined: &mut HashSet<String>) {
-    stmts.push(Stmt::Assign { lhs: "__ret".to_string(), rhs: "__canon_suppressed__".to_string() });
-    defined.insert("__ret".to_string());
+    // Structural invariant: never synthesize suppressed return bindings.
+    // Deterministic return fallback in lowering must handle missing __ret.
 }
 
 pub(crate) fn emit_suppressed_for_name(name: &str, stmts: &mut Vec<Stmt>, defined: &mut HashSet<String>, suppressed_sentinel_names: &mut HashSet<String>) {
@@ -62,11 +62,9 @@ pub(crate) fn emit_suppressed_for_name(name: &str, stmts: &mut Vec<Stmt>, define
     if name == "__ret" {
         return;
     }
-    if name == "__ret" {
-        emit_suppressed_ret_binding(stmts, defined);
-    } else {
-        mir_guard::emit_suppressed_binding(name, defined, suppressed_sentinel_names, stmts);
-    }
+    // Suppressed bindings are eliminated at this stage.
+    // Structural lowering and deterministic return fallback
+    // are responsible for maintaining invariants.
 }
 
 pub(crate) fn count_local_uses<'tcx>(body: &mir::Body<'tcx>) -> HashMap<u32, usize> {

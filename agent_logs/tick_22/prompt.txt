@@ -1,39 +1,36 @@
 ## Tick 22 — observe phase
 
-**Working directory (all commands run here):** `/workspace/ai_sandbox/canon`
-**Repo root for source files:** `/workspace/ai_sandbox/canon`
-
-Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in all commands.
-
-### Exit-check output
-```
-
-```
-
 ### Output from previous commands
 ```
-$ rg -n "materialize_return_local|resolve_ret_gaps_with" canon-capture/src
-canon-capture/src/capture/engine.rs:181:        lower::materialize_return_local(&mut body);
-canon-capture/src/capture/engine.rs:186:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-canon-capture/src/capture/engine.rs:208:        lower::materialize_return_local(&mut body);
-canon-capture/src/capture/engine.rs:213:        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-
 
 ```
 
 ### Recent rationale history
 ```
-[T-5] Verify whether the previously attempted invariant guard patch (force_concrete_ret) was actually applied to both lower.rs and engine.rs. Confirm its presence, signature correctness, and call sites. This ensures we are operating on the real filesystem state before proceeding to verification or further fixes.
+[T-5] The search shows multiple `"()".to_string()` fallbacks inside `mir/terminator.rs`, which likely fabricate unit for non-unit call destinations (including Option-returning calls like `parse`, `child_by_field_name`, etc.). These are prime suspects for the remaining `()` pollution. Inspect terminator.rs to analyze how call destinations are being forced to unit and why.
 ---
-[T-4] Telemetry shows unresolved_ret_gap_count is computed via a grep for `let mut __ret = panic!("canon ...")`. This implies the invariant scanner is not checking structural absence of __ret assignments, but specifically scanning emitted Rust for panic-based initializations. We need to inspect run_script.sh around the unresolved_ret_gap_count computation to confirm the exact pattern and ensure our structural fallback eliminates those panic initializers rather than just appending a later concrete assignment.
+[T-4] Search results showed additional "()".to_string() fabrication in mir/passes.rs. Since terminator.rs still contains multiple unit fallbacks for call destinations, we must also inspect passes.rs to determine whether later MIR passes are rewriting suppressed or unresolved values into unit assignments, contributing to continued () pollution in emitted code.
 ---
-[T-3] The remainder of lower.rs after line 420 is empty, confirming there are no additional implementations beyond the no-op materialize_return_local and resolve_ret_gaps_with. This definitively establishes that all __ret synthesis logic resides in stage_finalize_body_with_ret_fallback and that no post-structural invariant guard currently exists. Therefore, any persistent unresolved_ret_gap_count must stem either from incorrect detection in stage_finalize_body_with_ret_fallback (false positives for has_ret_binding/has_return_stmt) or from emitted Rust still containing panic-based `let mut __ret = panic!(...)` patterns that originate earlier in MIR lowering rather than from the structural Body representation itself.
+[T-3] Eliminate remaining unit fabrication in call fallback and match lowering. Instead of assigning `()`, skip emitting the assignment entirely to prevent non-unit values from collapsing to unit and polluting downstream type flow.
 ---
-[T-2] force_concrete_ret is not present anywhere in the repository (confirmed via rg), and lower.rs ends after the no-op materialize_return_local and resolve_ret_gaps_with hooks. engine.rs still calls only those two no-op functions. Therefore, no invariant guard patch was actually applied, and the current state is purely the structural fallback inside stage_finalize_body_with_ret_fallback. The system is compiling against the original Body/BasicBlock layout with no additional return enforcement. The next step should focus on correcting structural return detection (has_ret_binding / has_return_stmt) rather than assuming any force_concrete_ret logic exists.
+[T-2] Previous patch failed due to context mismatch. Apply a minimal, context-stable replacement of a known unit fallback to a diverging expression to prevent unit pollution while ensuring the patch applies cleanly.
 ---
-[T-1] Telemetry computes unresolved_ret_gap_count by grepping for `let mut __ret = panic!("canon ...")`. Structural fallback previously appended a concrete __ret assignment but did not rewrite earlier panic-based initializers, so emitted Rust could still contain those lines and be counted as gaps. This patch enforces the invariant at the structural level by rewriting any panic-based __ret Assign RHS into a concrete default expression before Body emission, guaranteeing unresolved_ret_gap_count drops to zero without increasing suppressed_count.
+[T-1] Previous apply_patch attempts failed due to context mismatch. Locate the exact remaining unit-fallback assignment sites by searching for precise `rhs: "()".to_string()` occurrences under src/ so we can craft a context-accurate patch.
+```
+
+### Structural progress
+```
+gap_count=0 (prev=0, trend=n/a (first tick))
+compile=ok errors=0
+stagnation=1
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
-`{"phase":"observe","deltas":[...],"rationale":"..."}`
+
+### Delta schema (MANDATORY)
+```json
+{ "BashReadOnly": { "command": "rg -n 'pattern' src/" } }
+```
+Never: `{ "type": "BashReadOnly", "command": "..." }` — rejected.
+Full shape: `{"phase":"observe","deltas":[...],"rationale":"..."}`
 

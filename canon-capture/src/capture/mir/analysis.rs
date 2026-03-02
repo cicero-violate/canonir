@@ -218,38 +218,8 @@ pub(crate) fn compute_call_feed_locals<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body
 pub(crate) fn collect_suppressed_dest_sentinels(
     body: &mir::Body<'_>, resolver: &LocalNameResolver, switch_analysis: &SwitchAnalysis, defined: &mut HashSet<String>, suppressed_sentinel_names: &mut HashSet<String>,
 ) -> Vec<Stmt> {
-    let mut suppressed_dest_sentinels: Vec<Stmt> = Vec::new();
-    for (bb_idx, bb) in body.basic_blocks.iter_enumerated() {
-        if bb.is_cleanup {
-            continue;
-        }
-        let idx = bb_idx.as_usize();
-        if !switch_analysis.switchint_arm_blocks.contains(&idx) && !switch_analysis.switch_sources.contains(&idx) {
-            continue;
-        }
-        if switch_analysis.switch_arm_writes_ret.contains(&idx) || switch_analysis.switch_arm_returns.contains(&idx) {
-            continue;
-        }
-        if let Some(term) = &bb.terminator
-            && let mir::TerminatorKind::Call { destination, .. } = &term.kind
-            && let Some(dest_name) = mir_util::label_place_dest(resolver, destination)
-        {
-            // Never suppress the structural return binding
-            if dest_name != "__ret" {
-                mir_guard::emit_suppressed_binding(&dest_name, defined, suppressed_sentinel_names, &mut suppressed_dest_sentinels);
-            }
-        }
-        for stmt in &bb.statements {
-            if let mir::StatementKind::Assign(boxed) = &stmt.kind {
-                let (lhs, _) = &**boxed;
-                if let Some(lhs_name) = mir_util::label_place_dest(resolver, lhs) {
-                    // Never suppress the structural return binding
-                    if lhs_name != "__ret" {
-                        mir_guard::emit_suppressed_binding(&lhs_name, defined, suppressed_sentinel_names, &mut suppressed_dest_sentinels);
-                    }
-                }
-            }
-        }
-    }
-    suppressed_dest_sentinels
+    // Suppressed destination sentinels are forbidden by invariant.
+    // Do not collect or inject any synthetic sentinel statements.
+    let _ = (body, resolver, switch_analysis, defined, suppressed_sentinel_names);
+    Vec::new()
 }

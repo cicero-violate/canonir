@@ -32,6 +32,12 @@ pub struct RawAgent {
     /// Optional path (relative to AGENT_PROMPTS_DIR) for a goal/context file injected as {{GOAL}}.
     #[serde(default)]
     pub goal_file: String,
+    /// Truncate any single command's output to this many lines (default 200).
+    #[serde(default = "default_max_command_output_lines")]
+    pub max_command_output_lines: usize,
+    /// Truncate the full {{BASH_OUTPUT}} block to this many lines (default 2000).
+    #[serde(default = "default_max_message_output_lines")]
+    pub max_message_output_lines: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +56,29 @@ pub struct RawGuardrail {
 }
 
 fn default_stagnation_threshold() -> usize { 4 }
+fn default_max_command_output_lines() -> usize { 200 }
+fn default_max_message_output_lines() -> usize { 2000 }
+
+/// Truncate `text` to at most `max_lines` lines.
+/// If truncated, appends a marker showing how many lines were dropped.
+pub fn truncate_lines(text: &str, max_lines: usize) -> String {
+    let mut lines = text.lines();
+    let mut kept = Vec::with_capacity(max_lines);
+    let mut count = 0usize;
+    for line in lines.by_ref() {
+        if count >= max_lines {
+            break;
+        }
+        kept.push(line);
+        count += 1;
+    }
+    let remaining = lines.count();
+    let mut out = kept.join("\n");
+    if remaining > 0 {
+        out.push_str(&format!("\n... [{} lines truncated] ...", remaining));
+    }
+    out
+}
 
 // ---------------------------------------------------------------------------
 // Resolved config
@@ -66,6 +95,8 @@ pub struct AgentConfig {
     pub stagnation_threshold: usize,
     /// Loaded content of the goal file, or empty string.
     pub goal: String,
+    pub max_command_output_lines: usize,
+    pub max_message_output_lines: usize,
 }
 
 pub struct Templates {
@@ -98,6 +129,8 @@ impl AgentConfig {
             retry_addendum: a.retry_addendum,
             guardrails: a.guardrails,
             stagnation_threshold: a.stagnation_threshold,
+            max_command_output_lines: a.max_command_output_lines,
+            max_message_output_lines: a.max_message_output_lines,
             goal: if a.goal_file.is_empty() {
                 String::new()
             } else {
@@ -130,16 +163,34 @@ impl AgentConfig {
         exit_check_output: &str,
         stagnation_pressure: &str,
     ) -> String {
+        self.render_with_progress(template, tick, phase, cwd, bash_output, last_error, rationale_history, exit_check_output, stagnation_pressure, "")
+    }
+
+    pub fn render_with_progress(
+        &self,
+        template: &str,
+        tick: u64,
+        phase: &str,
+        cwd: &Path,
+        bash_output: &str,
+        last_error: &str,
+        rationale_history: &str,
+        exit_check_output: &str,
+        stagnation_pressure: &str,
+        progress_block: &str,
+    ) -> String {
+        let bash_output_trimmed = truncate_lines(bash_output, self.max_message_output_lines);
         template
             .replace("{{TICK}}", &tick.to_string())
             .replace("{{PHASE}}", phase)
             .replace("{{CWD}}", &cwd.display().to_string())
-            .replace("{{BASH_OUTPUT}}", bash_output)
+            .replace("{{BASH_OUTPUT}}", &bash_output_trimmed)
             .replace("{{LAST_ERROR}}", last_error)
             .replace("{{RATIONALE_HISTORY}}", rationale_history)
             .replace("{{EXIT_CHECK_OUTPUT}}", exit_check_output)
             .replace("{{GOAL}}", &self.goal)
             .replace("{{STAGNATION_PRESSURE}}", stagnation_pressure)
+            .replace("{{PROGRESS}}", progress_block)
     }
 
     pub fn render_retry_addendum(&self, error: &str) -> String {

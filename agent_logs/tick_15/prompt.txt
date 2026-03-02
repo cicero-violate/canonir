@@ -1,253 +1,214 @@
 ## Tick 15 — observe phase
 
-**Working directory (all commands run here):** `/workspace/ai_sandbox/canon`
-**Repo root for source files:** `/workspace/ai_sandbox/canon`
-
-Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in all commands.
-
-### Exit-check output
-```
-
-```
-
 ### Output from previous commands
 ```
-$ sed -n '1,200p' canon-capture/src/types.rs
-use serde::{Deserialize, Serialize};
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running `target/debug/orchestration --all`
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct NodeId(pub u32);
+== [repomap] capture ==
+  Building rustc_capture...
+   Compiling canon-capture v0.1.0 (/workspace/ai_sandbox/canon/canon-capture)
+   Compiling rustc_capture v0.1.0 (/workspace/ai_sandbox/canon/rustc_capture)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.51s
+  Capturing "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap" -> "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap/canon_capture.json"
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling tree-sitter-language v0.1.7
+   Compiling memchr v2.8.0
+   Compiling regex-syntax v0.8.10
+   Compiling same-file v1.0.6
+   Compiling streaming-iterator v0.1.9
+   Compiling walkdir v2.5.0
+   Compiling cc v1.2.56
+   Compiling aho-corasick v1.1.4
+   Compiling tree-sitter-rust v0.23.3
+   Compiling tree-sitter v0.24.7
+   Compiling regex-automata v0.4.14
+   Compiling regex v1.12.3
+   Compiling repomap v0.1.0 (/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap)
+canon_capture: wrote /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap/canon_capture.json
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.41s
+  Done. IR written to "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap/canon_capture.json"  nodes=1701
 
-impl NodeId {
-    #[inline]
-    pub fn index(self) -> usize {
-        self.0 as usize
-    }
-}
+== [repomap] orchestration ==
+Loading "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap/canon_capture.json"
+  canon nodes: 1701
+Analyzing CanonIR...
+INFO liveness_solver: pruned 4 dead function(s) from emit_order
+Emitting source (CanonIR pipeline)...
+Canon emitted 5 file(s) to "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap"
+Scanning emitted structural surface...
+- emitted structural surface:
+  - canon suppressed binding count: 0
+  - canon suppressed __ret count: 0
+  - canon suppressed non-__ret count: 0
+  - canon match gap count: 0
+  - canon call gap count: 0
+  - canon switch gap count: 0
+  - unresolved gap total: 0
+  - unresolved __ret gap count: 0
+  - unreachable count: 0
+  - // match count: 0
+  - // goto count: 0
+Structural surface snapshot written to "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap/canon_structural_surface.json"
+Running cargo build on emitted source...
+- cargo build result: FAILED
+  - error count: 12
+  - warning count: 0
+- cargo errors:
+  error[E0599]: no method named `expect` found for unit type `()` in the current scope
+    --> src/extractor.rs:19:25
+     |
+  19 |     let mut tree = _v10.expect(_v13);
+     |                         ^^^^^^ method not found in `()`
+  error[E0308]: mismatched types
+    --> src/extractor.rs:49:12
+     |
+  27 | fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
+     |                                                 ----------- expected `Vec<Symbol>` because of return type
+  ...
+  49 |     return __ret;
+     |            ^^^^^ expected `Vec<Symbol>`, found `()`
+     |
+     = note: expected struct `Vec<Symbol>`
+             found unit type `()`
+  error[E0599]: no method named `unwrap_or` found for unit type `()` in the current scope
+    --> src/extractor.rs:68:26
+     |
+  68 |     let mut params = _v8.unwrap_or(_v12);
+     |                          ^^^^^^^^^ method not found in `()`
+  error[E0599]: no method named `unwrap_or_default` found for unit type `()` in the current scope
+    --> src/extractor.rs:72:24
+     |
+  72 |     let mut ret = _v14.unwrap_or_default();
+     |                        ^^^^^^^^^^^^^^^^^ method not found in `()`
+  error[E0308]: mismatched types
+     --> src/extractor.rs:108:12
+      |
+   92 | fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+      |                                               ----------- expected `Vec<std::string::String>` because of return type
+  ...
+  108 |     return __ret;
+      |            ^^^^^ expected `Vec<String>`, found `()`
+      |
+      = note: expected struct `Vec<std::string::String>`
+              found unit type `()`
+  error[E0308]: mismatched types
+     --> src/extractor.rs:127:12
+      |
+  111 | fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
+      |                                                     ----------- expected `Vec<std::string::String>` because of return type
+  ...
+  127 |     return __ret;
+      |            ^^^^^ expected `Vec<String>`, found `()`
+      |
+      = note: expected struct `Vec<std::string::String>`
+              found unit type `()`
+  error[E0308]: mismatched types
+     --> src/extractor.rs:154:12
+      |
+  138 | fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
+      |                                                     ----------- expected `Vec<std::string::String>` because of return type
+  ...
+  154 |     return __ret;
+      |            ^^^^^ expected `Vec<String>`, found `()`
+      |
+      = note: expected struct `Vec<std::string::String>`
+              found unit type `()`
+  error[E0599]: `()` is not an iterator
+    --> src/repomap.rs:24:23
+     |
+  24 |     let mut _v3 = _v4.into_iter();
+     |                       ^^^^^^^^^ `()` is not an iterator
+     |
+     = note: the following trait bounds were not satisfied:
+             `(): Iterator`
+             which is required by `(): IntoIterator`
+             `&(): Iterator`
+             which is required by `&(): IntoIterator`
+             `&mut (): Iterator`
+             which is required by `&mut (): IntoIterator`
+  error[E0308]: mismatched types
+    --> src/repomap.rs:29:12
+     |
+  16 | pub fn build_repomap(root_dir: &Path) -> Vec<FileMap> {
+     |                                          ------------ expected `Vec<FileMap>` because of return type
+  ...
+  29 |     return __ret;
+     |            ^^^^^ expected `Vec<FileMap>`, found `()`
+     |
+     = note: expected struct `Vec<FileMap>`
+             found unit type `()`
+  error[E0308]: mismatched types
+    --> src/symbol.rs:26:16
+     |
+  12 |     pub fn line(&self) -> usize {
+     |                           ----- expected `usize` because of return type
+  ...
+  26 |         return __ret;
+     |                ^^^^^ expected `usize`, found `&&usize`
+     |
+  help: consider dereferencing the borrow
+     |
+  26 |         return **__ret;
+     |                ++
+  error[E0277]: the trait bound `(): AsRef<OsStr>` is not satisfied
+      --> src/main.rs:15:41
+       |
+    15 |     let mut root = std::path::Path::new(_v6);
+       |                    -------------------- ^^^ the trait `AsRef<OsStr>` is not implemented for `()`
+       |                    |
+       |                    required by a bound introduced by this call
+       |
+  note: required by a bound in `Path::new`
+      --> /home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/path.rs:2383:25
+       |
+  2383 |     pub const fn new<S: [const] AsRef<OsStr> + ?Sized>(s: &S) -> &Path {
+       |                         ^^^^^^^^^^^^^^^^^^^^ required by this bound in `Path::new`
+  error[E0599]: `()` is not an iterator
+    --> src/main.rs:55:25
+     |
+  55 |     let mut _v44 = _v45.sum();
+     |                         ^^^ `()` is not an iterator
+     |
+     = note: the following trait bounds were not satisfied:
+             `(): Iterator`
+             which is required by `&mut (): Iterator`
+Build report written to "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap/canon_build_report.json"
+Canon snapshot written to "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap/canon_ir_solved.json"
+Pipeline complete.
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub enum Visibility {
-    Public,
-    PubCrate,
-    PubSuper,
-    PubIn(String),
-    #[default]
-    Private,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GenericParam {
-    pub name: String,
-    pub bounds: Vec<String>,
-    pub is_lifetime: bool,
-    pub default_ty: Option<TypeExpr>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum PrimType {
-    Bool,
-    Char,
-    Str,
-    U8,
-    U16,
-    U32,
-    U64,
-    U128,
-    Usize,
-    I8,
-    I16,
-    I32,
-    I64,
-    I128,
-    Isize,
-    F32,
-    F64,
-    Unit,
-    Never,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum TypeExpr {
-    Primitive(PrimType),
-    Ref { lifetime: Option<String>, inner: Box<TypeExpr>, mutable: bool },
-    RawPtr { inner: Box<TypeExpr>, mutable: bool },
-    Array { inner: Box<TypeExpr>, len: Option<u64> },
-    Slice(Box<TypeExpr>),
-    Tuple(Vec<TypeExpr>),
-    FnPtr { params: Vec<TypeExpr>, ret: Box<TypeExpr> },
-    Param(String),
-    DynTrait(String),
-    ImplTrait(String),
-    AppliedPath { base: String, args: Vec<TypeExpr> },
-    Path(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Field {
-    pub name: Option<String>,
-    pub ty: TypeExpr,
-    pub vis: Visibility,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Param {
-    pub name: String,
-    pub ty: TypeExpr,
-    pub is_self: bool,
-    pub mutable: bool,
-    pub lifetime: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EnumVariant {
-    pub name: String,
-    pub fields: Vec<Field>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Stmt {
-    Let { pat: String, ty: Option<TypeExpr>, init: Option<String> },
-    Assign { lhs: String, rhs: String },
-    Expr(String),
-    Call { func: String, args: Vec<String>, dest: Option<String> },
-    FieldAccess { base: String, field: String, dest: Option<String> },
-    MethodCall { receiver: String, method: String, args: Vec<String>, dest: Option<String> },
-    StructLit { ty: TypeExpr, fields: Vec<(String, String)>, dest: Option<String> },
-    Match { dest: Option<String> },
-    Return(Option<String>),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Terminator {
-    Goto(u32),
-    Branch { cond: String, true_bb: u32, false_bb: u32 },
-    Return,
-    Unreachable,
-    None,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BasicBlock {
-    pub stmts: Vec<Stmt>,
-    pub terminator: Terminator,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Body {
-    None,
-    Blocks(Vec<BasicBlock>),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TraitMethod {
-    pub name: String,
-    pub vis: Visibility,
-    pub generics: Vec<GenericParam>,
-    pub params: Vec<Param>,
-    pub ret: TypeExpr,
-    pub body: Body,
-    #[serde(default)]
-    pub attrs: Vec<String>,
-    #[serde(default)]
-    pub where_clauses: Vec<String>,
-    #[serde(default)]
-    pub unsafe_: bool,
-    #[serde(default)]
-    pub async_: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub enum StructKind {
-    #[default]
-    Named,
-    Tuple,
-    Unit,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum NodeKind {
-    Crate {
-        name: String,
-        edition: String,
-    },
-    Module {
-        path: String,
-        file: String,
-        #[serde(default)]
-        vis: Visibility,
-        #[serde(default)]
-        inline: bool,
-    },
-    Struct {
-        name: String,
-        vis: Visibility,
-        generics: Vec<GenericParam>,
-        fields: Vec<Field>,
-        derives: Vec<String>,
-        #[serde(default)]
-        attrs: Vec<String>,
-        #[serde(default)]
-        where_clauses: Vec<String>,
-        #[serde(default)]
-        struct_kind: StructKind,
-    },
-    Enum {
-        name: String,
-        vis: Visibility,
-        generics: Vec<GenericParam>,
-        variants: Vec<EnumVariant>,
-        derives: Vec<String>,
-        #[serde(default)]
-        attrs: Vec<String>,
-        #[serde(default)]
-        where_clauses: Vec<String>,
-    },
-    Trait {
-        name: String,
-        vis: Visibility,
-        generics: Vec<GenericParam>,
-        methods: Vec<TraitMethod>,
-        #[serde(default)]
-        attrs: Vec<String>,
-        #[serde(default)]
-        where_clauses: Vec<String>,
-        #[serde(default)]
-        unsafe_: bool,
-
-$ rg -n "enum Body|struct BasicBlock|enum Stmt" canon-capture/src/types.rs
-93:pub enum Stmt {
-115:pub struct BasicBlock {
-121:pub enum Body {
-
-
+Invariant report written to: /workspace/ai_sandbox/canon/STRUCTURAL_INVARIANTS_REPORT.md
+JSON report written to:      /workspace/ai_sandbox/canon/orchestration_report.json
+[exit-check exit code: 1]
 ```
 
 ### Recent rationale history
 ```
-[T-5] Compilation is clean; execute the canon-capture test suite to validate that strengthened __ret structural guarantees do not introduce behavioral regressions and that the invariant holds under tests.
+[T-5] The emitted extractor shows locals like `symbols = ();`, `methods = ();`, etc., meaning MIR expression lowering is fabricating unit for non-unit aggregates (Vec, String, Option). The root cause is likely in `mir_expr::mir_assign_stmt` or related expression lowering. Inspect expr.rs to see where non-structural expressions fall back to `()`.
 ---
-[T-4] cargo test for canon-capture completed successfully: all unit tests passed (2/2) and doc-tests passed (0 failures). The crate compiles cleanly and the strengthened structural __ret guarantees did not introduce regressions at the test level. The build and test suite are now green.
+[T-4] Continue inspecting `mir_assign_stmt` to see how `__ret` is treated and how rvalues that fail to render are handled. The fallback to `"()"` in `mir_assign_stmt` is likely the direct source of unit pollution for non-unit locals like `symbols`, `methods`, etc.
 ---
-[T-3] cargo check for canon-capture succeeds with no errors. The crate builds cleanly, and prior fixes remain intact. No additional compiler issues are present at this stage.
+[T-3] Continue through `mir_rvalue_expr` to see which Rvalue variants return `None`, triggering the `"()"` fallback in `mir_assign_stmt`. We need to identify which common aggregates (Vec, String, Option, iterators) are currently unhandled and therefore collapsing to unit.
 ---
-[T-2] The current lower.rs tail confirms that materialize_return_local and resolve_ret_gaps_with are explicit no-ops, and structural __ret synthesis is fully handled inside stage_finalize_body_with_ret_fallback. No suppressed emission paths for __ret remain in lower_assign_statement. The structural invariant is now enforced entirely within the MIR lowering pipeline, and no further action is required in this region.
+[T-2] The root cause of widespread `()` pollution is the silent fallback to unit in `mir_assign_stmt` whenever `mir_rvalue_expr` returns None. This collapses non-unit values (Vec, Option, iterators, etc.) into `()`, breaking type flow across the entire emitted program. The fix is to stop fabricating `()` at the expression layer and instead return `None`, allowing higher-level lowering logic to handle suppression deterministically without destroying type information.
 ---
-[T-1] No new command output was produced in this tick. The project remains in a clean state: canon-capture builds successfully and all tests pass. Structural __ret synthesis is enforced in stage_finalize_body_with_ret_fallback, and no suppressed __ret paths remain. Ready for next directive (e.g., orchestration-level invariant validation such as unresolved_ret_gap_count).
+[T-1] Re-run the full orchestration pipeline after removing the unit fallback in mir_assign_stmt to verify that unit pollution is eliminated and that all fixtures emit gap-free, compiling Rust.
+```
+
+### Structural progress
+```
+gap_count=0 (prev=0, trend=n/a (first tick))
+compile=ok errors=0
+stagnation=0
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
-`{"phase":"observe","deltas":[...],"rationale":"..."}`
 
-### BashReadOnly whitelisted commands
-Only the following command prefixes are permitted in `BashReadOnly` deltas:
-`rg`, `cat`, `ls`, `tree`, `sed`, `awk`, `perl`, `find`, `head`, `tail`,
-`wc`, `diff`, `stat`, `echo`, `pwd`, `cargo`
+### Delta schema (MANDATORY)
+```json
+{ "BashReadOnly": { "command": "rg -n 'pattern' src/" } }
+```
+Never: `{ "type": "BashReadOnly", "command": "..." }` — rejected.
+Full shape: `{"phase":"observe","deltas":[...],"rationale":"..."}`
 
-For `cargo`, read-only invocations only: `cargo check -p <crate> 2>&1`,
-`cargo build -p <crate> 2>&1`, `cargo test -p <crate> 2>&1`.
-Any other command prefix will be rejected at runtime with an error.
-`cargo` commands automatically run from the repo root `/workspace/ai_sandbox/canon` —
-do NOT prefix them with `cd`.
-
-
-⚠️  STAGNATION DETECTED: You have spent many ticks observing or planning without acting. You MUST choose phase `act` this tick and emit at least one `ApplyPatch` or `Bash` delta. Do NOT choose observe or plan.

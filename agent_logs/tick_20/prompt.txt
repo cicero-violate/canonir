@@ -1,15 +1,5 @@
 ## Tick 20 — observe phase
 
-**Working directory (all commands run here):** `/workspace/ai_sandbox/canon`
-**Repo root for source files:** `/workspace/ai_sandbox/canon`
-
-Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in all commands.
-
-### Exit-check output
-```
-
-```
-
 ### Output from previous commands
 ```
 
@@ -17,19 +7,32 @@ Use absolute paths (e.g. `/workspace/ai_sandbox/canon/canon-capture/src/...`) in
 
 ### Recent rationale history
 ```
-[T-5] The previous cargo check exited with status 101, which stopped execution before emitting diagnostics. Re-run cargo check while capturing stderr and forcing a zero exit (|| true) so the full compiler error output is surfaced for diagnosis.
+[T-5] Re-run the full orchestration pipeline after removing the unit fallback in mir_assign_stmt to verify that unit pollution is eliminated and that all fixtures emit gap-free, compiling Rust.
 ---
-[T-4] Telemetry confirms unresolved_ret_gap_count is computed by grepping emitted Rust for `let mut __ret = panic!("canon ...)`. Since MIR lowering now avoids suppressed __ret and stage_finalize_body_with_ret_fallback injects structural `Assign + Return`, any remaining unresolved gaps must originate in code generation (emit stage), not MIR lowering. Next debugging focus should shift to the Rust emission layer that materializes `let mut __ret = panic!(...)` scaffolding in orchestration output.
+[T-4] The build still shows pervasive `()` pollution, meaning unit is still being fabricated elsewhere. Search the capture pipeline for remaining explicit "()" assignment fallbacks (outside mir_assign_stmt) that may still be collapsing non-unit values to unit.
 ---
-[T-3] Telemetry shows unresolved_ret_gap_count is driven by emitted Rust containing `let mut __ret = panic!("canon ...)`. MIR lowering and structural fallback now synthesize Assign+Return deterministically, so remaining gaps likely originate in the Rust emission/orchestration layer that still materializes panic-based __ret scaffolding. Search for the emission site that generates this pattern and inspect how __ret is initialized during code generation.
+[T-3] The previous search pattern was too specific. We need to search for any remaining explicit `"()".to_string()` fabrications across the capture layer (terminator, lower, passes, etc.) that may still be introducing unit fallbacks and polluting non-unit value flow.
 ---
-[T-2] The previous failure was due to a timeout waiting for the model response, not a Bash or patch error. Re-emitting a minimal, well-formed JSON block to allow the orchestration loop to proceed without triggering long-running commands.
+[T-2] The search shows multiple `"()".to_string()` fallbacks inside `mir/terminator.rs`, which likely fabricate unit for non-unit call destinations (including Option-returning calls like `parse`, `child_by_field_name`, etc.). These are prime suspects for the remaining `()` pollution. Inspect terminator.rs to analyze how call destinations are being forced to unit and why.
 ---
-[T-1] run_script.sh confirms unresolved_ret_gap_count is computed purely from emitted Rust containing `let mut __ret = panic!("canon ...")`. Since MIR structural fallback no longer emits suppressed __ret, remaining gaps must be introduced during Rust emission under emit/. These searches isolate the exact emission sites generating the panic-based __ret initializer so we can fix them at the source.
+[T-1] Search results showed additional "()".to_string() fabrication in mir/passes.rs. Since terminator.rs still contains multiple unit fallbacks for call destinations, we must also inspect passes.rs to determine whether later MIR passes are rewriting suppressed or unresolved values into unit assignments, contributing to continued () pollution in emitted code.
+```
+
+### Structural progress
+```
+gap_count=0 (prev=0, trend=n/a (first tick))
+compile=ok errors=0
+stagnation=4
 ```
 
 Use `BashReadOnly` to probe files. Respond with ONE fenced ```json block.
-`{"phase":"observe","deltas":[...],"rationale":"..."}`
+
+### Delta schema (MANDATORY)
+```json
+{ "BashReadOnly": { "command": "rg -n 'pattern' src/" } }
+```
+Never: `{ "type": "BashReadOnly", "command": "..." }` — rejected.
+Full shape: `{"phase":"observe","deltas":[...],"rationale":"..."}`
 
 
 ⚠️  STAGNATION DETECTED: You have spent many ticks observing or planning without acting. You MUST choose phase `act` this tick and emit at least one `ApplyPatch` or `Bash` delta. Do NOT choose observe or plan.

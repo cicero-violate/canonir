@@ -341,15 +341,19 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                         Stmt::Let { pat, ty, init } => {
                             let name_id = NameId(canon.name_intern.intern(pat));
                             let ty_id = ty.as_ref().map(|t| intern_ty_expr(canon, t)).unwrap_or_else(|| unit_ty(canon));
-                            let rhs = init.as_deref().map(|e| {
-                                let eid = NameId(canon.name_intern.intern(e));
-                                canon.push_node(CanonNodeKind::Local { name_id: eid, ty: ty_id, flags: 0 })
-                            });
+                            // Do not synthesize a separate Local for initializer here.
+                            // Initializations are modeled by subsequent Assign/Call ops.
+                            // Emitting a fresh Local for `init` here breaks dataflow and
+                            // causes widespread unit-typed pollution in the emit phase.
+                            let rhs = None;
                             let lhs = canon.push_node(CanonNodeKind::Local { name_id, ty: ty_id, flags: 0 });
                             CfgOp::Let { lhs, ty: ty_id, rhs }
                         }
                         Stmt::Assign { lhs, rhs } => {
-                            let ty = unit_ty(canon);
+                            // Avoid interning malformed helper path segments like "_"
+                            // Use a well-formed placeholder segment instead.
+                            let path = canon.intern_path("unknown");
+                            let ty = canon.intern_type(TypeKind::Unresolved(path));
                             let lhs_name = NameId(canon.name_intern.intern(lhs));
                             let rhs_name = NameId(canon.name_intern.intern(rhs));
                             let lhs_id = canon.push_node(CanonNodeKind::Local { name_id: lhs_name, ty, flags: 0 });
@@ -358,12 +362,17 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                         }
                         Stmt::Expr(e) => {
                             let eid = NameId(canon.name_intern.intern(e));
-                            let ty = unit_ty(canon);
+                            // Avoid forcing expression temporaries to unit type.
+                            // Use unresolved placeholder to prevent `()` pollution downstream.
+                            let path = canon.intern_path("unknown");
+                            let ty = canon.intern_type(TypeKind::Unresolved(path));
                             let loc = canon.push_node(CanonNodeKind::Local { name_id: eid, ty, flags: 0 });
                             CfgOp::Expr(loc)
                         }
                         Stmt::Call { func, args, dest } => {
-                            let ty = unit_ty(canon);
+                            // Avoid interning malformed helper path segments like "_"
+                            let path = canon.intern_path("unknown");
+                            let ty = canon.intern_type(TypeKind::Unresolved(path));
                             let func_name = NameId(canon.name_intern.intern(func));
                             let func_id = canon.push_node(CanonNodeKind::Local { name_id: func_name, ty, flags: 0 });
                             let args: Vec<CanonId> = args
@@ -380,7 +389,9 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                             CfgOp::Call { func: func_id, args, dest }
                         }
                         Stmt::FieldAccess { base, field, dest } => {
-                            let ty = unit_ty(canon);
+                            // Avoid interning malformed helper path segments like "_"
+                            let path = canon.intern_path("unknown");
+                            let ty = canon.intern_type(TypeKind::Unresolved(path));
                             let base_name = NameId(canon.name_intern.intern(base));
                             let base_id = canon.push_node(CanonNodeKind::Local { name_id: base_name, ty, flags: 0 });
                             let field_id = NameId(canon.name_intern.intern(field));
@@ -391,7 +402,9 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                             CfgOp::FieldAccess { base: base_id, field: field_id, dest: dest_id }
                         }
                         Stmt::MethodCall { receiver, method, args, dest } => {
-                            let ty = unit_ty(canon);
+                            // Avoid interning malformed helper path segments like "_"
+                            let path = canon.intern_path("unknown");
+                            let ty = canon.intern_type(TypeKind::Unresolved(path));
                             let receiver_name = NameId(canon.name_intern.intern(receiver));
                             let receiver_id = canon.push_node(CanonNodeKind::Local { name_id: receiver_name, ty, flags: 0 });
                             let arg_ids: Vec<CanonId> = args
@@ -410,7 +423,9 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                         }
                         Stmt::StructLit { ty, fields, dest } => {
                             let ty_id = intern_ty_expr(canon, ty);
-                            let value_ty = unit_ty(canon);
+                            // Do not force struct literal field temporaries to unit.
+                            let path = canon.intern_path("unknown");
+                            let value_ty = canon.intern_type(TypeKind::Unresolved(path));
                             let lowered_fields: Vec<(NameId, CanonId)> = fields
                                 .iter()
                                 .map(|(field, value)| {
@@ -426,7 +441,9 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                             CfgOp::StructLit { ty: ty_id, fields: lowered_fields, dest: dest_id }
                         }
                         Stmt::Match { dest } => {
-                            let ty = unit_ty(canon);
+                            // Avoid unit-typing match destinations; preserve unresolved type.
+                            let path = canon.intern_path("unknown");
+                            let ty = canon.intern_type(TypeKind::Unresolved(path));
                             let dest = dest.as_deref().map(|name| {
                                 let name_id = NameId(canon.name_intern.intern(name));
                                 canon.push_node(CanonNodeKind::Local { name_id, ty, flags: 0 })
@@ -434,9 +451,13 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                             CfgOp::Match { dest }
                         }
                         Stmt::Return(val) => {
+                            // Do not force return temporaries to unit type.
+                            // Use an unresolved placeholder type to avoid
+                            // polluting downstream emit with `()`-typed locals.
                             let v = val.as_deref().map(|e| {
                                 let eid = NameId(canon.name_intern.intern(e));
-                                let ty = unit_ty(canon);
+                                let path = canon.intern_path("unknown");
+                                let ty = canon.intern_type(TypeKind::Unresolved(path));
                                 canon.push_node(CanonNodeKind::Local { name_id: eid, ty, flags: 0 })
                             });
                             CfgOp::Return(v)

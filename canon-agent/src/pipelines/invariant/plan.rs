@@ -73,14 +73,18 @@ fn enforce_phase(phase: Phase, deltas: Vec<CodeDelta>) -> (Phase, Vec<CodeDelta>
 
 fn check_guardrails(config: &AgentConfig, response: &AgentResponse) -> Result<()> {
     for delta in &response.deltas {
-        if let CodeDelta::ApplyPatch { patch } = delta {
-            for rule in &config.guardrails {
-                let triggered = patch.lines().any(|line| {
-                    line.starts_with('+') && line.contains(&rule.forbidden_pattern)
-                });
-                if triggered {
-                    anyhow::bail!("GUARDRAIL_REJECTION: {}", rule.message);
-                }
+        for rule in &config.guardrails {
+            let triggered = match delta {
+                CodeDelta::ApplyPatch { patch } => patch.lines().any(|line| {
+                    line.starts_with('+')
+                        && !line.trim_start_matches('+').trim_start().starts_with("//")
+                        && line.contains(&rule.forbidden_pattern)
+                }),
+                CodeDelta::Bash { command } => command.contains(&rule.forbidden_pattern),
+                CodeDelta::BashReadOnly { command } => command.contains(&rule.forbidden_pattern),
+            };
+            if triggered {
+                anyhow::bail!("GUARDRAIL_REJECTION: {}", rule.message);
             }
         }
     }
@@ -123,6 +127,7 @@ pub struct PlanRequest<'a> {
     pub is_bootstrap: bool,
     pub current_phase: Option<&'a Phase>,
     pub stagnation_pressure: &'a str,
+    pub progress_block: &'a str,
 }
 
 pub async fn plan_via_llm(
@@ -142,7 +147,7 @@ pub async fn plan_via_llm(
 
     let phase_str = req.current_phase.map(|p| p.to_string()).unwrap_or_else(|| "observe".into());
 
-    let prompt = config.render(
+    let prompt = config.render_with_progress(
         template,
         req.tick,
         &phase_str,
@@ -152,6 +157,7 @@ pub async fn plan_via_llm(
         req.rationale_history,
         req.exit_check_output,
         req.stagnation_pressure,
+        req.progress_block,
     );
 
     std::fs::write(log_dir.join("prompt.txt"), &prompt).ok();

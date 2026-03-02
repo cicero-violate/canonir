@@ -1,113 +1,179 @@
-$ sed -n '150,260p' canon-capture/src/capture/engine.rs
-    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
-    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
-    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
-    let default_value = {
-        let v = helpers::hir_init_src(tcx, def_id);
-        if v.trim().is_empty() {
-            None
-        } else {
-            Some(v)
-        }
-    };
-    let kind = NodeKind::AssocConst { name, vis, ty: ty_expr, default_value, attrs: Vec::new() };
-    Some((vec![Node { id, kind, span }], vec![]))
-}
+$ cargo run -p orchestration -- --all
 
-fn lower_fn_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
-    let id = *index.def_to_node.get(&def_id)?;
-    let full_path = norm::path(tcx, def_id);
-    let name = norm::short(&full_path).to_string();
-    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
-    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
-    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
-    let sig = tcx.fn_sig(def_id).skip_binder();
-    let returns_unit = sig.output().skip_binder().is_unit();
-    let params = helpers::map_params(tcx, def_id, sig.inputs().skip_binder());
-    let async_ = tcx.asyncness(def_id).is_async();
-    let ret = helpers::declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, sig.output().skip_binder()));
-    let unsafe_ = sig.safety() == rustc_hir::Safety::Unsafe;
-    let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-    let mut body = lower::mir_body_structural(tcx, def_id, &param_names, returns_unit);
-    if !returns_unit {
-        lower::materialize_return_local(&mut body);
-        // Deterministically replace remaining __ret gaps with a concrete return
-        // value derived from the declared return type, eliminating suppressed
-        // return bindings at the structural level.
-        let default_expr = helpers::default_return_expr(&ret);
-        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-    }
-    let kind = NodeKind::Function { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ };
-    Some((vec![Node { id, kind, span }], vec![]))
-}
+== [repomap] capture ==
+  Building rustc_capture...
+  Capturing "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap" -> "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap/canon_capture.json"
+  Done. IR written to "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap/canon_capture.json"  nodes=1701
 
-fn lower_assoc_fn_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
-    let id = *index.def_to_node.get(&def_id)?;
-    let full_path = norm::path(tcx, def_id);
-    let name = norm::short(&full_path).to_string();
-    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
-    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
-    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
-    let sig = tcx.fn_sig(def_id).skip_binder();
-    let returns_unit = sig.output().skip_binder().is_unit();
-    let params = helpers::map_params(tcx, def_id, sig.inputs().skip_binder());
-    let async_ = tcx.asyncness(def_id).is_async();
-    let ret = helpers::declared_fn_return_type_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, sig.output().skip_binder()));
-    let unsafe_ = sig.safety() == rustc_hir::Safety::Unsafe;
-    let param_names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-    let mut body = lower::mir_body_structural(tcx, def_id, &param_names, returns_unit);
-    if !returns_unit {
-        lower::materialize_return_local(&mut body);
-        // Deterministically replace remaining __ret gaps with a concrete return
-        // value derived from the declared return type, eliminating suppressed
-        // return bindings at the structural level.
-        let default_expr = helpers::default_return_expr(&ret);
-        lower::resolve_ret_gaps_with(&mut body, &default_expr);
-    }
-    let kind = NodeKind::Method { name, vis, generics, params, ret, body, attrs: Vec::new(), where_clauses, unsafe_, async_ };
-    Some((vec![Node { id, kind, span }], vec![]))
-}
+== [repomap] orchestration ==
+Loading "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap/canon_capture.json"
+  canon nodes: 1701
+Analyzing CanonIR...
+Emitting source (CanonIR pipeline)...
+Canon emitted 5 file(s) to "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap"
+Scanning emitted structural surface...
+- emitted structural surface:
+  - canon suppressed binding count: 0
+  - canon suppressed __ret count: 0
+  - canon suppressed non-__ret count: 0
+  - canon match gap count: 0
+  - canon call gap count: 0
+  - canon switch gap count: 0
+  - unresolved gap total: 0
+  - unresolved __ret gap count: 0
+  - unreachable count: 0
+  - // match count: 0
+  - // goto count: 0
+Structural surface snapshot written to "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap/canon_structural_surface.json"
+Running cargo build on emitted source...
+- cargo build result: FAILED
+  - error count: 12
+  - warning count: 0
+- cargo errors:
+  error[E0599]: no method named `expect` found for unit type `()` in the current scope
+    --> src/extractor.rs:19:25
+     |
+  19 |     let mut tree = _v10.expect(_v13);
+     |                         ^^^^^^ method not found in `()`
+  error[E0308]: mismatched types
+    --> src/extractor.rs:49:12
+     |
+  27 | fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
+     |                                                 ----------- expected `Vec<Symbol>` because of return type
+  ...
+  49 |     return __ret;
+     |            ^^^^^ expected `Vec<Symbol>`, found `()`
+     |
+     = note: expected struct `Vec<Symbol>`
+             found unit type `()`
+  error[E0599]: no method named `unwrap_or` found for unit type `()` in the current scope
+    --> src/extractor.rs:68:26
+     |
+  68 |     let mut params = _v8.unwrap_or(_v12);
+     |                          ^^^^^^^^^ method not found in `()`
+  error[E0599]: no method named `unwrap_or_default` found for unit type `()` in the current scope
+    --> src/extractor.rs:72:24
+     |
+  72 |     let mut ret = _v14.unwrap_or_default();
+     |                        ^^^^^^^^^^^^^^^^^ method not found in `()`
+  error[E0308]: mismatched types
+     --> src/extractor.rs:108:12
+      |
+   92 | fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
+      |                                                     ----------- expected `Vec<std::string::String>` because of return type
+  ...
+  108 |     return __ret;
+      |            ^^^^^ expected `Vec<String>`, found `()`
+      |
+      = note: expected struct `Vec<std::string::String>`
+              found unit type `()`
+  error[E0308]: mismatched types
+     --> src/extractor.rs:135:12
+      |
+  119 | fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
+      |                                                     ----------- expected `Vec<std::string::String>` because of return type
+  ...
+  135 |     return __ret;
+      |            ^^^^^ expected `Vec<String>`, found `()`
+      |
+      = note: expected struct `Vec<std::string::String>`
+              found unit type `()`
+  error[E0308]: mismatched types
+     --> src/extractor.rs:154:12
+      |
+  138 | fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
+      |                                               ----------- expected `Vec<std::string::String>` because of return type
+  ...
+  154 |     return __ret;
+      |            ^^^^^ expected `Vec<String>`, found `()`
+      |
+      = note: expected struct `Vec<std::string::String>`
+              found unit type `()`
+  error[E0599]: `()` is not an iterator
+    --> src/repomap.rs:24:23
+     |
+  24 |     let mut _v3 = _v4.into_iter();
+     |                       ^^^^^^^^^ `()` is not an iterator
+     |
+     = note: the following trait bounds were not satisfied:
+             `(): Iterator`
+             which is required by `(): IntoIterator`
+             `&(): Iterator`
+             which is required by `&(): IntoIterator`
+             `&mut (): Iterator`
+             which is required by `&mut (): IntoIterator`
+  error[E0308]: mismatched types
+    --> src/repomap.rs:29:12
+     |
+  16 | pub fn build_repomap(root_dir: &Path) -> Vec<FileMap> {
+     |                                          ------------ expected `Vec<FileMap>` because of return type
+  ...
+  29 |     return __ret;
+     |            ^^^^^ expected `Vec<FileMap>`, found `()`
+     |
+     = note: expected struct `Vec<FileMap>`
+             found unit type `()`
+  error[E0308]: mismatched types
+    --> src/symbol.rs:26:16
+     |
+  12 |     pub fn line(&self) -> usize {
+     |                           ----- expected `usize` because of return type
+  ...
+  26 |         return __ret;
+     |                ^^^^^ expected `usize`, found `&&usize`
+     |
+  help: consider dereferencing the borrow
+     |
+  26 |         return **__ret;
+     |                ++
+  error[E0277]: the trait bound `(): AsRef<OsStr>` is not satisfied
+      --> src/main.rs:15:41
+       |
+    15 |     let mut root = std::path::Path::new(_v6);
+       |                    -------------------- ^^^ the trait `AsRef<OsStr>` is not implemented for `()`
+       |                    |
+       |                    required by a bound introduced by this call
+       |
+  note: required by a bound in `Path::new`
+      --> /home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/path.rs:2383:25
+       |
+  2383 |     pub const fn new<S: [const] AsRef<OsStr> + ?Sized>(s: &S) -> &Path {
+       |                         ^^^^^^^^^^^^^^^^^^^^ required by this bound in `Path::new`
+  error[E0599]: `()` is not an iterator
+    --> src/main.rs:55:25
+     |
+  55 |     let mut _v44 = _v45.sum();
+     |                         ^^^ `()` is not an iterator
+     |
+     = note: the following trait bounds were not satisfied:
+             `(): Iterator`
+             which is required by `&mut (): Iterator`
+Build report written to "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap/canon_build_report.json"
+Canon snapshot written to "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap/canon_ir_solved.json"
+Pipeline complete.
 
-fn lower_const_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
-    let id = *index.def_to_node.get(&def_id)?;
-    let full_path = norm::path(tcx, def_id);
-    let name = norm::short(&full_path).to_string();
-    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
-    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
-    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
-    let value = helpers::hir_init_src(tcx, def_id);
-    let kind = NodeKind::Const { name, vis, ty: ty_expr, value, attrs: Vec::new() };
-    Some((vec![Node { id, kind, span }], vec![]))
-}
-
-fn lower_ty_alias_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
-    let id = *index.def_to_node.get(&def_id)?;
-    let full_path = norm::path(tcx, def_id);
-    let name = norm::short(&full_path).to_string();
-    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
-    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
-    let (generics, where_clauses) = helpers::map_generics(tcx, def_id);
-    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
-    let kind = NodeKind::TypeAlias { name, vis, generics, ty: ty_expr, attrs: Vec::new(), where_clauses };
-    Some((vec![Node { id, kind, span }], vec![]))
-}
-
-fn lower_static_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
-    let id = *index.def_to_node.get(&def_id)?;
-    let full_path = norm::path(tcx, def_id);
-    let name = norm::short(&full_path).to_string();
-    let span = Some(norm::span(tcx, tcx.def_span(def_id)));
-    let vis = helpers::map_vis(tcx, def_id, tcx.visibility(def_id));
-    let ty_expr = helpers::declared_item_ty_expr(tcx, def_id).unwrap_or_else(|| helpers::lower_ty(tcx, tcx.type_of(def_id).instantiate_identity()));
-    let value = helpers::hir_init_src(tcx, def_id);
-    let mutable = matches!(tcx.def_kind(def_id), DefKind::Static { mutability: rustc_hir::Mutability::Mut, .. });
-    let kind = NodeKind::Static { name, vis, ty: ty_expr, value, mutable, attrs: Vec::new() };
-    Some((vec![Node { id, kind, span }], vec![]))
-}
-
-fn lower_use_item(tcx: TyCtxt<'_>, def_id: DefId, index: &Index, rule: &RuleSpec) -> Option<(Vec<Node>, Vec<EdgeHint>)> {
-    let id = *index.def_to_node.get(&def_id)?;
-    let local = def_id.as_local()?;
-    let rustc_hir::Node::Item(item_hir) = tcx.hir_node_by_def_id(local) else {
-        return Some((Vec::new(), Vec::new()));
-
+Invariant report written to: /workspace/ai_sandbox/canon/STRUCTURAL_INVARIANTS_REPORT.md
+JSON report written to:      /workspace/ai_sandbox/canon/orchestration_report.json
+--- stderr ---
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running `target/debug/orchestration --all`
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
+   Compiling find-msvc-tools v0.1.9
+   Compiling shlex v1.3.0
+   Compiling tree-sitter-language v0.1.7
+   Compiling memchr v2.8.0
+   Compiling regex-syntax v0.8.10
+   Compiling same-file v1.0.6
+   Compiling streaming-iterator v0.1.9
+   Compiling walkdir v2.5.0
+   Compiling cc v1.2.56
+   Compiling aho-corasick v1.1.4
+   Compiling tree-sitter v0.24.7
+   Compiling tree-sitter-rust v0.23.3
+   Compiling regex-automata v0.4.14
+   Compiling regex v1.12.3
+   Compiling repomap v0.1.0 (/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap)
+canon_capture: wrote /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap/canon_capture.json
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.41s
+INFO liveness_solver: pruned 4 dead function(s) from emit_order
+[exit code 1]

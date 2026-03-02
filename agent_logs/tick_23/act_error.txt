@@ -1,1 +1,1 @@
-apply_patch failed in "/workspace/ai_sandbox/canon": exit status: 1
+readonly bash exited with exit status: 2: rg: src/: IO error for operation on src/: No such file or directory (os error 2)

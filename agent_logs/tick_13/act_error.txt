@@ -1,1 +1,0 @@
-BashReadOnly rejected non-whitelisted command: cd /workspace/ai_sandbox/canon/canon-capture && cargo check

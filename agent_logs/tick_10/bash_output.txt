@@ -1,18 +1,201 @@
-$ cargo test -p canon-capture 2>&1
-   Compiling canon-capture v0.1.0 (/workspace/ai_sandbox/canon/canon-capture)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.85s
-     Running unittests src/lib.rs (target/debug/deps/canon_capture-83a02123355bc149)
+$ sed -n '1,200p' /workspace/ai_sandbox/canon/canon-capture/src/capture/mir/expr.rs
+use rustc_abi::{FieldIdx, VariantIdx};
+use rustc_middle::mir;
+use rustc_middle::ty::{self, TyCtxt};
 
-running 2 tests
-test norm::tests::normalizes_extern_type_paths ... ok
-test norm::tests::normalizes_local_crate_path_prefixes ... ok
+use crate::capture::helpers::{lower_ty, render_type_expr};
+use crate::capture::mir::filters;
+use crate::capture::mir::guard as mir_guard;
+use crate::capture::mir::ops as mir_ops;
+use crate::capture::mir::resolver::LocalNameResolver;
+use crate::norm;
+use crate::types::{Stmt, TypeExpr};
 
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+pub(crate) fn render_projected_place_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, place: &mir::Place<'tcx>, resolver: &LocalNameResolver) -> Option<String> {
+    if place.projection.is_empty() {
+        return resolver.label_place(place);
+    }
+    let mut expr = resolver.label_local(place.local)?;
+    let mut cursor_ty = local_decls[place.local].ty;
+    let mut pending_downcast: Option<(VariantIdx, ty::Ty<'tcx>)> = None;
+    for elem in place.projection.iter() {
+        match elem {
+            mir::ProjectionElem::Deref => {
+                // Avoid eagerly materializing `*expr` in the rendered output.
+                // Emitting explicit deref here interacts poorly with enum
+                // downcast projection, producing `match *self` and moving out
+                // of borrowed values. Instead, keep the base expression
+                // unchanged and only advance the type cursor.
+                cursor_ty = match cursor_ty.kind() {
+                    ty::TyKind::Ref(_, inner, _) => *inner,
+                    ty::TyKind::RawPtr(inner, _) => *inner,
+                    _ => cursor_ty.builtin_deref(true)?,
+                };
+            }
+            mir::ProjectionElem::Downcast(variant_name, variant_idx) => {
+                let _ = variant_name;
+                pending_downcast = Some((variant_idx, cursor_ty));
+            }
+            mir::ProjectionElem::Field(field_idx, field_ty) => {
+                let field = if let Some(downcast) = pending_downcast.take() {
+                    expr = render_downcast_field_expr(tcx, &expr, downcast.1, downcast.0, field_idx)?;
+                    String::new()
+                } else {
+                    match cursor_ty.kind() {
+                        ty::TyKind::Adt(adt, _) => {
+                            if !adt.did().is_local() {
+                                let tuple_like = adt.non_enum_variant().fields.iter().all(|f| f.name.to_string().chars().all(|c| c.is_ascii_digit()));
+                                if tuple_like {
+                                    return None;
+                                }
+                            }
+                            let f = adt.non_enum_variant().fields.get(field_idx)?;
+                            let name = f.name.to_string();
+                            if name.chars().all(|c| c.is_ascii_digit()) {
+                                field_idx.index().to_string()
+                            } else {
+                                name
+                            }
+                        }
+                        ty::TyKind::Tuple(_) => field_idx.index().to_string(),
+                        _ => return None,
+                    }
+                };
+                if !field.is_empty() {
+                    expr = format!("({expr}).{field}");
+                }
+                cursor_ty = field_ty;
+            }
+            mir::ProjectionElem::Index(local) => {
+                let idx = resolver.label_local(local)?;
+                expr = format!("{expr}[{idx}]");
+                cursor_ty = match cursor_ty.kind() {
+                    ty::TyKind::Array(inner, _) | ty::TyKind::Slice(inner) => *inner,
+                    _ => cursor_ty,
+                };
+            }
+            mir::ProjectionElem::OpaqueCast(..) | mir::ProjectionElem::UnwrapUnsafeBinder(..) => {}
+            _ => return None,
+        }
+    }
+    if let Some(downcast) = pending_downcast {
+        let ty::TyKind::Adt(adt, _) = downcast.1.kind() else {
+            return None;
+        };
+        if !adt.is_enum() {
+            return None;
+        }
+        let enum_path = norm::path(tcx, adt.did());
+        let variant = adt.variant(downcast.0);
+        let variant_path = format!("{enum_path}::{}", variant.name);
+        // Match on a reference to avoid moving out of borrowed values (e.g., &self).
+        expr = format!(
+            "match &{expr} {{ {variant_path} => (), _ => panic!(\"canon downcast projection mismatch\") }}"
+        );
+    }
+    Some(expr)
+}
 
-   Doc-tests canon_capture
+fn render_downcast_field_expr<'tcx>(tcx: TyCtxt<'tcx>, base_expr: &str, enum_ty: ty::Ty<'tcx>, variant_idx: VariantIdx, field_idx: FieldIdx) -> Option<String> {
+    let ty::TyKind::Adt(adt, _) = enum_ty.kind() else {
+        return None;
+    };
+    if !adt.is_enum() {
+        return None;
+    }
+    let variant = adt.variant(variant_idx);
+    let enum_path = norm::path(tcx, adt.did());
+    let variant_path = format!("{enum_path}::{}", variant.name);
+    let idx = field_idx.index();
+    if idx >= variant.fields.len() {
+        return None;
+    }
 
-running 0 tests
+    let bindings: Vec<String> = (0..variant.fields.len()).map(|i| format!("__canon_f{i}")).collect();
+    let select = bindings[idx].clone();
+    let pattern = match &variant.fields {
+        fields if fields.is_empty() => variant_path.clone(),
+        fields
+            if fields.iter().all(|f| {
+                let name = f.name.to_string();
+                !name.is_empty() && !name.chars().all(|c| c.is_ascii_digit())
+            }) =>
+        {
+            let named = fields.iter().zip(bindings.iter()).map(|(f, b)| format!("{}: {b}", f.name)).collect::<Vec<_>>().join(", ");
+            format!("{variant_path} {{ {named} }}")
+        }
+        _ => {
+            let tuple = bindings.join(", ");
+            format!("{variant_path}({tuple})")
+        }
+    };
 
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+    // Match on a reference to avoid moving out of borrowed enum values (e.g., &self).
+    // This prevents generated code like `match *self` from moving non-Copy fields.
+    // Ensure we never accidentally match on a dereferenced value like `*self`.
+    // If the base expression already starts with a deref, strip the leading `*`
+    // and match on a reference to the underlying expression instead.
+    let safe_base = base_expr.strip_prefix('*').unwrap_or(base_expr);
+    Some(format!(
+        "match &{safe_base} {{ {pattern} => {select}, _ => panic!(\"canon downcast projection mismatch\") }}"
+    ))
+}
 
+pub(crate) fn mir_binop_token(op: mir::BinOp) -> Option<&'static str> {
+    match op {
+        mir::BinOp::Add => Some("+"),
+        mir::BinOp::Sub => Some("-"),
+        mir::BinOp::Mul => Some("*"),
+        mir::BinOp::Div => Some("/"),
+        mir::BinOp::Rem => Some("%"),
+        mir::BinOp::BitXor => Some("^"),
+        mir::BinOp::BitAnd => Some("&"),
+        mir::BinOp::BitOr => Some("|"),
+        mir::BinOp::Shl => Some("<<"),
+        mir::BinOp::Shr => Some(">>"),
+        mir::BinOp::Eq => Some("=="),
+        mir::BinOp::Lt => Some("<"),
+        mir::BinOp::Le => Some("<="),
+        mir::BinOp::Ne => Some("!="),
+        mir::BinOp::Ge => Some(">="),
+        mir::BinOp::Gt => Some(">"),
+        mir::BinOp::Cmp => None,
+        mir::BinOp::Offset => None,
+        mir::BinOp::AddUnchecked => Some("+"),
+        mir::BinOp::SubUnchecked => Some("-"),
+        mir::BinOp::MulUnchecked => Some("*"),
+        mir::BinOp::ShlUnchecked => Some("<<"),
+        mir::BinOp::ShrUnchecked => Some(">>"),
+        mir::BinOp::AddWithOverflow => None,
+        mir::BinOp::SubWithOverflow => None,
+        mir::BinOp::MulWithOverflow => None,
+    }
+}
 
+pub(crate) fn mir_unop_token(op: mir::UnOp) -> &'static str {
+    match op {
+        mir::UnOp::Not => "!",
+        mir::UnOp::Neg => "-",
+        mir::UnOp::PtrMetadata => "",
+    }
+}
+
+pub(crate) fn mir_assign_stmt<'tcx>(
+    tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, lhs: &mir::Place<'tcx>, rvalue: &mir::Rvalue<'tcx>, resolver: &LocalNameResolver, defined: &std::collections::HashSet<String>,
+    suppressed_sentinel_names: &std::collections::HashSet<String>,
+) -> Option<Stmt> {
+    let lhs = resolver.label_place(lhs)?;
+    // If we cannot render the rvalue into a concrete expression, fall back
+    // to a unit literal instead of propagating a synthetic Default::default()
+    // through later structural passes. This prevents generation of
+    // untyped `let _vX = Default::default();` locals in emitted Rust.
+    let rhs = match mir_rvalue_expr(tcx, local_decls, rvalue, resolver) {
+        Some(expr) => expr,
+        None => "()".to_string(),
+    };
+    if assign_rhs_should_suppress(&rhs) {
+        return None;
+    }
+    if lhs == "__ret" {
+        // Do not allow panic-based synthetic initialization of __ret;
+... [1 lines truncated] ...

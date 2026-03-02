@@ -1,2 +1,19 @@
-$ sed -n '420,700p' canon-capture/src/capture/mir/lower.rs
-
+$ rg -n '"\(\)"\.to_string\(\)' canon-capture/src/capture
+canon-capture/src/capture/helpers.rs:470:            PrimType::Unit => "()".to_string(),
+canon-capture/src/capture/helpers.rs:499:                "()".to_string()
+canon-capture/src/capture/helpers.rs:527:        TypeExpr::Primitive(PrimType::Unit) => "()".to_string(),
+canon-capture/src/capture/helpers.rs:535:                "()".to_string()
+canon-capture/src/capture/helpers.rs:548:            None => "()".to_string(),
+canon-capture/src/capture/helpers.rs:551:        TypeExpr::FnPtr { .. } => "()".to_string(),
+canon-capture/src/capture/helpers.rs:552:        TypeExpr::Param(_) => "()".to_string(),
+canon-capture/src/capture/helpers.rs:553:        TypeExpr::DynTrait(_) => "()".to_string(),
+canon-capture/src/capture/helpers.rs:554:        TypeExpr::ImplTrait(_) => "()".to_string(),
+canon-capture/src/capture/helpers.rs:567:                "()".to_string()
+canon-capture/src/capture/helpers.rs:581:                "()".to_string()
+canon-capture/src/capture/mir/terminator.rs:32:                rhs: "()".to_string(),
+canon-capture/src/capture/mir/terminator.rs:47:                rhs: "()".to_string(),
+canon-capture/src/capture/mir/terminator.rs:64:                    rhs: "()".to_string(),
+canon-capture/src/capture/mir/terminator.rs:77:                        rhs: "()".to_string(),
+canon-capture/src/capture/mir/terminator.rs:100:                    rhs: "()".to_string(),
+canon-capture/src/capture/mir/terminator.rs:110:                rhs: "()".to_string(),
+canon-capture/src/capture/mir/passes.rs:119:                        rhs: "()".to_string(),

@@ -2,6 +2,6 @@
 ## PREVIOUS ACTION FAILED
 Error:
 ```
-LLM payload did not match AgentResponse schema
+json extract error: no fenced json block found
 ```
 Emit a corrected JSON block addressing the error above.

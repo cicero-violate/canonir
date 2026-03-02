@@ -186,7 +186,10 @@ fn run_capture(project_dir: &Path, output_json: &Path) -> Result<()> {
         .env("CANON_CAPTURE_OUT", output_json)
         .env("RUSTC_WRAPPER", &wrapper)
         .env("CARGO_NET_OFFLINE", std::env::var("CARGO_NET_OFFLINE").unwrap_or_else(|_| "true".into()))
-        .current_dir(CANON_ROOT)
+        // Run cargo from the fixture project directory to avoid
+        // workspace/target resolution mismatches that can corrupt
+        // target_capture artifacts.
+        .current_dir(project_dir)
         .status()
         .context("cargo build (capture) failed to spawn")?;
     anyhow::ensure!(status.success(), "cargo build (capture) exited non-zero for {:?}", project_dir);

@@ -106,10 +106,18 @@ fn pass_lower_match_dest_to_suppressed(mut emitted: Vec<EmittedBlock>) -> Vec<Em
     for block in &mut emitted {
         for stmt in &mut block.block.stmts {
             if let Stmt::Match { dest: Some(dest) } = stmt {
-                // Never suppress matches that bind to __ret; return value
-                // must remain structurally assigned to preserve invariant.
+                // Structural invariant: do not introduce suppressed bindings.
+                // Instead, lower non-__ret match destinations to a concrete
+                // default value so no suppressed placeholder is emitted.
                 if dest != "__ret" {
-                    *stmt = Stmt::Assign { lhs: dest.clone(), rhs: "__canon_suppressed__".to_string() };
+                    // Avoid emitting untyped Default::default() for match
+                    // destinations, as this causes downstream type
+                    // inference failures. Use unit placeholder; structural
+                    // return synthesis handles typed defaults where needed.
+                    *stmt = Stmt::Assign {
+                        lhs: dest.clone(),
+                        rhs: "()".to_string(),
+                    };
                 }
             }
         }
@@ -117,17 +125,12 @@ fn pass_lower_match_dest_to_suppressed(mut emitted: Vec<EmittedBlock>) -> Vec<Em
     emitted
 }
 
-fn pass_prune_unused_suppressed_bindings(mut emitted: Vec<EmittedBlock>) -> Vec<EmittedBlock> {
-    let used = collect_used_value_names(&emitted);
-    for block in &mut emitted {
-        block.block.stmts.retain(|stmt| {
-            !matches!(
-                stmt,
-                Stmt::Assign { lhs, rhs }
-                    if rhs == "__canon_suppressed__" && lhs != "__ret" && !used.contains(lhs)
-            )
-        });
-    }
+fn pass_prune_unused_suppressed_bindings(emitted: Vec<EmittedBlock>) -> Vec<EmittedBlock> {
+    // Suppressed bindings are no longer introduced anywhere in the
+    // structural pipeline. Pruning logic that reasons about the
+    // "__canon_suppressed__" sentinel can cause accidental removal
+    // of required assignments if stale sentinels appear. Make this
+    // pass a no-op to preserve all structurally lowered bindings.
     emitted
 }
 

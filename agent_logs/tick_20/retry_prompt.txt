@@ -2,6 +2,6 @@
 ## PREVIOUS ACTION FAILED
 Error:
 ```
-llm send_turn error: timeout waiting for ChatGPT response
+apply_patch failed in "/workspace/ai_sandbox/canon": exit status: 1
 ```
 Emit a corrected JSON block addressing the error above.

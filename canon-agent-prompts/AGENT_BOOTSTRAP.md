@@ -11,13 +11,22 @@
 ## Exit-check command (what "done" means)
 The loop terminates when this command exits 0:
 ```
-cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap && cargo run . 2>&1 | grep -c 'canon suppressed binding' | awk '{exit ($1 > 0)}'
+cd /workspace/ai_sandbox/canon && cargo run -p orchestration -- --all
 ```
-This runs the repomap tool against the canon-capture output and counts
-occurrences of the string `canon suppressed binding` in the result.
-Exit 0 = zero occurrences = success. Any occurrence = still failing.
-Your goal is to eliminate all `canon suppressed binding` strings from
-the repomap output by fixing the structural return lowering in canon-capture.
+This runs the full orchestration pipeline across all 5 fixtures:
+`repomap`, `test_1`, `semantic-lint`, `conversation`, `canon`.
+
+For each fixture it:
+1. Loads `canon_capture.json` and runs the full emit pipeline
+2. Scans emitted `src/` for structural gap sentinels (`canon suppressed binding`, match/call/switch gaps)
+3. Runs `cargo build` on the emitted Rust source and checks for errors
+
+Success = all fixtures have `suppressed_count == 0` AND `build_success == true`.
+The machine-readable result is written to `/workspace/ai_sandbox/canon/orchestration_report.json`.
+The human-readable report is written to `/workspace/ai_sandbox/canon/STRUCTURAL_INVARIANTS_REPORT.md`.
+
+Your goal is to fix the structural return lowering in canon-capture so that
+all emitted Rust source is gap-free and compiles cleanly across every fixture.
 
 ## Your phases
 Each response must declare one of:
@@ -36,12 +45,9 @@ Never write patch context lines from memory or inference; always read first.
 Only these prefixes are permitted: `rg`, `cat`, `ls`, `tree`, `sed`, `awk`,
 `perl`, `find`, `head`, `tail`, `wc`, `diff`, `stat`, `echo`, `pwd`, `cargo`
 (`cargo` for read-only ops only: `check`, `build`, `test`).
+Always use `--message-format=json` with `cargo check` and `cargo build`
+so output is machine-readable: `cargo check -p <crate> --message-format=json 2>&1`
 Anything else is rejected at runtime.
-
-## Current exit-check output
-```
-{{EXIT_CHECK_OUTPUT}}
-```
 
 ## Response schema
 Respond with ONE fenced ```json block only. No text outside it.
@@ -55,6 +61,16 @@ Respond with ONE fenced ```json block only. No text outside it.
   "rationale": "Explain your reasoning and what you intend to do next."
 }
 ```
+
+> **CRITICAL — delta shape:** Each delta object uses the **variant name as its only key**
+> (`"ApplyPatch"`, `"Bash"`, `"BashReadOnly"`). Never use a `"type"` discriminator field.
+> `{"type":"ApplyPatch","patch":"..."}` will be **rejected** with a schema error.
+>
+> Correct examples for every variant:
+> - `{ "BashReadOnly": { "command": "rg -n 'foo' src/" } }`
+> - `{ "Bash":         { "command": "cargo fmt" } }`
+> - `{ "ApplyPatch":   { "patch": "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch" } }`
+
 {{STAGNATION_PRESSURE}}
 ## ApplyPatch format (MANDATORY)
 The `patch` string must use this exact format — NOT unified diff (`---`/`+++`):

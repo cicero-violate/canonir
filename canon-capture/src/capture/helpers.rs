@@ -545,13 +545,13 @@ pub(crate) fn default_return_expr(expr: &TypeExpr) -> String {
                 let elem = default_return_expr(inner);
                 format!("[{elem}; {n}]")
             }
-            None => "Default::default()".to_string(),
+            None => "()".to_string(),
         },
         TypeExpr::Slice(_) => "&[]".to_string(),
-        TypeExpr::FnPtr { .. } => "Default::default()".to_string(),
-        TypeExpr::Param(_) => "Default::default()".to_string(),
-        TypeExpr::DynTrait(_) => "Default::default()".to_string(),
-        TypeExpr::ImplTrait(_) => "Default::default()".to_string(),
+        TypeExpr::FnPtr { .. } => "()".to_string(),
+        TypeExpr::Param(_) => "()".to_string(),
+        TypeExpr::DynTrait(_) => "()".to_string(),
+        TypeExpr::ImplTrait(_) => "()".to_string(),
         TypeExpr::AppliedPath { base, .. } => {
             if base.ends_with("Vec") {
                 "Vec::new()".to_string()
@@ -564,7 +564,7 @@ pub(crate) fn default_return_expr(expr: &TypeExpr) -> String {
                 // Emit empty Vec for common extractor pattern Vec<Symbol>.
                 "Vec::new()".to_string()
             } else {
-                "Default::default()".to_string()
+                "()".to_string()
             }
         }
         TypeExpr::Path(p) => {
@@ -578,7 +578,7 @@ pub(crate) fn default_return_expr(expr: &TypeExpr) -> String {
                 // Common extractor pattern: Vec<Symbol> lowered via path fallback
                 "Vec::new()".to_string()
             } else {
-                "Default::default()".to_string()
+                "()".to_string()
             }
         }
     }

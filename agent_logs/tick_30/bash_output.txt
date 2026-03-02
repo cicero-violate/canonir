@@ -1,15 +1,2 @@
-$ rg -n "canon suppressed binding" /workspace/ai_sandbox/canon/canon-capture/src -S
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:184:                if lhs == "__ret" && rhs.contains("canon suppressed binding")
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:194:                if lhs == "__ret" && rhs.contains("canon suppressed binding")
-
-$ rg -n "suppressed binding" /workspace/ai_sandbox/canon/canon-capture/src -S
-/workspace/ai_sandbox/canon/canon-capture/src/capture/helpers.rs:524:/// This must never panic and must not introduce suppressed bindings.
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/expr.rs:178:        // force canonical suppressed binding instead.
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:184:                if lhs == "__ret" && rhs.contains("canon suppressed binding")
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:194:                if lhs == "__ret" && rhs.contains("canon suppressed binding")
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:282:            // Do not emit suppressed bindings for opaque aggregates.
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:315:                // Never emit suppressed binding for any assignment here.
-/workspace/ai_sandbox/canon/canon-capture/src/capture/mir/lower.rs:343:// engine.rs can invoke it without introducing suppressed bindings.
-
-$ rg -n "panic!\(\"canon" /workspace/ai_sandbox/canon/canon-capture/src -S
-
+$ echo "acknowledged"
+acknowledged

@@ -1,8 +1,0 @@
-$ cd /workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap && cargo run . 2>&1 | tee /tmp/repomap_output.txt
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
-     Running `target/debug/repomap .`
-
-thread 'main' (197654) panicked at src/main.rs:14:20:
-canon suppressed binding
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-
