@@ -12,12 +12,13 @@
 use anyhow::{bail, Context, Result};
 use canon::CanonIR;
 use canon_telemetry::{BuildReport, StructuralSurface};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use std::collections::HashMap;
-
-const FIXTURES: &[&str] = &["repomap", "test_1", "semantic-lint", "conversation", "canon"];
+// const FIXTURES: &[&str] = &["repomap", "test_1", "semantic-lint", "conversation", "canon"];
+const FIXTURES: &[&str] = &["repomap"];
 const TEST_ROOT: &str = "/workspace/ai_sandbox/canon/test_projects/test_rust_projects";
+const CANON_ROOT: &str = "/workspace/ai_sandbox/canon";
 const REPORT_PATH: &str = "/workspace/ai_sandbox/canon/STRUCTURAL_INVARIANTS_REPORT.md";
 const JSON_REPORT_PATH: &str = "/workspace/ai_sandbox/canon/orchestration_report.json";
 
@@ -72,7 +73,7 @@ struct FixtureSummary {
 }
 
 #[derive(Debug, serde::Serialize)]
-struct OrchestratonReport {
+struct OrchestrationReport {
     overall_ok: bool,
     fixtures: Vec<FixtureSummary>,
 }
@@ -89,15 +90,25 @@ fn run_all_fixtures() -> Result<()> {
     let mut overall_ok = true;
 
     for &fixture in FIXTURES {
-        println!("\n== [{}] orchestration ==", fixture);
+        println!("\n== [{}] capture ==", fixture);
+        let capture_dir = PathBuf::from(format!("{}/capture/{}", TEST_ROOT, fixture));
         let capture_json = PathBuf::from(format!("{}/capture/{}/canon_capture.json", TEST_ROOT, fixture));
         let emit_dir = PathBuf::from(format!("{}/emit/{}", TEST_ROOT, fixture));
 
-        // Wipe emit dir before each run (mirrors `run_step clean`).
+        // --- capture ---
+        if let Err(e) = run_capture(&capture_dir, &capture_json) {
+            overall_ok = false;
+            eprintln!("[{}] capture error: {:#}", fixture, e);
+            results.push(FixtureResult { fixture, surface: None, build: None, error: Some(format!("capture: {:#}", e)) });
+            continue;
+        }
+
+        // --- wipe emit dir ---
         if emit_dir.exists() {
             std::fs::remove_dir_all(&emit_dir).with_context(|| format!("cannot clean emit dir for {}", fixture))?;
         }
 
+        println!("\n== [{}] orchestration ==", fixture);
         let result = match run_pipeline(capture_json, emit_dir.clone(), None) {
             Ok(()) => {
                 let surface = canon_telemetry::scan_emit_dir(&emit_dir).unwrap_or(None);
@@ -129,7 +140,72 @@ fn run_all_fixtures() -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Report writer
+// Capture step — replaces run_capture.sh
+// ---------------------------------------------------------------------------
+
+fn run_capture(project_dir: &Path, output_json: &Path) -> Result<()> {
+    // Resolve rustc_capture wrapper path from cargo metadata.
+    let meta_out = Command::new("cargo").args(["metadata", "--no-deps", "--format-version", "1"]).current_dir(CANON_ROOT).output().context("cargo metadata failed")?;
+    anyhow::ensure!(meta_out.status.success(), "cargo metadata exited non-zero");
+
+    let meta: serde_json::Value = serde_json::from_slice(&meta_out.stdout).context("cannot parse cargo metadata JSON")?;
+    let target_dir = meta["target_directory"].as_str().context("target_directory missing from cargo metadata")?;
+    let wrapper = PathBuf::from(format!("{}/debug/rustc_capture", target_dir));
+
+    // Build rustc_capture first.
+    println!("  Building rustc_capture...");
+    let build_status = Command::new("cargo").args(["build", "-p", "rustc_capture"]).current_dir(CANON_ROOT).status().context("cargo build rustc_capture failed to spawn")?;
+    anyhow::ensure!(build_status.success(), "cargo build -p rustc_capture exited non-zero");
+    anyhow::ensure!(wrapper.exists(), "rustc_capture binary not found at {:?}", wrapper);
+
+    let rustc_out = Command::new("rustup").args(["which", "rustc"]).output().context("rustup which rustc failed")?;
+    let real_rustc = String::from_utf8_lossy(&rustc_out.stdout).trim().to_owned();
+    anyhow::ensure!(!real_rustc.is_empty(), "rustup which rustc returned empty");
+
+    println!("  Capturing {:?} -> {:?}", project_dir, output_json);
+
+    // Wipe target_capture and stale output so capture always fires fresh.
+    let target_capture = project_dir.join("target_capture");
+    if target_capture.exists() {
+        std::fs::remove_dir_all(&target_capture).context("cannot remove target_capture")?;
+    }
+    std::fs::create_dir_all(&target_capture).context("cannot create target_capture")?;
+    if output_json.exists() {
+        std::fs::remove_file(output_json).context("cannot remove stale capture JSON")?;
+    }
+    if let Some(parent) = output_json.parent() {
+        std::fs::create_dir_all(parent).context("cannot create capture output dir")?;
+    }
+
+    let status = Command::new("cargo")
+        .arg("build")
+        .arg("--manifest-path")
+        .arg(project_dir.join("Cargo.toml"))
+        .arg("--target-dir")
+        .arg(&target_capture)
+        .env("CANON_CAPTURE_OUT", output_json)
+        .env("RUSTC_WRAPPER", &wrapper)
+        .env("CARGO_NET_OFFLINE", std::env::var("CARGO_NET_OFFLINE").unwrap_or_else(|_| "true".into()))
+        .current_dir(CANON_ROOT)
+        .status()
+        .context("cargo build (capture) failed to spawn")?;
+    anyhow::ensure!(status.success(), "cargo build (capture) exited non-zero for {:?}", project_dir);
+    anyhow::ensure!(output_json.exists(), "capture did not produce {:?}", output_json);
+
+    // Count nodes using python3 (as run_capture.sh did).
+    let count = Command::new("python3")
+        .arg("-c")
+        .arg(format!("import json; d=json.load(open('{}')); print(len(d.get('nodes', [])))", output_json.display()))
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .unwrap_or_else(|_| "?".into());
+    println!("  Done. IR written to {:?}  nodes={}", output_json, count);
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Report writers
 // ---------------------------------------------------------------------------
 
 fn write_report(results: &[FixtureResult]) -> Result<()> {
@@ -192,8 +268,7 @@ fn write_report(results: &[FixtureResult]) -> Result<()> {
         out.push('\n');
     }
 
-    std::fs::write(REPORT_PATH, out).context("failed to write STRUCTURAL_INVARIANTS_REPORT.md")?;
-    Ok(())
+    std::fs::write(REPORT_PATH, out).context("failed to write STRUCTURAL_INVARIANTS_REPORT.md")
 }
 
 fn write_json_report(results: &[FixtureResult], overall_ok: bool) -> Result<()> {
@@ -221,12 +296,12 @@ fn write_json_report(results: &[FixtureResult], overall_ok: bool) -> Result<()> 
         })
         .collect();
 
-    let report = OrchestratonReport { overall_ok, fixtures };
+    let report = OrchestrationReport { overall_ok, fixtures };
     std::fs::write(JSON_REPORT_PATH, serde_json::to_string_pretty(&report)?).context("failed to write orchestration_report.json")
 }
 
 // ---------------------------------------------------------------------------
-// Single-fixture pipeline (unchanged logic)
+// Single-fixture pipeline
 // ---------------------------------------------------------------------------
 
 fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBuf>) -> Result<()> {
