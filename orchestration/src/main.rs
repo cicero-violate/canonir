@@ -16,8 +16,7 @@ use std::path::PathBuf;
 
 use std::collections::HashMap;
 
-// const FIXTURES: &[&str] = &["repomap", "test_1", "semantic-lint", "conversation", "canon"];
-const FIXTURES: &[&str] = &["repomap", "test_1"];
+const FIXTURES: &[&str] = &["repomap", "test_1", "semantic-lint", "conversation", "canon"];
 const TEST_ROOT: &str = "/workspace/ai_sandbox/canon/test_projects/test_rust_projects";
 const REPORT_PATH: &str = "/workspace/ai_sandbox/canon/STRUCTURAL_INVARIANTS_REPORT.md";
 const JSON_REPORT_PATH: &str = "/workspace/ai_sandbox/canon/orchestration_report.json";
