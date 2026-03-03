@@ -1,51 +1,11 @@
-# Generic agent pipeline configuration
-# All {{PLACEHOLDER}} tokens are substituted at runtime.
-
-[agent]
-goal_file = "AGENT_GOAL.md"
-stagnation_threshold = 4
-# chatgpt_url            = "https://chatgpt.com"
-# chatgpt_url            = "https://chatgpt.com/gg/69a32d7d1a008199948ad06498df2f4f"
-chatgpt_url            = "https://chatgpt.com/gg/699d3878fbd0819a9d73741b03e8128e"
-max_ticks              = 20
-exit_check_command     = "cd /workspace/ai_sandbox/canon && cargo run -p orchestration -- --all 2>&1 && python3 -c \"\nimport json, sys\ndata = json.load(open('orchestration_report.json'))\nfails = [f for f in data['fixtures'] if f['suppressed_count'] > 0 or not f['build_success']]\nif fails:\n    for f in fails: print(f\\\"FAIL {f['fixture']}: suppressed={f['suppressed_count']} build_ok={f['build_success']}\\\")\n    sys.exit(1)\nprint('ALL FIXTURES CLEAN')\n\""
-rationale_history_len  = 5
-
-# Output truncation limits (line counts).
-# Per-command: truncate any single command's stdout/stderr to this many lines.
-# Per-message: truncate the full {{BASH_OUTPUT}} block injected into the prompt.
-max_command_output_lines = 200
+[system]
 max_message_output_lines = 2000
+exit_check_command     = "cd /workspace/ai_sandbox/canon && cargo run -p orchestration -- --all 2>&1 && python3 -c \"\nimport json, sys\ndata = json.load(open('orchestration_report.json'))\nfails = [f for f in data['fixtures'] if f['suppressed_count'] > 0 or not f['build_success']]\nif fails:\n    for f in fails: print(f\\\"FAIL {f['fixture']}: suppressed={f['suppressed_count']} build_ok={f['build_success']}\\\")\n    sys.exit(1)\nprint('ALL FIXTURES CLEAN')\n\""
 
-# Appended as the next turn when a previous response caused an error.
-retry_addendum = """
----
-## PREVIOUS ACTION FAILED
-Error:
-```
-{{RETRY_ERROR}}
-```
-Emit a corrected JSON block addressing the error above.
-"""
-
-# Sent once on first turn (bootstrap).
-# After that the LLM's chosen phase determines the template.
-[agent.templates]
-bootstrap = "AGENT_BOOTSTRAP.md"
-observe   = "AGENT_OBSERVE.md"
-plan      = "AGENT_PLAN.md"
-act       = "AGENT_ACT.md"
-verify    = "AGENT_VERIFY.md"
-
-# Each entry forbids a pattern on any + line inside an ApplyPatch delta.
-[[agent.guardrails]]
-forbidden_pattern = "canon suppressed binding"
-message           = "Reintroduction of suppressed binding is forbidden. Lower the return structurally instead."
-
-[[agent.guardrails]]
-forbidden_pattern = "rm -rf"
-message           = "Destructive rm -rf is forbidden. Use targeted file edits via ApplyPatch instead."
-
-[[agent.guardrails]]
-forbidden_pattern = "remove_dir_all"
-message           = "remove_dir_all is forbidden in agent patches. Use targeted file edits via ApplyPatch instead."
+# Multi-agent card inputs (reserved for future use)
+[[agents.cards]]
+agent_url = "https://chatgpt.com/gg/699d3878fbd0819a9d73741b03e8128e"
+agent_id = ""
+role = ""
+goal = ""
+tool_capabilities = ["apply_patch", "bash"]
