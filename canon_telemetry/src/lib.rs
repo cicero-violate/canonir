@@ -3,8 +3,14 @@
 //! Scans a canon-emitted `src/` directory and accumulates the invariant
 //! counters that `run_script.sh` used to compute via shell+rg.
 
+pub mod type_authority;
+pub use type_authority::{analyse_capture, write_report as write_type_authority_report, TypeAuthorityReport};
+pub mod repair_signal;
+pub use repair_signal::{classify as classify_repair_signals, CanonRepairSignal};
+
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -72,24 +78,7 @@ impl StructuralSurface {
     /// Print the same human-readable block that `run_script.sh` wrote into
     /// `STRUCTURAL_INVARIANTS_REPORT.md`.
     pub fn print_report(&self) {
-        println!("- emitted structural surface:");
-        println!("  - canon suppressed binding count: {}", self.suppressed_count);
-        println!("  - canon suppressed __ret count: {}", self.suppressed_ret_count);
-        println!("  - canon suppressed non-__ret count: {}", self.suppressed_nonret_count);
-        println!("  - canon match gap count: {}", self.match_gap_count);
-        println!("  - canon call gap count: {}", self.call_gap_count);
-        println!("  - canon switch gap count: {}", self.switch_gap_count);
-        println!("  - unresolved gap total: {}", self.unresolved_gap_total);
-        println!("  - unresolved __ret gap count: {}", self.unresolved_ret_gap_count);
-        println!("  - unreachable count: {}", self.unreachable_count);
-        println!("  - // match count: {}", self.match_comment_count);
-        println!("  - // goto count: {}", self.goto_comment_count);
-        if !self.ret_gap_sites.is_empty() {
-            println!("- unresolved __ret gap sites:");
-            for site in &self.ret_gap_sites {
-                println!("  - {}:{} :: {}", site.file, site.line, site.enclosing_fn);
-            }
-        }
+        // Intentionally silent (structured data written to disk instead).
     }
 }
 
@@ -210,6 +199,8 @@ pub fn scan_emit_dir(emit_dir: &Path) -> io::Result<Option<StructuralSurface>> {
 pub struct Diagnostic {
     pub level: String,
     pub message: String,
+    /// Rust error code extracted from rendered text, e.g. "E0308". Empty string if absent.
+    pub error_code: String,
     /// The rendered, human-readable form cargo produces.
     pub rendered: Option<String>,
     /// File + line of the primary span, if present.
@@ -229,47 +220,46 @@ pub struct BuildReport {
     pub success: bool,
     pub errors: Vec<Diagnostic>,
     pub warnings: Vec<Diagnostic>,
+    /// Error count grouped by Rust error code, e.g. {"E0308": 3, "unknown": 5}.
+    pub build_error_categories: HashMap<String, usize>,
+    /// First representative rendered snippet (trimmed to 12 lines) per error code.
+    /// Gives the agent one concrete example of each category without flooding output.
+    pub build_error_samples: HashMap<String, String>,
+    /// Error count per emitted source file, e.g. {"src/extractor.rs": 42}.
+    /// Derived from primary_span.file; lets the agent prioritize which file to fix first.
+    pub errors_by_file: HashMap<String, usize>,
 }
 
 impl BuildReport {
     pub fn print_report(&self) {
-        println!("- cargo build result: {}", if self.success { "OK" } else { "FAILED" });
-        println!("  - error count: {}", self.errors.len());
-        println!("  - warning count: {}", self.warnings.len());
-        if !self.errors.is_empty() {
-            println!("- cargo errors:");
-            for d in &self.errors {
-                if let Some(r) = &d.rendered {
-                    // Print rendered text indented, trimming trailing newline.
-                    for line in r.trim_end().lines() {
-                        println!("  {}", line);
-                    }
-                } else {
-                    println!("  [{}] {}", d.level, d.message);
-                }
-            }
-        }
+        // Intentionally silent (JSON report written to disk instead).
     }
 }
 
-/// Run `cargo build --message-format json` inside `emit_dir` (offline) and
+/// Run `cargo check --message-format json` inside `emit_dir` (offline) and
 /// return a [`BuildReport`] parsed from the JSON output.
 ///
 /// `offline` mirrors `CARGO_NET_OFFLINE=true` used in `run_script.sh`.
 pub fn build(emit_dir: &Path, offline: bool) -> io::Result<BuildReport> {
     let mut cmd = Command::new("cargo");
-    cmd.arg("build").arg("--message-format").arg("json").current_dir(emit_dir);
+    cmd.arg("check")
+        .arg("--message-format")
+        .arg("json")
+        .current_dir(emit_dir);
     if offline {
         cmd.env("CARGO_NET_OFFLINE", "true");
     }
 
     let output = cmd.output()?;
-    // cargo --message-format json writes diagnostics to stdout; exit code
-    // reflects success/failure.
     let success = output.status.success();
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     let mut report = BuildReport { success, ..Default::default() };
+
+    // Compiled once for extracting Rust error codes from rendered text.
+    let re_ecode = Regex::new(r"\[E(\d+)\]").expect("hardcoded regex");
+    // Max lines to keep for a sample snippet.
+    const SAMPLE_LINES: usize = 12;
 
     for raw_line in stdout.lines() {
         let line = raw_line.trim();
@@ -280,7 +270,6 @@ pub fn build(emit_dir: &Path, offline: bool) -> io::Result<BuildReport> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        // Only care about compiler-message lines.
         if obj.get("reason").and_then(|r| r.as_str()) != Some("compiler-message") {
             continue;
         }
@@ -292,6 +281,9 @@ pub fn build(emit_dir: &Path, offline: bool) -> io::Result<BuildReport> {
         let message = msg.get("message").and_then(|m| m.as_str()).unwrap_or("").to_owned();
         let rendered = msg.get("rendered").and_then(|r| r.as_str()).map(|s| s.to_owned());
 
+        // Extract Rust error code from rendered text (e.g. "[E0308]" -> "E0308").
+        let error_code = rendered.as_deref().and_then(|r| re_ecode.captures(r)).map(|c| format!("E{}", &c[1])).unwrap_or_default();
+
         // Extract primary span location.
         let primary_span =
             msg.get("spans").and_then(|s| s.as_array()).and_then(|spans| spans.iter().find(|s| s.get("is_primary").and_then(|p| p.as_bool()).unwrap_or(false))).map(|span| SpanLocation {
@@ -300,11 +292,28 @@ pub fn build(emit_dir: &Path, offline: bool) -> io::Result<BuildReport> {
                 line_end: span.get("line_end").and_then(|l| l.as_u64()).unwrap_or(0) as u32,
             });
 
-        let diag = Diagnostic { level: level.clone(), message, rendered, primary_span };
-        match level.as_str() {
-            "error" => report.errors.push(diag),
-            "warning" => report.warnings.push(diag),
-            _ => {}
+        let diag = Diagnostic { level: level.clone(), message, error_code: error_code.clone(), rendered, primary_span };
+
+        if level == "error" {
+            // Category counter.
+            let key = if error_code.is_empty() { "unknown".to_owned() } else { error_code.clone() };
+            *report.build_error_categories.entry(key.clone()).or_insert(0) += 1;
+
+            // First sample per category (trimmed to SAMPLE_LINES lines).
+            report.build_error_samples.entry(key).or_insert_with(|| {
+                diag.rendered.as_deref().map(|r| r.trim_end().lines().take(SAMPLE_LINES).collect::<Vec<_>>().join("\n")).unwrap_or_else(|| format!("[{}] {}", diag.level, diag.message))
+            });
+
+            // Per-file error count from primary span.
+            if let Some(span) = &diag.primary_span {
+                if !span.file.is_empty() {
+                    *report.errors_by_file.entry(span.file.clone()).or_insert(0) += 1;
+                }
+            }
+
+            report.errors.push(diag);
+        } else if level == "warning" {
+            report.warnings.push(diag);
         }
     }
 

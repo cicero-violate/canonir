@@ -414,6 +414,12 @@ pub(crate) fn lower_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> TypeExpr {
             let ret = Box::new(lower_ty(tcx, sig.output()));
             TypeExpr::FnPtr { params, ret }
         }
+        ty::TyKind::Closure(def_id, args) => {
+            let sig = args.as_closure().sig().skip_binder();
+            let params = sig.inputs().iter().map(|t| lower_ty(tcx, *t)).collect();
+            let ret = Box::new(lower_ty(tcx, sig.output()));
+            TypeExpr::FnPtr { params, ret }
+        }
         ty::TyKind::Adt(adt, args) => {
             let base = norm::path(tcx, adt.did());
             let lowered_args: Vec<TypeExpr> = args.types().map(|t| lower_ty(tcx, t)).collect();
@@ -423,7 +429,12 @@ pub(crate) fn lower_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> TypeExpr {
                 TypeExpr::AppliedPath { base, args: lowered_args }
             }
         }
-        ty::TyKind::Param(param) => TypeExpr::Param(param.name.as_str().to_string()),
+        ty::TyKind::Param(_param) => {
+            // Structural fallback: avoid emitting unresolved generic parameters (e.g., `T`)
+            // into rendered output, since emitted crates may not carry the original
+            // generic bindings. Collapse to `_` to preserve well-formedness.
+            TypeExpr::Path("_".to_string())
+        }
         ty::TyKind::Dynamic(preds, _) => {
             let principal = preds.principal_def_id().map(|did| norm::path(tcx, did)).unwrap_or_else(|| panic!("unsupported dyn type without principal trait: {ty:?}"));
             TypeExpr::DynTrait(principal)
@@ -513,8 +524,23 @@ pub(crate) fn render_type_expr(_tcx: TyCtxt<'_>, expr: &TypeExpr) -> String {
         TypeExpr::DynTrait(path) => format!("dyn {path}"),
         TypeExpr::ImplTrait(path) => format!("impl {path}"),
         TypeExpr::AppliedPath { base, args } => {
-            let rendered = args.iter().map(|a| render_type_expr(_tcx, a)).collect::<Vec<_>>().join(", ");
-            format!("{base}<{rendered}>")
+            // Filter implicit allocator parameters like `std::alloc::Global`
+            // which appear in types such as `Vec<T, A>` but should not be
+            // rendered in emitted Rust.
+            let rendered_args: Vec<String> = args
+                .iter()
+                .filter(|a| match a {
+                    TypeExpr::Path(p) => !(p.contains("std::alloc::Global") || p.contains("alloc::Global")),
+                    _ => true,
+                })
+                .map(|a| render_type_expr(_tcx, a))
+                .collect();
+
+            if rendered_args.is_empty() {
+                base.clone()
+            } else {
+                format!("{base}::<{}>", rendered_args.join(", "))
+            }
         }
         TypeExpr::Path(path) => path.clone(),
     }
@@ -554,7 +580,7 @@ pub(crate) fn default_return_expr(expr: &TypeExpr) -> String {
         TypeExpr::ImplTrait(_) => "()".to_string(),
         TypeExpr::AppliedPath { base, .. } => {
             if base.ends_with("Vec") {
-                "Vec::new()".to_string()
+                "Vec::<_>::new()".to_string()
             } else if base.ends_with("String") {
                 "String::new()".to_string()
             } else if base.ends_with("Option") {
@@ -562,21 +588,21 @@ pub(crate) fn default_return_expr(expr: &TypeExpr) -> String {
             } else if base.ends_with("Symbol") {
                 // Non-Default ADTs must not fall back to Default::default().
                 // Emit empty Vec for common extractor pattern Vec<Symbol>.
-                "Vec::new()".to_string()
+                "Vec::<_>::new()".to_string()
             } else {
                 "()".to_string()
             }
         }
         TypeExpr::Path(p) => {
             if p.contains("Vec<") || p.ends_with("Vec") {
-                "Vec::new()".to_string()
+                "Vec::<_>::new()".to_string()
             } else if p.ends_with("String") {
                 "String::new()".to_string()
             } else if p.contains("Option<") || p.ends_with("Option") {
                 "None".to_string()
             } else if p.ends_with("Symbol") {
                 // Common extractor pattern: Vec<Symbol> lowered via path fallback
-                "Vec::new()".to_string()
+                "Vec::<_>::new()".to_string()
             } else {
                 "()".to_string()
             }

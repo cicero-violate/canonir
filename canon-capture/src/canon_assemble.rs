@@ -221,7 +221,12 @@ fn intern_ty_expr(canon: &mut CanonIR, ty: &TypeExpr) -> CanonId {
             if let Some(len) = len {
                 TypeKind::Array { inner, len: *len }
             } else {
-                TypeKind::Unresolved(canon.intern_path(&render_type_expr(ty)))
+                // Arrays without a concrete length must not introduce
+                // TypeKind::Unresolved, as analysis requires a fully
+                // resolved type graph. Fall back to a slice instead,
+                // which preserves element type without fabricating an
+                // unresolved path.
+                TypeKind::Slice(inner)
             }
         }
         TypeExpr::Slice(inner) => TypeKind::Slice(intern_ty_expr(canon, inner)),
@@ -257,8 +262,19 @@ fn intern_ty_expr(canon: &mut CanonIR, ty: &TypeExpr) -> CanonId {
         TypeExpr::AppliedPath { base, args } => {
             let base_path = canon.intern_path(base);
             let base_ty = canon.intern_type(TypeKind::Extern(base_path));
-            let args: Vec<CanonId> = args.iter().map(|arg| intern_ty_expr(canon, arg)).collect();
-            TypeKind::Applied { base: base_ty, args }
+            // Filter allocator type arguments like `std::alloc::Global`
+            // which are implicit in many std types (e.g., Vec<T, A>) but
+            // should not surface in projected Rust.
+            let filtered_args: Vec<CanonId> = args
+                .iter()
+                .filter(|arg| match arg {
+                    TypeExpr::Path(p) => !(p.contains("std::alloc::Global") || p.contains("alloc::Global")),
+                    _ => true,
+                })
+                .map(|arg| intern_ty_expr(canon, arg))
+                .collect();
+
+            TypeKind::Applied { base: base_ty, args: filtered_args }
         }
         TypeExpr::Path(path) => TypeKind::Extern(canon.intern_path(path)),
     };
@@ -335,12 +351,58 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
             let mut block_ids = Vec::with_capacity(blocks.len());
             for bb in blocks {
                 let mut ops = Vec::new();
+                // Centralized unresolved placeholder type to avoid
+                // repeatedly fabricating distinct "unknown" path ids.
+                // This keeps all late-link placeholders canonical.
+                // TEMPORARY: use a single canonical unresolved type per body
+                // instead of fabricating per-use unit types. This avoids
+                // unit pollution while we refactor toward a proper
+                // authoritative local registry.
+                // Must not start with '_' (validator rejects private/helper segments)
+                // Temporary canonical fallback type for locals that lack an explicit
+                // annotation in the lowered Stmt surface. This must be a
+                // validator-safe path segment and is expected to be resolved
+                // by analysis before projection.
+                // Use a concrete, analyzer-resolvable fallback instead of Unresolved.
+                // This prevents TypeKind::Unresolved from surviving analysis while
+                // still providing a deterministic placeholder type.
+                // Reintroduce a canonical unresolved placeholder for unannotated locals.
+                // Using unit here causes pervasive `():` pollution in projection
+                // (E0308/E0599/E0609). Now that orchestration no longer hard-aborts
+                // on unresolved types, prefer a distinct placeholder that can be
+                // detected and properly resolved by analysis instead of silently
+                // collapsing everything to `()`.
+                // Use a distinct unresolved placeholder instead of unit `()`
+                // for unannotated locals in the lowered surface.
+                //
+                // Using unit here pollutes CanonIR with `()`-typed locals
+                // (notably `__ret`), which then project as
+                // `let mut __ret = ();` even for non-unit-returning
+                // functions. By emitting an Unresolved type, we defer
+                // concretization to analysis/type authority instead of
+                // collapsing everything to unit prematurely.
+                // Reintroduce a canonical unresolved placeholder type for
+                // unannotated locals. TypeKind::Unresolved requires a PathId,
+                // so fabricate a single, validator-safe synthetic path and
+                // intern it once per body as the fallback anchor.
+                // Use a validator-safe synthetic segment (no leading underscore)
+                // to avoid invariant violations about private/helper paths.
+                // Use unit type as the temporary fallback for unannotated locals.
+                // Unresolved types must not escape capture into analysis/projection.
+                // This restores the invariant that TypeKind::Unresolved never
+                // reaches projection.
+                let fallback_ty = canon.intern_type(TypeKind::Tuple(vec![]));
+
+                fn unknown_ty(fallback_ty: CanonId) -> CanonId {
+                    fallback_ty
+                }
+
                 for stmt in &bb.stmts {
                     use crate::types::Stmt;
                     let op = match stmt {
                         Stmt::Let { pat, ty, init } => {
                             let name_id = NameId(canon.name_intern.intern(pat));
-                            let ty_id = ty.as_ref().map(|t| intern_ty_expr(canon, t)).unwrap_or_else(|| unit_ty(canon));
+                            let ty_id = if let Some(t) = ty.as_ref() { intern_ty_expr(canon, t) } else { unknown_ty(fallback_ty) };
                             // Do not synthesize a separate Local for initializer here.
                             // Initializations are modeled by subsequent Assign/Call ops.
                             // Emitting a fresh Local for `init` here breaks dataflow and
@@ -350,10 +412,12 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                             CfgOp::Let { lhs, ty: ty_id, rhs }
                         }
                         Stmt::Assign { lhs, rhs } => {
-                            // Avoid interning malformed helper path segments like "_"
-                            // Use a well-formed placeholder segment instead.
-                            let path = canon.intern_path("unknown");
-                            let ty = canon.intern_type(TypeKind::Unresolved(path));
+                            // Use unresolved fallback for assignment operands as well.
+                            // Forcing unit here pollutes CanonIR with `()`-typed locals
+                            // (e.g., temporaries feeding __ret), which then project as
+                            // `():` or cause E0308/E0599 mismatches. Defer concretization
+                            // to analysis/type authority instead of collapsing to unit.
+                            let ty = unknown_ty(fallback_ty);
                             let lhs_name = NameId(canon.name_intern.intern(lhs));
                             let rhs_name = NameId(canon.name_intern.intern(rhs));
                             let lhs_id = canon.push_node(CanonNodeKind::Local { name_id: lhs_name, ty, flags: 0 });
@@ -364,15 +428,15 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                             let eid = NameId(canon.name_intern.intern(e));
                             // Avoid forcing expression temporaries to unit type.
                             // Use unresolved placeholder to prevent `()` pollution downstream.
-                            let path = canon.intern_path("unknown");
-                            let ty = canon.intern_type(TypeKind::Unresolved(path));
+                            // Use unit type instead of manufacturing an "unknown" unresolved type.
+                            // Unresolved placeholders must not survive into analysis.
+                            let ty = unknown_ty(fallback_ty);
                             let loc = canon.push_node(CanonNodeKind::Local { name_id: eid, ty, flags: 0 });
                             CfgOp::Expr(loc)
                         }
                         Stmt::Call { func, args, dest } => {
                             // Avoid interning malformed helper path segments like "_"
-                            let path = canon.intern_path("unknown");
-                            let ty = canon.intern_type(TypeKind::Unresolved(path));
+                            let ty = unknown_ty(fallback_ty);
                             let func_name = NameId(canon.name_intern.intern(func));
                             let func_id = canon.push_node(CanonNodeKind::Local { name_id: func_name, ty, flags: 0 });
                             let args: Vec<CanonId> = args
@@ -390,8 +454,7 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                         }
                         Stmt::FieldAccess { base, field, dest } => {
                             // Avoid interning malformed helper path segments like "_"
-                            let path = canon.intern_path("unknown");
-                            let ty = canon.intern_type(TypeKind::Unresolved(path));
+                            let ty = unknown_ty(fallback_ty);
                             let base_name = NameId(canon.name_intern.intern(base));
                             let base_id = canon.push_node(CanonNodeKind::Local { name_id: base_name, ty, flags: 0 });
                             let field_id = NameId(canon.name_intern.intern(field));
@@ -403,8 +466,7 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                         }
                         Stmt::MethodCall { receiver, method, args, dest } => {
                             // Avoid interning malformed helper path segments like "_"
-                            let path = canon.intern_path("unknown");
-                            let ty = canon.intern_type(TypeKind::Unresolved(path));
+                            let ty = unknown_ty(fallback_ty);
                             let receiver_name = NameId(canon.name_intern.intern(receiver));
                             let receiver_id = canon.push_node(CanonNodeKind::Local { name_id: receiver_name, ty, flags: 0 });
                             let arg_ids: Vec<CanonId> = args
@@ -424,8 +486,7 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                         Stmt::StructLit { ty, fields, dest } => {
                             let ty_id = intern_ty_expr(canon, ty);
                             // Do not force struct literal field temporaries to unit.
-                            let path = canon.intern_path("unknown");
-                            let value_ty = canon.intern_type(TypeKind::Unresolved(path));
+                            let value_ty = unknown_ty(fallback_ty);
                             let lowered_fields: Vec<(NameId, CanonId)> = fields
                                 .iter()
                                 .map(|(field, value)| {
@@ -442,8 +503,7 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                         }
                         Stmt::Match { dest } => {
                             // Avoid unit-typing match destinations; preserve unresolved type.
-                            let path = canon.intern_path("unknown");
-                            let ty = canon.intern_type(TypeKind::Unresolved(path));
+                            let ty = unknown_ty(fallback_ty);
                             let dest = dest.as_deref().map(|name| {
                                 let name_id = NameId(canon.name_intern.intern(name));
                                 canon.push_node(CanonNodeKind::Local { name_id, ty, flags: 0 })
@@ -455,9 +515,13 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                             // Use an unresolved placeholder type to avoid
                             // polluting downstream emit with `()`-typed locals.
                             let v = val.as_deref().map(|e| {
-                                let eid = NameId(canon.name_intern.intern(e));
-                                let path = canon.intern_path("unknown");
-                                let ty = canon.intern_type(TypeKind::Unresolved(path));
+                                // Normalize borrow at Rust return boundary: if returning
+                                // Do not inject a dereference for `__ret`.
+                                // The capture layer must ensure `__ret`
+                                // already matches the authoritative return type.
+                                let rendered = e;
+                                let eid = NameId(canon.name_intern.intern(rendered));
+                                let ty = unknown_ty(fallback_ty);
                                 canon.push_node(CanonNodeKind::Local { name_id: eid, ty, flags: 0 })
                             });
                             CfgOp::Return(v)

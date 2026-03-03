@@ -5,6 +5,10 @@ Only direct facts from tool output are recorded.
 
 ## fixture=repomap
 
+- type authority (capture-time __ret vs FnSig.ret):
+  - functions analysed: 16
+  - __ret type mismatches: 0
+  - missing __ret locals: 0
 - emitted structural surface:
   - canon suppressed binding count: 0
   - canon suppressed __ret count: 0
@@ -20,66 +24,125 @@ Only direct facts from tool output are recorded.
 - cargo build result: FAILED
   - error count: 12
   - warning count: 0
+  - error categories:
+    - E0277: 5
+    - E0308: 4
+    - E0599: 3
+  - errors by file:
+    - src/extractor.rs: 7
+    - src/main.rs: 2
+    - src/symbol.rs: 2
+    - src/repomap.rs: 1
+  - error samples (first occurrence per category):
+    [E0277]
+      error[E0277]: expected a `FnOnce(Node<'_>)` closure, found `()`
+          --> src/extractor.rs:60:21
+           |
+        60 |     __ret = _v4.map(_v6);
+           |                 --- ^^^ expected an `FnOnce(Node<'_>)` closure, found `()`
+           |                 |
+           |                 required by a bound introduced by this call
+           |
+           = help: the trait `FnOnce(Node<'_>)` is not implemented for `()`
+      note: required by a bound in `Option::<T>::map`
+          --> /home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:1162:12
+           |
+    [E0308]
+      error[E0308]: mismatched types
+        --> src/extractor.rs:97:12
+         |
+      65 | fn fn_signature(node: Node, src: &[u8]) -> String {
+         |                                            ------ expected `std::string::String` because of return type
+      ...
+      97 |     return __ret;
+         |            ^^^^^ expected `String`, found `()`
+    [E0599]
+      error[E0599]: no method named `expect` found for unit type `()` in the current scope
+        --> src/extractor.rs:20:25
+         |
+      20 |     let mut tree = _v10.expect(_v13);
+         |                         ^^^^^^ method not found in `()`
 - cargo errors:
   error[E0599]: no method named `expect` found for unit type `()` in the current scope
-    --> src/extractor.rs:19:25
+    --> src/extractor.rs:20:25
      |
-  19 |     let mut tree = _v10.expect(_v13);
+  20 |     let mut tree = _v10.expect(_v13);
      |                         ^^^^^^ method not found in `()`
+  error[E0277]: expected a `FnOnce(Node<'_>)` closure, found `()`
+      --> src/extractor.rs:60:21
+       |
+    60 |     __ret = _v4.map(_v6);
+       |                 --- ^^^ expected an `FnOnce(Node<'_>)` closure, found `()`
+       |                 |
+       |                 required by a bound introduced by this call
+       |
+       = help: the trait `FnOnce(Node<'_>)` is not implemented for `()`
+  note: required by a bound in `Option::<T>::map`
+      --> /home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:1162:12
+       |
+  1160 |     pub const fn map<U, F>(self, f: F) -> Option<U>
+       |                  --- required by a bound in this associated function
+  1161 |     where
+  1162 |         F: [const] FnOnce(T) -> U + [const] Destruct,
+       |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Option::<T>::map`
+  error[E0277]: expected a `FnOnce(Node<'_>)` closure, found `()`
+      --> src/extractor.rs:73:27
+       |
+    73 |     let mut _v8 = _v9.map(_v11);
+       |                       --- ^^^^ expected an `FnOnce(Node<'_>)` closure, found `()`
+       |                       |
+       |                       required by a bound introduced by this call
+       |
+       = help: the trait `FnOnce(Node<'_>)` is not implemented for `()`
+  note: required by a bound in `Option::<T>::map`
+      --> /home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:1162:12
+       |
+  1160 |     pub const fn map<U, F>(self, f: F) -> Option<U>
+       |                  --- required by a bound in this associated function
+  1161 |     where
+  1162 |         F: [const] FnOnce(T) -> U + [const] Destruct,
+       |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Option::<T>::map`
+  error[E0277]: expected a `FnOnce(Node<'_>)` closure, found `()`
+      --> src/extractor.rs:79:29
+       |
+    79 |     let mut _v14 = _v15.map(_v17);
+       |                         --- ^^^^ expected an `FnOnce(Node<'_>)` closure, found `()`
+       |                         |
+       |                         required by a bound introduced by this call
+       |
+       = help: the trait `FnOnce(Node<'_>)` is not implemented for `()`
+  note: required by a bound in `Option::<T>::map`
+      --> /home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:1162:12
+       |
+  1160 |     pub const fn map<U, F>(self, f: F) -> Option<U>
+       |                  --- required by a bound in this associated function
+  1161 |     where
+  1162 |         F: [const] FnOnce(T) -> U + [const] Destruct,
+       |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Option::<T>::map`
   error[E0308]: mismatched types
-    --> src/extractor.rs:49:12
+    --> src/extractor.rs:97:12
      |
-  27 | fn extract_top_level(root: Node, src: &[u8]) -> Vec<Symbol> {
-     |                                                 ----------- expected `Vec<Symbol>` because of return type
+  65 | fn fn_signature(node: Node, src: &[u8]) -> String {
+     |                                            ------ expected `std::string::String` because of return type
   ...
-  49 |     return __ret;
-     |            ^^^^^ expected `Vec<Symbol>`, found `()`
-     |
-     = note: expected struct `Vec<Symbol>`
-             found unit type `()`
-  error[E0599]: no method named `unwrap_or` found for unit type `()` in the current scope
-    --> src/extractor.rs:68:26
-     |
-  68 |     let mut params = _v8.unwrap_or(_v12);
-     |                          ^^^^^^^^^ method not found in `()`
-  error[E0599]: no method named `unwrap_or_default` found for unit type `()` in the current scope
-    --> src/extractor.rs:72:24
-     |
-  72 |     let mut ret = _v14.unwrap_or_default();
-     |                        ^^^^^^^^^^^^^^^^^ method not found in `()`
+  97 |     return __ret;
+     |            ^^^^^ expected `String`, found `()`
   error[E0308]: mismatched types
-     --> src/extractor.rs:108:12
+     --> src/extractor.rs:166:13
       |
-   92 | fn collect_enum_variants(body: Node, src: &[u8]) -> Vec<String> {
-      |                                                     ----------- expected `Vec<std::string::String>` because of return type
+  162 |     let mut __ret = ();
+      |                     -- expected due to this value
   ...
-  108 |     return __ret;
-      |            ^^^^^ expected `Vec<String>`, found `()`
-      |
-      = note: expected struct `Vec<std::string::String>`
-              found unit type `()`
+  166 |     __ret = _v3.unwrap_or(_v5);
+      |             ^^^^^^^^^^^^^^^^^^ expected `()`, found `&str`
   error[E0308]: mismatched types
-     --> src/extractor.rs:135:12
+     --> src/extractor.rs:167:12
       |
-  119 | fn collect_struct_fields(body: Node, src: &[u8]) -> Vec<String> {
-      |                                                     ----------- expected `Vec<std::string::String>` because of return type
+  161 | fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
+      |                                                ------- expected `&'a str` because of return type
   ...
-  135 |     return __ret;
-      |            ^^^^^ expected `Vec<String>`, found `()`
-      |
-      = note: expected struct `Vec<std::string::String>`
-              found unit type `()`
-  error[E0308]: mismatched types
-     --> src/extractor.rs:154:12
-      |
-  138 | fn collect_methods(body: Node, src: &[u8]) -> Vec<String> {
-      |                                               ----------- expected `Vec<std::string::String>` because of return type
-  ...
-  154 |     return __ret;
-      |            ^^^^^ expected `Vec<String>`, found `()`
-      |
-      = note: expected struct `Vec<std::string::String>`
-              found unit type `()`
+  167 |     return __ret;
+      |            ^^^^^ expected `&str`, found `()`
   error[E0599]: `()` is not an iterator
     --> src/repomap.rs:24:23
      |
@@ -93,30 +156,22 @@ Only direct facts from tool output are recorded.
              which is required by `&(): IntoIterator`
              `&mut (): Iterator`
              which is required by `&mut (): IntoIterator`
+  error[E0277]: the size for values of type `str` cannot be known at compilation time
+     --> src/symbol.rs:156:13
+      |
+  156 |         let mut t = match trait_name { std::option::Option::Some(__canon_f0) => *__canon_f0, _ => panic!("canon downcast projection mismatch") };
+      |             ^^^^^ doesn't have a size known at compile-time
+      |
+      = help: the trait `Sized` is not implemented for `str`
+      = note: all local variables must have a statically known size
   error[E0308]: mismatched types
-    --> src/repomap.rs:29:12
-     |
-  16 | pub fn build_repomap(root_dir: &Path) -> Vec<FileMap> {
-     |                                          ------------ expected `Vec<FileMap>` because of return type
+     --> src/symbol.rs:217:16
+      |
+   29 |     pub fn render(&self) -> String {
+      |                             ------ expected `std::string::String` because of return type
   ...
-  29 |     return __ret;
-     |            ^^^^^ expected `Vec<FileMap>`, found `()`
-     |
-     = note: expected struct `Vec<FileMap>`
-             found unit type `()`
-  error[E0308]: mismatched types
-    --> src/symbol.rs:26:16
-     |
-  12 |     pub fn line(&self) -> usize {
-     |                           ----- expected `usize` because of return type
-  ...
-  26 |         return __ret;
-     |                ^^^^^ expected `usize`, found `&&usize`
-     |
-  help: consider dereferencing the borrow
-     |
-  26 |         return **__ret;
-     |                ++
+  217 |         return __ret;
+      |                ^^^^^ expected `String`, found `()`
   error[E0277]: the trait bound `(): AsRef<OsStr>` is not satisfied
       --> src/main.rs:15:41
        |

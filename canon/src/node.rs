@@ -109,6 +109,9 @@ pub enum CfgOp {
     Index { base: CanonId, idx: CanonId, dest: Option<CanonId> },
     /// closure literal
     Closure { sig_id: CanonId, body_id: CanonId },
+    /// Sentinel used to detect invalid lowering of higher-order constructs.
+    /// Must never be emitted as a substitute for closures or return values.
+    InvalidUnitSentinel,
     /// struct literal
     StructLit { ty: CanonId, fields: Vec<(NameId, CanonId)>, dest: Option<CanonId> },
     /// match region placeholder with optional value destination

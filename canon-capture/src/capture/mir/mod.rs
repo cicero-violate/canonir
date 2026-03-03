@@ -7,5 +7,6 @@ pub mod ops;
 pub mod passes;
 pub mod patterns;
 pub mod resolver;
+pub mod ret;
 pub mod terminator;
 pub mod util;

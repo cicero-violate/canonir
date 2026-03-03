@@ -87,10 +87,9 @@ pub(crate) fn render_projected_place_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: 
         let enum_path = norm::path(tcx, adt.did());
         let variant = adt.variant(downcast.0);
         let variant_path = format!("{enum_path}::{}", variant.name);
-        // Match on a reference to avoid moving out of borrowed values (e.g., &self).
-        expr = format!(
-            "match &{expr} {{ {variant_path} => (), _ => panic!(\"canon downcast projection mismatch\") }}"
-        );
+        // Match directly on the expression to avoid introducing an extra shared borrow
+        // that can propagate as `&T` into return bindings (e.g., `&usize` instead of `usize`).
+        expr = format!("match {expr} {{ {variant_path} => (), _ => panic!(\"canon downcast projection mismatch\") }}");
     }
     Some(expr)
 }
@@ -135,9 +134,7 @@ fn render_downcast_field_expr<'tcx>(tcx: TyCtxt<'tcx>, base_expr: &str, enum_ty:
     // If the base expression already starts with a deref, strip the leading `*`
     // and match on a reference to the underlying expression instead.
     let safe_base = base_expr.strip_prefix('*').unwrap_or(base_expr);
-    Some(format!(
-        "match &{safe_base} {{ {pattern} => {select}, _ => panic!(\"canon downcast projection mismatch\") }}"
-    ))
+    Some(format!("match {safe_base} {{ {pattern} => *{select}, _ => panic!(\"canon downcast projection mismatch\") }}"))
 }
 
 pub(crate) fn mir_binop_token(op: mir::BinOp) -> Option<&'static str> {
@@ -300,7 +297,18 @@ fn mir_rvalue_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>,
             let place = render_projected_place_expr(tcx, local_decls, place, resolver)?;
             Some(match borrow_kind {
                 mir::BorrowKind::Mut { .. } => format!("&mut {place}"),
-                _ => format!("&{place}"),
+                _ => {
+                    // Avoid introducing redundant shared-borrow layers when
+                    // the projected place already renders as a reference-like
+                    // expression (e.g., match-based enum projections). This
+                    // prevents emitting `&__canon_fN` and downstream `&T` vs `T`
+                    // mismatches (E0597, E0308).
+                    if place.starts_with('&') || place.starts_with("match ") {
+                        place
+                    } else {
+                        format!("&{place}")
+                    }
+                }
             })
         }
         mir::Rvalue::RawPtr(raw_ptr_kind, place) => {

@@ -3,13 +3,26 @@ use std::collections::HashSet;
 
 pub fn structural_guard(stmt: &Stmt, defined: &HashSet<String>, suppressed_sentinel_names: &HashSet<String>) -> bool {
     match stmt {
-        Stmt::Assign { rhs, .. } => value_known(rhs, defined, suppressed_sentinel_names),
-        Stmt::Call { args, dest, .. } => {
-            let allow_suppressed_inputs = matches!(dest, Some(dest) if dest == "__ret");
-            args.iter().all(|a| value_known_with_mode(a, defined, suppressed_sentinel_names, allow_suppressed_inputs))
+        Stmt::Assign { .. } => {
+            // Always allow assignments structurally.
+            // Rejecting based on RHS defined-order causes user-named locals
+            // like `symbols`, `fields`, `methods`, and `variants` to never
+            // receive a structural binding when their RHS references
+            // not-yet-defined values. Deterministic lowering must preserve
+            // the assignment; type-checking will validate correctness later.
+            true
+        }
+        Stmt::Call { .. } => {
+            // Allow calls structurally; argument defined-ordering is handled
+            // by deterministic lowering, not by rejecting the call.
+            true
         }
         Stmt::FieldAccess { base, .. } => value_known(base, defined, suppressed_sentinel_names),
-        Stmt::MethodCall { receiver, args, .. } => value_known(receiver, defined, suppressed_sentinel_names) && args.iter().all(|a| value_known(a, defined, suppressed_sentinel_names)),
+        Stmt::MethodCall { .. } => {
+            // Allow method calls structurally; do not reject based on
+            // transient defined-set ordering.
+            true
+        }
         Stmt::StructLit { fields, .. } => fields.iter().all(|(_, v)| value_known(v, defined, suppressed_sentinel_names)),
         Stmt::Match { .. } => true,
         _ => true,

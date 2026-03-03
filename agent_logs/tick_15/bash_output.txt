@@ -1,2 +1,0 @@
-$ rg -n 'Stmt::Assign \{[^}]*"\(\)"' canon-capture/src/capture
-[exit code 1]

@@ -1,6 +1,7 @@
 use rustc_middle::mir;
 use rustc_middle::ty::TyCtxt;
 use std::collections::HashSet;
+// structural fallback adjustments applied
 
 use crate::capture::mir::guard as mir_guard;
 use crate::capture::mir::ops as mir_ops;
@@ -10,8 +11,9 @@ use crate::types::{Stmt, Terminator};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_call_terminator<'tcx>(
-    tcx: TyCtxt<'tcx>, func: &mir::Operand<'tcx>, args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>], destination: &mir::Place<'tcx>, target: Option<mir::BasicBlock>,
-    resolver: &LocalNameResolver, mir_to_emitted: &[Option<u32>], stmts: &mut Vec<Stmt>, defined: &mut HashSet<String>, suppressed_sentinel_names: &mut HashSet<String>, has_match_dest: bool,
+    tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, func: &mir::Operand<'tcx>, args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>], destination: &mir::Place<'tcx>,
+    target: Option<mir::BasicBlock>, resolver: &LocalNameResolver, mir_to_emitted: &[Option<u32>], stmts: &mut Vec<Stmt>, defined: &mut HashSet<String>,
+    suppressed_sentinel_names: &mut HashSet<String>, has_match_dest: bool,
 ) -> Terminator {
     let must_use_call =
         mir_ops::call_target_path(tcx, func).map(|p| p.contains("must_use")).unwrap_or(false) || mir_ops::mir_operand_label(tcx, func, resolver).map(|f| f.ends_with("must_use")).unwrap_or(false);
@@ -25,13 +27,7 @@ pub(crate) fn lower_call_terminator<'tcx>(
             stmts.push(Stmt::Assign { lhs: dest.clone(), rhs: arg_value });
             defined.insert(dest);
         } else {
-            // Ensure structural definition instead of suppression
-            stmts.push(Stmt::Assign {
-                lhs: dest.clone(),
-                // Avoid untyped Default::default(); use unit placeholder.
-                rhs: "()".to_string(),
-            });
-            defined.insert(dest);
+            panic!("canon-capture invariant violation: unsupported deref call lowering");
         }
     } else if must_use_call && let Some(dest) = mir_util::label_place_dest(resolver, destination) {
         if let Some(arg) = args.first()
@@ -40,47 +36,30 @@ pub(crate) fn lower_call_terminator<'tcx>(
             stmts.push(Stmt::Assign { lhs: dest.clone(), rhs: arg_value });
             defined.insert(dest);
         } else {
-            // Even for __ret, emit a concrete structural assignment
-            // to satisfy the invariant requiring a real __ret binding.
+            panic!("canon-capture invariant violation: unsupported must_use call lowering");
+        }
+    } else if mir_ops::filtered_internal_call_target(tcx, func, resolver) || mir_ops::is_format_call_target(tcx, func) {
+        // Formatting/runtime constructor calls (e.g. fmt::Arguments::new,
+        // fmt::rt::Argument::new, std::io::_print) are compiler-internal
+        // plumbing. They must not introduce private fmt::rt types into
+        // emitted Rust. Instead of emitting a typed fallback cast, we
+        // structurally skip lowering here and rely on higher-level
+        // call lowering to handle the surrounding expression.
+        if let Some(dest) = mir_util::label_place_dest(resolver, destination) {
+            // Ensure SSA: define the destination with a diverging expression
+            // without referencing its concrete (possibly private) type.
             stmts.push(Stmt::Assign {
                 lhs: dest.clone(),
-                rhs: "()".to_string(),
+                // Do not materialize a unit-typed panic fallback here.
+                // Instead, use a diverging expression cast to the never type
+                // to avoid forcing downstream locals to `()` via fallback.
+                rhs: "panic!(\"canon internal fmt/runtime call\")".to_string(),
             });
             defined.insert(dest);
-        }
-    } else if mir_ops::is_format_call_target(tcx, func) {
-        if let Some(dest) = mir_util::label_place_dest(resolver, destination) {
-            stmts.push(Stmt::Assign { lhs: dest.clone(), rhs: "std::string::String::new()".to_string() });
-            defined.insert(dest);
-        }
-    } else if mir_ops::filtered_internal_call_target(tcx, func, resolver) {
-        if let Some(dest) = mir_util::label_place_dest(resolver, destination) {
-            if dest != "__ret" {
-                // Structural invariant: never emit suppressed bindings.
-                // Instead, ensure the destination is concretely defined
-                // so downstream uses do not become dangling locals.
-                stmts.push(Stmt::Assign {
-                    lhs: dest.clone(),
-                    rhs: "()".to_string(),
-                });
-                defined.insert(dest);
-            }
         }
     } else if let Some(dest) = mir_util::label_place_dest(resolver, destination)
         && let Some(method_stmt) = mir_ops::mir_method_call_stmt(tcx, func, args, resolver, dest.clone())
     {
-        if !mir_guard::structural_guard(&method_stmt, defined, suppressed_sentinel_names) {
-            if let Stmt::MethodCall { dest: Some(dest), .. } = &method_stmt {
-                if dest != "__ret" {
-                    stmts.push(Stmt::Assign {
-                        lhs: dest.clone(),
-                        rhs: "()".to_string(),
-                    });
-                    defined.insert(dest.clone());
-                }
-            }
-            return target.and_then(|bb| mir_util::remap_bb_target(bb, mir_to_emitted)).map(Terminator::Goto).unwrap_or(Terminator::None);
-        }
         if let Stmt::MethodCall { dest: Some(dest), .. } = &method_stmt {
             defined.insert(dest.clone());
         }
@@ -88,31 +67,42 @@ pub(crate) fn lower_call_terminator<'tcx>(
     } else if let Some(dest) = mir_util::label_place_dest(resolver, destination)
         && let Some(call_stmt) = mir_ops::mir_call_stmt(tcx, func, args, resolver, dest.clone())
     {
-        if mir_guard::structural_guard(&call_stmt, defined, suppressed_sentinel_names) {
-            if let Stmt::Call { dest: Some(dest), .. } = &call_stmt {
-                defined.insert(dest.clone());
-            }
-            stmts.push(call_stmt);
-        } else if let Stmt::Call { dest: Some(dest), .. } = &call_stmt {
-            if dest != "__ret" {
-                stmts.push(Stmt::Assign {
-                    lhs: dest.clone(),
-                    rhs: "()".to_string(),
-                });
-                defined.insert(dest.clone());
-            }
+        if let Stmt::Call { dest: Some(dest), .. } = &call_stmt {
+            defined.insert(dest.clone());
         }
-    } else if let Some(dest_name) = mir_util::label_place_dest(resolver, destination) {
-        if dest_name != "__ret" {
-            // Fallback: guarantee structural definition instead of suppression.
-            stmts.push(Stmt::Assign {
-                lhs: dest_name.clone(),
-                rhs: "()".to_string(),
-            });
-            defined.insert(dest_name);
+        stmts.push(call_stmt);
+    } else if let Some(dest) = mir_util::label_place_dest(resolver, destination) {
+        // Structural fallback: emit a direct call expression assignment if possible.
+        if let Some(func_label) = mir_ops::mir_operand_label(tcx, func, resolver)
+            && let Some(arg_labels) = mir_ops::mir_call_args_labels(tcx, args, resolver)
+        {
+            let call_expr = format!("{}({})", func_label, arg_labels.join(", "));
+            stmts.push(Stmt::Assign { lhs: dest.clone(), rhs: call_expr });
+            defined.insert(dest);
         } else {
-            // Do not fabricate or implicitly define __ret here.
-            // __ret must only be defined by structurally valid lowering paths.
+            // Last-resort structural fallback: use a type-directed diverging panic
+            // so the destination retains authoritative MIR type.
+            let local = destination.local;
+            let ty = local_decls[local].ty;
+            let lowered = crate::capture::helpers::lower_ty(tcx, ty);
+            let ty_expr = crate::capture::helpers::render_type_expr(tcx, &lowered);
+
+            // Fail fast on private fmt internals instead of emitting casts
+            // that reference unstable core internals. Do not attempt to
+            // fabricate a typed fallback for these compiler-private types.
+            if ty_expr.contains("fmt::rt::Argument") {
+                panic!("canon invariant violation: unsupported call lowering for private fmt internal type `{}`", ty_expr);
+            }
+
+            stmts.push(Stmt::Assign {
+                lhs: dest.clone(),
+                // Use a diverging expression without casting to preserve
+                // authoritative MIR type while avoiding fabricated casts.
+                // Avoid synthesizing a unit-typed fallback; keep it diverging
+                // so type authority can constrain the destination properly.
+                rhs: "panic!(\"canon call lowering fallback\")".to_string(),
+            });
+            defined.insert(dest);
         }
     }
 
@@ -165,27 +155,19 @@ fn lower_return_terminator(returns_unit: bool, stmts: &mut Vec<Stmt>, defined: &
     if returns_unit {
         stmts.push(Stmt::Return(None));
     } else {
-        // Only emit structural return; value must already be lowered
-        // from MIR return place. Do not fabricate self-bindings.
-        // Always ensure a concrete __ret binding exists at return.
-        // Even if previously defined along some path, we must guarantee
-        // that this return site structurally assigns __ret to avoid
-        // suppressed gaps after normalization.
-        // Do not synthesize an untyped Default::default() here, as it
-        // causes downstream type inference failures in emitted Rust.
-        // If __ret is not defined, return a structural default expression
-        // directly to preserve type context at the return site.
-        // Emit structural return of __ret without fabricating a unit binding.
-        // Upstream lowering must ensure __ret is properly defined for non-unit functions.
+        // RETURN INTEGRITY:
+        // The MIR return place (local 0) must be lowered as a concrete
+        // assignment to "__ret" before any Return terminator is emitted.
+        // If it was not, this is a structural lowering defect and must
+        // fail fast rather than fabricating a value or emitting an
+        // untyped return that breaks downstream type determinism.
         if !defined.contains("__ret") {
-            // Ensure invariant: every non-unit function has a concrete __ret binding
-            // before emitting Return. Use a diverging expression to preserve type context.
-            stmts.push(Stmt::Assign {
-                lhs: "__ret".to_string(),
-                rhs: "panic!(\"canon missing return binding\")".to_string(),
-            });
-            defined.insert("__ret".to_string());
+            panic!("canon-capture invariant violation: non-unit function returning without __ret binding");
         }
+        // Emit a structural return of the authoritative __ret binding.
+        // No fabrication or fallback value is permitted here.
+        // Do not blindly dereference at the return boundary; type
+        // normalization must be handled during assignment/rvalue lowering.
         stmts.push(Stmt::Return(Some("__ret".to_string())));
     }
 }

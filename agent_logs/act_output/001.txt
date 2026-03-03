@@ -1,0 +1,69 @@
+[list_dir /workspace/ai_sandbox/canon/.]
+.cargo
+.git
+.gitignore
+.ignore
+.run_script_logs
+AGENT.md
+AGENT_STATE.md
+AGENT_STATE_SECTION_DELTAS.sh
+Cargo.lock
+Cargo.toml
+EXECUTION_REF.md
+GOAL.md
+LOC.sh
+PLAN.md
+PROJECT_EXAMPLE.md
+PROJECT_GOAL.md
+PROJECT_OVERVIEW.md
+PROJECT_STATUS.md
+STRUCTURAL_AUDIT.md
+STRUCTURAL_INVARIANTS_REPORT.md
+STRUCTURAL_INVARIANTS_REPORT.txt
+agent_logs
+algorithms
+borrow_emission_tick226_anchor.txt
+build.json
+canon
+canon-agent
+canon-agent-prompts
+canon-agent-prompts_bak
+canon-analyzer
+canon-capture
+canon-chromium-extension
+canon-mutation
+canon-projection
+canon_telemetry
+chatgpt_rustsandbox
+chrome-dev-profile
+frames
+invariant_logs
+orchestration
+orchestration_report.json
+run_capture.sh
+rustc_capture
+rustfmt.toml
+src
+summarize.sh
+target
+test_projects
+txt.patch
+[list_dir /workspace/ai_sandbox/canon/src]
+[read_file /workspace/ai_sandbox/canon/Cargo.toml]
+[workspace]
+members = [
+  "algorithms",
+  "canon-capture",
+  "canon-mutation",
+  "orchestration",
+  "canon_telemetry",
+  "rustc_capture",
+  "canon",
+  "canon-analyzer",
+  "canon-projection", "canon-agent",
+]
+exclude = [
+  "test_projects",
+]
+resolver = "2"
+ERROR: path does not exist: /workspace/ai_sandbox/canon/src/main.rs

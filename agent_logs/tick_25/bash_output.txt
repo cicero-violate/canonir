@@ -1,7 +1,0 @@
-$ cargo build
---- stderr ---
-   Compiling canon-projection v0.1.0 (/workspace/ai_sandbox/canon/canon-projection)
-   Compiling canon-capture v0.1.0 (/workspace/ai_sandbox/canon/canon-capture)
-   Compiling orchestration v0.1.0 (/workspace/ai_sandbox/canon/orchestration)
-   Compiling rustc_capture v0.1.0 (/workspace/ai_sandbox/canon/rustc_capture)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.83s

@@ -114,10 +114,7 @@ fn pass_lower_match_dest_to_suppressed(mut emitted: Vec<EmittedBlock>) -> Vec<Em
                     // destinations, as this causes downstream type
                     // inference failures. Use unit placeholder; structural
                     // return synthesis handles typed defaults where needed.
-                    *stmt = Stmt::Assign {
-                        lhs: dest.clone(),
-                        rhs: "()".to_string(),
-                    };
+                    *stmt = Stmt::Assign { lhs: dest.clone(), rhs: "panic!(\"canon unlowered match dest\")".to_string() };
                 }
             }
         }

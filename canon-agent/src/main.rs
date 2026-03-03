@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  canon-agent show-graph <graph.json>");
         println!("  canon-agent run-pipeline <ir.json> <layout.json> <proposal.json> <outputs.json>");
         println!("  canon-agent run-agent <ir.json> <layout.json> <graph.json> <workspace>");
-        println!("  canon-agent run-invariant <cwd1,cwd2,...> <capture_dir> <emit_dir> <orchestration_bin> [max_ticks=20]");
+        println!("  canon-agent run-invariant <cwd> [max_ticks=20]");
     };
 
     if args.len() < 2 {
@@ -124,27 +124,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         "run-invariant" => {
-            if args.len() < 6 {
+            if args.len() < 3 {
                 usage();
                 return Ok(());
             }
-            let cwd: Vec<PathBuf> = args[2].split(',').map(PathBuf::from).collect();
-            let capture_dir = PathBuf::from(&args[3]);
-            let emit_dir = PathBuf::from(&args[4]);
-            let orchestration_bin = PathBuf::from(&args[5]);
-            let max_ticks: u64 = args.get(6).and_then(|s| s.parse().ok()).unwrap_or(20);
+            let cwd_root = PathBuf::from(&args[2]);
+            let cwd: Vec<PathBuf> = vec![cwd_root.clone()];
+            let capture_dir = cwd_root.join("test_projects/test_rust_projects/capture/repomap");
+            let emit_dir = cwd_root.join("test_projects/test_rust_projects/emit/repomap");
+            let orchestration_bin = cwd_root.join("target/debug/orchestration");
+            let max_ticks: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20);
 
             let addr = "127.0.0.1:9100".parse()?;
             let bridge = ws_server::spawn(addr);
-
-            // ControlDomain = canon-agent directory (where binary is launched)
-            let control_root = std::env::current_dir()?;
-            let agent_cfg = AgentConfig::load(&control_root).map_err(|e| {
-                eprintln!("[main] fatal: {e}");
-                e
-            })?;
-
-            eprintln!("[main] invariant chatgpt_url (control_root={}): {}", control_root.display(), agent_cfg.chatgpt_url);
 
             let pipeline = canon_agent::pipelines::invariant::AgentPipeline::new(bridge);
 
@@ -172,9 +164,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("[main] reward={:.4} advanced={}", outcome.reward, outcome.advanced);
 
                 if outcome.advanced {
-                   eprintln!("[main] exit check passed — stopping");
-                   break;
-               }
+                    eprintln!("[main] exit check passed — stopping");
+                    break;
+                }
             }
         }
 

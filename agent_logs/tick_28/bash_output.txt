@@ -1,2 +1,0 @@
-$ rg -n "panic!\\(\"canon gap\"\)" canon-capture/src/
-[exit code 1]

@@ -1,0 +1,68 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running `target/debug/orchestration --all`
+  Building rustc_capture...
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.03s
+  Capturing "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap" -> "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap/canon_capture.json"
+   Compiling find-msvc-tools v0.1.9
+   Compiling shlex v1.3.0
+   Compiling tree-sitter-language v0.1.7
+   Compiling memchr v2.8.0
+   Compiling regex-syntax v0.8.10
+   Compiling same-file v1.0.6
+   Compiling streaming-iterator v0.1.9
+   Compiling walkdir v2.5.0
+   Compiling cc v1.2.56
+   Compiling aho-corasick v1.1.4
+   Compiling tree-sitter-rust v0.23.3
+   Compiling tree-sitter v0.24.7
+   Compiling regex-automata v0.4.14
+   Compiling regex v1.12.3
+   Compiling repomap v0.1.0 (/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap)
+canon_capture: wrote /workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap/canon_capture.json
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.60s
+  Done. IR written to "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap/canon_capture.json"  nodes=1735
+Loading "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/capture/repomap/canon_capture.json"
+  canon nodes: 1735
+Analyzing CanonIR...
+INFO liveness_solver: pruned 4 dead function(s) from emit_order
+Emitting source (CanonIR pipeline)...
+Canon emitted 5 file(s) to "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap"
+Type authority report written to "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap/canon_type_authority_report.json"
+Scanning emitted structural surface...
+Structural surface snapshot written to "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap/canon_structural_surface.json"
+Running cargo build on emitted source...
+repair signals detected: [MissingMethod { file: "src/extractor.rs", line: 20, method_name: Some("expect"), type_name: Some("()") }, TraitBoundFailure { file: "src/extractor.rs", line: 60, trait_name: Some("FnOnce(Node<'_>)"), type_name: Some("()") }, TraitBoundFailure { file: "src/extractor.rs", line: 73, trait_name: Some("FnOnce(Node<'_>)"), type_name: Some("()") }, TraitBoundFailure { file: "src/extractor.rs", line: 79, trait_name: Some("FnOnce(Node<'_>)"), type_name: Some("()") }, TypeMismatch { file: "src/extractor.rs", line: 97, expected: Some("|            ^^^^^  `String`"), found: Some("`()`") }, TypeMismatch { file: "src/extractor.rs", line: 166, expected: Some("|             ^^^^^^^^^^^^^^^^^^  `()`"), found: Some("`&str`") }, TypeMismatch { file: "src/extractor.rs", line: 167, expected: Some("|            ^^^^^  `&str`"), found: Some("`()`") }, MissingMethod { file: "src/repomap.rs", line: 24, method_name: None, type_name: None }, TraitBoundFailure { file: "src/symbol.rs", line: 156, trait_name: Some("Sized"), type_name: Some("str") }, TypeMismatch { file: "src/symbol.rs", line: 217, expected: Some("|                ^^^^^  `String`"), found: Some("`()`") }, TraitBoundFailure { file: "src/main.rs", line: 15, trait_name: Some("AsRef<OsStr>"), type_name: Some("()") }, MissingMethod { file: "src/main.rs", line: 55, method_name: None, type_name: None }]
+
+=== Build Summary ===
+  success: false
+  error count: 12
+  warning count: 0
+  categories:
+    E0277: 5
+    E0308: 4
+    E0599: 3
+  errors by file:
+    src/extractor.rs: 7
+    src/symbol.rs: 2
+    src/main.rs: 2
+    src/repomap.rs: 1
+
+=== Repair Signals ===
+  MissingMethod { file: "src/extractor.rs", line: 20, method_name: Some("expect"), type_name: Some("()") }
+  TraitBoundFailure { file: "src/extractor.rs", line: 60, trait_name: Some("FnOnce(Node<'_>)"), type_name: Some("()") }
+  TraitBoundFailure { file: "src/extractor.rs", line: 73, trait_name: Some("FnOnce(Node<'_>)"), type_name: Some("()") }
+  TraitBoundFailure { file: "src/extractor.rs", line: 79, trait_name: Some("FnOnce(Node<'_>)"), type_name: Some("()") }
+  TypeMismatch { file: "src/extractor.rs", line: 97, expected: Some("|            ^^^^^  `String`"), found: Some("`()`") }
+  TypeMismatch { file: "src/extractor.rs", line: 166, expected: Some("|             ^^^^^^^^^^^^^^^^^^  `()`"), found: Some("`&str`") }
+  TypeMismatch { file: "src/extractor.rs", line: 167, expected: Some("|            ^^^^^  `&str`"), found: Some("`()`") }
+  MissingMethod { file: "src/repomap.rs", line: 24, method_name: None, type_name: None }
+  TraitBoundFailure { file: "src/symbol.rs", line: 156, trait_name: Some("Sized"), type_name: Some("str") }
+  TypeMismatch { file: "src/symbol.rs", line: 217, expected: Some("|                ^^^^^  `String`"), found: Some("`()`") }
+  TraitBoundFailure { file: "src/main.rs", line: 15, trait_name: Some("AsRef<OsStr>"), type_name: Some("()") }
+  MissingMethod { file: "src/main.rs", line: 55, method_name: None, type_name: None }
+Build report written to "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap/canon_build_report.json"
+Canon snapshot written to "/workspace/ai_sandbox/canon/test_projects/test_rust_projects/emit/repomap/canon_ir_solved.json"
+Pipeline complete.
+Invariant report written to: /workspace/ai_sandbox/canon/STRUCTURAL_INVARIANTS_REPORT.md
+JSON report written to:      /workspace/ai_sandbox/canon/orchestration_report.json
+[exit code 1]

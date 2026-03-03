@@ -1,383 +1,401 @@
-//! AgentPipeline — generic LLM-driven coding agent loop.
+//! Deterministic invariant pipeline: Observe → Plan → Act → Verify.
 //!
-//! The LLM picks its own phase each tick: observe / plan / act / verify.
-//! Loop terminates when the exit-check command returns exit code 0,
-//! or when max_ticks is reached.
+//! Requirements enforced:
+//! - Fixed phase machine, one phase per tick.
+//! - LLM response schema: { phase, deltas, rationale }.
+//! - Structured deltas only (no free-form shell execution).
+//! - Explicit logging per tick, replayable from logs.
 
 pub mod act;
 pub mod config;
 pub mod observe;
 pub mod plan;
-pub mod score;
 
 use super::{Pipeline, PipelineContext, PipelineOutcome};
 use crate::ir::SystemState;
 use crate::layout::FileTopology;
 use crate::ws_server::WsBridge;
-use anyhow::Result;
-use config::{AgentConfig, Phase, truncate_lines};
-use plan::{plan_via_llm, plan_via_llm_retry, PlanRequest};
-use score::{CargoReport, RewardSignals, parse_cargo_json, patch_line_count, ProgressMetrics};
+use act::{apply_mutations, apply_read_only, DeltaOutcome};
+use config::AgentConfig;
+use plan::{request_plan, AgentResponse};
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 
-const RETRY_LIMIT: usize = 3;
+const LOG_ROOT: &str = "/workspace/ai_sandbox/canon/agent_logs";
 
-/// Appended to prompts when the agent has stagnated in observe/plan too long.
-const STAGNATION_PRESSURE: &str =
-    "\n\n\u{26a0}\u{fe0f}  STAGNATION DETECTED: You have spent many ticks observing or planning \
-     without acting. You MUST choose phase `act` this tick and emit at least one `ApplyPatch` or \
-     `Bash` delta. Do NOT choose observe or plan.";
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Phase {
+    Observe,
+    Plan,
+    Act,
+    Verify,
+}
+
+impl Phase {
+    fn next(&self) -> Self {
+        match self {
+            Phase::Observe => Phase::Plan,
+            Phase::Plan => Phase::Act,
+            Phase::Act => Phase::Verify,
+            Phase::Verify => Phase::Observe,
+        }
+    }
+}
+
+impl std::fmt::Display for Phase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Phase::Observe => write!(f, "observe"),
+            Phase::Plan => write!(f, "plan"),
+            Phase::Act => write!(f, "act"),
+            Phase::Verify => write!(f, "verify"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Delta {
+    ReadFile { path: String },
+    ListDir { path: String },
+    ReadCommand { command: String, args: Vec<String> },
+    WriteFile { path: String, content: String },
+    ReplaceText { path: String, find: String, replace: String },
+    DeleteFile { path: String },
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DeltasAppliedLog {
+    phase: Phase,
+    deltas: Vec<Delta>,
+    results: Vec<DeltaOutcome>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct StateSnapshot<'a> {
+    current_phase: &'a Phase,
+    tick: u64,
+    rationale_history: Vec<String>,
+}
+
+struct PipelineState {
+    current_phase: Phase,
+    tick: u64,
+    rationale_history: VecDeque<String>,
+    system_prompt_sent: bool,
+}
 
 pub struct AgentPipeline {
-    pub bridge: WsBridge,
+    bridge: WsBridge,
     config: AgentConfig,
+    state: tokio::sync::Mutex<PipelineState>,
     tab_id: tokio::sync::Mutex<Option<u32>>,
-    bootstrap_sent: tokio::sync::Mutex<bool>,
-    /// Ring buffer of recent rationales for RATIONALE_HISTORY.
-    rationale_history: tokio::sync::Mutex<VecDeque<String>>,
-    /// Count of consecutive ticks where the LLM chose observe or plan.
-    stagnation_counter: tokio::sync::Mutex<usize>,
-    /// Count of ticks consumed by plan phase (free ticks, for observability).
-    plan_tick_credits: tokio::sync::Mutex<usize>,
-    /// Cargo report from the last completed tick (for delta scoring).
-    prev_cargo_report: tokio::sync::Mutex<Option<CargoReport>>,
-    /// Gap count from the previous tick (for progress metrics).
-    prev_gap_count: tokio::sync::Mutex<usize>,
 }
 
 impl AgentPipeline {
     pub fn new(bridge: WsBridge) -> Self {
-        let config = AgentConfig::load().expect("failed to load agent_config.toml");
+        let config = AgentConfig::load().expect("failed to load invariant agent config");
         Self {
             bridge,
             config,
+            state: tokio::sync::Mutex::new(PipelineState {
+                current_phase: Phase::Observe,
+                tick: 0,
+                rationale_history: VecDeque::new(),
+                system_prompt_sent: false,
+            }),
             tab_id: tokio::sync::Mutex::new(None),
-            bootstrap_sent: tokio::sync::Mutex::new(false),
-            rationale_history: tokio::sync::Mutex::new(VecDeque::new()),
-            stagnation_counter: tokio::sync::Mutex::new(0),
-            plan_tick_credits: tokio::sync::Mutex::new(0),
-            prev_cargo_report: tokio::sync::Mutex::new(None),
-            prev_gap_count: tokio::sync::Mutex::new(0),
         }
     }
 
-    async fn push_rationale(&self, rationale: &str) {
-        let mut history = self.rationale_history.lock().await;
-        if history.len() >= self.config.rationale_history_len {
-            history.pop_front();
-        }
-        history.push_back(rationale.to_string());
+    fn log_dir(kind: &str) -> PathBuf {
+        Path::new(LOG_ROOT).join(kind)
     }
 
-    async fn rationale_history_str(&self) -> String {
-        let history = self.rationale_history.lock().await;
-        history
-            .iter()
-            .enumerate()
-            .map(|(i, r)| format!("[T-{}] {}", history.len() - i, r))
-            .collect::<Vec<_>>()
-            .join("\n---\n")
+    fn log_path(kind: &str, tick: u64, ext: &str) -> PathBuf {
+        Self::log_dir(kind).join(format!("{:03}.{}", tick, ext))
+    }
+
+    fn ensure_log_dirs() {
+        for kind in [
+            "system_prompt",
+            "input_prompt",
+            "llm_response",
+            "deltas_applied",
+            "act_output",
+            "verify_output",
+            "exit_check_output",
+            "state_snapshot",
+        ] {
+            let _ = std::fs::create_dir_all(Self::log_dir(kind));
+        }
+    }
+
+    fn read_prev_text(kind: &str, tick: u64, ext: &str) -> String {
+        if tick == 0 {
+            return String::new();
+        }
+        let path = Self::log_path(kind, tick, ext);
+        std::fs::read_to_string(path).unwrap_or_default()
+    }
+
+    fn last_output_and_error(tick: u64) -> (String, String) {
+        if tick == 0 {
+            return (String::new(), String::new());
+        }
+        let act = Self::read_prev_text("act_output", tick, "txt");
+        let verify = Self::read_prev_text("verify_output", tick, "txt");
+        let mut last_output = act;
+        if !verify.trim().is_empty() {
+            if !last_output.trim().is_empty() {
+                last_output.push('\n');
+            }
+            last_output.push_str(&verify);
+        }
+
+        let mut last_error = String::new();
+        let deltas_path = Self::log_path("deltas_applied", tick, "json");
+        if let Ok(raw) = std::fs::read_to_string(deltas_path) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
+                    last_error = err.to_string();
+                }
+            }
+        }
+
+        (last_output, last_error)
+    }
+
+    fn build_prompt(&self, phase: &Phase, cwd: &Path, last_output: &str, last_error: &str) -> String {
+        let mode = match phase {
+            Phase::Observe | Phase::Verify => "read-only",
+            Phase::Plan => "plan-only",
+            Phase::Act => "mutate",
+        };
+        format!(
+            "Deterministic Agent Tick\n\
+             ------------------------\n\
+             Execution mode: {mode}\n\
+             Inputs (only these):\n\
+             - cwd: {cwd}\n\
+             - last_output:\n{last_output}\n\
+             - last_error:\n{last_error}\n\
+             \n\
+             If execution mode is mutate and the goal is not met, emit at least one write delta.\n\
+             Respond with one JSON block per the system prompt schema.",
+            mode = mode,
+            cwd = cwd.display(),
+            last_output = indent_block(last_output, 2),
+            last_error = indent_block(last_error, 2),
+        )
+    }
+
+    fn system_prompt(&self) -> String {
+        let card = match self.config.primary_card() {
+            Ok(c) => c,
+            Err(_) => {
+                return "System Prompt — Invariant Pipeline\nMissing agent card.".to_string();
+            }
+        };
+        let tools = if card.tool_capabilities.is_empty() {
+            "(none)".to_string()
+        } else {
+            card.tool_capabilities.join(", ")
+        };
+        format!(
+            "{}\n\n# Goal\n{}\n\n# Tool Capabilities\n{}\n\n# Tool Protocol\n{}\n\n# Plan Example\n{}\n\n# Delta Schema\n{}\n",
+            card.role_markdown.trim_end(),
+            card.goal_markdown.trim_end(),
+            tools,
+            tool_protocol(),
+            self.config.plan_example.trim_end(),
+            delta_schema()
+        )
     }
 }
 
 #[async_trait::async_trait]
 impl Pipeline for AgentPipeline {
     fn name(&self) -> &str {
-        "agent"
+        "invariant"
     }
 
-    async fn run_tick(
-        &self,
-        ctx: &PipelineContext,
-        _ir: &mut SystemState,
-        _layout: &mut FileTopology,
-    ) -> Result<PipelineOutcome> {
+    async fn run_tick(&self, ctx: &PipelineContext, _ir: &mut SystemState, _layout: &mut FileTopology) -> anyhow::Result<PipelineOutcome> {
+        Self::ensure_log_dirs();
+
+        let mut state = self.state.lock().await;
+        state.tick = ctx.tick;
+        let phase = state.current_phase.clone();
+        let prev_tick = ctx.tick.saturating_sub(1);
+        let (last_output, last_error) = Self::last_output_and_error(prev_tick);
+
         let cwd = &ctx.cwd[0];
-        let log_dir = cwd
-            .join("agent_logs")
-            .join(format!("tick_{:02}", ctx.tick));
-        std::fs::create_dir_all(&log_dir).ok();
-
-        // -----------------------------------------------------------------------
-        // 1. Load outputs from the previous tick
-        // -----------------------------------------------------------------------
-
-        // Exit check is never injected into prompts directly — it only surfaces
-        // via bash_output after a verify tick runs it.
-        let exit_check_display = "";
-
-        // Load bash output persisted by the previous tick's act phase.
-        let prev_log_dir = cwd
-            .join("agent_logs")
-            .join(format!("tick_{:02}", ctx.tick.saturating_sub(1)));
-        let prev_bash_output = std::fs::read_to_string(prev_log_dir.join("bash_output.txt"))
-            .unwrap_or_default();
-
-        // Surface act_error.txt from the previous tick so the LLM sees why its
-        // patch was rejected.  This populates {{LAST_ERROR}} in the act template.
-        let prev_act_error = std::fs::read_to_string(prev_log_dir.join("act_error.txt"))
-            .unwrap_or_default();
-
-        // -----------------------------------------------------------------------
-        // 2. Plan — LLM decides phase + deltas
-        // -----------------------------------------------------------------------
-        let rationale_history = self.rationale_history_str().await;
-        let is_bootstrap = !*self.bootstrap_sent.lock().await;
-
-        // Build structured progress metrics (Case 1 — visible to LLM, scalar hidden).
-        let gap_count_now  = ProgressMetrics::gap_count_from_output(&exit_check_display);
-        let gap_count_prev = *self.prev_gap_count.lock().await;
-        let prev_cargo     = self.prev_cargo_report.lock().await.clone();
-        let progress = ProgressMetrics {
-            gap_count_now,
-            gap_count_prev,
-            compile_ok:     prev_cargo.as_ref().map(|r| r.error_count == 0).unwrap_or(true),
-            compile_errors: prev_cargo.as_ref().map(|r| r.error_count).unwrap_or(0),
-            stagnation:     *self.stagnation_counter.lock().await,
-        };
-        let progress_block = progress.to_prompt_block();
-
-        // Snapshot stagnation count before the plan call so the pressure string
-        // is stable for the entire retry loop of this tick.
-        let stagnation_count = *self.stagnation_counter.lock().await;
-        let stagnation_pressure = if stagnation_count >= self.config.stagnation_threshold {
-            STAGNATION_PRESSURE
-        } else {
-            ""
-        };
-
-        // Track last phase for template selection on retries.
-        let mut last_error: Option<String> = None;
-        let mut response = None;
-        let mut current_phase: Option<Phase> = None;
-
-        for _attempt in 0..RETRY_LIMIT {
-            let plan_result = if let Some(err) = &last_error {
-                plan_via_llm_retry(&self.bridge, &self.config, err, &log_dir, &self.tab_id).await
+        if !state.system_prompt_sent {
+            let sys_prompt = self.system_prompt();
+            std::fs::write(Self::log_path("system_prompt", 0, "md"), &sys_prompt).ok();
+            if let Err(e) = plan::send_system_prompt(&self.bridge, &self.config, &self.tab_id, &sys_prompt).await {
+                eprintln!("[invariant] system prompt send failed: {e}");
             } else {
-                let req = PlanRequest {
-                    tick: ctx.tick,
-                    cwd,
-                    bash_output: &prev_bash_output,
-                    last_error: &prev_act_error,
-                    rationale_history: &rationale_history,
-                    exit_check_output: &exit_check_display,
-                    is_bootstrap,
-                    current_phase: current_phase.as_ref(),
-                    stagnation_pressure,
-                    progress_block: &progress_block,
-                };
-                plan_via_llm(&self.bridge, &self.config, &req, &log_dir, &self.tab_id).await
-            };
-
-            match plan_result {
-                Ok(r) => {
-                    response = Some(r);
-                    break;
-                }
-                Err(e) => {
-                    last_error = Some(e.to_string());
-                    continue;
-                }
+                state.system_prompt_sent = true;
             }
         }
 
-        // Mark bootstrap sent after first successful plan.
-        if is_bootstrap && response.is_some() {
-            *self.bootstrap_sent.lock().await = true;
-        }
+        let prompt = self.build_prompt(&phase, cwd, &last_output, &last_error);
+        std::fs::write(Self::log_path("input_prompt", ctx.tick, "md"), &prompt).ok();
 
-        let response = match response {
-            Some(r) => r,
-            None => {
-                let err = last_error.unwrap_or_else(|| "plan failed after retries".into());
-                return Ok(PipelineOutcome {
-                    reward: -1.0,
-                    summary: format!("plan failed: {}", err),
-                    advanced: false,
-                });
+        let mut llm_payload: serde_json::Value = serde_json::json!({});
+        let mut response: Option<AgentResponse> = None;
+        let mut validation_error: Option<String> = None;
+
+        match request_plan(&self.bridge, &self.config, &prompt, &self.tab_id).await {
+            Ok((payload, parsed)) => {
+                llm_payload = payload;
+                response = Some(parsed);
             }
-        };
-
-        current_phase = Some(response.phase.clone());
-        self.push_rationale(&response.rationale).await;
-
-        std::fs::write(log_dir.join("phase.txt"), response.phase.to_string()).ok();
-
-        // -----------------------------------------------------------------------
-        // 3. Act — execute deltas (skip for Plan phase)
-        // -----------------------------------------------------------------------
-        let mut act_failed = false;
-        let mut bash_output = String::new();
-
-        // Act: execute Bash/ApplyPatch deltas.
-        // Observe/Verify: execute BashReadOnly deltas only if any were emitted.
-        // Plan: no deltas, skip entirely.
-        // Observe/Verify execution failures are non-fatal (soft error, reward stays 0).
-        let run_deltas = match response.phase {
-            Phase::Act => true,
-            Phase::Observe | Phase::Verify => !response.deltas.is_empty(),
-            Phase::Plan => false,
-        };
-        if run_deltas {
-            match act::act(&response.deltas, &ctx.cwd) {
-                Ok(out) => {
-                    bash_output = truncate_lines(&out, self.config.max_command_output_lines);
-                    if !bash_output.is_empty() {
-                        std::fs::write(log_dir.join("bash_output.txt"), &bash_output).ok();
-                    }
-                }
-                Err(e) => {
-                    let is_fatal = response.phase == Phase::Act;
-                    if is_fatal {
-                        act_failed = true;
-                    }
-                    std::fs::write(log_dir.join("act_error.txt"), e.to_string()).ok();
-                }
+            Err(e) => {
+                validation_error = Some(format!("LLM_ERROR: {e}"));
+                llm_payload = serde_json::json!({ "error": e.to_string() });
             }
         }
 
-        // -----------------------------------------------------------------------
-        // 3b. Act-failure inline retry — one free correction per tick
-        // -----------------------------------------------------------------------
-        if act_failed {
-            let act_error_str = std::fs::read_to_string(log_dir.join("act_error.txt"))
-                .unwrap_or_else(|_| "apply_patch failed (unknown error)".into());
-
-            match plan_via_llm_retry(&self.bridge, &self.config, &act_error_str, &log_dir, &self.tab_id).await {
-                Ok(retry_response) => {
-                    if retry_response.phase == Phase::Act {
-                        match act::act(&retry_response.deltas, &ctx.cwd) {
-                            Ok(out) => {
-                                act_failed = false;
-                                bash_output = truncate_lines(&out, self.config.max_command_output_lines);
-                                if !bash_output.is_empty() {
-                                    std::fs::write(log_dir.join("bash_output.txt"), &bash_output).ok();
-                                }
-                                std::fs::write(log_dir.join("act_retry_ok.txt"), "1").ok();
-                            }
-                            Err(e) => {
-                                // Second failure — persist new error and surface to bash_output.
-                                let err_str = e.to_string();
-                                std::fs::write(log_dir.join("act_error.txt"), &err_str).ok();
-                                bash_output.push_str(&format!("\n[act retry failed] {}\n", err_str));
-                                std::fs::write(log_dir.join("bash_output.txt"), &bash_output).ok();
-                            }
-                        }
-                    }
-                    self.push_rationale(&retry_response.rationale).await;
-                }
-                Err(e) => {
-                    // Plan retry itself failed — surface into bash_output for next tick.
-                    let err_str = e.to_string();
-                    eprintln!("[agent] act-retry plan failed: {err_str}");
-                    bash_output.push_str(&format!("\n[act-retry plan failed] {}\n", err_str));
-                    std::fs::write(log_dir.join("bash_output.txt"), &bash_output).ok();
-                }
-            }
-
-            // If still failed after retry, surface original error into bash_output.
-            if act_failed {
-                let act_error_str = std::fs::read_to_string(log_dir.join("act_error.txt"))
-                    .unwrap_or_else(|_| "apply_patch failed (unknown error)".into());
-                bash_output.push_str(&format!("\n[act failed] {}\n", act_error_str));
-                std::fs::write(log_dir.join("bash_output.txt"), &bash_output).ok();
-            }
+        if let Ok(pretty) = serde_json::to_string_pretty(&llm_payload) {
+            std::fs::write(Self::log_path("llm_response", ctx.tick, "json"), pretty).ok();
         }
 
-        // -----------------------------------------------------------------------
-        // 4. Verify — run exit check again if LLM chose verify phase
-        // -----------------------------------------------------------------------
+        let mut act_output = String::new();
+        let mut verify_output = String::new();
+        let mut exit_check_output = String::new();
+        let mut delta_results: Vec<DeltaOutcome> = Vec::new();
+        let mut delta_error = validation_error.clone();
         let mut exit_ok = false;
 
-        if response.phase == Phase::Verify {
-            let verify_result = observe::run_exit_check(&self.config.exit_check_command, cwd)?;
-            exit_ok = verify_result.exit_code == 0;
-            let annotated = format!(
-                "{}\n[exit-check exit code: {}]",
-                verify_result.stdout.trim_end(),
-                verify_result.exit_code,
-            );
-            std::fs::write(log_dir.join("exit_check_output.txt"), &annotated).ok();
-            std::fs::write(log_dir.join("verify_output.txt"), &verify_result.stdout).ok();
-            // Surface exit check result into bash_output so the LLM sees it
-            // in {{BASH_OUTPUT}} on the next tick — not via the exit-check block.
-            bash_output.push_str(&annotated);
-            std::fs::write(log_dir.join("bash_output.txt"), &bash_output).ok();
-            if exit_ok {
-                return Ok(PipelineOutcome {
-                    reward: 1.0,
-                    summary: "exit check passed — done".into(),
-                    advanced: true,
-                });
+        let deltas = response.as_ref().map(|r| r.deltas.clone()).unwrap_or_default();
+        let (allowed_deltas, mut ignored_outcomes) = filter_deltas_for_phase(&phase, &deltas);
+
+        match phase {
+            Phase::Observe => {
+                let (out, mut results, err) = apply_read_only(&allowed_deltas, &ctx.cwd, self.config.max_output_lines);
+                results.append(&mut ignored_outcomes);
+                act_output = out;
+                delta_results = results;
+                if err.is_some() && delta_error.is_none() {
+                    delta_error = err;
+                }
+            }
+            Phase::Plan => {
+                // No deltas allowed.
+                delta_results.append(&mut ignored_outcomes);
+            }
+            Phase::Act => {
+                let (out, mut results, err) = apply_mutations(&allowed_deltas, &ctx.cwd, self.config.max_output_lines);
+                results.append(&mut ignored_outcomes);
+                act_output = out;
+                delta_results = results;
+                if err.is_some() && delta_error.is_none() {
+                    delta_error = err;
+                }
+            }
+            Phase::Verify => {
+                let (out, mut results, err) = apply_read_only(&allowed_deltas, &ctx.cwd, self.config.max_output_lines);
+                results.append(&mut ignored_outcomes);
+                verify_output = out;
+                delta_results = results;
+                if err.is_some() && delta_error.is_none() {
+                    delta_error = err;
+                }
+
+                let verify = observe::run_exit_check(&self.config.exit_check_command, cwd)?;
+                exit_ok = verify.exit_code == 0;
+                exit_check_output = format!("{}\n[exit code {}]", verify.stdout.trim_end(), verify.exit_code);
             }
         }
 
-        // -----------------------------------------------------------------------
-        // 5. Update stagnation counter
-        // -----------------------------------------------------------------------
-        {
-            let mut sc = self.stagnation_counter.lock().await;
-            if response.phase == Phase::Act || response.phase == Phase::Verify {
-                *sc = 0;
-            } else {
-                *sc += 1;
-            }
+        let deltas_log = DeltasAppliedLog { phase: phase.clone(), deltas: deltas.clone(), results: delta_results.clone(), error: delta_error.clone() };
+        if let Ok(pretty) = serde_json::to_string_pretty(&deltas_log) {
+            std::fs::write(Self::log_path("deltas_applied", ctx.tick, "json"), pretty).ok();
         }
 
-        // Plan ticks are "free" — record credit for observability.
-        if response.phase == Phase::Plan {
-            let mut credits = self.plan_tick_credits.lock().await;
-            *credits += 1;
+        std::fs::write(Self::log_path("act_output", ctx.tick, "txt"), &act_output).ok();
+        std::fs::write(Self::log_path("verify_output", ctx.tick, "txt"), &verify_output).ok();
+        std::fs::write(Self::log_path("exit_check_output", ctx.tick, "txt"), &exit_check_output).ok();
+
+        if let Some(_resp) = response {
+            // Rationale history is intentionally not retained or sent.
         }
 
-        // -----------------------------------------------------------------------
-        // 6. Score
-        // -----------------------------------------------------------------------
-        let cargo_now: Option<CargoReport> = {
-            let r = parse_cargo_json(&bash_output);
-            if response.phase == Phase::Verify || r.error_count > 0 || r.warning_count > 0 {
-                Some(r)
-            } else {
-                None
-            }
+        state.current_phase = phase.next();
+
+        let snapshot = StateSnapshot { current_phase: &state.current_phase, tick: state.tick, rationale_history: state.rationale_history.iter().cloned().collect() };
+        if let Ok(pretty) = serde_json::to_string_pretty(&snapshot) {
+            std::fs::write(Self::log_path("state_snapshot", ctx.tick, "json"), pretty).ok();
+        }
+
+        let summary = if exit_ok {
+            format!("phase={} exit_ok=true", phase)
+        } else if let Some(err) = delta_error {
+            format!("phase={} error={}", phase, err)
+        } else {
+            format!("phase={} exit_ok=false", phase)
         };
 
-        let cargo_prev = self.prev_cargo_report.lock().await.clone();
-
-        let total_patch_lines: usize = response.deltas.iter().map(|d| {
-            if let crate::ir::CodeDelta::ApplyPatch { patch } = d {
-                patch_line_count(patch)
-            } else {
-                0
-            }
-        }).sum();
-
-        let signals = RewardSignals {
-            exit_ok,
-            act_failed,
-            cargo_now: cargo_now.clone(),
-            cargo_prev,
-            patch_lines: total_patch_lines,
-            stagnation: stagnation_count,
-        };
-
-        let breakdown = score::compute_reward(&signals);
-        let reward = breakdown.total_f64;
-        let advanced = exit_ok && !act_failed;
-        let plan_credits = *self.plan_tick_credits.lock().await;
-
-        if cargo_now.is_some() {
-            *self.prev_cargo_report.lock().await = cargo_now;
-        }
-        *self.prev_gap_count.lock().await = gap_count_now;
-
-        let summary = format!(
-            "tick={} phase={} exit_ok={} act_failed={} stagnation={} plan_credits={} reward=[{}]",
-            ctx.tick, response.phase, exit_ok, act_failed, stagnation_count, plan_credits, breakdown,
-        );
-        println!("[agent] {}", summary);
-
-        Ok(PipelineOutcome { reward, summary, advanced })
+        Ok(PipelineOutcome { reward: 0.0, summary, advanced: exit_ok })
     }
+}
+
+fn allowed_delta(phase: &Phase, delta: &Delta) -> bool {
+    match phase {
+        Phase::Observe => matches!(delta, Delta::ReadFile { .. } | Delta::ListDir { .. } | Delta::ReadCommand { .. }),
+        Phase::Plan => false,
+        Phase::Act => matches!(delta, Delta::WriteFile { .. } | Delta::ReplaceText { .. } | Delta::DeleteFile { .. }),
+        Phase::Verify => matches!(delta, Delta::ReadFile { .. } | Delta::ListDir { .. } | Delta::ReadCommand { .. }),
+    }
+}
+
+fn delta_schema() -> String {
+    r#"[
+  { "type": "read_file", "path": "relative/or/absolute" },
+  { "type": "list_dir", "path": "relative/or/absolute" },
+  { "type": "read_command", "command": "rg", "args": ["pattern", "path"] },
+  { "type": "write_file", "path": "relative/or/absolute", "content": "full file content" },
+  { "type": "replace_text", "path": "relative/or/absolute", "find": "old", "replace": "new" },
+  { "type": "delete_file", "path": "relative/or/absolute" }
+]"#
+        .to_string()
+}
+
+fn indent_block(text: &str, spaces: usize) -> String {
+    let pad = " ".repeat(spaces);
+    if text.trim().is_empty() {
+        return format!("{}(empty)", pad);
+    }
+    text.lines().map(|l| format!("{}{}", pad, l)).collect::<Vec<_>>().join("\n")
+}
+
+fn filter_deltas_for_phase(phase: &Phase, deltas: &[Delta]) -> (Vec<Delta>, Vec<DeltaOutcome>) {
+    let mut allowed = Vec::new();
+    let mut ignored = Vec::new();
+
+    for delta in deltas {
+        if allowed_delta(phase, delta) {
+            allowed.push(delta.clone());
+        } else {
+            ignored.push(DeltaOutcome {
+                delta: delta.clone(),
+                status: "ignored".into(),
+                message: format!("ignored delta not allowed in phase {}", phase),
+            });
+        }
+    }
+
+    (allowed, ignored)
+}
+
+fn tool_protocol() -> String {
+    "apply_patch -> write_file | replace_text | delete_file (Act phase only)\n\
+bash (read-only) -> read_command (Observe/Verify phases only)\n\
+Notes: free-form shell is not allowed; use read_command with explicit command+args."
+        .to_string()
 }

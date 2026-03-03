@@ -1,0 +1,18 @@
+[list_dir /workspace/ai_sandbox/canon/small_rust_project]
+Cargo.toml
+src
+[list_dir /workspace/ai_sandbox/canon/small_rust_project/src]
+main.rs
+[read_file /workspace/ai_sandbox/canon/small_rust_project/Cargo.toml]
+[package]
+name = "small_rust_project"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+[read_file /workspace/ai_sandbox/canon/small_rust_project/src/main.rs]
+fn main() {
+    println!("Hello, world!");
+}
+[read_command rg small_rust_project Cargo.toml]
+    "small_rust_project",

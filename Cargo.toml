@@ -9,6 +9,7 @@ members = [
   "canon",
   "canon-analyzer",
   "canon-projection", "canon-agent",
+    "small_rust_project",
 ]
 exclude = [
   "test_projects",

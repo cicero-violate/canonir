@@ -32,7 +32,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 
-const RESPONSE_TIMEOUT_SECS: u64 = 120;
+const RESPONSE_TIMEOUT_SECS: u64 = 20;
 
 // ---------------------------------------------------------------------------
 // Public error type

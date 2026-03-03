@@ -6,6 +6,6 @@ exit_check_command     = "cd /workspace/ai_sandbox/canon && cargo run -p orchest
 [[agents.cards]]
 agent_url = "https://chatgpt.com/gg/699d3878fbd0819a9d73741b03e8128e"
 agent_id = ""
-role = ""
-goal = ""
+role = "GENERIC_AGENT_ROLE.md"
+goal = "AGENT_GOAL.md"
 tool_capabilities = ["apply_patch", "bash"]

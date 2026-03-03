@@ -1,2 +1,0 @@
-[apply_patch] ✓ applied patch to:
-  canon-capture/src/capture/mir/expr.rs

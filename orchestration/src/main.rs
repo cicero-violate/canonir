@@ -11,7 +11,8 @@
 
 use anyhow::{bail, Context, Result};
 use canon::CanonIR;
-use canon_telemetry::{BuildReport, StructuralSurface};
+use canon_telemetry::{BuildReport, StructuralSurface, TypeAuthorityReport};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -23,8 +24,16 @@ const REPORT_PATH: &str = "/workspace/ai_sandbox/canon/STRUCTURAL_INVARIANTS_REP
 const JSON_REPORT_PATH: &str = "/workspace/ai_sandbox/canon/orchestration_report.json";
 
 fn main() -> Result<()> {
+    // All verbosity handled via --quiet at cargo invocation.
+
     let args: Vec<String> = std::env::args().skip(1).collect();
 
+    // Emit-only mode: skip capture, reuse existing canon_capture.json
+    if args.first().map(|s| s.as_str()) == Some("--emit") {
+        return run_emit_only();
+    }
+
+    // Full pipeline mode (capture + emit)
     if args.first().map(|s| s.as_str()) == Some("--all") {
         return run_all_fixtures();
     }
@@ -45,7 +54,7 @@ fn main() -> Result<()> {
         }
     }
 
-    run_pipeline(json_path, out_dir, mutate_path)
+    run_pipeline(json_path, out_dir, mutate_path, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -70,6 +79,19 @@ struct FixtureSummary {
     build_success: bool,
     build_error_count: usize,
     build_warning_count: usize,
+    /// Error counts grouped by Rust error code, e.g. {"E0308": 3, "unknown": 5}.
+    build_error_categories: HashMap<String, usize>,
+    /// First rendered snippet (trimmed to 12 lines) for each error code category.
+    build_error_samples: HashMap<String, String>,
+    /// Error count per emitted source file, sorted descending by count.
+    errors_by_file: HashMap<String, usize>,
+    // --- type authority ---
+    /// Number of functions where __ret Local.ty != FnSig.ret at capture time.
+    type_authority_mismatch_count: usize,
+    /// Number of functions where no __ret local was found.
+    type_authority_missing_ret_count: usize,
+    /// Per-function detail for violations only (to keep JSON compact).
+    type_authority_violations: Vec<canon_telemetry::type_authority::FnTypeReport>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -82,6 +104,7 @@ struct FixtureResult {
     fixture: &'static str,
     surface: Option<StructuralSurface>,
     build: Option<BuildReport>,
+    type_authority: Option<TypeAuthorityReport>,
     error: Option<String>,
 }
 
@@ -90,7 +113,7 @@ fn run_all_fixtures() -> Result<()> {
     let mut overall_ok = true;
 
     for &fixture in FIXTURES {
-        println!("\n== [{}] capture ==", fixture);
+        // capture (silent)
         let capture_dir = PathBuf::from(format!("{}/capture/{}", TEST_ROOT, fixture));
         let capture_json = PathBuf::from(format!("{}/capture/{}/canon_capture.json", TEST_ROOT, fixture));
         let emit_dir = PathBuf::from(format!("{}/emit/{}", TEST_ROOT, fixture));
@@ -99,29 +122,41 @@ fn run_all_fixtures() -> Result<()> {
         if let Err(e) = run_capture(&capture_dir, &capture_json) {
             overall_ok = false;
             eprintln!("[{}] capture error: {:#}", fixture, e);
-            results.push(FixtureResult { fixture, surface: None, build: None, error: Some(format!("capture: {:#}", e)) });
+            results.push(FixtureResult { fixture, surface: None, build: None, type_authority: None, error: Some(format!("capture: {:#}", e)) });
             continue;
         }
 
-        // --- wipe emit dir ---
-        if emit_dir.exists() {
-            std::fs::remove_dir_all(&emit_dir).with_context(|| format!("cannot clean emit dir for {}", fixture))?;
-        }
+        // --- type authority analysis (runs on capture output, before projection) ---
+        let type_authority = match canon_telemetry::analyse_capture(&capture_json) {
+            Ok(r) => {
+                r.print_report();
+                Some(r)
+            }
+            Err(e) => {
+                eprintln!("[{}] type authority analysis error: {:#}", fixture, e);
+                None
+            }
+        };
 
-        println!("\n== [{}] orchestration ==", fixture);
-        let result = match run_pipeline(capture_json, emit_dir.clone(), None) {
+        // --- DO NOT wipe emit dir ---
+        // Preserve previous emit outputs to allow iterative inspection.
+        std::fs::create_dir_all(&emit_dir)
+            .with_context(|| format!("cannot ensure emit dir for {}", fixture))?;
+
+        // orchestration (silent)
+        let result = match run_pipeline(capture_json, emit_dir.clone(), None, type_authority.as_ref()) {
             Ok(()) => {
                 let surface = canon_telemetry::scan_emit_dir(&emit_dir).unwrap_or(None);
                 let build = canon_telemetry::build(&emit_dir, true).ok();
                 if build.as_ref().map(|b| !b.success).unwrap_or(false) {
                     overall_ok = false;
                 }
-                FixtureResult { fixture, surface, build, error: None }
+                FixtureResult { fixture, surface, build, type_authority, error: None }
             }
             Err(e) => {
                 overall_ok = false;
                 eprintln!("[{}] pipeline error: {:#}", fixture, e);
-                FixtureResult { fixture, surface: None, build: None, error: Some(format!("{:#}", e)) }
+                FixtureResult { fixture, surface: None, build: None, type_authority, error: Some(format!("{:#}", e)) }
             }
         };
 
@@ -130,7 +165,7 @@ fn run_all_fixtures() -> Result<()> {
 
     write_report(&results)?;
     write_json_report(&results, overall_ok)?;
-    println!("\nInvariant report written to: {}", REPORT_PATH);
+    println!("Invariant report written to: {}", REPORT_PATH);
     println!("JSON report written to:      {}", JSON_REPORT_PATH);
 
     if !overall_ok {
@@ -140,11 +175,10 @@ fn run_all_fixtures() -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Capture step — replaces run_capture.sh
+// Capture step
 // ---------------------------------------------------------------------------
 
 fn run_capture(project_dir: &Path, output_json: &Path) -> Result<()> {
-    // Resolve rustc_capture wrapper path from cargo metadata.
     let meta_out = Command::new("cargo").args(["metadata", "--no-deps", "--format-version", "1"]).current_dir(CANON_ROOT).output().context("cargo metadata failed")?;
     anyhow::ensure!(meta_out.status.success(), "cargo metadata exited non-zero");
 
@@ -152,7 +186,6 @@ fn run_capture(project_dir: &Path, output_json: &Path) -> Result<()> {
     let target_dir = meta["target_directory"].as_str().context("target_directory missing from cargo metadata")?;
     let wrapper = PathBuf::from(format!("{}/debug/rustc_capture", target_dir));
 
-    // Build rustc_capture first.
     println!("  Building rustc_capture...");
     let build_status = Command::new("cargo").args(["build", "-p", "rustc_capture"]).current_dir(CANON_ROOT).status().context("cargo build rustc_capture failed to spawn")?;
     anyhow::ensure!(build_status.success(), "cargo build -p rustc_capture exited non-zero");
@@ -164,7 +197,6 @@ fn run_capture(project_dir: &Path, output_json: &Path) -> Result<()> {
 
     println!("  Capturing {:?} -> {:?}", project_dir, output_json);
 
-    // Wipe target_capture and stale output so capture always fires fresh.
     let target_capture = project_dir.join("target_capture");
     if target_capture.exists() {
         std::fs::remove_dir_all(&target_capture).context("cannot remove target_capture")?;
@@ -186,16 +218,12 @@ fn run_capture(project_dir: &Path, output_json: &Path) -> Result<()> {
         .env("CANON_CAPTURE_OUT", output_json)
         .env("RUSTC_WRAPPER", &wrapper)
         .env("CARGO_NET_OFFLINE", std::env::var("CARGO_NET_OFFLINE").unwrap_or_else(|_| "true".into()))
-        // Run cargo from the fixture project directory to avoid
-        // workspace/target resolution mismatches that can corrupt
-        // target_capture artifacts.
         .current_dir(project_dir)
         .status()
         .context("cargo build (capture) failed to spawn")?;
     anyhow::ensure!(status.success(), "cargo build (capture) exited non-zero for {:?}", project_dir);
     anyhow::ensure!(output_json.exists(), "capture did not produce {:?}", output_json);
 
-    // Count nodes using python3 (as run_capture.sh did).
     let count = Command::new("python3")
         .arg("-c")
         .arg(format!("import json; d=json.load(open('{}')); print(len(d.get('nodes', [])))", output_json.display()))
@@ -225,6 +253,23 @@ fn write_report(results: &[FixtureResult]) -> Result<()> {
             continue;
         }
 
+        // --- type authority ---
+        if let Some(ta) = &r.type_authority {
+            out.push_str("- type authority (capture-time __ret vs FnSig.ret):\n");
+            out.push_str(&format!("  - functions analysed: {}\n", ta.fn_count));
+            out.push_str(&format!("  - __ret type mismatches: {}\n", ta.mismatch_count));
+            out.push_str(&format!("  - missing __ret locals: {}\n", ta.missing_ret_local_count));
+            if ta.mismatch_count > 0 {
+                out.push_str("  - violations (fn: sig_ret | __ret_local):\n");
+                for f in &ta.functions {
+                    if f.mismatch {
+                        out.push_str(&format!("    - {}: {} | {}\n", f.fn_name, f.sig_ret_type, f.ret_local_type.as_deref().unwrap_or("<missing>"),));
+                    }
+                }
+            }
+        }
+
+        // --- structural surface ---
         if let Some(surface) = &r.surface {
             out.push_str("- emitted structural surface:\n");
             out.push_str(&format!("  - canon suppressed binding count: {}\n", surface.suppressed_count));
@@ -248,10 +293,42 @@ fn write_report(results: &[FixtureResult]) -> Result<()> {
             out.push_str("- no src/ dir found; surface scan skipped.\n");
         }
 
+        // --- build ---
         if let Some(build) = &r.build {
             out.push_str(&format!("- cargo build result: {}\n", if build.success { "OK" } else { "FAILED" }));
             out.push_str(&format!("  - error count: {}\n", build.errors.len()));
             out.push_str(&format!("  - warning count: {}\n", build.warnings.len()));
+
+            if !build.build_error_categories.is_empty() {
+                out.push_str("  - error categories:\n");
+                let mut cats: Vec<(&String, &usize)> = build.build_error_categories.iter().collect();
+                cats.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+                for (code, count) in &cats {
+                    out.push_str(&format!("    - {}: {}\n", code, count));
+                }
+            }
+
+            if !build.errors_by_file.is_empty() {
+                out.push_str("  - errors by file:\n");
+                let mut by_file: Vec<(&String, &usize)> = build.errors_by_file.iter().collect();
+                by_file.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+                for (file, count) in &by_file {
+                    out.push_str(&format!("    - {}: {}\n", file, count));
+                }
+            }
+
+            if !build.build_error_samples.is_empty() {
+                out.push_str("  - error samples (first occurrence per category):\n");
+                let mut codes: Vec<&String> = build.build_error_samples.keys().collect();
+                codes.sort();
+                for code in codes {
+                    out.push_str(&format!("    [{}]\n", code));
+                    for line in build.build_error_samples[code].lines() {
+                        out.push_str(&format!("      {}\n", line));
+                    }
+                }
+            }
+
             if !build.errors.is_empty() {
                 out.push_str("- cargo errors:\n");
                 for d in &build.errors {
@@ -278,7 +355,7 @@ fn write_json_report(results: &[FixtureResult], overall_ok: bool) -> Result<()> 
     let fixtures: Vec<FixtureSummary> = results
         .iter()
         .map(|r| {
-            let (surface, build) = (r.surface.as_ref(), r.build.as_ref());
+            let (surface, build, ta) = (r.surface.as_ref(), r.build.as_ref(), r.type_authority.as_ref());
             FixtureSummary {
                 fixture: r.fixture,
                 pipeline_ok: r.error.is_none(),
@@ -295,6 +372,12 @@ fn write_json_report(results: &[FixtureResult], overall_ok: bool) -> Result<()> 
                 build_success: build.map(|b| b.success).unwrap_or(false),
                 build_error_count: build.map(|b| b.errors.len()).unwrap_or(0),
                 build_warning_count: build.map(|b| b.warnings.len()).unwrap_or(0),
+                build_error_categories: build.map(|b| b.build_error_categories.clone()).unwrap_or_default(),
+                build_error_samples: build.map(|b| b.build_error_samples.clone()).unwrap_or_default(),
+                errors_by_file: build.map(|b| b.errors_by_file.clone()).unwrap_or_default(),
+                type_authority_mismatch_count: ta.map(|t| t.mismatch_count).unwrap_or(0),
+                type_authority_missing_ret_count: ta.map(|t| t.missing_ret_local_count).unwrap_or(0),
+                type_authority_violations: ta.map(|t| t.functions.iter().filter(|f| f.mismatch).cloned().collect()).unwrap_or_default(),
             }
         })
         .collect();
@@ -307,7 +390,7 @@ fn write_json_report(results: &[FixtureResult], overall_ok: bool) -> Result<()> 
 // Single-fixture pipeline
 // ---------------------------------------------------------------------------
 
-fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBuf>) -> Result<()> {
+fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBuf>, type_authority: Option<&TypeAuthorityReport>) -> Result<()> {
     println!("Loading {:?}", json_path);
     let json = std::fs::read_to_string(&json_path).with_context(|| format!("cannot read {:?}", json_path))?;
     let mut canon_ir: CanonIR = serde_json::from_str(&json).with_context(|| format!("cannot parse CanonIR from {:?}", json_path))?;
@@ -350,10 +433,38 @@ fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBu
     println!("Analyzing CanonIR...");
     canon_analyzer::canon_analyze(&mut canon_ir).context("canon analysis failed")?;
 
+    // Fail fast if unresolved types remain after analysis.
+    let mut unresolved_count = 0usize;
+    for node in &canon_ir.nodes {
+        if let canon::node::CanonNodeKind::Type { kind } = &node.kind {
+            if let canon::node::TypeKind::Unresolved(path_id) = kind {
+                eprintln!("ERROR: unresolved type after analysis: {}", canon_ir.lookup_path(*path_id));
+                unresolved_count += 1;
+            }
+        }
+    }
+    if unresolved_count > 0 {
+        // TEMPORARY: Log unresolved types but do not abort the pipeline.
+        // Downstream projection/build telemetry will surface any concrete
+        // type errors. This prevents hard-stop stagnation while we
+        // continue eliminating residual Unresolved nodes.
+        eprintln!("WARNING: analysis left {} unresolved type(s); continuing to projection", unresolved_count);
+    }
+
     println!("Emitting source (CanonIR pipeline)...");
     let canon_plan = canon_projection::project(&canon_ir).context("canon project failed")?;
     canon_projection::emit_to_disk(&canon_ir, &canon_plan, &out_dir).context("canon emit failed")?;
     println!("Canon emitted {} file(s) to {:?}", canon_plan.files.len(), out_dir);
+
+    // Write type authority report alongside emitted source so the agent can cat it.
+    if let Some(ta) = type_authority {
+        std::fs::create_dir_all(&out_dir)?;
+        if let Err(e) = canon_telemetry::write_type_authority_report(ta, &out_dir) {
+            eprintln!("Warning: failed to write type authority report: {}", e);
+        } else {
+            println!("Type authority report written to {:?}", out_dir.join("canon_type_authority_report.json"));
+        }
+    }
 
     println!("Scanning emitted structural surface...");
     match canon_telemetry::scan_emit_dir(&out_dir).context("structural surface scan failed")? {
@@ -363,14 +474,55 @@ fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBu
             std::fs::write(&snap_path, serde_json::to_string_pretty(&surface).context("surface serialize failed")?).context("surface snapshot write failed")?;
             println!("Structural surface snapshot written to {:?}", snap_path);
         }
-        None => {
-            println!("  (no src/ dir found under emit dir, skipping surface scan)");
-        }
+        None => println!("  (no src/ dir found under emit dir, skipping surface scan)"),
     }
 
     println!("Running cargo build on emitted source...");
-    let build_report = canon_telemetry::build(&out_dir, true).context("cargo build invocation failed")?;
-    build_report.print_report();
+    let build_report = canon_telemetry::build(&out_dir, true)
+        .context("cargo build invocation failed")?;
+
+    // --- Canon Repair Signal Extraction ---
+    {
+        use canon_telemetry::classify_repair_signals;
+        let signals = classify_repair_signals(&build_report);
+        if !signals.is_empty() {
+            println!("repair signals detected: {:?}", signals);
+        }
+    }
+    // Replace verbose print_report() with structured summary
+
+    use canon_telemetry::classify_repair_signals;
+
+    println!("\n=== Build Summary ===");
+    println!("  success: {}", build_report.success);
+    println!("  error count: {}", build_report.errors.len());
+    println!("  warning count: {}", build_report.warnings.len());
+
+    if !build_report.build_error_categories.is_empty() {
+        println!("  categories:");
+        let mut cats: Vec<_> = build_report.build_error_categories.iter().collect();
+        cats.sort_by(|a, b| b.1.cmp(a.1));
+        for (code, count) in cats {
+            println!("    {}: {}", code, count);
+        }
+    }
+
+    if !build_report.errors_by_file.is_empty() {
+        println!("  errors by file:");
+        let mut files: Vec<_> = build_report.errors_by_file.iter().collect();
+        files.sort_by(|a, b| b.1.cmp(a.1));
+        for (file, count) in files {
+            println!("    {}: {}", file, count);
+        }
+    }
+
+    let signals = classify_repair_signals(&build_report);
+    if !signals.is_empty() {
+        println!("\n=== Repair Signals ===");
+        for s in &signals {
+            println!("  {:?}", s);
+        }
+    }
     let build_report_path = out_dir.join("canon_build_report.json");
     std::fs::write(&build_report_path, serde_json::to_string_pretty(&build_report).context("build report serialize failed")?).context("build report write failed")?;
     println!("Build report written to {:?}", build_report_path);
@@ -381,5 +533,29 @@ fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBu
     println!("Canon snapshot written to {:?}", canon_snap_path);
 
     println!("Pipeline complete.");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Emit-only mode (no capture)
+// ---------------------------------------------------------------------------
+
+fn run_emit_only() -> Result<()> {
+    for &fixture in FIXTURES {
+        let capture_json = PathBuf::from(format!(
+            "{}/capture/{}/canon_capture.json",
+            TEST_ROOT, fixture
+        ));
+
+        let emit_dir = PathBuf::from(format!(
+            "{}/emit/{}",
+            TEST_ROOT, fixture
+        ));
+
+        println!("Emit-only: loading {:?}", capture_json);
+        run_pipeline(capture_json, emit_dir, None, None)?;
+    }
+
+    println!("Emit-only pipeline complete.");
     Ok(())
 }

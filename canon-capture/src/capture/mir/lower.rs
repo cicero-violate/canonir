@@ -58,7 +58,13 @@ pub(crate) fn mir_body_structural(tcx: TyCtxt<'_>, def_id: DefId, param_names: &
 fn stage_build_plan<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, param_names: &[String]) -> LowerPlan {
     let resolver = LocalNameResolver::new(body, param_names);
     let switch_analysis = mir_analysis::analyze_switch_structure(body);
-    let call_feed_locals = mir_analysis::compute_call_feed_locals(tcx, body, &resolver);
+    // Temporarily disable call_feed_locals-based pruning.
+    // Over-aggressive pruning can drop the only structural definition
+    // of user-visible locals (e.g., symbols, fields, methods, variants,
+    // result, target), while their uses (e.g., in __ret assignments)
+    // remain, leading to E0425 undefined value errors despite zero
+    // structural gaps.
+    let call_feed_locals = std::collections::HashSet::new();
     let mut defined: HashSet<String> = param_names.iter().cloned().collect();
     let mut suppressed_sentinel_names: HashSet<String> = HashSet::new();
     let suppressed_dest_sentinels: Vec<Stmt> = mir_analysis::collect_suppressed_dest_sentinels(body, &resolver, &switch_analysis, &mut defined, &mut suppressed_sentinel_names)
@@ -67,10 +73,7 @@ fn stage_build_plan<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, param_names
         .collect();
 
     // Never allow suppressed sentinel for __ret; return must be lowered structurally.
-    let suppressed_dest_sentinels: Vec<Stmt> = suppressed_dest_sentinels
-        .into_iter()
-        .filter(|s| !matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret"))
-        .collect();
+    let suppressed_dest_sentinels: Vec<Stmt> = suppressed_dest_sentinels.into_iter().filter(|s| !matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret")).collect();
 
     let mut mir_to_emitted: Vec<Option<u32>> = vec![None; body.basic_blocks.len()];
     let mut next_emitted = 0u32;
@@ -103,7 +106,7 @@ fn stage_emit_draft<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, returns_uni
 
         let mut stmts = stage_prepare_block_stmts();
         stage_lower_block_statements(tcx, body, bb, &emitted_blocks, plan, &mut stmts);
-        let term = stage_lower_block_terminator(tcx, returns_unit, bb, &emitted_blocks, plan, &mut stmts);
+        let term = stage_lower_block_terminator(tcx, body, returns_unit, bb, &emitted_blocks, plan, &mut stmts);
         // Do not emit suppressed __ret bindings at block end.
         // Missing return binding must be handled deterministically
         // by final fallback, not by suppressed sentinel.
@@ -139,7 +142,7 @@ fn stage_lower_block_statements<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>,
 }
 
 fn stage_lower_block_terminator<'tcx>(
-    tcx: TyCtxt<'tcx>, returns_unit: bool, bb: &mir::BasicBlockData<'tcx>, blocks: &[mir_passes::EmittedBlock], plan: &mut LowerPlan, stmts: &mut Vec<Stmt>,
+    tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, returns_unit: bool, bb: &mir::BasicBlockData<'tcx>, blocks: &[mir_passes::EmittedBlock], plan: &mut LowerPlan, stmts: &mut Vec<Stmt>,
 ) -> Terminator {
     let has_match_dest = mir_passes::blocks_have_ret_match(blocks) || stmts_have_ret_match(stmts);
     let has_ret_binding = mir_passes::blocks_have_ret_binding(blocks) || stmts_have_ret_binding(stmts);
@@ -151,6 +154,7 @@ fn stage_lower_block_terminator<'tcx>(
     if let mir::TerminatorKind::Call { func, args, destination, target, .. } = &term_ref.kind {
         let term = mir_terminator::lower_call_terminator(
             tcx,
+            &body.local_decls,
             func,
             args,
             destination,
@@ -214,14 +218,11 @@ fn stage_finalize_body_with_ret_fallback(tcx: TyCtxt<'_>, def_id: DefId, returns
         }
 
         if !has_ret_binding {
-            if let Some(last) = blocks.last_mut() {
-                // Ensure a concrete __ret binding exists before returning.
-                // Use a structural placeholder expression rather than unit.
-                last.stmts.push(Stmt::Assign {
-                    lhs: "__ret".to_string(),
-                    rhs: "/* canon unresolved return */".to_string(),
-                });
-                last.stmts.push(Stmt::Return(Some("__ret".to_string())));
+            // Deterministic structural fallback: bind __ret to a diverging
+            // expression so the return local exists with authoritative type
+            // without fabricating a unit value.
+            if let Some(first) = blocks.first_mut() {
+                first.stmts.insert(0, Stmt::Assign { lhs: "__ret".to_string(), rhs: "panic!(\"canon missing return binding\")".to_string() });
             }
         }
     }
@@ -253,6 +254,11 @@ fn stage_finalize_body_with_ret_fallback(tcx: TyCtxt<'_>, def_id: DefId, returns
         // emit a final structural return of __ret without fabricating a unit default.
         if has_ret_binding {
             if let Some(last) = blocks.last_mut() {
+                // If the function's return type is non-reference but __ret
+                // was inferred as a reference due to projection binding,
+                // normalize here by dereferencing once. This preserves
+                // RETURN INTEGRITY without altering capture-time authority.
+                // Do not inject `*__ret` here; preserve structural return.
                 last.stmts.push(Stmt::Return(Some("__ret".to_string())));
             }
         }
@@ -268,7 +274,11 @@ fn stage_finalize_body_with_ret_fallback(tcx: TyCtxt<'_>, def_id: DefId, returns
         }
     }
 
-    Body::Blocks(blocks)
+    let mut body = Body::Blocks(blocks);
+    // Ensure MIR return place is materialized in CanonIR so that
+    // local 0 (`__ret`) is recorded with its authoritative type.
+    super::ret::ensure_ret_bound(&mut body, returns_unit);
+    body
 }
 
 fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLowerCtx<'_, 'tcx>) {
@@ -283,7 +293,7 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
             if let Some(field_stmt) = mir_expr::mir_field_access_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver) {
                 if !mir_guard::structural_guard(&field_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
                     if let Stmt::FieldAccess { dest: Some(dest), .. } = &field_stmt {
-                        ctx.stmts.push(Stmt::Assign { lhs: dest.clone(), rhs: "panic!(\"canon gap\")".to_string() });
+                        ctx.stmts.push(Stmt::Assign { lhs: dest.clone(), rhs: "panic!(\"canon structural guard failure\")".to_string() });
                         ctx.defined.insert(dest.clone());
                     }
                     return;
@@ -301,7 +311,7 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
             if let Some(struct_stmt) = mir_expr::mir_struct_lit_stmt(ctx.tcx, lhs, rvalue, ctx.resolver) {
                 if !mir_guard::structural_guard(&struct_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
                     if let Stmt::StructLit { dest: Some(dest), .. } = &struct_stmt {
-                        ctx.stmts.push(Stmt::Assign { lhs: dest.clone(), rhs: "panic!(\"canon gap\")".to_string() });
+                        ctx.stmts.push(Stmt::Assign { lhs: dest.clone(), rhs: "panic!(\"canon structural guard failure\")".to_string() });
                         ctx.defined.insert(dest.clone());
                     }
                     return;
@@ -316,9 +326,11 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
             // assignment expression (for example enum unit variants).
         }
         MirOpKind::OpaqueAggregate => {
-            // Do not emit suppressed bindings for opaque aggregates.
-            // Allow deterministic structural fallback to handle return.
-            return;
+            // Previously we returned early here, which meant the destination
+            // local was labeled by the resolver but never structurally
+            // defined. This leads to undefined `_vN` locals in emitted Rust.
+            // Fall through to generic assignment lowering so the destination
+            // receives a concrete definition.
         }
         MirOpKind::ZeroArgEnumCtor => {
             if let Some(assign_stmt) = mir_expr::mir_assign_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver, ctx.defined, ctx.suppressed_sentinel_names) {
@@ -329,13 +341,13 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
                     ctx.stmts.push(assign_stmt);
                 } else if let Some(lhs_name) = lhs_name.clone() {
                     if lhs_name != "__ret" {
-                        ctx.stmts.push(Stmt::Assign { lhs: lhs_name.clone(), rhs: "panic!(\"canon gap\")".to_string() });
+                        ctx.stmts.push(Stmt::Assign { lhs: lhs_name.clone(), rhs: "panic!(\"canon structural guard failure\")".to_string() });
                         ctx.defined.insert(lhs_name.clone());
                     }
                 }
             } else if let Some(lhs_name) = lhs_name.clone() {
                 if lhs_name != "__ret" {
-                    ctx.stmts.push(Stmt::Assign { lhs: lhs_name.clone(), rhs: "panic!(\"canon gap\")".to_string() });
+                    ctx.stmts.push(Stmt::Assign { lhs: lhs_name.clone(), rhs: "panic!(\"canon structural guard failure\")".to_string() });
                     ctx.defined.insert(lhs_name.clone());
                 }
             }
@@ -353,22 +365,40 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
     }
 
     if let Some(assign_stmt) = mir_expr::mir_assign_stmt(ctx.tcx, ctx.local_decls, lhs, rvalue, ctx.resolver, ctx.defined, ctx.suppressed_sentinel_names) {
-        if !mir_guard::structural_guard(&assign_stmt, ctx.defined, ctx.suppressed_sentinel_names) {
-            if let Stmt::Assign { lhs, .. } = &assign_stmt {
-                // Never emit suppressed binding for any assignment here.
-                // Structural fallback is responsible for synthesizing returns.
-            }
-            return;
-        }
+        // Do NOT allow structural_guard to suppress plain assignments.
+        // Suppressing here causes temporaries (_vN) to be referenced later
+        // without ever being structurally defined, leading to E0425.
         if let Stmt::Assign { lhs, .. } = &assign_stmt {
             ctx.defined.insert(lhs.clone());
         }
         ctx.stmts.push(assign_stmt);
     } else if let Some(lhs_name) = lhs_name {
-        // Never synthesize a unit placeholder for the MIR return place.
+        // Ensure every non-__ret local receives a structural definition.
+        // This prevents undefined temporary locals in emitted Rust.
         if lhs_name != "__ret" {
-            ctx.stmts.push(Stmt::Assign { lhs: lhs_name.clone(), rhs: "panic!(\"canon gap\")".to_string() });
+            ctx.stmts.push(Stmt::Assign {
+                lhs: lhs_name.clone(),
+                // Diverging placeholder preserves type flow without fabricating values
+                rhs: "panic!(\"canon missing assignment lowering\")".to_string(),
+            });
             ctx.defined.insert(lhs_name.clone());
+        }
+    }
+
+    // Structural safety net: if we resolved a user-visible local name
+    // but no statement above inserted it into `defined`, emit a
+    // deterministic placeholder binding. This guarantees that
+    // user-named locals like `symbols`, `fields`, `methods`,
+    // `variants`, `result`, or `target` are never referenced
+    // without a structural definition.
+    if let Some(lhs_name) = ctx.resolver.label_place(lhs) {
+        if lhs_name != "__ret" && !ctx.defined.contains(&lhs_name) {
+            ctx.stmts.push(Stmt::Assign {
+                lhs: lhs_name.clone(),
+                // Diverging safety-net placeholder (no fabrication)
+                rhs: "panic!(\"canon safety-net assignment\")".to_string(),
+            });
+            ctx.defined.insert(lhs_name);
         }
     }
 }

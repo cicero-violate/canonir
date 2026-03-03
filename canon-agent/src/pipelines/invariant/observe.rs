@@ -1,4 +1,4 @@
-//! Observe phase — run exit-check command and capture output.
+//! Verify phase helper — runs exit-check command.
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -9,14 +9,10 @@ pub struct ObserveResult {
     pub stdout: String,
 }
 
-/// Run the configured exit-check command in `cwd` and return its exit code + stdout.
+/// Run exit-check command in `cwd`.
+/// Uses `bash -c` because the command may contain pipes or redirects.
 pub fn run_exit_check(command: &str, cwd: &Path) -> Result<ObserveResult> {
-    let output = Command::new("bash")
-        .arg("-c")
-        .arg(command)
-        .current_dir(cwd)
-        .output()
-        .with_context(|| format!("failed to spawn exit-check: {}", command))?;
+    let output = Command::new("bash").arg("-c").arg(command).current_dir(cwd).output().with_context(|| format!("failed to spawn exit-check: {}", command))?;
 
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr);
