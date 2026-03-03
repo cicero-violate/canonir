@@ -21,7 +21,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  canon-agent show-graph <graph.json>");
         println!("  canon-agent run-pipeline <ir.json> <layout.json> <proposal.json> <outputs.json>");
         println!("  canon-agent run-agent <ir.json> <layout.json> <graph.json> <workspace>");
-        println!("  canon-agent run-invariant <cwd> [max_ticks=20]");
+        println!("  canon-agent run-multi-dag <cwd> [max_ticks=20]");
+        println!("  canon-agent run-capability <cwd>");
     };
 
     if args.len() < 2 {
@@ -101,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let addr = "127.0.0.1:9100".parse()?;
-            let bridge = ws_server::spawn(addr);
+            let bridge = ws_server::spawn(addr, 60);
 
             eprintln!("[main] starting run-agent loop");
             eprintln!("[main] workspace : {}", workspace.display());
@@ -123,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        "run-invariant" => {
+        "run-multi-dag" => {
             if args.len() < 3 {
                 usage();
                 return Ok(());
@@ -136,13 +137,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let max_ticks: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20);
 
             let addr = "127.0.0.1:9100".parse()?;
-            let bridge = ws_server::spawn(addr);
+            let config = canon_agent::pipelines::multi_dag::config::AgentConfig::load()?;
+            let bridge = ws_server::spawn(addr, config.response_timeout_secs);
 
-            let pipeline = canon_agent::pipelines::invariant::AgentPipeline::new(bridge);
+            let pipeline = canon_agent::pipelines::multi_dag::AgentPipeline::new(bridge);
 
             // InvariantPipeline operates purely on files — ir and layout are unused.
             let mut ir = SystemState::new(
-                CanonicalMeta { version: "0.1.0".into(), law_revision: Word::new("genesis").expect("valid word"), description: "invariant pipeline stub".into() },
+                CanonicalMeta { version: "0.1.0".into(), law_revision: Word::new("genesis").expect("valid word"), description: "multi-dag pipeline stub".into() },
+                VersionContract { current: "0.1.0".into(), compatible_with: vec![], migration_proofs: vec![] },
+                Project { name: Word::new("canon_agent").expect("valid word"), version: "0.1.0".into(), language: Language::Rust },
+            );
+            let mut layout = FileTopology::default();
+
+            use canon_agent::pipelines::Pipeline;
+            for tick in 1..=max_ticks {
+                let ctx = canon_agent::pipelines::PipelineContext {
+                    cwd: cwd.clone(),
+                    capture_dir: capture_dir.clone(),
+                    emit_dir: emit_dir.clone(),
+                    orchestration_bin: orchestration_bin.clone(),
+                    workspace: cwd[0].clone(),
+                    tick,
+                };
+
+                let outcome = pipeline.run_tick(&ctx, &mut ir, &mut layout).await?;
+                eprintln!("[main] tick {tick} done — {}", outcome.summary);
+                eprintln!("[main] reward={:.4} advanced={}", outcome.reward, outcome.advanced);
+
+                if outcome.advanced {
+                    eprintln!("[main] exit check passed — stopping");
+                    break;
+                }
+            }
+        }
+
+        "run-capability" => {
+            if args.len() < 3 {
+                usage();
+                return Ok(());
+            }
+            let cwd_root = PathBuf::from(&args[2]);
+            let cwd: Vec<PathBuf> = vec![cwd_root.clone()];
+            let capture_dir = cwd_root.join("test_projects/test_rust_projects/capture/repomap");
+            let emit_dir = cwd_root.join("test_projects/test_rust_projects/emit/repomap");
+            let orchestration_bin = cwd_root.join("target/debug/orchestration");
+            let max_ticks: u64 = 1;
+
+            let addr = "127.0.0.1:9100".parse()?;
+            let cap_config = canon_agent::pipelines::capability::config::CapabilityConfig::load()?;
+            let bridge = ws_server::spawn(addr, cap_config.response_timeout_secs);
+
+            let pipeline = canon_agent::pipelines::capability::CapabilityPipeline::new(bridge);
+
+            let mut ir = SystemState::new(
+                CanonicalMeta { version: "0.1.0".into(), law_revision: Word::new("genesis").expect("valid word"), description: "capability pipeline stub".into() },
                 VersionContract { current: "0.1.0".into(), compatible_with: vec![], migration_proofs: vec![] },
                 Project { name: Word::new("canon_agent").expect("valid word"), version: "0.1.0".into(), language: Language::Rust },
             );

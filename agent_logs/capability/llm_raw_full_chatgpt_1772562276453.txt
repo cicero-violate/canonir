@@ -1,0 +1,24 @@
+```json
+{
+  "tasks": [
+    {
+      "id": "t1.1.1.1.2",
+      "description": "List all files in canon-agent directory",
+      "deps": ["t1.1.1.1.1"],
+      "required_capabilities": ["file_read"]
+    },
+    {
+      "id": "t1.1.1.1.3",
+      "description": "Filter for key source files in canon-agent directory",
+      "deps": ["t1.1.1.1.2"],
+      "required_capabilities": ["file_read"]
+    },
+    {
+      "id": "t1.1.1.1.4",
+      "description": "Categorize identified files into source types",
+      "deps": ["t1.1.1.1.3"],
+      "required_capabilities": ["file_read"]
+    }
+  ]
+}
+```

@@ -1,0 +1,27 @@
+```json
+{
+  "tasks": [
+    {
+      "id": "t1",
+      "description": "Analyze current state of canon-agent framework and identify improvement opportunities.",
+      "deps": [],
+      "required_capabilities": ["file_read"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t2",
+      "description": "Refactor agent framework and create new multi-agent pipeline structure.",
+      "deps": ["t1"],
+      "required_capabilities": ["apply_patch", "cargo_build"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t3",
+      "description": "Implement GPU-accelerated function for multi-agent communication within the new pipeline.",
+      "deps": ["t2"],
+      "required_capabilities": ["create_node", "file_write"],
+      "node_type": "render"
+    }
+  ]
+}
+```

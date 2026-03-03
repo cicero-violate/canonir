@@ -1,0 +1,36 @@
+```json
+{
+  "tasks": [
+    {
+      "id": "t2",
+      "description": "Assess current state of canon-agent framework.",
+      "deps": ["t1"],
+      "required_capabilities": ["file_read"]
+    },
+    {
+      "id": "t3",
+      "description": "Review documentation and configuration files in canon-agent.",
+      "deps": ["t2"],
+      "required_capabilities": ["file_read"]
+    },
+    {
+      "id": "t4",
+      "description": "Evaluate performance of core functions in canon-agent.",
+      "deps": ["t2"],
+      "required_capabilities": ["file_read"]
+    },
+    {
+      "id": "t5",
+      "description": "Identify code quality issues and possible optimizations.",
+      "deps": ["t4"],
+      "required_capabilities": ["file_read"]
+    },
+    {
+      "id": "t6",
+      "description": "Analyze test coverage and identify missing tests.",
+      "deps": ["t3"],
+      "required_capabilities": ["file_read"]
+    }
+  ]
+}
+```

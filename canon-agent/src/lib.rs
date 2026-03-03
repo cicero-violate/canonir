@@ -7,10 +7,10 @@ pub mod io;
 pub mod llm_provider;
 pub mod meta;
 pub mod observe;
+pub mod parsers;
 pub mod reward;
 pub mod runner;
 pub mod slice;
-pub mod sse;
 pub mod ws_server;
 
 pub mod agent_commands;

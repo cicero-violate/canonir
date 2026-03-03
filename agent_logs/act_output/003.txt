@@ -1,3 +1,0 @@
-write_file /workspace/ai_sandbox/canon/small_rust_project/Cargo.toml (89 bytes)
-write_file /workspace/ai_sandbox/canon/small_rust_project/src/main.rs (45 bytes)
-replace_text /workspace/ai_sandbox/canon/Cargo.toml (1 replacements)

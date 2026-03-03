@@ -1,0 +1,20 @@
+```json
+{
+  "tasks": [
+    {
+      "id": "t1.1",
+      "description": "Analyze architecture of the canon-agent framework and identify possible areas for improvement.",
+      "deps": [],
+      "required_capabilities": ["file_read"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t1.2",
+      "description": "Review existing performance metrics for canon-agent and identify bottlenecks.",
+      "deps": [],
+      "required_capabilities": ["file_read"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t1.3",
+      "description": "Evaluate the modularity of the canon

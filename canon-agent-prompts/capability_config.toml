@@ -1,0 +1,42 @@
+[system]
+exit_check_command = "cd /workspace/ai_sandbox/canon && cargo run -p orchestration -- --all 2>&1"
+max_message_output_lines = 2000
+goal_file = "/workspace/ai_sandbox/canon/canon-agent-prompts/AGENT_GOAL.md"
+max_iterations = 50
+llm_retry_count = 3
+llm_retry_delay_secs = 5
+response_timeout_secs = 90
+max_concurrency = 4
+max_nodes = 64
+max_expand_iters = 6
+context_radius = 2
+max_depth = 6
+prune_unlinked = true
+
+[llm]
+tab_cooldown_ms = 4000
+# [[llm.endpoints]]
+# id = "gemini"
+# url = "https://gemini.google.com/app"
+# role_markdown = "GENERIC_AGENT_ROLE.md"
+# max_tabs = 5
+# reuse_tabs = true
+
+[[llm.endpoints]]
+id = "chatgpt"
+url = "https://chatgpt.com/?temporary-chat=true"
+role_markdown = "GENERIC_AGENT_ROLE.md"
+max_tabs = 4
+reuse_tabs = true
+
+[llm.roles.decompose.weights]
+chatgpt = 100
+
+[llm.roles.decompose]
+burst = 4
+
+[llm.roles.planner.weights]
+chatgpt = 100
+
+[llm.roles.planner]
+burst = 4

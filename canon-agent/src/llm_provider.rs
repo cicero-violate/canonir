@@ -159,7 +159,7 @@ impl JsonExtractor {
     }
 
     fn slice_json(text: &str) -> Result<&str, LlmProviderError> {
-        let end = text.find("```").ok_or(LlmProviderError::MissingJsonFence)?;
+        let end = text.rfind("```").ok_or(LlmProviderError::MissingJsonFence)?;
         Ok(text[..end].trim())
     }
 }

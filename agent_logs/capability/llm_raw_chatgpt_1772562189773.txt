@@ -1,0 +1,10 @@
+```json
+{
+  "tasks": [
+    {
+      "id": "t1.1.1.1",
+      "description": "Identify key components of the canon-agent codebase for architectural review.",
+      "deps": [],
+      "required_capabilities": ["file_read"]
+    },
+   

@@ -1,0 +1,76 @@
+      "required_capabilities": ["file_read"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t1.4.1",
+      "description": "Verify the adequacy of the unit test coverage for core components.",
+      "deps": ["t1.4"],
+      "required_capabilities": ["file_read"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t1.4.2",
+      "description": "Analyze integration test coverage and identify critical missing cases.",
+      "deps": ["t1.4"],
+      "required_capabilities": ["file_read"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t1.1.1.1",
+      "description": "Evaluate component isolation for render kernel optimization.",
+      "deps": ["t1.1.1"],
+      "required_capabilities": ["file_read"],
+      "node_type": "render"
+    },
+    {
+      "id": "t1.1.2.1",
+      "description": "Assess inter-component communication to minimize data transfer costs for GPU rendering.",
+      "deps": ["t1.1.2"],
+      "required_capabilities": ["file_read"],
+      "node_type": "render"
+    },
+    {
+      "id": "t1.2.1.1",
+      "description": "Profile latency-critical paths for GPU-optimized execution.",
+      "deps": ["t1.2.1"],
+      "required_capabilities": ["file_read"],
+      "node_type": "render"
+    },
+    {
+      "id": "t1.2.2.1",
+      "description": "Profile memory usage for GPU kernel adaptation.",
+      "deps": ["t1.2.2"],
+      "required_capabilities": ["file_read"],
+      "node_type": "render"
+    },
+    {
+      "id": "t1.3.1.1",
+      "description": "Test framework for modularity under GPU kernel execution constraints.",
+      "deps": ["t1.3.1"],
+      "required_capabilities": ["file_read"],
+      "node_type": "render"
+    },
+    {
+      "id": "t1.3.2.1",
+      "description": "Optimize component decoupling for GPU kernel deployment.",
+      "deps": ["t1.3.2"],
+      "required_capabilities": ["file_read"],
+      "node_type": "render"
+    },
+    {
+      "id": "t1.4.1.1",
+      "description": "Design test cases that can be parallelized for GPU execution.",
+      "deps": ["t1.4.1"],
+      "required_capabilities": ["file_read"],
+      "node_type": "render"
+    },
+    {
+      "id": "t1.4.2.1",
+      "description": "Enhance integration tests for GPU-based component validation.",
+      "deps": ["t1.4.2"],
+      "required_capabilities": ["file_read"],
+      "node_type": "render"
+    }
+  ]
+}
+```

@@ -19,7 +19,7 @@ pub mod refactor;
 pub mod reward;
 pub mod runner;
 pub mod slice;
-pub mod sse;
+pub mod parsers;
 pub mod ws_server;
 pub use bootstrap::{seed_capability_graph, seed_refactor_proposal};
 pub use call::{

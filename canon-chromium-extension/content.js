@@ -12,13 +12,17 @@
     s.onload = () => s.remove();
   }
 
-  injectScript("inject.js");
-
-  // Inject the correct request hook based on path
-  if (location.pathname.startsWith("/gg/")) {
-    injectScript("request_hook_group.js");
+  const host = location.hostname;
+  if (host === "gemini.google.com") {
+    injectScript("request_gemini.js");
   } else {
-    injectScript("request_hook_private.js");
+    injectScript("inject.js");
+    // Inject the correct request hook based on path
+    if (location.pathname.startsWith("/gg/")) {
+      injectScript("request_hook_group.js");
+    } else {
+      injectScript("request_hook_private.js");
+    }
   }
 
   // inject.js → content.js: bridge installed signal
@@ -45,6 +49,16 @@
     if (message?.type === "OUTBOUND_SUBMIT") {
       console.log("[CS] OUTBOUND_SUBMIT received, posting to page");
       window.postMessage({ type: "OUTBOUND_SUBMIT", payload: message.payload }, "*");
+      sendResponse({ ok: true });
+      return true;
+    }
+    if (message?.type === "NEW_CHAT") {
+      window.postMessage({ type: "NEW_CHAT" }, "*");
+      sendResponse({ ok: true });
+      return true;
+    }
+    if (message?.type === "TEMP_CHAT") {
+      window.postMessage({ type: "TEMP_CHAT" }, "*");
       sendResponse({ ok: true });
       return true;
     }

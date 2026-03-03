@@ -77,6 +77,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!tabId) { sendResponse({ ok: false, error: "no tabId" }); return true; }
 
   if (message?.type === "INBOUND_MESSAGE") {
+    try {
+      const payload = typeof message.payload === "string" ? message.payload : JSON.stringify(message.payload ?? "");
+      if (payload.includes("\"limit_modal\"") || payload.includes("\"limit_modal_action\"")) {
+        chrome.storage.local.set({
+          last_limit_event: payload,
+          last_limit_event_ts: Date.now()
+        });
+      }
+    } catch {}
     sendToRust({
       type:    "INBOUND_MESSAGE",
       tabId,
@@ -109,13 +118,17 @@ function handleRustMessage(msg) {
     chrome.tabs.create({ url: msg.url, active: false }, (tab) => {
       if (!tab?.id) return;
       const newTabId = tab.id;
+      // Prevent Chrome from discarding background ChatGPT tabs.
+      try {
+        chrome.tabs.update(newTabId, { autoDiscardable: false });
+      } catch {}
       if (reqId !== null) pendingOpenReqIds.set(newTabId, reqId);
 
       // Informational only
       chrome.tabs.onUpdated.addListener(function listener(id, changeInfo) {
         if (id !== newTabId) return;
         const url = changeInfo.url || "";
-        if (!url.startsWith("https://chatgpt.com")) return;
+        if (!(url.startsWith("https://chatgpt.com") || url.startsWith("https://gemini.google.com"))) return;
         chrome.tabs.onUpdated.removeListener(listener);
         sendToRust({ type: "TAB_OPENED", tabId: newTabId, url, reqId });
       });
@@ -130,11 +143,51 @@ function handleRustMessage(msg) {
     return;
   }
 
+  if (msg?.type === "NEW_CHAT") {
+    const targetTabId = msg.tabId;
+    if (!targetTabId) return;
+    sendToTab(targetTabId, { type: "NEW_CHAT" });
+    return;
+  }
+
+  if (msg?.type === "TEMP_CHAT") {
+    const targetTabId = msg.tabId;
+    if (!targetTabId) return;
+    sendToTab(targetTabId, { type: "TEMP_CHAT" });
+    return;
+  }
+
+  if (msg?.type === "CLOSE_TAB") {
+    const targetTabId = msg.tabId;
+    if (!targetTabId) return;
+    chrome.tabs.remove(targetTabId, () => void chrome.runtime.lastError);
+    return;
+  }
+
   if (msg?.type === "TURN") {
     const targetTabId = msg.tabId;
     if (!targetTabId) return;
     console.log("[BG] TURN → sendToTab", targetTabId, "text length:", msg.text?.length);
-    sendToTab(targetTabId, { type: "OUTBOUND_SUBMIT", payload: { text: msg.text, mode: "auto" } });
+    // Ensure the target tab is active and its window focused before sending.
+    chrome.tabs.get(targetTabId, (tab) => {
+      const err = chrome.runtime.lastError;
+      if (err || !tab) {
+        console.warn("[BG] TURN tab lookup failed:", err?.message);
+        sendToTab(targetTabId, { type: "OUTBOUND_SUBMIT", payload: { text: msg.text, mode: "auto" } });
+        return;
+      }
+      if (tab.windowId) {
+        chrome.windows.update(tab.windowId, { focused: true }, () => {
+          chrome.tabs.update(targetTabId, { active: true }, () => {
+            sendToTab(targetTabId, { type: "OUTBOUND_SUBMIT", payload: { text: msg.text, mode: "auto" } });
+          });
+        });
+      } else {
+        chrome.tabs.update(targetTabId, { active: true }, () => {
+          sendToTab(targetTabId, { type: "OUTBOUND_SUBMIT", payload: { text: msg.text, mode: "auto" } });
+        });
+      }
+    });
     return;
   }
 }
@@ -146,7 +199,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 // ── Re-inject content scripts into existing chatgpt tabs on startup ──────
-chrome.tabs.query({ url: ["https://chatgpt.com/*", "https://chat.openai.com/*"] }, (tabs) => {
+chrome.tabs.query({ url: ["https://chatgpt.com/*", "https://chat.openai.com/*", "https://gemini.google.com/*"] }, (tabs) => {
   for (const tab of tabs) {
     chrome.scripting.executeScript({
       target: { tabId: tab.id },

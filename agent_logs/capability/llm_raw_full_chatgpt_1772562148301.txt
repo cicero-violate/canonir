@@ -1,0 +1,36 @@
+```json
+{
+  "tasks": [
+    {
+      "id": "t2",
+      "description": "Inspect the canon-agent framework structure for potential improvements.",
+      "deps": ["t1"],
+      "required_capabilities": ["file_read"]
+    },
+    {
+      "id": "t3",
+      "description": "Evaluate current agent performance for optimization opportunities.",
+      "deps": ["t1"],
+      "required_capabilities": ["file_read"]
+    },
+    {
+      "id": "t4",
+      "description": "Identify key sections of the canon-agent code base to focus on for optimization.",
+      "deps": ["t1"],
+      "required_capabilities": ["file_read"]
+    },
+    {
+      "id": "t5",
+      "description": "Gather agent performance metrics to inform optimization strategies.",
+      "deps": ["t3"],
+      "required_capabilities": ["stdout_capture"]
+    },
+    {
+      "id": "t6",
+      "description": "Generate suggestions based on analysis of agent framework and performance metrics.",
+      "deps": ["t2", "t3", "t4"],
+      "required_capabilities": ["compute_delta"]
+    }
+  ]
+}
+```

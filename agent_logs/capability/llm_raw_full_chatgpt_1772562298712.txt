@@ -1,0 +1,17 @@
+```json
+{
+  "tasks": [
+    {
+      "id": "t1.1.1.1.1.1.1",
+      "description": "Access canon-agent directory path.",
+      "deps": [],
+      "required_capabilities": ["file_read"]
+    },
+    {
+      "id": "t1.1.1.1.1.1.2",
+      "description": "Check for read permissions in canon-agent directory.",
+      "deps": ["t1.1.1.1.1.1.1"],
+      "required_capabilities": ["file_read"]
+    },
+    {
+      "id": "t1.1.1.1.1.1.3

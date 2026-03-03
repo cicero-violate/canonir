@@ -1,0 +1,280 @@
+  (function() {
+    try {
+      if (window.__geminiSseEnterInjected) {
+        console.log('ℹ️ Combined injection already active');
+        return;
+      }
+      window.__geminiSseEnterInjected = true;
+
+      // ----- Globals for prompt injection -----
+      window.__pendingPromptInjection  = window.__pendingPromptInjection  || null;
+      window.__promptInjectionMode     = window.__promptInjectionMode     || "auto";
+      window.__promptInjectionQueue    = window.__promptInjectionQueue    || [];
+
+      // ----- Gemini Enter-based send -----
+      const selectors = {
+        CHAT_INPUT: 'div.ql-editor.textarea.new-input-ui'
+      };
+
+      function findEditor() {
+        return document.querySelector(selectors.CHAT_INPUT);
+      }
+
+      function dispatchInputEvents(el) {
+        try {
+          el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+        } catch {
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+
+      function insertText(text) {
+        const editor = findEditor();
+        if (!editor) {
+          console.warn('❌ Gemini editor not found');
+          return false;
+        }
+        editor.focus();
+        document.execCommand('selectAll', false, null);
+        document.execCommand('insertText', false, text);
+        dispatchInputEvents(editor);
+        return true;
+      }
+
+      function pressEnter(target) {
+        if (!target) return false;
+        const opts = { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13 };
+        target.dispatchEvent(new KeyboardEvent('keydown', opts));
+        target.dispatchEvent(new KeyboardEvent('keypress', opts));
+        target.dispatchEvent(new KeyboardEvent('keyup', opts));
+        return true;
+      }
+
+      window.__sendGeminiMessage = function(message) {
+        const editor = findEditor();
+        if (!editor) return false;
+        const inserted = insertText(message);
+        if (!inserted) return false;
+        return pressEnter(editor);
+      };
+
+      console.log('✅ Gemini Enter injection active. Use window.__sendGeminiMessage("hi")');
+
+      function waitForEditor(callback) {
+        const editor = findEditor();
+        if (editor) { callback(editor); return; }
+        const observer = new MutationObserver(() => {
+          const ed = findEditor();
+          if (ed) { observer.disconnect(); callback(ed); }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+      }
+
+      // Signal content.js when editor exists
+      (function signalReadyWhenEditorExists() {
+        const editor = findEditor();
+        if (editor) {
+          window.postMessage({ type: "BRIDGE_READY" }, "*");
+          return;
+        }
+        const observer = new MutationObserver(() => {
+          const ed = findEditor();
+          if (ed) {
+            observer.disconnect();
+            window.postMessage({ type: "BRIDGE_READY" }, "*");
+          }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+      })();
+
+      // ----- SSE capture (fetch + EventSource + XHR) -----
+      window.__sseChunks = window.__sseChunks || [];
+      function recordSseChunk(source, url, chunk) {
+        const entry = { ts: Date.now(), source, url, chunk };
+        window.__sseChunks.push(entry);
+        console.log(`📡 SSE chunk [${source}]`, url, chunk);
+        window.postMessage({ type: "INBOUND_MESSAGE", payload: chunk }, "*");
+      }
+
+      // Fetch hook
+      if (!window.__sseFetchHooked) {
+        window.__sseFetchHooked = true;
+        const allowedContentTypes = ['text/event-stream', 'text/plain', 'application/json'];
+        window.__originalFetch = window.__originalFetch || window.fetch;
+
+        window.fetch = async function(url, options) {
+          const response = await window.__originalFetch.apply(this, arguments);
+          const contentType = response.headers.get('content-type') || '';
+          const isStream = allowedContentTypes.some(t => contentType.includes(t));
+
+          if (!isStream || !response.body) return response;
+
+          console.log('📡 SSE/Stream detected (fetch):', url, contentType);
+
+          const readable = new ReadableStream({
+            start(controller) {
+              const reader = response.body.getReader();
+              const decoder = new TextDecoder();
+
+              function pump() {
+                return reader.read().then(({ done, value }) => {
+                  if (done) {
+                    controller.close();
+                    console.log('📡 Stream complete (fetch)');
+                    return;
+                  }
+
+                  const chunk = decoder.decode(value, { stream: true });
+                  recordSseChunk('fetch', url, chunk);
+                  controller.enqueue(value);
+                  return pump();
+                }).catch(err => {
+                  console.error('📡 Stream error (fetch):', err);
+                  controller.error(err);
+                });
+              }
+
+              return pump();
+            }
+          });
+
+          return new Response(readable, {
+            headers: response.headers,
+            status: response.status,
+            statusText: response.statusText
+          });
+        };
+      }
+
+      // EventSource hook
+      if (!window.__sseEventSourceHooked) {
+        window.__sseEventSourceHooked = true;
+        const OriginalEventSource = window.EventSource;
+        if (OriginalEventSource) {
+          window.EventSource = function(url, config) {
+            const es = new OriginalEventSource(url, config);
+
+            es.addEventListener('message', (e) => {
+              recordSseChunk('eventsource', url, e.data);
+            });
+
+            es.addEventListener('error', (e) => {
+              console.warn('📡 EventSource error:', url, e);
+            });
+
+            return es;
+          };
+          window.EventSource.prototype = OriginalEventSource.prototype;
+        }
+      }
+
+      // XHR hook (for SSE via XHR streaming)
+      if (!window.__sseXhrHooked) {
+        window.__sseXhrHooked = true;
+        const OriginalXHR = window.XMLHttpRequest;
+
+        function PatchedXHR() {
+          const xhr = new OriginalXHR();
+          let lastIndex = 0;
+          let url = '';
+
+          const open = xhr.open;
+          xhr.open = function(method, u) {
+            url = u;
+            return open.apply(xhr, arguments);
+          };
+
+          xhr.addEventListener('readystatechange', function() {
+            if (xhr.readyState === 3 || xhr.readyState === 4) {
+              const text = xhr.responseText || '';
+              if (text.length > lastIndex) {
+                const chunk = text.slice(lastIndex);
+                lastIndex = text.length;
+                recordSseChunk('xhr', url, chunk);
+              }
+            }
+          });
+
+          return xhr;
+        }
+
+        window.XMLHttpRequest = PatchedXHR;
+        window.XMLHttpRequest.UNSENT = OriginalXHR.UNSENT;
+        window.XMLHttpRequest.OPENED = OriginalXHR.OPENED;
+        window.XMLHttpRequest.HEADERS_RECEIVED = OriginalXHR.HEADERS_RECEIVED;
+        window.XMLHttpRequest.LOADING = OriginalXHR.LOADING;
+        window.XMLHttpRequest.DONE = OriginalXHR.DONE;
+      }
+
+      console.log('✅ SSE capture hooks active (fetch + EventSource + XHR)');
+
+      // OUTBOUND_SUBMIT handler (Rust → Gemini input)
+      window.addEventListener("message", (event) => {
+        if (event.source !== window) return;
+        if (event.data?.type !== "OUTBOUND_SUBMIT") return;
+        const { text } = event.data.payload || {};
+        if (typeof text !== "string") return;
+        const { mode } = event.data.payload || {};
+        window.__promptInjectionMode = mode || "auto";
+
+        if (mode === "buffer") {
+          window.__promptInjectionQueue ||= [];
+          if (text) window.__promptInjectionQueue.push(text);
+          return;
+        }
+
+        if (text) {
+          window.__pendingPromptInjection = text;
+          const attemptSend = () => {
+            const queued = window.__promptInjectionQueue?.length > 0
+              ? window.__promptInjectionQueue.join("\n\n")
+              : null;
+            if (queued) {
+              window.__pendingPromptInjection = queued;
+              window.__promptInjectionQueue = [];
+            }
+            const payload = window.__pendingPromptInjection;
+            if (!payload) return;
+            window.__pendingPromptInjection = null;
+            const ok = window.__sendGeminiMessage(payload);
+            if (!ok) {
+              console.warn("❌ Gemini send failed (editor missing)");
+            }
+          };
+
+          waitForEditor(() => setTimeout(attemptSend, 100));
+        }
+      });
+
+      function clickNewChat() {
+        const selectors = [
+          'a[aria-label="New chat"][href="/app"]',
+          'a.bard-logo-container[aria-label="New chat"]',
+        ];
+        for (const sel of selectors) {
+          const el = document.querySelector(sel);
+          if (el) {
+            el.click();
+            return true;
+          }
+        }
+        return false;
+      }
+
+      window.addEventListener("message", (event) => {
+        if (event.source !== window) return;
+        if (event.data?.type === "NEW_CHAT") {
+          if (!clickNewChat()) {
+            // Fallback: navigate to /app
+            try { location.href = "/app"; } catch {}
+          }
+        }
+        if (event.data?.type === "TEMP_CHAT") {
+          // Gemini does not expose a reliable temp chat toggle; no-op for now.
+        }
+      });
+    } catch (error) {
+      console.error('❌ Combined injection failed:', error);
+    }
+  })();

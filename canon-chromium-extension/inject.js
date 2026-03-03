@@ -188,4 +188,116 @@
       }, 100);
     }
   });
+
+  function clickNewChat() {
+    const btn = document.querySelector('a[data-testid="create-new-chat-button"]');
+    if (btn) { btn.click(); return true; }
+    const link = document.querySelector('a[href="/"][data-testid="create-new-chat-button"]');
+    if (link) { link.click(); return true; }
+    return false;
+  }
+
+  function clickTempChat() {
+    const btn = document.querySelector('button[aria-label="Turn on temporary chat"]');
+    if (btn) { btn.click(); return true; }
+    return false;
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    if (event.data?.type === "NEW_CHAT") {
+      if (!clickNewChat()) {
+        try { location.href = "/"; } catch {}
+      }
+    }
+    if (event.data?.type === "TEMP_CHAT") {
+      clickTempChat();
+    }
+  });
+
+  // ── Rate-limit modal handler (auto dismiss + retry) ─────────────────────
+  function findByText(root, text) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const val = (node.nodeValue || "").trim();
+      if (val.includes(text)) return node.parentElement;
+    }
+    return null;
+  }
+
+  function clickIfVisible(el) {
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return false;
+    el.click();
+    return true;
+  }
+
+  function closeLimitModalAndRetry() {
+    // Look for limit message
+    const limitPhrases = [
+      "You've hit your limit",
+      "You’ve hit your limit",
+      "limit resets",
+      "Gateway time-out",
+      "gateway time-out",
+      "Error reference number",
+    ];
+    const node = limitPhrases
+      .map(t => findByText(document.body, t))
+      .find(Boolean);
+    if (!node) return;
+
+    window.postMessage({
+      type: "INBOUND_MESSAGE",
+      payload: JSON.stringify({
+        type: "limit_modal",
+        ts: Date.now(),
+        title: node.textContent?.slice(0, 120) || ""
+      })
+    }, "*");
+
+    // Try to click an explicit "Retry" button if present
+    const retryBtn = Array.from(document.querySelectorAll("button"))
+      .find(b => (b.textContent || "").toLowerCase().includes("retry"));
+    if (clickIfVisible(retryBtn)) {
+      window.postMessage({
+        type: "INBOUND_MESSAGE",
+        payload: JSON.stringify({ type: "limit_modal_action", action: "retry", ts: Date.now() })
+      }, "*");
+      return;
+    }
+
+    // Try to click an "X" close button on modal/dialog
+    const closeBtn =
+      document.querySelector('button[aria-label="Close"]') ||
+      document.querySelector('button[aria-label="Dismiss"]') ||
+      document.querySelector('button[aria-label="Close dialog"]');
+    if (clickIfVisible(closeBtn)) {
+      window.postMessage({
+        type: "INBOUND_MESSAGE",
+        payload: JSON.stringify({ type: "limit_modal_action", action: "close", ts: Date.now() })
+      }, "*");
+      return;
+    }
+
+    // Try to click any button with "Got it" or "OK"
+    const okBtn = Array.from(document.querySelectorAll("button"))
+      .find(b => {
+        const t = (b.textContent || "").toLowerCase();
+        return t.includes("got it") || t === "ok" || t.includes("okay");
+      });
+    if (clickIfVisible(okBtn)) {
+      window.postMessage({
+        type: "INBOUND_MESSAGE",
+        payload: JSON.stringify({ type: "limit_modal_action", action: "ok", ts: Date.now() })
+      }, "*");
+    }
+  }
+
+  // Poll + observe because the modal can appear asynchronously
+  setInterval(closeLimitModalAndRetry, 2000);
+  const limitObserver = new MutationObserver(() => closeLimitModalAndRetry());
+  limitObserver.observe(document.body, { childList: true, subtree: true });
 })();

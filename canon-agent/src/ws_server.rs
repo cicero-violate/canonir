@@ -15,6 +15,9 @@
 //!   { "type": "OPEN_TAB",       "url": "...", "reqId"?: n }
 //!   { "type": "TURN",           "tabId": n, "text": "..." }
 //!   { "type": "OUTBOUND_SUBMIT","tabId": n, "payload": { ... } }
+//!   { "type": "CLOSE_TAB",      "tabId": n }
+//!   { "type": "NEW_CHAT",       "tabId": n }
+//!   { "type": "TEMP_CHAT",      "tabId": n }
 //!
 //! WsBridge is a cheap-clone handle for callers.
 
@@ -24,15 +27,13 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use super::sse::{classify_frame, FrameResult};
+use super::parsers::{FrameAssembler, SiteType};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
-
-const RESPONSE_TIMEOUT_SECS: u64 = 20;
 
 // ---------------------------------------------------------------------------
 // Public error type
@@ -68,8 +69,8 @@ struct ServerState {
     /// None when the extension is not connected.
     out_tx: Option<mpsc::Sender<Message>>,
 
-    /// tabId → accumulated SSE delta strings for the in-flight request.
-    tab_buffers: HashMap<u32, Vec<String>>,
+    /// tabId → frame assembler (parser + buffering).
+    tab_assemblers: HashMap<u32, FrameAssembler>,
 
     /// tabId → oneshot waiting for a completed response.
     pending: HashMap<u32, oneshot::Sender<String>>,
@@ -102,7 +103,7 @@ impl ServerState {
 
         Self {
             out_tx: None,
-            tab_buffers: HashMap::new(),
+            tab_assemblers: HashMap::new(),
             pending: HashMap::new(),
             pending_open: HashMap::new(),
             live_tabs: std::collections::HashSet::new(),
@@ -129,6 +130,7 @@ impl ServerState {
 pub struct WsBridge {
     state: Arc<Mutex<ServerState>>,
     next_req_id: Arc<AtomicU64>,
+    response_timeout_secs: u64,
 }
 
 impl WsBridge {
@@ -158,7 +160,11 @@ impl WsBridge {
         {
             let mut st = self.state.lock().await;
             st.pending.insert(tab_id, tx);
-            st.tab_buffers.insert(tab_id, Vec::new());
+            if !st.tab_assemblers.contains_key(&tab_id) {
+                st.tab_assemblers.insert(tab_id, FrameAssembler::new(SiteType::Unknown));
+            } else if let Some(asm) = st.tab_assemblers.get_mut(&tab_id) {
+                asm.reset();
+            }
 
             let frame = json!({ "type": "TURN", "tabId": tab_id, "text": text });
 
@@ -171,7 +177,7 @@ impl WsBridge {
             }
         }
 
-        match tokio::time::timeout(std::time::Duration::from_secs(RESPONSE_TIMEOUT_SECS), rx).await {
+        match tokio::time::timeout(std::time::Duration::from_secs(self.response_timeout_secs), rx).await {
             Ok(Ok(text)) => Ok(text),
             Ok(Err(_)) => Err(WsBridgeError::Cancelled),
             Err(_) => Err(WsBridgeError::Timeout),
@@ -196,15 +202,37 @@ impl WsBridge {
         let st = self.state.lock().await;
         st.send(json!({ "type": "OUTBOUND_SUBMIT", "tabId": tab_id, "payload": payload }))
     }
+
+    /// Close a tab by id.
+    pub async fn close_tab(&self, tab_id: u32) -> Result<(), WsBridgeError> {
+        let st = self.state.lock().await;
+        st.send(json!({ "type": "CLOSE_TAB", "tabId": tab_id }))
+    }
+
+    /// Trigger a new chat in the tab.
+    pub async fn new_chat(&self, tab_id: u32) -> Result<(), WsBridgeError> {
+        let st = self.state.lock().await;
+        st.send(json!({ "type": "NEW_CHAT", "tabId": tab_id }))
+    }
+
+    /// Trigger temporary chat in the tab (ChatGPT).
+    pub async fn temp_chat(&self, tab_id: u32) -> Result<(), WsBridgeError> {
+        let st = self.state.lock().await;
+        st.send(json!({ "type": "TEMP_CHAT", "tabId": tab_id }))
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Server bootstrap
 // ---------------------------------------------------------------------------
 
-pub fn spawn(addr: SocketAddr) -> WsBridge {
+pub fn spawn(addr: SocketAddr, response_timeout_secs: u64) -> WsBridge {
     let state = Arc::new(Mutex::new(ServerState::new()));
-    let bridge = WsBridge { state: state.clone(), next_req_id: Arc::new(AtomicU64::new(1)) };
+    let bridge = WsBridge {
+        state: state.clone(),
+        next_req_id: Arc::new(AtomicU64::new(1)),
+        response_timeout_secs,
+    };
 
     tokio::spawn(async move {
         loop {
@@ -310,6 +338,11 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             let url = msg.get("url").and_then(|v| v.as_str()).unwrap_or("");
             let mut st = state.lock().await;
             st.live_tabs.insert(tab_id);
+            let site = SiteType::from_url(url);
+            st.tab_assemblers
+                .entry(tab_id)
+                .and_modify(|asm| asm.set_site(site))
+                .or_insert_with(|| FrameAssembler::new(site));
         }
 
         "TAB_CLOSED" => {
@@ -319,7 +352,7 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             };
             let mut st = state.lock().await;
             st.live_tabs.remove(&tab_id);
-            st.tab_buffers.remove(&tab_id);
+            st.tab_assemblers.remove(&tab_id);
             st.pending.remove(&tab_id);
         }
 
@@ -332,6 +365,11 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             let req_id = msg.get("reqId").and_then(|v| v.as_u64());
 
             let mut st = state.lock().await;
+            let site = SiteType::from_url(url);
+            st.tab_assemblers
+                .entry(tab_id)
+                .and_modify(|asm| asm.set_site(site))
+                .or_insert_with(|| FrameAssembler::new(site));
 
             if let Some(rid) = req_id {
                 if let Some(tx) = st.pending_open.remove(&rid) {
@@ -352,27 +390,27 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
 
             let mut st = state.lock().await;
 
-            // Silence frame dumping
+            // Dump every inbound frame to disk for parser inspection.
+            st.frame_counter += 1;
+            let dump_path = format!("./frames/frame_{:06}_tab{}.txt", st.frame_counter, tab_id);
+            let _ = std::fs::write(&dump_path, &payload);
 
-            match classify_frame(&payload) {
-                FrameResult::Delta(text) => {
-                    st.tab_buffers.entry(tab_id).or_default().push(text);
+            let assembled = if let Some(asm) = st.tab_assemblers.get_mut(&tab_id) {
+                asm.push(&payload)
+            } else {
+                let mut asm = FrameAssembler::new(SiteType::Unknown);
+                let out = asm.push(&payload);
+                st.tab_assemblers.insert(tab_id, asm);
+                out
+            };
+
+            if let Some(text) = assembled {
+                // Dump assembled message for debugging (Gemini/ChatGPT).
+                let assembled_path = format!("./frames/assembled_tab{}.txt", tab_id);
+                let _ = std::fs::write(&assembled_path, &text);
+                if let Some(tx) = st.pending.remove(&tab_id) {
+                    let _ = tx.send(text);
                 }
-                FrameResult::Snapshot(text) => {
-                    // /gg path: full accumulated text — replace buffer and resolve immediately.
-                    st.tab_buffers.insert(tab_id, vec![text.clone()]);
-                    if let Some(tx) = st.pending.remove(&tab_id) {
-                        let _ = tx.send(text);
-                    }
-                    st.tab_buffers.remove(&tab_id);
-                }
-                FrameResult::Done => {
-                    if let (Some(buf), Some(tx)) = (st.tab_buffers.remove(&tab_id), st.pending.remove(&tab_id)) {
-                        let assembled = buf.join("");
-                        let _ = tx.send(assembled);
-                    }
-                }
-                FrameResult::Ignore => {}
             }
         }
 
