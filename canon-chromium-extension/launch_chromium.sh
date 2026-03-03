@@ -42,7 +42,7 @@ trap cleanup SIGINT SIGTERM EXIT
 
 # Chromium Flags
 FLAGS=(
-    --remote-debugging-port=9222
+    --remote-debugging-port=9223
     --remote-debugging-address=127.0.0.1
     --load-extension="$EXT_DIR"
     --user-data-dir="$PROFILE_DIR"
