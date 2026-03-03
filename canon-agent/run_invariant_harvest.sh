@@ -3,5 +3,5 @@ cargo run -p canon-agent -- run-multi-dag \
   1000
 
 cargo run -p canon-agent -- run-capability \
-  /workspace/ai_sandbox/canon \
-  1000
+  /workspace/ai_sandbox/canon 
+
