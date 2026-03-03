@@ -2,7 +2,7 @@
 RUSTC_BOOTSTRAP = "1"
 
 [build]
-# rustflags = ["-A", "warnings"]
+rustflags = ["-A", "warnings"]
 
 [alias]
 # json-build = "build --message-format=json"
