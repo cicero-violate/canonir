@@ -19,6 +19,9 @@ pub struct ExecMetrics {
     pub nodes_executed: u64,
     pub nodes_failed: u64,
     pub avg_latency_ms: u64,
+    pub last_repair_attempts: u64,
+    pub last_repair_successes: u64,
+    pub last_repair_kind: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
@@ -35,6 +38,15 @@ pub struct RuntimeMetrics {
     pub policy_weight_norm: f64,
     pub dataset_size: u64,
     pub deadlock_rate: f64,
+    pub policy_run_planner: bool,
+    pub policy_expansion_scale: f64,
+    pub policy_execution_preference: f64,
+    pub template_reuse: bool,
+    pub template_score: f64,
+    pub template_selected: Option<String>,
+    pub repair_attempts: u64,
+    pub repair_success_rate: f64,
+    pub repair_type: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]

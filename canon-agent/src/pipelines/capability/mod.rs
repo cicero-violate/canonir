@@ -137,6 +137,7 @@ impl CapabilityPipeline {
             result: None,
             error: None,
             readonly_fail_count: 0,
+            repair_attempts: 0,
             completed_iter: None,
         }).collect();
             ensure_unique_node_ids(&mut nodes);
@@ -192,6 +193,7 @@ impl CapabilityPipeline {
                 retry_count,
                 retry_delay,
                 max_output_lines,
+                0.0,
                 &mut exec_metrics,
             )
             .await?;
@@ -215,6 +217,15 @@ impl CapabilityPipeline {
                 policy_weight_norm: 0.0,
                 dataset_size: 0,
                 deadlock_rate: features.deadlock_rate,
+                policy_run_planner: true,
+                policy_expansion_scale: 1.0,
+                policy_execution_preference: 0.0,
+                template_reuse: false,
+                template_score: 0.0,
+                template_selected: None,
+                repair_attempts: 0,
+                repair_success_rate: 0.0,
+                repair_type: None,
             };
             let snapshot = telemetry::TelemetrySnapshot {
                 planner: Default::default(),
@@ -225,6 +236,10 @@ impl CapabilityPipeline {
                 goal: Some(template_name.clone()),
             };
             telemetry::record_snapshot(&Path::new(LOG_ROOT).join("metrics.json"), &snapshot);
+            telemetry::record_snapshot(
+                &Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"),
+                &snapshot,
+            );
             let _ = std::fs::create_dir_all(Path::new(TEMPLATE_ROOT));
             telemetry::record_snapshot(
                 &Path::new(TEMPLATE_ROOT).join(format!("metrics_{}.json", template_hash)),

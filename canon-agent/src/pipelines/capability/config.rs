@@ -56,12 +56,20 @@ struct RawSystem {
     pub prune_threshold: f64,
     #[serde(default = "default_prune_min_age")]
     pub prune_min_age: u64,
+    #[serde(default = "default_template_reuse_threshold")]
+    pub template_reuse_threshold: f64,
+    #[serde(default = "default_template_top_k")]
+    pub template_top_k: usize,
     #[serde(default = "default_recovery_retry_rate_threshold")]
     pub recovery_retry_rate_threshold: f64,
     #[serde(default = "default_recovery_failed_fraction_threshold")]
     pub recovery_failed_fraction_threshold: f64,
     #[serde(default = "default_max_node_retries")]
     pub max_node_retries: u32,
+    #[serde(default = "default_repair_radius")]
+    pub repair_radius: usize,
+    #[serde(default = "default_max_repairs_per_node")]
+    pub max_repairs_per_node: u32,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -107,9 +115,13 @@ fn default_planner_plateau_expand_factor() -> usize { 2 }
 fn default_auto_prune() -> bool { true }
 fn default_prune_threshold() -> f64 { 0.2 }
 fn default_prune_min_age() -> u64 { 5 }
+fn default_template_reuse_threshold() -> f64 { 0.15 }
+fn default_template_top_k() -> usize { 5 }
 fn default_recovery_retry_rate_threshold() -> f64 { 0.3 }
 fn default_recovery_failed_fraction_threshold() -> f64 { 0.3 }
 fn default_max_node_retries() -> u32 { 3 }
+fn default_repair_radius() -> usize { 1 }
+fn default_max_repairs_per_node() -> u32 { 3 }
 fn default_max_tabs() -> usize { 1 }
 fn default_tab_cooldown_ms() -> u64 { 0 }
 
@@ -156,9 +168,13 @@ pub struct CapabilityConfig {
     pub auto_prune: bool,
     pub prune_threshold: f64,
     pub prune_min_age: u64,
+    pub template_reuse_threshold: f64,
+    pub template_top_k: usize,
     pub recovery_retry_rate_threshold: f64,
     pub recovery_failed_fraction_threshold: f64,
     pub max_node_retries: u32,
+    pub repair_radius: usize,
+    pub max_repairs_per_node: u32,
     pub llm_endpoints: Vec<LlmEndpoint>,
     pub planner_endpoint: Option<LlmEndpoint>,
     pub llm_roles: HashMap<String, RawRoleConfig>,
@@ -215,9 +231,13 @@ impl CapabilityConfig {
             auto_prune: raw.system.auto_prune,
             prune_threshold: raw.system.prune_threshold,
             prune_min_age: raw.system.prune_min_age,
+            template_reuse_threshold: raw.system.template_reuse_threshold,
+            template_top_k: raw.system.template_top_k,
             recovery_retry_rate_threshold: raw.system.recovery_retry_rate_threshold,
             recovery_failed_fraction_threshold: raw.system.recovery_failed_fraction_threshold,
             max_node_retries: raw.system.max_node_retries,
+            repair_radius: raw.system.repair_radius,
+            max_repairs_per_node: raw.system.max_repairs_per_node,
             llm_endpoints,
             planner_endpoint,
             llm_roles: raw.llm.roles,

@@ -27,6 +27,7 @@ use super::telemetry::{self, ExecMetrics, PlannerMetrics, RuntimeMetrics, Teleme
 use super::console;
 use super::capability::dominant_class;
 use super::gpu_scheduler::driver::GpuScheduler;
+use super::decompose;
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -68,6 +69,13 @@ struct TemplateRevisionLog {
     nodes: usize,
     edges: usize,
     rewrites: usize,
+}
+
+#[derive(Default)]
+struct RepairStats {
+    attempts: u64,
+    successes: u64,
+    last_kind: Option<String>,
 }
 
 fn edge_count(graph: &dag::TaskGraph) -> usize {
@@ -140,6 +148,88 @@ fn apply_recovery(graph: &mut dag::TaskGraph) {
     graph.rebuild_index();
 }
 
+fn repair_node(
+    graph: &mut dag::TaskGraph,
+    node_id: &str,
+    policy: &config::CapabilityPolicy,
+    repair_radius: usize,
+    max_repairs: u32,
+) -> Option<String> {
+    {
+        let node = graph.get_node_mut(node_id)?;
+        if node.repair_attempts >= max_repairs {
+            return None;
+        }
+        node.repair_attempts += 1;
+
+        // 1) Retry repair if we still have retry budget.
+        if node.readonly_fail_count < policy.max_node_retries {
+            node.status = dag::Status::Ready;
+            node.error = None;
+            node.result = None;
+            return Some("retry".to_string());
+        }
+
+        // 2) Capability rewrite / downgrade.
+        if node.required_capabilities.iter().any(|c| c.class() == super::capability::CapabilityClass::Mutate) {
+            node.required_capabilities = vec![super::capability::Capability::FileRead];
+            node.status = dag::Status::Pending;
+            node.error = None;
+            node.result = None;
+            return Some("capability_downgrade".to_string());
+        }
+    }
+
+    // 3) Dependency rewire: drop failed deps in the local neighborhood.
+    if repair_radius >= 1 {
+        let failed_deps: std::collections::HashSet<String> = graph.nodes.iter()
+            .filter(|n| n.status == dag::Status::Failed)
+            .map(|n| n.id.clone())
+            .collect();
+        if let Some(node) = graph.get_node_mut(node_id) {
+            let before = node.deps.len();
+            node.deps.retain(|dep| !failed_deps.contains(dep));
+            if node.deps.len() != before {
+                node.status = dag::Status::Pending;
+                return Some("dependency_rewire".to_string());
+            }
+        }
+    }
+
+    // 4) Node split (simple): create a lightweight analysis node that the failing node depends on.
+    if let Some(node_snapshot) = graph.get_node(node_id).cloned() {
+        if node_snapshot.description.len() > 120 {
+            let new_id = format!("{}_analysis", node_snapshot.id);
+            if graph.get_node(&new_id).is_none() {
+                let new_node = TaskNode {
+                    id: new_id.clone(),
+                    description: format!("Analyze: {}", node_snapshot.description),
+                    status: dag::Status::Pending,
+                    deps: node_snapshot.deps.clone(),
+                    required_capabilities: vec![super::capability::Capability::ReadDag],
+                    node_type: decompose::NodeType::Analysis,
+                    priority: node_snapshot.priority,
+                    budget: node_snapshot.budget,
+                    reasoning_trace: None,
+                    result: None,
+                    error: None,
+                    readonly_fail_count: 0,
+                    repair_attempts: 0,
+                    completed_iter: None,
+                };
+                if let Some(node) = graph.get_node_mut(node_id) {
+                    node.deps = vec![new_id.clone()];
+                }
+                graph.nodes.push(new_node);
+                graph.rebuild_index();
+                return Some("node_split".to_string());
+            }
+        }
+    }
+
+    None
+}
+
 fn take_recovery_signal() -> Option<String> {
     let path = Path::new(LOG_ROOT).join("recovery_signal.json");
     let raw = std::fs::read_to_string(&path).ok()?;
@@ -167,13 +257,16 @@ pub(crate) async fn execute_graph_loop(
     retry_count: u32,
     retry_delay: u64,
     max_output_lines: usize,
+    execution_preference: f64,
     exec_metrics: &mut ExecMetrics,
 ) -> Result<(u64, Vec<ExecFailure>)> {
     let semaphore = Arc::new(Semaphore::new(max_concurrency.max(1)));
     let mut blocked_streak = 0u32;
     let mut state = PipelineState::Running;
     let mut failures = Vec::new();
+    let mut repair_stats = RepairStats::default();
     for iter in 1..=max_iterations {
+        repair_stats = RepairStats::default();
         let features = graph_features(graph);
         let mut ready_ids = GpuScheduler::schedule(graph);
         for id in &ready_ids {
@@ -255,15 +348,18 @@ pub(crate) async fn execute_graph_loop(
         }
         ready_ids.sort_by_key(|id| {
             let node = graph.nodes.iter().find(|n| n.id == *id);
-            let base = node.map(|n| n.priority as i32).unwrap_or(0);
+            let base = node.map(|n| n.priority as f64).unwrap_or(0.0);
             let retry_penalty = node.map(|n| n.readonly_fail_count as i32).unwrap_or(0);
             let unblock_bonus = if features.blocked_fraction > 0.4 {
                 node.map(|n| n.required_capabilities.iter().any(|c| c.class() == super::capability::CapabilityClass::Observe))
                     .unwrap_or(false) as i32
             } else { 0 };
             let completion_bonus = features.completion_velocity.min(5.0) as i32;
-            let adjusted = base + completion_bonus + unblock_bonus - retry_penalty;
-            std::cmp::Reverse(adjusted)
+            let adjusted = (base * (1.0 + execution_preference))
+                + completion_bonus as f64
+                + unblock_bonus as f64
+                - retry_penalty as f64;
+            std::cmp::Reverse((adjusted * 1000.0) as i64)
         });
 
         let mut futures = Vec::new();
@@ -361,11 +457,17 @@ pub(crate) async fn execute_graph_loop(
                 iter,
                 policy,
                 exec_metrics,
+                &mut repair_stats,
+                config.repair_radius,
+                config.max_repairs_per_node,
             ) {
                 count += 1;
                 total_ms = total_ms.saturating_add(ms);
             }
         }
+        exec_metrics.last_repair_attempts = repair_stats.attempts;
+        exec_metrics.last_repair_successes = repair_stats.successes;
+        exec_metrics.last_repair_kind = repair_stats.last_kind.clone();
         exec_metrics.nodes_executed = exec_metrics.nodes_executed.saturating_add(count);
         if count > 0 {
             let avg = (total_ms / count as u128) as u64;
@@ -399,6 +501,9 @@ fn process_node_result(
     iter: u64,
     policy: &config::CapabilityPolicy,
     exec_metrics: &mut ExecMetrics,
+    repair_stats: &mut RepairStats,
+    repair_radius: usize,
+    max_repairs: u32,
 ) -> Option<u128> {
     let (node_id, call_result, elapsed) = match item {
         Ok(t) => t,
@@ -428,7 +533,18 @@ fn process_node_result(
             node_id,
             e
         );
-        let _ = graph.update_status(&node_id, dag::Status::Ready);
+        if let Some(kind) = repair_node(graph, &node_id, policy, repair_radius, max_repairs) {
+            repair_stats.attempts += 1;
+            repair_stats.successes += 1;
+            repair_stats.last_kind = Some(kind);
+        } else {
+            let _ = graph.update_status(&node_id, dag::Status::Failed);
+            if let Some(n) = graph.get_node_mut(&node_id) {
+                n.error = Some(e.to_string());
+            }
+            repair_stats.attempts += 1;
+            repair_stats.last_kind = Some("repair_failed".to_string());
+        }
         exec_metrics.nodes_failed += 1;
     }
     if let Some(n) = graph.get_node_mut(&node_id) {
@@ -478,11 +594,27 @@ pub(crate) async fn run_planner_execution_loop(
     let mut exec_metrics = ExecMetrics::default();
     let mut empty_streak = 0u32;
     let mut iter = 0u64;
+    let mut last_template_reuse = false;
+    let mut last_template_score = 0.0;
+    let mut last_template_selected: Option<String> = None;
     while !graph.all_completed() && iter < max_iterations {
         eprintln!("{}", console::phase("planner", &format!("iter={} nodes={}", iter, graph.nodes.len())));
         let iter_start = std::time::Instant::now();
         let failure_stats = failure_store.stats();
         let features = graph_features(graph).with_failure_stats(&failure_stats);
+        let normalized = normalize_features(&features, config.max_nodes, config.max_nodes.saturating_mul(4));
+        let policy_model = super::policy::PolicyModel::load_default();
+        let policy_bias = policy_model.predict(&normalized);
+        let policy_decision = policy_model.decide(&normalized);
+        let mut run_planner = policy_decision.run_planner;
+        let mut expansion_scale = policy_decision.expansion_scale;
+        let execution_preference = policy_decision.execution_preference;
+        if graph.nodes.is_empty() || features.deadlock_rate > 0.0 {
+            run_planner = true;
+        }
+        if expansion_scale.is_nan() || expansion_scale <= 0.0 {
+            expansion_scale = 1.0;
+        }
         let rewrite_requests = graph
             .nodes
             .iter()
@@ -492,6 +624,34 @@ pub(crate) async fn run_planner_execution_loop(
                 })
             })
             .collect::<Vec<_>>();
+        let mut reuse_decision = false;
+        let mut reuse_score = 0.0;
+        let mut reuse_goal: Option<String> = None;
+        if !run_planner {
+            let candidates = store.find_similar(template_name, graph, config.template_top_k);
+            if let Some(best) = candidates.into_iter().max_by(|a, b| {
+                let a_score = a.score * a.entry.reward;
+                let b_score = b.score * b.entry.reward;
+                a_score.partial_cmp(&b_score).unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                reuse_score = best.score * best.entry.reward;
+                reuse_goal = Some(best.entry.goal.clone());
+                if reuse_score >= config.template_reuse_threshold {
+                    if let Ok(loaded) = store.load(&best.entry.goal) {
+                        *graph = loaded;
+                        graph.reset_for_execution();
+                        graph.rebuild_index();
+                        reuse_decision = true;
+                    }
+                }
+            }
+        }
+        last_template_reuse = reuse_decision;
+        last_template_score = reuse_score;
+        last_template_selected = reuse_goal.clone();
+        if !reuse_decision && !run_planner {
+            run_planner = true;
+        }
         let recovery_reason = take_recovery_signal();
         let mut rewrite_requests = rewrite_requests;
         if let Some(reason) = recovery_reason.as_ref() {
@@ -517,7 +677,7 @@ pub(crate) async fn run_planner_execution_loop(
             config.planner_plateau_threshold,
         ) || features.ready_fraction < 0.1 || recovery_reason.is_some();
         let remaining_nodes = config.max_nodes.saturating_sub(graph.nodes.len());
-        let (planner_max_new_nodes, planner_max_new_edges) = if force_planner_expand {
+        let (mut planner_max_new_nodes, mut planner_max_new_edges) = if force_planner_expand {
             (
                 (config.planner_max_new_nodes.saturating_mul(config.planner_plateau_expand_factor))
                     .min(remaining_nodes.max(1)),
@@ -526,104 +686,116 @@ pub(crate) async fn run_planner_execution_loop(
         } else {
             (config.planner_max_new_nodes, config.planner_max_new_edges)
         };
-        for attempt in 1..=attempts {
-            planner_metrics.planner_calls += 1;
-            if attempt > 1 {
-                planner_metrics.planner_retries += 1;
-            }
-            let candidate = planner
-                .planner_iteration(
+        let run_planner_now = run_planner && !reuse_decision;
+        if run_planner_now {
+            planner_max_new_nodes = ((planner_max_new_nodes as f64) * expansion_scale)
+                .round()
+                .max(1.0)
+                .min(remaining_nodes.max(1) as f64) as usize;
+            planner_max_new_edges = ((planner_max_new_edges as f64) * expansion_scale)
+                .round()
+                .max(1.0) as usize;
+        }
+        if run_planner_now {
+            for attempt in 1..=attempts {
+                planner_metrics.planner_calls += 1;
+                if attempt > 1 {
+                    planner_metrics.planner_retries += 1;
+                }
+                let candidate = planner
+                    .planner_iteration(
+                        graph,
+                        &signals,
+                        &features,
+                        &rewrite_requests,
+                        bridge,
+                        tabs,
+                        endpoint.max_tabs,
+                        tab_cooldown_ms,
+                        retry_count,
+                        retry_delay,
+                        &log_dir,
+                        iter,
+                        planner_max_new_nodes,
+                        planner_max_new_edges,
+                        config.max_nodes,
+                        config.max_nodes.saturating_mul(4),
+                    )
+                    .await?;
+                let mut candidate_graph = graph.clone();
+                if let Err(e) = apply_planner_update(&mut candidate_graph, candidate.clone()) {
+                    if attempt < attempts {
+                        tokio::time::sleep(std::time::Duration::from_secs(retry_delay)).await;
+                        continue;
+                    }
+                    planner_metrics.planner_failures += 1;
+                    return Err(e);
+                }
+                let candidate_sig = graph_signature(&candidate_graph);
+                if failure_store.contains(&candidate_sig) {
+                    let payload = serde_json::json!({
+                        "iter": iter,
+                        "attempt": attempt,
+                        "error": "planner candidate matches known failure signature",
+                        "signature": candidate_sig,
+                    });
+                    let path = log_dir.join(format!("planner_iter_{:04}_rejected_failure.json", iter));
+                    if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
+                        let _ = std::fs::write(path, pretty);
+                    }
+                    if attempt < attempts {
+                        tokio::time::sleep(std::time::Duration::from_secs(retry_delay)).await;
+                        continue;
+                    }
+                }
+                if let Err(e) = validate_planner_update(
                     graph,
-                    &signals,
-                    &features,
-                    &rewrite_requests,
-                    bridge,
-                    tabs,
-                    endpoint.max_tabs,
-                    tab_cooldown_ms,
-                    retry_count,
-                    retry_delay,
-                    &log_dir,
-                    iter,
+                    &candidate,
                     planner_max_new_nodes,
                     planner_max_new_edges,
-                    config.max_nodes,
-                    config.max_nodes.saturating_mul(4),
-                )
-                .await?;
-            let mut candidate_graph = graph.clone();
-            if let Err(e) = apply_planner_update(&mut candidate_graph, candidate.clone()) {
-                if attempt < attempts {
-                    tokio::time::sleep(std::time::Duration::from_secs(retry_delay)).await;
-                    continue;
+                    &mut failure_store,
+                    iter,
+                ) {
+                    let err_msg = e.to_string();
+                    if err_msg.contains("cycle detected") || err_msg.contains("capability class") {
+                        store.record_failure(&template_hash);
+                    }
+                    let payload = serde_json::json!({
+                        "iter": iter,
+                        "attempt": attempt,
+                        "error": err_msg,
+                        "planner_output": candidate,
+                    });
+                    let path = log_dir.join(format!("planner_iter_{:04}_validate_error.json", iter));
+                    if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
+                        let _ = std::fs::write(path, pretty);
+                    }
+                    if attempt < attempts {
+                        tokio::time::sleep(std::time::Duration::from_secs(retry_delay)).await;
+                        continue;
+                    }
+                    planner_metrics.planner_failures += 1;
+                    return Err(e);
                 }
-                planner_metrics.planner_failures += 1;
-                return Err(e);
+                if force_planner_expand && candidate.new_nodes.is_empty() && candidate.new_edges.is_empty() {
+                    let payload = serde_json::json!({
+                        "iter": iter,
+                        "attempt": attempt,
+                        "error": "plateaued template requires expansion",
+                        "planner_output": candidate,
+                    });
+                    let path = log_dir.join(format!("planner_iter_{:04}_expand_required.json", iter));
+                    if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
+                        let _ = std::fs::write(path, pretty);
+                    }
+                    if attempt < attempts {
+                        tokio::time::sleep(std::time::Duration::from_secs(retry_delay)).await;
+                        continue;
+                    }
+                }
+                update = Some(candidate);
+                break;
             }
-            let candidate_sig = graph_signature(&candidate_graph);
-            if failure_store.contains(&candidate_sig) {
-                let payload = serde_json::json!({
-                    "iter": iter,
-                    "attempt": attempt,
-                    "error": "planner candidate matches known failure signature",
-                    "signature": candidate_sig,
-                });
-                let path = log_dir.join(format!("planner_iter_{:04}_rejected_failure.json", iter));
-                if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
-                    let _ = std::fs::write(path, pretty);
-                }
-                if attempt < attempts {
-                    tokio::time::sleep(std::time::Duration::from_secs(retry_delay)).await;
-                    continue;
-                }
-            }
-            if let Err(e) = validate_planner_update(
-                graph,
-                &candidate,
-                planner_max_new_nodes,
-                planner_max_new_edges,
-                &mut failure_store,
-                iter,
-            ) {
-                let err_msg = e.to_string();
-                if err_msg.contains("cycle detected") || err_msg.contains("capability class") {
-                    store.record_failure(&template_hash);
-                }
-                let payload = serde_json::json!({
-                    "iter": iter,
-                    "attempt": attempt,
-                    "error": err_msg,
-                    "planner_output": candidate,
-                });
-                let path = log_dir.join(format!("planner_iter_{:04}_validate_error.json", iter));
-                if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
-                    let _ = std::fs::write(path, pretty);
-                }
-                if attempt < attempts {
-                    tokio::time::sleep(std::time::Duration::from_secs(retry_delay)).await;
-                    continue;
-                }
-                planner_metrics.planner_failures += 1;
-                return Err(e);
-            }
-            if force_planner_expand && candidate.new_nodes.is_empty() && candidate.new_edges.is_empty() {
-                let payload = serde_json::json!({
-                    "iter": iter,
-                    "attempt": attempt,
-                    "error": "plateaued template requires expansion",
-                    "planner_output": candidate,
-                });
-                let path = log_dir.join(format!("planner_iter_{:04}_expand_required.json", iter));
-                if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
-                    let _ = std::fs::write(path, pretty);
-                }
-                if attempt < attempts {
-                    tokio::time::sleep(std::time::Duration::from_secs(retry_delay)).await;
-                    continue;
-                }
-            }
-            update = Some(candidate);
-            break;
         }
         if let Some(update) = update {
             revision_rewrites = Some(update.rewrite_nodes.len());
@@ -653,6 +825,8 @@ pub(crate) async fn run_planner_execution_loop(
                     }
                 }
             }
+        } else {
+            last_update_counts = Some((0, 0, 0));
         }
         let (exec_iters, exec_failures) = execute_graph_loop(
             graph,
@@ -672,6 +846,7 @@ pub(crate) async fn run_planner_execution_loop(
             retry_count,
             retry_delay,
             max_output_lines,
+            execution_preference,
             &mut exec_metrics,
         )
         .await?;
@@ -683,14 +858,9 @@ pub(crate) async fn run_planner_execution_loop(
         let iterations_used = iter.saturating_add(1);
         planner_metrics.iterations += 1;
         let reward = telemetry::compute_reward(graph, iterations_used, max_iterations);
-        let failure_stats = failure_store.stats();
-        let features = graph_features(graph).with_failure_stats(&failure_stats);
-        let normalized = normalize_features(&features, config.max_nodes, config.max_nodes.saturating_mul(4));
-        let policy_model = super::policy::PolicyModel::load_default();
-        let policy_bias = policy_model.predict(&normalized);
         let policy_prediction = policy_bias.planner_bias;
         let policy_error = reward - policy_prediction;
-            let runtime = RuntimeMetrics {
+        let runtime = RuntimeMetrics {
             queue_depth: telemetry::pending_requests(),
             retry_rate: if planner_metrics.planner_calls == 0 {
                 0.0
@@ -707,6 +877,19 @@ pub(crate) async fn run_planner_execution_loop(
             policy_weight_norm: policy_model.weight_norm(),
             dataset_size: policy_train::dataset_size(),
             deadlock_rate: features.deadlock_rate,
+            policy_run_planner: run_planner_now,
+            policy_expansion_scale: expansion_scale,
+            policy_execution_preference: execution_preference,
+            template_reuse: last_template_reuse,
+            template_score: last_template_score,
+            template_selected: last_template_selected.clone(),
+            repair_attempts: exec_metrics.last_repair_attempts,
+            repair_success_rate: if exec_metrics.last_repair_attempts == 0 {
+                0.0
+            } else {
+                exec_metrics.last_repair_successes as f64 / exec_metrics.last_repair_attempts as f64
+            },
+            repair_type: exec_metrics.last_repair_kind.clone(),
         };
         let reward_history = store.recent_rewards(template_name, 6);
         let features = features.with_reward_history(&reward_history);
@@ -745,6 +928,11 @@ pub(crate) async fn run_planner_execution_loop(
                 "add_edges": add_edges,
                 "rewrites": rewrites
             }),
+            policy_decision: serde_json::json!({
+                "run_planner": run_planner,
+                "expansion_scale": expansion_scale,
+                "execution_preference": execution_preference
+            }),
             reward,
         };
         append_policy_dataset(entry.clone());
@@ -773,6 +961,10 @@ pub(crate) async fn run_planner_execution_loop(
         };
         telemetry::record_snapshot(&Path::new(LOG_ROOT).join("planner_logs/metrics.json"), &snapshot);
         telemetry::record_snapshot(&Path::new(LOG_ROOT).join("metrics.json"), &snapshot);
+        telemetry::record_snapshot(
+            &Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"),
+            &snapshot,
+        );
         let _ = std::fs::create_dir_all(Path::new(TEMPLATE_ROOT));
         telemetry::record_snapshot(
             &Path::new(TEMPLATE_ROOT).join(format!("metrics_{}.json", template_hash)),
@@ -900,6 +1092,7 @@ pub(crate) fn apply_planner_update(graph: &mut dag::TaskGraph, update: PlannerUp
                 result: None,
                 error: None,
                 readonly_fail_count: 0,
+                repair_attempts: 0,
                 completed_iter: None,
             })
     );

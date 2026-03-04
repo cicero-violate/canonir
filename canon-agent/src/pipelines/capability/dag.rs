@@ -57,6 +57,8 @@ pub struct TaskNode {
     #[serde(default)]
     pub readonly_fail_count: u32,
     #[serde(default)]
+    pub repair_attempts: u32,
+    #[serde(default)]
     pub completed_iter: Option<u64>,
 }
 
