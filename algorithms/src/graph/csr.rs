@@ -52,4 +52,26 @@ impl Csr {
         let end = self.row_ptr[v + 1] as usize;
         &self.col_idx[start..end]
     }
+
+    /// Build CSR from edge list (u -> v) with a known vertex count.
+    pub fn from_edges(vertex_count: usize, edges: &[(usize, usize)]) -> Self {
+        let mut adj = vec![Vec::new(); vertex_count];
+        for &(u, v) in edges {
+            if u < vertex_count && v < vertex_count {
+                adj[u].push(v);
+            }
+        }
+        Self::from_adj(&adj)
+    }
+
+    /// Convert CSR back to adjacency list.
+    pub fn to_adj(&self) -> Vec<Vec<usize>> {
+        let mut adj = vec![Vec::new(); self.vertex_count()];
+        for u in 0..self.vertex_count() {
+            for &v in self.neighbours(u) {
+                adj[u].push(v as usize);
+            }
+        }
+        adj
+    }
 }

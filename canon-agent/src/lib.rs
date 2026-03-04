@@ -5,6 +5,7 @@ pub mod capability;
 pub mod dispatcher;
 pub mod io;
 pub mod llm_provider;
+pub mod llm_domains;
 pub mod meta;
 pub mod observe;
 pub mod parsers;

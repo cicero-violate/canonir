@@ -13,6 +13,7 @@ pub mod dep_solver;
 pub mod drop_solver;
 pub mod exhaustiveness_solver;
 pub mod generic_solver;
+pub(crate) mod gpu_algorithms;
 pub mod impl_solver;
 pub mod invariant_solver;
 pub mod liveness_solver;
@@ -66,6 +67,12 @@ pub(crate) fn to_canon_id(id: NodeId) -> CanonId {
 pub(crate) fn csr_to_adj<ND, ED>(graph: &canon::csr_graph::CsrGraph<ND, ED>) -> Vec<Vec<usize>> {
     let v = graph.vertex_count();
     (0..v).map(|i| graph.neighbours(NodeId(i as u32)).map(|(dst, _)| dst.index()).collect()).collect()
+}
+
+pub(crate) fn graph_to_csr<ND, ED>(graph: &canon::csr_graph::CsrGraph<ND, ED>) -> Csr {
+    let row_ptr: Vec<i32> = graph.row_ptr.iter().map(|&x| x as i32).collect();
+    let col_idx: Vec<i32> = graph.col_idx.iter().map(|&x| x as i32).collect();
+    Csr { row_ptr, col_idx }
 }
 
 pub(crate) fn global_csr_to_adj(ir: &CanonIR) -> Vec<Vec<usize>> {

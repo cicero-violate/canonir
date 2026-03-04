@@ -7,7 +7,11 @@ use std::process::Command;
 const CUDA_SOURCES: &[(&str, &str)] = &[
     ("src/graph/bfs.cu", "graph_bfs"),
     ("src/graph/bellman_ford.cu", "graph_bellman_ford"),
+    ("src/graph/max_flow.cu", "graph_max_flow"),
+    ("src/graph/reachability.cu", "graph_reachability"),
+    ("src/graph/model_checking.cu", "graph_model_checking"),
     ("src/graph/csr_unified.cu", "graph_csr_unified"),
+    ("src/constraints/constraints.cu", "constraints_kernels"),
     ("src/control_flow/dominators.cu", "control_flow_dominators"),
     ("src/control_flow/dataflow.cu", "control_flow_dataflow"),
     ("src/cryptography/merkle_tree.cu", "cryptography_merkle_tree"),

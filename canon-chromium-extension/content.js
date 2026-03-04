@@ -42,6 +42,14 @@
     if (event.data?.type === "INBOUND_MESSAGE") {
       chrome.runtime.sendMessage(event.data, () => void chrome.runtime.lastError);
     }
+    if (event.data?.type === "NEW_CHAT_DONE") {
+      console.log("[CS] NEW_CHAT_DONE from page");
+      chrome.runtime.sendMessage({ type: "NEW_CHAT_DONE" }, () => void chrome.runtime.lastError);
+    }
+    if (event.data?.type === "TEMP_CHAT_DONE") {
+      console.log("[CS] TEMP_CHAT_DONE from page");
+      chrome.runtime.sendMessage({ type: "TEMP_CHAT_DONE" }, () => void chrome.runtime.lastError);
+    }
   });
 
   // Background → Page: prompt injection

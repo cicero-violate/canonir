@@ -25,15 +25,17 @@ pub async fn plan_edges(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::llm::TabSlots>,
+    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
     reuse_tabs: bool,
     max_tabs: usize,
     workspace_root: &Path,
     workspace_listing: &str,
     constraint_note: Option<&str>,
+    planner_signals: Option<&str>,
     log_dir: &Path,
     retries: u32,
     delay_secs: u64,
+    tab_cooldown_ms: u64,
 ) -> Result<EdgePlan> {
     let summaries: Vec<serde_json::Value> = nodes
         .iter()
@@ -56,15 +58,17 @@ pub async fn plan_edges(
     });
     let schema = "Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"edges\": [\n    { \"from\": \"node_id\", \"to\": \"node_id\" }\n  ]\n}\n";
     let constraints = constraint_note.unwrap_or("none");
+    let signals = planner_signals.unwrap_or("none");
     let prompt = format!(
-        "{}\nLink the provided node ids into a DAG using edges only. Do not create, rename, or annotate nodes.\nIt is acceptable to leave some nodes unlinked if they are semantically irrelevant.\nOutput only edges; no extra fields or prose.\nWorkspace root: {}\nWorkspace entries: {}\nConstraints: {}\nAction space: you may only reference the provided node ids.\nINPUT:\n{}",
+        "{}\nLink the provided node ids into a DAG using edges only. Do not create, rename, or annotate nodes.\nIt is acceptable to leave some nodes unlinked if they are semantically irrelevant.\nOutput only edges; no extra fields or prose.\nWorkspace root: {}\nWorkspace entries: {}\nConstraints: {}\nGraph signals (from previous plan): {}\nAction space: you may only reference the provided node ids.\nINPUT:\n{}",
         schema,
         workspace_root.display(),
         workspace_listing,
         constraints,
+        signals,
         serde_json::to_string_pretty(&input).unwrap_or_default()
     );
-    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "planner", tabs, reuse_tabs, max_tabs, retries, delay_secs).await?;
+    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "planner", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, retries, delay_secs).await?;
     let mut plan: EdgePlan = match serde_json::from_value(payload.clone()) {
         Ok(v) => v,
         Err(_) => {
@@ -74,7 +78,7 @@ pub async fn plan_edges(
                 serde_json::to_string_pretty(&payload).unwrap_or_default(),
                 serde_json::to_string_pretty(&input).unwrap_or_default()
             );
-            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "planner", tabs, reuse_tabs, max_tabs, 1, delay_secs).await?;
+            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "planner", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, 1, delay_secs).await?;
             payload = retry_payload.clone();
             serde_json::from_value(retry_payload.clone()).context("planner output did not match edge schema")?
         }

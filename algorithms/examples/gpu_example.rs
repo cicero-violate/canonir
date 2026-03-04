@@ -6,6 +6,8 @@
 #[cfg(feature = "cuda")]
 use algorithms::control_flow::gpu::{dominators_gpu, reaching_definitions_gpu};
 #[cfg(feature = "cuda")]
+use algorithms::graph::adj_list::AdjList;
+#[cfg(feature = "cuda")]
 use algorithms::cryptography::merkle_tree_gpu::{merkle_build_gpu, root, PAGE_SIZE};
 #[cfg(feature = "cuda")]
 use algorithms::graph::bellman_ford_gpu::bellman_ford_gpu;
@@ -14,7 +16,17 @@ use algorithms::graph::csr_unified::CsrUnified;
 #[cfg(feature = "cuda")]
 use algorithms::graph::gpu::bfs_gpu as bfs_gpu_csr;
 #[cfg(feature = "cuda")]
-use algorithms::graph::{adj_list::AdjList, gpu::bfs_gpu};
+use algorithms::graph::gpu::bfs_gpu;
+#[cfg(feature = "cuda")]
+use algorithms::graph::reachability::reachability_gpu;
+#[cfg(feature = "cuda")]
+use algorithms::graph::model_checking::model_check_gpu;
+#[cfg(feature = "cuda")]
+use algorithms::graph::max_flow::max_flow_gpu;
+#[cfg(feature = "cuda")]
+use algorithms::constraints::ac3::{ConstraintGraph, ac3_gpu_apply};
+#[cfg(feature = "cuda")]
+use algorithms::constraints::forward_checking::forward_check_gpu_build;
 #[cfg(feature = "cuda")]
 use algorithms::numerical::gpu::{matrix_multiply_gpu, sieve_gpu};
 #[cfg(feature = "cuda")]
@@ -35,6 +47,8 @@ fn main() {
 
     #[cfg(feature = "cuda")]
     {
+        let results_dir = "/workspace/ai_sandbox/canon/algorithms/results";
+        let _ = std::fs::create_dir_all(results_dir);
         let stress = std::env::args().any(|a| a == "--stress");
 
         // ── 1. Graph BFS ─────────────────────────────────────────────────────
@@ -60,17 +74,95 @@ fn main() {
 
         // Same graph via unified memory CSR — no cudaMemcpy in the kernel
         let ucsr = CsrUnified::from_adj(&g);
-        println!("row_ptr (unified, host-readable): {:?}", ucsr.row_ptr_slice());
-        println!("col_idx (unified, host-readable): {:?}", ucsr.col_idx_slice());
-        // Pass unified pointers directly to bfs kernel via Csr wrapper
-        let csr2 = algorithms::graph::csr::Csr { row_ptr: ucsr.row_ptr_slice().to_vec(), col_idx: ucsr.col_idx_slice().to_vec() };
-        let levels2 = bfs_gpu_csr(&csr2, 0);
-        println!("BFS via unified CSR: {:?}", levels2);
+        if !stress {
+            println!("row_ptr (unified, host-readable): {:?}", ucsr.row_ptr_slice());
+            println!("col_idx (unified, host-readable): {:?}", ucsr.col_idx_slice());
+            // Pass unified pointers directly to bfs kernel via Csr wrapper
+            let csr2 = algorithms::graph::csr::Csr { row_ptr: ucsr.row_ptr_slice().to_vec(), col_idx: ucsr.col_idx_slice().to_vec() };
+            let levels2 = bfs_gpu_csr(&csr2, 0);
+            println!("BFS via unified CSR: {:?}", levels2);
+        }
         if stress {
             println!("max level: {}", levels.iter().max().unwrap());
         } else {
             println!("levels from source 0: {:?}", levels);
         }
+
+        // ── 1b. GPU Reachability (multi-root BFS) ───────────────────────────
+        println!("\n=== GPU Reachability ===");
+        let roots = vec![0usize, 2usize];
+        let reachable = reachability_gpu(&csr, &roots);
+        if stress {
+            let count = reachable.iter().filter(|&&v| v).count();
+            println!("roots {:?} reachable count: {}", roots, count);
+        } else {
+            println!("roots {:?} reachable mask: {:?}", roots, reachable);
+        }
+
+        // ── 1c. GPU Model Checking (reachable states satisfy invariant) ────
+        println!("\n=== GPU Model Checking ===");
+        let mut invariant = vec![1u8; v];
+        if v > 3 {
+            invariant[3] = 0; // violate invariant at node 3
+        }
+        let ok = model_check_gpu(&csr, &[0usize], &invariant);
+        println!("invariant holds on reachable states: {}", ok);
+        let model_check_path = format!("{}/model_checking.json", results_dir);
+        let _ = std::fs::write(
+            &model_check_path,
+            serde_json::json!({
+                "roots": [0],
+                "invariant_mask": invariant,
+                "result": ok,
+            }).to_string(),
+        );
+
+        // ── 1d. GPU Max Flow (push-relabel) ────────────────────────────────
+        println!("\n=== GPU Max Flow ===");
+        // Simple network:
+        // 0->1 (3), 0->2 (2), 1->2 (1), 1->3 (2), 2->3 (4)
+        let flow_edges: Vec<(usize, usize, i64)> = vec![
+            (0, 1, 3),
+            (0, 2, 2),
+            (1, 2, 1),
+            (1, 3, 2),
+            (2, 3, 4),
+        ];
+        let max_flow = max_flow_gpu(4, &flow_edges, 0, 3);
+        println!("max flow 0->3 = {}", max_flow);
+        let max_flow_path = format!("{}/max_flow.json", results_dir);
+        let _ = std::fs::write(
+            &max_flow_path,
+            serde_json::json!({
+                "edges": flow_edges,
+                "source": 0,
+                "sink": 3,
+                "max_flow": max_flow,
+            }).to_string(),
+        );
+
+        // ── 1e. GPU AC-3 / Forward Checking ────────────────────────────────
+        println!("\n=== GPU AC-3 / Forward Checking ===");
+        // Variables X0, X1 with domains {1,2,3}; constraint X0 != X1
+        let domains = vec![vec![1, 2, 3], vec![1, 2, 3]];
+        let mut cg = ConstraintGraph::default();
+        cg.add_constraint(0, 1, |a, b| a != b);
+        let pruned = ac3_gpu_apply(&domains, &cg).unwrap_or(domains.clone());
+        println!("AC-3 pruned domains: {:?}", pruned);
+        let assignment = vec![Some(1), None];
+        let gpu_buf = forward_check_gpu_build(&domains, &assignment, &cg).unwrap();
+        let pruned_fc = gpu_buf.to_domains();
+        println!("Forward checking pruned domains: {:?}", pruned_fc);
+        let constraints_path = format!("{}/constraints.json", results_dir);
+        let _ = std::fs::write(
+            &constraints_path,
+            serde_json::json!({
+                "domains": domains,
+                "ac3_pruned": pruned,
+                "assignment": assignment,
+                "forward_check_pruned": pruned_fc,
+            }).to_string(),
+        );
 
         // ── 2. Bitonic sort ──────────────────────────────────────────────────
         // Pads to next power-of-2 internally, trims after.
@@ -120,8 +212,12 @@ fn main() {
             0, 0, 1,
         ];
         let c = matrix_multiply_gpu(&identity, &identity, 3);
-        for row in 0..3 {
-            println!("  {:?}", &c[row * 3..row * 3 + 3]);
+        if stress {
+            println!("matrix multiply result[0..3]: {:?}", &c[0..3]);
+        } else {
+            for row in 0..3 {
+                println!("  {:?}", &c[row * 3..row * 3 + 3]);
+            }
         }
 
         // ── 5. Dominators (GPU) ──────────────────────────────────────────────
@@ -131,15 +227,19 @@ fn main() {
         let pred_csr = algorithms::graph::csr::Csr::from_adj(&pred_adj);
         let dom_bits = dominators_gpu(&pred_csr, 0, 4);
         let words = (4 + 63) / 64;
-        for n in 0..4 {
-            let mut doms = Vec::new();
-            for i in 0..4 {
-                let word = dom_bits[n * words + (i >> 6)];
-                if (word >> (i & 63)) & 1 == 1 {
-                    doms.push(i);
+        if stress {
+            println!("dominators computed for 4 nodes");
+        } else {
+            for n in 0..4 {
+                let mut doms = Vec::new();
+                for i in 0..4 {
+                    let word = dom_bits[n * words + (i >> 6)];
+                    if (word >> (i & 63)) & 1 == 1 {
+                        doms.push(i);
+                    }
                 }
+                println!("  dom({n}) = {:?}", doms);
             }
-            println!("  dom({n}) = {:?}", doms);
         }
 
         // ── 6. Reaching Definitions (GPU) ────────────────────────────────────
@@ -155,15 +255,19 @@ fn main() {
         r#gen[0] |= 1u64 << 0;
         r#gen[1] |= 1u64 << 1;
         let out_bits = reaching_definitions_gpu(&pred_csr, block_count, def_count, &r#gen, &kill);
-        for b in 0..block_count {
-            let mut defs = Vec::new();
-            for i in 0..def_count {
-                let word = out_bits[b * words + (i >> 6)];
-                if (word >> (i & 63)) & 1 == 1 {
-                    defs.push(i);
+        if stress {
+            println!("reaching definitions computed for {} blocks", block_count);
+        } else {
+            for b in 0..block_count {
+                let mut defs = Vec::new();
+                for i in 0..def_count {
+                    let word = out_bits[b * words + (i >> 6)];
+                    if (word >> (i & 63)) & 1 == 1 {
+                        defs.push(i);
+                    }
                 }
+                println!("  out({b}) = {:?}", defs);
             }
-            println!("  out({b}) = {:?}", defs);
         }
 
         // ── 5. Sieve of Eratosthenes ─────────────────────────────────────────
@@ -186,7 +290,11 @@ fn main() {
         let text = b"abracadabra";
         let pattern = b"abra";
         let matches = rabin_karp_gpu(text, pattern);
-        println!("pattern \"{}\" found at positions: {:?}", std::str::from_utf8(pattern).unwrap(), matches);
+        if stress {
+            println!("match count: {}", matches.len());
+        } else {
+            println!("pattern \"{}\" found at positions: {:?}", std::str::from_utf8(pattern).unwrap(), matches);
+        }
 
         // ── 7. Genetic algorithm ─────────────────────────────────────────────
         // Each thread: tournament select two parents, arithmetic crossover.
@@ -202,7 +310,7 @@ fn main() {
         //          SHA256(left_child_hash || right_child_hash)
         // root = tree[32..64]  (1-indexed, node 1)
         println!("\n=== GPU Merkle Tree ===");
-        let leaf_count = if stress { 1024 } else { 4 };
+        let leaf_count = if stress { 256 } else { 4 };
         let pages = vec![0xabu8; leaf_count * PAGE_SIZE];
         let tree = merkle_build_gpu(&pages);
         let r = root(&tree);

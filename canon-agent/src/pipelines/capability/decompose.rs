@@ -43,7 +43,7 @@ pub async fn decompose_goal(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::llm::TabSlots>,
+    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
     reuse_tabs: bool,
     max_tabs: usize,
     workspace_root: &Path,
@@ -51,6 +51,7 @@ pub async fn decompose_goal(
     log_dir: &Path,
     retries: u32,
     delay_secs: u64,
+    tab_cooldown_ms: u64,
 ) -> Result<DecomposeOutput> {
     let input = serde_json::json!({ "goal": goal.raw });
     let caps = [
@@ -82,7 +83,7 @@ Action space: you may only reference paths under the workspace root.\n{}\n\nINPU
         schema,
         serde_json::to_string_pretty(&input).unwrap_or_default()
     );
-    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "decompose_goal", tabs, reuse_tabs, max_tabs, retries, delay_secs).await?;
+    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "decompose_goal", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, retries, delay_secs).await?;
     let output: DecomposeOutput = match serde_json::from_value(payload.clone()) {
         Ok(v) => v,
         Err(_) => {
@@ -99,7 +100,7 @@ Original input:\n{}",
                 serde_json::to_string_pretty(&payload).unwrap_or_default(),
                 serde_json::to_string_pretty(&input).unwrap_or_default()
             );
-            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "decompose_goal", tabs, reuse_tabs, max_tabs, 1, delay_secs).await?;
+            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "decompose_goal", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, 1, delay_secs).await?;
             payload = retry_payload.clone();
             serde_json::from_value(retry_payload.clone()).context("D_g output did not match schema")?
         }
@@ -118,7 +119,7 @@ Original input:\n{}",
             serde_json::to_string_pretty(&payload).unwrap_or_default(),
             serde_json::to_string_pretty(&input).unwrap_or_default()
         );
-        let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "decompose_goal", tabs, reuse_tabs, max_tabs, 1, delay_secs).await?;
+        let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "decompose_goal", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, 1, delay_secs).await?;
         payload = retry_payload.clone();
         let retry_output: DecomposeOutput = serde_json::from_value(retry_payload.clone()).context("D_g output did not match schema")?;
         if retry_output.tasks.len() < 2 {
@@ -150,7 +151,7 @@ pub async fn decompose_node(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::llm::TabSlots>,
+    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
     reuse_tabs: bool,
     max_tabs: usize,
     workspace_root: &Path,
@@ -158,6 +159,7 @@ pub async fn decompose_node(
     log_dir: &Path,
     retries: u32,
     delay_secs: u64,
+    tab_cooldown_ms: u64,
 ) -> Result<DecomposeOutput> {
     let input = serde_json::json!({ "node": { "id": node.id, "description": node.description } });
     let caps = [
@@ -187,7 +189,7 @@ Workspace root: {}\nWorkspace entries: {}\nAction space: paths must be under wor
         schema,
         serde_json::to_string_pretty(&input).unwrap_or_default()
     );
-    let payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "decompose_node", tabs, reuse_tabs, max_tabs, retries, delay_secs).await?;
+    let payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "decompose_node", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, retries, delay_secs).await?;
     let mut output: DecomposeOutput = serde_json::from_value(payload.clone()).context("D_g output did not match schema")?;
     for t in &mut output.tasks {
         t.node_type = normalize_node_type(t.node_type, &t.required_capabilities, &t.description);

@@ -18,3 +18,8 @@ regex = "1"
 async-trait = "0.1"
 anyhow = "1"
 canon_telemetry = { path = "../canon_telemetry" }
+algorithms = { path = "../algorithms" }
+
+[features]
+default = []
+cuda = ["algorithms/cuda"]

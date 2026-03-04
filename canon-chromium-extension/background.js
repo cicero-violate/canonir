@@ -104,6 +104,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: true });
     return true;
   }
+  if (message?.type === "NEW_CHAT_DONE") {
+    console.log("[BG] NEW_CHAT_DONE -> Rust", { tabId });
+    sendToRust({ type: "NEW_CHAT_DONE", tabId });
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (message?.type === "TEMP_CHAT_DONE") {
+    console.log("[BG] TEMP_CHAT_DONE -> Rust", { tabId });
+    sendToRust({ type: "TEMP_CHAT_DONE", tabId });
+    sendResponse({ ok: true });
+    return true;
+  }
 
   sendResponse({ ok: false });
   return true;

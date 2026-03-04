@@ -1,5 +1,9 @@
 use crate::solver::csr_to_adj;
-use algorithms::graph::scc::kosaraju_scc;
+use crate::solver::gpu_algorithms::kosaraju_scc;
+#[cfg(feature = "cuda")]
+use crate::solver::gpu_algorithms::ac3_gpu_apply;
+#[cfg(feature = "cuda")]
+use algorithms::constraints::ac3::{ConstraintGraph, Domain};
 use anyhow::Result;
 use canon::edge::EdgeKind;
 use canon::id::NodeId;
@@ -21,7 +25,95 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
 
     derive_instantiates_edges(ir);
 
+    #[cfg(feature = "cuda")]
+    {
+        let (domains, graph, var_to_node) = build_type_constraint_graph(ir);
+        if !graph.constraints.is_empty() {
+            let pruned = ac3_gpu_apply(&domains, &graph).unwrap_or_else(|| {
+                eprintln!("WARN type_solver: ac3_gpu_apply validation failed; skipping pruning");
+                domains.clone()
+            });
+            for (var_idx, dom) in pruned.iter().enumerate() {
+                if dom.is_empty() {
+                    let node_id = var_to_node.get(var_idx).copied().unwrap_or_default();
+                    eprintln!("WARN type_solver: empty type domain for node {}", node_id);
+                }
+            }
+        }
+    }
+
     Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn build_type_constraint_graph(ir: &CanonIR) -> (Vec<Domain>, ConstraintGraph, Vec<usize>) {
+    let v = ir.type_graph.vertex_count();
+    let mut type_nodes = Vec::new();
+    let mut node_to_var = vec![None; v];
+    for idx in 0..v {
+        if matches!(ir.nodes.get(idx).map(|n| &n.kind), Some(CanonNodeKind::Type { .. })) {
+            node_to_var[idx] = Some(type_nodes.len());
+            type_nodes.push(idx);
+        }
+    }
+
+    let mut concrete_types = Vec::new();
+    for &node_idx in &type_nodes {
+        let Some(CanonNodeKind::Type { kind }) = ir.nodes.get(node_idx).map(|n| &n.kind) else {
+            continue;
+        };
+        if is_concrete_type(kind) {
+            concrete_types.push(node_idx as i32);
+        }
+    }
+    let fallback_domain: Vec<i32> = if concrete_types.is_empty() {
+        type_nodes.iter().map(|&i| i as i32).collect()
+    } else {
+        concrete_types.clone()
+    };
+
+    let mut domains = Vec::with_capacity(type_nodes.len());
+    for &node_idx in &type_nodes {
+        let Some(CanonNodeKind::Type { kind }) = ir.nodes.get(node_idx).map(|n| &n.kind) else {
+            continue;
+        };
+        let dom = if is_concrete_type(kind) {
+            vec![node_idx as i32]
+        } else {
+            fallback_domain.clone()
+        };
+        domains.push(dom);
+    }
+
+    let mut graph = ConstraintGraph::default();
+    for src in 0..v {
+        let Some(src_var) = node_to_var.get(src).and_then(|v| *v) else {
+            continue;
+        };
+        for (dst, edge) in ir.type_graph.neighbours(NodeId(src as u32)) {
+            let dst_idx = dst.index();
+            let Some(dst_var) = node_to_var.get(dst_idx).and_then(|v| *v) else {
+                continue;
+            };
+            match edge {
+                EdgeKind::TypeUnifies | EdgeKind::Instantiates => {
+                    graph.add_constraint(src_var, dst_var, |a, b| a == b);
+                    graph.add_constraint(dst_var, src_var, |a, b| a == b);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    (domains, graph, type_nodes)
+}
+
+#[cfg(feature = "cuda")]
+fn is_concrete_type(kind: &TypeKind) -> bool {
+    !matches!(
+        kind,
+        TypeKind::Param(_) | TypeKind::Extern(_) | TypeKind::Unresolved(_) | TypeKind::TypeRef { .. }
+    )
 }
 
 fn derive_instantiates_edges(ir: &mut CanonIR) {

@@ -265,13 +265,32 @@
       window.addEventListener("message", (event) => {
         if (event.source !== window) return;
         if (event.data?.type === "NEW_CHAT") {
-          if (!clickNewChat()) {
-            // Fallback: navigate to /app
-            try { location.href = "/app"; } catch {}
-          }
+          const deadline = Date.now() + 20000;
+          const click = () => {
+            if (!clickNewChat()) {
+              try { location.href = "/app"; } catch {}
+            }
+          };
+          const waitReady = () => {
+            const onApp = location.pathname.startsWith("/app");
+            const editor = findEditor();
+            const empty = editor ? editor.textContent.trim().length === 0 : false;
+            if (onApp && empty) {
+              window.postMessage({ type: "NEW_CHAT_DONE" }, "*");
+              return;
+            }
+            if (Date.now() < deadline) {
+              setTimeout(waitReady, 250);
+            } else {
+              window.postMessage({ type: "NEW_CHAT_DONE" }, "*");
+            }
+          };
+          click();
+          setTimeout(waitReady, 400);
         }
         if (event.data?.type === "TEMP_CHAT") {
           // Gemini does not expose a reliable temp chat toggle; no-op for now.
+          window.postMessage({ type: "TEMP_CHAT_DONE" }, "*");
         }
       });
     } catch (error) {

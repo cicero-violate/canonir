@@ -77,6 +77,10 @@ struct ServerState {
 
     /// reqId → oneshot waiting for TAB_OPENED confirmation.
     pending_open: HashMap<u64, oneshot::Sender<u32>>,
+    /// tabId → oneshot waiting for NEW_CHAT completion.
+    pending_new_chat: HashMap<u32, oneshot::Sender<()>>,
+    /// tabId → oneshot waiting for TEMP_CHAT completion.
+    pending_temp_chat: HashMap<u32, oneshot::Sender<()>>,
 
     /// All live tabs reported by the extension.
     live_tabs: std::collections::HashSet<u32>,
@@ -106,6 +110,8 @@ impl ServerState {
             tab_assemblers: HashMap::new(),
             pending: HashMap::new(),
             pending_open: HashMap::new(),
+            pending_new_chat: HashMap::new(),
+            pending_temp_chat: HashMap::new(),
             live_tabs: std::collections::HashSet::new(),
             turn_replay_queue: Vec::new(),
             frame_counter: 0,
@@ -219,6 +225,34 @@ impl WsBridge {
     pub async fn temp_chat(&self, tab_id: u32) -> Result<(), WsBridgeError> {
         let st = self.state.lock().await;
         st.send(json!({ "type": "TEMP_CHAT", "tabId": tab_id }))
+    }
+
+    /// Wait for NEW_CHAT completion signal from the tab.
+    pub async fn wait_new_chat(&self, tab_id: u32, timeout_secs: u64) -> Result<(), WsBridgeError> {
+        let (tx, rx) = oneshot::channel::<()>();
+        {
+            let mut st = self.state.lock().await;
+            st.pending_new_chat.insert(tab_id, tx);
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => Err(WsBridgeError::Cancelled),
+            Err(_) => Err(WsBridgeError::Timeout),
+        }
+    }
+
+    /// Wait for TEMP_CHAT completion signal from the tab.
+    pub async fn wait_temp_chat(&self, tab_id: u32, timeout_secs: u64) -> Result<(), WsBridgeError> {
+        let (tx, rx) = oneshot::channel::<()>();
+        {
+            let mut st = self.state.lock().await;
+            st.pending_temp_chat.insert(tab_id, tx);
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => Err(WsBridgeError::Cancelled),
+            Err(_) => Err(WsBridgeError::Timeout),
+        }
     }
 }
 
@@ -354,6 +388,7 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             st.live_tabs.remove(&tab_id);
             st.tab_assemblers.remove(&tab_id);
             st.pending.remove(&tab_id);
+            st.pending_new_chat.remove(&tab_id);
         }
 
         "TAB_READY" => {
@@ -411,6 +446,29 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
                 if let Some(tx) = st.pending.remove(&tab_id) {
                     let _ = tx.send(text);
                 }
+            }
+        }
+
+        "NEW_CHAT_DONE" => {
+            let tab_id = match msg.get("tabId").and_then(|v| v.as_u64()) {
+                Some(id) => id as u32,
+                None => return,
+            };
+            eprintln!("[ws] NEW_CHAT_DONE tab={}", tab_id);
+            let mut st = state.lock().await;
+            if let Some(tx) = st.pending_new_chat.remove(&tab_id) {
+                let _ = tx.send(());
+            }
+        }
+        "TEMP_CHAT_DONE" => {
+            let tab_id = match msg.get("tabId").and_then(|v| v.as_u64()) {
+                Some(id) => id as u32,
+                None => return,
+            };
+            eprintln!("[ws] TEMP_CHAT_DONE tab={}", tab_id);
+            let mut st = state.lock().await;
+            if let Some(tx) = st.pending_temp_chat.remove(&tab_id) {
+                let _ = tx.send(());
             }
         }
 

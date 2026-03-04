@@ -1,5 +1,5 @@
 use crate::solver::csr_to_adj;
-use algorithms::graph::reachability::reachability;
+use std::collections::VecDeque;
 use anyhow::Result;
 use canon::node::{flags, CanonNodeKind};
 use canon::CanonIR;
@@ -53,7 +53,7 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
         if a >= fwd.len() {
             return false;
         }
-        let reach = reachability(&fwd, &[a]);
+        let reach = reachability_mask(&fwd, &[a]);
         b < reach.len() && reach[b]
     };
 
@@ -93,6 +93,27 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn reachability_mask(adj: &[Vec<usize>], roots: &[usize]) -> Vec<bool> {
+    let n = adj.len();
+    let mut visited = vec![false; n];
+    let mut q = VecDeque::new();
+    for &r in roots {
+        if r < n && !visited[r] {
+            visited[r] = true;
+            q.push_back(r);
+        }
+    }
+    while let Some(u) = q.pop_front() {
+        for &v in &adj[u] {
+            if v < n && !visited[v] {
+                visited[v] = true;
+                q.push_back(v);
+            }
+        }
+    }
+    visited
 }
 
 fn visibility_flags(kind: Option<&CanonNodeKind>) -> u32 {

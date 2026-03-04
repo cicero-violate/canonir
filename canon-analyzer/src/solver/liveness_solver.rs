@@ -1,5 +1,11 @@
+#[cfg(not(feature = "cuda"))]
 use crate::solver::csr_to_adj;
-use algorithms::graph::reachability::reachability;
+#[cfg(feature = "cuda")]
+use crate::solver::graph_to_csr;
+#[cfg(feature = "cuda")]
+use crate::solver::gpu_algorithms::reachability_gpu;
+#[cfg(not(feature = "cuda"))]
+use std::collections::VecDeque;
 use anyhow::Result;
 use canon::node::{flags, CanonNodeKind};
 use canon::CanonIR;
@@ -9,8 +15,6 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
     if call_v == 0 {
         return Ok(());
     }
-
-    let adj = csr_to_adj(&ir.call_graph);
 
     let roots: Vec<usize> = ir
         .nodes
@@ -35,7 +39,18 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
         return Ok(());
     }
 
-    let live = reachability(&adj, &roots);
+    let live = {
+        #[cfg(feature = "cuda")]
+        {
+            let csr = graph_to_csr(&ir.call_graph);
+            reachability_gpu(&csr, &roots)
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            let adj = csr_to_adj(&ir.call_graph);
+            reachability_mask(&adj, &roots)
+        }
+    };
 
     let before = ir.emit_order.len();
     ir.emit_order.retain(|&id| {
@@ -56,4 +71,26 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(not(feature = "cuda"))]
+fn reachability_mask(adj: &[Vec<usize>], roots: &[usize]) -> Vec<bool> {
+    let n = adj.len();
+    let mut visited = vec![false; n];
+    let mut q = VecDeque::new();
+    for &r in roots {
+        if r < n && !visited[r] {
+            visited[r] = true;
+            q.push_back(r);
+        }
+    }
+    while let Some(u) = q.pop_front() {
+        for &v in &adj[u] {
+            if v < n && !visited[v] {
+                visited[v] = true;
+                q.push_back(v);
+            }
+        }
+    }
+    visited
 }

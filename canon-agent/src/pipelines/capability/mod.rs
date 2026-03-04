@@ -14,6 +14,7 @@ pub mod execute;
 pub mod verify;
 pub mod act;
 pub mod policy;
+pub mod tab_management;
 
 use super::{Pipeline, PipelineContext, PipelineOutcome};
 use crate::ir::SystemState;
@@ -28,6 +29,7 @@ use tokio::sync::Semaphore;
 use futures_util::future::join_all;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
+use algorithms::graph::adj_list::AdjList;
 
 const LOG_ROOT: &str = "/workspace/ai_sandbox/canon/agent_logs/capability";
 
@@ -45,7 +47,7 @@ pub enum Delta {
 pub struct CapabilityPipeline {
     bridge: WsBridge,
     config: CapabilityConfig,
-    tabs: tokio::sync::Mutex<llm::TabSlots>,
+    tabs: tokio::sync::Mutex<tab_management::TabSlots>,
     role_rr: tokio::sync::Mutex<HashMap<String, usize>>,
 }
 
@@ -55,7 +57,7 @@ impl CapabilityPipeline {
         Self {
             bridge,
             config,
-            tabs: tokio::sync::Mutex::new(llm::TabSlots::new()),
+            tabs: tokio::sync::Mutex::new(tab_management::TabSlots::new()),
             role_rr: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
@@ -100,6 +102,7 @@ impl CapabilityPipeline {
             Path::new(LOG_ROOT),
             self.config.llm_retry_count,
             self.config.llm_retry_delay_secs,
+            self.config.tab_cooldown_ms,
         ).await?;
         eprintln!("[capability] decompose_goal tasks={}", decomp.tasks.len());
 
@@ -142,11 +145,14 @@ impl CapabilityPipeline {
             &ctx.cwd[0],
             &workspace_listing,
             None,
+            None,
             Path::new(LOG_ROOT),
             retry_count,
             retry_delay,
         ).await?;
         eprintln!("[capability] build_graph_from_edges nodes={}", graph.nodes.len());
+        emit_planned_graph(&graph, Path::new(LOG_ROOT), 0);
+        run_graph_algorithms(&graph, Path::new(LOG_ROOT), 0);
 
         let semaphore = Arc::new(Semaphore::new(self.config.max_concurrency.max(1)));
         let mut blocked_streak = 0u32;
@@ -224,6 +230,7 @@ impl CapabilityPipeline {
                         tabs,
                         endpoint.reuse_tabs,
                         endpoint.max_tabs,
+                        self.config.tab_cooldown_ms,
                         &workspace_root,
                         &context,
                         &log_dir,
@@ -272,6 +279,7 @@ impl CapabilityPipeline {
 
             // Replan edges after each iteration to reflect new structure or progress.
             ensure_unique_node_ids(&mut graph.nodes);
+            let planner_signals = planner_signals_for_graph(&graph);
             graph = build_graph_from_edges(
                 &graph.nodes,
                 &self.bridge,
@@ -281,10 +289,14 @@ impl CapabilityPipeline {
                 &ctx.cwd[0],
                 &workspace_listing,
                 None,
+                Some(&planner_signals),
                 Path::new(LOG_ROOT),
                 retry_count,
                 retry_delay,
             ).await?;
+            let iter_u32 = u32::try_from(iter).unwrap_or(u32::MAX);
+            emit_planned_graph(&graph, Path::new(LOG_ROOT), iter_u32);
+            run_graph_algorithms(&graph, Path::new(LOG_ROOT), iter_u32);
 
             if self.config.prune_unlinked {
                 prune_unlinked_nodes(&mut graph);
@@ -564,7 +576,7 @@ async fn decompose_node_burst(
     bridge: &WsBridge,
     config: &CapabilityConfig,
     role_rr: &tokio::sync::Mutex<HashMap<String, usize>>,
-    tabs: &tokio::sync::Mutex<llm::TabSlots>,
+    tabs: &tokio::sync::Mutex<tab_management::TabSlots>,
     workspace_root: &Path,
     workspace_listing: &str,
     log_dir: &Path,
@@ -596,6 +608,7 @@ async fn decompose_node_burst(
                 log_dir,
                 retries,
                 delay_secs,
+                config.tab_cooldown_ms,
             )
             .await
         };
@@ -620,10 +633,11 @@ async fn plan_edges_burst(
     bridge: &WsBridge,
     config: &CapabilityConfig,
     role_rr: &tokio::sync::Mutex<HashMap<String, usize>>,
-    tabs: &tokio::sync::Mutex<llm::TabSlots>,
+    tabs: &tokio::sync::Mutex<tab_management::TabSlots>,
     workspace_root: &Path,
     workspace_listing: &str,
     constraint_note: Option<&str>,
+    planner_signals: Option<&str>,
     log_dir: &Path,
     retries: u32,
     delay_secs: u64,
@@ -650,9 +664,11 @@ async fn plan_edges_burst(
                 workspace_root,
                 workspace_listing,
                 constraint_note,
+                planner_signals,
                 log_dir,
                 retries,
                 delay_secs,
+                config.tab_cooldown_ms,
             )
             .await
         };
@@ -677,7 +693,7 @@ async fn expand_nodes(
     bridge: &WsBridge,
     config: &CapabilityConfig,
     role_rr: &tokio::sync::Mutex<HashMap<String, usize>>,
-    tabs: &tokio::sync::Mutex<llm::TabSlots>,
+    tabs: &tokio::sync::Mutex<tab_management::TabSlots>,
     workspace_root: &Path,
     workspace_listing: &str,
     log_dir: &Path,
@@ -688,17 +704,41 @@ async fn expand_nodes(
     max_depth: usize,
 ) -> Result<()> {
     let mut iter = 0u32;
+    let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let mut depth_map: HashMap<String, usize> = HashMap::new();
+    {
+        let mut expandable: Vec<&dag::TaskNode> = nodes.iter().filter(|n| is_expandable(n)).collect();
+        expandable.sort_by(|a, b| a.id.cmp(&b.id));
+        for node in expandable {
+            let depth = node.id.matches("__").count() + 1;
+            depth_map.insert(node.id.clone(), depth);
+            queue.push_back(node.id.clone());
+        }
+    }
     while iter < max_iters && nodes.len() < max_nodes {
-        let mut expandable: Vec<dag::TaskNode> = nodes.iter().cloned().filter(is_expandable).collect();
-        if expandable.is_empty() {
+        if queue.is_empty() {
             break;
         }
-        expandable.sort_by(|a, b| a.id.cmp(&b.id));
         let burst = role_burst(config, "decompose").max(1);
         let nodes_per_batch = (config.max_concurrency / burst).max(1);
-        expandable.truncate(nodes_per_batch);
+        let current_depth = queue
+            .front()
+            .and_then(|id| depth_map.get(id).cloned())
+            .unwrap_or(1);
+        let mut batch_ids = Vec::new();
+        while let Some(id) = queue.front() {
+            let depth = depth_map.get(id).cloned().unwrap_or(1);
+            if depth != current_depth || batch_ids.len() >= nodes_per_batch {
+                break;
+            }
+            batch_ids.push(queue.pop_front().unwrap());
+        }
         let mut futures = Vec::new();
-        for node in expandable {
+        for id in batch_ids {
+            let node = match nodes.iter().find(|n| n.id == id) {
+                Some(n) if is_expandable(n) => n.clone(),
+                _ => continue,
+            };
             let spec = decompose::TaskSpec {
                 id: node.id.clone(),
                 description: node.description.clone(),
@@ -730,6 +770,9 @@ async fn expand_nodes(
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!(r#"[capability] {{"event":"decompose_node_error","node":"{}","error":"{}"}}"#, parent_id, e);
+                    if nodes.iter().any(|n| n.id == parent_id) {
+                        queue.push_back(parent_id.clone());
+                    }
                     continue;
                 }
             };
@@ -740,12 +783,13 @@ async fn expand_nodes(
                 if child.id == parent_id || nodes.iter().any(|n| n.id == child.id) {
                     child.id = format!("{}__{}", parent_id, idx);
                 }
-                let depth = parent_id.matches("__").count() + 1;
+                let depth = current_depth + 1;
                 if depth > max_depth {
                     continue;
                 }
+                let child_id = child.id.clone();
                 nodes.push(dag::TaskNode {
-                    id: child.id,
+                    id: child_id.clone(),
                     description: child.description,
                     status: dag::Status::Pending,
                     deps: child.deps,
@@ -754,6 +798,8 @@ async fn expand_nodes(
                     result: None,
                     error: None,
                 });
+                depth_map.insert(child_id.clone(), depth);
+                queue.push_back(child_id);
                 if nodes.len() >= max_nodes {
                     break;
                 }
@@ -770,10 +816,11 @@ async fn build_graph_from_edges(
     bridge: &WsBridge,
     config: &CapabilityConfig,
     role_rr: &tokio::sync::Mutex<HashMap<String, usize>>,
-    tabs: &tokio::sync::Mutex<llm::TabSlots>,
+    tabs: &tokio::sync::Mutex<tab_management::TabSlots>,
     workspace_root: &Path,
     workspace_listing: &str,
     constraint_note: Option<&str>,
+    planner_signals: Option<&str>,
     log_dir: &Path,
     retries: u32,
     delay_secs: u64,
@@ -787,6 +834,7 @@ async fn build_graph_from_edges(
         workspace_root,
         workspace_listing,
         constraint_note,
+        planner_signals,
         log_dir,
         retries,
         delay_secs,
@@ -825,9 +873,11 @@ async fn build_graph_from_edges(
             workspace_root,
             workspace_listing,
             Some(&note),
+            planner_signals,
             log_dir,
             retries,
             delay_secs,
+            config.tab_cooldown_ms,
         ).await?;
         let mut graph_retry = dag::TaskGraph { nodes: nodes.to_vec() };
         let ids: std::collections::HashSet<String> = graph_retry.nodes.iter().map(|n| n.id.clone()).collect();
@@ -869,9 +919,11 @@ async fn build_graph_from_edges(
             workspace_root,
             workspace_listing,
             Some(&note),
+            planner_signals,
             log_dir,
             retries,
             delay_secs,
+            config.tab_cooldown_ms,
         ).await?;
         let mut graph_retry = dag::TaskGraph { nodes: nodes.to_vec() };
         let ids: std::collections::HashSet<String> = graph_retry.nodes.iter().map(|n| n.id.clone()).collect();
@@ -898,6 +950,218 @@ async fn build_graph_from_edges(
         return Ok(graph_retry);
     }
     Ok(graph)
+}
+
+fn emit_planned_graph(graph: &dag::TaskGraph, log_dir: &Path, iter: u32) {
+    #[derive(serde::Serialize)]
+    struct GraphSnapshot<'a> {
+        nodes: Vec<GraphNode<'a>>,
+        edges: Vec<GraphEdge<'a>>,
+    }
+    #[derive(serde::Serialize)]
+    struct GraphNode<'a> {
+        id: &'a str,
+        deps: &'a [String],
+        node_type: decompose::NodeType,
+    }
+    #[derive(serde::Serialize)]
+    struct GraphEdge<'a> {
+        from: &'a str,
+        to: &'a str,
+    }
+
+    let mut edges = Vec::new();
+    for n in &graph.nodes {
+        for dep in &n.deps {
+            edges.push(GraphEdge { from: dep.as_str(), to: n.id.as_str() });
+        }
+    }
+    let nodes = graph.nodes.iter().map(|n| GraphNode {
+        id: n.id.as_str(),
+        deps: &n.deps,
+        node_type: n.node_type,
+    }).collect();
+    let snapshot = GraphSnapshot { nodes, edges };
+    let path = if iter == 0 {
+        log_dir.join("planned_graph.json")
+    } else {
+        log_dir.join(format!("iter_{:03}_planned_graph.json", iter))
+    };
+    if let Ok(pretty) = serde_json::to_string_pretty(&snapshot) {
+        let _ = std::fs::write(path, pretty);
+    }
+}
+
+fn run_graph_algorithms(graph: &dag::TaskGraph, log_dir: &Path, iter: u32) {
+    let signals = compute_graph_signals(graph);
+    let mut id_to_index: HashMap<String, usize> = HashMap::new();
+    let mut index_to_id: Vec<String> = Vec::new();
+    for n in &graph.nodes {
+        let idx = index_to_id.len();
+        id_to_index.insert(n.id.clone(), idx);
+        index_to_id.push(n.id.clone());
+    }
+    let mut adj = AdjList::new(graph.nodes.len());
+    for n in &graph.nodes {
+        let to = match id_to_index.get(&n.id) {
+            Some(v) => *v,
+            None => continue,
+        };
+        for dep in &n.deps {
+            if let Some(from) = id_to_index.get(dep) {
+                adj.add_edge(*from, to);
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    {
+        let csr = adj.to_csr();
+        let levels = algorithms::graph::gpu::bfs_gpu(&csr, 0);
+        let snapshot = serde_json::json!({
+            "algorithm": "bfs_gpu",
+            "source": 0,
+            "levels": levels,
+            "index_to_id": index_to_id,
+            "signals": signals.to_json(&index_to_id),
+        });
+        let path = if iter == 0 {
+            log_dir.join("graph_algorithms.json")
+        } else {
+            log_dir.join(format!("iter_{:03}_graph_algorithms.json", iter))
+        };
+        if let Ok(pretty) = serde_json::to_string_pretty(&snapshot) {
+            let _ = std::fs::write(path, pretty);
+        }
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    {
+        let snapshot = serde_json::json!({
+            "algorithm": "bfs_gpu",
+            "status": "skipped",
+            "reason": "canon-agent built without feature \"cuda\"",
+            "signals": signals.to_json(&index_to_id),
+        });
+        let path = if iter == 0 {
+            log_dir.join("graph_algorithms.json")
+        } else {
+            log_dir.join(format!("iter_{:03}_graph_algorithms.json", iter))
+        };
+        if let Ok(pretty) = serde_json::to_string_pretty(&snapshot) {
+            let _ = std::fs::write(path, pretty);
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct GraphSignals {
+    roots: Vec<usize>,
+    topo_order: Vec<usize>,
+    sccs: Vec<Vec<usize>>,
+    unreachable: Vec<usize>,
+    has_cycle: bool,
+}
+
+impl GraphSignals {
+    fn to_json(&self, index_to_id: &[String]) -> serde_json::Value {
+        let to_ids = |idxs: &[usize]| idxs.iter().filter_map(|i| index_to_id.get(*i)).cloned().collect::<Vec<_>>();
+        let scc_ids = self
+            .sccs
+            .iter()
+            .map(|comp| to_ids(comp))
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "roots": to_ids(&self.roots),
+            "topo_order": to_ids(&self.topo_order),
+            "sccs": scc_ids,
+            "unreachable": to_ids(&self.unreachable),
+            "has_cycle": self.has_cycle
+        })
+    }
+}
+
+fn compute_graph_signals(graph: &dag::TaskGraph) -> GraphSignals {
+    let n = graph.nodes.len();
+    let mut id_to_index: HashMap<&str, usize> = HashMap::new();
+    for (idx, node) in graph.nodes.iter().enumerate() {
+        id_to_index.insert(node.id.as_str(), idx);
+    }
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut indegree = vec![0usize; n];
+    for node in &graph.nodes {
+        let to = match id_to_index.get(node.id.as_str()) {
+            Some(v) => *v,
+            None => continue,
+        };
+        for dep in &node.deps {
+            if let Some(from) = id_to_index.get(dep.as_str()) {
+                adj[*from].push(to);
+                indegree[to] += 1;
+            }
+        }
+    }
+    let roots: Vec<usize> = indegree
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &d)| if d == 0 { Some(i) } else { None })
+        .collect();
+    let topo_order = algorithms::graph::topological_sort::topological_sort(&adj);
+    let has_cycle = topo_order.len() != n;
+    let sccs = algorithms::graph::scc::kosaraju_scc(&adj)
+        .into_iter()
+        .filter(|c| c.len() > 1)
+        .collect::<Vec<_>>();
+    let reach = reachability_mask(&adj, &roots);
+    let unreachable = reach
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &ok)| if ok { None } else { Some(i) })
+        .collect::<Vec<_>>();
+    GraphSignals {
+        roots,
+        topo_order,
+        sccs,
+        unreachable,
+        has_cycle,
+    }
+}
+
+fn reachability_mask(adj: &[Vec<usize>], roots: &[usize]) -> Vec<bool> {
+    let n = adj.len();
+    let mut visited = vec![false; n];
+    let mut q = std::collections::VecDeque::new();
+    for &r in roots {
+        if r < n && !visited[r] {
+            visited[r] = true;
+            q.push_back(r);
+        }
+    }
+    while let Some(u) = q.pop_front() {
+        for &v in &adj[u] {
+            if v < n && !visited[v] {
+                visited[v] = true;
+                q.push_back(v);
+            }
+        }
+    }
+    visited
+}
+
+fn planner_signals_for_graph(graph: &dag::TaskGraph) -> String {
+    let signals = compute_graph_signals(graph);
+    let ids: Vec<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
+    let to_id = |i: usize| ids.get(i).copied().unwrap_or("<unknown>");
+    let roots = signals.roots.iter().map(|&i| to_id(i)).collect::<Vec<_>>().join(", ");
+    let unreachable = signals.unreachable.iter().map(|&i| to_id(i)).collect::<Vec<_>>().join(", ");
+    let topo = signals.topo_order.iter().map(|&i| to_id(i)).collect::<Vec<_>>().join(", ");
+    let sccs = signals.sccs.iter().map(|comp| {
+        comp.iter().map(|&i| to_id(i)).collect::<Vec<_>>().join(" -> ")
+    }).collect::<Vec<_>>().join(" | ");
+    format!(
+        "roots=[{}]; unreachable=[{}]; topo_order=[{}]; sccs=[{}]; has_cycle={}",
+        roots, unreachable, topo, sccs, signals.has_cycle
+    )
 }
 
 fn enforce_linking_constraints(graph: &dag::TaskGraph) -> Result<(), String> {

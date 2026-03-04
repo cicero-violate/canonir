@@ -72,9 +72,10 @@ pub async fn call_node(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::llm::TabSlots>,
+    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
     reuse_tabs: bool,
     max_tabs: usize,
+    tab_cooldown_ms: u64,
     workspace_root: &Path,
     context: &[ContextNode],
     log_dir: &Path,
@@ -84,17 +85,17 @@ pub async fn call_node(
 ) -> Result<NodeCallResult> {
     if ctx.is_verify_context() {
         ctx.require(Capability::StatusUpdateOnly).map_err(|e| anyhow::anyhow!(e))?;
-        let output = call_verify(node, bridge, endpoint_id, url, role_schema, tabs, reuse_tabs, max_tabs, workspace_root, context, log_dir, iter, retries, delay_secs).await?;
+        let output = call_verify(node, bridge, endpoint_id, url, role_schema, tabs, reuse_tabs, max_tabs, tab_cooldown_ms, workspace_root, context, log_dir, iter, retries, delay_secs).await?;
         return Ok(NodeCallResult::Verify { node_id: node.id.clone(), output });
     }
     if ctx.is_mutation_context() {
         if !(ctx.has(Capability::FileWrite) || ctx.has(Capability::ApplyPatch)) {
             return Err(anyhow::anyhow!("node {} missing capability FileWrite or ApplyPatch", node.id));
         }
-        let output = call_mutate(node, bridge, endpoint_id, url, role_schema, tabs, reuse_tabs, max_tabs, workspace_root, context, log_dir, iter, retries, delay_secs).await?;
+        let output = call_mutate(node, bridge, endpoint_id, url, role_schema, tabs, reuse_tabs, max_tabs, tab_cooldown_ms, workspace_root, context, log_dir, iter, retries, delay_secs).await?;
         return Ok(NodeCallResult::Mutate { node_id: node.id.clone(), output });
     }
-    let output = call_readonly(node, bridge, endpoint_id, url, role_schema, tabs, reuse_tabs, max_tabs, workspace_root, context, log_dir, iter, retries, delay_secs).await?;
+    let output = call_readonly(node, bridge, endpoint_id, url, role_schema, tabs, reuse_tabs, max_tabs, tab_cooldown_ms, workspace_root, context, log_dir, iter, retries, delay_secs).await?;
     Ok(NodeCallResult::Readonly { node_id: node.id.clone(), output })
 }
 
@@ -122,9 +123,10 @@ pub async fn dispatch_node(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::llm::TabSlots>,
+    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
     reuse_tabs: bool,
     max_tabs: usize,
+    tab_cooldown_ms: u64,
     workspace_root: &Path,
     roots: &[PathBuf],
     max_output_lines: usize,
@@ -135,15 +137,15 @@ pub async fn dispatch_node(
 ) -> Result<NodeOutcome> {
     if ctx.is_verify_context() {
         ctx.require(Capability::StatusUpdateOnly).map_err(|e| anyhow::anyhow!(e))?;
-        return dispatch_verify(node, graph, bridge, endpoint_id, url, role_schema, tabs, reuse_tabs, max_tabs, workspace_root, log_dir, iter, retries, delay_secs).await;
+        return dispatch_verify(node, graph, bridge, endpoint_id, url, role_schema, tabs, reuse_tabs, max_tabs, tab_cooldown_ms, workspace_root, log_dir, iter, retries, delay_secs).await;
     }
     if ctx.is_mutation_context() {
         if !(ctx.has(Capability::FileWrite) || ctx.has(Capability::ApplyPatch)) {
             return Err(anyhow::anyhow!("node {} missing capability FileWrite or ApplyPatch", node.id));
         }
-        return dispatch_mutate(node, graph, bridge, endpoint_id, url, role_schema, tabs, reuse_tabs, max_tabs, workspace_root, roots, max_output_lines, log_dir, iter, retries, delay_secs).await;
+        return dispatch_mutate(node, graph, bridge, endpoint_id, url, role_schema, tabs, reuse_tabs, max_tabs, tab_cooldown_ms, workspace_root, roots, max_output_lines, log_dir, iter, retries, delay_secs).await;
     }
-    dispatch_readonly(node, graph, bridge, endpoint_id, url, role_schema, tabs, reuse_tabs, max_tabs, workspace_root, roots, max_output_lines, log_dir, iter, retries, delay_secs).await
+    dispatch_readonly(node, graph, bridge, endpoint_id, url, role_schema, tabs, reuse_tabs, max_tabs, tab_cooldown_ms, workspace_root, roots, max_output_lines, log_dir, iter, retries, delay_secs).await
 }
 
 async fn call_mutate(
@@ -152,9 +154,10 @@ async fn call_mutate(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::llm::TabSlots>,
+    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
     reuse_tabs: bool,
     max_tabs: usize,
+    tab_cooldown_ms: u64,
     workspace_root: &Path,
     context: &[ContextNode],
     log_dir: &Path,
@@ -174,7 +177,7 @@ async fn call_mutate(
         context.len(),
         serde_json::to_string_pretty(&input).unwrap_or_default()
     );
-    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "mutate", tabs, reuse_tabs, max_tabs, retries, delay_secs).await?;
+    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "mutate", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, retries, delay_secs).await?;
     let output: ExecOutput = match parse_exec_output(&payload, &node.id) {
         Ok(v) => v,
         Err(_) => {
@@ -184,7 +187,7 @@ async fn call_mutate(
                 serde_json::to_string_pretty(&payload).unwrap_or_default(),
                 serde_json::to_string_pretty(&input).unwrap_or_default()
             );
-            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "mutate", tabs, reuse_tabs, max_tabs, 1, delay_secs).await?;
+            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "mutate", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, 1, delay_secs).await?;
             payload = retry_payload.clone();
             parse_exec_output(&retry_payload, &node.id)?
         }
@@ -295,9 +298,10 @@ async fn call_verify(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::llm::TabSlots>,
+    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
     reuse_tabs: bool,
     max_tabs: usize,
+    tab_cooldown_ms: u64,
     workspace_root: &Path,
     context: &[ContextNode],
     log_dir: &Path,
@@ -317,7 +321,7 @@ async fn call_verify(
         context.len(),
         serde_json::to_string_pretty(&input).unwrap_or_default()
     );
-    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "verify", tabs, reuse_tabs, max_tabs, retries, delay_secs).await?;
+    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "verify", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, retries, delay_secs).await?;
     let output: VerifyOutput = match serde_json::from_value(payload.clone()) {
         Ok(v) => v,
         Err(_) => {
@@ -327,7 +331,7 @@ async fn call_verify(
                 serde_json::to_string_pretty(&payload).unwrap_or_default(),
                 serde_json::to_string_pretty(&input).unwrap_or_default()
             );
-            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "verify", tabs, reuse_tabs, max_tabs, 1, delay_secs).await?;
+            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "verify", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, 1, delay_secs).await?;
             payload = retry_payload.clone();
             serde_json::from_value(retry_payload.clone()).context("verifier output did not match schema")?
         }
@@ -376,9 +380,10 @@ async fn call_readonly(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::llm::TabSlots>,
+    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
     reuse_tabs: bool,
     max_tabs: usize,
+    tab_cooldown_ms: u64,
     workspace_root: &Path,
     context: &[ContextNode],
     log_dir: &Path,
@@ -398,7 +403,7 @@ async fn call_readonly(
         context.len(),
         serde_json::to_string_pretty(&input).unwrap_or_default()
     );
-    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "readonly", tabs, reuse_tabs, max_tabs, retries, delay_secs).await?;
+    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "readonly", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, retries, delay_secs).await?;
     let output: ExecOutput = match parse_exec_output(&payload, &node.id) {
         Ok(v) => v,
         Err(_) => {
@@ -408,7 +413,7 @@ async fn call_readonly(
                 serde_json::to_string_pretty(&payload).unwrap_or_default(),
                 serde_json::to_string_pretty(&input).unwrap_or_default()
             );
-            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "readonly", tabs, reuse_tabs, max_tabs, 1, delay_secs).await?;
+            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "readonly", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, 1, delay_secs).await?;
             payload = retry_payload.clone();
             parse_exec_output(&retry_payload, &node.id)?
         }
@@ -423,7 +428,7 @@ Invalid response:\n{}\n\nOriginal input:\n{}",
             serde_json::to_string_pretty(&payload).unwrap_or_default(),
             serde_json::to_string_pretty(&input).unwrap_or_default()
         );
-        let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "verify", tabs, reuse_tabs, max_tabs, 1, delay_secs).await?;
+        let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "verify", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, 1, delay_secs).await?;
         let retry_output = parse_exec_output(&retry_payload, &node.id)?;
         return Ok(retry_output);
     }
@@ -526,9 +531,10 @@ async fn dispatch_mutate(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::llm::TabSlots>,
+    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
     reuse_tabs: bool,
     max_tabs: usize,
+    tab_cooldown_ms: u64,
     workspace_root: &Path,
     roots: &[PathBuf],
     max_output_lines: usize,
@@ -545,7 +551,7 @@ async fn dispatch_mutate(
         workspace_root.display(),
         serde_json::to_string_pretty(&input).unwrap_or_default()
     );
-    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "readonly", tabs, reuse_tabs, max_tabs, retries, delay_secs).await?;
+    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "readonly", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, retries, delay_secs).await?;
     let output: ExecOutput = match parse_exec_output(&payload, &node.id) {
         Ok(v) => v,
         Err(_) => {
@@ -555,7 +561,7 @@ async fn dispatch_mutate(
                 serde_json::to_string_pretty(&payload).unwrap_or_default(),
                 serde_json::to_string_pretty(&input).unwrap_or_default()
             );
-            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "readonly", tabs, reuse_tabs, max_tabs, 1, delay_secs).await?;
+            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "readonly", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, 1, delay_secs).await?;
             payload = retry_payload.clone();
             parse_exec_output(&retry_payload, &node.id)?
         }
@@ -641,9 +647,10 @@ async fn dispatch_verify(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::llm::TabSlots>,
+    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
     reuse_tabs: bool,
     max_tabs: usize,
+    tab_cooldown_ms: u64,
     workspace_root: &Path,
     log_dir: &Path,
     iter: u64,
@@ -658,7 +665,7 @@ async fn dispatch_verify(
         workspace_root.display(),
         serde_json::to_string_pretty(&input).unwrap_or_default()
     );
-    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "readonly", tabs, reuse_tabs, max_tabs, retries, delay_secs).await?;
+    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "readonly", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, retries, delay_secs).await?;
     let output: VerifyOutput = match serde_json::from_value(payload.clone()) {
         Ok(v) => v,
         Err(_) => {
@@ -668,7 +675,7 @@ async fn dispatch_verify(
                 serde_json::to_string_pretty(&payload).unwrap_or_default(),
                 serde_json::to_string_pretty(&input).unwrap_or_default()
             );
-            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "readonly", tabs, reuse_tabs, max_tabs, 1, delay_secs).await?;
+            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "readonly", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, 1, delay_secs).await?;
             payload = retry_payload.clone();
             serde_json::from_value(retry_payload.clone()).context("verifier output did not match schema")?
         }
@@ -710,9 +717,10 @@ async fn dispatch_readonly(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::llm::TabSlots>,
+    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
     reuse_tabs: bool,
     max_tabs: usize,
+    tab_cooldown_ms: u64,
     workspace_root: &Path,
     roots: &[PathBuf],
     max_output_lines: usize,
@@ -729,7 +737,7 @@ async fn dispatch_readonly(
         workspace_root.display(),
         serde_json::to_string_pretty(&input).unwrap_or_default()
     );
-    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "readonly", tabs, reuse_tabs, max_tabs, retries, delay_secs).await?;
+    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "readonly", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, retries, delay_secs).await?;
     let output: ExecOutput = match parse_exec_output(&payload, &node.id) {
         Ok(v) => v,
         Err(_) => {
@@ -739,7 +747,7 @@ async fn dispatch_readonly(
                 serde_json::to_string_pretty(&payload).unwrap_or_default(),
                 serde_json::to_string_pretty(&input).unwrap_or_default()
             );
-            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "readonly", tabs, reuse_tabs, max_tabs, 1, delay_secs).await?;
+            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "readonly", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, 1, delay_secs).await?;
             payload = retry_payload.clone();
             parse_exec_output(&retry_payload, &node.id)?
         }

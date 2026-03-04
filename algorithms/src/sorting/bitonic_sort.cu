@@ -13,10 +13,10 @@
 //   swap(tid, ixj) if ascending ? arr[tid] > arr[ixj] : arr[tid] < arr[ixj]
 //   Complexity: O(log^2 N) passes, O(N) parallel comparisons per pass
 
-__global__ void bitonic_step(int64_t* arr, int j, int k) {
+__global__ void bitonic_step(int64_t* arr, int N, int j, int k) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     int ixj = tid ^ j;
-    if (tid >= gridDim.x * blockDim.x) return;
+    if (tid >= N || ixj >= N) return;
     if (ixj <= tid) return;
     bool asc = (tid & k) == 0;
     if (asc ? arr[tid] > arr[ixj] : arr[tid] < arr[ixj]) {
@@ -36,7 +36,7 @@ extern "C" void gpu_bitonic_sort(int64_t* arr, int N) {
 
     for (int k = 2; k <= N; k <<= 1) {
         for (int j = k >> 1; j > 0; j >>= 1) {
-            bitonic_step<<<blocks, threads>>>(d, j, k);
+            bitonic_step<<<blocks, threads>>>(d, N, j, k);
             cudaDeviceSynchronize();
         }
     }

@@ -128,20 +128,20 @@ Only direct facts from tool output are recorded.
   97 |     return __ret;
      |            ^^^^^ expected `String`, found `()`
   error[E0308]: mismatched types
-     --> src/extractor.rs:166:13
+     --> src/extractor.rs:126:13
       |
-  162 |     let mut __ret = ();
+  122 |     let mut __ret = ();
       |                     -- expected due to this value
   ...
-  166 |     __ret = _v3.unwrap_or(_v5);
+  126 |     __ret = _v3.unwrap_or(_v5);
       |             ^^^^^^^^^^^^^^^^^^ expected `()`, found `&str`
   error[E0308]: mismatched types
-     --> src/extractor.rs:167:12
+     --> src/extractor.rs:127:12
       |
-  161 | fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
+  121 | fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
       |                                                ------- expected `&'a str` because of return type
   ...
-  167 |     return __ret;
+  127 |     return __ret;
       |            ^^^^^ expected `&str`, found `()`
   error[E0599]: `()` is not an iterator
     --> src/repomap.rs:24:23

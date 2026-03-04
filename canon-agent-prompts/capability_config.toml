@@ -24,7 +24,8 @@ tab_cooldown_ms = 4000
 
 [[llm.endpoints]]
 id = "chatgpt"
-url = "https://chatgpt.com/?temporary-chat=true"
+# url = "https://chatgpt.com/?temporary-chat=true"
+url = "https://chatgpt.com/gg/69a5aa249554819e9ac25e2df27102f1"
 role_markdown = "GENERIC_AGENT_ROLE.md"
 max_tabs = 4
 reuse_tabs = true

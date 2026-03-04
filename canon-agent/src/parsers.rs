@@ -1,4 +1,5 @@
 use serde_json::Value;
+use crate::llm_domains::{is_chatgpt_gg_url, is_chatgpt_url, is_gemini_url};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SiteType {
@@ -10,13 +11,13 @@ pub enum SiteType {
 
 impl SiteType {
     pub fn from_url(url: &str) -> Self {
-        if url.starts_with("https://chatgpt.com/gg/") {
+        if is_chatgpt_gg_url(url) {
             return SiteType::ChatGptGroup;
         }
-        if url.starts_with("https://chatgpt.com/") || url.starts_with("https://chat.openai.com/") {
+        if is_chatgpt_url(url) {
             return SiteType::ChatGptPrivate;
         }
-        if url.starts_with("https://gemini.google.com/") {
+        if is_gemini_url(url) {
             return SiteType::Gemini;
         }
         SiteType::Unknown

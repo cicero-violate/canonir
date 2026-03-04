@@ -34,6 +34,7 @@
 //! Designed as a structured computational foundation layer.
 
 pub mod concurrency;
+pub mod constraints;
 pub mod control_flow;
 pub mod cryptography;
 pub mod data_structures;
@@ -46,3 +47,5 @@ pub mod parsing_compilation;
 pub mod searching;
 pub mod sorting;
 pub mod string_algorithms;
+#[cfg(all(test, feature = "cuda"))]
+mod gpu_tests;

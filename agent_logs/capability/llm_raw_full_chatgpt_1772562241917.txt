@@ -1,7 +1,0 @@
-Perform a basic structural audit of the canon-agent repository.",
-      "deps": [],
-      "required_capabilities": ["file_read"]
-    }
-  ]
-}
-```

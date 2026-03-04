@@ -1,5 +1,5 @@
 use crate::solver::{csr_to_adj, global_csr_rev_to_adj, global_csr_to_adj};
-use algorithms::graph::reachability::is_acyclic;
+use algorithms::graph::topological_sort::topological_sort;
 use anyhow::{bail, Result};
 use canon::edge::EdgeKind;
 use canon::id::NodeId;
@@ -91,7 +91,7 @@ pub fn solve(ir: &CanonIR) -> Result<()> {
     let mod_v = ir.module_graph.vertex_count();
     if mod_v > 0 {
         let adj = csr_to_adj(&ir.module_graph);
-        if !is_acyclic(&adj) {
+        if topological_sort(&adj).len() != adj.len() {
             bail!("invariant_solver: module_graph contains a cycle");
         }
     }

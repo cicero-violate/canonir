@@ -189,6 +189,15 @@
     }
   });
 
+  function isStreaming() {
+    const stopByTestId = document.querySelector('button[data-testid="stop-button"]');
+    if (stopByTestId) return true;
+    const stopByAria = document.querySelector('button[aria-label="Stop generating"]');
+    if (stopByAria) return true;
+    const buttons = Array.from(document.querySelectorAll('button'));
+    return buttons.some(b => (b.textContent || "").toLowerCase().includes("stop"));
+  }
+
   function clickNewChat() {
     const btn = document.querySelector('a[data-testid="create-new-chat-button"]');
     if (btn) { btn.click(); return true; }
@@ -203,15 +212,68 @@
     return false;
   }
 
+  function isTempChatEnabled() {
+    if (location.search.includes("temporary-chat=true")) return true;
+    const offBtn = document.querySelector('button[aria-label="Turn off temporary chat"]');
+    if (offBtn) return true;
+    const badge = document.querySelector('[data-testid="temporary-chat-badge"]');
+    if (badge) return true;
+    return false;
+  }
+
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     if (event.data?.type === "NEW_CHAT") {
-      if (!clickNewChat()) {
-        try { location.href = "/"; } catch {}
-      }
+      const deadline = Date.now() + 20000;
+      const click = () => {
+        if (!clickNewChat()) {
+          try { location.href = "/"; } catch {}
+        }
+      };
+      const waitReady = () => {
+        const onHome = location.pathname === "/";
+        const editor = document.querySelector('div[contenteditable="true"]');
+        const empty = editor ? editor.textContent.trim().length === 0 : false;
+        if (onHome && empty) {
+          window.postMessage({ type: "NEW_CHAT_DONE" }, "*");
+          return;
+        }
+        if (Date.now() < deadline) {
+          setTimeout(waitReady, 250);
+        } else {
+          window.postMessage({ type: "NEW_CHAT_DONE" }, "*");
+        }
+      };
+      const waitStream = () => {
+        if (!isStreaming()) {
+          click();
+          setTimeout(waitReady, 400);
+          return;
+        }
+        if (Date.now() < deadline) {
+          setTimeout(waitStream, 250);
+        } else {
+          click();
+          setTimeout(waitReady, 400);
+        }
+      };
+      waitStream();
     }
     if (event.data?.type === "TEMP_CHAT") {
-      clickTempChat();
+      const deadline = Date.now() + 10000;
+      const tryEnable = () => {
+        if (isTempChatEnabled()) {
+          window.postMessage({ type: "TEMP_CHAT_DONE" }, "*");
+          return;
+        }
+        clickTempChat();
+        if (Date.now() < deadline) {
+          setTimeout(tryEnable, 300);
+        } else {
+          window.postMessage({ type: "TEMP_CHAT_DONE" }, "*");
+        }
+      };
+      tryEnable();
     }
   });
 

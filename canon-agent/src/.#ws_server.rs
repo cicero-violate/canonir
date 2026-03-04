@@ -1,1 +1,0 @@
-cicero-arch-omen@archlinux.1637050:1771646713

@@ -63,6 +63,7 @@ extern "C" void gpu_matrix_multiply(
     cudaMalloc(&dA, bytes);
     cudaMalloc(&dB, bytes);
     cudaMalloc(&dC, bytes);
+    cudaMemset(dC, 0, bytes);
 
     cudaMemcpy(dA, A, bytes, cudaMemcpyHostToDevice);
     cudaMemcpy(dB, B, bytes, cudaMemcpyHostToDevice);

@@ -1,63 +1,43 @@
-//! Reachability — forward BFS/DFS from a root set.
+//! Reachability via GPU BFS (no CPU implementation).
 //!
 //! Variables:
-//!   adj    : &[Vec<usize>]   — adjacency list, vertex count = adj.len()
-//!   roots  : &[usize]        — starting vertices
-//!   reach  : Vec<bool>       — reach[v] = true iff v is reachable from roots
-//!
-//! Equation:
-//!   reach = BFS({ roots }) on adj
-//!   live(v) <=> reach[v]
+//!   adj (CSR): row_ptr, col_idx
+//!   roots: starting vertices
+//!   visited[v] = true iff v reachable from any root
 
-/// Returns a boolean mask: `mask[v]` is true iff `v` is reachable from any root.
-pub fn reachability(adj: &[Vec<usize>], roots: &[usize]) -> Vec<bool> {
-    let n = adj.len();
-    let mut visited = vec![false; n];
-    let mut queue = std::collections::VecDeque::new();
-    for &r in roots {
-        if r < n && !visited[r] {
-            visited[r] = true;
-            queue.push_back(r);
-        }
-    }
-    while let Some(u) = queue.pop_front() {
-        for &w in &adj[u] {
-            if w < n && !visited[w] {
-                visited[w] = true;
-                queue.push_back(w);
-            }
-        }
-    }
-    visited
+use super::csr::Csr;
+
+#[cfg(not(feature = "cuda"))]
+compile_error!("graph::reachability requires feature \"cuda\" (GPU-only module)");
+
+#[cfg(feature = "cuda")]
+unsafe extern "C" {
+    fn gpu_reachability(
+        row_ptr: *const i32,
+        col_idx: *const i32,
+        v: i32,
+        e: i32,
+        roots: *const i32,
+        root_count: i32,
+        visited_out: *mut i32,
+    );
 }
 
-/// Returns true iff the graph has no cycle (i.e. is a DAG).
-/// Uses DFS-colouring: white=0, grey=1, black=2.
-pub fn is_acyclic(adj: &[Vec<usize>]) -> bool {
-    let n = adj.len();
-    let mut colour = vec![0u8; n];
-
-    fn visit(u: usize, adj: &[Vec<usize>], colour: &mut Vec<u8>) -> bool {
-        colour[u] = 1; // grey — on stack
-        for &w in &adj[u] {
-            if w >= adj.len() {
-                continue;
-            }
-            if colour[w] == 1 {
-                return false;
-            } // back edge = cycle
-            if colour[w] == 0 && !visit(w, adj, colour) {
-                return false;
-            }
-        }
-        colour[u] = 2; // black — done
-        true
+/// GPU reachability from a set of roots. Returns visited mask.
+#[cfg(feature = "cuda")]
+pub fn reachability_gpu(csr: &Csr, roots: &[usize]) -> Vec<bool> {
+    let mut visited = vec![0i32; csr.vertex_count()];
+    let roots_i32: Vec<i32> = roots.iter().map(|&r| r as i32).collect();
+    unsafe {
+        gpu_reachability(
+            csr.row_ptr.as_ptr(),
+            csr.col_idx.as_ptr(),
+            csr.vertex_count() as i32,
+            csr.edge_count() as i32,
+            roots_i32.as_ptr(),
+            roots_i32.len() as i32,
+            visited.as_mut_ptr(),
+        );
     }
-
-    for u in 0..n {
-        if colour[u] == 0 && !visit(u, adj, &mut colour) {
-            return false;
-        }
-    }
-    true
+    visited.into_iter().map(|v| v != 0).collect()
 }
