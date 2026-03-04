@@ -1,43 +1,3 @@
-### Variables
-
-[
-B = \text{branch count}
-]
-
-[
-B_{target} = \text{desired branch count}
-]
-
-[
-M = \text{modules}
-]
-
-[
-T = \text{dispatch tables}
-]
-
-[
-K = \text{algorithm kernels}
-]
-
----
-
-### Equations
-
-[
-B_{target} < 200
-]
-
-Explanation: reduce branching by converting control flow to tables and kernels.
-
-[
-Execution = DAG(N,E) \rightarrow K
-]
-
-Explanation: graph algorithms handle flow instead of nested logic.
-
----
-
 # LLM Refactor Execution Plan
 
 Workspace root:
@@ -322,12 +282,3 @@ capability/
   dag.rs
 ```
 
-Execution model:
-
-[
-Agent = DAG + Kernels + DispatchTables
-]
-
----
-
-max(intelligence, efficiency, correctness, alignment, robustness, performance, scalability, determinism, transparency, collaboration, empowerment, benefit, learning, future-proofing) = good
