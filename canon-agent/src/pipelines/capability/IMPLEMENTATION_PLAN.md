@@ -1,23 +1,5 @@
-### Variables
-
-[
-Q = \text{endpoint worker queue} \
-E = \text{execution engine} \
-G = \text{capability graph} \
-S = \text{scheduler} \
-R = \text{response routing} \
-I = \text{invariants}
-]
-
----
-
-# Current System State
-
 ### Equation
 
-[
-System = Q + G + S + E
-]
 
 Explanation:
 You now have a **deterministic execution pipeline**:
@@ -27,10 +9,6 @@ graph → scheduler → endpoint worker → LLM → result
 ```
 
 Key improvement:
-
-[
-LLM_{calls} = serialized
-]
 
 This removes:
 
@@ -43,10 +21,6 @@ This removes:
 # Next Step 1 — Response Routing
 
 ### Equation
-
-[
-response = f(req_id)
-]
 
 Explanation:
 Your worker prefixes requests with `REQ_ID`.
@@ -262,8 +236,3 @@ That must drive the system.
 
 These convert your system from **task executor → reasoning engine**.
 
----
-
-[
-good = \max(\text{Intelligence},\text{Efficiency},\text{Correctness},\text{Alignment},\text{Robustness},\text{Performance},\text{Scalability},\text{Determinism},\text{Transparency},\text{Collaboration},\text{Empowerment},\text{Benefit},\text{Learning},\text{FutureProofing})
-]
