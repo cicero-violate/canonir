@@ -58,7 +58,8 @@ pub enum NodeCallResult {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum DispatchMode { Mutate, Readonly, Verify }
+#[repr(u8)]
+enum DispatchMode { Mutate, Verify, Readonly }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextNode {
@@ -68,6 +69,81 @@ pub struct ContextNode {
     pub deps: Vec<String>,
     pub required_capabilities: Vec<Capability>,
     pub status: Status,
+}
+
+const MUTATE_SCHEMA: &str = "Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"results\": [\n    { \"id\": \"t1\", \"deltas\": [ { \"type\": \"write_file\", \"path\": \"x\", \"content\": \"...\" } ], \"rationale\": \"string\" }\n  ]\n}\nAllowed delta types:\n- read_file { path }\n- list_dir { path }\n- read_command { command, args }\n- write_file { path, content }\n- replace_text { path, find, replace }\n- delete_file { path }\n";
+const VERIFY_SCHEMA: &str = "Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"updates\": [\n    { \"id\": \"t1\", \"status\": \"completed\", \"error\": null }\n  ]\n}\nAllowed status values: pending, ready, running, completed, failed, blocked.\n";
+const READONLY_SCHEMA: &str = "Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"results\": [\n    { \"id\": \"t1\", \"deltas\": [ { \"type\": \"read_file\", \"path\": \"x\" } ], \"rationale\": \"string\" }\n  ]\n}\nAllowed delta types: read_file, list_dir, read_command.\n";
+
+struct ModeConfig {
+    phase: &'static str,
+    schema: &'static str,
+    log_name: fn(u64) -> String,
+}
+
+fn log_name_mutate(iter: u64) -> String {
+    format!("iter_{:03}_execute_output.json", iter)
+}
+
+fn log_name_verify(iter: u64) -> String {
+    format!("iter_{:03}_verify_output.json", iter)
+}
+
+fn log_name_readonly(iter: u64) -> String {
+    format!("iter_{:03}_readonly_output.json", iter)
+}
+
+const MODE_CONFIGS: [ModeConfig; 3] = [
+    ModeConfig { phase: "mutate", schema: MUTATE_SCHEMA, log_name: log_name_mutate },
+    ModeConfig { phase: "verify", schema: VERIFY_SCHEMA, log_name: log_name_verify },
+    ModeConfig { phase: "readonly", schema: READONLY_SCHEMA, log_name: log_name_readonly },
+];
+
+type ParseFn = fn(Value, &TaskNode, u64) -> Result<NodeCallResult>;
+
+const PARSE_FNS: [ParseFn; 3] = [parse_mutate, parse_verify, parse_readonly];
+
+fn parse_mutate(payload: Value, node: &TaskNode, iter: u64) -> Result<NodeCallResult> {
+    let output = parse_exec_output(&payload, &node.id)?;
+    if node.node_type != super::decompose::NodeType::Render {
+        return Err(anyhow::anyhow!("non-render node attempted mutation call"));
+    }
+    let delta_count: usize = output.results.iter().map(|r| r.deltas.len()).sum();
+    eprintln!(
+        r#"[capability] {{"iter":{},"phase":"executor","results":{},"deltas":{}}}"#,
+        iter,
+        output.results.len(),
+        delta_count
+    );
+    Ok(NodeCallResult::Mutate { node_id: node.id.clone(), output })
+}
+
+fn parse_verify(payload: Value, node: &TaskNode, iter: u64) -> Result<NodeCallResult> {
+    let output: VerifyOutput = serde_json::from_value(payload)
+        .context("verifier output did not match schema")?;
+    eprintln!(
+        r#"[capability] {{"iter":{},"phase":"verifier","updates":{}}}"#,
+        iter,
+        output.updates.len()
+    );
+    Ok(NodeCallResult::Verify { node_id: node.id.clone(), output })
+}
+
+fn parse_readonly(payload: Value, node: &TaskNode, iter: u64) -> Result<NodeCallResult> {
+    let output = parse_exec_output(&payload, &node.id)?;
+    if output.results.iter().any(|r| r.deltas.iter().any(|d|
+        matches!(d, Delta::WriteFile {..} | Delta::ReplaceText {..} | Delta::DeleteFile {..})))
+    {
+        return Err(anyhow::anyhow!("readonly node returned mutation deltas"));
+    }
+    let delta_count: usize = output.results.iter().map(|r| r.deltas.len()).sum();
+    eprintln!(
+        r#"[capability] {{"iter":{},"phase":"readonly","results":{},"deltas":{}}}"#,
+        iter,
+        output.results.len(),
+        delta_count
+    );
+    Ok(NodeCallResult::Readonly { node_id: node.id.clone(), output })
 }
 
 // ── Mode selection ────────────────────────────────────────────────────────────
@@ -96,7 +172,6 @@ pub async fn call_node(
     url: &str,
     role_schema: &str,
     tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
-    reuse_tabs: bool,
     max_tabs: usize,
     tab_cooldown_ms: u64,
     workspace_root: &Path,
@@ -107,8 +182,24 @@ pub async fn call_node(
     delay_secs: u64,
 ) -> Result<NodeCallResult> {
     let mode = select_mode(ctx, &node.id)?;
-    call_mode(mode, node, bridge, endpoint_id, url, role_schema, tabs, reuse_tabs,
-              max_tabs, tab_cooldown_ms, workspace_root, context, log_dir, iter, retries, delay_secs).await
+    call_mode(
+        mode,
+        node,
+        bridge,
+        endpoint_id,
+        url,
+        role_schema,
+        tabs,
+        max_tabs,
+        tab_cooldown_ms,
+        workspace_root,
+        context,
+        log_dir,
+        iter,
+        retries,
+        delay_secs,
+    )
+    .await
 }
 
 pub fn apply_node_result(
@@ -120,10 +211,67 @@ pub fn apply_node_result(
     iter: u64,
     policy: &CapabilityPolicy,
 ) -> Result<()> {
+    let idx = result_index(&result);
+    APPLY_FNS[idx](result, graph, roots, max_output_lines, log_dir, iter, policy)
+}
+
+type ApplyFn = fn(NodeCallResult, &mut TaskGraph, &[PathBuf], usize, &Path, u64, &CapabilityPolicy) -> Result<()>;
+
+const APPLY_FNS: [ApplyFn; 3] = [apply_mutate_wrapper, apply_readonly_wrapper, apply_verify_wrapper];
+
+fn result_index(result: &NodeCallResult) -> usize {
     match result {
-        NodeCallResult::Mutate   { node_id, output } => apply_mutate_output(node_id, output, graph, roots, max_output_lines, log_dir, iter, policy),
-        NodeCallResult::Readonly { node_id, output } => apply_readonly_output(node_id, output, graph, roots, max_output_lines, log_dir, iter),
-        NodeCallResult::Verify   { node_id, output } => apply_verify_output(node_id, output, graph, log_dir, iter),
+        NodeCallResult::Mutate { .. } => 0,
+        NodeCallResult::Readonly { .. } => 1,
+        NodeCallResult::Verify { .. } => 2,
+    }
+}
+
+fn apply_mutate_wrapper(
+    result: NodeCallResult,
+    graph: &mut TaskGraph,
+    roots: &[PathBuf],
+    max_output_lines: usize,
+    log_dir: &Path,
+    iter: u64,
+    policy: &CapabilityPolicy,
+) -> Result<()> {
+    if let NodeCallResult::Mutate { node_id, output } = result {
+        apply_mutate_output(node_id, output, graph, roots, max_output_lines, log_dir, iter, policy)
+    } else {
+        unreachable!("apply_mutate_wrapper received wrong variant")
+    }
+}
+
+fn apply_readonly_wrapper(
+    result: NodeCallResult,
+    graph: &mut TaskGraph,
+    roots: &[PathBuf],
+    max_output_lines: usize,
+    log_dir: &Path,
+    iter: u64,
+    _policy: &CapabilityPolicy,
+) -> Result<()> {
+    if let NodeCallResult::Readonly { node_id, output } = result {
+        apply_readonly_output(node_id, output, graph, roots, max_output_lines, log_dir, iter)
+    } else {
+        unreachable!("apply_readonly_wrapper received wrong variant")
+    }
+}
+
+fn apply_verify_wrapper(
+    result: NodeCallResult,
+    graph: &mut TaskGraph,
+    _roots: &[PathBuf],
+    _max_output_lines: usize,
+    log_dir: &Path,
+    iter: u64,
+    _policy: &CapabilityPolicy,
+) -> Result<()> {
+    if let NodeCallResult::Verify { node_id, output } = result {
+        apply_verify_output(node_id, output, graph, log_dir, iter)
+    } else {
+        unreachable!("apply_verify_wrapper received wrong variant")
     }
 }
 
@@ -137,7 +285,6 @@ pub async fn dispatch_node(
     url: &str,
     role_schema: &str,
     tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
-    reuse_tabs: bool,
     max_tabs: usize,
     tab_cooldown_ms: u64,
     workspace_root: &Path,
@@ -149,9 +296,24 @@ pub async fn dispatch_node(
     delay_secs: u64,
 ) -> Result<NodeOutcome> {
     let mode = select_mode(ctx, &node.id)?;
-    let result = call_mode(mode, node, bridge, endpoint_id, url, role_schema, tabs,
-                           reuse_tabs, max_tabs, tab_cooldown_ms, workspace_root,
-                           &[], log_dir, iter, retries, delay_secs).await?;
+    let result = call_mode(
+        mode,
+        node,
+        bridge,
+        endpoint_id,
+        url,
+        role_schema,
+        tabs,
+        max_tabs,
+        tab_cooldown_ms,
+        workspace_root,
+        &[],
+        log_dir,
+        iter,
+        retries,
+        delay_secs,
+    )
+    .await?;
     apply_node_result(result, graph, roots, max_output_lines, log_dir, iter,
                       &CapabilityPolicy::default())?;
     Ok(NodeOutcome { node_id: node.id.clone(), result: None, error: None, status_update: None })
@@ -167,7 +329,6 @@ async fn call_mode(
     url: &str,
     role_schema: &str,
     tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
-    reuse_tabs: bool,
     max_tabs: usize,
     tab_cooldown_ms: u64,
     workspace_root: &Path,
@@ -177,92 +338,47 @@ async fn call_mode(
     retries: u32,
     delay_secs: u64,
 ) -> Result<NodeCallResult> {
-    // ── Build mode-specific prompt pieces ─────────────────────────────────────
-    let (phase, schema, input, log_name): (&str, &str, Value, String) = match mode {
-        DispatchMode::Mutate => (
-            "mutate",
-            "Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"results\": [\n    { \"id\": \"t1\", \"deltas\": [ { \"type\": \"write_file\", \"path\": \"x\", \"content\": \"...\" } ], \"rationale\": \"string\" }\n  ]\n}\nAllowed delta types:\n- read_file { path }\n- list_dir { path }\n- read_command { command, args }\n- write_file { path, content }\n- replace_text { path, find, replace }\n- delete_file { path }\n",
-            serde_json::json!({
-                "nodes": [{"id": node.id, "description": node.description,
-                           "node_type": node.node_type, "deps": node.deps,
-                           "required_capabilities": node.required_capabilities}],
-                "context": context
-            }),
-            format!("iter_{:03}_execute_output.json", iter),
-        ),
-        DispatchMode::Verify => (
-            "verify",
-            "Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"updates\": [\n    { \"id\": \"t1\", \"status\": \"completed\", \"error\": null }\n  ]\n}\nAllowed status values: pending, ready, running, completed, failed, blocked.\n",
-            serde_json::json!({
-                "nodes": [{"id": node.id, "status": node.status,
-                           "result": node.result, "description": node.description}],
-                "context": context
-            }),
-            format!("iter_{:03}_verify_output.json", iter),
-        ),
-        DispatchMode::Readonly => (
-            "readonly",
-            "Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"results\": [\n    { \"id\": \"t1\", \"deltas\": [ { \"type\": \"read_file\", \"path\": \"x\" } ], \"rationale\": \"string\" }\n  ]\n}\nAllowed delta types: read_file, list_dir, read_command.\n",
-            serde_json::json!({
-                "node": {"id": node.id, "description": node.description,
-                         "node_type": node.node_type, "deps": node.deps,
-                         "required_capabilities": node.required_capabilities},
-                "context": context
-            }),
-            format!("iter_{:03}_readonly_output.json", iter),
-        ),
+    let config = &MODE_CONFIGS[mode as usize];
+    let input: Value = match mode {
+        DispatchMode::Mutate => serde_json::json!({
+            "nodes": [{"id": node.id, "description": node.description,
+                       "node_type": node.node_type, "deps": node.deps,
+                       "required_capabilities": node.required_capabilities}],
+            "context": context
+        }),
+        DispatchMode::Verify => serde_json::json!({
+            "nodes": [{"id": node.id, "status": node.status,
+                       "result": node.result, "description": node.description}],
+            "context": context
+        }),
+        DispatchMode::Readonly => serde_json::json!({
+            "node": {"id": node.id, "description": node.description,
+                     "node_type": node.node_type, "deps": node.deps,
+                     "required_capabilities": node.required_capabilities},
+            "context": context
+        }),
     };
 
     let prompt = format!(
         "{}\n\nWorkspace root: {}\nContext radius: {} nodes.\nINPUT:\n{}",
-        schema, workspace_root.display(), context.len(),
+        config.schema, workspace_root.display(), context.len(),
         serde_json::to_string_pretty(&input).unwrap_or_default()
     );
 
     // ── LLM call with one schema-retry ────────────────────────────────────────
     let payload = llm_call_with_retry(
-        bridge, endpoint_id, url, &prompt, schema, &input, role_schema, phase,
-        tabs, reuse_tabs, max_tabs, tab_cooldown_ms, retries, delay_secs,
+        bridge, endpoint_id, url, &prompt, config.schema, &input, role_schema, config.phase,
+        tabs, max_tabs, tab_cooldown_ms, retries, delay_secs,
     ).await?;
 
     // ── Log ───────────────────────────────────────────────────────────────────
     if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
-        let _ = std::fs::write(log_dir.join(&log_name), pretty);
+        let _ = std::fs::write(log_dir.join((config.log_name)(iter)), pretty);
     }
 
     // ── Parse and wrap ────────────────────────────────────────────────────────
-    match mode {
-        DispatchMode::Mutate => {
-            let output = parse_exec_output(&payload, &node.id)?;
-            if node.node_type != super::decompose::NodeType::Render {
-                return Err(anyhow::anyhow!("non-render node attempted mutation call"));
-            }
-            let delta_count: usize = output.results.iter().map(|r| r.deltas.len()).sum();
-            eprintln!(r#"[capability] {{"iter":{},"phase":"executor","results":{},"deltas":{}}}"#,
-                      iter, output.results.len(), delta_count);
-            Ok(NodeCallResult::Mutate { node_id: node.id.clone(), output })
-        }
-        DispatchMode::Verify => {
-            let output: VerifyOutput = serde_json::from_value(payload)
-                .context("verifier output did not match schema")?;
-            eprintln!(r#"[capability] {{"iter":{},"phase":"verifier","updates":{}}}"#,
-                      iter, output.updates.len());
-            Ok(NodeCallResult::Verify { node_id: node.id.clone(), output })
-        }
-        DispatchMode::Readonly => {
-            let output = parse_exec_output(&payload, &node.id)?;
-            // Guard: readonly must not contain mutation deltas.
-            if output.results.iter().any(|r| r.deltas.iter().any(|d|
-                matches!(d, Delta::WriteFile {..} | Delta::ReplaceText {..} | Delta::DeleteFile {..})))
-            {
-                return Err(anyhow::anyhow!("readonly node returned mutation deltas"));
-            }
-            let delta_count: usize = output.results.iter().map(|r| r.deltas.len()).sum();
-            eprintln!(r#"[capability] {{"iter":{},"phase":"readonly","results":{},"deltas":{}}}"#,
-                      iter, output.results.len(), delta_count);
-            Ok(NodeCallResult::Readonly { node_id: node.id.clone(), output })
-        }
-    }
+    let parse_fn = PARSE_FNS[mode as usize];
+    parse_fn(payload, node, iter)
 }
 
 // ── Shared LLM call with one schema-retry ─────────────────────────────────────
@@ -277,7 +393,6 @@ async fn llm_call_with_retry(
     role_schema: &str,
     phase: &str,
     tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
-    reuse_tabs: bool,
     max_tabs: usize,
     tab_cooldown_ms: u64,
     retries: u32,
@@ -285,7 +400,7 @@ async fn llm_call_with_retry(
 ) -> Result<Value> {
     let payload = call_agent_json_with_retry(
         bridge, endpoint_id, url, prompt, role_schema, phase,
-        tabs, reuse_tabs, max_tabs, tab_cooldown_ms, retries, delay_secs,
+        tabs, max_tabs, tab_cooldown_ms, retries, delay_secs,
     ).await?;
     Ok(payload)
 }
@@ -321,21 +436,22 @@ fn apply_mutate_output(
         }
     }
     for mut result in output.results {
-        if result.id != node_id { result.id = node_id.clone(); }
+        coerce_id(&mut result.id, &node_id);
         let (ro, mutate): (Vec<Delta>, Vec<Delta>) = result.deltas.into_iter()
             .partition(|d| matches!(d, Delta::ReadFile {..} | Delta::ListDir {..} | Delta::ReadCommand {..}));
         if !ro.is_empty() { let _ = apply_read_only(&ro, roots, max_output_lines); }
         let (out, _, err) = apply_mutations(&mutate, roots, roots, max_output_lines);
         let _ = graph.update_status(&result.id, Status::Running);
-        if let Some(n) = graph.get_node_mut(&result.id) { n.result = Some(out); n.error = err; }
-        let requires_verify = graph.nodes.iter().find(|n| n.id == result.id)
-            .map(|n| n.required_capabilities.contains(&Capability::StatusUpdateOnly))
-            .unwrap_or(false);
+        let (requires_verify, has_err) = if let Some(n) = graph.get_node_mut(&result.id) {
+            n.result = Some(out);
+            n.error = err;
+            (n.required_capabilities.contains(&Capability::StatusUpdateOnly), n.error.is_some())
+        } else {
+            (false, false)
+        };
         if !requires_verify {
-            let has_err = graph.nodes.iter().find(|n| n.id == result.id)
-                .and_then(|n| n.error.as_ref()).is_some();
-            let _ = if has_err { graph.update_status(&result.id, Status::Failed) }
-                    else { graph.update_status(&result.id, Status::Completed) };
+            let s = if has_err { Status::Failed } else { Status::Completed };
+            let _ = graph.update_status(&result.id, s);
         }
     }
     Ok(())
@@ -349,11 +465,7 @@ fn apply_verify_output(
     iter: u64,
 ) -> Result<()> {
     for mut upd in output.updates {
-        if upd.id != node_id {
-            eprintln!(r#"[capability] {{"iter":{},"phase":"verifier","event":"id_mismatch","got":"{}","expected":"{}"}}"#,
-                      iter, upd.id, node_id);
-            upd.id = node_id.clone();
-        }
+        coerce_id(&mut upd.id, &node_id);
         let _ = graph.update_status(&upd.id, upd.status);
         if let Some(n) = graph.get_node_mut(&upd.id) { n.error = upd.error; }
     }
@@ -378,7 +490,7 @@ fn apply_readonly_output(
         return Ok(());
     }
     for mut result in output.results {
-        if result.id != node_id { result.id = node_id.clone(); }
+        coerce_id(&mut result.id, &node_id);
         let (ro, mutate): (Vec<Delta>, Vec<Delta>) = result.deltas.into_iter()
             .partition(|d| matches!(d, Delta::ReadFile {..} | Delta::ListDir {..} | Delta::ReadCommand {..}));
         if !mutate.is_empty() {
@@ -402,6 +514,11 @@ fn apply_readonly_output(
         }
     }
     Ok(())
+}
+
+fn coerce_id(result_id: &mut String, canonical: &str) {
+    result_id.clear();
+    result_id.push_str(canonical);
 }
 
 // ── Exec output parser ────────────────────────────────────────────────────────

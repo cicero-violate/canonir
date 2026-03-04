@@ -21,5 +21,5 @@ canon_telemetry = { path = "../canon_telemetry" }
 algorithms = { path = "../algorithms" }
 
 [features]
-default = []
+default = ["cuda"]
 cuda = ["algorithms/cuda"]

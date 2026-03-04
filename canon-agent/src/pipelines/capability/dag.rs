@@ -5,6 +5,7 @@ use super::capability::{assert_mut_verify_disjoint, Capability};
 use super::decompose::NodeType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Pending,
@@ -14,6 +15,27 @@ pub enum Status {
     Failed,
     Blocked,
 }
+
+const PENDING_TO_READY: [Status; 6] = [
+    Status::Ready,     // Pending (0) -> Ready
+    Status::Ready,     // Ready (1)
+    Status::Running,   // Running (2)
+    Status::Completed, // Completed (3)
+    Status::Failed,    // Failed (4)
+    Status::Blocked,   // Blocked (5)
+];
+
+const TRANSITION_TABLE: [[bool; 6]; 6] = {
+    let mut t = [[false; 6]; 6];
+    t[0][1] = true; // Pending -> Ready
+    t[0][5] = true; // Pending -> Blocked
+    t[1][2] = true; // Ready -> Running
+    t[2][1] = true; // Running -> Ready
+    t[2][3] = true; // Running -> Completed
+    t[2][4] = true; // Running -> Failed
+    t[5][1] = true; // Blocked -> Ready
+    t
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskNode {
@@ -92,57 +114,26 @@ impl TaskGraph {
 }
 
 fn transition_allowed(from: Status, to: Status) -> bool {
-    matches!(
-        (from, to),
-        (Status::Pending, Status::Ready)
-            | (Status::Pending, Status::Blocked)
-            | (Status::Ready, Status::Running)
-            | (Status::Running, Status::Ready)
-            | (Status::Running, Status::Completed)
-            | (Status::Running, Status::Failed)
-            | (Status::Blocked, Status::Ready)
-    )
+    TRANSITION_TABLE[from as usize][to as usize]
 }
 
 fn detect_cycle(graph: &TaskGraph) -> Result<(), String> {
-    let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
-    for n in &graph.nodes {
-        adj.entry(n.id.as_str()).or_default();
-        for d in &n.deps {
-            adj.entry(d.as_str()).or_default().push(n.id.as_str());
-        }
-    }
-
-    let mut visited = HashSet::new();
-    let mut stack = HashSet::new();
-
-    for n in &graph.nodes {
-        if !visited.contains(n.id.as_str()) {
-            if dfs_cycle(n.id.as_str(), &adj, &mut visited, &mut stack) {
-                return Err("cycle detected in task graph".into());
-            }
-        }
+    let id_to_idx: HashMap<&str, usize> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
+    let adj: Vec<Vec<usize>> = graph
+        .nodes
+        .iter()
+        .map(|n| n.deps.iter().filter_map(|d| id_to_idx.get(d.as_str()).copied()).collect())
+        .collect();
+    let sccs = algorithms::graph::scc::kosaraju_scc(&adj);
+    if sccs.iter().any(|c| c.len() > 1) {
+        return Err("cycle detected in task graph".into());
     }
     Ok(())
-}
-
-fn dfs_cycle<'a>(node: &'a str, adj: &HashMap<&'a str, Vec<&'a str>>, visited: &mut HashSet<&'a str>, stack: &mut HashSet<&'a str>) -> bool {
-    visited.insert(node);
-    stack.insert(node);
-
-    if let Some(nexts) = adj.get(node) {
-        for &n in nexts {
-            if !visited.contains(n) && dfs_cycle(n, adj, visited, stack) {
-                return true;
-            }
-            if stack.contains(n) {
-                return true;
-            }
-        }
-    }
-
-    stack.remove(node);
-    false
 }
 
 #[derive(Debug, Clone)]
@@ -196,12 +187,8 @@ pub fn resolve_ready(graph: &mut TaskGraph) {
         })
         .collect();
     let layers = algorithms::graph::scheduling::topological_layers(&adj);
-    if let Some(first) = layers.first() {
-        for &idx in first {
-            if graph.nodes[idx].status == Status::Pending {
-                graph.nodes[idx].status = Status::Ready;
-            }
-        }
+    for &idx in layers.first().into_iter().flatten() {
+        graph.nodes[idx].status = PENDING_TO_READY[graph.nodes[idx].status as usize];
     }
 }
 

@@ -28,39 +28,23 @@ pub async fn get_or_open_tab(
     endpoint_id: &str,
     url: &str,
     tabs: &tokio::sync::Mutex<TabSlots>,
-    reuse_tabs: bool,
     max_tabs: usize,
 ) -> Result<u32> {
     let slots_len = {
         let tabs = tabs.lock().await;
         tabs.slots.get(endpoint_id).map(|v| v.len()).unwrap_or(0)
     };
-    if reuse_tabs {
-        if let Some(id) = reserve_tab(endpoint_id, tabs).await {
-            log_llm(format!("endpoint={} reuse tab={}", endpoint_id, id));
-            return Ok(id);
-        }
-        if max_tabs != 0 && slots_len >= max_tabs {
-            if let Some(id) = wait_for_available_tab(endpoint_id, tabs).await {
-                log_llm(format!("endpoint={} waited tab={}", endpoint_id, id));
-                return Ok(id);
-            }
-            return Err(anyhow::anyhow!("no available tab (reuse_tabs=true, slots_len={})", slots_len));
-        }
-    } else {
-        let limit = if max_tabs == 0 { usize::MAX } else { max_tabs };
-        if slots_len >= limit {
-            if let Some(id) = reserve_tab(endpoint_id, tabs).await {
-                log_llm(format!("endpoint={} reuse tab={}", endpoint_id, id));
-                return Ok(id);
-            }
-        }
+    if let Some(id) = reserve_tab(endpoint_id, tabs).await {
+        log_llm(format!("endpoint={} reuse tab={}", endpoint_id, id));
+        return Ok(id);
     }
-    if !reuse_tabs && max_tabs != 0 && slots_len >= max_tabs {
+    let capacity = max_tabs == 0 || slots_len < max_tabs;
+    if !capacity {
         if let Some(id) = wait_for_available_tab(endpoint_id, tabs).await {
             log_llm(format!("endpoint={} waited tab={}", endpoint_id, id));
             return Ok(id);
         }
+        return Err(anyhow::anyhow!("no available tab (slots_len={})", slots_len));
     }
     bridge.wait_for_connection().await;
     log_llm(format!("endpoint={} opening_new_tab url={}", endpoint_id, url));
@@ -73,7 +57,7 @@ pub async fn get_or_open_tab(
             return Err(anyhow::anyhow!("open tab timeout"));
         }
     };
-    set_tab_id(endpoint_id, id, tabs, reuse_tabs, max_tabs).await;
+    set_tab_id(endpoint_id, id, tabs, max_tabs).await;
     mark_tab_in_flight(tabs, id, true).await;
     log_llm(format!("endpoint={} opened tab={}", endpoint_id, id));
     Ok(id)
@@ -111,22 +95,13 @@ pub async fn reserve_tab(endpoint_id: &str, tabs: &tokio::sync::Mutex<TabSlots>)
     Some(best_id)
 }
 
-pub async fn set_tab_id(endpoint_id: &str, id: u32, tabs: &tokio::sync::Mutex<TabSlots>, reuse_tabs: bool, max_tabs: usize) {
+pub async fn set_tab_id(endpoint_id: &str, id: u32, tabs: &tokio::sync::Mutex<TabSlots>, max_tabs: usize) {
     let mut tabs = tabs.lock().await;
     let entry = tabs.slots.entry(endpoint_id.to_string()).or_default();
-    if reuse_tabs {
-        let limit = if max_tabs == 0 { usize::MAX } else { max_tabs };
-        if entry.len() < limit && !entry.contains(&id) {
+    if max_tabs == 0 || entry.len() < max_tabs {
+        if !entry.contains(&id) {
             entry.push(id);
         }
-        tabs.meta.entry(id).or_default();
-        return;
-    }
-    if max_tabs == 0 || entry.len() < max_tabs {
-        entry.push(id);
-        tabs.meta.entry(id).or_default();
-    } else if entry.is_empty() {
-        entry.push(id);
         tabs.meta.entry(id).or_default();
     }
 }

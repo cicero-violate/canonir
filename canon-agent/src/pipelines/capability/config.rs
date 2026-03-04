@@ -62,7 +62,6 @@ fn default_context_radius() -> usize { 1 }
 fn default_max_depth() -> usize { 6 }
 fn default_prune_unlinked() -> bool { true }
 fn default_max_tabs() -> usize { 1 }
-fn default_reuse_tabs() -> bool { true }
 fn default_tab_cooldown_ms() -> u64 { 0 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -79,8 +78,6 @@ pub struct LlmEndpoint {
     pub role_markdown: String,
     #[serde(default = "default_max_tabs")]
     pub max_tabs: usize,
-    #[serde(default = "default_reuse_tabs")]
-    pub reuse_tabs: bool,
 }
 
 pub struct CapabilityConfig {

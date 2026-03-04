@@ -26,7 +26,6 @@ pub async fn plan_edges(
     url: &str,
     role_schema: &str,
     tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
-    reuse_tabs: bool,
     max_tabs: usize,
     workspace_root: &Path,
     workspace_listing: &str,
@@ -68,7 +67,7 @@ pub async fn plan_edges(
         signals,
         serde_json::to_string_pretty(&input).unwrap_or_default()
     );
-    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "planner", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, retries, delay_secs).await?;
+    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "planner", tabs, max_tabs, tab_cooldown_ms, retries, delay_secs).await?;
     let mut plan: EdgePlan = match serde_json::from_value(payload.clone()) {
         Ok(v) => v,
         Err(_) => {
@@ -78,7 +77,7 @@ pub async fn plan_edges(
                 serde_json::to_string_pretty(&payload).unwrap_or_default(),
                 serde_json::to_string_pretty(&input).unwrap_or_default()
             );
-            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "planner", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, 1, delay_secs).await?;
+            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "planner", tabs, max_tabs, tab_cooldown_ms, 1, delay_secs).await?;
             payload = retry_payload.clone();
             serde_json::from_value(retry_payload.clone()).context("planner output did not match edge schema")?
         }

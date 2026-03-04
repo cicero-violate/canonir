@@ -1,0 +1,48 @@
+```json
+{
+  "tasks": [
+    {
+      "id": "t1a",
+      "description": "List and enumerate specification sources in GOAL.md, PLAN.md, EXECUTION_REF.md, and specs/ to build a corpus of requirement-bearing documents.",
+      "deps": [],
+      "required_capabilities": ["file_read", "read_structural_surface", "compute_delta"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t1b",
+      "description": "Extract raw requirement statements and constraint sentences from the specification corpus.",
+      "deps": [],
+      "required_capabilities": ["file_read", "compute_delta"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t1c",
+      "description": "Normalize extracted requirements into structured requirement records (requirement_id, text, category, source).",
+      "deps": [],
+      "required_capabilities": ["compute_delta"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t1d",
+      "description": "Pure function classify_requirement(requirement_text) -> requirement_category.",
+      "deps": [],
+      "required_capabilities": ["stateless_invoke"],
+      "node_type": "render"
+    },
+    {
+      "id": "t1e",
+      "description": "Pure function extract_invariants(requirement_text) -> invariant_set.",
+      "deps": [],
+      "required_capabilities": ["stateless_invoke"],
+      "node_type": "render"
+    },
+    {
+      "id": "t1f",
+      "description": "Pure function extract_performance_constraints(requirement_text) -> constraint_set.",
+      "deps": [],
+      "required_capabilities": ["stateless_invoke"],
+      "node_type": "render"
+    }
+  ]
+}
+```

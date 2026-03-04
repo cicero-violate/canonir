@@ -89,7 +89,6 @@ impl CapabilityPipeline {
             &endpoint.url,
             "",
             &self.tabs,
-            endpoint.reuse_tabs,
             endpoint.max_tabs,
             &ctx.cwd[0],
             &workspace_listing,
@@ -222,7 +221,6 @@ impl CapabilityPipeline {
                         &url,
                         "",
                         tabs,
-                        endpoint.reuse_tabs,
                         endpoint.max_tabs,
                         self.config.tab_cooldown_ms,
                         &workspace_root,
@@ -356,36 +354,25 @@ fn build_context(graph: &dag::TaskGraph, node_id: &str, radius: usize) -> Vec<en
 }
 
 fn prune_unlinked_nodes(graph: &mut dag::TaskGraph) {
-    let mut indegree: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut outdegree: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for n in &graph.nodes {
-        indegree.insert(n.id.clone(), 0);
-        outdegree.insert(n.id.clone(), 0);
-    }
+    let mut degree: HashMap<String, (usize, usize)> = graph
+        .nodes
+        .iter()
+        .map(|n| (n.id.clone(), (0usize, 0usize)))
+        .collect();
     for n in &graph.nodes {
         for d in &n.deps {
-            if let Some(v) = indegree.get_mut(&n.id) {
-                *v += 1;
+            if let Some(e) = degree.get_mut(&n.id) {
+                e.0 += 1;
             }
-            if let Some(v) = outdegree.get_mut(d) {
-                *v += 1;
+            if let Some(e) = degree.get_mut(d) {
+                e.1 += 1;
             }
         }
     }
-    let keep: std::collections::HashSet<String> = graph
-        .nodes
-        .iter()
-        .filter_map(|n| {
-            let in_d = *indegree.get(&n.id).unwrap_or(&0);
-            let out_d = *outdegree.get(&n.id).unwrap_or(&0);
-            if in_d == 0 && out_d == 0 {
-                None
-            } else {
-                Some(n.id.clone())
-            }
-        })
-        .collect();
-    graph.nodes.retain(|n| keep.contains(&n.id));
+    graph.nodes.retain(|n| {
+        let (ind, outd) = degree.get(&n.id).copied().unwrap_or((0, 0));
+        ind > 0 || outd > 0
+    });
 }
 
 fn enforce_semantic_validations(graph: &dag::TaskGraph) -> Result<()> {
@@ -442,7 +429,6 @@ fn is_expandable(node: &dag::TaskNode) -> bool {
 struct EndpointCtx {
     id: String,
     url: String,
-    reuse_tabs: bool,
     max_tabs: usize,
 }
 
@@ -487,20 +473,15 @@ async fn select_endpoints_for_role(
             *entry = entry.wrapping_add(1);
             sel
         };
-        let mut acc = 0usize;
-        let mut chosen = weights[0].0;
-        for (ep_idx, w) in &weights {
-            acc += *w as usize;
-            if idx < acc {
-                chosen = *ep_idx;
-                break;
-            }
-        }
+        let chosen = weights
+            .iter()
+            .scan(0usize, |acc, &(ep_idx, w)| { *acc += w as usize; Some((*acc, ep_idx)) })
+            .find_map(|(acc, ep_idx)| (idx < acc).then_some(ep_idx))
+            .unwrap_or(weights[0].0);
         let ep = &config.llm_endpoints[chosen];
         selected.push(EndpointCtx {
             id: ep.id.clone(),
             url: ep.url.clone(),
-            reuse_tabs: ep.reuse_tabs,
             max_tabs: ep.max_tabs,
         });
     }
@@ -513,12 +494,12 @@ fn merge_decompose_outputs(outputs: Vec<decompose::DecomposeOutput>) -> decompos
     let mut counter: HashMap<String, usize> = HashMap::new();
     for output in outputs {
         for mut t in output.tasks {
-            if !seen.insert(t.id.clone()) {
-                let c = counter.entry(t.id.clone()).or_insert(0);
-                *c += 1;
-                t.id = format!("{}__{}", t.id, c);
-                let _ = seen.insert(t.id.clone());
+            let slot = counter.entry(t.id.clone()).or_insert(0usize);
+            if *slot > 0 {
+                t.id = format!("{}__{}", t.id, *slot);
             }
+            *slot += 1;
+            seen.insert(t.id.clone());
             tasks.push(t);
         }
     }
@@ -584,7 +565,6 @@ async fn decompose_node_burst(
     for ep in endpoints {
         let id = ep.id.clone();
         let url = ep.url.clone();
-        let reuse_tabs = ep.reuse_tabs;
         let max_tabs = ep.max_tabs;
         let spec = spec.clone();
         let fut = async move {
@@ -595,7 +575,6 @@ async fn decompose_node_burst(
                 url.as_str(),
                 "",
                 tabs,
-                reuse_tabs,
                 max_tabs,
                 workspace_root,
                 workspace_listing,
@@ -643,7 +622,6 @@ async fn plan_edges_burst(
     for ep in endpoints {
         let id = ep.id.clone();
         let url = ep.url.clone();
-        let reuse_tabs = ep.reuse_tabs;
         let max_tabs = ep.max_tabs;
         let fut = async move {
             planner::plan_edges(
@@ -653,7 +631,6 @@ async fn plan_edges_burst(
                 url.as_str(),
                 "",
                 tabs,
-                reuse_tabs,
                 max_tabs,
                 workspace_root,
                 workspace_listing,
@@ -772,14 +749,11 @@ async fn expand_nodes(
             };
             nodes.retain(|n| n.id != parent_id);
             let mut idx = 0usize;
-            for mut child in output.tasks {
+            let next_depth = current_depth + 1;
+            for mut child in output.tasks.into_iter().filter(|_| next_depth <= max_depth) {
                 idx += 1;
                 if child.id == parent_id || nodes.iter().any(|n| n.id == child.id) {
                     child.id = format!("{}__{}", parent_id, idx);
-                }
-                let depth = current_depth + 1;
-                if depth > max_depth {
-                    continue;
                 }
                 let child_id = child.id.clone();
                 nodes.push(dag::TaskNode {
@@ -792,7 +766,7 @@ async fn expand_nodes(
                     result: None,
                     error: None,
                 });
-                depth_map.insert(child_id.clone(), depth);
+                depth_map.insert(child_id.clone(), next_depth);
                 queue.push_back(child_id);
                 if nodes.len() >= max_nodes {
                     break;
@@ -819,6 +793,33 @@ async fn build_graph_from_edges(
     retries: u32,
     delay_secs: u64,
 ) -> Result<dag::TaskGraph> {
+    fn apply_edges_to_graph(
+        nodes: &[dag::TaskNode],
+        edges: Vec<planner::EdgeSpec>,
+        log_event: &str,
+    ) -> dag::TaskGraph {
+        let mut graph = dag::TaskGraph { nodes: nodes.to_vec() };
+        let ids: std::collections::HashSet<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
+        for n in &mut graph.nodes {
+            n.deps.clear();
+        }
+        for edge in edges {
+            if !ids.contains(&edge.from) || !ids.contains(&edge.to) {
+                eprintln!(
+                    r#"[capability] {{"event":"{}","from":"{}","to":"{}"}}"#,
+                    log_event,
+                    edge.from,
+                    edge.to
+                );
+                continue;
+            }
+            if let Some(node) = graph.get_node_mut(&edge.to) {
+                node.deps.push(edge.from);
+            }
+        }
+        graph
+    }
+
     let plan = plan_edges_burst(
         nodes,
         bridge,
@@ -834,25 +835,8 @@ async fn build_graph_from_edges(
         delay_secs,
     ).await?;
 
-    let mut graph = dag::TaskGraph { nodes: nodes.to_vec() };
-    let ids: std::collections::HashSet<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
-    for n in &mut graph.nodes {
-        n.deps.clear();
-    }
-    for edge in plan.edges {
-        if !ids.contains(&edge.from) || !ids.contains(&edge.to) {
-            eprintln!(
-                r#"[capability] {{"event":"edge_rejected","from":"{}","to":"{}"}}"#,
-                edge.from,
-                edge.to
-            );
-            continue;
-        }
-        if let Some(node) = graph.get_node_mut(&edge.to) {
-            node.deps.push(edge.from);
-        }
-    }
-    if let Err(e) = graph.validate() {
+    let mut graph = apply_edges_to_graph(nodes, plan.edges, "edge_rejected");
+    if let Err(e) = graph.validate().and_then(|_| enforce_linking_constraints(&graph)) {
         let note = format!("previous edge set invalid: {}", e);
         eprintln!(r#"[capability] {{"event":"edge_validate_failed","error":"{}"}}"#, e);
         let plan = planner::plan_edges(
@@ -862,7 +846,6 @@ async fn build_graph_from_edges(
             &config.llm_endpoints[0].url,
             "",
             tabs,
-            config.llm_endpoints[0].reuse_tabs,
             config.llm_endpoints[0].max_tabs,
             workspace_root,
             workspace_listing,
@@ -873,74 +856,9 @@ async fn build_graph_from_edges(
             delay_secs,
             config.tab_cooldown_ms,
         ).await?;
-        let mut graph_retry = dag::TaskGraph { nodes: nodes.to_vec() };
-        let ids: std::collections::HashSet<String> = graph_retry.nodes.iter().map(|n| n.id.clone()).collect();
-        for n in &mut graph_retry.nodes {
-            n.deps.clear();
-        }
-        for edge in plan.edges {
-            if !ids.contains(&edge.from) || !ids.contains(&edge.to) {
-                eprintln!(
-                    r#"[capability] {{"event":"edge_rejected","from":"{}","to":"{}"}}"#,
-                    edge.from,
-                    edge.to
-                );
-                continue;
-            }
-            if let Some(node) = graph_retry.get_node_mut(&edge.to) {
-                node.deps.push(edge.from);
-            }
-        }
-        if let Err(e2) = enforce_linking_constraints(&graph_retry) {
-            eprintln!(r#"[capability] {{"event":"edge_constraint_failed","error":"{}"}}"#, e2);
-            return Err(anyhow::anyhow!(e2));
-        }
+        let graph_retry = apply_edges_to_graph(nodes, plan.edges, "edge_rejected");
         graph_retry.validate().map_err(|e| anyhow::anyhow!(e))?;
-        return Ok(graph_retry);
-    }
-    if let Err(e) = enforce_linking_constraints(&graph) {
-        let note = format!("linking constraints failed: {}", e);
-        eprintln!(r#"[capability] {{"event":"edge_constraint_failed","error":"{}"}}"#, e);
-        let plan = planner::plan_edges(
-            nodes,
-            bridge,
-            &config.llm_endpoints[0].id,
-            &config.llm_endpoints[0].url,
-            "",
-            tabs,
-            config.llm_endpoints[0].reuse_tabs,
-            config.llm_endpoints[0].max_tabs,
-            workspace_root,
-            workspace_listing,
-            Some(&note),
-            planner_signals,
-            log_dir,
-            retries,
-            delay_secs,
-            config.tab_cooldown_ms,
-        ).await?;
-        let mut graph_retry = dag::TaskGraph { nodes: nodes.to_vec() };
-        let ids: std::collections::HashSet<String> = graph_retry.nodes.iter().map(|n| n.id.clone()).collect();
-        for n in &mut graph_retry.nodes {
-            n.deps.clear();
-        }
-        for edge in plan.edges {
-            if !ids.contains(&edge.from) || !ids.contains(&edge.to) {
-                eprintln!(
-                    r#"[capability] {{"event":"edge_rejected","from":"{}","to":"{}"}}"#,
-                    edge.from,
-                    edge.to
-                );
-                continue;
-            }
-            if let Some(node) = graph_retry.get_node_mut(&edge.to) {
-                node.deps.push(edge.from);
-            }
-        }
-        graph_retry.validate().map_err(|e| anyhow::anyhow!(e))?;
-        if let Err(e3) = enforce_linking_constraints(&graph_retry) {
-            return Err(anyhow::anyhow!(e3));
-        }
+        enforce_linking_constraints(&graph_retry).map_err(|e| anyhow::anyhow!(e))?;
         return Ok(graph_retry);
     }
     Ok(graph)

@@ -1,9 +1,18 @@
-use std::collections::{HashMap, VecDeque};
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use algorithms::graph::adj_list::AdjList;
+use algorithms::graph::csr::Csr;
 
 use super::{dag, decompose};
+
+fn algo_log_path(log_dir: &Path, iter: u32, name: &str) -> PathBuf {
+    if iter == 0 {
+        log_dir.join(name)
+    } else {
+        log_dir.join(format!("iter_{:03}_{}", iter, name))
+    }
+}
 
 pub fn emit_planned_graph(graph: &dag::TaskGraph, log_dir: &Path, iter: u32) {
     #[derive(serde::Serialize)]
@@ -39,11 +48,7 @@ pub fn emit_planned_graph(graph: &dag::TaskGraph, log_dir: &Path, iter: u32) {
         })
         .collect();
     let snapshot = GraphSnapshot { nodes, edges };
-    let path = if iter == 0 {
-        log_dir.join("planned_graph.json")
-    } else {
-        log_dir.join(format!("iter_{:03}_planned_graph.json", iter))
-    };
+    let path = algo_log_path(log_dir, iter, "planned_graph.json");
     if let Ok(pretty) = serde_json::to_string_pretty(&snapshot) {
         let _ = std::fs::write(path, pretty);
     }
@@ -71,43 +76,18 @@ pub fn run_graph_algorithms(graph: &dag::TaskGraph, log_dir: &Path, iter: u32) {
         }
     }
 
-    #[cfg(feature = "cuda")]
-    {
-        let csr = adj.to_csr();
-        let levels = algorithms::graph::gpu::bfs_gpu(&csr, 0);
-        let snapshot = serde_json::json!({
-            "algorithm": "bfs_gpu",
-            "source": 0,
-            "levels": levels,
-            "index_to_id": index_to_id,
-            "signals": signals.to_json(&index_to_id),
-        });
-        let path = if iter == 0 {
-            log_dir.join("graph_algorithms.json")
-        } else {
-            log_dir.join(format!("iter_{:03}_graph_algorithms.json", iter))
-        };
-        if let Ok(pretty) = serde_json::to_string_pretty(&snapshot) {
-            let _ = std::fs::write(path, pretty);
-        }
-    }
-
-    #[cfg(not(feature = "cuda"))]
-    {
-        let snapshot = serde_json::json!({
-            "algorithm": "bfs_gpu",
-            "status": "skipped",
-            "reason": "canon-agent built without feature \"cuda\"",
-            "signals": signals.to_json(&index_to_id),
-        });
-        let path = if iter == 0 {
-            log_dir.join("graph_algorithms.json")
-        } else {
-            log_dir.join(format!("iter_{:03}_graph_algorithms.json", iter))
-        };
-        if let Ok(pretty) = serde_json::to_string_pretty(&snapshot) {
-            let _ = std::fs::write(path, pretty);
-        }
+    let csr = adj.to_csr();
+    let levels = algorithms::graph::gpu::bfs_gpu(&csr, 0);
+    let snapshot = serde_json::json!({
+        "algorithm": "bfs_gpu",
+        "source": 0,
+        "levels": levels,
+        "index_to_id": index_to_id,
+        "signals": signals.to_json(&index_to_id),
+    });
+    let path = algo_log_path(log_dir, iter, "graph_algorithms.json");
+    if let Ok(pretty) = serde_json::to_string_pretty(&snapshot) {
+        let _ = std::fs::write(path, pretty);
     }
 }
 
@@ -166,12 +146,6 @@ fn compute_graph_signals(graph: &dag::TaskGraph) -> GraphSignals {
         .filter(|c| c.len() > 1)
         .collect::<Vec<_>>();
 
-    #[cfg(feature = "cuda")]
-    let reach = {
-        let csr = algorithms::graph::csr::Csr::from_adj(&adj);
-        reachability_mask(&csr, &roots)
-    };
-    #[cfg(not(feature = "cuda"))]
     let reach = reachability_mask(&adj, &roots);
 
     let unreachable = reach
@@ -188,31 +162,9 @@ fn compute_graph_signals(graph: &dag::TaskGraph) -> GraphSignals {
     }
 }
 
-#[cfg(feature = "cuda")]
-fn reachability_mask(adj_csr: &algorithms::graph::csr::Csr, roots: &[usize]) -> Vec<bool> {
-    algorithms::graph::reachability::reachability_gpu(adj_csr, roots)
-}
-
-#[cfg(not(feature = "cuda"))]
 fn reachability_mask(adj: &[Vec<usize>], roots: &[usize]) -> Vec<bool> {
-    let n = adj.len();
-    let mut visited = vec![false; n];
-    let mut q = VecDeque::new();
-    for &r in roots {
-        if r < n && !visited[r] {
-            visited[r] = true;
-            q.push_back(r);
-        }
-    }
-    while let Some(u) = q.pop_front() {
-        for &v in &adj[u] {
-            if v < n && !visited[v] {
-                visited[v] = true;
-                q.push_back(v);
-            }
-        }
-    }
-    visited
+    let csr = Csr::from_adj(adj);
+    algorithms::graph::reachability::reachability_gpu(&csr, roots)
 }
 
 pub fn planner_signals_for_graph(graph: &dag::TaskGraph) -> String {

@@ -24,11 +24,10 @@ pub async fn call_agent_json(
     role_schema: &str,
     phase: &str,
     tabs: &tokio::sync::Mutex<TabSlots>,
-    reuse_tabs: bool,
     max_tabs: usize,
     tab_cooldown_ms: u64,
 ) -> Result<Value> {
-    let tab_id = get_or_open_tab(bridge, endpoint_id, url, tabs, reuse_tabs, max_tabs).await?;
+    let tab_id = get_or_open_tab(bridge, endpoint_id, url, tabs, max_tabs).await?;
     mark_tab_sent(tabs, tab_id).await;
     log_llm(format!("phase={} endpoint={} tab={} send", phase, endpoint_id, tab_id));
     let full_prompt = if role_schema.trim().is_empty() {
@@ -42,51 +41,44 @@ pub async fn call_agent_json(
             mark_tab_in_flight(tabs, tab_id, false).await;
             drop_tab(tabs, endpoint_id, tab_id).await;
             log_llm(format!("phase={} endpoint={} tab={} send_error={}", phase, endpoint_id, tab_id, e));
-            if !reuse_tabs {
-                let _ = bridge.close_tab(tab_id).await;
-            }
             return Err(anyhow::anyhow!("llm send_turn error: {e}"));
         }
     };
     mark_tab_response(tabs, tab_id).await;
     mark_tab_in_flight(tabs, tab_id, false).await;
     log_llm(format!("phase={} endpoint={} tab={} response_ok bytes={}", phase, endpoint_id, tab_id, raw.len()));
-    if reuse_tabs {
-        if is_gemini_url(url) {
-            let _ = bridge.new_chat(tab_id).await;
-            match bridge.wait_new_chat(tab_id, 20).await {
-                Ok(()) => log_llm(format!("phase={} endpoint={} tab={} new_chat_done", phase, endpoint_id, tab_id)),
-                Err(e) => {
-                    mark_tab_in_flight(tabs, tab_id, true).await;
-                    log_llm(format!("phase={} endpoint={} tab={} new_chat_timeout={}", phase, endpoint_id, tab_id, e));
-                    return Err(anyhow::anyhow!("new_chat timeout"));
-                }
-            }
-        } else if is_chatgpt_url(url) {
-            let _ = bridge.new_chat(tab_id).await;
-            match bridge.wait_new_chat(tab_id, 20).await {
-                Ok(()) => log_llm(format!("phase={} endpoint={} tab={} new_chat_done", phase, endpoint_id, tab_id)),
-                Err(e) => {
-                    mark_tab_in_flight(tabs, tab_id, true).await;
-                    log_llm(format!("phase={} endpoint={} tab={} new_chat_timeout={}", phase, endpoint_id, tab_id, e));
-                    return Err(anyhow::anyhow!("new_chat timeout"));
-                }
-            }
-            let _ = bridge.temp_chat(tab_id).await;
-            match bridge.wait_temp_chat(tab_id, 20).await {
-                Ok(()) => log_llm(format!("phase={} endpoint={} tab={} temp_chat_done", phase, endpoint_id, tab_id)),
-                Err(e) => {
-                    mark_tab_in_flight(tabs, tab_id, true).await;
-                    log_llm(format!("phase={} endpoint={} tab={} temp_chat_timeout={}", phase, endpoint_id, tab_id, e));
-                    return Err(anyhow::anyhow!("temp_chat timeout"));
-                }
+    if is_gemini_url(url) {
+        let _ = bridge.new_chat(tab_id).await;
+        match bridge.wait_new_chat(tab_id, 20).await {
+            Ok(()) => log_llm(format!("phase={} endpoint={} tab={} new_chat_done", phase, endpoint_id, tab_id)),
+            Err(e) => {
+                mark_tab_in_flight(tabs, tab_id, true).await;
+                log_llm(format!("phase={} endpoint={} tab={} new_chat_timeout={}", phase, endpoint_id, tab_id, e));
+                return Err(anyhow::anyhow!("new_chat timeout"));
             }
         }
-        if tab_cooldown_ms > 0 {
-            mark_tab_cooldown(tabs, tab_id, tab_cooldown_ms).await;
+    } else if is_chatgpt_url(url) {
+        let _ = bridge.new_chat(tab_id).await;
+        match bridge.wait_new_chat(tab_id, 20).await {
+            Ok(()) => log_llm(format!("phase={} endpoint={} tab={} new_chat_done", phase, endpoint_id, tab_id)),
+            Err(e) => {
+                mark_tab_in_flight(tabs, tab_id, true).await;
+                log_llm(format!("phase={} endpoint={} tab={} new_chat_timeout={}", phase, endpoint_id, tab_id, e));
+                return Err(anyhow::anyhow!("new_chat timeout"));
+            }
         }
-    } else {
-        let _ = bridge.close_tab(tab_id).await;
+        let _ = bridge.temp_chat(tab_id).await;
+        match bridge.wait_temp_chat(tab_id, 20).await {
+            Ok(()) => log_llm(format!("phase={} endpoint={} tab={} temp_chat_done", phase, endpoint_id, tab_id)),
+            Err(e) => {
+                mark_tab_in_flight(tabs, tab_id, true).await;
+                log_llm(format!("phase={} endpoint={} tab={} temp_chat_timeout={}", phase, endpoint_id, tab_id, e));
+                return Err(anyhow::anyhow!("temp_chat timeout"));
+            }
+        }
+    }
+    if tab_cooldown_ms > 0 {
+        mark_tab_cooldown(tabs, tab_id, tab_cooldown_ms).await;
     }
     let log_dir = "/workspace/ai_sandbox/canon/agent_logs/capability";
     let _ = std::fs::create_dir_all(log_dir);
@@ -121,7 +113,6 @@ pub async fn call_agent_json_with_retry(
     role_schema: &str,
     phase: &str,
     tabs: &tokio::sync::Mutex<TabSlots>,
-    reuse_tabs: bool,
     max_tabs: usize,
     tab_cooldown_ms: u64,
     max_retries: u32,
@@ -131,7 +122,7 @@ pub async fn call_agent_json_with_retry(
     for attempt in 0..max_retries {
         let start = now_ms();
         log_llm(format!("phase={} endpoint={} attempt={} start", phase, endpoint_id, attempt + 1));
-        match call_agent_json(bridge, endpoint_id, url, prompt, role_schema, phase, tabs, reuse_tabs, max_tabs, tab_cooldown_ms).await {
+        match call_agent_json(bridge, endpoint_id, url, prompt, role_schema, phase, tabs, max_tabs, tab_cooldown_ms).await {
             Ok(v) => {
                 let elapsed = now_ms().saturating_sub(start);
                 log_llm(format!("phase={} endpoint={} attempt={} ok elapsed_ms={}", phase, endpoint_id, attempt + 1, elapsed));
