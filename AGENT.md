@@ -90,14 +90,19 @@ rustc compiler source code can be found in here
 
 
 ## CODING STYLE
-1. **Branching**      : Minimize if/match/loop; replace with table dispatch, iterators, and predicate functions.
-2. **Dispatch**       : Use static fn-pointer or index tables over match chains; one branch to index, zero inside.
-3. **Iteration**      : Prefer library algorithms (topological_sort, scc, reachability) over hand-rolled loops.
-4. **Graph Execution**: Let the DAG own execution order; nodes are pure kernels, not stateful procedures.
-5. **GPU Offload**    : Push BFS, reachability, scheduling, and SCC to CUDA kernels when the algorithms crate provides them.
-6. **Purity**         : Kernel functions are deterministic, side-effect-free, and take all inputs as arguments.
-7. **Dataflow**       : Model computation as data transformations through a pipeline, not nested control flow.
-8. **Error Paths**    : Use Result-chaining and combinators (and_then, get_or_insert, then_some) over guard branches.
-9. **Deduplication**  : Every structural pattern appears once; retry logic, edge application, and id coercion are extracted helpers.
-10. **Readability**   : Code should be flat, composable, and index-addressable — easier for both humans and LLMs to trace.
 
+1. **Branching**		: Minimize `if` / `match` / `loop`; replace with table dispatch, iterators, and predicate functions.  
+2. **Dispatch**			: Prefer static fn-pointer or index tables over match chains; one branch to index, zero inside.  
+3. **Iteration**		: Use library algorithms (`topological_sort`, `scc`, `reachability`) instead of manual traversal loops.  
+4. **Graph Execution**	: DAG determines execution order; nodes are pure kernels rather than stateful procedures.  
+5. **GPU Offload**		: Push BFS, reachability, scheduling, and SCC to CUDA kernels when available.  
+6. **Purity**			: Kernel functions are deterministic and side-effect-free; all inputs are explicit arguments.  
+7. **Dataflow**			: Structure computation as transformations through a pipeline rather than nested control flow.  
+8. **Error Handling**	: Prefer `Result` chaining and combinators (`and_then`, `map`, `then_some`) over guard branches.  
+9. **Deduplication**	: Extract shared logic (retry, edge application, ID coercion) into single reusable helpers.  
+10. **Readability**		: Code should be flat, composable, and index-addressable for easy human and LLM reasoning.  
+11. **Invariants**		: Core structural properties (unique IDs, DAG validity, reachability) are enforced explicitly.  
+12. **Validation**		: Check invariants at module boundaries (`build_graph`, `apply_edges`) instead of scattered guards.  
+13. **Fail Fast**		: Invalid states return errors immediately rather than branching into recovery logic.  
+14. **Index Integrity**	: Graph index maps must remain synchronized with node storage and updated atomically.  
+15. **Determinism**		: Program correctness derives from invariant preservation across pipeline stages.
