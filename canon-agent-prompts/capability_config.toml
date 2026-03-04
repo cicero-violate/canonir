@@ -12,16 +12,22 @@ max_expand_iters = 6
 context_radius = 2
 max_depth = 6
 prune_unlinked = true
+planner_max_new_nodes = 32
+planner_max_new_edges = 64
 
 [llm]
 tab_cooldown_ms = 4000
-# [[llm.endpoints]]
-# id = "gemini"
-# url = "https://gemini.google.com/app"
-# role_markdown = "GENERIC_AGENT_ROLE.md"
-# max_tabs = 5
 
-[[llm.endpoints]]
+[llm.endpoints.planner]
+id = "planner_chatgpt_group"
+# url = "https://chatgpt.com/g/<GROUP_CHAT_ID>"
+url = "https://chatgpt.com/gg/69a5aa249554819e9ac25e2df27102f1"
+role_markdown = "GENERIC_AGENT_ROLE.md"
+role = "planner"
+stateful = true
+max_tabs = 1
+
+[llm.endpoints.exec_chatgpt]
 id = "chatgpt"
 # url = "https://chatgpt.com/?temporary-chat=true"
 url = "https://chatgpt.com/gg/69a5aa249554819e9ac25e2df27102f1"
@@ -35,7 +41,7 @@ chatgpt = 100
 burst = 4
 
 [llm.roles.planner.weights]
-chatgpt = 100
+planner_chatgpt_group = 100
 
 [llm.roles.planner]
 burst = 4
