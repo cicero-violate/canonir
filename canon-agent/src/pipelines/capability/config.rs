@@ -42,6 +42,8 @@ struct RawSystem {
     pub planner_max_new_nodes: usize,
     #[serde(default = "default_planner_max_new_edges")]
     pub planner_max_new_edges: usize,
+    #[serde(default = "default_planner_refine_on_cache")]
+    pub planner_refine_on_cache: bool,
     #[serde(default = "default_max_node_retries")]
     pub max_node_retries: u32,
 }
@@ -82,6 +84,7 @@ fn default_max_depth() -> usize { 6 }
 fn default_prune_unlinked() -> bool { true }
 fn default_planner_max_new_nodes() -> usize { 32 }
 fn default_planner_max_new_edges() -> usize { 64 }
+fn default_planner_refine_on_cache() -> bool { true }
 fn default_max_node_retries() -> u32 { 3 }
 fn default_max_tabs() -> usize { 1 }
 fn default_tab_cooldown_ms() -> u64 { 0 }
@@ -122,6 +125,7 @@ pub struct CapabilityConfig {
     pub prune_unlinked: bool,
     pub planner_max_new_nodes: usize,
     pub planner_max_new_edges: usize,
+    pub planner_refine_on_cache: bool,
     pub max_node_retries: u32,
     pub llm_endpoints: Vec<LlmEndpoint>,
     pub planner_endpoint: Option<LlmEndpoint>,
@@ -172,6 +176,7 @@ impl CapabilityConfig {
             prune_unlinked: raw.system.prune_unlinked,
             planner_max_new_nodes: raw.system.planner_max_new_nodes,
             planner_max_new_edges: raw.system.planner_max_new_edges,
+            planner_refine_on_cache: raw.system.planner_refine_on_cache,
             max_node_retries: raw.system.max_node_retries,
             llm_endpoints,
             planner_endpoint,

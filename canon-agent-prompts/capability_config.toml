@@ -14,6 +14,7 @@ max_depth = 6
 prune_unlinked = true
 planner_max_new_nodes = 32
 planner_max_new_edges = 64
+planner_refine_on_cache = true
 
 [llm]
 tab_cooldown_ms = 4000

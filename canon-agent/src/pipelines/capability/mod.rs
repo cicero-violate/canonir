@@ -139,10 +139,12 @@ impl CapabilityPipeline {
             Ok::<dag::TaskGraph, anyhow::Error>(dag::TaskGraph { nodes, id_index: HashMap::new() })
         };
 
+        let mut cache_hit = false;
         let mut graph = if store.exists(&template_name) {
             match store.load(&template_name) {
                 Ok(g) if g.validate().is_ok() => {
                     eprintln!("[templates] cache hit");
+                    cache_hit = true;
                     g
                 }
                 _ => {
@@ -163,59 +165,100 @@ impl CapabilityPipeline {
         emit_planned_graph(&graph, Path::new(LOG_ROOT), 0);
         run_graph_algorithms(&graph, Path::new(LOG_ROOT), 0);
 
-        let planner_endpoint = self.config.planner_endpoint()?;
-        let mut planner_session = planner_session::PlannerSession::new(planner_endpoint, goal.raw.clone());
-        let recent = store.recent_rewards(&template_name, 4);
-        let plateaued = store.is_plateaued(&template_name, 4, 0.05);
-        let similar = store.find_similar(&goal.raw, &graph, 1);
-        let bootstrap_seed = similar.into_iter().next().map(|s| {
-            let seed_graph = store.load(&s.entry.goal).ok();
-            let node_summaries = seed_graph.as_ref().map(|g| {
-                g.nodes.iter()
-                    .map(|n| format!("{}: {}", n.id, n.description))
-                    .collect::<Vec<_>>()
-            }).unwrap_or_default();
-            planner_session::BootstrapSeed {
-                goal: s.entry.goal.clone(),
-                similarity_score: s.score,
-                reward: s.entry.reward,
-                node_summaries,
-                capability_set: s.entry.capability_set.clone(),
-                node_count: s.entry.node_count,
-                edge_count: s.entry.edge_count,
-            }
-        });
-        let reward_ctx = planner_session::RewardContext {
-            recent_rewards: recent,
-            plateaued,
-            best_reward: store.stored_reward(&template_name),
-            stored_reward: store.stored_reward(&template_name),
-            bootstrap_seed,
-        };
-        planner_session.set_reward_context(reward_ctx);
-        scheduler::run_planner_execution_loop(
-            &mut planner_session,
-            &mut graph,
-            &self.bridge,
-            &self.config,
-            &self.role_rr,
-            &self.tabs,
-            &ctx.cwd,
-            &workspace_listing,
-            endpoint,
-            "exec",
-            &policy,
-            self.config.context_radius,
-            self.config.max_concurrency,
-            self.config.max_iterations,
-            self.config.tab_cooldown_ms,
-            retry_count,
-            retry_delay,
-            max_output_lines,
-            &mut store,
-            &template_name,
-        )
-        .await
+        if cache_hit && !self.config.planner_refine_on_cache {
+            let mut exec_metrics = Default::default();
+            let iterations_used = scheduler::execute_graph_loop(
+                &mut graph,
+                &self.bridge,
+                &self.config,
+                &self.role_rr,
+                &self.tabs,
+                &ctx.cwd,
+                &workspace_listing,
+                endpoint,
+                "exec",
+                &policy,
+                self.config.context_radius,
+                self.config.max_concurrency,
+                self.config.max_iterations,
+                self.config.tab_cooldown_ms,
+                retry_count,
+                retry_delay,
+                max_output_lines,
+                &mut exec_metrics,
+            )
+            .await?;
+            let reward = telemetry::compute_reward(&graph, iterations_used, self.config.max_iterations);
+            store.record_reward(&template_name, reward);
+            let runtime = telemetry::RuntimeMetrics {
+                queue_depth: telemetry::pending_requests(),
+                retry_rate: 0.0,
+                progress_fraction: telemetry::progress_fraction(&graph),
+                iteration_time_ms: 0,
+            };
+            let snapshot = telemetry::TelemetrySnapshot {
+                planner: Default::default(),
+                exec: exec_metrics.clone(),
+                runtime,
+                reward,
+            };
+            telemetry::record_snapshot(&Path::new(LOG_ROOT).join("metrics.json"), &snapshot);
+            Ok(reward)
+        } else {
+            let planner_endpoint = self.config.planner_endpoint()?;
+            let mut planner_session = planner_session::PlannerSession::new(planner_endpoint, goal.raw.clone());
+            let recent = store.recent_rewards(&template_name, 4);
+            let plateaued = store.is_plateaued(&template_name, 4, 0.05);
+            let similar = store.find_similar(&goal.raw, &graph, 1);
+            let bootstrap_seed = similar.into_iter().next().map(|s| {
+                let seed_graph = store.load(&s.entry.goal).ok();
+                let node_summaries = seed_graph.as_ref().map(|g| {
+                    g.nodes.iter()
+                        .map(|n| format!("{}: {}", n.id, n.description))
+                        .collect::<Vec<_>>()
+                }).unwrap_or_default();
+                planner_session::BootstrapSeed {
+                    goal: s.entry.goal.clone(),
+                    similarity_score: s.score,
+                    reward: s.entry.reward,
+                    node_summaries,
+                    capability_set: s.entry.capability_set.clone(),
+                    node_count: s.entry.node_count,
+                    edge_count: s.entry.edge_count,
+                }
+            });
+            let reward_ctx = planner_session::RewardContext {
+                recent_rewards: recent,
+                plateaued,
+                best_reward: store.stored_reward(&template_name),
+                stored_reward: store.stored_reward(&template_name),
+                bootstrap_seed,
+            };
+            planner_session.set_reward_context(reward_ctx);
+            scheduler::run_planner_execution_loop(
+                &mut planner_session,
+                &mut graph,
+                &self.bridge,
+                &self.config,
+                &self.role_rr,
+                &self.tabs,
+                &ctx.cwd,
+                &workspace_listing,
+                endpoint,
+                "exec",
+                &policy,
+                self.config.context_radius,
+                self.config.max_concurrency,
+                self.config.max_iterations,
+                self.config.tab_cooldown_ms,
+                retry_count,
+                retry_delay,
+                max_output_lines,
+                &mut store,
+                &template_name,
+            )
+            .await
+        }
     }
 }
 
