@@ -444,7 +444,12 @@ fn apply_verify_output(
     for mut upd in output.updates {
         coerce_id(&mut upd.id, &node_id);
         let _ = graph.update_status(&upd.id, upd.status);
-        if let Some(n) = graph.get_node_mut(&upd.id) { n.error = upd.error; }
+        if let Some(n) = graph.get_node_mut(&upd.id) {
+            n.error = upd.error;
+            if upd.status == Status::Completed {
+                n.completed_iter = Some(iter);
+            }
+        }
     }
     if let Some(node) = graph.get_node_mut(&node_id) {
         let has_mutate = node.required_capabilities.iter().any(|c| c.class() == CapabilityClass::Mutate);
@@ -452,6 +457,9 @@ fn apply_verify_output(
         let has_verify = node.required_capabilities.iter().any(|c| c.class() == CapabilityClass::Verify);
         if has_verify && !has_mutate && !has_observe && node.status == Status::Ready {
             let _ = graph.update_status(&node_id, Status::Completed);
+            if let Some(n) = graph.get_node_mut(&node_id) {
+                n.completed_iter = Some(iter);
+            }
             eprintln!(
                 "{}",
                 console::phase("verify", &format!("node={} auto-completed verify-only", node_id))
@@ -530,7 +538,14 @@ fn apply_mutate_result(
     let final_status = requires_verify
         .then_some(None)
         .unwrap_or_else(|| Some(if has_err { Status::Failed } else { Status::Completed }));
-    if let Some(s) = final_status { let _ = graph.update_status(node_id, s); }
+    if let Some(s) = final_status {
+        let _ = graph.update_status(node_id, s);
+        if s == Status::Completed {
+            if let Some(n) = graph.get_node_mut(node_id) {
+                n.completed_iter = Some(iter);
+            }
+        }
+    }
 }
 
 fn log_empty_readonly(iter: u64, node_id: &str, log_dir: &Path) {
@@ -592,6 +607,11 @@ fn apply_readonly_result(
     }).unwrap_or(Status::Completed);
 
     let _ = graph.update_status(node_id, next_status);
+    if next_status == Status::Completed {
+        if let Some(n) = graph.get_node_mut(node_id) {
+            n.completed_iter = Some(iter);
+        }
+    }
 }
 
 fn coerce_id(result_id: &mut String, canonical: &str) {

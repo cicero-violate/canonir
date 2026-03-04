@@ -50,6 +50,12 @@ struct RawSystem {
     pub planner_plateau_threshold: f64,
     #[serde(default = "default_planner_plateau_expand_factor")]
     pub planner_plateau_expand_factor: usize,
+    #[serde(default = "default_auto_prune")]
+    pub auto_prune: bool,
+    #[serde(default = "default_prune_threshold")]
+    pub prune_threshold: f64,
+    #[serde(default = "default_prune_min_age")]
+    pub prune_min_age: u64,
     #[serde(default = "default_max_node_retries")]
     pub max_node_retries: u32,
 }
@@ -94,6 +100,9 @@ fn default_planner_refine_on_cache() -> bool { true }
 fn default_planner_plateau_window() -> usize { 10 }
 fn default_planner_plateau_threshold() -> f64 { 0.01 }
 fn default_planner_plateau_expand_factor() -> usize { 2 }
+fn default_auto_prune() -> bool { true }
+fn default_prune_threshold() -> f64 { 0.2 }
+fn default_prune_min_age() -> u64 { 5 }
 fn default_max_node_retries() -> u32 { 3 }
 fn default_max_tabs() -> usize { 1 }
 fn default_tab_cooldown_ms() -> u64 { 0 }
@@ -138,6 +147,9 @@ pub struct CapabilityConfig {
     pub planner_plateau_window: usize,
     pub planner_plateau_threshold: f64,
     pub planner_plateau_expand_factor: usize,
+    pub auto_prune: bool,
+    pub prune_threshold: f64,
+    pub prune_min_age: u64,
     pub max_node_retries: u32,
     pub llm_endpoints: Vec<LlmEndpoint>,
     pub planner_endpoint: Option<LlmEndpoint>,
@@ -192,6 +204,9 @@ impl CapabilityConfig {
             planner_plateau_window: raw.system.planner_plateau_window,
             planner_plateau_threshold: raw.system.planner_plateau_threshold,
             planner_plateau_expand_factor: raw.system.planner_plateau_expand_factor,
+            auto_prune: raw.system.auto_prune,
+            prune_threshold: raw.system.prune_threshold,
+            prune_min_age: raw.system.prune_min_age,
             max_node_retries: raw.system.max_node_retries,
             llm_endpoints,
             planner_endpoint,

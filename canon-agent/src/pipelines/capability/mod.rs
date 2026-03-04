@@ -21,6 +21,7 @@ pub mod console;
 pub mod templates;
 pub mod template_index;
 pub mod failure_store;
+pub mod policy;
 
 use super::{Pipeline, PipelineContext, PipelineOutcome};
 use crate::ir::SystemState;
@@ -134,6 +135,7 @@ impl CapabilityPipeline {
             result: None,
             error: None,
             readonly_fail_count: 0,
+            completed_iter: None,
         }).collect();
             ensure_unique_node_ids(&mut nodes);
             ensure_unique_node_ids(&mut nodes);

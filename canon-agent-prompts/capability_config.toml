@@ -18,6 +18,9 @@ planner_refine_on_cache = true  #if false we skip planner and just execute
 planner_plateau_window = 10
 planner_plateau_threshold = 0.01
 planner_plateau_expand_factor = 2
+auto_prune = true
+prune_threshold = 0.2
+prune_min_age = 5
 
 [llm]
 tab_cooldown_ms = 4000

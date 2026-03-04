@@ -56,6 +56,8 @@ pub struct TaskNode {
     pub error: Option<String>,
     #[serde(default)]
     pub readonly_fail_count: u32,
+    #[serde(default)]
+    pub completed_iter: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,6 +153,7 @@ impl TaskGraph {
             node.result = None;
             node.error = None;
             node.readonly_fail_count = 0;
+            node.completed_iter = None;
         }
         self.rebuild_index();
     }

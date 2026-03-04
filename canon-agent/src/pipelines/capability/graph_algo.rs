@@ -197,6 +197,66 @@ pub fn enforce_linking_constraints(graph: &dag::TaskGraph) -> Result<(), String>
     Ok(())
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FeatureVector {
+    pub nodes: usize,
+    pub edges: usize,
+    pub depth: usize,
+    pub scc_count: usize,
+    pub failure_rate: f64,
+    pub reward_trend: f64,
+}
+
+impl FeatureVector {
+    pub fn to_vec(&self) -> Vec<f64> {
+        vec![
+            self.nodes as f64,
+            self.edges as f64,
+            self.depth as f64,
+            self.scc_count as f64,
+            self.failure_rate,
+            self.reward_trend,
+        ]
+    }
+
+    pub fn with_reward_history(mut self, rewards: &[f64]) -> Self {
+        if rewards.len() >= 2 {
+            self.reward_trend = rewards[rewards.len() - 1] - rewards[0];
+        }
+        self
+    }
+}
+
+pub fn graph_features(graph: &dag::TaskGraph) -> FeatureVector {
+    let signals = compute_graph_signals(graph);
+    let nodes = graph.nodes.len();
+    let edges = graph.nodes.iter().map(|n| n.deps.len()).sum();
+    let depth = compute_max_depth(graph);
+    let failed = graph.nodes.iter().filter(|n| n.status == dag::Status::Failed).count();
+    let failure_rate = if nodes == 0 { 0.0 } else { failed as f64 / nodes as f64 };
+    FeatureVector {
+        nodes,
+        edges,
+        depth,
+        scc_count: signals.sccs.len(),
+        failure_rate,
+        reward_trend: 0.0,
+    }
+}
+
+pub fn node_utility(graph: &dag::TaskGraph, node_id: &str, iter: u64) -> f64 {
+    let node = match graph.nodes.iter().find(|n| n.id == node_id) {
+        Some(n) => n,
+        None => return 0.0,
+    };
+    let dependents = graph.nodes.iter()
+        .filter(|n| n.deps.iter().any(|d| d == node_id))
+        .count();
+    let completion_value = if node.status == dag::Status::Completed && node.error.is_none() { 1.0 } else { 0.0 };
+    let age = node.completed_iter.map(|t| iter.saturating_sub(t)).unwrap_or(0) as f64;
+    0.6 * dependents as f64 + 0.3 * completion_value - 0.1 * age
+}
+
 pub fn graph_signature(graph: &dag::TaskGraph) -> String {
     let mut nodes = graph.nodes.iter().map(|n| {
         let mut caps: Vec<Capability> = n.required_capabilities.clone();
@@ -228,6 +288,31 @@ pub fn graph_signature(graph: &dag::TaskGraph) -> String {
         hasher.write(to.as_bytes());
     }
     format!("{:016x}", hasher.finish())
+}
+
+fn compute_max_depth(graph: &dag::TaskGraph) -> usize {
+    if graph.nodes.is_empty() {
+        return 0;
+    }
+    let id_to_idx: HashMap<&str, usize> = graph.nodes.iter().enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); graph.nodes.len()];
+    for (idx, node) in graph.nodes.iter().enumerate() {
+        for dep in &node.deps {
+            if let Some(&j) = id_to_idx.get(dep.as_str()) {
+                adj[j].push(idx);
+            }
+        }
+    }
+    let topo = algorithms::graph::topological_sort::topological_sort(&adj);
+    let mut depth = vec![0usize; graph.nodes.len()];
+    for &u in &topo {
+        for &v in &adj[u] {
+            depth[v] = depth[v].max(depth[u] + 1);
+        }
+    }
+    depth.into_iter().max().unwrap_or(0)
 }
 
 struct Fnv64 {

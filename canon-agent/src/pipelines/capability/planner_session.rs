@@ -12,6 +12,8 @@ use super::decompose::TaskSpec;
 use super::capability::Capability;
 use super::endpoint_worker;
 use super::graph_algo::GraphSignals;
+use super::graph_algo::graph_features;
+use super::policy;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeSpec {
     pub from: String,
@@ -193,6 +195,12 @@ Continue refining the current graph.\n",
                 base + &seed_section
             }
         };
+        let mut features = graph_features(graph);
+        if let Some(ctx) = self.reward_context.as_ref() {
+            features = features.with_reward_history(&ctx.recent_rewards);
+        }
+        let bias = policy::PolicyModel::load_default().predict(&features);
+        let bias_text = policy::format_bias(&bias);
         let prompt = format!(
             "You are a planner. Maintain continuity across iterations.\n\
 Planner limits: max_new_nodes={}, max_new_edges={}\n\
@@ -207,6 +215,7 @@ Rules:\n\
 5) Retract nodes that are Pending or Failed with no dependents.\n\
 6) Rewrite nodes that are Pending with an imprecise description.\n\
 {}\n\
+{}\n\
 Goal:\n{}\n\n\
 Graph Nodes:\n{}\n\n\
 Graph Signals:\n{}\n\n\
@@ -217,6 +226,7 @@ Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"descript
             expandable.join(", "),
             ready_nodes.join(", "),
             unreachable_nodes.join(", "),
+            bias_text,
             reward_section,
             self.goal,
             serde_json::to_string_pretty(&nodes_json).unwrap_or_default(),

@@ -55,6 +55,10 @@ impl FailureStore {
         self.data.failures.iter().any(|f| f.signature == signature)
     }
 
+    pub fn failure_count(&self) -> usize {
+        self.data.failures.len()
+    }
+
     pub fn record(&mut self, signature: String, failure_type: &str, graph: &TaskGraph, iteration: u64) {
         if self.contains(&signature) {
             return;

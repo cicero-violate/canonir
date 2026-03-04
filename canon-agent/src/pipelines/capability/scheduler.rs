@@ -6,6 +6,7 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::io::Write;
 use tokio::sync::Semaphore;
 
 use super::config::{self, CapabilityConfig};
@@ -13,7 +14,7 @@ use super::capability::assert_class_disjoint;
 use super::dag;
 use super::engine;
 use super::endpoint_scheduler;
-use super::graph_algo::{emit_planned_graph, compute_graph_signals, run_graph_algorithms, graph_signature};
+use super::graph_algo::{emit_planned_graph, compute_graph_signals, run_graph_algorithms, graph_signature, node_utility, graph_features};
 use super::graph_runtime::{build_context, enforce_semantic_validations, prune_unlinked_nodes};
 use super::tab_management::{self, TabsHandle};
 use super::LOG_ROOT;
@@ -25,6 +26,13 @@ use super::dag::TaskNode;
 use super::telemetry::{self, ExecMetrics, PlannerMetrics, RuntimeMetrics, TelemetrySnapshot};
 use super::console;
 use super::capability::dominant_class;
+
+#[derive(serde::Serialize)]
+struct PolicyDatasetEntry {
+    features: serde_json::Value,
+    action: serde_json::Value,
+    reward: f64,
+}
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -70,6 +78,60 @@ struct TemplateRevisionLog {
 
 fn edge_count(graph: &dag::TaskGraph) -> usize {
     graph.nodes.iter().map(|n| n.deps.len()).sum()
+}
+
+fn prune_low_value_nodes(graph: &mut dag::TaskGraph, iter: u64, config: &CapabilityConfig) {
+    if !config.auto_prune {
+        return;
+    }
+    let mut parents = std::collections::HashSet::new();
+    for node in &graph.nodes {
+        for dep in &node.deps {
+            parents.insert(dep.clone());
+        }
+    }
+    let mut pruned = Vec::new();
+    for node in &graph.nodes {
+        if node.status != dag::Status::Completed {
+            continue;
+        }
+        if node.deps.is_empty() {
+            continue;
+        }
+        if parents.contains(&node.id) {
+            continue;
+        }
+        let age = node.completed_iter.map(|t| iter.saturating_sub(t)).unwrap_or(0);
+        if age < config.prune_min_age {
+            continue;
+        }
+        let util = node_utility(graph, &node.id, iter);
+        if util < config.prune_threshold {
+            pruned.push(node.id.clone());
+        }
+    }
+    if pruned.is_empty() {
+        return;
+    }
+    graph.nodes.retain(|n| !pruned.contains(&n.id));
+    for node in &mut graph.nodes {
+        node.deps.retain(|d| !pruned.contains(d));
+    }
+    graph.rebuild_index();
+}
+
+fn append_policy_dataset(entry: PolicyDatasetEntry) {
+    let path = Path::new("/workspace/ai_sandbox/canon/agent_logs/policy_dataset.jsonl");
+    if let Ok(line) = serde_json::to_string(&entry) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, format!("{}\n", line).as_bytes()));
+    }
 }
 
 pub(crate) async fn execute_graph_loop(
@@ -286,6 +348,7 @@ pub(crate) async fn execute_graph_loop(
             prune_unlinked_nodes(graph);
         }
         enforce_semantic_validations(graph)?;
+        prune_low_value_nodes(graph, iter, config);
     }
     anyhow::bail!("iteration limit exceeded")
 }
@@ -371,6 +434,7 @@ pub(crate) async fn run_planner_execution_loop(
         let signals = compute_graph_signals(graph);
         let log_dir = Path::new(LOG_ROOT).join("planner_logs");
         let mut revision_rewrites = None;
+        let mut last_update_counts = None;
         let mut update = None;
         let attempts = retry_count.max(1);
         let force_planner_expand = store.is_plateaued(
@@ -485,6 +549,11 @@ pub(crate) async fn run_planner_execution_loop(
         }
         if let Some(update) = update {
             revision_rewrites = Some(update.rewrite_nodes.len());
+            last_update_counts = Some((
+                update.new_nodes.len(),
+                update.new_edges.len(),
+                update.rewrite_nodes.len(),
+            ));
             if update.new_nodes.is_empty() && update.new_edges.is_empty() {
                 empty_streak += 1;
             } else {
@@ -537,6 +606,28 @@ pub(crate) async fn run_planner_execution_loop(
             iteration_time_ms: iter_start.elapsed().as_millis() as u64,
         };
         let reward = telemetry::compute_reward(graph, iterations_used, max_iterations);
+        let features = graph_features(graph);
+        let reward_history = store.recent_rewards(template_name, 6);
+        let features = features.with_reward_history(&reward_history);
+        let failures = failure_store.failure_count();
+        let (add_nodes, add_edges, rewrites) = last_update_counts.unwrap_or((0, 0, 0));
+        append_policy_dataset(PolicyDatasetEntry {
+            features: serde_json::json!({
+                "nodes": features.nodes,
+                "edges": features.edges,
+                "depth": features.depth,
+                "scc_count": features.scc_count,
+                "failure_rate": features.failure_rate,
+                "reward_trend": features.reward_trend,
+                "failures": failures
+            }),
+            action: serde_json::json!({
+                "add_nodes": add_nodes,
+                "add_edges": add_edges,
+                "rewrites": rewrites
+            }),
+            reward,
+        });
         if let Some(rewrites) = revision_rewrites {
             let revision = TemplateRevisionLog {
                 template_hash: store.hash_for(template_name),
@@ -688,6 +779,7 @@ pub(crate) fn apply_planner_update(graph: &mut dag::TaskGraph, update: PlannerUp
                 result: None,
                 error: None,
                 readonly_fail_count: 0,
+                completed_iter: None,
             })
     );
 
