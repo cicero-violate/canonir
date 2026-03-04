@@ -1,16 +1,9 @@
 thank claude, ok so we are now implementing your plan.
 
-
-
 on a different note
-
 this is the canon project
-
 it's an attempt to produce bi-directional code
-
 from rust source code --> mir --> canon ir --> rust code
-
-
 
 archlinux in canon on  main                                                                                                                                                                                                 2026-03-03 21:51:20
 
