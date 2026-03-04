@@ -165,6 +165,7 @@ struct RawPolicy {
 }
 
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct CapabilityPolicy {
     pub write_allowed_roots: Vec<PathBuf>,
     pub require_final_render: bool,
