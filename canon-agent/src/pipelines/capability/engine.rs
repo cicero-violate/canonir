@@ -7,6 +7,7 @@ use super::act::{apply_mutations, apply_read_only, summarize_deltas};
 use super::config::CapabilityPolicy;
 use super::dag::AuthorityContext;
 use super::capability::{Capability, CapabilityClass};
+use super::console;
 use super::dag::{Status, TaskGraph, TaskNode};
 use super::llm::call_agent_json_with_retry_allow_mismatch;
 use super::tab_management::TabsHandle;
@@ -187,6 +188,12 @@ const MODE_RULES: [ModeRule; 3] = [
 ];
 
 fn select_mode(ctx: &AuthorityContext, node_id: &str) -> Result<DispatchMode> {
+    if ctx.is_verify_context()
+        && !ctx.is_mutation_context()
+        && ctx.capabilities.iter().any(|c| c.class() == CapabilityClass::Observe)
+    {
+        return Ok(DispatchMode::Readonly);
+    }
     MODE_RULES.iter()
         .find(|r| (r.predicate)(ctx))
         .map(|r| (r.validate)(ctx, node_id).map(|_| r.mode))
@@ -439,6 +446,18 @@ fn apply_verify_output(
         let _ = graph.update_status(&upd.id, upd.status);
         if let Some(n) = graph.get_node_mut(&upd.id) { n.error = upd.error; }
     }
+    if let Some(node) = graph.get_node_mut(&node_id) {
+        let has_mutate = node.required_capabilities.iter().any(|c| c.class() == CapabilityClass::Mutate);
+        let has_observe = node.required_capabilities.iter().any(|c| c.class() == CapabilityClass::Observe);
+        let has_verify = node.required_capabilities.iter().any(|c| c.class() == CapabilityClass::Verify);
+        if has_verify && !has_mutate && !has_observe && node.status == Status::Ready {
+            let _ = graph.update_status(&node_id, Status::Completed);
+            eprintln!(
+                "{}",
+                console::phase("verify", &format!("node={} auto-completed verify-only", node_id))
+            );
+        }
+    }
     Ok(())
 }
 
@@ -486,6 +505,15 @@ fn apply_mutate_result(
     roots: &[PathBuf],
     max_output_lines: usize,
 ) {
+    if !result.rationale.trim().is_empty() {
+        eprintln!(
+            "{}",
+            console::phase(
+                "mutate",
+                &format!("node={} rationale={}", node_id, console::truncate(&result.rationale, 180))
+            )
+        );
+    }
     let (ro, mutate) = partition_deltas(result.deltas);
     if !ro.is_empty() {
         let _ = apply_read_only(&ro, roots, max_output_lines);
@@ -530,6 +558,15 @@ fn apply_readonly_result(
     iter: u64,
     max_node_retries: u32,
 ) {
+    if !result.rationale.trim().is_empty() {
+        eprintln!(
+            "{}",
+            console::phase(
+                "observe",
+                &format!("node={} rationale={}", node_id, console::truncate(&result.rationale, 180))
+            )
+        );
+    }
     let (ro, mutate) = partition_deltas(result.deltas);
     if !mutate.is_empty() {
         let msg = "read-only context received mutation deltas".to_string();

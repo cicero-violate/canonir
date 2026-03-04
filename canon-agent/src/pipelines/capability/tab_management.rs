@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::ws_server::WsBridge;
+use super::console;
 
 pub struct TabSlots {
     pub owner: HashMap<String, u32>,
@@ -120,5 +121,5 @@ pub fn now_ms() -> u128 {
 }
 
 pub fn log_llm(message: String) {
-    eprintln!("[llm {}] {}", now_ms(), message);
+    eprintln!("{}", console::llm(&format!("{} {}", now_ms(), message)));
 }

@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t4",
+      "deltas": [
+        {
+          "type": "read_file",
+          "path": "/workspace/ai_sandbox/canon/orchestration/src/main.rs"
+        }
+      ],
+      "rationale": "Inspect the orchestration pipeline implementation to understand how execution results, telemetry, and status information are currently represented so the node execution record schema can capture inputs, outputs, duration, retries, invariant results, and dependency updates in a compatible format."
+    }
+  ]
+}
+```

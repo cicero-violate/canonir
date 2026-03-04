@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t4",
+      "deltas": [
+        {
+          "type": "read_file",
+          "path": "/workspace/ai_sandbox/canon/canon_telemetry/src/lib.rs"
+        }
+      ],
+      "rationale": "To define a node execution record schema consistent with the existing pipeline, we must inspect the telemetry data structures already used for build, structural surface, and reporting (e.g., BuildReport, StructuralSurface). Reading canon_telemetry/src/lib.rs reveals the current metric and report models so the execution record schema can integrate cleanly with telemetry aggregation and orchestration reporting."
+    }
+  ]
+}
+```

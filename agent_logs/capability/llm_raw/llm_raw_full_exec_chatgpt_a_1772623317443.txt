@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t11",
+      "deltas": [
+        {
+          "type": "read_file",
+          "path": "/workspace/ai_sandbox/canon/canon-agent/src/reward.rs"
+        }
+      ],
+      "rationale": "The reward ledger implementation contains the existing reward aggregation and EMA logic used to derive learning signals. Inspecting it will inform how aggregate_execution_metrics should compute DAG-level metrics including throughput, latency distribution, success ratio, and cumulative reward."
+    }
+  ]
+}
+```

@@ -1,6 +1,7 @@
 use crate::ws_server::WsBridge;
 use anyhow::Result;
 use futures_util::future::join_all;
+use serde::Serialize;
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -16,10 +17,13 @@ use super::graph_algo::{emit_planned_graph, compute_graph_signals, run_graph_alg
 use super::graph_runtime::{build_context, enforce_semantic_validations, prune_unlinked_nodes};
 use super::tab_management::{self, TabsHandle};
 use super::LOG_ROOT;
+use super::TEMPLATE_ROOT;
 use super::planner_session::{PlannerSession, PlannerUpdate};
 use super::templates::TemplateStore;
 use super::dag::TaskNode;
 use super::telemetry::{self, ExecMetrics, PlannerMetrics, RuntimeMetrics, TelemetrySnapshot};
+use super::console;
+use super::capability::dominant_class;
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -47,6 +51,19 @@ const PIPELINE_TRANSITIONS: [[PipelineState; 3]; 3] = {
     t[PipelineState::Blocked as usize][PipelineEvent::Blocked as usize] = PipelineState::Blocked;
     t
 };
+
+#[derive(Serialize)]
+struct TemplateRevisionLog {
+    template_hash: String,
+    reward: f64,
+    nodes: usize,
+    edges: usize,
+    rewrites: usize,
+}
+
+fn edge_count(graph: &dag::TaskGraph) -> usize {
+    graph.nodes.iter().map(|n| n.deps.len()).sum()
+}
 
 pub(crate) async fn execute_graph_loop(
     graph: &mut dag::TaskGraph,
@@ -89,18 +106,26 @@ pub(crate) async fn execute_graph_loop(
             status_path,
             serde_json::to_string_pretty(&summary).unwrap_or_default(),
         );
-        eprintln!("[capability] {}", summary);
+        eprintln!("{}", console::info("capability", &summary.to_string()));
         let completed_count = graph
             .nodes
             .iter()
             .filter(|n| n.status == dag::Status::Completed)
             .count();
+        let failed_count = graph.nodes.iter().filter(|n| n.status == dag::Status::Failed).count();
         eprintln!(
-            "[capability] iter={} ready={} completed={}/{}",
-            iter,
-            ready_ids.len(),
-            completed_count,
-            graph.nodes.len()
+            "{}",
+            console::phase(
+                "tick",
+                &format!(
+                    "iter={} ready={} completed={}/{} failed={}",
+                    iter,
+                    ready_ids.len(),
+                    completed_count,
+                    graph.nodes.len(),
+                    failed_count
+                )
+            )
         );
 
         let event = if graph.all_completed() {
@@ -170,12 +195,20 @@ pub(crate) async fn execute_graph_loop(
                 .map(|c| format!("{:?}", c).to_lowercase())
                 .collect::<Vec<_>>()
                 .join(",");
+            let mode = dominant_class(&node.required_capabilities);
             eprintln!(
-                "[capability] dispatch node={} type={} caps=[{}] endpoint={}",
-                node.id,
-                node_type_str,
-                caps_str,
-                endpoint_id
+                "{}",
+                console::info(
+                    "dispatch",
+                    &format!(
+                        "node={} type={} mode={} caps=[{}] endpoint={}",
+                        node.id,
+                        node_type_str,
+                        console::mode_tag(mode),
+                        caps_str,
+                        endpoint_id
+                    )
+                )
             );
             let fut = async move {
                 let start = std::time::Instant::now();
@@ -317,11 +350,14 @@ pub(crate) async fn run_planner_execution_loop(
     let mut empty_streak = 0u32;
     let mut iter = 0u64;
     while !graph.all_completed() && iter < max_iterations {
+        eprintln!("{}", console::phase("planner", &format!("iter={} nodes={}", iter, graph.nodes.len())));
         let iter_start = std::time::Instant::now();
         let signals = compute_graph_signals(graph);
         let log_dir = Path::new(LOG_ROOT).join("planner_logs");
+        let mut revision_rewrites = None;
         let mut update = None;
         let attempts = retry_count.max(1);
+        let force_planner_expand = store.is_plateaued(template_name, 10, 0.01);
         for attempt in 1..=attempts {
             planner_metrics.planner_calls += 1;
             if attempt > 1 {
@@ -361,10 +397,27 @@ pub(crate) async fn run_planner_execution_loop(
                 planner_metrics.planner_failures += 1;
                 return Err(e);
             }
+            if force_planner_expand && candidate.new_nodes.is_empty() && candidate.new_edges.is_empty() {
+                let payload = serde_json::json!({
+                    "iter": iter,
+                    "attempt": attempt,
+                    "error": "plateaued template requires expansion",
+                    "planner_output": candidate,
+                });
+                let path = log_dir.join(format!("planner_iter_{:04}_expand_required.json", iter));
+                if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
+                    let _ = std::fs::write(path, pretty);
+                }
+                if attempt < attempts {
+                    tokio::time::sleep(std::time::Duration::from_secs(retry_delay)).await;
+                    continue;
+                }
+            }
             update = Some(candidate);
             break;
         }
         if let Some(update) = update {
+            revision_rewrites = Some(update.rewrite_nodes.len());
             if update.new_nodes.is_empty() && update.new_edges.is_empty() {
                 empty_streak += 1;
             } else {
@@ -412,6 +465,20 @@ pub(crate) async fn run_planner_execution_loop(
             iteration_time_ms: iter_start.elapsed().as_millis() as u64,
         };
         let reward = telemetry::compute_reward(graph, iterations_used, max_iterations);
+        if let Some(rewrites) = revision_rewrites {
+            let revision = TemplateRevisionLog {
+                template_hash: store.hash_for(template_name),
+                reward,
+                nodes: graph.nodes.len(),
+                edges: edge_count(graph),
+                rewrites,
+            };
+            let path = Path::new(TEMPLATE_ROOT).join(format!("template_revision_{:04}.json", iter));
+            if let Ok(pretty) = serde_json::to_string_pretty(&revision) {
+                let _ = std::fs::create_dir_all(Path::new(TEMPLATE_ROOT));
+                let _ = std::fs::write(path, pretty);
+            }
+        }
         let snapshot = TelemetrySnapshot {
             planner: planner_metrics.clone(),
             exec: exec_metrics.clone(),
@@ -419,6 +486,7 @@ pub(crate) async fn run_planner_execution_loop(
             reward,
         };
         telemetry::record_snapshot(&Path::new(LOG_ROOT).join("planner_logs/metrics.json"), &snapshot);
+        telemetry::record_snapshot(&Path::new(LOG_ROOT).join("metrics.json"), &snapshot);
         iter += 1;
     }
     let reward = telemetry::compute_reward(graph, iter, max_iterations);

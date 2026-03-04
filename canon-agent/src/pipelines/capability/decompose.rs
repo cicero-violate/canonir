@@ -168,6 +168,14 @@ Original input:\n{}",
 
     for t in &mut output.tasks {
         t.node_type = normalize_node_type(t.node_type, &t.required_capabilities, &t.description);
+        let has_verify = t.required_capabilities.iter().any(|c| c.class() == super::capability::CapabilityClass::Verify);
+        let has_observe = t.required_capabilities.iter().any(|c| c.class() == super::capability::CapabilityClass::Observe);
+        let has_mutate = t.required_capabilities.iter().any(|c| c.class() == super::capability::CapabilityClass::Mutate);
+        if t.node_type == NodeType::Analysis && has_verify && !has_observe && !has_mutate {
+            if !t.required_capabilities.contains(&Capability::FileRead) {
+                t.required_capabilities.push(Capability::FileRead);
+            }
+        }
     }
 
     let has_render = output.tasks.iter().any(|t| t.node_type == NodeType::Render);

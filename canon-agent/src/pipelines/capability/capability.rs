@@ -57,6 +57,7 @@ impl Capability {
             Capability::PromptContractEnforce => CapabilityClass::Observe,
             Capability::GoalToSubgoals => CapabilityClass::Observe,
             Capability::ScheduleReady => CapabilityClass::Observe,
+            Capability::ConstraintAttach => CapabilityClass::Observe,
 
             Capability::StatusUpdateOnly => CapabilityClass::Verify,
             Capability::UpdateStatus => CapabilityClass::Verify,
@@ -74,7 +75,6 @@ impl Capability {
             Capability::AddEdge => CapabilityClass::Mutate,
             Capability::RefineNode => CapabilityClass::Mutate,
             Capability::DependencyRewrite => CapabilityClass::Mutate,
-            Capability::ConstraintAttach => CapabilityClass::Mutate,
 
             Capability::Unknown => CapabilityClass::Observe,
         }

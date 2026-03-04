@@ -1,0 +1,20 @@
+```json
+{
+  "results": [
+    {
+      "id": "t1",
+      "deltas": [
+        {
+          "type": "read_file",
+          "path": "/workspace/ai_sandbox/canon/GOAL.md"
+        },
+        {
+          "type": "read_file",
+          "path": "/workspace/ai_sandbox/canon/small_rust_project/src/main.rs"
+        }
+      ],
+      "rationale": "Read the explicit goal specification and the existing small_rust_project agent implementation to derive the architectural specification for the new deterministic DAG-controlled multi-agent framework replacing canon-agent."
+    }
+  ]
+}
+```

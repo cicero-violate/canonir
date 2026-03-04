@@ -72,7 +72,7 @@ async fn call_agent_json_inner(
         tab_cooldown_ms,
     )
     .await?;
-    let log_dir = "/workspace/ai_sandbox/canon/agent_logs/capability";
+    let log_dir = "/workspace/ai_sandbox/canon/agent_logs/capability/llm_raw";
     let _ = std::fs::create_dir_all(log_dir);
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
