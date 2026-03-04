@@ -56,6 +56,10 @@ struct RawSystem {
     pub prune_threshold: f64,
     #[serde(default = "default_prune_min_age")]
     pub prune_min_age: u64,
+    #[serde(default = "default_recovery_retry_rate_threshold")]
+    pub recovery_retry_rate_threshold: f64,
+    #[serde(default = "default_recovery_failed_fraction_threshold")]
+    pub recovery_failed_fraction_threshold: f64,
     #[serde(default = "default_max_node_retries")]
     pub max_node_retries: u32,
 }
@@ -103,6 +107,8 @@ fn default_planner_plateau_expand_factor() -> usize { 2 }
 fn default_auto_prune() -> bool { true }
 fn default_prune_threshold() -> f64 { 0.2 }
 fn default_prune_min_age() -> u64 { 5 }
+fn default_recovery_retry_rate_threshold() -> f64 { 0.3 }
+fn default_recovery_failed_fraction_threshold() -> f64 { 0.3 }
 fn default_max_node_retries() -> u32 { 3 }
 fn default_max_tabs() -> usize { 1 }
 fn default_tab_cooldown_ms() -> u64 { 0 }
@@ -150,6 +156,8 @@ pub struct CapabilityConfig {
     pub auto_prune: bool,
     pub prune_threshold: f64,
     pub prune_min_age: u64,
+    pub recovery_retry_rate_threshold: f64,
+    pub recovery_failed_fraction_threshold: f64,
     pub max_node_retries: u32,
     pub llm_endpoints: Vec<LlmEndpoint>,
     pub planner_endpoint: Option<LlmEndpoint>,
@@ -207,6 +215,8 @@ impl CapabilityConfig {
             auto_prune: raw.system.auto_prune,
             prune_threshold: raw.system.prune_threshold,
             prune_min_age: raw.system.prune_min_age,
+            recovery_retry_rate_threshold: raw.system.recovery_retry_rate_threshold,
+            recovery_failed_fraction_threshold: raw.system.recovery_failed_fraction_threshold,
             max_node_retries: raw.system.max_node_retries,
             llm_endpoints,
             planner_endpoint,

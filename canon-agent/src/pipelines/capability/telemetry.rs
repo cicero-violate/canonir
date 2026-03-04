@@ -27,6 +27,9 @@ pub struct RuntimeMetrics {
     pub retry_rate: f64,
     pub progress_fraction: f64,
     pub iteration_time_ms: u64,
+    pub branching_factor: f64,
+    pub blocked_fraction: f64,
+    pub completion_velocity: f64,
 }
 
 #[derive(Debug, Default, Serialize, Clone)]

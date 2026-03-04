@@ -429,7 +429,7 @@ fn apply_mutate_output(
     }
     for mut result in output.results {
         coerce_id(&mut result.id, &node_id);
-        apply_mutate_result(result, &node_id, graph, roots, max_output_lines);
+        apply_mutate_result(result, &node_id, graph, roots, max_output_lines, iter);
     }
     Ok(())
 }
@@ -512,6 +512,7 @@ fn apply_mutate_result(
     graph: &mut TaskGraph,
     roots: &[PathBuf],
     max_output_lines: usize,
+    iter: u64,
 ) {
     if !result.rationale.trim().is_empty() {
         eprintln!(

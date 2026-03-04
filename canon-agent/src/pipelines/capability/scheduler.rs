@@ -134,6 +134,18 @@ fn append_policy_dataset(entry: PolicyDatasetEntry) {
     }
 }
 
+fn apply_recovery(graph: &mut dag::TaskGraph) {
+    for node in &mut graph.nodes {
+        if node.status == dag::Status::Failed {
+            node.status = dag::Status::Pending;
+            node.readonly_fail_count = 0;
+            node.error = None;
+            node.result = None;
+        }
+    }
+    graph.rebuild_index();
+}
+
 pub(crate) async fn execute_graph_loop(
     graph: &mut dag::TaskGraph,
     bridge: &WsBridge,
@@ -159,7 +171,8 @@ pub(crate) async fn execute_graph_loop(
     let mut state = PipelineState::Running;
     let mut failures = Vec::new();
     for iter in 1..=max_iterations {
-        let ready_ids = GpuScheduler::schedule(graph);
+        let features = graph_features(graph);
+        let mut ready_ids = GpuScheduler::schedule(graph);
         for id in &ready_ids {
             let _ = graph.update_status(id, dag::Status::Ready);
         }
@@ -232,6 +245,23 @@ pub(crate) async fn execute_graph_loop(
             }
             _ => blocked_streak = 0,
         }
+
+        if features.branching_factor > 3.5 {
+            let keep = (ready_ids.len() / 2).max(1);
+            ready_ids.truncate(keep);
+        }
+        ready_ids.sort_by_key(|id| {
+            let node = graph.nodes.iter().find(|n| n.id == *id);
+            let base = node.map(|n| n.priority as i32).unwrap_or(0);
+            let retry_penalty = node.map(|n| n.readonly_fail_count as i32).unwrap_or(0);
+            let unblock_bonus = if features.blocked_fraction > 0.4 {
+                node.map(|n| n.required_capabilities.iter().any(|c| c.class() == super::capability::CapabilityClass::Observe))
+                    .unwrap_or(false) as i32
+            } else { 0 };
+            let completion_bonus = features.completion_velocity.min(5.0) as i32;
+            let adjusted = base + completion_bonus + unblock_bonus - retry_penalty;
+            std::cmp::Reverse(adjusted)
+        });
 
         let mut futures = Vec::new();
         for node_id in ready_ids {
@@ -349,6 +379,11 @@ pub(crate) async fn execute_graph_loop(
         }
         enforce_semantic_validations(graph)?;
         prune_low_value_nodes(graph, iter, config);
+        if features.retry_rate > config.recovery_retry_rate_threshold
+            || features.failed_fraction > config.recovery_failed_fraction_threshold
+        {
+            apply_recovery(graph);
+        }
     }
     anyhow::bail!("iteration limit exceeded")
 }
@@ -392,6 +427,14 @@ fn process_node_result(
         );
         let _ = graph.update_status(&node_id, dag::Status::Ready);
         exec_metrics.nodes_failed += 1;
+    }
+    if let Some(n) = graph.get_node_mut(&node_id) {
+        if n.readonly_fail_count > policy.max_node_retries {
+            n.readonly_fail_count = 0;
+            n.status = dag::Status::Pending;
+            n.error = None;
+            n.result = None;
+        }
     }
     Some(ms)
 }
@@ -595,6 +638,7 @@ pub(crate) async fn run_planner_execution_loop(
         let _exec_iters = exec_iters;
         let iterations_used = iter.saturating_add(1);
         planner_metrics.iterations += 1;
+        let features = graph_features(graph);
         let runtime = RuntimeMetrics {
             queue_depth: telemetry::pending_requests(),
             retry_rate: if planner_metrics.planner_calls == 0 {
@@ -604,9 +648,11 @@ pub(crate) async fn run_planner_execution_loop(
             },
             progress_fraction: telemetry::progress_fraction(graph),
             iteration_time_ms: iter_start.elapsed().as_millis() as u64,
+            branching_factor: features.branching_factor,
+            blocked_fraction: features.blocked_fraction,
+            completion_velocity: features.completion_velocity,
         };
         let reward = telemetry::compute_reward(graph, iterations_used, max_iterations);
-        let features = graph_features(graph);
         let reward_history = store.recent_rewards(template_name, 6);
         let features = features.with_reward_history(&reward_history);
         let failures = failure_store.failure_count();

@@ -200,11 +200,15 @@ impl CapabilityPipeline {
             }
             let reward = telemetry::compute_reward(&graph, iterations_used, self.config.max_iterations);
             store.record_reward(&template_name, reward);
+            let features = graph_algo::graph_features(&graph);
             let runtime = telemetry::RuntimeMetrics {
                 queue_depth: telemetry::pending_requests(),
                 retry_rate: 0.0,
                 progress_fraction: telemetry::progress_fraction(&graph),
                 iteration_time_ms: 0,
+                branching_factor: features.branching_factor,
+                blocked_fraction: features.blocked_fraction,
+                completion_velocity: features.completion_velocity,
             };
             let snapshot = telemetry::TelemetrySnapshot {
                 planner: Default::default(),

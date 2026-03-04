@@ -21,6 +21,8 @@ planner_plateau_expand_factor = 2
 auto_prune = true
 prune_threshold = 0.2
 prune_min_age = 5
+recovery_retry_rate_threshold = 0.3
+recovery_failed_fraction_threshold = 0.3
 
 [llm]
 tab_cooldown_ms = 4000

@@ -17,6 +17,21 @@ unsafe extern "C" {
 }
 
 #[cfg(feature = "cuda")]
+pub fn indegree_gpu(csr: &Csr) -> Vec<i32> {
+    let v = csr.vertex_count() as i32;
+    let mut indegree = vec![0i32; csr.vertex_count()];
+    unsafe {
+        gpu_topo_indegree(
+            csr.row_ptr.as_ptr(),
+            csr.col_idx.as_ptr(),
+            v,
+            indegree.as_mut_ptr(),
+        );
+    }
+    indegree
+}
+
+#[cfg(feature = "cuda")]
 pub fn topological_sort_gpu(csr: &Csr) -> Vec<usize> {
     let v = csr.vertex_count() as i32;
     if v == 0 {
