@@ -46,6 +46,7 @@ use templates::TemplateStore;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::sync::Arc;
+use policy::PolicyModel;
 
 pub(crate) const LOG_ROOT: &str = "/workspace/ai_sandbox/canon/agent_logs/capability";
 pub(crate) const TEMPLATE_ROOT: &str = "/workspace/ai_sandbox/canon/agent_logs/templates";
@@ -81,6 +82,31 @@ impl CapabilityPipeline {
 
     fn ensure_log_dir() {
         let _ = std::fs::create_dir_all(LOG_ROOT);
+        let _ = std::fs::create_dir_all("/workspace/ai_sandbox/canon/agent_logs");
+        let _ = std::fs::create_dir_all("/workspace/ai_sandbox/canon/agent_logs/templates");
+        Self::ensure_agent_log_files();
+    }
+
+    fn ensure_agent_log_files() {
+        Self::ensure_file("/workspace/ai_sandbox/canon/agent_logs/policy_dataset.jsonl", "");
+        Self::ensure_file("/workspace/ai_sandbox/canon/agent_logs/goal_embeddings.json", "{}");
+        Self::ensure_file("/workspace/ai_sandbox/canon/agent_logs/metrics.json", "{}");
+        Self::ensure_file("/workspace/ai_sandbox/canon/agent_logs/capability_costs.json", "{}");
+        let weights_path = Path::new("/workspace/ai_sandbox/canon/agent_logs/policy_weights.json");
+        if !weights_path.exists() {
+            let model = PolicyModel::load_default();
+            let _ = model.save(weights_path);
+        }
+    }
+
+    fn ensure_file(path: &str, contents: &str) {
+        let p = Path::new(path);
+        if !p.exists() {
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(p, contents);
+        }
     }
 
     fn log_path(name: &str) -> PathBuf {
