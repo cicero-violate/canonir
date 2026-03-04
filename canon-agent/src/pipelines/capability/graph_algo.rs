@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use algorithms::graph::adj_list::AdjList;
 use algorithms::graph::csr::Csr;
+use algorithms::graph::scheduling::topological_layers;
 
 use super::{dag, decompose};
 use super::capability::Capability;
@@ -117,61 +118,28 @@ impl GraphSignals {
 
 pub fn compute_graph_signals(graph: &dag::TaskGraph) -> GraphSignals {
     let n = graph.nodes.len();
-    let mut id_to_index: HashMap<&str, usize> = HashMap::new();
-    for (idx, node) in graph.nodes.iter().enumerate() {
-        id_to_index.insert(node.id.as_str(), idx);
-    }
+    let id_to_index: HashMap<&str, usize> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(idx, node)| (node.id.as_str(), idx))
+        .collect();
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
     for node in &graph.nodes {
-        let to = match id_to_index.get(node.id.as_str()) {
-            Some(v) => *v,
-            None => continue,
-        };
-        for dep in &node.deps {
-            if let Some(from) = id_to_index.get(dep.as_str()) {
-                adj[*from].push(to);
-            }
-        }
-    }
-    #[cfg(feature = "cuda")]
-    let roots: Vec<usize> = {
-        let csr = Csr::from_adj(&adj);
-        let indegree = algorithms::graph::topological_sort_gpu::indegree_gpu(&csr);
-        indegree
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &d)| if d == 0 { Some(i) } else { None })
-            .collect()
-    };
-    #[cfg(not(feature = "cuda"))]
-    let roots: Vec<usize> = {
-        let mut indegree = vec![0usize; n];
-        for node in &graph.nodes {
-            let to = match id_to_index.get(node.id.as_str()) {
-                Some(v) => *v,
-                None => continue,
-            };
+        if let Some(&to) = id_to_index.get(node.id.as_str()) {
             for dep in &node.deps {
-                if let Some(from) = id_to_index.get(dep.as_str()) {
-                    let _ = from;
-                    indegree[to] += 1;
+                if let Some(&from) = id_to_index.get(dep.as_str()) {
+                    adj[from].push(to);
                 }
             }
         }
-        indegree
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &d)| if d == 0 { Some(i) } else { None })
-            .collect()
-    };
-    #[cfg(feature = "cuda")]
-    let topo_order = {
-        let csr = Csr::from_adj(&adj);
-        algorithms::graph::topological_sort_gpu::topological_sort_gpu(&csr)
-    };
-    #[cfg(not(feature = "cuda"))]
-    let topo_order = algorithms::graph::topological_sort::topological_sort(&adj);
+    }
+
+    let layers = topological_layers(&adj);
+    let roots = layers.get(0).cloned().unwrap_or_default();
+    let topo_order = layers.iter().flatten().cloned().collect::<Vec<_>>();
     let has_cycle = topo_order.len() != n;
+
     #[cfg(feature = "cuda")]
     let sccs = {
         let csr = Csr::from_adj(&adj);
@@ -187,11 +155,10 @@ pub fn compute_graph_signals(graph: &dag::TaskGraph) -> GraphSignals {
         .collect::<Vec<_>>();
 
     let reach = reachability_mask(&adj, &roots);
-
     let unreachable = reach
         .iter()
         .enumerate()
-        .filter_map(|(i, &ok)| if ok { None } else { Some(i) })
+        .filter_map(|(i, &ok)| (!ok).then_some(i))
         .collect::<Vec<_>>();
     GraphSignals {
         roots,
