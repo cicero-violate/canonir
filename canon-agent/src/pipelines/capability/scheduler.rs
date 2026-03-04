@@ -357,7 +357,21 @@ pub(crate) async fn run_planner_execution_loop(
         let mut revision_rewrites = None;
         let mut update = None;
         let attempts = retry_count.max(1);
-        let force_planner_expand = store.is_plateaued(template_name, 10, 0.01);
+        let force_planner_expand = store.is_plateaued(
+            template_name,
+            config.planner_plateau_window,
+            config.planner_plateau_threshold,
+        );
+        let remaining_nodes = config.max_nodes.saturating_sub(graph.nodes.len());
+        let (planner_max_new_nodes, planner_max_new_edges) = if force_planner_expand {
+            (
+                (config.planner_max_new_nodes.saturating_mul(config.planner_plateau_expand_factor))
+                    .min(remaining_nodes.max(1)),
+                config.planner_max_new_edges.saturating_mul(config.planner_plateau_expand_factor),
+            )
+        } else {
+            (config.planner_max_new_nodes, config.planner_max_new_edges)
+        };
         for attempt in 1..=attempts {
             planner_metrics.planner_calls += 1;
             if attempt > 1 {
@@ -375,8 +389,8 @@ pub(crate) async fn run_planner_execution_loop(
                     retry_delay,
                     &log_dir,
                     iter,
-                    config.planner_max_new_nodes,
-                    config.planner_max_new_edges,
+                    planner_max_new_nodes,
+                    planner_max_new_edges,
                 )
                 .await?;
             if let Err(e) = validate_planner_update(graph, &candidate, config) {
@@ -484,6 +498,8 @@ pub(crate) async fn run_planner_execution_loop(
             exec: exec_metrics.clone(),
             runtime,
             reward,
+            template_hash: Some(store.hash_for(template_name)),
+            goal: Some(template_name.to_string()),
         };
         telemetry::record_snapshot(&Path::new(LOG_ROOT).join("planner_logs/metrics.json"), &snapshot);
         telemetry::record_snapshot(&Path::new(LOG_ROOT).join("metrics.json"), &snapshot);

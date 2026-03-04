@@ -44,6 +44,12 @@ struct RawSystem {
     pub planner_max_new_edges: usize,
     #[serde(default = "default_planner_refine_on_cache")]
     pub planner_refine_on_cache: bool,
+    #[serde(default = "default_planner_plateau_window")]
+    pub planner_plateau_window: usize,
+    #[serde(default = "default_planner_plateau_threshold")]
+    pub planner_plateau_threshold: f64,
+    #[serde(default = "default_planner_plateau_expand_factor")]
+    pub planner_plateau_expand_factor: usize,
     #[serde(default = "default_max_node_retries")]
     pub max_node_retries: u32,
 }
@@ -85,6 +91,9 @@ fn default_prune_unlinked() -> bool { true }
 fn default_planner_max_new_nodes() -> usize { 32 }
 fn default_planner_max_new_edges() -> usize { 64 }
 fn default_planner_refine_on_cache() -> bool { true }
+fn default_planner_plateau_window() -> usize { 10 }
+fn default_planner_plateau_threshold() -> f64 { 0.01 }
+fn default_planner_plateau_expand_factor() -> usize { 2 }
 fn default_max_node_retries() -> u32 { 3 }
 fn default_max_tabs() -> usize { 1 }
 fn default_tab_cooldown_ms() -> u64 { 0 }
@@ -126,6 +135,9 @@ pub struct CapabilityConfig {
     pub planner_max_new_nodes: usize,
     pub planner_max_new_edges: usize,
     pub planner_refine_on_cache: bool,
+    pub planner_plateau_window: usize,
+    pub planner_plateau_threshold: f64,
+    pub planner_plateau_expand_factor: usize,
     pub max_node_retries: u32,
     pub llm_endpoints: Vec<LlmEndpoint>,
     pub planner_endpoint: Option<LlmEndpoint>,
@@ -177,6 +189,9 @@ impl CapabilityConfig {
             planner_max_new_nodes: raw.system.planner_max_new_nodes,
             planner_max_new_edges: raw.system.planner_max_new_edges,
             planner_refine_on_cache: raw.system.planner_refine_on_cache,
+            planner_plateau_window: raw.system.planner_plateau_window,
+            planner_plateau_threshold: raw.system.planner_plateau_threshold,
+            planner_plateau_expand_factor: raw.system.planner_plateau_expand_factor,
             max_node_retries: raw.system.max_node_retries,
             llm_endpoints,
             planner_endpoint,

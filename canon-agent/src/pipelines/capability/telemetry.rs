@@ -35,6 +35,8 @@ pub struct TelemetrySnapshot {
     pub exec: ExecMetrics,
     pub runtime: RuntimeMetrics,
     pub reward: f64,
+    pub template_hash: Option<String>,
+    pub goal: Option<String>,
 }
 
 pub fn record_snapshot(path: &Path, snapshot: &TelemetrySnapshot) {

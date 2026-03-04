@@ -15,6 +15,9 @@ prune_unlinked = true
 planner_max_new_nodes = 32
 planner_max_new_edges = 64
 planner_refine_on_cache = true  #if false we skip planner and just execute
+planner_plateau_window = 10
+planner_plateau_threshold = 0.01
+planner_plateau_expand_factor = 2
 
 [llm]
 tab_cooldown_ms = 4000

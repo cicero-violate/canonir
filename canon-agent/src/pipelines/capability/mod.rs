@@ -201,6 +201,8 @@ impl CapabilityPipeline {
                 exec: exec_metrics.clone(),
                 runtime,
                 reward,
+                template_hash: Some(store.hash_for(&template_name)),
+                goal: Some(template_name.clone()),
             };
             telemetry::record_snapshot(&Path::new(LOG_ROOT).join("metrics.json"), &snapshot);
             Ok(reward)
@@ -208,7 +210,11 @@ impl CapabilityPipeline {
             let planner_endpoint = self.config.planner_endpoint()?;
             let mut planner_session = planner_session::PlannerSession::new(planner_endpoint, goal.raw.clone());
             let recent = store.recent_rewards(&template_name, 4);
-            let plateaued = store.is_plateaued(&template_name, 4, 0.05);
+            let plateaued = store.is_plateaued(
+                &template_name,
+                self.config.planner_plateau_window,
+                self.config.planner_plateau_threshold,
+            );
             let similar = store.find_similar(&goal.raw, &graph, 1);
             let bootstrap_seed = similar.into_iter().next().map(|s| {
                 let seed_graph = store.load(&s.entry.goal).ok();
