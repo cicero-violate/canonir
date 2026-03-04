@@ -94,6 +94,14 @@ struct RawSystem {
     pub snapshot_interval_iters: u64,
     #[serde(default = "default_snapshot_file")]
     pub snapshot_file: String,
+    #[serde(default = "default_goal_similarity_weight")]
+    pub goal_similarity_weight: f64,
+    #[serde(default = "default_structural_similarity_weight")]
+    pub structural_similarity_weight: f64,
+    #[serde(default = "default_embedding_model")]
+    pub embedding_model: String,
+    #[serde(default = "default_embedding_dim")]
+    pub embedding_dim: usize,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -160,6 +168,10 @@ fn default_snapshot_interval_iters() -> u64 { 10 }
 fn default_snapshot_file() -> String {
     "/workspace/ai_sandbox/canon/agent_logs/state_snapshot.json".to_string()
 }
+fn default_goal_similarity_weight() -> f64 { 0.6 }
+fn default_structural_similarity_weight() -> f64 { 0.4 }
+fn default_embedding_model() -> String { "hash".to_string() }
+fn default_embedding_dim() -> usize { 64 }
 fn default_max_tabs() -> usize { 1 }
 fn default_tab_cooldown_ms() -> u64 { 0 }
 
@@ -225,6 +237,10 @@ pub struct CapabilityConfig {
     pub enable_resume: bool,
     pub snapshot_interval_iters: u64,
     pub snapshot_file: String,
+    pub goal_similarity_weight: f64,
+    pub structural_similarity_weight: f64,
+    pub embedding_model: String,
+    pub embedding_dim: usize,
     pub llm_endpoints: Vec<LlmEndpoint>,
     pub planner_endpoint: Option<LlmEndpoint>,
     pub llm_roles: HashMap<String, RawRoleConfig>,
@@ -300,6 +316,10 @@ impl CapabilityConfig {
             enable_resume: raw.system.enable_resume,
             snapshot_interval_iters: raw.system.snapshot_interval_iters,
             snapshot_file: raw.system.snapshot_file,
+            goal_similarity_weight: raw.system.goal_similarity_weight,
+            structural_similarity_weight: raw.system.structural_similarity_weight,
+            embedding_model: raw.system.embedding_model,
+            embedding_dim: raw.system.embedding_dim,
             llm_endpoints,
             planner_endpoint,
             llm_roles: raw.llm.roles,

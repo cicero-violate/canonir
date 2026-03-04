@@ -628,6 +628,9 @@ pub(crate) async fn run_planner_execution_loop(
     let mut last_template_reuse = false;
     let mut last_template_score = 0.0;
     let mut last_template_selected: Option<String> = None;
+    let mut last_goal_similarity = 0.0;
+    let mut last_template_by_embedding = false;
+    let mut last_embedding_cache_hits = 0u64;
     let mut last_mutations = 0u64;
     let mut last_mutation_success = 0u64;
     let mut last_mutation_reward_delta = 0.0;
@@ -662,15 +665,28 @@ pub(crate) async fn run_planner_execution_loop(
         let mut reuse_decision = false;
         let mut reuse_score = 0.0;
         let mut reuse_goal: Option<String> = None;
+        let mut reuse_goal_similarity = 0.0;
+        let mut reuse_by_embedding = false;
+        last_embedding_cache_hits = 0;
         if !run_planner {
-            let candidates = store.find_similar(template_name, graph, config.template_top_k);
-            if let Some(best) = candidates.into_iter().max_by(|a, b| {
+            let search = store.find_similar(
+                template_name,
+                graph,
+                config.template_top_k,
+                config.goal_similarity_weight,
+                config.structural_similarity_weight,
+                config.embedding_dim,
+            );
+            last_embedding_cache_hits = search.cache_hits;
+            if let Some(best) = search.templates.into_iter().max_by(|a, b| {
                 let a_score = a.score * a.entry.reward;
                 let b_score = b.score * b.entry.reward;
                 a_score.partial_cmp(&b_score).unwrap_or(std::cmp::Ordering::Equal)
             }) {
                 reuse_score = best.score * best.entry.reward;
                 reuse_goal = Some(best.entry.goal.clone());
+                reuse_goal_similarity = best.goal_similarity;
+                reuse_by_embedding = best.used_embedding;
                 if reuse_score >= config.template_reuse_threshold {
                     if let Ok(loaded) = store.load(&best.entry.goal) {
                         *graph = loaded;
@@ -684,6 +700,8 @@ pub(crate) async fn run_planner_execution_loop(
         last_template_reuse = reuse_decision;
         last_template_score = reuse_score;
         last_template_selected = reuse_goal.clone();
+        last_goal_similarity = reuse_goal_similarity;
+        last_template_by_embedding = reuse_by_embedding && reuse_decision;
         if !reuse_decision && !run_planner {
             run_planner = true;
         }
@@ -1013,6 +1031,9 @@ pub(crate) async fn run_planner_execution_loop(
             snapshot_written: exec_metrics.last_snapshot_written,
             snapshot_loaded: resume_iteration > 0,
             resume_iteration,
+            goal_similarity_score: last_goal_similarity,
+            template_reuse_by_embedding: last_template_by_embedding,
+            embedding_cache_hits: last_embedding_cache_hits,
         };
         let reward_history = store.recent_rewards(template_name, 6);
         let features = features.with_reward_history(&reward_history);

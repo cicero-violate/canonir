@@ -10,16 +10,18 @@ use super::dag::TaskGraph;
 use super::planner_session::PlannerUpdate;
 use super::scheduler::apply_planner_update;
 use super::template_index;
+use super::goal_embedding;
 
 pub struct TemplateStore {
     root: PathBuf,
     index: template_index::TemplateIndex,
+    embedding_dim: usize,
 }
 
 impl TemplateStore {
-    pub fn new(root: PathBuf) -> Self {
+    pub fn new(root: PathBuf, embedding_dim: usize) -> Self {
         let index = template_index::TemplateIndex::load(&root);
-        Self { root, index }
+        Self { root, index, embedding_dim }
     }
 
     pub fn path_for(&self, name: &str) -> PathBuf {
@@ -53,6 +55,26 @@ impl TemplateStore {
         fs::create_dir_all(&self.root)?;
         let json = serde_json::to_string_pretty(graph)?;
         fs::write(self.path_for(name), json)?;
+        let hash = self.hash_for(name);
+        let mut entry = template_index::entry_from_graph(&hash, name, graph, self.stored_reward(name));
+        let mut cache = goal_embedding::load_cache();
+        let g_hash = goal_embedding::goal_hash(name);
+        let (emb, cache_hit) = if let Some(existing) = cache.get(&g_hash) {
+            (existing.clone(), true)
+        } else {
+            let emb = goal_embedding::embed_goal(name, self.embedding_dim);
+            cache.insert(g_hash.clone(), emb.vector.clone());
+            (emb.vector, false)
+        };
+        if !cache_hit {
+            goal_embedding::save_cache(&cache);
+        }
+        entry.goal_embedding = emb;
+        if let Some(existing) = self.index.get(&hash) {
+            entry.failure_count = existing.failure_count;
+        }
+        self.index.upsert(entry);
+        self.index.save();
         Ok(())
     }
 
@@ -106,6 +128,19 @@ impl TemplateStore {
         fs::write(self.reward_path(name), reward.to_string())?;
         let hash = self.hash_for(name);
         let mut entry = template_index::entry_from_graph(&hash, name, graph, reward);
+        let mut cache = goal_embedding::load_cache();
+        let g_hash = goal_embedding::goal_hash(name);
+        let (emb, cache_hit) = if let Some(existing) = cache.get(&g_hash) {
+            (existing.clone(), true)
+        } else {
+            let emb = goal_embedding::embed_goal(name, self.embedding_dim);
+            cache.insert(g_hash.clone(), emb.vector.clone());
+            (emb.vector, false)
+        };
+        if !cache_hit {
+            goal_embedding::save_cache(&cache);
+        }
+        entry.goal_embedding = emb;
         if let Some(existing) = self.index.get(&hash) {
             entry.failure_count = existing.failure_count;
         }
@@ -140,8 +175,11 @@ impl TemplateStore {
         goal: &str,
         graph: &TaskGraph,
         top_k: usize,
-    ) -> Vec<template_index::SimilarTemplate> {
-        self.index.find_similar(goal, graph, top_k)
+        goal_w: f64,
+        struct_w: f64,
+        embedding_dim: usize,
+    ) -> template_index::SimilarSearch {
+        self.index.find_similar(goal, graph, top_k, goal_w, struct_w, embedding_dim)
     }
 
     pub fn record_failure(&mut self, template_hash: &str) {

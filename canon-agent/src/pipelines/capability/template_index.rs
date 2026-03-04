@@ -4,11 +4,14 @@ use std::path::{Path, PathBuf};
 
 use super::dag::TaskGraph;
 use super::decompose;
+use super::goal_embedding;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemplateEntry {
     pub hash: String,
     pub goal: String,
+    #[serde(default)]
+    pub goal_embedding: Vec<f32>,
     pub reward: f64,
     pub node_count: usize,
     pub edge_count: usize,
@@ -24,6 +27,15 @@ pub struct TemplateEntry {
 pub struct SimilarTemplate {
     pub entry: TemplateEntry,
     pub score: f64,
+    pub goal_similarity: f64,
+    pub structural_similarity: f64,
+    pub used_embedding: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SimilarSearch {
+    pub templates: Vec<SimilarTemplate>,
+    pub cache_hits: u64,
 }
 
 pub struct TemplateIndex {
@@ -67,9 +79,31 @@ impl TemplateIndex {
         }
     }
 
-    pub fn find_similar(&self, goal: &str, graph: &TaskGraph, top_k: usize) -> Vec<SimilarTemplate> {
+    pub fn find_similar(
+        &self,
+        goal: &str,
+        graph: &TaskGraph,
+        top_k: usize,
+        goal_w: f64,
+        struct_w: f64,
+        embedding_dim: usize,
+    ) -> SimilarSearch {
         if self.entries.is_empty() {
-            return Vec::new();
+            return SimilarSearch { templates: Vec::new(), cache_hits: 0 };
+        }
+        let mut cache = goal_embedding::load_cache();
+        let g_hash = goal_embedding::goal_hash(goal);
+        let mut cache_hits = 0u64;
+        let g_embed = if let Some(embed) = cache.get(&g_hash) {
+            cache_hits += 1;
+            embed.clone()
+        } else {
+            let emb = goal_embedding::embed_goal(goal, embedding_dim);
+            cache.insert(g_hash.clone(), emb.vector.clone());
+            emb.vector
+        };
+        if cache_hits == 0 {
+            goal_embedding::save_cache(&cache);
         }
         let (max_nodes, max_edges, max_depth) = self.maxima_with_graph(graph);
         let target_entry = entry_from_graph("target", goal, graph, 0.0);
@@ -78,18 +112,30 @@ impl TemplateIndex {
         let mut scored: Vec<SimilarTemplate> = self.entries.iter()
             .filter(|e| e.reward > 0.0)
             .map(|entry| {
-                let goal_sim = jaccard(goal, &entry.goal);
+                let (goal_sim, used_embedding) = if !entry.goal_embedding.is_empty()
+                    && entry.goal_embedding.len() == g_embed.len()
+                {
+                    (goal_embedding::cosine_similarity(&g_embed, &entry.goal_embedding), true)
+                } else {
+                    (jaccard(goal, &entry.goal), false)
+                };
                 let vec = structural_features(entry, max_nodes, max_edges, max_depth);
                 let struct_sim = cosine(&target_vec, &vec);
-                let score = 0.6 * goal_sim + 0.4 * struct_sim;
-                SimilarTemplate { entry: entry.clone(), score }
+                let score = goal_w * goal_sim + struct_w * struct_sim;
+                SimilarTemplate {
+                    entry: entry.clone(),
+                    score,
+                    goal_similarity: goal_sim,
+                    structural_similarity: struct_sim,
+                    used_embedding,
+                }
             })
             .filter(|s| s.score >= 0.2)
             .collect();
 
         scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_k);
-        scored
+        SimilarSearch { templates: scored, cache_hits }
     }
 
     fn maxima_with_graph(&self, graph: &TaskGraph) -> (f64, f64, f64) {
@@ -125,6 +171,7 @@ pub fn entry_from_graph(hash: &str, goal: &str, graph: &TaskGraph, reward: f64) 
     TemplateEntry {
         hash: hash.to_string(),
         goal: goal.to_string(),
+        goal_embedding: Vec::new(),
         reward,
         node_count,
         edge_count,

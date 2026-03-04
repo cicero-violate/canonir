@@ -60,6 +60,9 @@ pub struct RuntimeMetrics {
     pub snapshot_written: bool,
     pub snapshot_loaded: bool,
     pub resume_iteration: u64,
+    pub goal_similarity_score: f64,
+    pub template_reuse_by_embedding: bool,
+    pub embedding_cache_hits: u64,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]

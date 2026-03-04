@@ -27,6 +27,7 @@ pub mod gpu_scheduler;
 pub mod capability_cost;
 pub mod template_mutation;
 pub mod state_snapshot;
+pub mod goal_embedding;
 
 use super::{Pipeline, PipelineContext, PipelineOutcome};
 use crate::ir::SystemState;
@@ -105,7 +106,7 @@ impl CapabilityPipeline {
         let policy = config::CapabilityPolicy::load(&ctx.cwd[0])?;
         let policy = config::CapabilityPolicy { max_node_retries: self.config.max_node_retries, ..policy };
 
-        let mut store = TemplateStore::new(Path::new(TEMPLATE_ROOT).to_path_buf());
+        let mut store = TemplateStore::new(Path::new(TEMPLATE_ROOT).to_path_buf(), self.config.embedding_dim);
         let template_name = goal.raw.clone();
 
         let mut planner_generate = || async {
@@ -254,6 +255,9 @@ impl CapabilityPipeline {
                 snapshot_written: false,
                 snapshot_loaded: false,
                 resume_iteration: 0,
+                goal_similarity_score: 0.0,
+                template_reuse_by_embedding: false,
+                embedding_cache_hits: 0,
             };
             let snapshot = telemetry::TelemetrySnapshot {
                 planner: Default::default(),
@@ -283,8 +287,15 @@ impl CapabilityPipeline {
                 self.config.planner_plateau_window,
                 self.config.planner_plateau_threshold,
             );
-            let similar = store.find_similar(&goal.raw, &graph, 1);
-            let bootstrap_seed = similar.into_iter().next().map(|s| {
+            let similar = store.find_similar(
+                &goal.raw,
+                &graph,
+                1,
+                self.config.goal_similarity_weight,
+                self.config.structural_similarity_weight,
+                self.config.embedding_dim,
+            );
+            let bootstrap_seed = similar.templates.into_iter().next().map(|s| {
                 let seed_graph = store.load(&s.entry.goal).ok();
                 let node_summaries = seed_graph.as_ref().map(|g| {
                     g.nodes.iter()
