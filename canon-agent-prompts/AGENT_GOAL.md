@@ -1,4 +1,15 @@
 # Agent Goal
 
-Refactor and implement the DAG-controlled, multi-agent pipeline as specified in the implementation plan.
-Primary target: build a better agent framework than canon-agent in `small_rust_project/src/`.
+Fix the `orchestration` pipeline so:
+
+```
+cargo run --bin orchestration -- --all
+```
+
+completes with zero build errors in emitted files. Focus on eliminating errors in emitted sources (e.g. `emit/repomap/src/*.rs`).
+
+You may modify code under:
+
+- `/workspace/ai_sandbox/canon/canon-capture`
+- `/workspace/ai_sandbox/canon/canon-projection`
+- `/workspace/ai_sandbox/canon/canon`

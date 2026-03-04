@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t11",
+      "deltas": [
+        {
+          "type": "list_dir",
+          "path": "/workspace/ai_sandbox/canon/canon_telemetry/src"
+        }
+      ],
+      "rationale": "To implement aggregate_execution_metrics correctly, we need to inspect existing telemetry modules that define BuildReport, StructuralSurface, reward signals, or related metrics. Listing the canon_telemetry/src directory reveals the relevant source files (e.g., metrics, reports, signals) that define how telemetry is structured so the DAG-level aggregation function can align with existing metric schemas."
+    }
+  ]
+}
+```

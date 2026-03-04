@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t5",
+      "deltas": [
+        {
+          "type": "read_file",
+          "path": "/workspace/ai_sandbox/canon/orchestration/src/main.rs"
+        }
+      ],
+      "rationale": "The orchestration module already aggregates build results, structural surface metrics, and execution telemetry across pipeline runs. Reading it provides the existing metric structures needed to design telemetry aggregation converting node execution records into DAG-level metrics such as throughput, success ratio, latency distribution, and reward signals."
+    }
+  ]
+}
+```

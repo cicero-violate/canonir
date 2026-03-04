@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t9",
+      "deltas": [
+        {
+          "type": "read_file",
+          "path": "/workspace/ai_sandbox/canon/dag/DAG_CONTROLLED_AGENT_PIPELINE.md"
+        }
+      ],
+      "rationale": "The deterministic scheduling semantics (stable ordering and frontier consumption) are defined in the DAG_CONTROLLED_AGENT_PIPELINE specification. Reading it provides the authoritative rules required to implement schedule_next_node(ready_nodes, priority_scores) deterministically."
+    }
+  ]
+}
+```

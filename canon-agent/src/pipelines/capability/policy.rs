@@ -13,6 +13,14 @@ pub struct PolicyWeights {
     pub edge_add_bias: Vec<f64>,
     #[serde(default)]
     pub rewrite_bias: Vec<f64>,
+    #[serde(default)]
+    pub run_planner_head: Vec<f64>,
+    #[serde(default)]
+    pub expansion_head: Vec<f64>,
+    #[serde(default)]
+    pub execution_head: Vec<f64>,
+    #[serde(default)]
+    pub unblock_head: Vec<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +34,14 @@ pub struct PolicyBias {
     pub node_add_bias: f64,
     pub edge_add_bias: f64,
     pub rewrite_bias: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PolicyDecision {
+    pub run_planner: bool,
+    pub expansion_scale: f64,
+    pub prioritize_unblock: bool,
+    pub execution_preference: f64,
 }
 
 impl PolicyModel {
@@ -43,6 +59,10 @@ impl PolicyModel {
                 node_add_bias: Vec::new(),
                 edge_add_bias: Vec::new(),
                 rewrite_bias: Vec::new(),
+                run_planner_head: Vec::new(),
+                expansion_head: Vec::new(),
+                execution_head: Vec::new(),
+                unblock_head: Vec::new(),
             });
         Self { weights }
     }
@@ -65,11 +85,35 @@ impl PolicyModel {
         }
     }
 
+    pub fn decide(&self, features: &[f64]) -> PolicyDecision {
+        let dot = |w: &Vec<f64>| -> f64 {
+            w.iter().zip(features.iter()).map(|(a, b)| a * b).sum()
+        };
+        let raw_run = dot(&self.weights.run_planner_head);
+        let raw_expand = dot(&self.weights.expansion_head);
+        let raw_exec = dot(&self.weights.execution_head);
+        let raw_unblock = dot(&self.weights.unblock_head);
+        let run_planner = raw_run >= 0.0;
+        let expansion_scale = (1.0 + raw_expand).clamp(0.5, 2.0);
+        let execution_preference = raw_exec.clamp(-1.0, 1.0);
+        let prioritize_unblock = raw_unblock > 0.0;
+        PolicyDecision {
+            run_planner,
+            expansion_scale,
+            prioritize_unblock,
+            execution_preference,
+        }
+    }
+
     pub fn weight_norm(&self) -> f64 {
         let all = self.weights.planner_bias.iter()
             .chain(self.weights.node_add_bias.iter())
             .chain(self.weights.edge_add_bias.iter())
-            .chain(self.weights.rewrite_bias.iter());
+            .chain(self.weights.rewrite_bias.iter())
+            .chain(self.weights.run_planner_head.iter())
+            .chain(self.weights.expansion_head.iter())
+            .chain(self.weights.execution_head.iter())
+            .chain(self.weights.unblock_head.iter());
         all.map(|v| v * v).sum::<f64>().sqrt()
     }
 }

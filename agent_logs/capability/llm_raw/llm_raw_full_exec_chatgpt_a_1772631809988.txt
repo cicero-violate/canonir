@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t11",
+      "deltas": [
+        {
+          "type": "read_file",
+          "path": "/workspace/ai_sandbox/canon/orchestration/src/main.rs"
+        }
+      ],
+      "rationale": "The orchestration pipeline already aggregates execution outcomes such as build success, error counts, and structural metrics. Reading this file provides the existing telemetry structures required to design the aggregate_execution_metrics function that converts node execution records into DAG-level metrics like throughput, latency distribution, success ratio, and cumulative reward."
+    }
+  ]
+}
+```

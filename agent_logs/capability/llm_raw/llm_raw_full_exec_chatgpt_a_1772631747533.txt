@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t2",
+      "deltas": [
+        {
+          "type": "read_file",
+          "path": "/workspace/ai_sandbox/canon/canon-agent/graph.json"
+        }
+      ],
+      "rationale": "The existing canon-agent graph definition encodes the current pipeline stages (observer, reasoner, prover, judge, mutator). Reading this file provides the authoritative mapping needed to formalize the observe, reason, prove, judge, mutate, execute stages as deterministic DAG node categories with invariants and execution contracts."
+    }
+  ]
+}
+```

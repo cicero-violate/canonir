@@ -46,6 +46,22 @@ pub struct FailureStats {
     pub deadlock_rate: f64,
 }
 
+#[derive(Debug, Clone)]
+pub struct Constraint {
+    pub signature: String,
+    pub rule: ConstraintRule,
+}
+
+#[derive(Debug, Clone)]
+pub enum ConstraintRule {
+    NoCycle,
+    NoUnreachable,
+    CapabilityConflict,
+    InvalidDependency,
+    PatternRewrite { pattern: String, replacement: String },
+    SignatureBan,
+}
+
 impl FailureStore {
     pub fn load(template_hash: &str) -> Self {
         let dir = Path::new(TEMPLATE_ROOT).join("failures");
@@ -89,6 +105,34 @@ impl FailureStore {
             cycle_frequency: cycle as f64 / denom,
             deadlock_rate: deadlock as f64 / denom,
         }
+    }
+
+    pub fn constraints(&self, threshold: usize, max_constraints: usize) -> Vec<Constraint> {
+        let mut by_type: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for f in &self.data.failures {
+            *by_type.entry(f.failure_type.as_str()).or_insert(0) += 1;
+        }
+        let mut out = Vec::new();
+        for f in &self.data.failures {
+            if out.len() >= max_constraints {
+                break;
+            }
+            if let Some(count) = by_type.get(f.failure_type.as_str()) {
+                if *count < threshold {
+                    continue;
+                }
+            }
+            let rule = match f.failure_type.as_str() {
+                "cycle" => ConstraintRule::NoCycle,
+                "deadlock" | "blocked" => ConstraintRule::NoUnreachable,
+                "invalid_authority" => ConstraintRule::CapabilityConflict,
+                "dependency_order" => ConstraintRule::InvalidDependency,
+                "verify_loop" => ConstraintRule::PatternRewrite { pattern: "cargo build".to_string(), replacement: "cargo check".to_string() },
+                _ => ConstraintRule::SignatureBan,
+            };
+            out.push(Constraint { signature: f.signature.clone(), rule });
+        }
+        out
     }
 
     pub fn record(&mut self, signature: String, failure_type: &str, graph: &TaskGraph, iteration: u64) {

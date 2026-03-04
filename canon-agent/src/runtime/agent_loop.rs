@@ -46,9 +46,17 @@ pub async fn run_agent_loop(
             tick,
             ..base_ctx.clone()
         };
-        let outcome = pipeline.run_tick(&ctx, ir, layout).await?;
-        eprintln!("[agent-loop] tick {} done — {}", tick, outcome.summary);
-        eprintln!("[agent-loop] reward={:.4} advanced={}", outcome.reward, outcome.advanced);
+        let outcome = match pipeline.run_tick(&ctx, ir, layout).await {
+            Ok(outcome) => {
+                eprintln!("[agent-loop] tick {} done — {}", tick, outcome.summary);
+                eprintln!("[agent-loop] reward={:.4} advanced={}", outcome.reward, outcome.advanced);
+                Some(outcome)
+            }
+            Err(e) => {
+                eprintln!("[agent-loop] tick {} error — {}", tick, e);
+                None
+            }
+        };
 
         if let Some(metrics) = read_metrics() {
             if metrics.runtime.completion_velocity == 0.0 {
@@ -68,9 +76,6 @@ pub async fn run_agent_loop(
             }
         }
 
-        if outcome.advanced && config.max_ticks == 1 {
-            break;
-        }
         if config.max_ticks > 0 && tick >= config.max_ticks {
             break;
         }

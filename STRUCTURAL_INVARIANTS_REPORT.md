@@ -64,19 +64,19 @@ Only direct facts from tool output are recorded.
       18 |     let mut _v10: /* Type */ = ::core::default::Default::default();
     [E0308]
       error[E0308]: mismatched types
-         --> src/extractor.rs:156:13
+         --> src/extractor.rs:129:13
           |
-      152 |     let mut __ret = ();
+      125 |     let mut __ret = ();
           |                     -- expected due to this value
       ...
-      156 |     __ret = _v3.unwrap_or(_v5);
+      129 |     __ret = _v3.unwrap_or(_v5);
           |             ^^^^^^^^^^^^^^^^^^ expected `()`, found `&str`
     [E0425]
       error[E0425]: cannot find value `child` in this scope
-         --> src/extractor.rs:116:21
+         --> src/extractor.rs:117:51
           |
-      116 |     let mut _v21 = &child;
-          |                     ^^^^^ not found in this scope
+      117 |     let mut _v22 = crate::extractor::fn_signature(child, src);
+          |                                                   ^^^^^ not found in this scope
     [unknown]
       error: expected one of `!`, `.`, `::`, `;`, `?`, `{`, `}`, or an operator, found `@`
         --> src/main.rs:13:87
@@ -169,15 +169,15 @@ Only direct facts from tool output are recorded.
   23 +     let mut _v4 = std::iter::Iterator::filter(_v5, {closure@src/repomap.rs:16:83: 16:86});
      |
   error[E0425]: cannot find value `child` in this scope
-     --> src/extractor.rs:116:21
+     --> src/extractor.rs:117:51
       |
-  116 |     let mut _v21 = &child;
-      |                     ^^^^^ not found in this scope
-  error[E0425]: cannot find value `child` in this scope
-     --> src/extractor.rs:144:51
-      |
-  144 |     let mut _v22 = crate::extractor::fn_signature(child, src);
+  117 |     let mut _v22 = crate::extractor::fn_signature(child, src);
       |                                                   ^^^^^ not found in this scope
+  error[E0425]: cannot find value `child` in this scope
+     --> src/extractor.rs:149:21
+      |
+  149 |     let mut _v21 = &child;
+      |                     ^^^^^ not found in this scope
   error[E0425]: cannot find value `child` in this scope
      --> src/extractor.rs:176:21
       |
@@ -248,26 +248,26 @@ Only direct facts from tool output are recorded.
   1162 |         F: [const] FnOnce(T) -> U + [const] Destruct,
        |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Option::<T>::map`
   error[E0308]: mismatched types
-     --> src/extractor.rs:156:13
+     --> src/extractor.rs:129:13
       |
-  152 |     let mut __ret = ();
+  125 |     let mut __ret = ();
       |                     -- expected due to this value
   ...
-  156 |     __ret = _v3.unwrap_or(_v5);
+  129 |     __ret = _v3.unwrap_or(_v5);
       |             ^^^^^^^^^^^^^^^^^^ expected `()`, found `&str`
   error[E0308]: mismatched types
-     --> src/extractor.rs:157:12
+     --> src/extractor.rs:130:12
       |
-  151 | fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
+  124 | fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
       |                                                ------- expected `&'a str` because of return type
   ...
-  157 |     return __ret;
+  130 |     return __ret;
       |            ^^^^^ expected `&str`, found `()`
   error[E0277]: the size for values of type `str` cannot be known at compilation time
      --> src/symbol.rs:156:13
       |
-  156 |         let mut t = match trait_name { std::option::Option::Some(__canon_f0) => *__canon_f0, _ => panic!("canon downcast projection mismatch") };
-      |             ^^^^^ doesn't have a size known at compile-time
+  156 | ...   let mut t = match trait_name { std::option::Option::Some(__canon_f0) => *__canon_f0, _ => panic!("canon downcast projection m...
+      |           ^^^^^ doesn't have a size known at compile-time
       |
       = help: the trait `Sized` is not implemented for `str`
       = note: all local variables must have a statically known size

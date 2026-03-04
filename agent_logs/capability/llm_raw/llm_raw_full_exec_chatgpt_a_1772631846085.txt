@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t4",
+      "deltas": [
+        {
+          "type": "read_file",
+          "path": "/workspace/ai_sandbox/canon/dag/DAG_CONTROLLED_AGENT_PIPELINE.md"
+        }
+      ],
+      "rationale": "The DAG-controlled agent pipeline specification likely defines execution flow, lifecycle semantics, and telemetry expectations required to correctly design the node execution record schema (inputs, outputs, duration, retries, invariant checks, and dependency updates). Reading this specification ensures the schema aligns with the orchestrated DAG execution model."
+    }
+  ]
+}
+```

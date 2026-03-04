@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t6",
+      "deltas": [
+        {
+          "type": "read_file",
+          "path": "/workspace/ai_sandbox/canon/AGENT.md"
+        }
+      ],
+      "rationale": "The AGENT.md file defines the architectural constraints and coding rules governing agent behavior, purity, and boundary enforcement. Reading it provides the authoritative specification needed to define the Agent trait and execution context interface while ensuring side effects occur only at DAG boundaries and kernel functions remain pure."
+    }
+  ]
+}
+```

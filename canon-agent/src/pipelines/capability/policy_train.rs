@@ -12,6 +12,8 @@ const LEARNING_RATE: f64 = 0.01;
 pub struct PolicyDatasetEntry {
     pub features: serde_json::Value,
     pub action: serde_json::Value,
+    #[serde(default)]
+    pub policy_decision: serde_json::Value,
     pub reward: f64,
 }
 
@@ -44,18 +46,20 @@ pub fn train_policy(max_nodes: usize, max_edges: usize) -> PolicyWeights {
         node_add_bias: Vec::new(),
         edge_add_bias: Vec::new(),
         rewrite_bias: Vec::new(),
+        run_planner_head: Vec::new(),
+        expansion_head: Vec::new(),
+        execution_head: Vec::new(),
+        unblock_head: Vec::new(),
     };
     for entry in entries {
         if let Some(features) = features_from_json(&entry.features) {
             let fv = normalize_features(&features, max_nodes, max_edges);
-            if weights.planner_bias.is_empty() {
-                weights.planner_bias = vec![0.0; fv.len()];
-            }
-            let predicted = dot(&weights.planner_bias, &fv);
-            let error = entry.reward - predicted;
-            for (w, f) in weights.planner_bias.iter_mut().zip(fv.iter()) {
-                *w += LEARNING_RATE * error * f;
-            }
+            ensure_head_len(&mut weights, fv.len());
+            update_head(&mut weights.planner_bias, &fv, entry.reward);
+            update_head(&mut weights.run_planner_head, &fv, entry.reward);
+            update_head(&mut weights.expansion_head, &fv, entry.reward);
+            update_head(&mut weights.execution_head, &fv, entry.reward);
+            update_head(&mut weights.unblock_head, &fv, entry.reward);
         }
     }
     weights
@@ -72,14 +76,12 @@ pub fn update_online(entry: &PolicyDatasetEntry, max_nodes: usize, max_edges: us
     let mut weights = model.weights.clone();
     if let Some(features) = features_from_json(&entry.features) {
         let fv = normalize_features(&features, max_nodes, max_edges);
-        if weights.planner_bias.is_empty() {
-            weights.planner_bias = vec![0.0; fv.len()];
-        }
-        let predicted = dot(&weights.planner_bias, &fv);
-        let error = entry.reward - predicted;
-        for (w, f) in weights.planner_bias.iter_mut().zip(fv.iter()) {
-            *w += LEARNING_RATE * error * f;
-        }
+        ensure_head_len(&mut weights, fv.len());
+        update_head(&mut weights.planner_bias, &fv, entry.reward);
+        update_head(&mut weights.run_planner_head, &fv, entry.reward);
+        update_head(&mut weights.expansion_head, &fv, entry.reward);
+        update_head(&mut weights.execution_head, &fv, entry.reward);
+        update_head(&mut weights.unblock_head, &fv, entry.reward);
         model = PolicyModel { weights };
         let _ = model.save(Path::new(WEIGHTS_PATH));
     }
@@ -87,4 +89,30 @@ pub fn update_online(entry: &PolicyDatasetEntry, max_nodes: usize, max_edges: us
 
 fn dot(w: &[f64], f: &[f64]) -> f64 {
     w.iter().zip(f.iter()).map(|(a, b)| a * b).sum()
+}
+
+fn ensure_head_len(weights: &mut PolicyWeights, len: usize) {
+    if weights.planner_bias.is_empty() {
+        weights.planner_bias = vec![0.0; len];
+    }
+    if weights.run_planner_head.is_empty() {
+        weights.run_planner_head = vec![0.0; len];
+    }
+    if weights.expansion_head.is_empty() {
+        weights.expansion_head = vec![0.0; len];
+    }
+    if weights.execution_head.is_empty() {
+        weights.execution_head = vec![0.0; len];
+    }
+    if weights.unblock_head.is_empty() {
+        weights.unblock_head = vec![0.0; len];
+    }
+}
+
+fn update_head(head: &mut [f64], fv: &[f64], reward: f64) {
+    let predicted = dot(head, fv);
+    let error = reward - predicted;
+    for (w, f) in head.iter_mut().zip(fv.iter()) {
+        *w += LEARNING_RATE * error * f;
+    }
 }

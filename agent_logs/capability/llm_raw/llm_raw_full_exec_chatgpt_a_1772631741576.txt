@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t1",
+      "deltas": [
+        {
+          "type": "read_file",
+          "path": "/workspace/ai_sandbox/canon/GOAL.md"
+        }
+      ],
+      "rationale": "The architectural specification must be derived from the system objective defined in GOAL.md, which serves as the authoritative description of the Canon system's design constraints and pipeline structure."
+    }
+  ]
+}
+```

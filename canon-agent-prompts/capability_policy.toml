@@ -1,4 +1,7 @@
 write_allowed_roots = [
-  "small_rust_project"
+  "small_rust_project",
+  "/workspace/ai_sandbox/canon/canon-capture",
+  "/workspace/ai_sandbox/canon/canon-projection",
+  "/workspace/ai_sandbox/canon/canon"
 ]
 require_final_render = false

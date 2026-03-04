@@ -1,5 +1,6 @@
-//! Deterministic DAG Runtime Skeleton
-//! Implements core runtime structures for the DAG-controlled multi-agent framework.
+//! DAG Runtime Skeleton
+//! Deterministic DAG scheduler and kernel interface.
+//! All execution logic is expressed as pure kernel functions.
 
 use std::collections::{HashMap, HashSet};
 
@@ -19,71 +20,24 @@ pub enum NodeStatus {
 pub struct DagNode {
     pub id: NodeId,
     pub deps: Vec<NodeId>,
-    pub node_type: NodeType,
-    pub required_capabilities: Vec<String>,
     pub status: NodeStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NodeType {
-    Analysis,
-    Render,
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DagGraph {
     pub nodes: HashMap<NodeId, DagNode>,
 }
 
 impl DagGraph {
     pub fn new(nodes: Vec<DagNode>) -> Self {
-        let map = nodes
-            .into_iter()
-            .map(|n| (n.id.clone(), n))
-            .collect::<HashMap<_, _>>();
-
+        let map = nodes.into_iter().map(|n| (n.id.clone(), n)).collect();
         Self { nodes: map }
     }
-
-    pub fn validate_acyclic(&self) -> bool {
-        fn dfs(
-            node: &NodeId,
-            graph: &DagGraph,
-            visiting: &mut HashSet<NodeId>,
-            visited: &mut HashSet<NodeId>,
-        ) -> bool {
-            if visiting.contains(node) {
-                return false;
-            }
-
-            if visited.contains(node) {
-                return true;
-            }
-
-            visiting.insert(node.clone());
-
-            if let Some(n) = graph.nodes.get(node) {
-                for dep in &n.deps {
-                    if !dfs(dep, graph, visiting, visited) {
-                        return false;
-                    }
-                }
-            }
-
-            visiting.remove(node);
-            visited.insert(node.clone());
-
-            true
-        }
-
-        let mut visiting = HashSet::new();
-        let mut visited = HashSet::new();
-
-        self.nodes
-            .keys()
-            .all(|id| dfs(id, self, &mut visiting, &mut visited))
-    }
 }
+
+// ------------------------------------------------------------
+// Kernel: compute_ready_nodes
+// ------------------------------------------------------------
 
 pub fn compute_ready_nodes(graph: &DagGraph) -> Vec<NodeId> {
     graph
@@ -103,28 +57,111 @@ pub fn compute_ready_nodes(graph: &DagGraph) -> Vec<NodeId> {
         .collect()
 }
 
-pub fn schedule(frontier: Vec<NodeId>) -> Vec<NodeId> {
-    let mut ordered = frontier;
-    ordered.sort();
-    ordered
+// ------------------------------------------------------------
+// Kernel: compute_priority
+// ------------------------------------------------------------
+
+pub fn compute_priority(node_id: &NodeId) -> u64 {
+    // deterministic placeholder priority
+    use std::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+
+    let mut h = DefaultHasher::new();
+    node_id.hash(&mut h);
+    h.finish()
 }
 
-pub fn transition_status(node: &mut DagNode, next: NodeStatus) -> Result<(), String> {
-    use NodeStatus::*;
+// ------------------------------------------------------------
+// Kernel: schedule_next_node
+// ------------------------------------------------------------
 
-    let valid = match (&node.status, &next) {
-        (Pending, Ready) => true,
-        (Ready, Running) => true,
-        (Running, Completed) => true,
-        (Running, Failed) => true,
-        (_, Skipped) => true,
-        _ => false,
-    };
+pub fn schedule_next_node(ready: &[NodeId]) -> Option<NodeId> {
+    ready
+        .iter()
+        .min_by_key(|id| compute_priority(id))
+        .cloned()
+}
 
-    if valid {
-        node.status = next;
-        Ok(())
-    } else {
-        Err(format!("invalid state transition: {:?} -> {:?}", node.status, next))
+// ------------------------------------------------------------
+// Scheduler
+// ------------------------------------------------------------
+
+pub fn schedule_batch(graph: &DagGraph) -> Vec<NodeId> {
+    let ready = compute_ready_nodes(graph);
+
+    let mut ready_sorted = ready.clone();
+    ready_sorted.sort_by_key(|id| compute_priority(id));
+
+    ready_sorted
+}
+
+// ------------------------------------------------------------
+// Invariant Validation
+// ------------------------------------------------------------
+
+pub fn validate_acyclic(graph: &DagGraph) -> bool {
+    fn visit(
+        node: &NodeId,
+        graph: &DagGraph,
+        visiting: &mut HashSet<NodeId>,
+        visited: &mut HashSet<NodeId>,
+    ) -> bool {
+        if visiting.contains(node) {
+            return false;
+        }
+
+        if visited.contains(node) {
+            return true;
+        }
+
+        visiting.insert(node.clone());
+
+        let ok = graph
+            .nodes
+            .get(node)
+            .map(|n| {
+                n.deps.iter().all(|d| visit(d, graph, visiting, visited))
+            })
+            .unwrap_or(false);
+
+        visiting.remove(node);
+        visited.insert(node.clone());
+
+        ok
+    }
+
+    let mut visiting = HashSet::new();
+    let mut visited = HashSet::new();
+
+    graph
+        .nodes
+        .keys()
+        .all(|id| visit(id, graph, &mut visiting, &mut visited))
+}
+
+// ------------------------------------------------------------
+// Runtime Execution Loop
+// ------------------------------------------------------------
+
+pub fn run_dag(graph: &mut DagGraph) {
+    assert!(validate_acyclic(graph), "DAG invariant violated: graph contains cycle");
+
+    loop {
+        let ready = compute_ready_nodes(graph);
+
+        if ready.is_empty() {
+            break;
+        }
+
+        let batch = schedule_batch(graph);
+
+        for id in batch {
+            if let Some(node) = graph.nodes.get_mut(&id) {
+                node.status = NodeStatus::Running;
+
+                // placeholder execution
+                node.status = NodeStatus::Completed;
+            }
+        }
     }
 }
