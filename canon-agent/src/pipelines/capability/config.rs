@@ -76,6 +76,14 @@ struct RawSystem {
     pub cost_failure_weight: f64,
     #[serde(default = "default_cost_decay_rate")]
     pub cost_decay_rate: f64,
+    #[serde(default = "default_mutation_rate")]
+    pub mutation_rate: f64,
+    #[serde(default = "default_mutation_budget")]
+    pub mutation_budget: usize,
+    #[serde(default = "default_mutation_candidates")]
+    pub mutation_candidates: usize,
+    #[serde(default = "default_template_population_size")]
+    pub template_population_size: usize,
     #[serde(default = "default_failure_constraint_threshold")]
     pub failure_constraint_threshold: usize,
     #[serde(default = "default_max_constraints")]
@@ -135,6 +143,10 @@ fn default_max_repairs_per_node() -> u32 { 3 }
 fn default_cost_latency_weight() -> f64 { 0.001 }
 fn default_cost_failure_weight() -> f64 { 1.0 }
 fn default_cost_decay_rate() -> f64 { 0.2 }
+fn default_mutation_rate() -> f64 { 0.25 }
+fn default_mutation_budget() -> usize { 2 }
+fn default_mutation_candidates() -> usize { 2 }
+fn default_template_population_size() -> usize { 5 }
 fn default_failure_constraint_threshold() -> usize { 2 }
 fn default_max_constraints() -> usize { 16 }
 fn default_max_tabs() -> usize { 1 }
@@ -193,6 +205,10 @@ pub struct CapabilityConfig {
     pub cost_latency_weight: f64,
     pub cost_failure_weight: f64,
     pub cost_decay_rate: f64,
+    pub mutation_rate: f64,
+    pub mutation_budget: usize,
+    pub mutation_candidates: usize,
+    pub template_population_size: usize,
     pub failure_constraint_threshold: usize,
     pub max_constraints: usize,
     pub llm_endpoints: Vec<LlmEndpoint>,
@@ -261,6 +277,10 @@ impl CapabilityConfig {
             cost_latency_weight: raw.system.cost_latency_weight,
             cost_failure_weight: raw.system.cost_failure_weight,
             cost_decay_rate: raw.system.cost_decay_rate,
+            mutation_rate: raw.system.mutation_rate,
+            mutation_budget: raw.system.mutation_budget,
+            mutation_candidates: raw.system.mutation_candidates,
+            template_population_size: raw.system.template_population_size,
             failure_constraint_threshold: raw.system.failure_constraint_threshold,
             max_constraints: raw.system.max_constraints,
             llm_endpoints,

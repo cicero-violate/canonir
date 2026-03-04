@@ -53,6 +53,9 @@ pub struct RuntimeMetrics {
     pub avg_capability_latency: f64,
     pub avg_capability_failure: f64,
     pub avg_node_utility: f64,
+    pub template_mutations: u64,
+    pub mutation_success_rate: f64,
+    pub mutation_reward_delta: f64,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]

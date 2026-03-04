@@ -29,6 +29,7 @@ use super::capability::dominant_class;
 use super::gpu_scheduler::driver::GpuScheduler;
 use super::decompose;
 use super::capability_cost::CapabilityCostTable;
+use super::template_mutation;
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -619,6 +620,9 @@ pub(crate) async fn run_planner_execution_loop(
     let mut last_template_reuse = false;
     let mut last_template_score = 0.0;
     let mut last_template_selected: Option<String> = None;
+    let mut last_mutations = 0u64;
+    let mut last_mutation_success = 0u64;
+    let mut last_mutation_reward_delta = 0.0;
     while !graph.all_completed() && iter < max_iterations {
         eprintln!("{}", console::phase("planner", &format!("iter={} nodes={}", iter, graph.nodes.len())));
         let iter_start = std::time::Instant::now();
@@ -719,6 +723,62 @@ pub(crate) async fn run_planner_execution_loop(
             planner_max_new_edges = ((planner_max_new_edges as f64) * expansion_scale)
                 .round()
                 .max(1.0) as usize;
+        }
+
+        if force_planner_expand && config.mutation_candidates > 0 {
+            let base_reward = store.stored_reward(template_name);
+            let candidates = template_mutation::generate_candidates(
+                graph,
+                config.mutation_candidates,
+                config.mutation_budget,
+                config.mutation_rate,
+                iter,
+            );
+            last_mutations = candidates.len() as u64;
+            let mut best_reward = base_reward;
+            let mut best_graph = None;
+            let mut success = 0u64;
+            for candidate in candidates {
+                if candidate.validate().is_err() {
+                    continue;
+                }
+                let mut eval_graph = candidate.clone();
+                if let Ok((_, _)) = execute_graph_loop(
+                    &mut eval_graph,
+                    bridge,
+                    config,
+                    role_rr,
+                    tabs,
+                    cwd,
+                    workspace_listing,
+                    endpoint,
+                    exec_role,
+                    policy,
+                    context_radius,
+                    max_concurrency,
+                    config.max_expand_iters as u64,
+                    tab_cooldown_ms,
+                    retry_count,
+                    retry_delay,
+                    max_output_lines,
+                    execution_preference,
+                    &mut cost_table,
+                    &mut exec_metrics,
+                ).await {
+                    let reward = telemetry::compute_reward(&eval_graph, 1, config.max_expand_iters as u64);
+                    success += 1;
+                    if reward > best_reward {
+                        best_reward = reward;
+                        best_graph = Some(eval_graph);
+                    }
+                }
+            }
+            last_mutation_success = success;
+            last_mutation_reward_delta = best_reward - base_reward;
+            if let Some(best_graph) = best_graph {
+                *graph = best_graph;
+                let _ = store.save_with_reward(template_name, graph, best_reward);
+            }
         }
         if run_planner_now {
             for attempt in 1..=attempts {
@@ -938,6 +998,9 @@ pub(crate) async fn run_planner_execution_loop(
             avg_capability_latency: cost_table.avg_latency(),
             avg_capability_failure: cost_table.avg_failure(),
             avg_node_utility,
+            template_mutations: last_mutations,
+            mutation_success_rate: if last_mutations == 0 { 0.0 } else { last_mutation_success as f64 / last_mutations as f64 },
+            mutation_reward_delta: last_mutation_reward_delta,
         };
         let reward_history = store.recent_rewards(template_name, 6);
         let features = features.with_reward_history(&reward_history);

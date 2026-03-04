@@ -28,13 +28,13 @@ Goal → Graph Features → Policy Decision → Planner (optional) → Scheduler
    - load existing template
    - run planner
 
-2. ✗ **Template Mutation Engine**
+2. ✓ **Template Mutation Engine**
    Ability to evolve templates by mutating nodes/edges and keeping higher-reward variants.
 
 3. ✓ **Graph Repair Operator**
    Local DAG rewrites when nodes fail (repair instead of full replanning).
 
-4. ✗ **Failure Constraint Injection**
+4. ✓ **Failure Constraint Injection**
    Failure signatures must generate structural constraints for future planner iterations.
 
 5. ✗ **Long-Horizon Credit Assignment**

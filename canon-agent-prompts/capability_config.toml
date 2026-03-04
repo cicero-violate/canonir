@@ -32,6 +32,10 @@ max_constraints = 16
 cost_latency_weight = 0.001
 cost_failure_weight = 1.0
 cost_decay_rate = 0.2
+mutation_rate = 0.25
+mutation_budget = 2
+mutation_candidates = 2
+template_population_size = 5
 
 [llm]
 tab_cooldown_ms = 4000

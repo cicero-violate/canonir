@@ -25,6 +25,7 @@ pub mod policy;
 pub mod policy_train;
 pub mod gpu_scheduler;
 pub mod capability_cost;
+pub mod template_mutation;
 
 use super::{Pipeline, PipelineContext, PipelineOutcome};
 use crate::ir::SystemState;
@@ -235,6 +236,9 @@ impl CapabilityPipeline {
                 avg_capability_latency: 0.0,
                 avg_capability_failure: 0.0,
                 avg_node_utility: 0.0,
+                template_mutations: 0,
+                mutation_success_rate: 0.0,
+                mutation_reward_delta: 0.0,
             };
             let snapshot = telemetry::TelemetrySnapshot {
                 planner: Default::default(),
