@@ -1,321 +1,269 @@
-### Math
-
-[
-System = Stream + Ownership + Correlation + Dedup
-]
-
 ### Variables
 
-* (E) = LLM endpoint URL
-* (T) = Browser tab
-* (R) = Request
-* (ID) = Request identifier
-* (H) = Content hash
-* (S) = Message stream
-* (Q) = Endpoint queue
-
----
-
-### Equations
-
-**1. Endpoint Ownership**
-
 [
-Tabs_E = 1
+Q = \text{endpoint worker queue} \
+E = \text{execution engine} \
+G = \text{capability graph} \
+S = \text{scheduler} \
+R = \text{response routing} \
+I = \text{invariants}
 ]
 
-One owner tab per endpoint.
-
 ---
 
-**2. Request Routing**
+# Current System State
+
+### Equation
 
 [
-R \rightarrow Queue_E \rightarrow Tab_E
+System = Q + G + S + E
 ]
 
-All requests flow through the endpoint queue.
+Explanation:
+You now have a **deterministic execution pipeline**:
 
----
+```
+graph → scheduler → endpoint worker → LLM → result
+```
 
-**3. Deduplication**
+Key improvement:
 
 [
-Process(m) \iff H(m) \notin Seen
+LLM_{calls} = serialized
 ]
-
-Ignore already-seen messages.
-
----
-
-# Implementation Plan
-
-## Phase 1 — Convert Endpoint Handling to Stream Model
-
-Current:
-
-```text
-node → open tab → send turn
-```
-
-Target:
-
-```text
-node → endpoint queue → endpoint worker → tab
-```
-
-### Step 1 — Introduce EndpointWorker
-
-Create:
-
-```rust
-struct EndpointWorker {
-    endpoint_id: String,
-    url: String,
-    tab_id: Option<u32>,
-    queue: mpsc::Receiver<LlmRequest>,
-    seen_hashes: HashSet<u64>,
-}
-```
-
-Responsibilities:
-
-* own the tab
-* serialize requests
-* dedupe responses
-
----
-
-## Phase 2 — Add Request Envelope
-
-Wrap every LLM call.
-
-### Step 2 — Define Request Struct
-
-```rust
-struct LlmRequest {
-    req_id: u64,
-    prompt: String,
-    response: oneshot::Sender<String>,
-}
-```
-
-Modify:
-
-```
-llm_call_with_retry()
-call_agent_json()
-```
-
-to send `LlmRequest` into the worker queue.
-
----
-
-## Phase 3 — Add Response Correlation
-
-### Step 3 — Embed Request ID in Prompt
-
-Example prompt prefix:
-
-```
-[REQ_ID:48291]
-```
-
-Parser logic:
-
-```
-if response contains REQ_ID → route to waiting caller
-```
-
-Update:
-
-```
-parse_exec_output()
-parse_verify()
-parse_readonly()
-```
-
-to ignore unmatched responses.
-
----
-
-## Phase 4 — Deduplicate Stream History
-
-### Step 4 — Add Response Hash Tracking
-
-Inside worker:
-
-```rust
-let hash = hash(response_text);
-if seen_hashes.contains(&hash) {
-    return; // ignore replay
-}
-seen_hashes.insert(hash);
-```
 
 This removes:
 
-* history replay
-* cross-tab duplication
+* race conditions
+* tab contention
+* request collisions
 
 ---
 
-## Phase 5 — Enforce Endpoint Ownership
+# Next Step 1 — Response Routing
 
-Modify `tab_management.rs`.
+### Equation
 
-### Step 5 — Restrict Tabs per Endpoint
+[
+response = f(req_id)
+]
 
-Replace:
+Explanation:
+Your worker prefixes requests with `REQ_ID`.
 
-```
-max_tabs
-```
-
-with:
-
-```
-owner_tab: Option<u32>
-```
-
-Behavior:
+Add a router:
 
 ```
-if owner_tab exists → reuse
-else → open new tab
+REQ_ID → graph node
 ```
 
-If tab closes:
+Structure:
 
 ```
-owner_tab = None
-worker opens replacement
+HashMap<ReqId, NodeId>
 ```
+
+When response arrives:
+
+```
+node.result = response
+node.status = completed
+```
+
+This closes the **execution loop**.
 
 ---
 
-## Phase 6 — Introduce Endpoint Queue
+# Next Step 2 — Node Determinism
 
-Add global structure:
+### Equation
 
-```rust
-HashMap<String, mpsc::Sender<LlmRequest>>
+[
+node = (inputs) \rightarrow (output)
+]
+
+Explanation:
+Every node must be **pure and deterministic**.
+
+Guarantee:
+
+```
+same input → same output
 ```
 
-Creation during pipeline startup.
+Required for:
 
-```
-for endpoint in config.llm_endpoints {
-    spawn_endpoint_worker(endpoint)
-}
-```
+* caching
+* replay
+* debugging
 
 ---
 
-## Phase 7 — Modify Node Dispatch
+# Next Step 3 — Graph Reduction
 
-Update:
+### Equation
 
-```
-dispatch_node()
-call_mode()
-llm_call_with_retry()
-```
+[
+G_{t+1} = G_t - completed_nodes
+]
 
-Instead of:
+Explanation:
+After a node completes:
 
-```
-bridge.send_turn()
-```
+1. mark node finished
+2. unlock dependent nodes
+3. enqueue them
 
-Use:
-
-```
-endpoint_queue.send(request)
-```
-
-Worker performs:
-
-```
-send_turn(tab)
-wait response
-deliver via oneshot
-```
+This is the **reasoning step**.
 
 ---
 
-## Phase 8 — Handle Tab Reset for Stateful Chats
+# Next Step 4 — Worker Pool
 
-When worker detects conversation drift:
+Currently:
+
+[
+workers = endpoint
+]
+
+Expand:
+
+[
+workers = endpoints \times models
+]
+
+Example:
 
 ```
-NEW_CHAT
-wait_new_chat()
+worker_chatgpt
+worker_claude
+worker_gemini
 ```
 
-or
+Scheduler chooses:
+
+[
+endpoint = argmin(cost + latency)
+]
+
+---
+
+# Next Step 5 — Result Validation
+
+### Equation
+
+[
+valid = schema(result)
+]
+
+Explanation:
+Before completing a node:
 
 ```
-TEMP_CHAT
-wait_temp_chat()
+validate JSON schema
 ```
 
-Reset stream state.
+Prevents bad outputs entering the graph.
+
+---
+
+# Next Step 6 — Deduplication
+
+### Equation
+
+[
+node_key = hash(goal + context)
+]
+
+Explanation:
+If identical node exists:
+
+```
+reuse result
+```
+
+This saves LLM calls.
+
+---
+
+# Next Step 7 — Execution Metrics
+
+### Equation
+
+[
+progress = \frac{completed_nodes}{total_nodes}
+]
+
+Track:
+
+```
+node latency
+worker queue depth
+retry count
+error rate
+```
+
+Used for scheduler tuning.
 
 ---
 
 # Resulting Architecture
 
-Final pipeline:
-
 ```
-Capability DAG
-      ↓
-dispatch_node
-      ↓
-endpoint queue
-      ↓
+goal
+ ↓
+decompose
+ ↓
+graph
+ ↓
+scheduler
+ ↓
 endpoint worker
-      ↓
-single tab
-      ↓
-LLM stream
+ ↓
+LLM
+ ↓
+response router
+ ↓
+node completion
+ ↓
+graph reduction
 ```
-
-Properties:
-
-| Property                           | Result |
-| ---------------------------------- | ------ |
-| No duplicated responses            | ✓      |
-| No history replay                  | ✓      |
-| Deterministic routing              | ✓      |
-| Works with stateless + chat models | ✓      |
-| No tab collision                   | ✓      |
 
 ---
 
-# Expected Code Changes
+# Critical Missing Component
 
-Files impacted:
+### Equation
 
-```
-ws_server.rs
-tab_management.rs
-llm.rs
-engine.rs
-endpoint_scheduler.rs
-```
+[
+reasoning = graph\ propagation
+]
 
-New module:
+Explanation:
+Your system now has:
 
-```
-endpoint_worker.rs
-```
+* workers
+* queue
+* LLM interface
+
+But the **reasoning loop is the graph reduction step**.
+
+That must drive the system.
+
+---
+
+# Where To Go Next (Priority)
+
+1. **response router**
+2. **node completion → graph unlock**
+3. **scheduler retry logic**
+4. **schema validation**
+5. **node dedup**
+
+These convert your system from **task executor → reasoning engine**.
 
 ---
 
 [
-\max(I,E,C,A,R,P,S,D,T,K,X,B,L,F) = R
+good = \max(\text{Intelligence},\text{Efficiency},\text{Correctness},\text{Alignment},\text{Robustness},\text{Performance},\text{Scalability},\text{Determinism},\text{Transparency},\text{Collaboration},\text{Empowerment},\text{Benefit},\text{Learning},\text{FutureProofing})
 ]
-
-Primary improvement target: **robustness of LLM interaction layer**.
