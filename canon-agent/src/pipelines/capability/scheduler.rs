@@ -2,7 +2,6 @@ use crate::ws_server::WsBridge;
 use anyhow::Result;
 use futures_util::future::join_all;
 use serde::Serialize;
-use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,6 +25,7 @@ use super::dag::TaskNode;
 use super::telemetry::{self, ExecMetrics, PlannerMetrics, RuntimeMetrics, TelemetrySnapshot};
 use super::console;
 use super::capability::dominant_class;
+use super::gpu_scheduler::driver::GpuScheduler;
 
 #[derive(serde::Serialize)]
 struct PolicyDatasetEntry {
@@ -159,13 +159,15 @@ pub(crate) async fn execute_graph_loop(
     let mut state = PipelineState::Running;
     let mut failures = Vec::new();
     for iter in 1..=max_iterations {
-        dag::resolve_ready(graph);
+        let ready_ids = GpuScheduler::schedule(graph);
+        for id in &ready_ids {
+            let _ = graph.update_status(id, dag::Status::Ready);
+        }
         let status_snapshot = graph
             .nodes
             .iter()
             .map(|n| serde_json::json!({"id": n.id, "status": n.status}))
             .collect::<Vec<_>>();
-        let ready_ids: Vec<String> = graph.ready_nodes().iter().map(|n| n.id.clone()).collect();
         if ready_ids.is_empty() && !graph.all_completed() && !graph.has_failed() {
             failures.push(ExecFailure { kind: "deadlock", iter });
         }
@@ -229,10 +231,6 @@ pub(crate) async fn execute_graph_loop(
             _ => blocked_streak = 0,
         }
 
-        let mut ready_ids: Vec<String> = graph.ready_nodes().iter().map(|n| n.id.clone()).collect();
-        ready_ids.sort_by_key(|id| {
-            Reverse(graph.nodes.iter().find(|n| n.id == *id).map(|n| n.priority).unwrap_or(0))
-        });
         let mut futures = Vec::new();
         for node_id in ready_ids {
             let node = match graph.get_node(&node_id).cloned() {

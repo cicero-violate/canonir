@@ -1,0 +1,43 @@
+use super::layout::{GpuGraph, is_completed, is_ready_candidate};
+
+pub fn compute_ready(graph: &GpuGraph) -> Vec<u8> {
+    let mut ready = vec![0u8; graph.node_count as usize];
+    for i in 0..graph.node_count as usize {
+        if !is_ready_candidate(graph.status[i]) {
+            continue;
+        }
+        let start = graph.deps_offset[i] as usize;
+        let end = graph.deps_offset[i + 1] as usize;
+        let mut ok = true;
+        for dep_idx in &graph.deps_flat[start..end] {
+            let dep = *dep_idx as usize;
+            if !is_completed(graph.status[dep]) {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            ready[i] = 1;
+        }
+    }
+    ready
+}
+
+pub fn priority_sort(ready_mask: &[u8], priority: &[u16]) -> Vec<usize> {
+    let mut indices: Vec<usize> = ready_mask.iter()
+        .enumerate()
+        .filter_map(|(i, &r)| if r == 1 { Some(i) } else { None })
+        .collect();
+    indices.sort_by(|a, b| {
+        let pa = priority.get(*a).copied().unwrap_or(0);
+        let pb = priority.get(*b).copied().unwrap_or(0);
+        pb.cmp(&pa).then_with(|| a.cmp(b))
+    });
+    indices
+}
+
+pub fn deadlock_check(ready_mask: &[u8], status: &[u8]) -> bool {
+    let ready_sum = ready_mask.iter().map(|v| *v as u64).sum::<u64>();
+    let completed = status.iter().filter(|&&s| is_completed(s)).count();
+    ready_sum == 0 && completed < status.len()
+}

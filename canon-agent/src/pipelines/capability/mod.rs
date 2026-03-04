@@ -22,6 +22,7 @@ pub mod templates;
 pub mod template_index;
 pub mod failure_store;
 pub mod policy;
+pub mod gpu_scheduler;
 
 use super::{Pipeline, PipelineContext, PipelineOutcome};
 use crate::ir::SystemState;
