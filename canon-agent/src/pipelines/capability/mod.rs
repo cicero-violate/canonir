@@ -214,6 +214,7 @@ impl CapabilityPipeline {
                 policy_error: 0.0,
                 policy_weight_norm: 0.0,
                 dataset_size: 0,
+                deadlock_rate: features.deadlock_rate,
             };
             let snapshot = telemetry::TelemetrySnapshot {
                 planner: Default::default(),

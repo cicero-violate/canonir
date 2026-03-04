@@ -1,10 +1,10 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::dag::TaskGraph;
 
-#[derive(Debug, Default, Serialize, Clone)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct PlannerMetrics {
     pub planner_calls: u64,
     pub planner_retries: u64,
@@ -14,14 +14,14 @@ pub struct PlannerMetrics {
     pub iterations: u64,
 }
 
-#[derive(Debug, Default, Serialize, Clone)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct ExecMetrics {
     pub nodes_executed: u64,
     pub nodes_failed: u64,
     pub avg_latency_ms: u64,
 }
 
-#[derive(Debug, Default, Serialize, Clone)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct RuntimeMetrics {
     pub queue_depth: u64,
     pub retry_rate: f64,
@@ -34,9 +34,10 @@ pub struct RuntimeMetrics {
     pub policy_error: f64,
     pub policy_weight_norm: f64,
     pub dataset_size: u64,
+    pub deadlock_rate: f64,
 }
 
-#[derive(Debug, Default, Serialize, Clone)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct TelemetrySnapshot {
     pub planner: PlannerMetrics,
     pub exec: ExecMetrics,

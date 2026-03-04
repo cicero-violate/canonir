@@ -140,6 +140,15 @@ fn apply_recovery(graph: &mut dag::TaskGraph) {
     graph.rebuild_index();
 }
 
+fn take_recovery_signal() -> Option<String> {
+    let path = Path::new(LOG_ROOT).join("recovery_signal.json");
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let _ = std::fs::remove_file(&path);
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(|s| s.to_string()))
+}
+
 pub(crate) async fn execute_graph_loop(
     graph: &mut dag::TaskGraph,
     bridge: &WsBridge,
@@ -483,6 +492,19 @@ pub(crate) async fn run_planner_execution_loop(
                 })
             })
             .collect::<Vec<_>>();
+        let recovery_reason = take_recovery_signal();
+        let mut rewrite_requests = rewrite_requests;
+        if let Some(reason) = recovery_reason.as_ref() {
+            for node in &graph.nodes {
+                if matches!(node.status, dag::Status::Pending | dag::Status::Failed) {
+                    rewrite_requests.push(node.id.clone());
+                }
+            }
+            eprintln!(
+                "{}",
+                console::info("recovery", &format!("reason={} rewrites={}", reason, rewrite_requests.len()))
+            );
+        }
         let signals = compute_graph_signals(graph);
         let log_dir = Path::new(LOG_ROOT).join("planner_logs");
         let mut revision_rewrites = None;
@@ -493,7 +515,7 @@ pub(crate) async fn run_planner_execution_loop(
             template_name,
             config.planner_plateau_window,
             config.planner_plateau_threshold,
-        ) || features.ready_fraction < 0.1;
+        ) || features.ready_fraction < 0.1 || recovery_reason.is_some();
         let remaining_nodes = config.max_nodes.saturating_sub(graph.nodes.len());
         let (planner_max_new_nodes, planner_max_new_edges) = if force_planner_expand {
             (
@@ -668,7 +690,7 @@ pub(crate) async fn run_planner_execution_loop(
         let policy_bias = policy_model.predict(&normalized);
         let policy_prediction = policy_bias.planner_bias;
         let policy_error = reward - policy_prediction;
-        let runtime = RuntimeMetrics {
+            let runtime = RuntimeMetrics {
             queue_depth: telemetry::pending_requests(),
             retry_rate: if planner_metrics.planner_calls == 0 {
                 0.0
@@ -684,6 +706,7 @@ pub(crate) async fn run_planner_execution_loop(
             policy_error,
             policy_weight_norm: policy_model.weight_norm(),
             dataset_size: policy_train::dataset_size(),
+            deadlock_rate: features.deadlock_rate,
         };
         let reward_history = store.recent_rewards(template_name, 6);
         let features = features.with_reward_history(&reward_history);

@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  canon-agent run-pipeline <ir.json> <layout.json> <proposal.json> <outputs.json>");
         println!("  canon-agent run-agent <ir.json> <layout.json> <graph.json> <workspace>");
         println!("  canon-agent run-multi-dag <cwd> [max_ticks=20]");
-        println!("  canon-agent run-capability <cwd>");
+        println!("  canon-agent run-capability <cwd> [max_ticks=0]");
     };
 
     if args.len() < 2 {
@@ -182,7 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let capture_dir = cwd_root.join("test_projects/test_rust_projects/capture/repomap");
             let emit_dir = cwd_root.join("test_projects/test_rust_projects/emit/repomap");
             let orchestration_bin = cwd_root.join("target/debug/orchestration");
-            let max_ticks: u64 = 1;
+            let max_ticks: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
 
             let addr = "127.0.0.1:9100".parse()?;
             let cap_config = canon_agent::pipelines::capability::config::CapabilityConfig::load()?;
@@ -197,26 +197,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             let mut layout = FileTopology::default();
 
-            use canon_agent::pipelines::Pipeline;
-            for tick in 1..=max_ticks {
-                let ctx = canon_agent::pipelines::PipelineContext {
-                    cwd: cwd.clone(),
-                    capture_dir: capture_dir.clone(),
-                    emit_dir: emit_dir.clone(),
-                    orchestration_bin: orchestration_bin.clone(),
-                    workspace: cwd[0].clone(),
-                    tick,
-                };
-
-                let outcome = pipeline.run_tick(&ctx, &mut ir, &mut layout).await?;
-                eprintln!("[main] tick {tick} done — {}", outcome.summary);
-                eprintln!("[main] reward={:.4} advanced={}", outcome.reward, outcome.advanced);
-
-                if outcome.advanced {
-                    eprintln!("[main] exit check passed — stopping");
-                    break;
-                }
-            }
+            let ctx = canon_agent::pipelines::PipelineContext {
+                cwd: cwd.clone(),
+                capture_dir: capture_dir.clone(),
+                emit_dir: emit_dir.clone(),
+                orchestration_bin: orchestration_bin.clone(),
+                workspace: cwd[0].clone(),
+                tick: 0,
+            };
+            let loop_config = canon_agent::runtime::agent_loop::AgentLoopConfig {
+                max_ticks,
+                ..Default::default()
+            };
+            canon_agent::runtime::agent_loop::run_agent_loop(
+                &pipeline,
+                &ctx,
+                &mut ir,
+                &mut layout,
+                loop_config,
+            )
+            .await?;
         }
 
         _ => {

@@ -28,6 +28,7 @@ pub mod layout {
 }
 
 pub mod runtime {
+    pub mod agent_loop;
     pub mod reward {
         // Match actual pipeline call:
         // compute_pipeline_reward(ir, &candidate, 0.0, 0.0)
