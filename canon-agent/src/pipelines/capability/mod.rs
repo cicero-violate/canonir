@@ -17,6 +17,8 @@ pub mod decompose;
 pub mod engine;
 pub mod act;
 pub mod tab_management;
+pub mod templates;
+pub mod template_index;
 
 use super::{Pipeline, PipelineContext, PipelineOutcome};
 use crate::ir::SystemState;
@@ -25,6 +27,7 @@ use crate::ws_server::WsBridge;
 use anyhow::Result;
 use config::{CapabilityConfig, GoalSpec};
 use graph_algo::{emit_planned_graph, run_graph_algorithms};
+use templates::TemplateStore;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -68,7 +71,7 @@ impl CapabilityPipeline {
         Path::new(LOG_ROOT).join(name)
     }
 
-    pub async fn run_capability_loop(&self, ctx: &PipelineContext) -> Result<()> {
+    pub async fn run_capability_loop(&self, ctx: &PipelineContext) -> Result<f64> {
         Self::ensure_log_dir();
         if self.config.llm_endpoints.is_empty() {
             anyhow::bail!("capability config has no llm endpoints");
@@ -93,23 +96,27 @@ impl CapabilityPipeline {
         let policy = config::CapabilityPolicy::load(&ctx.cwd[0])?;
         let policy = config::CapabilityPolicy { max_node_retries: self.config.max_node_retries, ..policy };
 
-        let decomp = decompose::decompose_goal(
-            &goal,
-            &self.bridge,
-            &endpoint.id,
-            &endpoint.url,
-            endpoint.stateful,
-            "",
-            &self.tabs,
-            endpoint.max_tabs,
-            &ctx.cwd[0],
-            &workspace_listing,
-            Path::new(LOG_ROOT),
-            self.config.llm_retry_count,
-            self.config.llm_retry_delay_secs,
-            self.config.tab_cooldown_ms,
-        ).await?;
-        eprintln!("[capability] decompose_goal tasks={}", decomp.tasks.len());
+        let mut store = TemplateStore::new(Self::log_path("templates"));
+        let template_name = goal.raw.clone();
+
+        let mut planner_generate = || async {
+            let decomp = decompose::decompose_goal(
+                &goal,
+                &self.bridge,
+                &endpoint.id,
+                &endpoint.url,
+                endpoint.stateful,
+                "",
+                &self.tabs,
+                endpoint.max_tabs,
+                &ctx.cwd[0],
+                &workspace_listing,
+                Path::new(LOG_ROOT),
+                self.config.llm_retry_count,
+                self.config.llm_retry_delay_secs,
+                self.config.tab_cooldown_ms,
+            ).await?;
+            eprintln!("[capability] decompose_goal tasks={}", decomp.tasks.len());
 
         let mut nodes: Vec<dag::TaskNode> = decomp.tasks.into_iter().map(|t| dag::TaskNode {
             id: t.id,
@@ -118,39 +125,125 @@ impl CapabilityPipeline {
             deps: t.deps,
             required_capabilities: t.required_capabilities,
             node_type: t.node_type,
+            priority: t.priority,
+            budget: t.budget,
+            reasoning_trace: t.reasoning_trace,
             result: None,
             error: None,
             readonly_fail_count: 0,
         }).collect();
-        ensure_unique_node_ids(&mut nodes);
+            ensure_unique_node_ids(&mut nodes);
+            ensure_unique_node_ids(&mut nodes);
+            Ok::<dag::TaskGraph, anyhow::Error>(dag::TaskGraph { nodes, id_index: HashMap::new() })
+        };
 
-        ensure_unique_node_ids(&mut nodes);
-        let mut graph = dag::TaskGraph { nodes, id_index: HashMap::new() };
-        let planner_endpoint = self.config.planner_endpoint()?;
-        let mut planner_session = planner_session::PlannerSession::new(planner_endpoint, goal.raw.clone());
+        let mut use_planner = true;
+        let mut graph = if store.exists(&template_name) {
+            match store.load(&template_name) {
+                Ok(g) if g.validate().is_ok() => {
+                    eprintln!("[templates] cache hit");
+                    use_planner = false;
+                    g
+                }
+                _ => {
+                    eprintln!("[templates] invalid template, evicting");
+                    store.evict(&template_name);
+                    let g = planner_generate().await?;
+                    let _ = store.save(&template_name, &g);
+                    g
+                }
+            }
+        } else {
+            eprintln!("[templates] cache miss — invoking planner");
+            let g = planner_generate().await?;
+            let _ = store.save(&template_name, &g);
+            g
+        };
+
         emit_planned_graph(&graph, Path::new(LOG_ROOT), 0);
         run_graph_algorithms(&graph, Path::new(LOG_ROOT), 0);
-        scheduler::run_planner_execution_loop(
-            &mut planner_session,
-            &mut graph,
-            &self.bridge,
-            &self.config,
-            &self.role_rr,
-            &self.tabs,
-            &ctx.cwd,
-            &workspace_listing,
-            endpoint,
-            "exec",
-            &policy,
-            self.config.context_radius,
-            self.config.max_concurrency,
-            self.config.max_iterations,
-            self.config.tab_cooldown_ms,
-            retry_count,
-            retry_delay,
-            max_output_lines,
-        )
-        .await
+
+        if use_planner {
+            let planner_endpoint = self.config.planner_endpoint()?;
+            let mut planner_session = planner_session::PlannerSession::new(planner_endpoint, goal.raw.clone());
+            let recent = store.recent_rewards(&template_name, 4);
+            let plateaued = store.is_plateaued(&template_name, 4, 0.05);
+            let similar = store.find_similar(&goal.raw, &graph, 1);
+            let bootstrap_seed = similar.into_iter().next().map(|s| {
+                let seed_graph = store.load(&s.entry.goal).ok();
+                let node_summaries = seed_graph.as_ref().map(|g| {
+                    g.nodes.iter()
+                        .map(|n| format!("{}: {}", n.id, n.description))
+                        .collect::<Vec<_>>()
+                }).unwrap_or_default();
+                planner_session::BootstrapSeed {
+                    goal: s.entry.goal.clone(),
+                    similarity_score: s.score,
+                    reward: s.entry.reward,
+                    node_summaries,
+                    capability_set: s.entry.capability_set.clone(),
+                    node_count: s.entry.node_count,
+                    edge_count: s.entry.edge_count,
+                }
+            });
+            let reward_ctx = planner_session::RewardContext {
+                recent_rewards: recent,
+                plateaued,
+                best_reward: store.stored_reward(&template_name),
+                stored_reward: store.stored_reward(&template_name),
+                bootstrap_seed,
+            };
+            planner_session.set_reward_context(reward_ctx);
+            scheduler::run_planner_execution_loop(
+                &mut planner_session,
+                &mut graph,
+                &self.bridge,
+                &self.config,
+                &self.role_rr,
+                &self.tabs,
+                &ctx.cwd,
+                &workspace_listing,
+                endpoint,
+                "exec",
+                &policy,
+                self.config.context_radius,
+                self.config.max_concurrency,
+                self.config.max_iterations,
+                self.config.tab_cooldown_ms,
+                retry_count,
+                retry_delay,
+                max_output_lines,
+                &mut store,
+                &template_name,
+            )
+            .await
+        } else {
+            let mut exec_metrics = Default::default();
+            let iterations_used = scheduler::execute_graph_loop(
+                &mut graph,
+                &self.bridge,
+                &self.config,
+                &self.role_rr,
+                &self.tabs,
+                &ctx.cwd,
+                &workspace_listing,
+                endpoint,
+                "exec",
+                &policy,
+                self.config.context_radius,
+                self.config.max_concurrency,
+                self.config.max_iterations,
+                self.config.tab_cooldown_ms,
+                retry_count,
+                retry_delay,
+                max_output_lines,
+                &mut exec_metrics,
+            )
+            .await?;
+            let reward = telemetry::compute_reward(&graph, iterations_used, self.config.max_iterations);
+            store.record_reward(&template_name, reward);
+            Ok(reward)
+        }
     }
 }
 
@@ -188,7 +281,7 @@ impl Pipeline for CapabilityPipeline {
 
     async fn run_tick(&self, ctx: &PipelineContext, _ir: &mut SystemState, _layout: &mut FileTopology) -> Result<PipelineOutcome> {
         match self.run_capability_loop(ctx).await {
-            Ok(()) => Ok(PipelineOutcome { reward: 1.0, summary: "capability completed".into(), advanced: true }),
+            Ok(reward) => Ok(PipelineOutcome { reward, summary: "capability completed".into(), advanced: true }),
             Err(e) => Ok(PipelineOutcome { reward: -1.0, summary: format!("capability error: {e}"), advanced: false }),
         }
     }

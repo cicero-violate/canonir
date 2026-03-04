@@ -6,6 +6,7 @@
 //!   visited[v] = true iff v reachable from any root
 
 use super::csr::Csr;
+use super::gpu;
 
 #[cfg(not(feature = "cuda"))]
 compile_error!("graph::reachability requires feature \"cuda\" (GPU-only module)");
@@ -40,4 +41,25 @@ pub fn reachability_gpu(csr: &Csr, roots: &[usize]) -> Vec<bool> {
         );
     }
     visited.into_iter().map(|v| v != 0).collect()
+}
+
+/// GPU reachability from roots bounded by max_depth (inclusive).
+#[cfg(feature = "cuda")]
+pub fn reachability_bounded(csr: &Csr, roots: &[usize], max_depth: usize) -> Vec<bool> {
+    if csr.vertex_count() == 0 {
+        return Vec::new();
+    }
+    if max_depth == 0 {
+        return vec![false; csr.vertex_count()];
+    }
+    let mut visited = vec![false; csr.vertex_count()];
+    for &root in roots {
+        let levels = gpu::bfs_gpu(csr, root);
+        for (idx, lvl) in levels.into_iter().enumerate() {
+            if lvl >= 0 && (lvl as usize) <= max_depth {
+                visited[idx] = true;
+            }
+        }
+    }
+    visited
 }

@@ -34,6 +34,7 @@ pub struct TelemetrySnapshot {
     pub planner: PlannerMetrics,
     pub exec: ExecMetrics,
     pub runtime: RuntimeMetrics,
+    pub reward: f64,
 }
 
 pub fn record_snapshot(path: &Path, snapshot: &TelemetrySnapshot) {
@@ -52,6 +53,15 @@ pub fn progress_fraction(graph: &TaskGraph) -> f64 {
         .filter(|n| n.status == super::dag::Status::Completed)
         .count();
     completed as f64 / graph.nodes.len() as f64
+}
+
+pub fn compute_reward(graph: &TaskGraph, iterations_used: u64, max_iterations: u64) -> f64 {
+    let n_total = graph.nodes.len() as f64;
+    if n_total == 0.0 { return 0.0; }
+    let n_completed = graph.nodes.iter().filter(|n| n.status == super::dag::Status::Completed).count() as f64;
+    let n_failed = graph.nodes.iter().filter(|n| n.status == super::dag::Status::Failed).count() as f64;
+    let iter_ratio = iterations_used as f64 / max_iterations.max(1) as f64;
+    (n_completed / n_total) - 0.2 * iter_ratio - 0.3 * (n_failed / n_total)
 }
 
 pub static PENDING_REQUESTS: AtomicU64 = AtomicU64::new(0);

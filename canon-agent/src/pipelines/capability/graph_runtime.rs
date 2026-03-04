@@ -41,28 +41,11 @@ fn build_kernels(graph: &dag::TaskGraph) -> GraphKernels {
 }
 
 fn prune_roots(kernels: &GraphKernels) -> Vec<usize> {
-    if kernels.adj.is_empty() {
-        return Vec::new();
-    }
-    let mut roots = Vec::new();
-    let mut seen = vec![false; kernels.adj.len()];
-    for &idx in &kernels.topo {
-        if !kernels.adj[idx].is_empty() {
-            roots.push(idx);
-            seen[idx] = true;
-        }
-    }
-    if kernels.topo.len() < kernels.adj.len() {
-        for comp in &kernels.sccs {
-            for &idx in comp {
-                if !seen[idx] && !kernels.adj[idx].is_empty() {
-                    roots.push(idx);
-                    seen[idx] = true;
-                }
-            }
-        }
-    }
-    roots
+    let all: std::collections::HashSet<usize> = kernels.topo.iter()
+        .chain(kernels.sccs.iter().flatten())
+        .copied()
+        .collect();
+    all.into_iter().filter(|&i| !kernels.adj[i].is_empty()).collect()
 }
 
 pub(crate) fn build_context(
@@ -73,43 +56,62 @@ pub(crate) fn build_context(
     if radius == 0 {
         return Vec::new();
     }
-    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut frontier: std::collections::VecDeque<(String, usize)> = std::collections::VecDeque::new();
-    frontier.push_back((node_id.to_string(), 0));
-    visited.insert(node_id.to_string());
-
-    let by_id: std::collections::HashMap<String, dag::TaskNode> =
-        graph.nodes.iter().map(|n| (n.id.clone(), n.clone())).collect();
-
-    let mut result = Vec::new();
-    while let Some((current, depth)) = frontier.pop_front() {
-        if depth >= radius {
-            continue;
-        }
-        if let Some(node) = by_id.get(&current) {
-            // Add parents only (toward root)
-            for dep in &node.deps {
-                if visited.insert(dep.clone()) {
-                    frontier.push_back((dep.clone(), depth + 1));
-                }
+    let id_to_idx: HashMap<&str, usize> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
+    let mut rev_adj: Vec<Vec<usize>> = vec![Vec::new(); graph.nodes.len()];
+    for (idx, node) in graph.nodes.iter().enumerate() {
+        for dep in &node.deps {
+            if let Some(dep_idx) = id_to_idx.get(dep.as_str()) {
+                rev_adj[idx].push(*dep_idx);
             }
         }
     }
-    for id in visited.iter() {
-        if let Some(n) = by_id.get(id) {
-            result.push(engine::ContextNode {
-                id: n.id.clone(),
-                description: n.description.clone(),
-                node_type: n.node_type,
-                deps: n.deps.clone(),
-                required_capabilities: n.required_capabilities.clone(),
-                status: n.status,
-                result: n.result.clone(),
-                error: n.error.clone(),
-            });
+    let csr = Csr::from_adj(&rev_adj);
+    let start = graph.nodes.iter().position(|n| n.id == node_id);
+    let roots: Vec<usize> = start.into_iter().collect();
+    let reach = reachability::reachability_bounded(&csr, &roots, radius);
+
+    let by_id: HashMap<&str, &dag::TaskNode> = graph
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n))
+        .collect();
+
+    let failure_summary = graph.nodes.iter().enumerate()
+        .filter(|(i, n)| reach.get(*i).copied().unwrap_or(false) && n.status == dag::Status::Failed)
+        .filter_map(|(_, n)| n.error.as_deref().map(|e| format!("{}: {}", n.id, e)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let failure_summary = if failure_summary.is_empty() { None } else { Some(failure_summary) };
+
+    graph.nodes.iter().enumerate()
+        .filter(|(i, _)| reach.get(*i).copied().unwrap_or(false))
+        .map(|(_, n)| {
+            let causal_summary = n.deps.iter()
+                .filter_map(|dep_id| by_id.get(dep_id.as_str()))
+                .filter(|dep| dep.status == dag::Status::Completed)
+                .filter_map(|dep| dep.result.as_deref())
+                .collect::<Vec<_>>()
+                .join("\n---\n");
+            let causal_summary = if causal_summary.is_empty() { None } else { Some(causal_summary) };
+            engine::ContextNode {
+            id: n.id.clone(),
+            description: n.description.clone(),
+            node_type: n.node_type,
+            deps: n.deps.clone(),
+            required_capabilities: n.required_capabilities.clone(),
+            status: n.status,
+            result: n.result.clone(),
+            error: n.error.clone(),
+            causal_summary,
+            failure_summary: failure_summary.clone(),
         }
-    }
-    result
+        })
+        .collect()
 }
 
 pub(crate) fn prune_unlinked_nodes(graph: &mut dag::TaskGraph) {

@@ -46,6 +46,12 @@ pub struct TaskNode {
     pub required_capabilities: Vec<Capability>,
     #[serde(default)]
     pub node_type: NodeType,
+    #[serde(default)]
+    pub priority: u8,
+    #[serde(default)]
+    pub budget: Option<u32>,
+    #[serde(default)]
+    pub reasoning_trace: Option<String>,
     pub result: Option<String>,
     pub error: Option<String>,
     #[serde(default)]
@@ -137,6 +143,16 @@ impl TaskGraph {
         }
         detect_cycle(self)?;
         Ok(())
+    }
+
+    pub fn reset_for_execution(&mut self) {
+        for node in &mut self.nodes {
+            node.status = Status::Pending;
+            node.result = None;
+            node.error = None;
+            node.readonly_fail_count = 0;
+        }
+        self.rebuild_index();
     }
 }
 

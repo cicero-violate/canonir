@@ -1,12 +1,14 @@
 use crate::ws_server::WsBridge;
 use anyhow::Result;
 use futures_util::future::join_all;
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 use super::config::{self, CapabilityConfig};
+use super::capability::assert_mut_verify_disjoint;
 use super::dag;
 use super::engine;
 use super::endpoint_scheduler;
@@ -15,6 +17,7 @@ use super::graph_runtime::{build_context, enforce_semantic_validations, prune_un
 use super::tab_management::{self, TabsHandle};
 use super::LOG_ROOT;
 use super::planner_session::{PlannerSession, PlannerUpdate};
+use super::templates::TemplateStore;
 use super::dag::TaskNode;
 use super::telemetry::{self, ExecMetrics, PlannerMetrics, RuntimeMetrics, TelemetrySnapshot};
 
@@ -64,7 +67,7 @@ pub(crate) async fn execute_graph_loop(
     retry_delay: u64,
     max_output_lines: usize,
     exec_metrics: &mut ExecMetrics,
-) -> Result<()> {
+) -> Result<u64> {
     let semaphore = Arc::new(Semaphore::new(max_concurrency.max(1)));
     let mut blocked_streak = 0u32;
     let mut state = PipelineState::Running;
@@ -109,7 +112,7 @@ pub(crate) async fn execute_graph_loop(
         };
         state = PIPELINE_TRANSITIONS[state as usize][event as usize];
         match (state, event) {
-            (PipelineState::Stop, _) => return Ok(()),
+            (PipelineState::Stop, _) => return Ok(iter),
             (_, PipelineEvent::Blocked) => {
                 blocked_streak += 1;
                 eprintln!(
@@ -126,7 +129,9 @@ pub(crate) async fn execute_graph_loop(
         }
 
         let mut ready_ids: Vec<String> = graph.ready_nodes().iter().map(|n| n.id.clone()).collect();
-        ready_ids.sort();
+        ready_ids.sort_by_key(|id| {
+            Reverse(graph.nodes.iter().find(|n| n.id == *id).map(|n| n.priority).unwrap_or(0))
+        });
         let mut futures = Vec::new();
         for node_id in ready_ids {
             let node = match graph.get_node(&node_id).cloned() {
@@ -206,58 +211,23 @@ pub(crate) async fn execute_graph_loop(
         let mut total_ms = 0u128;
         let mut count = 0u64;
         for item in results {
-            match item {
-                Ok((node_id, Ok(call_result), elapsed)) => {
-                    count += 1;
-                    total_ms = total_ms.saturating_add(elapsed.as_millis());
-                    if let Err(e) = engine::apply_node_result(
-                        call_result,
-                        graph,
-                        cwd,
-                        max_output_lines,
-                        Path::new(LOG_ROOT),
-                        iter,
-                        policy,
-                    ) {
-                        eprintln!(
-                            r#"[capability] {{"iter":{},"event":"apply_error","node":"{}","error":"{}"}}"#,
-                            iter,
-                            node_id,
-                            e
-                        );
-                        let _ = graph.update_status(&node_id, dag::Status::Ready);
-                        exec_metrics.nodes_failed += 1;
-                    }
-                }
-                Ok((node_id, Err(e), elapsed)) => {
-                    count += 1;
-                    total_ms = total_ms.saturating_add(elapsed.as_millis());
-                    eprintln!(
-                        r#"[capability] {{"iter":{},"event":"call_error","node":"{}","error":"{}"}}"#,
-                        iter,
-                        node_id,
-                        e
-                    );
-                    let _ = graph.update_status(&node_id, dag::Status::Ready);
-                    exec_metrics.nodes_failed += 1;
-                }
-                Err(e) => {
-                    eprintln!(
-                        r#"[capability] {{"iter":{},"event":"join_error","error":"{}"}}"#,
-                        iter,
-                        e
-                    );
-                }
+            if let Some(ms) = process_node_result(
+                item,
+                graph,
+                cwd,
+                max_output_lines,
+                iter,
+                policy,
+                exec_metrics,
+            ) {
+                count += 1;
+                total_ms = total_ms.saturating_add(ms);
             }
         }
         exec_metrics.nodes_executed = exec_metrics.nodes_executed.saturating_add(count);
         if count > 0 {
             let avg = (total_ms / count as u128) as u64;
-            exec_metrics.avg_latency_ms = if exec_metrics.avg_latency_ms == 0 {
-                avg
-            } else {
-                (exec_metrics.avg_latency_ms + avg) / 2
-            };
+            exec_metrics.avg_latency_ms = update_avg(exec_metrics.avg_latency_ms, avg);
         }
 
         super::ensure_unique_node_ids(&mut graph.nodes);
@@ -271,6 +241,53 @@ pub(crate) async fn execute_graph_loop(
         enforce_semantic_validations(graph)?;
     }
     anyhow::bail!("iteration limit exceeded")
+}
+
+fn process_node_result(
+    item: Result<(String, Result<engine::NodeCallResult>, std::time::Duration)>,
+    graph: &mut dag::TaskGraph,
+    cwd: &[PathBuf],
+    max_output_lines: usize,
+    iter: u64,
+    policy: &config::CapabilityPolicy,
+    exec_metrics: &mut ExecMetrics,
+) -> Option<u128> {
+    let (node_id, call_result, elapsed) = match item {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!(
+                r#"[capability] {{"iter":{},"event":"join_error","error":"{}"}}"#,
+                iter,
+                e
+            );
+            return None;
+        }
+    };
+    let ms = elapsed.as_millis();
+    let outcome = call_result.and_then(|r| engine::apply_node_result(
+        r,
+        graph,
+        cwd,
+        max_output_lines,
+        Path::new(LOG_ROOT),
+        iter,
+        policy,
+    ));
+    if let Err(e) = outcome {
+        eprintln!(
+            r#"[capability] {{"iter":{},"event":"call_or_apply_error","node":"{}","error":"{}"}}"#,
+            iter,
+            node_id,
+            e
+        );
+        let _ = graph.update_status(&node_id, dag::Status::Ready);
+        exec_metrics.nodes_failed += 1;
+    }
+    Some(ms)
+}
+
+fn update_avg(current: u64, next: u64) -> u64 {
+    current.checked_add(next).map(|s| s / 2).unwrap_or(next)
 }
 
 pub(crate) async fn run_planner_execution_loop(
@@ -292,7 +309,9 @@ pub(crate) async fn run_planner_execution_loop(
     retry_count: u32,
     retry_delay: u64,
     max_output_lines: usize,
-) -> Result<()> {
+    store: &mut TemplateStore,
+    template_name: &str,
+) -> Result<f64> {
     let mut planner_metrics = PlannerMetrics::default();
     let mut exec_metrics = ExecMetrics::default();
     let mut empty_streak = 0u32;
@@ -356,9 +375,10 @@ pub(crate) async fn run_planner_execution_loop(
             }
             planner_metrics.nodes_added += update.new_nodes.len() as u64;
             planner_metrics.edges_added += update.new_edges.len() as u64;
-            apply_planner_update(graph, update)?;
+            store.update(template_name, update)?;
+            *graph = store.load(template_name)?;
         }
-        execute_graph_loop(
+        let _exec_iters = execute_graph_loop(
             graph,
             bridge,
             config,
@@ -379,6 +399,7 @@ pub(crate) async fn run_planner_execution_loop(
             &mut exec_metrics,
         )
         .await?;
+        let iterations_used = iter.saturating_add(1);
         planner_metrics.iterations += 1;
         let runtime = RuntimeMetrics {
             queue_depth: telemetry::pending_requests(),
@@ -390,15 +411,24 @@ pub(crate) async fn run_planner_execution_loop(
             progress_fraction: telemetry::progress_fraction(graph),
             iteration_time_ms: iter_start.elapsed().as_millis() as u64,
         };
+        let reward = telemetry::compute_reward(graph, iterations_used, max_iterations);
         let snapshot = TelemetrySnapshot {
             planner: planner_metrics.clone(),
             exec: exec_metrics.clone(),
             runtime,
+            reward,
         };
         telemetry::record_snapshot(&Path::new(LOG_ROOT).join("planner_logs/metrics.json"), &snapshot);
         iter += 1;
     }
-    Ok(())
+    let reward = telemetry::compute_reward(graph, iter, max_iterations);
+    if graph.all_completed() && !graph.has_failed() {
+        if let Err(e) = store.save_with_reward(template_name, graph, reward) {
+            eprintln!("[templates] failed to persist updated template: {}", e);
+        }
+    }
+    store.record_reward(template_name, reward);
+    Ok(reward)
 }
 
 fn validate_planner_update(
@@ -406,77 +436,115 @@ fn validate_planner_update(
     update: &PlannerUpdate,
     config: &CapabilityConfig,
 ) -> Result<()> {
-    if update.new_nodes.len() > config.planner_max_new_nodes {
-        anyhow::bail!("planner expansion limit exceeded");
-    }
-    if update.new_edges.len() > config.planner_max_new_edges {
-        anyhow::bail!("planner edge limit exceeded");
-    }
+    ensure(update.new_nodes.len() <= config.planner_max_new_nodes, "planner expansion limit exceeded")?;
+    ensure(update.new_edges.len() <= config.planner_max_new_edges, "planner edge limit exceeded")?;
+
     let mut existing: HashMap<String, usize> = HashMap::new();
+    let mut status_by_id: HashMap<String, dag::Status> = HashMap::new();
     for (idx, node) in graph.nodes.iter().enumerate() {
         existing.insert(node.id.clone(), idx);
+        status_by_id.insert(node.id.clone(), node.status);
     }
     let mut new_ids: HashMap<String, usize> = HashMap::new();
-    for (idx, spec) in update.new_nodes.iter().enumerate() {
-        if spec.id.trim().is_empty() {
-            anyhow::bail!("planner node id empty");
-        }
-        if spec.description.trim().is_empty() {
-            anyhow::bail!("planner node description empty");
-        }
-        if existing.contains_key(&spec.id) || new_ids.contains_key(&spec.id) {
-            anyhow::bail!("duplicate node id {}", spec.id);
-        }
-        new_ids.insert(spec.id.clone(), idx);
-    }
-    for edge in &update.new_edges {
-        if edge.from.trim().is_empty() || edge.to.trim().is_empty() {
-            anyhow::bail!("planner edge endpoints empty");
-        }
+    update.new_nodes.iter().try_for_each(|spec| {
+        ensure(!spec.id.trim().is_empty(), "planner node id empty")?;
+        ensure(!spec.description.trim().is_empty(), "planner node description empty")?;
+        ensure(!(existing.contains_key(&spec.id) || new_ids.contains_key(&spec.id)),
+               &format!("duplicate node id {}", spec.id))?;
+        new_ids.insert(spec.id.clone(), new_ids.len());
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    update.new_edges.iter().try_for_each(|edge| {
+        ensure(!edge.from.trim().is_empty() && !edge.to.trim().is_empty(), "planner edge endpoints empty")?;
         let from_ok = existing.contains_key(&edge.from) || new_ids.contains_key(&edge.from);
         let to_ok = existing.contains_key(&edge.to) || new_ids.contains_key(&edge.to);
-        if !from_ok || !to_ok {
-            anyhow::bail!("planner edge references unknown node");
-        }
-    }
+        ensure(from_ok && to_ok, "planner edge references unknown node")
+    })?;
+
+    update.retract_nodes.iter().try_for_each(|spec| {
+        let status = status_by_id.get(&spec.id).copied()
+            .ok_or_else(|| anyhow::anyhow!("retract references unknown node"))?;
+        ensure(matches!(status, dag::Status::Pending | dag::Status::Failed), "retract node must be pending or failed")
+    })?;
+
+    update.rewrite_nodes.iter().try_for_each(|spec| {
+        let status = status_by_id.get(&spec.id).copied()
+            .ok_or_else(|| anyhow::anyhow!("rewrite references unknown node"))?;
+        ensure(matches!(status, dag::Status::Pending), "rewrite node must be pending")?;
+        let caps: std::collections::HashSet<_> = spec.new_capabilities.iter().copied().collect();
+        assert_mut_verify_disjoint(&caps).map_err(|e| anyhow::anyhow!(e))
+    })?;
+
     let mut test_graph = graph.clone();
     apply_planner_update(&mut test_graph, update.clone())?;
     test_graph.validate().map_err(|e| anyhow::anyhow!(e))?;
     Ok(())
 }
 
-fn apply_planner_update(graph: &mut dag::TaskGraph, update: PlannerUpdate) -> Result<()> {
-    let mut existing: HashMap<String, usize> = HashMap::new();
-    for (idx, node) in graph.nodes.iter().enumerate() {
-        existing.insert(node.id.clone(), idx);
-    }
-    for spec in update.new_nodes {
-        if existing.contains_key(&spec.id) {
-            continue;
+pub(crate) fn apply_planner_update(graph: &mut dag::TaskGraph, update: PlannerUpdate) -> Result<()> {
+    let retract_ids: std::collections::HashSet<String> = update.retract_nodes.into_iter()
+        .filter_map(|spec| {
+            graph.nodes.iter()
+                .find(|n| n.id == spec.id)
+                .filter(|n| matches!(n.status, dag::Status::Pending | dag::Status::Failed))
+                .map(|_| spec.id)
+        })
+        .collect();
+
+    if !retract_ids.is_empty() {
+        graph.nodes.retain(|n| !retract_ids.contains(&n.id));
+        for node in &mut graph.nodes {
+            node.deps.retain(|d| !retract_ids.contains(d));
         }
-        graph.nodes.push(TaskNode {
-            id: spec.id.clone(),
-            description: spec.description,
-            status: dag::Status::Pending,
-            deps: spec.deps,
-            required_capabilities: spec.required_capabilities,
-            node_type: spec.node_type,
-            result: None,
-            error: None,
-            readonly_fail_count: 0,
-        });
+        graph.rebuild_index();
     }
-    existing.clear();
-    for (idx, node) in graph.nodes.iter().enumerate() {
-        existing.insert(node.id.clone(), idx);
-    }
-    for edge in update.new_edges {
-        if let Some(to_idx) = existing.get(&edge.to).copied() {
-            let node = &mut graph.nodes[to_idx];
-            if !node.deps.contains(&edge.from) {
-                node.deps.push(edge.from);
+
+    for spec in update.rewrite_nodes {
+        if let Some(node) = graph.get_node_mut(&spec.id) {
+            if node.status == dag::Status::Pending {
+                let caps: std::collections::HashSet<_> = spec.new_capabilities.iter().copied().collect();
+                assert_mut_verify_disjoint(&caps).map_err(|e| anyhow::anyhow!(e))?;
+                node.description = spec.new_description;
+                node.required_capabilities = spec.new_capabilities;
             }
         }
     }
+
+    let existing: std::collections::HashSet<String> =
+        graph.nodes.iter().map(|n| n.id.clone()).collect();
+
+    graph.nodes.extend(
+        update.new_nodes.into_iter()
+            .filter(|s| !existing.contains(&s.id))
+            .map(|spec| TaskNode {
+                id: spec.id,
+                description: spec.description,
+                status: dag::Status::Pending,
+                deps: spec.deps,
+                required_capabilities: spec.required_capabilities,
+                node_type: spec.node_type,
+                priority: spec.priority,
+                budget: spec.budget,
+                reasoning_trace: spec.reasoning_trace,
+                result: None,
+                error: None,
+                readonly_fail_count: 0,
+            })
+    );
+
+    let id_to_idx: HashMap<String, usize> =
+        graph.nodes.iter().enumerate().map(|(i, n)| (n.id.clone(), i)).collect();
+
+    for edge in update.new_edges {
+        if let Some(&to_idx) = id_to_idx.get(&edge.to) {
+            let deps = &mut graph.nodes[to_idx].deps;
+            if !deps.contains(&edge.from) { deps.push(edge.from); }
+        }
+    }
     Ok(())
+}
+
+fn ensure(cond: bool, msg: &str) -> Result<()> {
+    cond.then_some(()).ok_or_else(|| anyhow::anyhow!("{}", msg))
 }

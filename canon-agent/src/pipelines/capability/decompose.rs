@@ -31,6 +31,12 @@ pub struct TaskSpec {
     pub required_capabilities: Vec<Capability>,
     #[serde(default = "default_node_type")]
     pub node_type: NodeType,
+    #[serde(default)]
+    pub priority: u8,
+    #[serde(default)]
+    pub budget: Option<u32>,
+    #[serde(default)]
+    pub reasoning_trace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,7 +90,7 @@ async fn decompose_inner(
                     "Your response did not match the schema.\n\
 Return exactly one fenced ```json block and nothing else.\n\
 Schema:\n\
-{{\n  \"tasks\": [\n    {{\n      \"id\": \"t1\",\n      \"description\": \"string\",\n      \"deps\": [],\n      \"required_capabilities\": [\"{}\"],\n      \"node_type\": \"analysis|render\"\n    }}\n  ]\n}}\n\
+{{\n  \"tasks\": [\n    {{\n      \"id\": \"t1\",\n      \"description\": \"string\",\n      \"deps\": [],\n      \"required_capabilities\": [\"{}\"],\n      \"node_type\": \"analysis|render\",\n      \"priority\": 0,\n      \"budget\": 3,\n      \"reasoning_trace\": \"string\"\n    }}\n  ]\n}}\n\
 Allowed capability values:\n{}\n\n\
 Invalid response:\n{}\n\n\
 Original input:\n{}",
@@ -124,7 +130,7 @@ Original input:\n{}",
                 "Your response must include at least {} tasks.\n\
 Return exactly one fenced ```json block and nothing else.\n\
 Schema:\n\
-{{\n  \"tasks\": [\n    {{\n      \"id\": \"t1\",\n      \"description\": \"string\",\n      \"deps\": [],\n      \"required_capabilities\": [\"{}\"],\n      \"node_type\": \"analysis|render\"\n    }}\n  ]\n}}\n\
+{{\n  \"tasks\": [\n    {{\n      \"id\": \"t1\",\n      \"description\": \"string\",\n      \"deps\": [],\n      \"required_capabilities\": [\"{}\"],\n      \"node_type\": \"analysis|render\",\n      \"priority\": 0,\n      \"budget\": 3,\n      \"reasoning_trace\": \"string\"\n    }}\n  ]\n}}\n\
 Allowed capability values:\n{}\n\n\
 Invalid response:\n{}\n\n\
 Original input:\n{}",
@@ -228,7 +234,7 @@ pub async fn decompose_goal(
     let schema = format!(
         "Return exactly one fenced ```json block and nothing else.\n\
 Schema:\n\
-{{\n  \"tasks\": [\n    {{\n      \"id\": \"t1\",\n      \"description\": \"string\",\n      \"deps\": [],\n      \"required_capabilities\": [\"{}\"],\n      \"node_type\": \"analysis|render\"\n    }}\n  ]\n}}\n\
+{{\n  \"tasks\": [\n    {{\n      \"id\": \"t1\",\n      \"description\": \"string\",\n      \"deps\": [],\n      \"required_capabilities\": [\"{}\"],\n      \"node_type\": \"analysis|render\",\n      \"priority\": 0,\n      \"budget\": 3,\n      \"reasoning_trace\": \"string\"\n    }}\n  ]\n}}\n\
 Allowed capability values (use only these):\n{}",
         "file_write",
         caps.join(", ")

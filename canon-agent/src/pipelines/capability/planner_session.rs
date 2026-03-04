@@ -9,6 +9,7 @@ use super::config::LlmEndpoint;
 use super::dag::TaskGraph;
 use super::dag::Status;
 use super::decompose::TaskSpec;
+use super::capability::Capability;
 use super::endpoint_worker;
 use super::graph_algo::GraphSignals;
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,11 +20,47 @@ pub struct EdgeSpec {
 use super::tab_management::TabsHandle;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewardContext {
+    pub recent_rewards: Vec<f64>,
+    pub plateaued: bool,
+    pub best_reward: f64,
+    pub stored_reward: f64,
+    pub bootstrap_seed: Option<BootstrapSeed>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BootstrapSeed {
+    pub goal: String,
+    pub similarity_score: f64,
+    pub reward: f64,
+    pub node_summaries: Vec<String>,
+    pub capability_set: Vec<String>,
+    pub node_count: usize,
+    pub edge_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetractSpec {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewriteSpec {
+    pub id: String,
+    pub new_description: String,
+    pub new_capabilities: Vec<Capability>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlannerUpdate {
     #[serde(default)]
     pub new_nodes: Vec<TaskSpec>,
     #[serde(default)]
     pub new_edges: Vec<EdgeSpec>,
+    #[serde(default)]
+    pub retract_nodes: Vec<RetractSpec>,
+    #[serde(default)]
+    pub rewrite_nodes: Vec<RewriteSpec>,
 }
 
 pub struct PlannerSession {
@@ -33,6 +70,7 @@ pub struct PlannerSession {
     goal: String,
     history: Vec<String>,
     stateful: bool,
+    reward_context: Option<RewardContext>,
 }
 
 const MAX_HISTORY: usize = 5;
@@ -46,7 +84,12 @@ impl PlannerSession {
             goal,
             history: Vec::new(),
             stateful: endpoint.stateful,
+            reward_context: None,
         }
+    }
+
+    pub fn set_reward_context(&mut self, ctx: RewardContext) {
+        self.reward_context = Some(ctx);
     }
 
     pub async fn planner_iteration(
@@ -88,12 +131,68 @@ impl PlannerSession {
                     "status": n.status,
                     "node_type": n.node_type,
                     "required_capabilities": n.required_capabilities,
+                    "priority": n.priority,
+                    "budget": n.budget,
+                    "reasoning_trace": n.reasoning_trace,
                     "result": n.result,
                 })
             })
             .collect();
 
         let history_tail = self.history.iter().rev().take(6).cloned().collect::<Vec<_>>();
+        let reward_section = match &self.reward_context {
+            None => String::new(),
+            Some(r) => {
+                let trend = r.recent_rewards.iter()
+                    .map(|v| format!("{:.3}", v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let seed_section = match r.bootstrap_seed.as_ref() {
+                    None => String::new(),
+                    Some(seed) => format!(
+                        "Bootstrap seed (similar prior goal, similarity={:.2}, reward={:.3}):\n\
+Prior goal: {}\n\
+Prior graph had {} nodes, {} edges.\n\
+Capabilities used: {}\n\
+Node summaries:\n{}\n\
+Consider reusing this structure as a starting point, adapting it to the current goal.\n",
+                        seed.similarity_score,
+                        seed.reward,
+                        seed.goal,
+                        seed.node_count,
+                        seed.edge_count,
+                        seed.capability_set.join(", "),
+                        seed.node_summaries.join("\n"),
+                    ),
+                };
+                let base = if r.plateaued {
+                    let signals_str = super::graph_algo::planner_signals_for_graph(graph);
+                    format!(
+                        "Reward history (last {} runs): [{}]\n\
+Best recorded reward: {:.3}\n\
+STATUS: PLATEAUED. The current graph structure is not improving.\n\
+You MUST propose a structurally different graph: different node decomposition, \
+different capability assignments, or different dependency topology. Do not make incremental edits.\n\
+Current graph topology: {}\n\
+Use these signals to identify structural bottlenecks before proposing changes.\n",
+                        r.recent_rewards.len(),
+                        trend,
+                        r.best_reward,
+                        signals_str
+                    )
+                } else {
+                    format!(
+                        "Reward history (last {} runs): [{}]\n\
+Best recorded reward: {:.3}\n\
+Continue refining the current graph.\n",
+                        r.recent_rewards.len(),
+                        trend,
+                        r.best_reward
+                    )
+                };
+                base + &seed_section
+            }
+        };
         let prompt = format!(
             "You are a planner. Maintain continuity across iterations.\n\
 Planner limits: max_new_nodes={}, max_new_edges={}\n\
@@ -105,16 +204,20 @@ Rules:\n\
 2) Avoid expanding nodes already expanded.\n\
 3) Prefer nodes with unsatisfied dependencies.\n\
 4) Never exceed planner_max_new_nodes.\n\
+5) Retract nodes that are Pending or Failed with no dependents.\n\
+6) Rewrite nodes that are Pending with an imprecise description.\n\
+{}\n\
 Goal:\n{}\n\n\
 Graph Nodes:\n{}\n\n\
 Graph Signals:\n{}\n\n\
 Recent History:\n{}\n\n\
-Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"description\":\"...\",\"deps\":[],\"required_capabilities\":[],\"node_type\":\"analysis|render\"}}],\n  \"new_edges\": [{{\"from\":\"id\",\"to\":\"id\"}}]\n}}",
+Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"description\":\"...\",\"deps\":[],\"required_capabilities\":[],\"node_type\":\"analysis|render\",\"priority\":0,\"budget\":3,\"reasoning_trace\":\"...\"}}],\n  \"new_edges\": [{{\"from\":\"id\",\"to\":\"id\"}}],\n  \"retract_nodes\": [{{\"id\":\"...\"}}],\n  \"rewrite_nodes\": [{{\"id\":\"...\",\"new_description\":\"...\",\"new_capabilities\":[]}}]\n}}",
             planner_max_new_nodes,
             planner_max_new_edges,
             expandable.join(", "),
             ready_nodes.join(", "),
             unreachable_nodes.join(", "),
+            reward_section,
             self.goal,
             serde_json::to_string_pretty(&nodes_json).unwrap_or_default(),
             serde_json::to_string_pretty(&signals_json).unwrap_or_default(),
@@ -189,7 +292,12 @@ Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"descript
                         iter,
                         graph.nodes.len(),
                         signals,
-                        &PlannerUpdate { new_nodes: Vec::new(), new_edges: Vec::new() },
+                        &PlannerUpdate {
+                            new_nodes: Vec::new(),
+                            new_edges: Vec::new(),
+                            retract_nodes: Vec::new(),
+                            rewrite_nodes: Vec::new(),
+                        },
                         &raw,
                         Some(&e.to_string()),
                     );

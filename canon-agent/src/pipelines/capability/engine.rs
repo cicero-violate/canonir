@@ -72,6 +72,10 @@ pub struct ContextNode {
     pub status: Status,
     pub result: Option<String>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub causal_summary: Option<String>,
+    #[serde(default)]
+    pub failure_summary: Option<String>,
 }
 
 const MUTATE_SCHEMA: &str = "Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"results\": [\n    { \"id\": \"t1\", \"deltas\": [ { \"type\": \"write_file\", \"path\": \"x\", \"content\": \"...\" } ], \"rationale\": \"string\" }\n  ]\n}\nAllowed delta types:\n- read_file { path }\n- list_dir { path }\n- read_command { command, args }\n- write_file { path, content }\n- replace_text { path, find, replace }\n- delete_file { path }\n";
@@ -151,18 +155,38 @@ fn parse_readonly(payload: Value, node: &TaskNode, iter: u64) -> Result<NodeCall
 
 // ── Mode selection ────────────────────────────────────────────────────────────
 
+type ModePredicate = fn(&AuthorityContext) -> bool;
+type ModeValidator = fn(&AuthorityContext, &str) -> Result<()>;
+
+struct ModeRule {
+    predicate: ModePredicate,
+    validate: ModeValidator,
+    mode: DispatchMode,
+}
+
+fn validate_verify(ctx: &AuthorityContext, _: &str) -> Result<()> {
+    ctx.require(Capability::StatusUpdateOnly).map_err(|e| anyhow::anyhow!(e))
+}
+
+fn validate_mutate(ctx: &AuthorityContext, node_id: &str) -> Result<()> {
+    (ctx.has(Capability::FileWrite) || ctx.has(Capability::ApplyPatch))
+        .then_some(())
+        .ok_or_else(|| anyhow::anyhow!("node {} missing capability FileWrite or ApplyPatch", node_id))
+}
+
+fn validate_pass(_: &AuthorityContext, _: &str) -> Result<()> { Ok(()) }
+
+const MODE_RULES: [ModeRule; 3] = [
+    ModeRule { predicate: AuthorityContext::is_verify_context, validate: validate_verify, mode: DispatchMode::Verify },
+    ModeRule { predicate: AuthorityContext::is_mutation_context, validate: validate_mutate, mode: DispatchMode::Mutate },
+    ModeRule { predicate: |_| true, validate: validate_pass, mode: DispatchMode::Readonly },
+];
+
 fn select_mode(ctx: &AuthorityContext, node_id: &str) -> Result<DispatchMode> {
-    if ctx.is_verify_context() {
-        ctx.require(Capability::StatusUpdateOnly).map_err(|e| anyhow::anyhow!(e))?;
-        return Ok(DispatchMode::Verify);
-    }
-    if ctx.is_mutation_context() {
-        if !(ctx.has(Capability::FileWrite) || ctx.has(Capability::ApplyPatch)) {
-            return Err(anyhow::anyhow!("node {} missing capability FileWrite or ApplyPatch", node_id));
-        }
-        return Ok(DispatchMode::Mutate);
-    }
-    Ok(DispatchMode::Readonly)
+    MODE_RULES.iter()
+        .find(|r| (r.predicate)(ctx))
+        .map(|r| (r.validate)(ctx, node_id).map(|_| r.mode))
+        .unwrap_or(Ok(DispatchMode::Readonly))
 }
 
 // ── Public entry points ───────────────────────────────────────────────────────
@@ -216,67 +240,13 @@ pub fn apply_node_result(
     iter: u64,
     policy: &CapabilityPolicy,
 ) -> Result<()> {
-    let idx = result_index(&result);
-    APPLY_FNS[idx](result, graph, roots, max_output_lines, log_dir, iter, policy)
-}
-
-type ApplyFn = fn(NodeCallResult, &mut TaskGraph, &[PathBuf], usize, &Path, u64, &CapabilityPolicy) -> Result<()>;
-
-const APPLY_FNS: [ApplyFn; 3] = [apply_mutate_wrapper, apply_readonly_wrapper, apply_verify_wrapper];
-
-fn result_index(result: &NodeCallResult) -> usize {
     match result {
-        NodeCallResult::Mutate { .. } => 0,
-        NodeCallResult::Readonly { .. } => 1,
-        NodeCallResult::Verify { .. } => 2,
-    }
-}
-
-fn apply_mutate_wrapper(
-    result: NodeCallResult,
-    graph: &mut TaskGraph,
-    roots: &[PathBuf],
-    max_output_lines: usize,
-    log_dir: &Path,
-    iter: u64,
-    policy: &CapabilityPolicy,
-) -> Result<()> {
-    if let NodeCallResult::Mutate { node_id, output } = result {
-        apply_mutate_output(node_id, output, graph, roots, max_output_lines, log_dir, iter, policy)
-    } else {
-        unreachable!("apply_mutate_wrapper received wrong variant")
-    }
-}
-
-fn apply_readonly_wrapper(
-    result: NodeCallResult,
-    graph: &mut TaskGraph,
-    roots: &[PathBuf],
-    max_output_lines: usize,
-    log_dir: &Path,
-    iter: u64,
-    policy: &CapabilityPolicy,
-) -> Result<()> {
-    if let NodeCallResult::Readonly { node_id, output } = result {
-        apply_readonly_output(node_id, output, graph, roots, max_output_lines, log_dir, iter, policy.max_node_retries)
-    } else {
-        unreachable!("apply_readonly_wrapper received wrong variant")
-    }
-}
-
-fn apply_verify_wrapper(
-    result: NodeCallResult,
-    graph: &mut TaskGraph,
-    _roots: &[PathBuf],
-    _max_output_lines: usize,
-    log_dir: &Path,
-    iter: u64,
-    _policy: &CapabilityPolicy,
-) -> Result<()> {
-    if let NodeCallResult::Verify { node_id, output } = result {
-        apply_verify_output(node_id, output, graph, log_dir, iter)
-    } else {
-        unreachable!("apply_verify_wrapper received wrong variant")
+        NodeCallResult::Mutate { node_id, output } =>
+            apply_mutate_output(node_id, output, graph, roots, max_output_lines, log_dir, iter, policy),
+        NodeCallResult::Readonly { node_id, output } =>
+            apply_readonly_output(node_id, output, graph, roots, max_output_lines, log_dir, iter, policy.max_node_retries),
+        NodeCallResult::Verify { node_id, output } =>
+            apply_verify_output(node_id, output, graph, log_dir, iter),
     }
 }
 
@@ -441,42 +411,14 @@ fn apply_mutate_output(
     iter: u64,
     policy: &CapabilityPolicy,
 ) -> Result<()> {
-    if let Some(node) = graph.get_node(&node_id) {
-        if node.node_type != super::decompose::NodeType::Render {
-            eprintln!(r#"[capability] {{"iter":{},"phase":"executor","event":"non_render_mutation","node":"{}"}}"#, iter, node_id);
-            let _ = graph.update_status(&node_id, Status::Ready);
-            return Ok(());
-        }
-    }
-    if policy.require_final_render {
-        let non_mutation_pending = graph.nodes.iter().any(|n| {
-            n.status != Status::Completed
-                && !n.required_capabilities.iter().any(|c| matches!(c, Capability::FileWrite | Capability::ApplyPatch))
-        });
-        if non_mutation_pending {
-            eprintln!(r#"[capability] {{"iter":{},"phase":"executor","event":"render_blocked","node":"{}"}}"#, iter, node_id);
-            let _ = graph.update_status(&node_id, Status::Ready);
-            return Ok(());
-        }
+    if mutate_is_blocked(&node_id, graph, policy) {
+        eprintln!(r#"[capability] {{"iter":{},"phase":"executor","event":"render_blocked","node":"{}"}}"#, iter, node_id);
+        let _ = graph.update_status(&node_id, Status::Ready);
+        return Ok(());
     }
     for mut result in output.results {
         coerce_id(&mut result.id, &node_id);
-        let (ro, mutate): (Vec<Delta>, Vec<Delta>) = result.deltas.into_iter()
-            .partition(|d| matches!(d, Delta::ReadFile {..} | Delta::ListDir {..} | Delta::ReadCommand {..}));
-        if !ro.is_empty() { let _ = apply_read_only(&ro, roots, max_output_lines); }
-        let (out, _, err) = apply_mutations(&mutate, roots, roots, max_output_lines);
-        let _ = graph.update_status(&result.id, Status::Running);
-        let (requires_verify, has_err) = if let Some(n) = graph.get_node_mut(&result.id) {
-            n.result = Some(out);
-            n.error = err;
-            (n.required_capabilities.contains(&Capability::StatusUpdateOnly), n.error.is_some())
-        } else {
-            (false, false)
-        };
-        if !requires_verify {
-            let s = if has_err { Status::Failed } else { Status::Completed };
-            let _ = graph.update_status(&result.id, s);
-        }
+        apply_mutate_result(result, &node_id, graph, roots, max_output_lines);
     }
     Ok(())
 }
@@ -506,53 +448,109 @@ fn apply_readonly_output(
     iter: u64,
     max_node_retries: u32,
 ) -> Result<()> {
-    if output.results.is_empty() {
-        let summary = serde_json::json!({"iter": iter, "phase": "readonly", "event": "empty_results", "node": node_id});
-        let _ = std::fs::write(log_dir.join(format!("iter_{:03}_readonly_error.json", iter)),
-                               serde_json::to_string_pretty(&summary).unwrap_or_default());
-        eprintln!("[capability] {}", summary);
-        let _ = graph.update_status(&node_id, Status::Ready);
-        return Ok(());
-    }
+    output.results.is_empty()
+        .then(|| log_empty_readonly(iter, &node_id, log_dir))
+        .and_then(|_| graph.update_status(&node_id, Status::Ready).ok());
     for mut result in output.results {
         coerce_id(&mut result.id, &node_id);
-        let (ro, mutate): (Vec<Delta>, Vec<Delta>) = result.deltas.into_iter()
-            .partition(|d| matches!(d, Delta::ReadFile {..} | Delta::ListDir {..} | Delta::ReadCommand {..}));
-        if !mutate.is_empty() {
-            let msg = "read-only context received mutation deltas".to_string();
-            if let Some(n) = graph.get_node_mut(&result.id) { n.result = Some(msg.clone()); n.error = Some(msg); }
-            let _ = graph.update_status(&result.id, Status::Failed);
-            continue;
-        }
-        let (out, _, err) = apply_read_only(&ro, roots, max_output_lines);
-        let _ = graph.update_status(&result.id, Status::Running);
-        if let Some(n) = graph.get_node_mut(&result.id) { n.result = Some(out); n.error = err.clone(); }
-        if err.is_some() {
-            let summary = serde_json::json!({"iter": iter, "phase": "readonly", "event": "delta_error",
-                                             "node": result.id, "error": err, "deltas": summarize_deltas(&ro)});
-            let _ = std::fs::write(log_dir.join(format!("iter_{:03}_readonly_error.json", iter)),
-                                   serde_json::to_string_pretty(&summary).unwrap_or_default());
-            eprintln!("[capability] {}", summary);
-            let fail_count = if let Some(n) = graph.get_node_mut(&result.id) {
-                n.readonly_fail_count += 1;
-                n.readonly_fail_count
-            } else {
-                1
-            };
-            if fail_count >= max_node_retries {
-                eprintln!(
-                    r#"[capability] {{"iter":{},"phase":"readonly","event":"escalate_failed","node":"{}","fail_count":{}}}"#,
-                    iter, result.id, fail_count
-                );
-                let _ = graph.update_status(&result.id, Status::Failed);
-            } else {
-                let _ = graph.update_status(&result.id, Status::Ready);
-            }
-        } else {
-            let _ = graph.update_status(&result.id, Status::Completed);
-        }
+        apply_readonly_result(result, &node_id, graph, roots, max_output_lines, log_dir, iter, max_node_retries);
     }
     Ok(())
+}
+
+fn partition_deltas(deltas: Vec<Delta>) -> (Vec<Delta>, Vec<Delta>) {
+    deltas.into_iter()
+        .partition(|d| matches!(d, Delta::ReadFile {..} | Delta::ListDir {..} | Delta::ReadCommand {..}))
+}
+
+fn mutate_is_blocked(node_id: &str, graph: &TaskGraph, policy: &CapabilityPolicy) -> bool {
+    let not_render = graph.nodes.iter()
+        .find(|n| n.id == node_id)
+        .map(|n| n.node_type != super::decompose::NodeType::Render)
+        .unwrap_or(false);
+    let render_blocked = policy.require_final_render && graph.nodes.iter().any(|n| {
+        n.status != Status::Completed
+            && !n.required_capabilities.iter().any(|c| matches!(c, Capability::FileWrite | Capability::ApplyPatch))
+    });
+    not_render || render_blocked
+}
+
+fn apply_mutate_result(
+    result: ExecNodeResult,
+    node_id: &str,
+    graph: &mut TaskGraph,
+    roots: &[PathBuf],
+    max_output_lines: usize,
+) {
+    let (ro, mutate) = partition_deltas(result.deltas);
+    if !ro.is_empty() {
+        let _ = apply_read_only(&ro, roots, max_output_lines);
+    }
+    let (out, _, err) = apply_mutations(&mutate, roots, roots, max_output_lines);
+    let _ = graph.update_status(node_id, Status::Running);
+    let (requires_verify, has_err) = if let Some(n) = graph.get_node_mut(node_id) {
+        n.result = Some(out);
+        n.error = err;
+        (n.required_capabilities.contains(&Capability::StatusUpdateOnly), n.error.is_some())
+    } else {
+        (false, false)
+    };
+    let final_status = requires_verify
+        .then_some(None)
+        .unwrap_or_else(|| Some(if has_err { Status::Failed } else { Status::Completed }));
+    if let Some(s) = final_status { let _ = graph.update_status(node_id, s); }
+}
+
+fn log_empty_readonly(iter: u64, node_id: &str, log_dir: &Path) {
+    let summary = serde_json::json!({"iter": iter, "phase": "readonly", "event": "empty_results", "node": node_id});
+    let _ = std::fs::write(log_dir.join(format!("iter_{:03}_readonly_error.json", iter)),
+                           serde_json::to_string_pretty(&summary).unwrap_or_default());
+    eprintln!("[capability] {}", summary);
+}
+
+fn log_readonly_error(iter: u64, node_id: &str, err: &str, deltas: &[Delta], log_dir: &Path) {
+    let summary = serde_json::json!({"iter": iter, "phase": "readonly", "event": "delta_error",
+                                     "node": node_id, "error": err, "deltas": summarize_deltas(deltas)});
+    let _ = std::fs::write(log_dir.join(format!("iter_{:03}_readonly_error.json", iter)),
+                           serde_json::to_string_pretty(&summary).unwrap_or_default());
+    eprintln!("[capability] {}", summary);
+}
+
+fn apply_readonly_result(
+    result: ExecNodeResult,
+    node_id: &str,
+    graph: &mut TaskGraph,
+    roots: &[PathBuf],
+    max_output_lines: usize,
+    log_dir: &Path,
+    iter: u64,
+    max_node_retries: u32,
+) {
+    let (ro, mutate) = partition_deltas(result.deltas);
+    if !mutate.is_empty() {
+        let msg = "read-only context received mutation deltas".to_string();
+        if let Some(n) = graph.get_node_mut(node_id) { n.result = Some(msg.clone()); n.error = Some(msg); }
+        let _ = graph.update_status(node_id, Status::Failed);
+        return;
+    }
+
+    let (out, _, err) = apply_read_only(&ro, roots, max_output_lines);
+    let _ = graph.update_status(node_id, Status::Running);
+    if let Some(n) = graph.get_node_mut(node_id) { n.result = Some(out); n.error = err.clone(); }
+
+    let effective_budget = graph.nodes.iter()
+        .find(|n| n.id == node_id)
+        .and_then(|n| n.budget)
+        .unwrap_or(max_node_retries);
+    let next_status = err.map(|e| {
+        log_readonly_error(iter, node_id, &e, &ro, log_dir);
+        let fail_count = graph.get_node_mut(node_id)
+            .map(|n| { n.readonly_fail_count += 1; n.readonly_fail_count })
+            .unwrap_or(1);
+        if fail_count >= effective_budget { Status::Failed } else { Status::Ready }
+    }).unwrap_or(Status::Completed);
+
+    let _ = graph.update_status(node_id, next_status);
 }
 
 fn coerce_id(result_id: &mut String, canonical: &str) {
