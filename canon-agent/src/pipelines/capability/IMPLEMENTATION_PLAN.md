@@ -1,284 +1,330 @@
-# LLM Refactor Execution Plan
+### Math
 
-Workspace root:
+[
+Complexity = Nodes + Edges + Modes + IO
+]
 
-```
-canon/canon-agent/src/pipelines/capability
-```
+[
+Control = DAG + Authority + Scheduler
+]
 
-Primary target:
-
-```
-mod.rs
-```
-
-Goal:
-
-```
-reduce branching
-improve reasoning structure
-preserve behavior
-```
+[
+Risk = Async_Streams + Tabs + Shared_State
+]
 
 ---
 
-# Phase 1 — Remove Node Lookup Loops
+### Variables
 
-Target pattern:
-
-```
-graph.nodes.iter().find(...)
-```
-
-Replace with index map.
-
-Add to `TaskGraph`:
-
-```
-HashMap<String, usize>
-```
-
-Steps:
-
-1. modify `TaskGraph`
-2. build index during graph construction
-3. replace all `iter().find()` calls
-
-Expected reduction:
-
-```
-~10 loops removed
-```
+* (N) = TaskNodes
+* (E) = Edge relations
+* (M) = Dispatch modes (mutate / verify / readonly)
+* (T) = Browser tabs
+* (S) = LLM streams
+* (Q) = Request queue
+* (C) = Concurrency
 
 ---
 
-# Phase 2 — Replace Delta Execution Match
+### Equations
 
-Target file:
+**1. Execution Load**
+
+[
+Load = N \times C
+]
+
+More nodes × concurrency → more tab pressure.
+
+---
+
+**2. Stream Collision**
+
+[
+Collision = Tabs_{same_url} \times Shared_Chat
+]
+
+Multiple tabs on same chat stream cause duplicated responses.
+
+---
+
+**3. Deterministic Execution**
+
+[
+Determinism = Queue + Ownership + Dedup
+]
+
+Single routing path removes race conditions.
+
+---
+
+# Architectural Observations
+
+Your system already has strong components:
+
+* `TaskGraph` → deterministic execution model
+* `AuthorityContext` → capability gating
+* `DispatchMode` → execution routing
+* `TabSlots` → tab resource manager
+* `EndpointScheduler` → endpoint selection
+
+But **the LLM interaction layer is still tab-centric**, not **stream-centric**.
+
+The root issue is:
+
+[
+LLM = Stream
+]
+
+but the code treats it as:
+
+[
+LLM = RequestResponse(tab)
+]
+
+---
+
+# Additional Solutions (Architecture Level)
+
+## 1. Endpoint Worker Model (Recommended)
+
+Create **one async worker per endpoint URL**.
 
 ```
-act.rs
+Agent nodes
+     ↓
+endpoint queue
+     ↓
+endpoint worker
+     ↓
+single tab
 ```
+
+Rust model:
+
+```rust
+struct EndpointWorker {
+    queue: mpsc::Receiver<Request>,
+    tab_id: u32,
+    in_flight: bool,
+}
+```
+
+Execution rule:
+
+```
+only 1 message active per endpoint stream
+```
+
+Removes duplication entirely.
+
+---
+
+# 2. Message Ticket System
+
+Every LLM request gets a **ticket id**.
+
+```
+ticket = atomic_counter++
+```
+
+Send prompt:
+
+```
+[TICKET: 4821]
+payload...
+```
+
+Response parser:
+
+```
+if ticket already processed → drop
+```
+
+Works even with replayed history.
+
+---
+
+# 3. Stream Offset Tracking
+
+Maintain a per-endpoint offset.
+
+```
+endpoint_state.last_seen_hash
+```
+
+On new tab:
+
+```
+ignore messages until new hash appears
+```
+
+Equivalent to Kafka consumer offsets.
+
+---
+
+# 4. Tab Lease System
+
+Modify `TabSlots`.
 
 Current:
 
 ```
-match delta
+slot → tab
 ```
 
-Replace with dispatch table.
-
-Create:
+New:
 
 ```
-executor_dispatch.rs
+slot → tab → lease_owner
 ```
 
-Example:
+Only the **owner worker** may send messages.
+
+If owner dies:
 
 ```
-static EXECUTORS: HashMap<DeltaType, ExecutorFn>
+lease_expire → new owner
 ```
 
-Expected reduction:
-
-```
-5-10 branches
-```
+Prevents parallel tabs.
 
 ---
 
-# Phase 3 — Replace Scheduler Conditions
+# 5. Stateless Envelope Protocol
 
-Target:
+Wrap every LLM message:
 
-```
-mod.rs execution loop
-```
-
-Current pattern:
-
-```
-if graph.all_completed
-if graph.has_failed
-if blocked_streak
+```json
+{
+ "req_id": "node_418",
+ "phase": "mutate",
+ "payload": {...}
+}
 ```
 
-Replace with state machine.
+Parser extracts only matching `req_id`.
 
-Create:
-
-```
-enum PipelineState
-```
-
-Transition table:
-
-| state   | event     | next    |
-| ------- | --------- | ------- |
-| Running | Completed | Stop    |
-| Running | Blocked   | Retry   |
-| Blocked | Retry     | Running |
-
-Implementation:
-
-```
-state = TRANSITIONS[state][event]
-```
+Old messages ignored.
 
 ---
 
-# Phase 4 — Kernelize Graph Traversal
+# 6. Local Response Journal
 
-Target files:
-
-```
-mod.rs
-dag.rs
-graph_algo.rs
-```
-
-Replace manual loops:
+Persist responses:
 
 ```
-while stack.pop()
-for dep in deps
+~/.canon_llm_journal
 ```
 
-With algorithms from:
+Structure:
 
 ```
-algorithms crate
+endpoint_id
+req_id
+content_hash
+timestamp
 ```
 
-Functions:
+Processing rule:
 
 ```
-topological_sort
-reachability
-scc
+if hash exists → skip
 ```
+
+Prevents replay across restarts.
 
 ---
 
-# Phase 5 — Extract Endpoint Scheduling
+# 7. Graph-Driven LLM Batching
 
-Move from `mod.rs`:
+Your DAG allows batching.
 
-```
-select_endpoints_for_role
-role_burst
-```
-
-Create module:
+Instead of:
 
 ```
-endpoint_scheduler.rs
+call_node(node)
 ```
 
-Responsibility:
+Do:
 
 ```
-endpoint selection
-burst distribution
+call_nodes_batch([node1,node2,node3])
 ```
+
+One LLM request:
+
+```
+{
+ "nodes": [...]
+}
+```
+
+Reduces tab traffic.
 
 ---
 
-# Phase 6 — Simplify Execution Loop
+# Structural Recommendation
 
-Replace large scheduler block with kernel pipeline.
-
-New structure:
+Given your pipeline:
 
 ```
-Goal
- ↓
-Decompose
- ↓
-Expand
- ↓
-PlanEdges
- ↓
-ExecuteGraph
+CapabilityPipeline
+   ↓
+scheduler
+   ↓
+dispatch_node
+   ↓
+llm_call
 ```
 
-Example skeleton:
+Best fix is **insert endpoint workers here**:
 
 ```
-run_capability_loop
-  load_goal
-  nodes = decompose
-  nodes = expand
-  graph = build_graph
-  scheduler::run(graph)
+dispatch_node
+      ↓
+endpoint_queue
+      ↓
+endpoint_worker
+      ↓
+tab
 ```
+
+This converts your system from:
+
+[
+ConcurrentTabs
+]
+
+to
+
+[
+DeterministicStreamProcessing
+]
 
 ---
 
-# Phase 7 — Verify Behavior
+# Codebase Health
 
-LLM must run:
-
-```
-cargo build
-cargo check
-cargo test
-```
-
-Ensure:
+Your branch stats:
 
 ```
-graph execution unchanged
-node results unchanged
-logs still generated
+ifs   132
+loops  1
 ```
+
+Meaning:
+
+[
+Architecture = Data\ Driven
+]
+
+Most logic lives in **state transitions and graph operations**, which is good for deterministic agents.
 
 ---
 
-# Success Metrics
+[
+\max(I,E,C,A,R,P,S,D,T,K,X,B,L,F) = D
+]
 
-| metric          | current | target |
-| --------------- | ------- | ------ |
-| total branches  | 326     | <200   |
-| mod.rs branches | 77      | <40    |
-| code size       | 3102    | ~2600  |
-
----
-
-# LLM Instructions
-
-Constraints:
-
-```
-do not change external APIs
-do not change task semantics
-maintain async behavior
-maintain logging
-```
-
-Allowed actions:
-
-```
-create new modules
-move functions
-replace matches with dispatch tables
-replace loops with algorithms
-```
-
----
-
-# Final Target Architecture
-
-```
-capability/
-  mod.rs
-  scheduler.rs
-  endpoint_scheduler.rs
-  graph_runtime.rs
-  engine.rs
-  act.rs
-  graph_algo.rs
-  dag.rs
-```
-
+Strongest property here is **deterministic execution design**.
