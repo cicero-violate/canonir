@@ -18,6 +18,8 @@ pub mod reachability;
 pub mod region;
 pub mod scheduling;
 pub mod scc;
+#[cfg(feature = "cuda")]
+pub mod scc_gpu;
 pub mod topological_sort;
 #[cfg(feature = "cuda")]
 pub mod topological_sort_gpu;

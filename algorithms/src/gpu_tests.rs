@@ -21,6 +21,7 @@ mod gpu_tests {
     use crate::control_flow::gpu::{dominators_gpu, reaching_definitions_gpu};
     use crate::graph::scheduler_gpu::{ready_mask_gpu, pack_ready_priority, deadlock_gpu};
     use crate::graph::topological_sort_gpu::topological_sort_gpu;
+    use crate::graph::scc_gpu::scc_gpu;
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -48,6 +49,17 @@ mod gpu_tests {
         assert!(pos[0] < pos[2]);
         assert!(pos[1] < pos[3]);
         assert!(pos[2] < pos[3]);
+    }
+
+    #[test]
+    fn scc_gpu_detects_cycle() {
+        // 0 -> 1 -> 2 -> 0 forms a single SCC
+        let csr = Csr::from_edges(3, &[(0,1),(1,2),(2,0)]);
+        let sccs = scc_gpu(&csr);
+        assert_eq!(sccs.len(), 1);
+        let mut comp = sccs[0].clone();
+        comp.sort_unstable();
+        assert_eq!(comp, vec![0,1,2]);
     }
 
     // ── Scheduler GPU ───────────────────────────────────────────────────────
