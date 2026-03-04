@@ -90,14 +90,14 @@ rustc compiler source code can be found in here
 
 
 ## CODING STYLE
-1. **Preferred Style**	: Reduce branching (if, match, loop); use DAG, graph structures, and kernel functions for clarity.
-2. **Execution Model**	: Use dataflow and scheduling over nested control flow.
-3. **Logic Units**		: Prefer pure kernels over stateful procedures.
-4. **Dispatch**			: Implement with lookup tables rather than match chains.
-5. **Iteration**		: Use algorithms instead of manual loops.
-6. **Function Style**	: Keep functions pure, deterministic, with minimal branching.
-7. **Dispatch**			: Use static dispatch tables for clearer execution paths.
-8. **Graph Execution**	: Let DAG control the execution order; kernels handle computation.
-9. **Code Structure**	: Avoid deeply nested conditions; prefer dataflow and modular design.
-10. **Result**			: More efficient, maintainable code that's easier for LLMs to reason about.
+1. **Branching**      : Minimize if/match/loop; replace with table dispatch, iterators, and predicate functions.
+2. **Dispatch**       : Use static fn-pointer or index tables over match chains; one branch to index, zero inside.
+3. **Iteration**      : Prefer library algorithms (topological_sort, scc, reachability) over hand-rolled loops.
+4. **Graph Execution**: Let the DAG own execution order; nodes are pure kernels, not stateful procedures.
+5. **GPU Offload**    : Push BFS, reachability, scheduling, and SCC to CUDA kernels when the algorithms crate provides them.
+6. **Purity**         : Kernel functions are deterministic, side-effect-free, and take all inputs as arguments.
+7. **Dataflow**       : Model computation as data transformations through a pipeline, not nested control flow.
+8. **Error Paths**    : Use Result-chaining and combinators (and_then, get_or_insert, then_some) over guard branches.
+9. **Deduplication**  : Every structural pattern appears once; retry logic, edge application, and id coercion are extracted helpers.
+10. **Readability**   : Code should be flat, composable, and index-addressable — easier for both humans and LLMs to trace.
 
