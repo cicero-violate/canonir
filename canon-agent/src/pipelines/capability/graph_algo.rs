@@ -439,14 +439,23 @@ fn compute_max_depth(graph: &dag::TaskGraph) -> usize {
             }
         }
     }
-    let topo = algorithms::graph::topological_sort::topological_sort(&adj);
-    let mut depth = vec![0usize; graph.nodes.len()];
-    for &u in &topo {
-        for &v in &adj[u] {
-            depth[v] = depth[v].max(depth[u] + 1);
-        }
+    #[cfg(feature = "cuda")]
+    {
+        let csr = Csr::from_adj(&adj);
+        let depth = algorithms::graph::depth_gpu::longest_path_depth_gpu(&csr);
+        return depth.into_iter().map(|d| d.max(0) as usize).max().unwrap_or(0);
     }
-    depth.into_iter().max().unwrap_or(0)
+    #[cfg(not(feature = "cuda"))]
+    {
+        let topo = algorithms::graph::topological_sort::topological_sort(&adj);
+        let mut depth = vec![0usize; graph.nodes.len()];
+        for &u in &topo {
+            for &v in &adj[u] {
+                depth[v] = depth[v].max(depth[u] + 1);
+            }
+        }
+        depth.into_iter().max().unwrap_or(0)
+    }
 }
 
 struct Fnv64 {

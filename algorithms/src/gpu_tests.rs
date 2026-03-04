@@ -22,6 +22,7 @@ mod gpu_tests {
     use crate::graph::scheduler_gpu::{ready_mask_gpu, pack_ready_priority, deadlock_gpu};
     use crate::graph::topological_sort_gpu::topological_sort_gpu;
     use crate::graph::scc_gpu::scc_gpu;
+    use crate::graph::depth_gpu::longest_path_depth_gpu;
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -60,6 +61,14 @@ mod gpu_tests {
         let mut comp = sccs[0].clone();
         comp.sort_unstable();
         assert_eq!(comp, vec![0,1,2]);
+    }
+
+    #[test]
+    fn depth_gpu_longest_path_chain() {
+        // 0->1->2->3, depth should be 0,1,2,3
+        let csr = Csr::from_edges(4, &[(0,1),(1,2),(2,3)]);
+        let depth = longest_path_depth_gpu(&csr);
+        assert_eq!(depth, vec![0,1,2,3]);
     }
 
     // ── Scheduler GPU ───────────────────────────────────────────────────────
