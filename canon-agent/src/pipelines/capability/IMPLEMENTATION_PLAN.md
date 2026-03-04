@@ -1,406 +1,321 @@
-## Variables
-
-(B_f) = branching per file
-(N_f) = nodes per file
-(C_f) = cyclomatic complexity
-(S) = scheduler state transitions
-(D) = decision surfaces
-(G) = graph state
-(E) = events
-(F) = functions
-
-## Equations
-
-1.
+### Variables
 
 [
-C_f = 1 + if + match + for + while + loop
+U = \text{PlannerUpdate}
 ]
-
-2.
 
 [
-D = \sum_{f \in F} C_f
+G = (V,E)
 ]
-
-3.
 
 [
-B_f = \frac{edges(G)}{nodes(G)}
+C_i = \text{capabilities of node } i
 ]
-
-4.
 
 [
-S_{t+1} = T[S_t, E_t]
+Class(C_i) \in {Observe, Verify, Mutate}
 ]
-
-5.
 
 [
-Reduction = D - \sum minimal_state_transitions
+Valid(U) \in {0,1}
 ]
-
-Explanation: reduce decision surfaces by replacing condition chains with deterministic state machines and table-driven logic.
 
 ---
 
-# Branch Reduction Implementation Plan
+### Equations
 
-## 1 — Collapse scheduler control logic
+[
+Valid(U) =
+\begin{cases}
+1 & \text{if } \forall i:; |Class(C_i)| = 1 \
+0 & \text{otherwise}
+\end{cases}
+]
 
-Target: `scheduler.rs`
+Planner validity rule.
 
-Problem
-Large conditional surfaces:
+[
+Repair(U) = f(U)
+]
 
-```
-if
-else if
-match
-continue
-```
+Repair transforms invalid planner update into valid update.
 
-Fix
+[
+U' = Repair(U)
+]
 
-Replace execution control with a **state machine executor**.
+---
 
-Implementation
+# Where Automatic Repair Goes
 
-Create:
-
-```
-scheduler_state.rs
-```
-
-Core structure
-
-```
-enum ExecStep {
-    CollectReady,
-    Dispatch,
-    ApplyResults,
-    MaintainGraph,
-}
-```
-
-Executor loop
-
-```
-while state != Stop {
-    state = TRANSITION[state][event];
-}
-```
-
-Expected reduction
+You already placed it correctly.
 
 ```
 scheduler.rs
-if: 108 → ~30
 ```
 
----
-
-# 2 — Replace heuristic scoring branches with vector scoring
-
-Current
+Key functions:
 
 ```
-if features.branching_factor > 3.5
-if blocked_fraction > 0.4
-if retry_penalty
-```
-
-Replace with
-
-[
-score = w_1 priority
-+ w_2 completion
-+ w_3 unblock
-- w_4 retry
-- w_5 cost
-]
-
-Implementation
-
-```
-score_node(node, features, cost_table)
-```
-
-Remove conditional bonuses.
-
-Branch reduction
-
-```
-~20 conditions removed
-```
-
----
-
-# 3 — Convert repair system to rule table
-
-Current
-
-```
-if retry
-if capability downgrade
-if dependency rewire
-if split
-```
-
-Create rule engine
-
-```
-RepairRule {
-    condition(node, graph)
-    action(node, graph)
-}
-```
-
-Rules
-
-```
-RetryRule
-CapabilityDowngradeRule
-DependencyRewireRule
-NodeSplitRule
-```
-
-Execution
-
-```
-for rule in RULES {
-    if rule.condition() { rule.action(); break }
-}
-```
-
-Branch reduction
-
-```
-repair_node(): 12 → 2
-```
-
----
-
-# 4 — Planner validation rule engine
-
-Current
-
-```
-if cycle
-if unreachable
-if signature
-if pattern
-```
-
-Convert to constraint table
-
-```
-ConstraintRule {
-    check(graph)
-}
-```
-
-Execution
-
-```
-for rule in constraints {
-    rule.check(graph)?
-}
-```
-
-Branch reduction
-
-```
-validate_planner_update(): ~20 branches removed
-```
-
----
-
-# 5 — Scheduler dispatch extraction
-
-Current
-
-Large dispatch block:
-
-```
-endpoint selection
-context build
-capability resolution
-auth grant
-```
-
-Extract
-
-```
-dispatch.rs
-```
-
-Functions
-
-```
-resolve_endpoint()
-build_node_context()
-prepare_execution()
-dispatch_node()
-```
-
-Benefit
-
-Scheduler becomes:
-
-```
-for node in ready_nodes {
-    dispatch(node)
-}
-```
-
----
-
-# 6 — Planner execution state machine
-
-Convert planner loop:
-
-```
-reuse decision
-mutation
-planner
-execute
-reward
-```
-
-Into pipeline
-
-```
-enum PlannerPhase {
-    ReuseTemplate
-    MutateTemplate
-    PlannerUpdate
-    Execute
-    Evaluate
-}
-```
-
-Transition table
-
-```
-PHASE_TRANSITIONS
-```
-
----
-
-# 7 — Feature gating consolidation
-
-Current
-
-Multiple checks
-
-```
-retry_rate > threshold
-failed_fraction > threshold
-branching_factor > threshold
-```
-
-Replace with
-
-[
-risk = w_1 retry + w_2 failure + w_3 branching
-]
-
-```
-if risk > threshold → recovery
-```
-
----
-
-# 8 — Move policy logic out of scheduler
-
-Files
-
-```
-policy.rs
-policy_train.rs
-```
-
-Introduce
-
-```
-policy_engine.rs
-```
-
-Scheduler only calls
-
-```
-policy_engine::decision(graph_features)
-```
-
----
-
-# 9 — Extract graph maintenance
-
-Current
-
-```
-prune_unlinked_nodes
-prune_low_value_nodes
-enforce_semantic_validations
-```
-
-Move to
-
-```
-graph_maintenance.rs
-```
-
-Single call
-
-```
-maintain_graph(graph)
-```
-
----
-
-# Expected Branch Reduction
-
-Current
-
-```
-if     363
-match  48
-for    134
-```
-
-Target
-
-```
-if     ~150
-match  ~30
-for    ~90
-```
-
-Primary reductions
-
-```
-scheduler.rs
-repair_node()
 validate_planner_update()
-planner loop
+auto_repair_planner_update()
+apply_planner_update()
+```
+
+Execution pipeline:
+
+```
+planner → validate → repair → validate → apply
 ```
 
 ---
 
-# Highest Leverage Order
+# Step 1 — Hook Repair Into Validation
 
-1. Scheduler state machine
-2. Repair rule engine
-3. Planner phase state machine
-4. Constraint validation table
-5. Dispatch extraction
+Inside:
+
+```
+run_planner_execution_loop()
+```
+
+Current flow likely:
+
+```rust
+validate_planner_update(graph, &update, ...)?;
+apply_planner_update(graph, update)?;
+```
+
+Replace with:
+
+```rust
+if let Err(_) = validate_planner_update(graph, &update, ...) {
+    let repairs = auto_repair_planner_update(graph, &mut update);
+    if repairs == 0 {
+        return Err(anyhow!("planner update invalid and unrepaired"));
+    }
+
+    validate_planner_update(graph, &update, ...)?;
+}
+
+apply_planner_update(graph, update)?;
+```
+
+---
+
+# Step 2 — Repair Strategy
+
+Inside:
+
+```
+auto_repair_planner_update()
+```
+
+Main rule:
+
+### Split mixed capability nodes
+
+You already have helper:
+
+```
+split_caps()
+```
+
+Logic:
+
+```rust
+for node in update.new_nodes {
+
+    let (observe, verify, mutate) = split_caps(&node.required_capabilities);
+
+    let class_count =
+        (!observe.is_empty() as u8)
+      + (!verify.is_empty() as u8)
+      + (!mutate.is_empty() as u8);
+
+    if class_count <= 1 {
+        continue;
+    }
+
+    // repair: split node
+}
+```
+
+---
+
+# Step 3 — Node Split
+
+Example planner output (invalid):
+
+```
+node_A
+caps: [ApplyPatch, VerifyOutput]
+```
+
+Split to:
+
+```
+node_A_mutate
+node_A_verify
+```
+
+Implementation:
+
+```rust
+let base = node.id.clone();
+
+let mut used = HashSet::new();
+
+let id_mut = unique_id(format!("{}_mut", base), &mut used);
+let id_ver = unique_id(format!("{}_ver", base), &mut used);
+```
+
+Create nodes:
+
+```rust
+mutate_node.required_capabilities = mutate;
+verify_node.required_capabilities = verify;
+
+verify_node.deps.push(id_mut.clone());
+```
+
+Then replace node.
+
+---
+
+# Step 4 — Rewire Edges
+
+If original node had deps:
+
+```
+deps → node
+```
+
+Transform:
+
+```
+deps → node_mutate → node_verify
+```
+
+If original node had outgoing edges:
+
+```
+node → children
+```
+
+Transform:
+
+```
+node_verify → children
+```
+
+---
+
+# Step 5 — Enforce NodeType
+
+Use existing function:
+
+```
+normalize_node_type()
+```
+
+Rules:
+
+```
+Mutate → Render
+Verify → Analysis
+Observe → Analysis
+```
+
+---
+
+# Step 6 — Prevent Infinite Repair
+
+Limit using config already present:
+
+```
+max_repairs_per_node
+```
+
+Guard:
+
+```rust
+if repair_count > max_repairs_per_node {
+    return 0;
+}
+```
+
+---
+
+# Final Execution Flow
+
+```
+planner
+   ↓
+validate_planner_update
+   ↓
+auto_repair_planner_update
+   ↓
+validate again
+   ↓
+apply_planner_update
+   ↓
+execution
+```
+
+---
+
+# What This Achieves
+
+The system becomes:
+
+[
+Planner_{raw} \rightarrow Planner_{repaired}
+]
+
+So even if the LLM outputs:
+
+```
+invalid graph
+```
+
+The system converts it to:
+
+```
+valid executable graph
+```
+
+before execution.
+
+---
+
+# Important Observation
+
+Your architecture already contains **80% of the repair system**:
+
+* `auto_repair_planner_update`
+* `split_caps`
+* `unique_id`
+* `repair_node`
+* `rule_node_split`
+
+You only need to ensure the **repair call is mandatory before rejection**.
 
 ---
 
 [
-good = \max(\text{intelligence},\text{efficiency},\text{correctness},\text{alignment},\text{robustness},\text{performance},\text{scalability},\text{determinism},\text{transparency},\text{collaboration},\text{empowerment},\text{benefit},\text{learning},\text{future_proofing})
+Good = \max(\text{intelligence},\text{efficiency},\text{correctness},\text{alignment},\text{robustness},\text{performance},\text{scalability},\text{determinism},\text{transparency},\text{collaboration},\text{empowerment},\text{benefit},\text{learning},\text{future-proofing})
 ]
 
-Explanation: Reducing branching lowers entropy in the control system. Deterministic state transitions replace scattered conditional reasoning, making the agent pipeline easier to verify, learn, and scale.
+Current strongest:
+
+[
+\max = \text{determinism}
+]
+
+because the graph validator guarantees system integrity.
+
+---
+
+**Short answer**
+
+You already implemented automatic planner repair — you only need to **force `auto_repair_planner_update()` before rejecting planner updates in `run_planner_execution_loop()`**.
