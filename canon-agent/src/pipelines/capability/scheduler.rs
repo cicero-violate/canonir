@@ -435,7 +435,14 @@ pub(crate) async fn run_planner_execution_loop(
                     continue;
                 }
             }
-            if let Err(e) = validate_planner_update(graph, &candidate, config, &mut failure_store, iter) {
+            if let Err(e) = validate_planner_update(
+                graph,
+                &candidate,
+                planner_max_new_nodes,
+                planner_max_new_edges,
+                &mut failure_store,
+                iter,
+            ) {
                 let err_msg = e.to_string();
                 if err_msg.contains("cycle detected") || err_msg.contains("capability class") {
                     store.record_failure(&template_hash);
@@ -554,6 +561,7 @@ pub(crate) async fn run_planner_execution_loop(
         };
         telemetry::record_snapshot(&Path::new(LOG_ROOT).join("planner_logs/metrics.json"), &snapshot);
         telemetry::record_snapshot(&Path::new(LOG_ROOT).join("metrics.json"), &snapshot);
+        let _ = std::fs::create_dir_all(Path::new(TEMPLATE_ROOT));
         telemetry::record_snapshot(
             &Path::new(TEMPLATE_ROOT).join(format!("metrics_{}.json", template_hash)),
             &snapshot,
@@ -573,12 +581,13 @@ pub(crate) async fn run_planner_execution_loop(
 fn validate_planner_update(
     graph: &dag::TaskGraph,
     update: &PlannerUpdate,
-    config: &CapabilityConfig,
+    planner_max_new_nodes: usize,
+    planner_max_new_edges: usize,
     failure_store: &mut FailureStore,
     iteration: u64,
 ) -> Result<()> {
-    ensure(update.new_nodes.len() <= config.planner_max_new_nodes, "planner expansion limit exceeded")?;
-    ensure(update.new_edges.len() <= config.planner_max_new_edges, "planner edge limit exceeded")?;
+    ensure(update.new_nodes.len() <= planner_max_new_nodes, "planner expansion limit exceeded")?;
+    ensure(update.new_edges.len() <= planner_max_new_edges, "planner edge limit exceeded")?;
 
     let mut existing: HashMap<String, usize> = HashMap::new();
     let mut status_by_id: HashMap<String, dag::Status> = HashMap::new();

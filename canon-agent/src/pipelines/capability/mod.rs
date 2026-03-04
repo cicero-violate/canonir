@@ -212,6 +212,7 @@ impl CapabilityPipeline {
                 goal: Some(template_name.clone()),
             };
             telemetry::record_snapshot(&Path::new(LOG_ROOT).join("metrics.json"), &snapshot);
+            let _ = std::fs::create_dir_all(Path::new(TEMPLATE_ROOT));
             telemetry::record_snapshot(
                 &Path::new(TEMPLATE_ROOT).join(format!("metrics_{}.json", template_hash)),
                 &snapshot,
