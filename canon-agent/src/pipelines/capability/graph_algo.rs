@@ -122,7 +122,6 @@ pub fn compute_graph_signals(graph: &dag::TaskGraph) -> GraphSignals {
         id_to_index.insert(node.id.as_str(), idx);
     }
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
-    let mut indegree = vec![0usize; n];
     for node in &graph.nodes {
         let to = match id_to_index.get(node.id.as_str()) {
             Some(v) => *v,
@@ -131,15 +130,40 @@ pub fn compute_graph_signals(graph: &dag::TaskGraph) -> GraphSignals {
         for dep in &node.deps {
             if let Some(from) = id_to_index.get(dep.as_str()) {
                 adj[*from].push(to);
-                indegree[to] += 1;
             }
         }
     }
-    let roots: Vec<usize> = indegree
-        .iter()
-        .enumerate()
-        .filter_map(|(i, &d)| if d == 0 { Some(i) } else { None })
-        .collect();
+    #[cfg(feature = "cuda")]
+    let roots: Vec<usize> = {
+        let csr = Csr::from_adj(&adj);
+        let indegree = algorithms::graph::topological_sort_gpu::indegree_gpu(&csr);
+        indegree
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &d)| if d == 0 { Some(i) } else { None })
+            .collect()
+    };
+    #[cfg(not(feature = "cuda"))]
+    let roots: Vec<usize> = {
+        let mut indegree = vec![0usize; n];
+        for node in &graph.nodes {
+            let to = match id_to_index.get(node.id.as_str()) {
+                Some(v) => *v,
+                None => continue,
+            };
+            for dep in &node.deps {
+                if let Some(from) = id_to_index.get(dep.as_str()) {
+                    let _ = from;
+                    indegree[to] += 1;
+                }
+            }
+        }
+        indegree
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &d)| if d == 0 { Some(i) } else { None })
+            .collect()
+    };
     #[cfg(feature = "cuda")]
     let topo_order = {
         let csr = Csr::from_adj(&adj);

@@ -71,6 +71,20 @@ mod gpu_tests {
         assert_eq!(depth, vec![0,1,2,3]);
     }
 
+    #[test]
+    fn depth_gpu_diamond() {
+        let csr = Csr::from_edges(4, &[
+            (0,1),
+            (0,2),
+            (1,3),
+            (2,3)
+        ]);
+
+        let depth = longest_path_depth_gpu(&csr);
+
+        assert_eq!(depth, vec![0,1,1,2]);
+    }
+
     // ── Scheduler GPU ───────────────────────────────────────────────────────
 
     #[test]
