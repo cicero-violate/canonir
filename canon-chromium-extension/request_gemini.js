@@ -10,6 +10,7 @@
       window.__pendingPromptInjection  = window.__pendingPromptInjection  || null;
       window.__promptInjectionMode     = window.__promptInjectionMode     || "auto";
       window.__promptInjectionQueue    = window.__promptInjectionQueue    || [];
+      window.__currentTurnId           = window.__currentTurnId           || null;
 
       // ----- Gemini Enter-based send -----
       const selectors = {
@@ -94,7 +95,10 @@
         const entry = { ts: Date.now(), source, url, chunk };
         window.__sseChunks.push(entry);
         console.log(`📡 SSE chunk [${source}]`, url, chunk);
-        window.postMessage({ type: "INBOUND_MESSAGE", payload: chunk }, "*");
+        window.postMessage({
+          type: "INBOUND_MESSAGE",
+          payload: { turn_id: window.__currentTurnId, chunk, ts: Date.now() }
+        }, "*");
       }
 
       // Fetch hook
@@ -213,10 +217,11 @@
       window.addEventListener("message", (event) => {
         if (event.source !== window) return;
         if (event.data?.type !== "OUTBOUND_SUBMIT") return;
-        const { text } = event.data.payload || {};
+        const { text, turn_id } = event.data.payload || {};
         if (typeof text !== "string") return;
         const { mode } = event.data.payload || {};
         window.__promptInjectionMode = mode || "auto";
+        window.__currentTurnId = turn_id ?? null;
 
         if (mode === "buffer") {
           window.__promptInjectionQueue ||= [];

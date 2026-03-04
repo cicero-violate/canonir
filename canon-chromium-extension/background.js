@@ -180,23 +180,24 @@ function handleRustMessage(msg) {
     const targetTabId = msg.tabId;
     if (!targetTabId) return;
     console.log("[BG] TURN → sendToTab", targetTabId, "text length:", msg.text?.length);
+    const turnId = msg.turnId ?? null;
     // Ensure the target tab is active and its window focused before sending.
     chrome.tabs.get(targetTabId, (tab) => {
       const err = chrome.runtime.lastError;
       if (err || !tab) {
         console.warn("[BG] TURN tab lookup failed:", err?.message);
-        sendToTab(targetTabId, { type: "OUTBOUND_SUBMIT", payload: { text: msg.text, mode: "auto" } });
+        sendToTab(targetTabId, { type: "OUTBOUND_SUBMIT", payload: { text: msg.text, mode: "auto", turn_id: turnId } });
         return;
       }
       if (tab.windowId) {
         chrome.windows.update(tab.windowId, { focused: true }, () => {
           chrome.tabs.update(targetTabId, { active: true }, () => {
-            sendToTab(targetTabId, { type: "OUTBOUND_SUBMIT", payload: { text: msg.text, mode: "auto" } });
+            sendToTab(targetTabId, { type: "OUTBOUND_SUBMIT", payload: { text: msg.text, mode: "auto", turn_id: turnId } });
           });
         });
       } else {
         chrome.tabs.update(targetTabId, { active: true }, () => {
-          sendToTab(targetTabId, { type: "OUTBOUND_SUBMIT", payload: { text: msg.text, mode: "auto" } });
+          sendToTab(targetTabId, { type: "OUTBOUND_SUBMIT", payload: { text: msg.text, mode: "auto", turn_id: turnId } });
         });
       }
     });

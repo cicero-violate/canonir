@@ -6,6 +6,7 @@ use std::path::Path;
 use super::capability::Capability;
 use super::config::GoalSpec;
 use super::llm::call_agent_json_with_retry;
+use super::tab_management::TabsHandle;
 use crate::ws_server::WsBridge;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -51,7 +52,7 @@ async fn decompose_inner(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
+    tabs: &TabsHandle,
     max_tabs: usize,
     tab_cooldown_ms: u64,
     retries: u32,
@@ -64,6 +65,7 @@ async fn decompose_inner(
         &prompt,
         role_schema,
         phase,
+        None,
         tabs,
         max_tabs,
         tab_cooldown_ms,
@@ -96,6 +98,7 @@ Original input:\n{}",
                     &retry_prompt,
                     role_schema,
                     phase,
+                    None,
                     tabs,
                     max_tabs,
                     tab_cooldown_ms,
@@ -135,6 +138,7 @@ Original input:\n{}",
                 &retry_prompt,
                 role_schema,
                 phase,
+                None,
                 tabs,
                 max_tabs,
                 tab_cooldown_ms,
@@ -169,7 +173,7 @@ pub async fn decompose_goal(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
+    tabs: &TabsHandle,
     max_tabs: usize,
     workspace_root: &Path,
     workspace_listing: &str,
@@ -237,7 +241,7 @@ pub async fn decompose_node(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
+    tabs: &TabsHandle,
     max_tabs: usize,
     workspace_root: &Path,
     workspace_listing: &str,

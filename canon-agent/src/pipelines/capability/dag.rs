@@ -53,19 +53,44 @@ pub struct TaskNode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskGraph {
     pub nodes: Vec<TaskNode>,
+    #[serde(skip, default)]
+    pub id_index: HashMap<String, usize>,
 }
 
 impl TaskGraph {
     pub fn new() -> Self {
-        Self { nodes: Vec::new() }
+        Self { nodes: Vec::new(), id_index: HashMap::new() }
     }
 
     pub fn add_node(&mut self, node: TaskNode) {
+        let idx = self.nodes.len();
+        self.id_index.insert(node.id.clone(), idx);
         self.nodes.push(node);
     }
 
+    pub fn rebuild_index(&mut self) {
+        self.id_index.clear();
+        for (idx, node) in self.nodes.iter().enumerate() {
+            self.id_index.insert(node.id.clone(), idx);
+        }
+    }
+
+    fn ensure_index(&mut self) {
+        if self.id_index.len() != self.nodes.len() {
+            self.rebuild_index();
+        }
+    }
+
+    pub fn get_node(&mut self, id: &str) -> Option<&TaskNode> {
+        self.ensure_index();
+        let idx = *self.id_index.get(id)?;
+        self.nodes.get(idx)
+    }
+
     pub fn get_node_mut(&mut self, id: &str) -> Option<&mut TaskNode> {
-        self.nodes.iter_mut().find(|n| n.id == id)
+        self.ensure_index();
+        let idx = *self.id_index.get(id)?;
+        self.nodes.get_mut(idx)
     }
 
     pub fn ready_nodes(&self) -> Vec<&TaskNode> {

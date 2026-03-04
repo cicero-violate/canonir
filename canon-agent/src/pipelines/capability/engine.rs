@@ -9,6 +9,7 @@ use super::dag::AuthorityContext;
 use super::capability::Capability;
 use super::dag::{Status, TaskGraph, TaskNode};
 use super::llm::call_agent_json_with_retry;
+use super::tab_management::TabsHandle;
 use super::Delta;
 use crate::ws_server::WsBridge;
 
@@ -171,7 +172,7 @@ pub async fn call_node(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
+    tabs: &TabsHandle,
     max_tabs: usize,
     tab_cooldown_ms: u64,
     workspace_root: &Path,
@@ -284,7 +285,7 @@ pub async fn dispatch_node(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
+    tabs: &TabsHandle,
     max_tabs: usize,
     tab_cooldown_ms: u64,
     workspace_root: &Path,
@@ -328,7 +329,7 @@ async fn call_mode(
     endpoint_id: &str,
     url: &str,
     role_schema: &str,
-    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
+    tabs: &TabsHandle,
     max_tabs: usize,
     tab_cooldown_ms: u64,
     workspace_root: &Path,
@@ -367,9 +368,22 @@ async fn call_mode(
 
     // ── LLM call with one schema-retry ────────────────────────────────────────
     let payload = llm_call_with_retry(
-        bridge, endpoint_id, url, &prompt, config.schema, &input, role_schema, config.phase,
-        tabs, max_tabs, tab_cooldown_ms, retries, delay_secs,
-    ).await?;
+        bridge,
+        endpoint_id,
+        url,
+        &prompt,
+        config.schema,
+        &input,
+        role_schema,
+        config.phase,
+        Some(&node.id),
+        tabs,
+        max_tabs,
+        tab_cooldown_ms,
+        retries,
+        delay_secs,
+    )
+    .await?;
 
     // ── Log ───────────────────────────────────────────────────────────────────
     if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
@@ -392,14 +406,15 @@ async fn llm_call_with_retry(
     input: &Value,
     role_schema: &str,
     phase: &str,
-    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
+    node_id: Option<&str>,
+    tabs: &TabsHandle,
     max_tabs: usize,
     tab_cooldown_ms: u64,
     retries: u32,
     delay_secs: u64,
 ) -> Result<Value> {
     let payload = call_agent_json_with_retry(
-        bridge, endpoint_id, url, prompt, role_schema, phase,
+        bridge, endpoint_id, url, prompt, role_schema, phase, node_id,
         tabs, max_tabs, tab_cooldown_ms, retries, delay_secs,
     ).await?;
     Ok(payload)
@@ -417,7 +432,7 @@ fn apply_mutate_output(
     iter: u64,
     policy: &CapabilityPolicy,
 ) -> Result<()> {
-    if let Some(node) = graph.nodes.iter().find(|n| n.id == node_id) {
+    if let Some(node) = graph.get_node(&node_id) {
         if node.node_type != super::decompose::NodeType::Render {
             eprintln!(r#"[capability] {{"iter":{},"phase":"executor","event":"non_render_mutation","node":"{}"}}"#, iter, node_id);
             let _ = graph.update_status(&node_id, Status::Ready);

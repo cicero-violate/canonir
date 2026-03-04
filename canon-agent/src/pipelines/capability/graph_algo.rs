@@ -91,17 +91,17 @@ pub fn run_graph_algorithms(graph: &dag::TaskGraph, log_dir: &Path, iter: u32) {
     }
 }
 
-#[derive(Debug, Clone)]
-struct GraphSignals {
-    roots: Vec<usize>,
-    topo_order: Vec<usize>,
-    sccs: Vec<Vec<usize>>,
-    unreachable: Vec<usize>,
-    has_cycle: bool,
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GraphSignals {
+    pub roots: Vec<usize>,
+    pub topo_order: Vec<usize>,
+    pub sccs: Vec<Vec<usize>>,
+    pub unreachable: Vec<usize>,
+    pub has_cycle: bool,
 }
 
 impl GraphSignals {
-    fn to_json(&self, index_to_id: &[String]) -> serde_json::Value {
+    pub fn to_json(&self, index_to_id: &[String]) -> serde_json::Value {
         let to_ids = |idxs: &[usize]| idxs.iter().filter_map(|i| index_to_id.get(*i)).cloned().collect::<Vec<_>>();
         let scc_ids = self.sccs.iter().map(|comp| to_ids(comp)).collect::<Vec<_>>();
         serde_json::json!({
@@ -114,7 +114,7 @@ impl GraphSignals {
     }
 }
 
-fn compute_graph_signals(graph: &dag::TaskGraph) -> GraphSignals {
+pub fn compute_graph_signals(graph: &dag::TaskGraph) -> GraphSignals {
     let n = graph.nodes.len();
     let mut id_to_index: HashMap<&str, usize> = HashMap::new();
     for (idx, node) in graph.nodes.iter().enumerate() {

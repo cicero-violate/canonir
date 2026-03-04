@@ -38,16 +38,33 @@ struct RawSystem {
     pub max_depth: usize,
     #[serde(default = "default_prune_unlinked")]
     pub prune_unlinked: bool,
+    #[serde(default = "default_planner_max_new_nodes")]
+    pub planner_max_new_nodes: usize,
+    #[serde(default = "default_planner_max_new_edges")]
+    pub planner_max_new_edges: usize,
 }
 
 #[derive(Debug, Deserialize, Default)]
 struct RawLlm {
     #[serde(default)]
-    pub endpoints: Vec<LlmEndpoint>,
+    pub endpoints: RawEndpoints,
     #[serde(default)]
     pub roles: HashMap<String, RawRoleConfig>,
     #[serde(default = "default_tab_cooldown_ms")]
     pub tab_cooldown_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawEndpoints {
+    List(Vec<LlmEndpoint>),
+    Map(HashMap<String, LlmEndpoint>),
+}
+
+impl Default for RawEndpoints {
+    fn default() -> Self {
+        RawEndpoints::List(Vec::new())
+    }
 }
 
 fn default_max_output_lines() -> usize { 2000 }
@@ -61,6 +78,8 @@ fn default_max_expand_iters() -> u32 { 6 }
 fn default_context_radius() -> usize { 1 }
 fn default_max_depth() -> usize { 6 }
 fn default_prune_unlinked() -> bool { true }
+fn default_planner_max_new_nodes() -> usize { 32 }
+fn default_planner_max_new_edges() -> usize { 64 }
 fn default_max_tabs() -> usize { 1 }
 fn default_tab_cooldown_ms() -> u64 { 0 }
 
@@ -76,6 +95,10 @@ pub struct LlmEndpoint {
     pub id: String,
     pub url: String,
     pub role_markdown: String,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub stateful: bool,
     #[serde(default = "default_max_tabs")]
     pub max_tabs: usize,
 }
@@ -94,7 +117,10 @@ pub struct CapabilityConfig {
     pub context_radius: usize,
     pub max_depth: usize,
     pub prune_unlinked: bool,
+    pub planner_max_new_nodes: usize,
+    pub planner_max_new_edges: usize,
     pub llm_endpoints: Vec<LlmEndpoint>,
+    pub planner_endpoint: Option<LlmEndpoint>,
     pub llm_roles: HashMap<String, RawRoleConfig>,
     pub tab_cooldown_ms: u64,
 }
@@ -103,6 +129,29 @@ impl CapabilityConfig {
     pub fn load() -> Result<Self> {
         let raw_toml = std::fs::read_to_string(CAPABILITY_CONFIG_TOML).with_context(|| format!("cannot read {}", CAPABILITY_CONFIG_TOML))?;
         let raw: RawConfig = toml::from_str(&raw_toml).context("cannot parse capability_config.toml")?;
+        let (llm_endpoints, planner_endpoint) = match raw.llm.endpoints {
+            RawEndpoints::List(list) => {
+                let planner = list.iter().find(|e| e.role.as_deref() == Some("planner")).cloned();
+                (list, planner)
+            }
+            RawEndpoints::Map(map) => {
+                let mut list = Vec::new();
+                let mut planner = None;
+                for (key, mut ep) in map {
+                    if ep.id.is_empty() {
+                        ep.id = key.clone();
+                    }
+                    if ep.role.is_none() && key == "planner" {
+                        ep.role = Some("planner".to_string());
+                    }
+                    if ep.role.as_deref() == Some("planner") {
+                        planner = Some(ep.clone());
+                    }
+                    list.push(ep);
+                }
+                (list, planner)
+            }
+        };
         Ok(Self {
             exit_check_command: raw.system.exit_check_command,
             max_output_lines: raw.system.max_message_output_lines,
@@ -117,7 +166,10 @@ impl CapabilityConfig {
             context_radius: raw.system.context_radius,
             max_depth: raw.system.max_depth,
             prune_unlinked: raw.system.prune_unlinked,
-            llm_endpoints: raw.llm.endpoints,
+            planner_max_new_nodes: raw.system.planner_max_new_nodes,
+            planner_max_new_edges: raw.system.planner_max_new_edges,
+            llm_endpoints,
+            planner_endpoint,
             llm_roles: raw.llm.roles,
             tab_cooldown_ms: raw.llm.tab_cooldown_ms,
         })
@@ -132,6 +184,12 @@ impl CapabilityConfig {
 
     pub fn role_config(&self, role: &str) -> RawRoleConfig {
         self.llm_roles.get(role).cloned().unwrap_or_default()
+    }
+
+    pub fn planner_endpoint(&self) -> Result<&LlmEndpoint> {
+        self.planner_endpoint
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no planner endpoint configured"))
     }
 }
 

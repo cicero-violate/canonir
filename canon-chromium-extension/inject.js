@@ -6,6 +6,16 @@
   window.__pendingPromptInjection  = window.__pendingPromptInjection  || null;
   window.__promptInjectionMode     = window.__promptInjectionMode     || "auto";
   window.__promptInjectionQueue    = window.__promptInjectionQueue    || [];
+  window.__currentTurnId           = window.__currentTurnId           || null;
+
+  function emitInbound(chunk) {
+    const payload = {
+      turn_id: window.__currentTurnId,
+      chunk,
+      ts: Date.now()
+    };
+    window.postMessage({ type: "INBOUND_MESSAGE", payload }, "*");
+  }
 
   // ── WebSocket hook (Calpico transport) ───────────────────────────────────
   const __OrigWS = window.WebSocket;
@@ -17,7 +27,7 @@
         : ev.data instanceof ArrayBuffer
           ? new TextDecoder().decode(ev.data)
           : "";
-      if (data) window.postMessage({ type: "INBOUND_MESSAGE", payload: data }, "*");
+      if (data) emitInbound(data);
     });
     return ws;
   };
@@ -66,10 +76,17 @@
             buffer += chunk;
             const lines = buffer.split("\n");
             buffer = lines.pop();
-            for (const line of lines)
-              window.postMessage({ type: "INBOUND_MESSAGE", payload: line }, "*");
+            for (const line of lines) {
+              emitInbound(line);
+              if (line.trim() === "data: [DONE]" || line.trim() === "[DONE]") {
+                window.__currentTurnId = null;
+              }
+            }
           } else {
-            window.postMessage({ type: "INBOUND_MESSAGE", payload: chunk }, "*");
+            emitInbound(chunk);
+            if (chunk.trim() === "data: [DONE]" || chunk.trim() === "[DONE]") {
+              window.__currentTurnId = null;
+            }
           }
         }
       } catch {}
@@ -144,10 +161,11 @@
     if (event.source !== window) return;
     if (event.data?.type !== "OUTBOUND_SUBMIT") return;
 
-    const { text, mode } = event.data.payload || {};
+    const { text, mode, turn_id } = event.data.payload || {};
     if (typeof text !== "string") return;
     console.log("[INJ] OUTBOUND_SUBMIT received, text length:", text.length, "mode:", mode);
 
+    window.__currentTurnId = turn_id ?? null;
     window.__promptInjectionMode = mode || "auto";
 
     if (mode === "buffer") {

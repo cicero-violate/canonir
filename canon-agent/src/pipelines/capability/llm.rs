@@ -1,17 +1,12 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::hash::{Hash, Hasher};
 
 use crate::llm_provider::JsonExtractor;
-use crate::llm_domains::{is_chatgpt_url, is_gemini_url};
 use crate::ws_server::WsBridge;
+use super::endpoint_worker;
 use super::tab_management::{
-    TabSlots,
-    get_or_open_tab,
-    mark_tab_sent,
-    mark_tab_response,
-    mark_tab_in_flight,
-    mark_tab_cooldown,
-    drop_tab,
+    TabsHandle,
     log_llm,
     now_ms,
 };
@@ -23,63 +18,26 @@ pub async fn call_agent_json(
     prompt: &str,
     role_schema: &str,
     phase: &str,
-    tabs: &tokio::sync::Mutex<TabSlots>,
+    node_id: Option<&str>,
+    tabs: &TabsHandle,
     max_tabs: usize,
     tab_cooldown_ms: u64,
 ) -> Result<Value> {
-    let tab_id = get_or_open_tab(bridge, endpoint_id, url, tabs, max_tabs).await?;
-    mark_tab_sent(tabs, tab_id).await;
-    log_llm(format!("phase={} endpoint={} tab={} send", phase, endpoint_id, tab_id));
-    let full_prompt = if role_schema.trim().is_empty() {
-        prompt.to_string()
-    } else {
-        format!("{}\n\n{}", role_schema.trim_end(), prompt)
-    };
-    let raw = match bridge.send_turn(tab_id, full_prompt).await {
-        Ok(v) => v,
-        Err(e) => {
-            mark_tab_in_flight(tabs, tab_id, false).await;
-            drop_tab(tabs, endpoint_id, tab_id).await;
-            log_llm(format!("phase={} endpoint={} tab={} send_error={}", phase, endpoint_id, tab_id, e));
-            return Err(anyhow::anyhow!("llm send_turn error: {e}"));
-        }
-    };
-    mark_tab_response(tabs, tab_id).await;
-    mark_tab_in_flight(tabs, tab_id, false).await;
-    log_llm(format!("phase={} endpoint={} tab={} response_ok bytes={}", phase, endpoint_id, tab_id, raw.len()));
-    if is_gemini_url(url) {
-        let _ = bridge.new_chat(tab_id).await;
-        match bridge.wait_new_chat(tab_id, 20).await {
-            Ok(()) => log_llm(format!("phase={} endpoint={} tab={} new_chat_done", phase, endpoint_id, tab_id)),
-            Err(e) => {
-                mark_tab_in_flight(tabs, tab_id, true).await;
-                log_llm(format!("phase={} endpoint={} tab={} new_chat_timeout={}", phase, endpoint_id, tab_id, e));
-                return Err(anyhow::anyhow!("new_chat timeout"));
-            }
-        }
-    } else if is_chatgpt_url(url) {
-        let _ = bridge.new_chat(tab_id).await;
-        match bridge.wait_new_chat(tab_id, 20).await {
-            Ok(()) => log_llm(format!("phase={} endpoint={} tab={} new_chat_done", phase, endpoint_id, tab_id)),
-            Err(e) => {
-                mark_tab_in_flight(tabs, tab_id, true).await;
-                log_llm(format!("phase={} endpoint={} tab={} new_chat_timeout={}", phase, endpoint_id, tab_id, e));
-                return Err(anyhow::anyhow!("new_chat timeout"));
-            }
-        }
-        let _ = bridge.temp_chat(tab_id).await;
-        match bridge.wait_temp_chat(tab_id, 20).await {
-            Ok(()) => log_llm(format!("phase={} endpoint={} tab={} temp_chat_done", phase, endpoint_id, tab_id)),
-            Err(e) => {
-                mark_tab_in_flight(tabs, tab_id, true).await;
-                log_llm(format!("phase={} endpoint={} tab={} temp_chat_timeout={}", phase, endpoint_id, tab_id, e));
-                return Err(anyhow::anyhow!("temp_chat timeout"));
-            }
-        }
-    }
-    if tab_cooldown_ms > 0 {
-        mark_tab_cooldown(tabs, tab_id, tab_cooldown_ms).await;
-    }
+    let cache_key = cache_key_for(prompt, role_schema);
+    let raw = endpoint_worker::send_request(
+        bridge,
+        endpoint_id,
+        url,
+        prompt,
+        role_schema,
+        node_id,
+        Some(cache_key),
+        phase,
+        tabs,
+        max_tabs,
+        tab_cooldown_ms,
+    )
+    .await?;
     let log_dir = "/workspace/ai_sandbox/canon/agent_logs/capability";
     let _ = std::fs::create_dir_all(log_dir);
     let ts = std::time::SystemTime::now()
@@ -112,7 +70,8 @@ pub async fn call_agent_json_with_retry(
     prompt: &str,
     role_schema: &str,
     phase: &str,
-    tabs: &tokio::sync::Mutex<TabSlots>,
+    node_id: Option<&str>,
+    tabs: &TabsHandle,
     max_tabs: usize,
     tab_cooldown_ms: u64,
     max_retries: u32,
@@ -122,7 +81,7 @@ pub async fn call_agent_json_with_retry(
     for attempt in 0..max_retries {
         let start = now_ms();
         log_llm(format!("phase={} endpoint={} attempt={} start", phase, endpoint_id, attempt + 1));
-        match call_agent_json(bridge, endpoint_id, url, prompt, role_schema, phase, tabs, max_tabs, tab_cooldown_ms).await {
+        match call_agent_json(bridge, endpoint_id, url, prompt, role_schema, phase, node_id, tabs, max_tabs, tab_cooldown_ms).await {
             Ok(v) => {
                 let elapsed = now_ms().saturating_sub(start);
                 log_llm(format!("phase={} endpoint={} attempt={} ok elapsed_ms={}", phase, endpoint_id, attempt + 1, elapsed));
@@ -147,4 +106,11 @@ fn try_parse_loose_json(raw: &str) -> Option<Value> {
     }
     let slice = raw[start..=end].trim();
     serde_json::from_str(slice).ok()
+}
+
+fn cache_key_for(prompt: &str, role_schema: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    prompt.hash(&mut hasher);
+    role_schema.hash(&mut hasher);
+    hasher.finish()
 }

@@ -13,7 +13,7 @@
 //!
 //! Rust → Extension frames:
 //!   { "type": "OPEN_TAB",       "url": "...", "reqId"?: n }
-//!   { "type": "TURN",           "tabId": n, "text": "..." }
+//!   { "type": "TURN",           "tabId": n, "text": "...", "turnId"?: n }
 //!   { "type": "OUTBOUND_SUBMIT","tabId": n, "payload": { ... } }
 //!   { "type": "CLOSE_TAB",      "tabId": n }
 //!   { "type": "NEW_CHAT",       "tabId": n }
@@ -74,6 +74,8 @@ struct ServerState {
 
     /// tabId → oneshot waiting for a completed response.
     pending: HashMap<u32, oneshot::Sender<String>>,
+    /// tabId → expected turnId for inbound chunk filtering.
+    pending_turn_id: HashMap<u32, u64>,
 
     /// reqId → oneshot waiting for TAB_OPENED confirmation.
     pending_open: HashMap<u64, oneshot::Sender<u32>>,
@@ -109,6 +111,7 @@ impl ServerState {
             out_tx: None,
             tab_assemblers: HashMap::new(),
             pending: HashMap::new(),
+            pending_turn_id: HashMap::new(),
             pending_open: HashMap::new(),
             pending_new_chat: HashMap::new(),
             pending_temp_chat: HashMap::new(),
@@ -136,6 +139,7 @@ impl ServerState {
 pub struct WsBridge {
     state: Arc<Mutex<ServerState>>,
     next_req_id: Arc<AtomicU64>,
+    next_turn_id: Arc<AtomicU64>,
     response_timeout_secs: u64,
 }
 
@@ -162,17 +166,19 @@ impl WsBridge {
     /// is silently lost during the ~1 s reconnect window.
     pub async fn send_turn(&self, tab_id: u32, text: String) -> Result<String, WsBridgeError> {
         let (tx, rx) = oneshot::channel::<String>();
+        let turn_id = self.next_turn_id.fetch_add(1, Ordering::Relaxed);
 
         {
             let mut st = self.state.lock().await;
             st.pending.insert(tab_id, tx);
+            st.pending_turn_id.insert(tab_id, turn_id);
             if !st.tab_assemblers.contains_key(&tab_id) {
                 st.tab_assemblers.insert(tab_id, FrameAssembler::new(SiteType::Unknown));
             } else if let Some(asm) = st.tab_assemblers.get_mut(&tab_id) {
                 asm.reset();
             }
 
-            let frame = json!({ "type": "TURN", "tabId": tab_id, "text": text });
+            let frame = json!({ "type": "TURN", "tabId": tab_id, "text": text, "turnId": turn_id });
 
             match st.send(frame.clone()) {
                 Ok(()) => {}
@@ -265,6 +271,7 @@ pub fn spawn(addr: SocketAddr, response_timeout_secs: u64) -> WsBridge {
     let bridge = WsBridge {
         state: state.clone(),
         next_req_id: Arc::new(AtomicU64::new(1)),
+        next_turn_id: Arc::new(AtomicU64::new(1)),
         response_timeout_secs,
     };
 
@@ -388,6 +395,7 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             st.live_tabs.remove(&tab_id);
             st.tab_assemblers.remove(&tab_id);
             st.pending.remove(&tab_id);
+            st.pending_turn_id.remove(&tab_id);
             st.pending_new_chat.remove(&tab_id);
         }
 
@@ -424,17 +432,39 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             };
 
             let mut st = state.lock().await;
+            let mut inbound_turn_id: Option<u64> = None;
+            let mut chunk = payload.clone();
+            if payload.trim_start().starts_with('{') {
+                if let Ok(v) = serde_json::from_str::<Value>(&payload) {
+                    if let (Some(tid), Some(c)) = (
+                        v.get("turn_id").and_then(|v| v.as_u64()),
+                        v.get("chunk").and_then(|v| v.as_str()),
+                    ) {
+                        inbound_turn_id = Some(tid);
+                        chunk = c.to_string();
+                    }
+                }
+            }
+
+            let expected = st.pending_turn_id.get(&tab_id).copied();
+            if let Some(tid) = inbound_turn_id {
+                if expected != Some(tid) {
+                    return;
+                }
+            } else if expected.is_some() {
+                return;
+            }
 
             // Dump every inbound frame to disk for parser inspection.
             st.frame_counter += 1;
             let dump_path = format!("./frames/frame_{:06}_tab{}.txt", st.frame_counter, tab_id);
-            let _ = std::fs::write(&dump_path, &payload);
+            let _ = std::fs::write(&dump_path, &chunk);
 
             let assembled = if let Some(asm) = st.tab_assemblers.get_mut(&tab_id) {
-                asm.push(&payload)
+                asm.push(&chunk)
             } else {
                 let mut asm = FrameAssembler::new(SiteType::Unknown);
-                let out = asm.push(&payload);
+                let out = asm.push(&chunk);
                 st.tab_assemblers.insert(tab_id, asm);
                 out
             };
@@ -446,6 +476,7 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
                 if let Some(tx) = st.pending.remove(&tab_id) {
                     let _ = tx.send(text);
                 }
+                st.pending_turn_id.remove(&tab_id);
             }
         }
 
