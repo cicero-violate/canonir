@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use super::act::{apply_mutations, apply_read_only, summarize_deltas};
 use super::config::CapabilityPolicy;
 use super::dag::AuthorityContext;
-use super::capability::Capability;
+use super::capability::{Capability, CapabilityClass};
 use super::dag::{Status, TaskGraph, TaskNode};
 use super::llm::call_agent_json_with_retry_allow_mismatch;
 use super::tab_management::TabsHandle;
@@ -164,14 +164,18 @@ struct ModeRule {
     mode: DispatchMode,
 }
 
-fn validate_verify(ctx: &AuthorityContext, _: &str) -> Result<()> {
-    ctx.require(Capability::StatusUpdateOnly).map_err(|e| anyhow::anyhow!(e))
+fn validate_verify(ctx: &AuthorityContext, node_id: &str) -> Result<()> {
+    ctx.capabilities.iter()
+        .any(|c| c.class() == CapabilityClass::Verify)
+        .then_some(())
+        .ok_or_else(|| anyhow::anyhow!("node {} has no Verify-class capability", node_id))
 }
 
 fn validate_mutate(ctx: &AuthorityContext, node_id: &str) -> Result<()> {
-    (ctx.has(Capability::FileWrite) || ctx.has(Capability::ApplyPatch))
+    ctx.capabilities.iter()
+        .any(|c| c.class() == CapabilityClass::Mutate)
         .then_some(())
-        .ok_or_else(|| anyhow::anyhow!("node {} missing capability FileWrite or ApplyPatch", node_id))
+        .ok_or_else(|| anyhow::anyhow!("node {} has no Mutate-class capability", node_id))
 }
 
 fn validate_pass(_: &AuthorityContext, _: &str) -> Result<()> { Ok(()) }
@@ -470,7 +474,7 @@ fn mutate_is_blocked(node_id: &str, graph: &TaskGraph, policy: &CapabilityPolicy
         .unwrap_or(false);
     let render_blocked = policy.require_final_render && graph.nodes.iter().any(|n| {
         n.status != Status::Completed
-            && !n.required_capabilities.iter().any(|c| matches!(c, Capability::FileWrite | Capability::ApplyPatch))
+            && !n.required_capabilities.iter().any(|c| c.class() == CapabilityClass::Mutate)
     });
     not_render || render_blocked
 }
@@ -491,7 +495,7 @@ fn apply_mutate_result(
     let (requires_verify, has_err) = if let Some(n) = graph.get_node_mut(node_id) {
         n.result = Some(out);
         n.error = err;
-        (n.required_capabilities.contains(&Capability::StatusUpdateOnly), n.error.is_some())
+        (n.required_capabilities.iter().any(|c| c.class() == CapabilityClass::Verify), n.error.is_some())
     } else {
         (false, false)
     };

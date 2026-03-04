@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-use super::capability::{assert_mut_verify_disjoint, Capability};
+use super::capability::{assert_class_disjoint, Capability, CapabilityClass};
 use super::decompose::NodeType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,7 +139,7 @@ impl TaskGraph {
         }
         for n in &self.nodes {
             let caps: HashSet<Capability> = n.required_capabilities.iter().copied().collect();
-            assert_mut_verify_disjoint(&caps).map_err(|e| format!("node {}: {}", n.id, e))?;
+            assert_class_disjoint(&caps).map_err(|e| format!("node {}: {}", n.id, e))?;
         }
         detect_cycle(self)?;
         Ok(())
@@ -187,7 +187,7 @@ pub struct AuthorityContext {
 
 impl AuthorityContext {
     pub fn new(node_id: String, caps: HashSet<Capability>) -> Result<Self, String> {
-        assert_mut_verify_disjoint(&caps)?;
+        assert_class_disjoint(&caps)?;
         Ok(Self { node_id, capabilities: caps })
     }
 
@@ -204,11 +204,11 @@ impl AuthorityContext {
     }
 
     pub fn is_verify_context(&self) -> bool {
-        self.capabilities.contains(&Capability::StatusUpdateOnly)
+        self.capabilities.iter().any(|c| c.class() == CapabilityClass::Verify)
     }
 
     pub fn is_mutation_context(&self) -> bool {
-        self.capabilities.contains(&Capability::FileWrite) || self.capabilities.contains(&Capability::ApplyPatch)
+        self.capabilities.iter().any(|c| c.class() == CapabilityClass::Mutate)
     }
 }
 

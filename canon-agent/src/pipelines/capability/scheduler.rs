@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 use super::config::{self, CapabilityConfig};
-use super::capability::assert_mut_verify_disjoint;
+use super::capability::assert_class_disjoint;
 use super::dag;
 use super::engine;
 use super::endpoint_scheduler;
@@ -473,7 +473,7 @@ fn validate_planner_update(
             .ok_or_else(|| anyhow::anyhow!("rewrite references unknown node"))?;
         ensure(matches!(status, dag::Status::Pending), "rewrite node must be pending")?;
         let caps: std::collections::HashSet<_> = spec.new_capabilities.iter().copied().collect();
-        assert_mut_verify_disjoint(&caps).map_err(|e| anyhow::anyhow!(e))
+        assert_class_disjoint(&caps).map_err(|e| anyhow::anyhow!(e))
     })?;
 
     let mut test_graph = graph.clone();
@@ -504,7 +504,7 @@ pub(crate) fn apply_planner_update(graph: &mut dag::TaskGraph, update: PlannerUp
         if let Some(node) = graph.get_node_mut(&spec.id) {
             if node.status == dag::Status::Pending {
                 let caps: std::collections::HashSet<_> = spec.new_capabilities.iter().copied().collect();
-                assert_mut_verify_disjoint(&caps).map_err(|e| anyhow::anyhow!(e))?;
+                assert_class_disjoint(&caps).map_err(|e| anyhow::anyhow!(e))?;
                 node.description = spec.new_description;
                 node.required_capabilities = spec.new_capabilities;
             }
