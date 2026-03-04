@@ -1,238 +1,335 @@
-### Equation
+# Stateful Planner Reasoning Implementation Plan
 
+## Goal
 
-Explanation:
-You now have a **deterministic execution pipeline**:
+Convert the planner layer from stateless LLM calls into a persistent stateful reasoning session.
 
-```
-graph → scheduler → endpoint worker → LLM → result
-```
-
-Key improvement:
-
-This removes:
-
-* race conditions
-* tab contention
-* request collisions
+This dramatically reduces rate limits and improves reasoning quality by allowing the planner to reuse context across iterations.
 
 ---
 
-# Next Step 1 — Response Routing
+# Current Architecture
 
-### Equation
+The planner currently performs stateless calls:
 
-Explanation:
-Your worker prefixes requests with `REQ_ID`.
+decompose_goal
+decompose_node
+plan_edges
 
-Add a router:
+Each invocation constructs a full prompt and sends it to the LLM.
 
-```
-REQ_ID → graph node
-```
+Result:
 
-Structure:
-
-```
-HashMap<ReqId, NodeId>
-```
-
-When response arrives:
-
-```
-node.result = response
-node.status = completed
-```
-
-This closes the **execution loop**.
+high token usage
+rate limit pressure
+loss of reasoning continuity
 
 ---
 
-# Next Step 2 — Node Determinism
+# Target Architecture
 
-### Equation
+Planner runs inside a persistent session:
 
-[
-node = (inputs) \rightarrow (output)
-]
+PlannerSession
+    goal
+    graph
+    planner_signals
+    node_list
+    history
 
-Explanation:
-Every node must be **pure and deterministic**.
+Planner produces incremental updates:
 
-Guarantee:
+new nodes
+new edges
+node refinements
 
-```
-same input → same output
-```
-
-Required for:
-
-* caching
-* replay
-* debugging
+Execution remains stateless.
 
 ---
 
-# Next Step 3 — Graph Reduction
+# New Planner Loop
 
-### Equation
-
-[
-G_{t+1} = G_t - completed_nodes
-]
-
-Explanation:
-After a node completes:
-
-1. mark node finished
-2. unlock dependent nodes
-3. enqueue them
-
-This is the **reasoning step**.
+load_goal
+↓
+start_planner_session
+↓
+planner_iteration
+↓
+update_graph
+↓
+scheduler_executes_nodes
+↓
+planner_iteration (repeat until graph complete)
 
 ---
 
-# Next Step 4 — Worker Pool
+# Required Components
 
-Currently:
+## 1 PlannerSession
 
-[
-workers = endpoint
-]
+New struct.
 
-Expand:
+canon-agent/src/pipelines/capability/planner_session.rs
 
-[
-workers = endpoints \times models
-]
+Responsibilities:
+
+- maintain session context
+- append planner state
+- send incremental prompts to LLM
 
 Example:
 
-```
-worker_chatgpt
-worker_claude
-worker_gemini
-```
-
-Scheduler chooses:
-
-[
-endpoint = argmin(cost + latency)
-]
+pub struct PlannerSession {
+    endpoint_id: String,
+    goal: String,
+    history: Vec<String>,
+}
 
 ---
 
-# Next Step 5 — Result Validation
+## 2 Planner Iteration API
 
-### Equation
+planner_session.rs
 
-[
-valid = schema(result)
-]
+pub fn planner_iteration(
+    session: &mut PlannerSession,
+    graph: &TaskGraph,
+    signals: &GraphSignals,
+) -> Result<PlannerUpdate>
 
-Explanation:
-Before completing a node:
+PlannerUpdate:
 
-```
-validate JSON schema
-```
-
-Prevents bad outputs entering the graph.
-
----
-
-# Next Step 6 — Deduplication
-
-### Equation
-
-[
-node_key = hash(goal + context)
-]
-
-Explanation:
-If identical node exists:
-
-```
-reuse result
-```
-
-This saves LLM calls.
+pub struct PlannerUpdate {
+    new_nodes: Vec<TaskSpec>,
+    new_edges: Vec<EdgeSpec>,
+    refinements: Vec<NodeRefinement>,
+}
 
 ---
 
-# Next Step 7 — Execution Metrics
+## 3 Graph Signals Feed
 
-### Equation
+Use existing algorithms:
 
-[
-progress = \frac{completed_nodes}{total_nodes}
-]
+graph_algo.rs
 
-Track:
+compute_graph_signals()
 
-```
-node latency
-worker queue depth
-retry count
-error rate
-```
+Feed into planner:
 
-Used for scheduler tuning.
+roots
+topological order
+SCCs
+unreachable nodes
+
+These guide planner reasoning.
 
 ---
 
-# Resulting Architecture
+## 4 Planner Batch Expansion
 
-```
+Replace single-node expansion.
+
+Current:
+
+decompose_node()
+
+New:
+
+planner_iteration()
+
+Planner decides which nodes to expand.
+
+---
+
+## 5 Scheduler Integration
+
+Modify scheduler loop.
+
+Current:
+
+expand_nodes
+plan_edges
+execute_graph_loop
+
+New:
+
+planner_iteration
+update_graph
+execute_graph_loop
+
+Scheduler now alternates between:
+
+planning
+execution
+
+---
+
+# New Scheduler Flow
+
+while !graph.complete():
+
+    planner_update = planner_iteration()
+
+    apply_planner_update()
+
+    run_graph_execution()
+
+---
+
+# Planner Prompt Context
+
+Planner receives:
+
 goal
- ↓
-decompose
- ↓
-graph
- ↓
-scheduler
- ↓
-endpoint worker
- ↓
-LLM
- ↓
-response router
- ↓
-node completion
- ↓
-graph reduction
-```
+node list
+graph signals
+recent node results
+
+Example context:
+
+GOAL
+----
+
+Refactor codebase for GPU execution
+
+GRAPH
+-----
+
+Nodes:
+node1 parse CFG
+node2 compute SCC
+node3 detect cycles
+
+Signals:
+roots: node1
+unreachable: node3
 
 ---
 
-# Critical Missing Component
+# Planner Output Schema
 
-### Equation
+Planner must return structured JSON:
 
-[
-reasoning = graph\ propagation
-]
-
-Explanation:
-Your system now has:
-
-* workers
-* queue
-* LLM interface
-
-But the **reasoning loop is the graph reduction step**.
-
-That must drive the system.
+{
+  "new_nodes": [],
+  "new_edges": [],
+  "refinements": []
+}
 
 ---
 
-# Where To Go Next (Priority)
+# Node Execution Remains Stateless
 
-1. **response router**
-2. **node completion → graph unlock**
-3. **scheduler retry logic**
-4. **schema validation**
-5. **node dedup**
+Do not change:
 
-These convert your system from **task executor → reasoning engine**.
+engine.rs
+dispatch_node()
+apply_node_result()
 
+Execution nodes remain isolated.
+
+---
+
+# Caching Strategy
+
+Planner responses should be cached using:
+
+prompt_hash → response
+
+This preserves determinism.
+
+---
+
+# Rate Limit Impact
+
+Before:
+
+100 nodes
+4 phases
+400 LLM calls
+
+After:
+
+planner turns: ~5
+node executions: 100
+
+≈105 calls
+
+---
+
+# Files To Add
+
+canon-agent/src/pipelines/capability/planner_session.rs
+
+---
+
+# Files To Modify
+
+planner.rs
+scheduler.rs
+mod.rs
+graph_runtime.rs
+
+---
+
+# Migration Steps
+
+Step 1
+
+Add PlannerSession abstraction.
+
+Step 2
+
+Implement planner_iteration.
+
+Step 3
+
+Replace decompose_node + plan_edges calls.
+
+Step 4
+
+Integrate planner_iteration into scheduler loop.
+
+Step 5
+
+Enable planner batching.
+
+---
+
+# Safety Invariants
+
+Planner must not:
+
+execute shell commands
+modify files
+apply deltas
+
+Planner can only modify the graph.
+
+---
+
+# Final Architecture
+
+Goal
+ ↓
+PlannerSession
+ ↓
+TaskGraph
+ ↓
+Scheduler
+ ↓
+Node Execution
+ ↓
+Graph Update
+ ↓
+PlannerSession (repeat)
+
+---
+
+# Success Criteria
+
+- planner maintains reasoning continuity
+- LLM calls reduced by >5x
+- graph reasoning improves
+- rate limits disappear
