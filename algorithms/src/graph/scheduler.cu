@@ -95,3 +95,20 @@ extern "C" void gpu_ready_mask(
     cudaFree(d_ready_count);
     cudaFree(d_completed_count);
 }
+
+extern "C" void gpu_pack_ready_priority(
+    const uint8_t* ready_mask,
+    const uint16_t* priority,
+    int v,
+    int64_t* out_keys
+) {
+    for (int i = 0; i < v; ++i) {
+        if (ready_mask[i]) {
+            uint64_t pr = static_cast<uint64_t>(priority[i]);
+            uint64_t key = ((pr + 1ull) << 32) | static_cast<uint32_t>(i);
+            out_keys[i] = static_cast<int64_t>(key);
+        } else {
+            out_keys[i] = static_cast<int64_t>(-1);
+        }
+    }
+}

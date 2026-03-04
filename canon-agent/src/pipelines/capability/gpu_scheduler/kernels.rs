@@ -2,6 +2,8 @@ use super::layout::{GpuGraph, is_completed, is_ready_candidate};
 
 #[cfg(feature = "cuda")]
 use algorithms::graph::scheduler_gpu;
+#[cfg(feature = "cuda")]
+use algorithms::sorting::gpu as sorting_gpu;
 
 #[cfg(feature = "cuda")]
 pub fn compute_ready(graph: &GpuGraph) -> Vec<u8> {
@@ -37,6 +39,21 @@ pub fn compute_ready(graph: &GpuGraph) -> Vec<u8> {
 }
 
 pub fn priority_sort(ready_mask: &[u8], priority: &[u16]) -> Vec<usize> {
+    #[cfg(feature = "cuda")]
+    {
+        let mut keys = scheduler_gpu::pack_ready_priority(ready_mask, priority);
+        sorting_gpu::bitonic_sort_gpu(&mut keys);
+        let mut indices = Vec::new();
+        for key in keys.into_iter().rev() {
+            let idx = (key & 0xFFFF_FFFF) as usize;
+            if key < 0 {
+                continue;
+            }
+            indices.push(idx);
+        }
+        return indices;
+    }
+    #[cfg(not(feature = "cuda"))]
     let mut indices: Vec<usize> = ready_mask.iter()
         .enumerate()
         .filter_map(|(i, &r)| if r == 1 { Some(i) } else { None })
