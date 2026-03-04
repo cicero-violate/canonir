@@ -106,7 +106,7 @@ fn stage_emit_draft<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, returns_uni
 
         let mut stmts = stage_prepare_block_stmts();
         stage_lower_block_statements(tcx, body, bb, &emitted_blocks, plan, &mut stmts);
-        let term = stage_lower_block_terminator(tcx, body, returns_unit, bb, &emitted_blocks, plan, &mut stmts);
+        let term = stage_lower_block_terminator(tcx, body, returns_unit, mir_idx, bb, &emitted_blocks, plan, &mut stmts);
         // Do not emit suppressed __ret bindings at block end.
         // Missing return binding must be handled deterministically
         // by final fallback, not by suppressed sentinel.
@@ -142,7 +142,14 @@ fn stage_lower_block_statements<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>,
 }
 
 fn stage_lower_block_terminator<'tcx>(
-    tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, returns_unit: bool, bb: &mir::BasicBlockData<'tcx>, blocks: &[mir_passes::EmittedBlock], plan: &mut LowerPlan, stmts: &mut Vec<Stmt>,
+    tcx: TyCtxt<'tcx>,
+    body: &mir::Body<'tcx>,
+    returns_unit: bool,
+    mir_idx: mir::BasicBlock,
+    bb: &mir::BasicBlockData<'tcx>,
+    blocks: &[mir_passes::EmittedBlock],
+    plan: &mut LowerPlan,
+    stmts: &mut Vec<Stmt>,
 ) -> Terminator {
     let has_match_dest = mir_passes::blocks_have_ret_match(blocks) || stmts_have_ret_match(stmts);
     let has_ret_binding = mir_passes::blocks_have_ret_binding(blocks) || stmts_have_ret_binding(stmts);
@@ -170,7 +177,19 @@ fn stage_lower_block_terminator<'tcx>(
         // Deterministic fallback handles missing return.
         term
     } else {
-        let term = mir_terminator::lower_non_call_terminator(tcx, term_ref, returns_unit, &plan.resolver, &plan.mir_to_emitted, stmts, &mut plan.defined, has_ret_binding, has_match_dest);
+        let term = mir_terminator::lower_non_call_terminator(
+            tcx,
+            term_ref,
+            returns_unit,
+            &plan.resolver,
+            &plan.mir_to_emitted,
+            stmts,
+            &mut plan.defined,
+            has_ret_binding,
+            has_match_dest,
+            mir_idx.as_usize(),
+            &plan.switch_analysis,
+        );
         // Do not emit suppressed __ret binding after non-call terminator.
         // Deterministic fallback handles missing return.
         term

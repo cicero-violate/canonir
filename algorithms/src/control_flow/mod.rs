@@ -1,3 +1,4 @@
+pub mod cfg_pattern;
 pub mod branching;
 pub mod dataflow;
 pub mod dominators;

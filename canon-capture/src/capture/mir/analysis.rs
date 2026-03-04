@@ -8,6 +8,7 @@ use crate::capture::mir::resolver::LocalNameResolver;
 use crate::capture::mir::util as mir_util;
 use crate::types::Stmt;
 use std::collections::HashSet;
+use algorithms::control_flow::cfg_pattern::{compute_back_edges, detect_iterator_loops};
 
 pub(crate) struct SwitchAnalysis {
     pub(crate) switch_sources: BTreeSet<usize>,
@@ -15,6 +16,8 @@ pub(crate) struct SwitchAnalysis {
     pub(crate) switch_arm_writes_ret: BTreeSet<usize>,
     pub(crate) switch_arm_returns: BTreeSet<usize>,
     pub(crate) switch_source_writes_ret: HashMap<usize, bool>,
+    pub(crate) iterator_switches: HashMap<usize, usize>,
+    pub(crate) iterator_body_blocks: HashSet<usize>,
 }
 
 pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
@@ -47,6 +50,14 @@ pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
                 succ_set.insert(succ.as_usize());
             }
         }
+    }
+
+    let back_edges = compute_back_edges(&succs);
+    let mut iterator_switches: HashMap<usize, usize> = HashMap::new();
+    let mut iterator_body_blocks: HashSet<usize> = HashSet::new();
+    for pattern in detect_iterator_loops(&succs, &back_edges) {
+        iterator_switches.insert(pattern.switch_block, pattern.body_entry);
+        iterator_body_blocks.extend(pattern.body_blocks.into_iter());
     }
 
     let mut switch_sources: BTreeSet<usize> = BTreeSet::new();
@@ -108,6 +119,7 @@ pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
             }
         }
     }
+    switchint_arm_blocks.retain(|bb| !iterator_body_blocks.contains(bb));
 
     let bb_writes_ret: Vec<bool> = body.basic_blocks.iter().map(mir_util::bb_writes_return_place).collect();
     let mut switch_source_writes_ret: HashMap<usize, bool> = HashMap::new();
@@ -143,7 +155,15 @@ pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
         switch_source_writes_ret.insert(*src, writes_ret);
     }
 
-    SwitchAnalysis { switch_sources, switchint_arm_blocks, switch_arm_writes_ret, switch_arm_returns, switch_source_writes_ret }
+    SwitchAnalysis {
+        switch_sources,
+        switchint_arm_blocks,
+        switch_arm_writes_ret,
+        switch_arm_returns,
+        switch_source_writes_ret,
+        iterator_switches,
+        iterator_body_blocks,
+    }
 }
 
 fn region_has_cycle(region: &BTreeSet<usize>, succs: &[Vec<usize>]) -> bool {

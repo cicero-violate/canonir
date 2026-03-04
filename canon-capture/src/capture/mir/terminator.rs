@@ -7,6 +7,7 @@ use crate::capture::mir::guard as mir_guard;
 use crate::capture::mir::ops as mir_ops;
 use crate::capture::mir::resolver::LocalNameResolver;
 use crate::capture::mir::util as mir_util;
+use crate::capture::mir::analysis::SwitchAnalysis;
 use crate::types::{Stmt, Terminator};
 
 #[allow(clippy::too_many_arguments)]
@@ -46,26 +47,24 @@ pub(crate) fn lower_call_terminator<'tcx>(
         // structurally skip lowering here and rely on higher-level
         // call lowering to handle the surrounding expression.
         if let Some(dest) = mir_util::label_place_dest(resolver, destination) {
-            // Ensure SSA: define the destination with a diverging expression
-            // without referencing its concrete (possibly private) type.
-            stmts.push(Stmt::Assign {
-                lhs: dest.clone(),
-                // Do not materialize a unit-typed panic fallback here.
-                // Instead, use a diverging expression cast to the never type
-                // to avoid forcing downstream locals to `()` via fallback.
-                rhs: "panic!(\"canon internal fmt/runtime call\")".to_string(),
-            });
-            defined.insert(dest);
+            if destination.local.as_u32() != 0 {
+                // Define destination with a typed default to preserve MIR type.
+                stmts.push(Stmt::Assign {
+                    lhs: dest.clone(),
+                    rhs: "::core::default::Default::default()".to_string(),
+                });
+                defined.insert(dest);
+            }
         }
     } else if let Some(dest) = mir_util::label_place_dest(resolver, destination)
-        && let Some(method_stmt) = mir_ops::mir_method_call_stmt(tcx, func, args, resolver, dest.clone())
+        && let Some(method_stmt) = mir_ops::mir_method_call_stmt(tcx, local_decls, func, args, resolver, dest.clone())
     {
         if let Stmt::MethodCall { dest: Some(dest), .. } = &method_stmt {
             defined.insert(dest.clone());
         }
         stmts.push(method_stmt);
     } else if let Some(dest) = mir_util::label_place_dest(resolver, destination)
-        && let Some(call_stmt) = mir_ops::mir_call_stmt(tcx, func, args, resolver, dest.clone())
+        && let Some(call_stmt) = mir_ops::mir_call_stmt(tcx, local_decls, func, args, resolver, dest.clone())
     {
         if let Stmt::Call { dest: Some(dest), .. } = &call_stmt {
             defined.insert(dest.clone());
@@ -74,7 +73,7 @@ pub(crate) fn lower_call_terminator<'tcx>(
     } else if let Some(dest) = mir_util::label_place_dest(resolver, destination) {
         // Structural fallback: emit a direct call expression assignment if possible.
         if let Some(func_label) = mir_ops::mir_operand_label(tcx, func, resolver)
-            && let Some(arg_labels) = mir_ops::mir_call_args_labels(tcx, args, resolver)
+            && let Some(arg_labels) = mir_call_args_labels_fallback(tcx, local_decls, args, resolver)
         {
             let call_expr = format!("{}({})", func_label, arg_labels.join(", "));
             stmts.push(Stmt::Assign { lhs: dest.clone(), rhs: call_expr });
@@ -116,8 +115,17 @@ pub(crate) fn lower_call_terminator<'tcx>(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_non_call_terminator<'tcx>(
-    tcx: TyCtxt<'tcx>, term_ref: &mir::Terminator<'tcx>, returns_unit: bool, resolver: &LocalNameResolver, mir_to_emitted: &[Option<u32>], stmts: &mut Vec<Stmt>, defined: &mut HashSet<String>,
-    has_ret_binding: bool, has_match_dest: bool,
+    tcx: TyCtxt<'tcx>,
+    term_ref: &mir::Terminator<'tcx>,
+    returns_unit: bool,
+    resolver: &LocalNameResolver,
+    mir_to_emitted: &[Option<u32>],
+    stmts: &mut Vec<Stmt>,
+    defined: &mut HashSet<String>,
+    has_ret_binding: bool,
+    has_match_dest: bool,
+    mir_idx: usize,
+    switch_analysis: &SwitchAnalysis,
 ) -> Terminator {
     match &term_ref.kind {
         mir::TerminatorKind::Return => {
@@ -128,6 +136,10 @@ pub(crate) fn lower_non_call_terminator<'tcx>(
         }
         mir::TerminatorKind::Goto { target } | mir::TerminatorKind::Drop { target, .. } | mir::TerminatorKind::Assert { target, .. } => remap_to_goto(*target, mir_to_emitted),
         mir::TerminatorKind::SwitchInt { discr, .. } => {
+            if let Some(body_entry) = switch_analysis.iterator_switches.get(&mir_idx).copied() {
+                let target = mir::BasicBlock::from_usize(body_entry);
+                return remap_to_goto(target, mir_to_emitted);
+            }
             let mut succ = term_ref.successors();
             if let (Some(t), Some(f)) = (succ.next(), succ.next())
                 && let Some(cond) = mir_ops::mir_operand_label(tcx, discr, resolver)
@@ -145,6 +157,39 @@ pub(crate) fn lower_non_call_terminator<'tcx>(
         }
         _ => Terminator::None,
     }
+}
+
+fn mir_call_args_labels_fallback<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    local_decls: &mir::LocalDecls<'tcx>,
+    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
+    resolver: &LocalNameResolver,
+) -> Option<Vec<String>> {
+    if let Some(labels) = mir_ops::mir_call_args_labels(tcx, args, resolver, local_decls) {
+        return Some(labels);
+    }
+
+    let mut out = Vec::with_capacity(args.len());
+    for arg in args {
+        match &arg.node {
+            mir::Operand::Copy(place) | mir::Operand::Move(place) => {
+                if let Some(label) = mir_ops::mir_operand_label_with_decls(tcx, &arg.node, resolver, Some(local_decls)) {
+                    out.push(label);
+                    continue;
+                }
+                if let Some(name) = resolver.label_local(place.local) {
+                    out.push(name);
+                    continue;
+                }
+                return None;
+            }
+            _ => {
+                let label = mir_ops::mir_operand_label_with_decls(tcx, &arg.node, resolver, Some(local_decls))?;
+                out.push(label);
+            }
+        }
+    }
+    Some(out)
 }
 
 fn remap_to_goto(target: mir::BasicBlock, mir_to_emitted: &[Option<u32>]) -> Terminator {

@@ -22,17 +22,19 @@ Only direct facts from tool output are recorded.
   - // match count: 0
   - // goto count: 0
 - cargo build result: FAILED
-  - error count: 12
+  - error count: 18
   - warning count: 0
   - error categories:
-    - E0277: 5
-    - E0308: 4
-    - E0599: 3
+    - unknown: 8
+    - E0277: 4
+    - E0425: 3
+    - E0308: 2
+    - E0282: 1
   - errors by file:
-    - src/extractor.rs: 7
-    - src/main.rs: 2
-    - src/symbol.rs: 2
-    - src/repomap.rs: 1
+    - src/extractor.rs: 9
+    - src/main.rs: 4
+    - src/repomap.rs: 4
+    - src/symbol.rs: 1
   - error samples (first occurrence per category):
     [E0277]
       error[E0277]: expected a `FnOnce(Node<'_>)` closure, found `()`
@@ -47,27 +49,153 @@ Only direct facts from tool output are recorded.
       note: required by a bound in `Option::<T>::map`
           --> /home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:1162:12
            |
+    [E0282]
+      error[E0282]: type annotations needed
+        --> src/extractor.rs:18:9
+         |
+      18 |     let mut _v10 = ::core::default::Default::default();
+         |         ^^^^^^^^
+      19 |     let mut _v13 = "parse failed";
+      20 |     let mut tree = _v10.expect(_v13);
+         |                    ---- type must be known at this point
+         |
+      help: consider giving `_v10` an explicit type
+         |
+      18 |     let mut _v10: /* Type */ = ::core::default::Default::default();
     [E0308]
       error[E0308]: mismatched types
-        --> src/extractor.rs:97:12
-         |
-      65 | fn fn_signature(node: Node, src: &[u8]) -> String {
-         |                                            ------ expected `std::string::String` because of return type
+         --> src/extractor.rs:156:13
+          |
+      152 |     let mut __ret = ();
+          |                     -- expected due to this value
       ...
-      97 |     return __ret;
-         |            ^^^^^ expected `String`, found `()`
-    [E0599]
-      error[E0599]: no method named `expect` found for unit type `()` in the current scope
-        --> src/extractor.rs:20:25
+      156 |     __ret = _v3.unwrap_or(_v5);
+          |             ^^^^^^^^^^^^^^^^^^ expected `()`, found `&str`
+    [E0425]
+      error[E0425]: cannot find value `child` in this scope
+         --> src/extractor.rs:116:21
+          |
+      116 |     let mut _v21 = &child;
+          |                     ^^^^^ not found in this scope
+    [unknown]
+      error: expected one of `!`, `.`, `::`, `;`, `?`, `{`, `}`, or an operator, found `@`
+        --> src/main.rs:13:87
          |
-      20 |     let mut tree = _v10.expect(_v13);
-         |                         ^^^^^^ method not found in `()`
+      13 |     let mut target = std::option::Option::<T>::unwrap_or_else(_v2, ZeroSized: {closure@src/main.rs:10:57: 10:59});
+         |                                                                                       ^ expected one of 8 possible tokens
 - cargo errors:
-  error[E0599]: no method named `expect` found for unit type `()` in the current scope
-    --> src/extractor.rs:20:25
+  error: expected one of `!`, `.`, `::`, `;`, `?`, `{`, `}`, or an operator, found `@`
+    --> src/main.rs:13:87
      |
+  13 |     let mut target = std::option::Option::<T>::unwrap_or_else(_v2, ZeroSized: {closure@src/main.rs:10:57: 10:59});
+     |                                                                                       ^ expected one of 8 possible tokens
+  error: invalid `struct` delimiters or `fn` call arguments
+    --> src/main.rs:13:22
+     |
+  13 |     let mut target = std::option::Option::<T>::unwrap_or_else(_v2, ZeroSized: {closure@src/main.rs:10:57: 10:59});
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+  help: if `std::option::Option<T>::unwrap_or_else` is a struct, use braces as delimiters
+     |
+  13 -     let mut target = std::option::Option::<T>::unwrap_or_else(_v2, ZeroSized: {closure@src/main.rs:10:57: 10:59});
+  13 +     let mut target = std::option::Option::<T>::unwrap_or_else { _v2, ZeroSized: {closure@src/main.rs:10:57: 10:59} };
+     |
+  help: if `std::option::Option<T>::unwrap_or_else` is a function, use the arguments directly
+     |
+  13 -     let mut target = std::option::Option::<T>::unwrap_or_else(_v2, ZeroSized: {closure@src/main.rs:10:57: 10:59});
+  13 +     let mut target = std::option::Option::<T>::unwrap_or_else(_v2, {closure@src/main.rs:10:57: 10:59});
+     |
+  error: expected one of `!`, `.`, `::`, `;`, `?`, `{`, `}`, or an operator, found `@`
+    --> src/main.rs:54:70
+     |
+  54 |     let mut _v45 = std::iter::Iterator::map(_v46, ZeroSized: {closure@src/main.rs:28:85: 28:88});
+     |                                                                      ^ expected one of 8 possible tokens
+  error: invalid `struct` delimiters or `fn` call arguments
+    --> src/main.rs:54:20
+     |
+  54 |     let mut _v45 = std::iter::Iterator::map(_v46, ZeroSized: {closure@src/main.rs:28:85: 28:88});
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+  help: if `std::iter::Iterator::map` is a struct, use braces as delimiters
+     |
+  54 -     let mut _v45 = std::iter::Iterator::map(_v46, ZeroSized: {closure@src/main.rs:28:85: 28:88});
+  54 +     let mut _v45 = std::iter::Iterator::map { _v46, ZeroSized: {closure@src/main.rs:28:85: 28:88} };
+     |
+  help: if `std::iter::Iterator::map` is a function, use the arguments directly
+     |
+  54 -     let mut _v45 = std::iter::Iterator::map(_v46, ZeroSized: {closure@src/main.rs:28:85: 28:88});
+  54 +     let mut _v45 = std::iter::Iterator::map(_v46, {closure@src/main.rs:28:85: 28:88});
+     |
+  error: expected one of `!`, `.`, `::`, `;`, `?`, `{`, `}`, or an operator, found `@`
+    --> src/repomap.rs:22:75
+     |
+  22 |     let mut _v5 = std::iter::Iterator::filter_map(_v6, ZeroSized: {closure@src/repomap.rs:16:64: 16:67});
+     |                                                                           ^ expected one of 8 possible tokens
+  error: invalid `struct` delimiters or `fn` call arguments
+    --> src/repomap.rs:22:19
+     |
+  22 |     let mut _v5 = std::iter::Iterator::filter_map(_v6, ZeroSized: {closure@src/repomap.rs:16:64: 16:67});
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+  help: if `std::iter::Iterator::filter_map` is a struct, use braces as delimiters
+     |
+  22 -     let mut _v5 = std::iter::Iterator::filter_map(_v6, ZeroSized: {closure@src/repomap.rs:16:64: 16:67});
+  22 +     let mut _v5 = std::iter::Iterator::filter_map { _v6, ZeroSized: {closure@src/repomap.rs:16:64: 16:67} };
+     |
+  help: if `std::iter::Iterator::filter_map` is a function, use the arguments directly
+     |
+  22 -     let mut _v5 = std::iter::Iterator::filter_map(_v6, ZeroSized: {closure@src/repomap.rs:16:64: 16:67});
+  22 +     let mut _v5 = std::iter::Iterator::filter_map(_v6, {closure@src/repomap.rs:16:64: 16:67});
+     |
+  error: expected one of `!`, `.`, `::`, `;`, `?`, `{`, `}`, or an operator, found `@`
+    --> src/repomap.rs:23:71
+     |
+  23 |     let mut _v4 = std::iter::Iterator::filter(_v5, ZeroSized: {closure@src/repomap.rs:16:83: 16:86});
+     |                                                                       ^ expected one of 8 possible tokens
+  error: invalid `struct` delimiters or `fn` call arguments
+    --> src/repomap.rs:23:19
+     |
+  23 |     let mut _v4 = std::iter::Iterator::filter(_v5, ZeroSized: {closure@src/repomap.rs:16:83: 16:86});
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+  help: if `std::iter::Iterator::filter` is a struct, use braces as delimiters
+     |
+  23 -     let mut _v4 = std::iter::Iterator::filter(_v5, ZeroSized: {closure@src/repomap.rs:16:83: 16:86});
+  23 +     let mut _v4 = std::iter::Iterator::filter { _v5, ZeroSized: {closure@src/repomap.rs:16:83: 16:86} };
+     |
+  help: if `std::iter::Iterator::filter` is a function, use the arguments directly
+     |
+  23 -     let mut _v4 = std::iter::Iterator::filter(_v5, ZeroSized: {closure@src/repomap.rs:16:83: 16:86});
+  23 +     let mut _v4 = std::iter::Iterator::filter(_v5, {closure@src/repomap.rs:16:83: 16:86});
+     |
+  error[E0425]: cannot find value `child` in this scope
+     --> src/extractor.rs:116:21
+      |
+  116 |     let mut _v21 = &child;
+      |                     ^^^^^ not found in this scope
+  error[E0425]: cannot find value `child` in this scope
+     --> src/extractor.rs:144:51
+      |
+  144 |     let mut _v22 = crate::extractor::fn_signature(child, src);
+      |                                                   ^^^^^ not found in this scope
+  error[E0425]: cannot find value `child` in this scope
+     --> src/extractor.rs:176:21
+      |
+  176 |     let mut _v21 = &child;
+      |                     ^^^^^ not found in this scope
+  error[E0282]: type annotations needed
+    --> src/extractor.rs:18:9
+     |
+  18 |     let mut _v10 = ::core::default::Default::default();
+     |         ^^^^^^^^
+  19 |     let mut _v13 = "parse failed";
   20 |     let mut tree = _v10.expect(_v13);
-     |                         ^^^^^^ method not found in `()`
+     |                    ---- type must be known at this point
+     |
+  help: consider giving `_v10` an explicit type
+     |
+  18 |     let mut _v10: /* Type */ = ::core::default::Default::default();
+     |                 ++++++++++++
   error[E0277]: expected a `FnOnce(Node<'_>)` closure, found `()`
       --> src/extractor.rs:60:21
        |
@@ -120,42 +248,21 @@ Only direct facts from tool output are recorded.
   1162 |         F: [const] FnOnce(T) -> U + [const] Destruct,
        |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Option::<T>::map`
   error[E0308]: mismatched types
-    --> src/extractor.rs:97:12
-     |
-  65 | fn fn_signature(node: Node, src: &[u8]) -> String {
-     |                                            ------ expected `std::string::String` because of return type
-  ...
-  97 |     return __ret;
-     |            ^^^^^ expected `String`, found `()`
-  error[E0308]: mismatched types
-     --> src/extractor.rs:126:13
+     --> src/extractor.rs:156:13
       |
-  122 |     let mut __ret = ();
+  152 |     let mut __ret = ();
       |                     -- expected due to this value
   ...
-  126 |     __ret = _v3.unwrap_or(_v5);
+  156 |     __ret = _v3.unwrap_or(_v5);
       |             ^^^^^^^^^^^^^^^^^^ expected `()`, found `&str`
   error[E0308]: mismatched types
-     --> src/extractor.rs:127:12
+     --> src/extractor.rs:157:12
       |
-  121 | fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
+  151 | fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
       |                                                ------- expected `&'a str` because of return type
   ...
-  127 |     return __ret;
+  157 |     return __ret;
       |            ^^^^^ expected `&str`, found `()`
-  error[E0599]: `()` is not an iterator
-    --> src/repomap.rs:24:23
-     |
-  24 |     let mut _v3 = _v4.into_iter();
-     |                       ^^^^^^^^^ `()` is not an iterator
-     |
-     = note: the following trait bounds were not satisfied:
-             `(): Iterator`
-             which is required by `(): IntoIterator`
-             `&(): Iterator`
-             which is required by `&(): IntoIterator`
-             `&mut (): Iterator`
-             which is required by `&mut (): IntoIterator`
   error[E0277]: the size for values of type `str` cannot be known at compilation time
      --> src/symbol.rs:156:13
       |
@@ -164,34 +271,4 @@ Only direct facts from tool output are recorded.
       |
       = help: the trait `Sized` is not implemented for `str`
       = note: all local variables must have a statically known size
-  error[E0308]: mismatched types
-     --> src/symbol.rs:217:16
-      |
-   29 |     pub fn render(&self) -> String {
-      |                             ------ expected `std::string::String` because of return type
-  ...
-  217 |         return __ret;
-      |                ^^^^^ expected `String`, found `()`
-  error[E0277]: the trait bound `(): AsRef<OsStr>` is not satisfied
-      --> src/main.rs:15:41
-       |
-    15 |     let mut root = std::path::Path::new(_v6);
-       |                    -------------------- ^^^ the trait `AsRef<OsStr>` is not implemented for `()`
-       |                    |
-       |                    required by a bound introduced by this call
-       |
-  note: required by a bound in `Path::new`
-      --> /home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/path.rs:2383:25
-       |
-  2383 |     pub const fn new<S: [const] AsRef<OsStr> + ?Sized>(s: &S) -> &Path {
-       |                         ^^^^^^^^^^^^^^^^^^^^ required by this bound in `Path::new`
-  error[E0599]: `()` is not an iterator
-    --> src/main.rs:55:25
-     |
-  55 |     let mut _v44 = _v45.sum();
-     |                         ^^^ `()` is not an iterator
-     |
-     = note: the following trait bounds were not satisfied:
-             `(): Iterator`
-             which is required by `&mut (): Iterator`
 

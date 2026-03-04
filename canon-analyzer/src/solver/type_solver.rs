@@ -9,6 +9,8 @@ use canon::edge::EdgeKind;
 use canon::id::NodeId;
 use canon::node::{CanonId, CanonNodeKind, TypeKind};
 use canon::CanonIR;
+#[cfg(feature = "cuda")]
+use canon::ir::TypeKey;
 use std::collections::{HashMap, HashSet};
 
 pub fn solve(ir: &mut CanonIR) -> Result<()> {
@@ -39,6 +41,7 @@ pub fn solve(ir: &mut CanonIR) -> Result<()> {
                     eprintln!("WARN type_solver: empty type domain for node {}", node_id);
                 }
             }
+            apply_pruned_type_domains(ir, &pruned, &var_to_node);
         }
     }
 
@@ -114,6 +117,35 @@ fn is_concrete_type(kind: &TypeKind) -> bool {
         kind,
         TypeKind::Param(_) | TypeKind::Extern(_) | TypeKind::Unresolved(_) | TypeKind::TypeRef { .. }
     )
+}
+
+#[cfg(feature = "cuda")]
+fn apply_pruned_type_domains(ir: &mut CanonIR, pruned: &[Domain], var_to_node: &[usize]) {
+    for (var_idx, dom) in pruned.iter().enumerate() {
+        if dom.len() != 1 {
+            continue;
+        }
+        let resolved_id = dom[0] as u32;
+        let Some(&node_idx) = var_to_node.get(var_idx) else {
+            continue;
+        };
+        let Some(node) = ir.nodes.get_mut(node_idx) else {
+            continue;
+        };
+        let CanonNodeKind::Type { kind } = &mut node.kind else {
+            continue;
+        };
+        if matches!(kind, TypeKind::Unresolved(_) | TypeKind::Param(_)) {
+            let old_kind = kind.clone();
+            *kind = TypeKind::Adt(CanonId(resolved_id));
+            if let Some(existing) = ir.type_index.get(&TypeKey(old_kind.clone())) {
+                if *existing == CanonId(node_idx as u32) {
+                    ir.type_index.remove(&TypeKey(old_kind));
+                }
+            }
+            ir.type_index.insert(TypeKey(kind.clone()), CanonId(node_idx as u32));
+        }
+    }
 }
 
 fn derive_instantiates_edges(ir: &mut CanonIR) {

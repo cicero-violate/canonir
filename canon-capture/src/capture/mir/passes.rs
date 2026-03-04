@@ -49,6 +49,9 @@ pub(crate) fn make_body_draft(emitted_blocks: Vec<EmittedBlock>, suppressed_dest
 
 pub(crate) fn emit_special_block(returns_unit: bool, mir_idx_usize: usize, blocks: &[EmittedBlock], switch_analysis: &SwitchAnalysis, defined: &mut HashSet<String>) -> Option<EmittedBlock> {
     if switch_analysis.switch_sources.contains(&mir_idx_usize) {
+        if switch_analysis.iterator_switches.contains_key(&mir_idx_usize) {
+            return None;
+        }
         let _ = (returns_unit, blocks, defined);
         return Some(EmittedBlock { role: BlockRole::SwitchSource, block: BasicBlock { stmts: Vec::new(), terminator: Terminator::Unreachable } });
     }

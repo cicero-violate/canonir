@@ -4,6 +4,7 @@ pub mod bellman_ford;
 pub mod bellman_ford_gpu;
 pub mod csr;
 pub mod csr_unified;
+pub mod cycle_report;
 pub mod dfs;
 pub mod dijkstra;
 pub mod max_flow;
