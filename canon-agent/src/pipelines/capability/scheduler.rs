@@ -28,6 +28,7 @@ use super::console;
 use super::capability::dominant_class;
 use super::gpu_scheduler::driver::GpuScheduler;
 use super::decompose;
+use super::capability_cost::CapabilityCostTable;
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -258,6 +259,7 @@ pub(crate) async fn execute_graph_loop(
     retry_delay: u64,
     max_output_lines: usize,
     execution_preference: f64,
+    cost_table: &mut CapabilityCostTable,
     exec_metrics: &mut ExecMetrics,
 ) -> Result<(u64, Vec<ExecFailure>)> {
     let semaphore = Arc::new(Semaphore::new(max_concurrency.max(1)));
@@ -355,10 +357,14 @@ pub(crate) async fn execute_graph_loop(
                     .unwrap_or(false) as i32
             } else { 0 };
             let completion_bonus = features.completion_velocity.min(5.0) as i32;
+            let node_cost = node
+                .map(|n| cost_table.node_cost(&n.required_capabilities, config.cost_latency_weight, config.cost_failure_weight))
+                .unwrap_or(0.0);
             let adjusted = (base * (1.0 + execution_preference))
                 + completion_bonus as f64
                 + unblock_bonus as f64
-                - retry_penalty as f64;
+                - retry_penalty as f64
+                - node_cost;
             std::cmp::Reverse((adjusted * 1000.0) as i64)
         });
 
@@ -460,11 +466,16 @@ pub(crate) async fn execute_graph_loop(
                 &mut repair_stats,
                 config.repair_radius,
                 config.max_repairs_per_node,
+                cost_table,
+                config.cost_decay_rate,
+                config.cost_latency_weight,
+                config.cost_failure_weight,
             ) {
                 count += 1;
                 total_ms = total_ms.saturating_add(ms);
             }
         }
+        cost_table.save();
         exec_metrics.last_repair_attempts = repair_stats.attempts;
         exec_metrics.last_repair_successes = repair_stats.successes;
         exec_metrics.last_repair_kind = repair_stats.last_kind.clone();
@@ -504,6 +515,10 @@ fn process_node_result(
     repair_stats: &mut RepairStats,
     repair_radius: usize,
     max_repairs: u32,
+    cost_table: &mut CapabilityCostTable,
+    cost_decay_rate: f64,
+    cost_latency_weight: f64,
+    cost_failure_weight: f64,
 ) -> Option<u128> {
     let (node_id, call_result, elapsed) = match item {
         Ok(t) => t,
@@ -548,6 +563,12 @@ fn process_node_result(
         exec_metrics.nodes_failed += 1;
     }
     if let Some(n) = graph.get_node_mut(&node_id) {
+        let success = matches!(n.status, dag::Status::Completed);
+        let latency_ms = ms as f64;
+        for cap in &n.required_capabilities {
+            cost_table.update(*cap, latency_ms, success, cost_decay_rate);
+        }
+        let _node_cost = cost_table.node_cost(&n.required_capabilities, cost_latency_weight, cost_failure_weight);
         if n.readonly_fail_count > policy.max_node_retries {
             n.reasoning_trace = Some(format!(
                 "REWRITE_REQUESTED: readonly failures exceeded {}",
@@ -590,6 +611,7 @@ pub(crate) async fn run_planner_execution_loop(
 ) -> Result<f64> {
     let template_hash = store.hash_for(template_name);
     let mut failure_store = FailureStore::load(&template_hash);
+    let mut cost_table = CapabilityCostTable::load();
     let mut planner_metrics = PlannerMetrics::default();
     let mut exec_metrics = ExecMetrics::default();
     let mut empty_streak = 0u32;
@@ -670,6 +692,8 @@ pub(crate) async fn run_planner_execution_loop(
         let mut revision_rewrites = None;
         let mut last_update_counts = None;
         let mut update = None;
+        let mut constraint_rejections = 0u64;
+        let mut constraint_types: Vec<String> = Vec::new();
         let attempts = retry_count.max(1);
         let force_planner_expand = store.is_plateaued(
             template_name,
@@ -707,6 +731,7 @@ pub(crate) async fn run_planner_execution_loop(
                         graph,
                         &signals,
                         &features,
+                        &cost_table.summary(5, config.cost_latency_weight, config.cost_failure_weight),
                         &rewrite_requests,
                         bridge,
                         tabs,
@@ -755,8 +780,14 @@ pub(crate) async fn run_planner_execution_loop(
                     planner_max_new_edges,
                     &mut failure_store,
                     iter,
+                    config.failure_constraint_threshold,
+                    config.max_constraints,
                 ) {
                     let err_msg = e.to_string();
+                    if err_msg.starts_with("constraint violated:") {
+                        constraint_rejections += 1;
+                        constraint_types.push(err_msg.replace("constraint violated: ", ""));
+                    }
                     if err_msg.contains("cycle detected") || err_msg.contains("capability class") {
                         store.record_failure(&template_hash);
                     }
@@ -847,6 +878,7 @@ pub(crate) async fn run_planner_execution_loop(
             retry_delay,
             max_output_lines,
             execution_preference,
+            &mut cost_table,
             &mut exec_metrics,
         )
         .await?;
@@ -860,6 +892,16 @@ pub(crate) async fn run_planner_execution_loop(
         let reward = telemetry::compute_reward(graph, iterations_used, max_iterations);
         let policy_prediction = policy_bias.planner_bias;
         let policy_error = reward - policy_prediction;
+        let avg_node_utility = if graph.nodes.is_empty() {
+            0.0
+        } else {
+            let mut total = 0.0;
+            for n in &graph.nodes {
+                let cost = cost_table.node_cost(&n.required_capabilities, config.cost_latency_weight, config.cost_failure_weight);
+                total += n.priority as f64 - cost;
+            }
+            total / graph.nodes.len() as f64
+        };
         let runtime = RuntimeMetrics {
             queue_depth: telemetry::pending_requests(),
             retry_rate: if planner_metrics.planner_calls == 0 {
@@ -890,6 +932,12 @@ pub(crate) async fn run_planner_execution_loop(
                 exec_metrics.last_repair_successes as f64 / exec_metrics.last_repair_attempts as f64
             },
             repair_type: exec_metrics.last_repair_kind.clone(),
+            constraint_rejections,
+            constraint_hit_rate: if attempts == 0 { 0.0 } else { constraint_rejections as f64 / attempts as f64 },
+            constraint_types: if constraint_types.is_empty() { None } else { Some(constraint_types.join(",")) },
+            avg_capability_latency: cost_table.avg_latency(),
+            avg_capability_failure: cost_table.avg_failure(),
+            avg_node_utility,
         };
         let reward_history = store.recent_rewards(template_name, 6);
         let features = features.with_reward_history(&reward_history);
@@ -989,6 +1037,8 @@ fn validate_planner_update(
     planner_max_new_edges: usize,
     failure_store: &mut FailureStore,
     iteration: u64,
+    failure_constraint_threshold: usize,
+    max_constraints: usize,
 ) -> Result<()> {
     ensure(update.new_nodes.len() <= planner_max_new_nodes, "planner expansion limit exceeded")?;
     ensure(update.new_edges.len() <= planner_max_new_edges, "planner edge limit exceeded")?;
@@ -1040,6 +1090,42 @@ fn validate_planner_update(
             failure_store.record_graph("invalid_authority", &test_graph, iteration);
         }
         return Err(anyhow::anyhow!(e));
+    }
+    let constraints = failure_store.constraints(failure_constraint_threshold, max_constraints);
+    if !constraints.is_empty() {
+        let signals = compute_graph_signals(&test_graph);
+        for c in constraints {
+            match c.rule {
+                super::failure_store::ConstraintRule::NoCycle => {
+                    if signals.has_cycle {
+                        return Err(anyhow::anyhow!("constraint violated: NoCycle"));
+                    }
+                }
+                super::failure_store::ConstraintRule::NoUnreachable => {
+                    if !signals.unreachable.is_empty() {
+                        return Err(anyhow::anyhow!("constraint violated: NoUnreachable"));
+                    }
+                }
+                super::failure_store::ConstraintRule::CapabilityConflict => {
+                    // already checked by assert_class_disjoint in validate_planner_update
+                }
+                super::failure_store::ConstraintRule::InvalidDependency => {
+                    // placeholder: rely on existing graph validation
+                }
+                super::failure_store::ConstraintRule::PatternRewrite { pattern, replacement: _ } => {
+                    let bad = test_graph.nodes.iter().any(|n| n.description.to_lowercase().contains(&pattern));
+                    if bad {
+                        return Err(anyhow::anyhow!("constraint violated: PatternRewrite({})", pattern));
+                    }
+                }
+                super::failure_store::ConstraintRule::SignatureBan => {
+                    let sig = graph_signature(&test_graph);
+                    if sig == c.signature {
+                        return Err(anyhow::anyhow!("constraint violated: SignatureBan"));
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }

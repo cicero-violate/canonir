@@ -24,6 +24,7 @@ pub mod failure_store;
 pub mod policy;
 pub mod policy_train;
 pub mod gpu_scheduler;
+pub mod capability_cost;
 
 use super::{Pipeline, PipelineContext, PipelineOutcome};
 use crate::ir::SystemState;
@@ -175,6 +176,7 @@ impl CapabilityPipeline {
             let mut exec_metrics = Default::default();
             let template_hash = store.hash_for(&template_name);
             let mut failure_store = failure_store::FailureStore::load(&template_hash);
+            let mut cost_table = capability_cost::CapabilityCostTable::load();
             let (iterations_used, exec_failures) = scheduler::execute_graph_loop(
                 &mut graph,
                 &self.bridge,
@@ -194,6 +196,7 @@ impl CapabilityPipeline {
                 retry_delay,
                 max_output_lines,
                 0.0,
+                &mut cost_table,
                 &mut exec_metrics,
             )
             .await?;
@@ -226,6 +229,12 @@ impl CapabilityPipeline {
                 repair_attempts: 0,
                 repair_success_rate: 0.0,
                 repair_type: None,
+                constraint_rejections: 0,
+                constraint_hit_rate: 0.0,
+                constraint_types: None,
+                avg_capability_latency: 0.0,
+                avg_capability_failure: 0.0,
+                avg_node_utility: 0.0,
             };
             let snapshot = telemetry::TelemetrySnapshot {
                 planner: Default::default(),

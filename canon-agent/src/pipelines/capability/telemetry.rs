@@ -47,6 +47,12 @@ pub struct RuntimeMetrics {
     pub repair_attempts: u64,
     pub repair_success_rate: f64,
     pub repair_type: Option<String>,
+    pub constraint_rejections: u64,
+    pub constraint_hit_rate: f64,
+    pub constraint_types: Option<String>,
+    pub avg_capability_latency: f64,
+    pub avg_capability_failure: f64,
+    pub avg_node_utility: f64,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]

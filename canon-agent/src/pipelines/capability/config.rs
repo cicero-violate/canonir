@@ -70,6 +70,16 @@ struct RawSystem {
     pub repair_radius: usize,
     #[serde(default = "default_max_repairs_per_node")]
     pub max_repairs_per_node: u32,
+    #[serde(default = "default_cost_latency_weight")]
+    pub cost_latency_weight: f64,
+    #[serde(default = "default_cost_failure_weight")]
+    pub cost_failure_weight: f64,
+    #[serde(default = "default_cost_decay_rate")]
+    pub cost_decay_rate: f64,
+    #[serde(default = "default_failure_constraint_threshold")]
+    pub failure_constraint_threshold: usize,
+    #[serde(default = "default_max_constraints")]
+    pub max_constraints: usize,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -122,6 +132,11 @@ fn default_recovery_failed_fraction_threshold() -> f64 { 0.3 }
 fn default_max_node_retries() -> u32 { 3 }
 fn default_repair_radius() -> usize { 1 }
 fn default_max_repairs_per_node() -> u32 { 3 }
+fn default_cost_latency_weight() -> f64 { 0.001 }
+fn default_cost_failure_weight() -> f64 { 1.0 }
+fn default_cost_decay_rate() -> f64 { 0.2 }
+fn default_failure_constraint_threshold() -> usize { 2 }
+fn default_max_constraints() -> usize { 16 }
 fn default_max_tabs() -> usize { 1 }
 fn default_tab_cooldown_ms() -> u64 { 0 }
 
@@ -175,6 +190,11 @@ pub struct CapabilityConfig {
     pub max_node_retries: u32,
     pub repair_radius: usize,
     pub max_repairs_per_node: u32,
+    pub cost_latency_weight: f64,
+    pub cost_failure_weight: f64,
+    pub cost_decay_rate: f64,
+    pub failure_constraint_threshold: usize,
+    pub max_constraints: usize,
     pub llm_endpoints: Vec<LlmEndpoint>,
     pub planner_endpoint: Option<LlmEndpoint>,
     pub llm_roles: HashMap<String, RawRoleConfig>,
@@ -238,6 +258,11 @@ impl CapabilityConfig {
             max_node_retries: raw.system.max_node_retries,
             repair_radius: raw.system.repair_radius,
             max_repairs_per_node: raw.system.max_repairs_per_node,
+            cost_latency_weight: raw.system.cost_latency_weight,
+            cost_failure_weight: raw.system.cost_failure_weight,
+            cost_decay_rate: raw.system.cost_decay_rate,
+            failure_constraint_threshold: raw.system.failure_constraint_threshold,
+            max_constraints: raw.system.max_constraints,
             llm_endpoints,
             planner_endpoint,
             llm_roles: raw.llm.roles,

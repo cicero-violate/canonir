@@ -100,6 +100,7 @@ impl PlannerSession {
         graph: &TaskGraph,
         signals: &GraphSignals,
         features: &graph_algo::FeatureVector,
+        cost_summary: &str,
         rewrite_requests: &[String],
         bridge: &WsBridge,
         tabs: &TabsHandle,
@@ -262,7 +263,11 @@ Rules:\n\
 5) Retract nodes that are Pending or Failed with no dependents.\n\
 6) Rewrite nodes that are Pending with an imprecise description.\n\
 7) If rewrite requests are listed, include them in rewrite_nodes.\n\
+POLICY BIAS\n\
 {}\n\
+SYSTEM GRAPH METRICS\n\
+{}\n\
+CAPABILITY COSTS (highest)\n\
 {}\n\
 {}\n\
 Goal:\n{}\n\n\
@@ -278,6 +283,7 @@ Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"descript
             rewrite_text,
             bias_text,
             metrics_text,
+            cost_summary,
             reward_section,
             self.goal,
             serde_json::to_string_pretty(&nodes_json).unwrap_or_default(),
