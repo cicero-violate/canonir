@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t9",
+      "deltas": [
+        { "type": "read_file", "path": "canon/src/ir.rs" },
+        { "type": "read_file", "path": "canon-projection/src/emit/file.rs" },
+        { "type": "read_file", "path": "STRUCTURAL_INVARIANTS_REPORT.md" },
+        { "type": "read_command", "path": "rg -n \"struct .*Ir|enum .*Ir|module|item|symbol|emit|projection\" canon canon-projection -S" }
+      ],
+      "rationale": "To design verify_projection_invariants(ir_state), inspect the canonical IR structure definitions, the projection emitter responsible for converting IR to Rust source files, and the documented structural invariants. Searching for IR structures and emit logic identifies the invariants required to ensure the IR is internally consistent before projection emits code."
+    }
+  ]
+}
+```

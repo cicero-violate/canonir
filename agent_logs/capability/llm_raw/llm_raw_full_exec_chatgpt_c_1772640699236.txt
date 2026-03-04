@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t8",
+      "deltas": [
+        { "type": "read_file", "path": "canon/src/ir.rs" },
+        { "type": "read_file", "path": "canon-projection/src/layout/mod.rs" },
+        { "type": "read_file", "path": "canon-projection/src/emit/file.rs" },
+        { "type": "read_command", "path": "rg -n \"module|mod |layout|tree|path\" canon canon-projection -S" }
+      ],
+      "rationale": "Designing normalize_module_tree requires understanding the IR module representation and how projection maps modules to filesystem layout. Reading IR definitions and projection layout logic reveals the existing module structure and file emission rules, while searching for module/path handling surfaces all code paths influencing Rust module hierarchy."
+    }
+  ]
+}
+```

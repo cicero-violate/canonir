@@ -1,0 +1,106 @@
+```json
+{
+  "tasks": [
+    {
+      "id": "t1",
+      "description": "Analyze orchestration build pipeline and emitted source generation path to identify where emitted Rust sources (e.g. emit/repomap/src/*.rs) are produced and how errors propagate into cargo build.",
+      "deps": [],
+      "required_capabilities": ["file_read", "read_structural_surface", "stateless_invoke"],
+      "node_type": "analysis",
+      "priority": 5,
+      "budget": 4,
+      "reasoning_trace": "Locate orchestration binary flow, projection emit logic, and capture/analyzer data flow that generates emitted Rust files."
+    },
+    {
+      "id": "t2",
+      "description": "Extract structural model of the emit pipeline mapping Canon IR → canon-projection emit modules → filesystem outputs to determine where invalid Rust code may be introduced.",
+      "deps": [],
+      "required_capabilities": ["file_read", "read_structural_surface", "stateless_invoke"],
+      "node_type": "analysis",
+      "priority": 5,
+      "budget": 4,
+      "reasoning_trace": "Understand projection emit layers responsible for generating files under emit/repomap/src and identify transformation stages."
+    },
+    {
+      "id": "t3",
+      "description": "Derive canonical IR invariants for items, modules, and use statements required for emitted Rust sources to compile successfully.",
+      "deps": [],
+      "required_capabilities": ["invariant_check", "stateless_invoke"],
+      "node_type": "analysis",
+      "priority": 4,
+      "budget": 3,
+      "reasoning_trace": "Define compile-time invariants ensuring emitted AST structures correspond to valid Rust constructs."
+    },
+    {
+      "id": "t4",
+      "description": "Design pure function validate_emitted_rust_structure(ir_items) -> structural_errors detecting missing modules, unresolved imports, invalid visibility, and duplicate definitions.",
+      "deps": [],
+      "required_capabilities": ["invariant_check", "stateless_invoke"],
+      "node_type": "analysis",
+      "priority": 4,
+      "budget": 3,
+      "reasoning_trace": "Detect structural errors before projection emit so emitted Rust remains compilable."
+    },
+    {
+      "id": "t5",
+      "description": "Design pure function compute_dependency_graph(ir_items) -> adjacency_matrix representing module, use, and item dependencies required for valid Rust compilation.",
+      "deps": [],
+      "required_capabilities": ["stateless_invoke"],
+      "node_type": "analysis",
+      "priority": 4,
+      "budget": 3,
+      "reasoning_trace": "Model dependency relationships between emitted items for deterministic validation and scheduling."
+    },
+    {
+      "id": "t6",
+      "description": "Design pure function detect_unresolved_paths(use_statements, symbol_table) -> unresolved_use_errors identifying imports that would cause compilation errors.",
+      "deps": [],
+      "required_capabilities": ["stateless_invoke", "invariant_check"],
+      "node_type": "analysis",
+      "priority": 4,
+      "budget": 3,
+      "reasoning_trace": "Prevent invalid use statements being emitted into generated sources."
+    },
+    {
+      "id": "t7",
+      "description": "Design pure function compute_emit_order(dependency_graph) -> ordered_item_ids producing deterministic ordering of emitted Rust items to satisfy dependencies.",
+      "deps": [],
+      "required_capabilities": ["stateless_invoke"],
+      "node_type": "analysis",
+      "priority": 4,
+      "budget": 3,
+      "reasoning_trace": "Ensure generated code respects dependency ordering so compilation succeeds."
+    },
+    {
+      "id": "t8",
+      "description": "Design pure function normalize_module_tree(ir_modules) -> canonical_module_tree ensuring module hierarchy corresponds to valid Rust module layout.",
+      "deps": [],
+      "required_capabilities": ["stateless_invoke", "invariant_check"],
+      "node_type": "analysis",
+      "priority": 4,
+      "budget": 3,
+      "reasoning_trace": "Guarantee filesystem module layout aligns with Rust module semantics."
+    },
+    {
+      "id": "t9",
+      "description": "Design pure function verify_projection_invariants(ir_state) -> projection_validation_report confirming IR consistency before emitting code.",
+      "deps": [],
+      "required_capabilities": ["invariant_check", "stateless_invoke"],
+      "node_type": "analysis",
+      "priority": 4,
+      "budget": 3,
+      "reasoning_trace": "Introduce pre-emit invariant validation to prevent broken emitted code."
+    },
+    {
+      "id": "t10",
+      "description": "Render architecture documentation describing the corrected orchestration emit pipeline, IR invariants, and deterministic emit ordering model.",
+      "deps": [],
+      "required_capabilities": ["file_write"],
+      "node_type": "render",
+      "priority": 2,
+      "budget": 2,
+      "reasoning_trace": "Persist architectural specification for the fixed orchestration emit pipeline."
+    }
+  ]
+}
+```
