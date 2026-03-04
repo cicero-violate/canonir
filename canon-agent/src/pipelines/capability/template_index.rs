@@ -109,29 +109,20 @@ impl TemplateIndex {
         let target_entry = entry_from_graph("target", goal, graph, 0.0);
         let target_vec = structural_features(&target_entry, max_nodes, max_edges, max_depth);
 
-        let mut scored: Vec<SimilarTemplate> = self.entries.iter()
-            .filter(|e| e.reward > 0.0)
-            .map(|entry| {
-                let (goal_sim, used_embedding) = if !entry.goal_embedding.is_empty()
-                    && entry.goal_embedding.len() == g_embed.len()
-                {
-                    (goal_embedding::cosine_similarity(&g_embed, &entry.goal_embedding), true)
-                } else {
-                    (jaccard(goal, &entry.goal), false)
-                };
-                let vec = structural_features(entry, max_nodes, max_edges, max_depth);
-                let struct_sim = cosine(&target_vec, &vec);
-                let score = goal_w * goal_sim + struct_w * struct_sim;
-                SimilarTemplate {
-                    entry: entry.clone(),
-                    score,
-                    goal_similarity: goal_sim,
-                    structural_similarity: struct_sim,
-                    used_embedding,
-                }
-            })
-            .filter(|s| s.score >= 0.2)
-            .collect();
+        let mut scored: Vec<SimilarTemplate> = batch_similarity(
+            &self.entries,
+            goal,
+            &g_embed,
+            &target_vec,
+            max_nodes,
+            max_edges,
+            max_depth,
+            goal_w,
+            struct_w,
+        )
+        .into_iter()
+        .filter(|s| s.score >= 0.2)
+        .collect();
 
         scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_k);
@@ -241,4 +232,40 @@ fn cosine(a: &[f64; 5], b: &[f64; 5]) -> f64 {
     let na: f64 = a.iter().map(|x| x * x).sum::<f64>().sqrt();
     let nb: f64 = b.iter().map(|x| x * x).sum::<f64>().sqrt();
     if na == 0.0 || nb == 0.0 { 0.0 } else { dot / (na * nb) }
+}
+
+fn batch_similarity(
+    entries: &[TemplateEntry],
+    goal: &str,
+    goal_embed: &[f32],
+    target_vec: &[f64; 5],
+    max_nodes: f64,
+    max_edges: f64,
+    max_depth: f64,
+    goal_w: f64,
+    struct_w: f64,
+) -> Vec<SimilarTemplate> {
+    entries
+        .iter()
+        .filter(|e| e.reward > 0.0)
+        .map(|entry| {
+            let (goal_sim, used_embedding) = if !entry.goal_embedding.is_empty()
+                && entry.goal_embedding.len() == goal_embed.len()
+            {
+                (goal_embedding::cosine_similarity(goal_embed, &entry.goal_embedding), true)
+            } else {
+                (jaccard(goal, &entry.goal), false)
+            };
+            let vec = structural_features(entry, max_nodes, max_edges, max_depth);
+            let struct_sim = cosine(target_vec, &vec);
+            let score = goal_w * goal_sim + struct_w * struct_sim;
+            SimilarTemplate {
+                entry: entry.clone(),
+                score,
+                goal_similarity: goal_sim,
+                structural_similarity: struct_sim,
+                used_embedding,
+            }
+        })
+        .collect()
 }

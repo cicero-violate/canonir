@@ -1,9 +1,15 @@
 use super::layout::{GpuGraph, is_completed, is_ready_candidate};
 
+use algorithms::graph::csr::Csr;
+
 #[cfg(feature = "cuda")]
 use algorithms::graph::scheduler_gpu;
 #[cfg(feature = "cuda")]
 use algorithms::sorting::gpu as sorting_gpu;
+#[cfg(feature = "cuda")]
+use algorithms::graph::{scc_gpu, topological_sort_gpu, depth_gpu, reachability};
+#[cfg(not(feature = "cuda"))]
+use algorithms::graph::{scc, topological_sort};
 
 #[cfg(feature = "cuda")]
 pub fn compute_ready(graph: &GpuGraph) -> Vec<u8> {
@@ -80,5 +86,110 @@ pub fn deadlock_check(graph: &GpuGraph) -> bool {
         let ready_sum = ready_mask.iter().map(|v| *v as u64).sum::<u64>();
         let completed = graph.status.iter().filter(|&&s| is_completed(s)).count();
         ready_sum == 0 && completed < graph.status.len()
+    }
+}
+
+pub fn compute_topo_order(adj: &[Vec<usize>]) -> Vec<usize> {
+    #[cfg(feature = "cuda")]
+    {
+        let csr = Csr::from_adj(adj);
+        return topological_sort_gpu::topological_sort_gpu(&csr);
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        return topological_sort::topological_sort(adj);
+    }
+}
+
+pub fn compute_roots(adj: &[Vec<usize>]) -> Vec<usize> {
+    #[cfg(feature = "cuda")]
+    {
+        let csr = Csr::from_adj(adj);
+        let indegree = topological_sort_gpu::indegree_gpu(&csr);
+        return indegree
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &d)| (d == 0).then_some(i))
+            .collect();
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        let mut indegree = vec![0usize; adj.len()];
+        for edges in adj {
+            for &v in edges {
+                if v < indegree.len() {
+                    indegree[v] += 1;
+                }
+            }
+        }
+        return indegree
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &d)| (d == 0).then_some(i))
+            .collect();
+    }
+}
+
+pub fn compute_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    #[cfg(feature = "cuda")]
+    {
+        let csr = Csr::from_adj(adj);
+        return scc_gpu::scc_gpu(&csr);
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        return scc::kosaraju_scc(adj);
+    }
+}
+
+pub fn compute_reachability(adj: &[Vec<usize>], roots: &[usize]) -> Vec<bool> {
+    #[cfg(feature = "cuda")]
+    {
+        let csr = Csr::from_adj(adj);
+        return reachability::reachability_gpu(&csr, roots);
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        let mut visited = vec![false; adj.len()];
+        let mut stack = Vec::new();
+        for &r in roots {
+            if r < adj.len() {
+                stack.push(r);
+            }
+        }
+        while let Some(u) = stack.pop() {
+            if visited[u] {
+                continue;
+            }
+            visited[u] = true;
+            for &v in &adj[u] {
+                if v < adj.len() && !visited[v] {
+                    stack.push(v);
+                }
+            }
+        }
+        return visited;
+    }
+}
+
+pub fn compute_depth(adj: &[Vec<usize>]) -> Vec<i32> {
+    #[cfg(feature = "cuda")]
+    {
+        let csr = Csr::from_adj(adj);
+        return depth_gpu::longest_path_depth_gpu(&csr);
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        let topo = topological_sort::topological_sort(adj);
+        let mut depth = vec![0i32; adj.len()];
+        for &u in &topo {
+            for &v in &adj[u] {
+                let next = depth[u] + 1;
+                if next > depth[v] {
+                    depth[v] = next;
+                }
+            }
+        }
+        return depth;
     }
 }

@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 
 use algorithms::graph::adj_list::AdjList;
 use algorithms::graph::csr::Csr;
-use algorithms::graph::scheduling::topological_layers;
 
 use super::{dag, decompose};
 use super::capability::Capability;
+use super::gpu_scheduler::kernels as gpu_kernels;
 
 fn algo_log_path(log_dir: &Path, iter: u32, name: &str) -> PathBuf {
     if iter == 0 {
@@ -135,26 +135,14 @@ pub fn compute_graph_signals(graph: &dag::TaskGraph) -> GraphSignals {
         }
     }
 
-    let layers = topological_layers(&adj);
-    let roots = layers.get(0).cloned().unwrap_or_default();
-    let topo_order = layers.iter().flatten().cloned().collect::<Vec<_>>();
+    let roots = gpu_kernels::compute_roots(&adj);
+    let topo_order = gpu_kernels::compute_topo_order(&adj);
     let has_cycle = topo_order.len() != n;
-
-    #[cfg(feature = "cuda")]
-    let sccs = {
-        let csr = Csr::from_adj(&adj);
-        algorithms::graph::scc_gpu::scc_gpu(&csr)
-            .into_iter()
-            .filter(|c| c.len() > 1)
-            .collect::<Vec<_>>()
-    };
-    #[cfg(not(feature = "cuda"))]
-    let sccs = algorithms::graph::scc::kosaraju_scc(&adj)
+    let sccs = gpu_kernels::compute_scc(&adj)
         .into_iter()
         .filter(|c| c.len() > 1)
         .collect::<Vec<_>>();
-
-    let reach = reachability_mask(&adj, &roots);
+    let reach = gpu_kernels::compute_reachability(&adj, &roots);
     let unreachable = reach
         .iter()
         .enumerate()
@@ -170,8 +158,7 @@ pub fn compute_graph_signals(graph: &dag::TaskGraph) -> GraphSignals {
 }
 
 fn reachability_mask(adj: &[Vec<usize>], roots: &[usize]) -> Vec<bool> {
-    let csr = Csr::from_adj(adj);
-    algorithms::graph::reachability::reachability_gpu(&csr, roots)
+    gpu_kernels::compute_reachability(adj, roots)
 }
 
 pub fn planner_signals_for_graph(graph: &dag::TaskGraph) -> String {
@@ -637,23 +624,8 @@ fn compute_max_depth(graph: &dag::TaskGraph) -> usize {
             }
         }
     }
-    #[cfg(feature = "cuda")]
-    {
-        let csr = Csr::from_adj(&adj);
-        let depth = algorithms::graph::depth_gpu::longest_path_depth_gpu(&csr);
-        return depth.into_iter().map(|d| d.max(0) as usize).max().unwrap_or(0);
-    }
-    #[cfg(not(feature = "cuda"))]
-    {
-        let topo = algorithms::graph::topological_sort::topological_sort(&adj);
-        let mut depth = vec![0usize; graph.nodes.len()];
-        for &u in &topo {
-            for &v in &adj[u] {
-                depth[v] = depth[v].max(depth[u] + 1);
-            }
-        }
-        depth.into_iter().max().unwrap_or(0)
-    }
+    let depth = gpu_kernels::compute_depth(&adj);
+    depth.into_iter().map(|d| d.max(0) as usize).max().unwrap_or(0)
 }
 
 struct Fnv64 {

@@ -12,6 +12,7 @@ pub mod endpoint_worker;
 pub mod response_router;
 pub mod scheduler;
 pub mod scheduler_state;
+pub mod scheduler_scoring;
 pub mod dispatch;
 pub mod planner_session;
 pub mod planner_state;

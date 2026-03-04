@@ -12,32 +12,59 @@ pub enum CapabilityClass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
+    #[serde(alias = "CreateNode")]
     CreateNode,
+    #[serde(alias = "AddEdge")]
     AddEdge,
+    #[serde(alias = "UpdateStatus")]
     UpdateStatus,
+    #[serde(alias = "ReadDag")]
     ReadDag,
+    #[serde(alias = "ScheduleReady")]
     ScheduleReady,
+    #[serde(alias = "GoalToSubgoals")]
     GoalToSubgoals,
+    #[serde(alias = "ConstraintAttach")]
     ConstraintAttach,
+    #[serde(alias = "RefineNode")]
     RefineNode,
+    #[serde(alias = "DependencyRewrite")]
     DependencyRewrite,
+    #[serde(alias = "RadiusBudgetEval")]
     RadiusBudgetEval,
+    #[serde(alias = "ApplyPatch")]
     ApplyPatch,
+    #[serde(alias = "FileRead")]
     FileRead,
+    #[serde(alias = "FileWrite")]
     FileWrite,
+    #[serde(alias = "Bash")]
     Bash,
+    #[serde(alias = "CargoBuild")]
     CargoBuild,
+    #[serde(alias = "CargoCheck")]
     CargoCheck,
+    #[serde(alias = "StdoutCapture")]
     StdoutCapture,
+    #[serde(alias = "ParseOrchestrationReport")]
     ParseOrchestrationReport,
+    #[serde(alias = "DetectFailures")]
     DetectFailures,
+    #[serde(alias = "StatusUpdateOnly")]
     StatusUpdateOnly,
+    #[serde(alias = "ReadStructuralSurface")]
     ReadStructuralSurface,
+    #[serde(alias = "ComputeDelta")]
     ComputeDelta,
+    #[serde(alias = "RewardSignalCompute")]
     RewardSignalCompute,
+    #[serde(alias = "InvariantCheck")]
     InvariantCheck,
+    #[serde(alias = "BoundaryGuard")]
     BoundaryGuard,
+    #[serde(alias = "PromptContractEnforce")]
     PromptContractEnforce,
+    #[serde(alias = "StatelessInvoke")]
     StatelessInvoke,
     #[serde(other)]
     Unknown,

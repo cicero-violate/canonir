@@ -35,6 +35,7 @@ use super::state_snapshot;
 use super::scheduler_state::{ExecEvent, ExecStep, EXEC_TRANSITIONS};
 use super::policy_engine;
 use super::planner_state::{PlannerPhase, PlannerEvent, PLANNER_TRANSITIONS};
+use super::scheduler_scoring;
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -415,13 +416,16 @@ pub(crate) async fn execute_graph_loop(
                     next_event = ExecEvent::Continue;
                 }
                 ExecStep::Dispatch => {
-                    ready_ids.sort_by(|a, b| {
-                        let na = graph.nodes.iter().find(|n| n.id == *a);
-                        let nb = graph.nodes.iter().find(|n| n.id == *b);
-                        let sa = na.map(|n| score_node(n, &features, cost_table, execution_preference, config)).unwrap_or(0.0);
-                        let sb = nb.map(|n| score_node(n, &features, cost_table, execution_preference, config)).unwrap_or(0.0);
-                        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
-                    });
+                    let mut scored = scheduler_scoring::score_ready_nodes(
+                        &ready_ids,
+                        graph,
+                        &features,
+                        cost_table,
+                        execution_preference,
+                        config,
+                    );
+                    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                    ready_ids = scored.into_iter().map(|(id, _)| id).collect();
 
                     let mut futures = Vec::new();
                     for node_id in ready_ids.clone() {
@@ -512,6 +516,7 @@ pub(crate) async fn execute_graph_loop(
                         iter,
                         features_retry_rate: features.retry_rate,
                         features_failed_fraction: features.failed_fraction,
+                        features_branching_factor: features.branching_factor,
                         cost_table,
                     })?;
                     if config.enable_resume
@@ -535,36 +540,6 @@ pub(crate) async fn execute_graph_loop(
     anyhow::bail!("iteration limit exceeded")
 }
 
-fn score_node(
-    node: &dag::TaskNode,
-    features: &super::graph_algo::FeatureVector,
-    cost_table: &CapabilityCostTable,
-    execution_preference: f64,
-    config: &CapabilityConfig,
-) -> f64 {
-    let base = node.priority as f64;
-    let completion = features.completion_velocity;
-    let unblock = node
-        .required_capabilities
-        .iter()
-        .any(|c| c.class() == super::capability::CapabilityClass::Observe) as u8 as f64;
-    let retry = node.readonly_fail_count as f64;
-    let cost = cost_table.node_cost(
-        &node.required_capabilities,
-        config.cost_latency_weight,
-        config.cost_failure_weight,
-    );
-    let w1 = 1.0;
-    let w2 = 0.4;
-    let w3 = 0.6;
-    let w4 = 0.8;
-    let w5 = 1.0;
-    (w1 * base * (1.0 + execution_preference))
-        + (w2 * completion)
-        + (w3 * unblock)
-        - (w4 * retry)
-        - (w5 * cost)
-}
 
 fn process_node_result(
     item: Result<(String, Result<engine::NodeCallResult>, std::time::Duration)>,
@@ -817,15 +792,17 @@ pub(crate) async fn run_planner_execution_loop(
                 config.mutation_rate,
                 iter,
             );
-            last_mutations = candidates.len() as u64;
+            let mut scored = template_mutation::evaluate_candidates(candidates);
+            scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            last_mutations = scored.len() as u64;
             let mut best_reward = base_reward;
             let mut best_graph = None;
             let mut success = 0u64;
-            for candidate in candidates {
-                if candidate.validate().is_err() {
+            for candidate in scored {
+                if candidate.graph.validate().is_err() {
                     continue;
                 }
-                let mut eval_graph = candidate.clone();
+                let mut eval_graph = candidate.graph.clone();
                 if let Ok((_, _)) = execute_graph_loop(
                     &mut eval_graph,
                     bridge,
@@ -894,8 +871,20 @@ pub(crate) async fn run_planner_execution_loop(
                     )
                     .await?;
                 let repaired = auto_repair_planner_update(graph, &mut candidate);
-                if repaired > 0 {
-                    eprintln!("[planner] auto-repaired {} mixed-class nodes", repaired);
+                if repaired.count > 0 {
+                    let ids = repaired.ids.join(", ");
+                    eprintln!("[planner] auto-repaired {} mixed-class nodes: [{}]", repaired.count, ids);
+                }
+                let output_payload = serde_json::json!({
+                    "iter": iter,
+                    "attempt": attempt,
+                    "auto_repaired": repaired.count,
+                    "auto_repair_ids": repaired.ids,
+                    "planner_output": candidate,
+                });
+                let output_path = log_dir.join(format!("planner_iter_{:04}_output.json", iter));
+                if let Ok(pretty) = serde_json::to_string_pretty(&output_payload) {
+                    let _ = std::fs::write(output_path, pretty);
                 }
                 let mut candidate_graph = graph.clone();
                 if let Err(e) = apply_planner_update(&mut candidate_graph, candidate.clone()) {
@@ -1041,6 +1030,9 @@ pub(crate) async fn run_planner_execution_loop(
         } else {
             (0, Vec::new())
         };
+        if matches!(phase, PlannerPhase::Evaluate) {
+            phase = PlannerPhase::ReuseTemplate;
+        }
         for failure in exec_failures {
             failure_store.record_graph(failure.kind, graph, failure.iter);
             store.record_failure(&template_hash);
@@ -1222,6 +1214,7 @@ fn validate_planner_update(
     update.new_nodes.iter().try_for_each(|spec| {
         ensure(!spec.id.trim().is_empty(), "planner node id empty")?;
         ensure(!spec.description.trim().is_empty(), "planner node description empty")?;
+        ensure(!spec.required_capabilities.iter().any(|c| matches!(c, Capability::Unknown)), "planner node has unknown capability")?;
         ensure(!(existing.contains_key(&spec.id) || new_ids.contains_key(&spec.id)),
                &format!("duplicate node id {}", spec.id))?;
         new_ids.insert(spec.id.clone(), new_ids.len());
@@ -1245,6 +1238,7 @@ fn validate_planner_update(
         let status = status_by_id.get(&spec.id).copied()
             .ok_or_else(|| anyhow::anyhow!("rewrite references unknown node"))?;
         ensure(matches!(status, dag::Status::Pending), "rewrite node must be pending")?;
+        ensure(!spec.new_capabilities.iter().any(|c| matches!(c, Capability::Unknown)), "rewrite node has unknown capability")?;
         let caps: std::collections::HashSet<_> = spec.new_capabilities.iter().copied().collect();
         assert_class_disjoint(&caps).map_err(|e| anyhow::anyhow!(e))
     })?;
@@ -1298,7 +1292,12 @@ fn check_constraint(
     }
 }
 
-fn auto_repair_planner_update(graph: &dag::TaskGraph, update: &mut PlannerUpdate) -> u64 {
+struct RepairReport {
+    count: u64,
+    ids: Vec<String>,
+}
+
+fn auto_repair_planner_update(graph: &dag::TaskGraph, update: &mut PlannerUpdate) -> RepairReport {
     let mut used: std::collections::HashSet<String> =
         graph.nodes.iter().map(|n| n.id.clone()).collect();
     for spec in &update.new_nodes {
@@ -1309,12 +1308,15 @@ fn auto_repair_planner_update(graph: &dag::TaskGraph, update: &mut PlannerUpdate
     }
 
     let mut repairs = 0u64;
+    let mut ids = Vec::new();
     let mut repaired_nodes: Vec<decompose::TaskSpec> = Vec::new();
 
-    for spec in update.new_nodes.drain(..) {
+    for mut spec in update.new_nodes.drain(..) {
+        normalize_capabilities(&mut spec.required_capabilities, &spec.description);
         let (observe, verify, mutate) = split_caps(&spec.required_capabilities);
         if !mutate.is_empty() && !verify.is_empty() {
             repairs += 1;
+            ids.push(spec.id.clone());
             let verify_id = unique_id(format!("{}_verify", spec.id), &mut used);
             let mut verify_caps = verify;
             verify_caps.extend(observe);
@@ -1360,9 +1362,11 @@ fn auto_repair_planner_update(graph: &dag::TaskGraph, update: &mut PlannerUpdate
     }
 
     for spec in update.rewrite_nodes.iter_mut() {
+        normalize_capabilities(&mut spec.new_capabilities, &spec.new_description);
         let (observe, verify, mutate) = split_caps(&spec.new_capabilities);
         if !mutate.is_empty() && !verify.is_empty() {
             repairs += 1;
+            ids.push(spec.id.clone());
             let verify_id = unique_id(format!("{}_verify", spec.id), &mut used);
             let mut verify_caps = verify;
             verify_caps.extend(observe);
@@ -1390,7 +1394,30 @@ fn auto_repair_planner_update(graph: &dag::TaskGraph, update: &mut PlannerUpdate
     }
 
     update.new_nodes.extend(repaired_nodes);
-    repairs
+    RepairReport { count: repairs, ids }
+}
+
+fn normalize_capabilities(caps: &mut Vec<Capability>, description: &str) {
+    let lower = description.to_lowercase();
+    if caps.iter().any(|c| matches!(c, Capability::StatelessInvoke)) {
+        let replacement = if lower.contains("cargo check") {
+            Some(Capability::CargoCheck)
+        } else if lower.contains("cargo build") || lower.contains("cargo run") {
+            Some(Capability::CargoBuild)
+        } else if lower.contains("bash") || lower.contains("shell") {
+            Some(Capability::Bash)
+        } else {
+            None
+        };
+        if let Some(rep) = replacement {
+            *caps = caps
+                .iter()
+                .filter(|c| !matches!(c, Capability::StatelessInvoke))
+                .copied()
+                .collect();
+            caps.push(rep);
+        }
+    }
 }
 
 fn split_caps(caps: &[Capability]) -> (Vec<Capability>, Vec<Capability>, Vec<Capability>) {

@@ -1,6 +1,12 @@
 use super::capability::Capability;
 use super::dag::TaskGraph;
-use super::graph_algo::node_utility;
+use super::graph_algo::{node_utility, FeatureVector, graph_features};
+
+pub struct CandidateScore {
+    pub graph: TaskGraph,
+    pub features: FeatureVector,
+    pub score: f64,
+}
 
 pub fn generate_candidates(
     graph: &TaskGraph,
@@ -19,6 +25,26 @@ pub fn generate_candidates(
         out.push(candidate);
     }
     out
+}
+
+pub fn evaluate_candidates(candidates: Vec<TaskGraph>) -> Vec<CandidateScore> {
+    candidates
+        .into_iter()
+        .map(|g| {
+            let features = graph_features(&g);
+            let score = mutation_score(&features);
+            CandidateScore { graph: g, features, score }
+        })
+        .collect()
+}
+
+fn mutation_score(features: &FeatureVector) -> f64 {
+    let w1 = 1.0;
+    let w2 = 0.7;
+    let w3 = 0.5;
+    (w1 * features.completion_velocity)
+        - (w2 * features.failed_fraction)
+        - (w3 * features.blocked_fraction)
 }
 
 fn mutate_template_with_mode(
