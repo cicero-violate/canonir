@@ -201,6 +201,34 @@ Continue refining the current graph.\n",
         }
         let bias = policy::PolicyModel::load_default().predict(&features);
         let bias_text = policy::format_bias(&bias);
+        let metrics_text = format!(
+            "Metrics:\n\
+nodes={} edges={} depth={} scc_count={}\n\
+roots={} leaves={} avg_out_deg={:.2} avg_in_deg={:.2} branching={:.2}\n\
+verify/mutate={:.2} observe/mutate={:.2} entropy={:.2}\n\
+priority_avg={:.2} budget_avg={:.2}\n\
+blocked_frac={:.2} ready_frac={:.2} failed_frac={:.2}\n\
+completion_velocity={:.3} retry_rate={:.3}\n",
+            features.nodes,
+            features.edges,
+            features.depth,
+            features.scc_count,
+            features.root_count,
+            features.leaf_count,
+            features.avg_out_degree,
+            features.avg_in_degree,
+            features.branching_factor,
+            features.verify_to_mutate_ratio,
+            features.observe_to_mutate_ratio,
+            features.node_type_entropy,
+            features.avg_node_priority,
+            features.avg_node_budget,
+            features.blocked_fraction,
+            features.ready_fraction,
+            features.failed_fraction,
+            features.completion_velocity,
+            features.retry_rate,
+        );
         let prompt = format!(
             "You are a planner. Maintain continuity across iterations.\n\
 Planner limits: max_new_nodes={}, max_new_edges={}\n\
@@ -216,6 +244,7 @@ Rules:\n\
 6) Rewrite nodes that are Pending with an imprecise description.\n\
 {}\n\
 {}\n\
+{}\n\
 Goal:\n{}\n\n\
 Graph Nodes:\n{}\n\n\
 Graph Signals:\n{}\n\n\
@@ -227,6 +256,7 @@ Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"descript
             ready_nodes.join(", "),
             unreachable_nodes.join(", "),
             bias_text,
+            metrics_text,
             reward_section,
             self.goal,
             serde_json::to_string_pretty(&nodes_json).unwrap_or_default(),

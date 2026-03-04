@@ -51,9 +51,9 @@ enum PipelineEvent {
 }
 
 #[derive(Clone)]
-struct ExecFailure {
-    kind: &'static str,
-    iter: u64,
+pub struct ExecFailure {
+    pub kind: &'static str,
+    pub iter: u64,
 }
 
 const PIPELINE_TRANSITIONS: [[PipelineState; 3]; 3] = {
@@ -619,6 +619,21 @@ pub(crate) async fn run_planner_execution_loop(
                 "scc_count": features.scc_count,
                 "failure_rate": features.failure_rate,
                 "reward_trend": features.reward_trend,
+                "avg_out_degree": features.avg_out_degree,
+                "avg_in_degree": features.avg_in_degree,
+                "branching_factor": features.branching_factor,
+                "leaf_count": features.leaf_count,
+                "root_count": features.root_count,
+                "verify_to_mutate_ratio": features.verify_to_mutate_ratio,
+                "observe_to_mutate_ratio": features.observe_to_mutate_ratio,
+                "node_type_entropy": features.node_type_entropy,
+                "avg_node_priority": features.avg_node_priority,
+                "avg_node_budget": features.avg_node_budget,
+                "blocked_fraction": features.blocked_fraction,
+                "ready_fraction": features.ready_fraction,
+                "failed_fraction": features.failed_fraction,
+                "completion_velocity": features.completion_velocity,
+                "retry_rate": features.retry_rate,
                 "failures": failures
             }),
             action: serde_json::json!({

@@ -5,7 +5,29 @@ from pathlib import Path
 DATA_PATH = Path("/workspace/ai_sandbox/canon/agent_logs/policy_dataset.jsonl")
 OUT_PATH = Path("/workspace/ai_sandbox/canon/agent_logs/policy_weights.json")
 
-FEATURE_KEYS = ["nodes", "edges", "depth", "scc_count", "failure_rate", "reward_trend"]
+FEATURE_KEYS = [
+    "nodes",
+    "edges",
+    "depth",
+    "scc_count",
+    "failure_rate",
+    "reward_trend",
+    "avg_out_degree",
+    "avg_in_degree",
+    "branching_factor",
+    "leaf_count",
+    "root_count",
+    "verify_to_mutate_ratio",
+    "observe_to_mutate_ratio",
+    "node_type_entropy",
+    "avg_node_priority",
+    "avg_node_budget",
+    "blocked_fraction",
+    "ready_fraction",
+    "failed_fraction",
+    "completion_velocity",
+    "retry_rate",
+]
 
 def load_rows():
     rows = []

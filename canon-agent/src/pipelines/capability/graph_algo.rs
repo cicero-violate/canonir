@@ -205,6 +205,21 @@ pub struct FeatureVector {
     pub scc_count: usize,
     pub failure_rate: f64,
     pub reward_trend: f64,
+    pub avg_out_degree: f64,
+    pub avg_in_degree: f64,
+    pub branching_factor: f64,
+    pub leaf_count: usize,
+    pub root_count: usize,
+    pub verify_to_mutate_ratio: f64,
+    pub observe_to_mutate_ratio: f64,
+    pub node_type_entropy: f64,
+    pub avg_node_priority: f64,
+    pub avg_node_budget: f64,
+    pub blocked_fraction: f64,
+    pub ready_fraction: f64,
+    pub failed_fraction: f64,
+    pub completion_velocity: f64,
+    pub retry_rate: f64,
 }
 
 impl FeatureVector {
@@ -216,6 +231,21 @@ impl FeatureVector {
             self.scc_count as f64,
             self.failure_rate,
             self.reward_trend,
+            self.avg_out_degree,
+            self.avg_in_degree,
+            self.branching_factor,
+            self.leaf_count as f64,
+            self.root_count as f64,
+            self.verify_to_mutate_ratio,
+            self.observe_to_mutate_ratio,
+            self.node_type_entropy,
+            self.avg_node_priority,
+            self.avg_node_budget,
+            self.blocked_fraction,
+            self.ready_fraction,
+            self.failed_fraction,
+            self.completion_velocity,
+            self.retry_rate,
         ]
     }
 
@@ -234,6 +264,80 @@ pub fn graph_features(graph: &dag::TaskGraph) -> FeatureVector {
     let depth = compute_max_depth(graph);
     let failed = graph.nodes.iter().filter(|n| n.status == dag::Status::Failed).count();
     let failure_rate = if nodes == 0 { 0.0 } else { failed as f64 / nodes as f64 };
+    let mut indegree = vec![0usize; nodes];
+    let mut outdegree = vec![0usize; nodes];
+    let mut id_to_idx: HashMap<&str, usize> = HashMap::new();
+    for (i, n) in graph.nodes.iter().enumerate() {
+        id_to_idx.insert(n.id.as_str(), i);
+        indegree[i] = n.deps.len();
+    }
+    for n in &graph.nodes {
+        for dep in &n.deps {
+            if let Some(&idx) = id_to_idx.get(dep.as_str()) {
+                outdegree[idx] += 1;
+            }
+        }
+    }
+    let root_count = graph.nodes.iter().filter(|n| n.deps.is_empty()).count();
+    let leaf_count = outdegree.iter().filter(|&&d| d == 0).count();
+    let avg_out_degree = if nodes == 0 { 0.0 } else { edges as f64 / nodes as f64 };
+    let avg_in_degree = avg_out_degree;
+    let branching_factor = {
+        let non_leaf = outdegree.iter().filter(|&&d| d > 0).count();
+        if non_leaf == 0 { 0.0 } else { outdegree.iter().sum::<usize>() as f64 / non_leaf as f64 }
+    };
+    let mut verify_count = 0usize;
+    let mut mutate_count = 0usize;
+    let mut observe_count = 0usize;
+    let mut analysis_count = 0usize;
+    let mut render_count = 0usize;
+    let mut priority_sum = 0f64;
+    let mut budget_sum = 0f64;
+    let mut blocked = 0usize;
+    let mut ready = 0usize;
+    let mut failed_count = 0usize;
+    let mut completed = 0usize;
+    let mut retry_total = 0f64;
+    let mut max_completed_iter = 0u64;
+    for n in &graph.nodes {
+        if n.node_type == decompose::NodeType::Analysis { analysis_count += 1; } else { render_count += 1; }
+        for cap in &n.required_capabilities {
+            match cap.class() {
+                super::capability::CapabilityClass::Verify => verify_count += 1,
+                super::capability::CapabilityClass::Mutate => mutate_count += 1,
+                super::capability::CapabilityClass::Observe => observe_count += 1,
+            }
+        }
+        priority_sum += n.priority as f64;
+        if let Some(b) = n.budget { budget_sum += b as f64; }
+        match n.status {
+            dag::Status::Blocked => blocked += 1,
+            dag::Status::Ready => ready += 1,
+            dag::Status::Failed => failed_count += 1,
+            dag::Status::Completed => {
+                completed += 1;
+                if let Some(t) = n.completed_iter { max_completed_iter = max_completed_iter.max(t); }
+            }
+            _ => {}
+        }
+        retry_total += n.readonly_fail_count as f64;
+    }
+    let verify_to_mutate_ratio = if mutate_count == 0 { 0.0 } else { verify_count as f64 / mutate_count as f64 };
+    let observe_to_mutate_ratio = if mutate_count == 0 { 0.0 } else { observe_count as f64 / mutate_count as f64 };
+    let node_type_entropy = {
+        let total = nodes.max(1) as f64;
+        let p_a = analysis_count as f64 / total;
+        let p_r = render_count as f64 / total;
+        let h = |p: f64| if p <= 0.0 { 0.0 } else { -p * p.ln() };
+        h(p_a) + h(p_r)
+    };
+    let avg_node_priority = if nodes == 0 { 0.0 } else { priority_sum / nodes as f64 };
+    let avg_node_budget = if nodes == 0 { 0.0 } else { budget_sum / nodes as f64 };
+    let blocked_fraction = if nodes == 0 { 0.0 } else { blocked as f64 / nodes as f64 };
+    let ready_fraction = if nodes == 0 { 0.0 } else { ready as f64 / nodes as f64 };
+    let failed_fraction = if nodes == 0 { 0.0 } else { failed_count as f64 / nodes as f64 };
+    let completion_velocity = if completed == 0 { 0.0 } else { completed as f64 / (max_completed_iter.max(1) as f64 + 1.0) };
+    let retry_rate = if nodes == 0 { 0.0 } else { retry_total / nodes as f64 };
     FeatureVector {
         nodes,
         edges,
@@ -241,6 +345,21 @@ pub fn graph_features(graph: &dag::TaskGraph) -> FeatureVector {
         scc_count: signals.sccs.len(),
         failure_rate,
         reward_trend: 0.0,
+        avg_out_degree,
+        avg_in_degree,
+        branching_factor,
+        leaf_count,
+        root_count,
+        verify_to_mutate_ratio,
+        observe_to_mutate_ratio,
+        node_type_entropy,
+        avg_node_priority,
+        avg_node_budget,
+        blocked_fraction,
+        ready_fraction,
+        failed_fraction,
+        completion_velocity,
+        retry_rate,
     }
 }
 
