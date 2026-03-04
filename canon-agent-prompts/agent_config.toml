@@ -5,7 +5,8 @@ response_timeout_secs = 90
 
 # Multi-agent cards (Case A — 4 agents)
 [[agents.cards]]
-agent_url = "https://chatgpt.com/gg/69a5aa249554819e9ac25e2df27102f1"
+# agent_url = "https://chatgpt.com/gg/69a5aa249554819e9ac25e2df27102f1"
+agent_url = "https://chatgpt.com/gg/69a86ca9112c8194bece166d0d686a70"
 agent_id = "decompose"
 role = "GENERIC_AGENT_ROLE.md"
 goal = "AGENT_GOAL.md"
