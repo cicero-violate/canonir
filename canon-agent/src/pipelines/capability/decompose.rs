@@ -5,7 +5,7 @@ use std::path::Path;
 
 use super::capability::Capability;
 use super::config::GoalSpec;
-use super::llm::call_agent_json_with_retry;
+use super::llm::call_agent_json_with_retry_allow_mismatch;
 use super::tab_management::TabsHandle;
 use crate::ws_server::WsBridge;
 
@@ -51,6 +51,7 @@ async fn decompose_inner(
     bridge: &WsBridge,
     endpoint_id: &str,
     url: &str,
+    stateful: bool,
     role_schema: &str,
     tabs: &TabsHandle,
     max_tabs: usize,
@@ -58,10 +59,11 @@ async fn decompose_inner(
     retries: u32,
     delay_secs: u64,
 ) -> Result<DecomposeOutput> {
-    let mut payload: Value = call_agent_json_with_retry(
+    let mut payload: Value = call_agent_json_with_retry_allow_mismatch(
         bridge,
         endpoint_id,
         url,
+        stateful,
         &prompt,
         role_schema,
         phase,
@@ -91,10 +93,11 @@ Original input:\n{}",
                     serde_json::to_string_pretty(&payload).unwrap_or_default(),
                     serde_json::to_string_pretty(&input).unwrap_or_default()
                 );
-                let retry_payload: Value = call_agent_json_with_retry(
+                let retry_payload: Value = call_agent_json_with_retry_allow_mismatch(
                     bridge,
                     endpoint_id,
                     url,
+                    stateful,
                     &retry_prompt,
                     role_schema,
                     phase,
@@ -131,10 +134,11 @@ Original input:\n{}",
                 serde_json::to_string_pretty(&payload).unwrap_or_default(),
                 serde_json::to_string_pretty(&input).unwrap_or_default()
             );
-            let retry_payload: Value = call_agent_json_with_retry(
+            let retry_payload: Value = call_agent_json_with_retry_allow_mismatch(
                 bridge,
                 endpoint_id,
                 url,
+                stateful,
                 &retry_prompt,
                 role_schema,
                 phase,
@@ -160,6 +164,35 @@ Original input:\n{}",
         t.node_type = normalize_node_type(t.node_type, &t.required_capabilities, &t.description);
     }
 
+    let has_render = output.tasks.iter().any(|t| t.node_type == NodeType::Render);
+    if !has_render {
+        let render_hint = format!(
+            "Your decomposition has no render nodes. At least one task must have node_type=render \
+and include file_write or apply_patch in required_capabilities.\n\
+Return exactly one fenced ```json block and nothing else.\n\
+Schema:\n\
+{{\n  \"tasks\": [\n    {{\n      \"id\": \"t1\",\n      \"description\": \"string\",\n      \"deps\": [],\n      \
+\"required_capabilities\": [\"file_write\"],\n      \"node_type\": \"render\"\n    }}\n  ]\n}}\n\
+Allowed capability values:\n{}\n\nOriginal input:\n{}",
+            caps.join(", "),
+            serde_json::to_string_pretty(&input).unwrap_or_default()
+        );
+        let retry_payload: Value = call_agent_json_with_retry_allow_mismatch(
+            bridge, endpoint_id, url, stateful, &render_hint, role_schema, phase,
+            None, tabs, max_tabs, tab_cooldown_ms, 1, delay_secs,
+        ).await?;
+        let retry_output: DecomposeOutput =
+            serde_json::from_value(retry_payload.clone()).context("render retry did not match schema")?;
+        let mut merged = output.tasks.clone();
+        for mut t in retry_output.tasks {
+            t.node_type = normalize_node_type(t.node_type, &t.required_capabilities, &t.description);
+            if !merged.iter().any(|e| e.id == t.id) {
+                merged.push(t);
+            }
+        }
+        output.tasks = merged;
+    }
+
     if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
         let _ = std::fs::write(log_path, pretty);
     }
@@ -172,6 +205,7 @@ pub async fn decompose_goal(
     bridge: &WsBridge,
     endpoint_id: &str,
     url: &str,
+    stateful: bool,
     role_schema: &str,
     tabs: &TabsHandle,
     max_tabs: usize,
@@ -203,7 +237,9 @@ Allowed capability values (use only these):\n{}",
         "Decompose goal into tasks (nodes only, no dependencies).\n\
 Return at least 3 tasks. Use unique task ids.\n\
 Continue decomposition until leaf tasks are pure functions suitable as GPU kernel functions (no side effects; control flow lives in the DAG).\n\
-Mark those leaf tasks as node_type=render and all others as analysis.\n\
+Leaf tasks that write files must have node_type=render AND include file_write or apply_patch in required_capabilities.\n\
+All other tasks must have node_type=analysis and must NOT include file_write or apply_patch.\n\
+Every goal that produces output files MUST have at least one render node with file_write capability.\n\
 Workspace root: {}\n\
 Workspace entries: {}\n\
 Action space: you may only reference paths under the workspace root.\n{}\n\nINPUT:\n{}",
@@ -225,6 +261,7 @@ Action space: you may only reference paths under the workspace root.\n{}\n\nINPU
         bridge,
         endpoint_id,
         url,
+        stateful,
         role_schema,
         tabs,
         max_tabs,
@@ -240,6 +277,7 @@ pub async fn decompose_node(
     bridge: &WsBridge,
     endpoint_id: &str,
     url: &str,
+    stateful: bool,
     role_schema: &str,
     tabs: &TabsHandle,
     max_tabs: usize,
@@ -271,7 +309,8 @@ Allowed capability values (use only these):\n{}",
         "Refine the node into smaller tasks (nodes only, no dependencies).\n\
 Return 2-6 child tasks. Use unique ids.\n\
 Continue decomposition until leaf tasks are pure functions suitable as GPU kernel functions (no side effects; control flow lives in the DAG).\n\
-Mark those leaf tasks as node_type=render and all others as analysis.\n\
+Leaf tasks that write files must have node_type=render AND include file_write or apply_patch in required_capabilities.\n\
+All other tasks must have node_type=analysis and must NOT include file_write or apply_patch.\n\
 Workspace root: {}\nWorkspace entries: {}\nAction space: paths must be under workspace root.\n{}\n\nINPUT:\n{}",
         workspace_root.display(),
         workspace_listing,
@@ -291,6 +330,7 @@ Workspace root: {}\nWorkspace entries: {}\nAction space: paths must be under wor
         bridge,
         endpoint_id,
         url,
+        stateful,
         role_schema,
         tabs,
         max_tabs,
@@ -303,11 +343,7 @@ Workspace root: {}\nWorkspace entries: {}\nAction space: paths must be under wor
 
 fn normalize_node_type(node_type: NodeType, caps: &[Capability], description: &str) -> NodeType {
     let render_cap = caps.iter().any(|c| matches!(c, Capability::FileWrite | Capability::ApplyPatch));
-    let desc = description.to_lowercase();
-    let is_kernel = (desc.contains("kernel") && desc.contains("gpu"))
-        || desc.contains("pure function")
-        || (desc.contains("pure") && desc.contains("function"));
-    if node_type == NodeType::Render && render_cap && is_kernel {
+    if render_cap {
         NodeType::Render
     } else {
         NodeType::Analysis

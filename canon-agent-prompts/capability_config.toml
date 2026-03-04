@@ -20,22 +20,45 @@ tab_cooldown_ms = 4000
 
 [llm.endpoints.planner]
 id = "planner_chatgpt_group"
-# url = "https://chatgpt.com/g/<GROUP_CHAT_ID>"
-url = "https://chatgpt.com/gg/69a5aa249554819e9ac25e2df27102f1"
+url = "https://chatgpt.com/gg/6992c359272881a19d30c226925f575d"
 role_markdown = "GENERIC_AGENT_ROLE.md"
 role = "planner"
 stateful = true
 max_tabs = 1
 
-[llm.endpoints.exec_chatgpt]
-id = "chatgpt"
-# url = "https://chatgpt.com/?temporary-chat=true"
+[llm.endpoints.exec_chatgpt_a]
+id = "exec_chatgpt_a"
 url = "https://chatgpt.com/gg/69a5aa249554819e9ac25e2df27102f1"
 role_markdown = "GENERIC_AGENT_ROLE.md"
+stateful = true
+max_tabs = 4
+
+[llm.endpoints.exec_chatgpt_b]
+id = "exec_chatgpt_b"
+url = "https://chatgpt.com/gg/699c50e06bc881a3aa5ac1866bf15679"
+role_markdown = "GENERIC_AGENT_ROLE.md"
+stateful = true
+max_tabs = 4
+
+[llm.endpoints.exec_chatgpt_c]
+id = "exec_chatgpt_c"
+url = "https://chatgpt.com/gg/69a32d7d1a008199948ad06498df2f4f"
+role_markdown = "GENERIC_AGENT_ROLE.md"
+stateful = true
+max_tabs = 4
+
+[llm.endpoints.exec_chatgpt_d]
+id = "exec_chatgpt_d"
+url = "https://chatgpt.com/gg/699d3878fbd0819a9d73741b03e8128e"
+role_markdown = "GENERIC_AGENT_ROLE.md"
+stateful = true
 max_tabs = 4
 
 [llm.roles.decompose.weights]
-chatgpt = 100
+exec_chatgpt_a = 100
+exec_chatgpt_b = 100
+exec_chatgpt_c = 100
+exec_chatgpt_d = 100
 
 [llm.roles.decompose]
 burst = 4
@@ -44,4 +67,13 @@ burst = 4
 planner_chatgpt_group = 100
 
 [llm.roles.planner]
+burst = 4
+
+[llm.roles.exec.weights]
+exec_chatgpt_a = 100
+exec_chatgpt_b = 100
+exec_chatgpt_c = 100
+exec_chatgpt_d = 100
+
+[llm.roles.exec]
 burst = 4

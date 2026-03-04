@@ -32,7 +32,10 @@ pub struct PlannerSession {
     role_schema: String,
     goal: String,
     history: Vec<String>,
+    stateful: bool,
 }
+
+const MAX_HISTORY: usize = 5;
 
 impl PlannerSession {
     pub fn new(endpoint: &LlmEndpoint, goal: String) -> Self {
@@ -42,6 +45,7 @@ impl PlannerSession {
             role_schema: endpoint.role_markdown.clone(),
             goal,
             history: Vec::new(),
+            stateful: endpoint.stateful,
         }
     }
 
@@ -119,22 +123,56 @@ Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"descript
 
         let attempts = retries.max(1);
         for attempt in 1..=attempts {
+            let allow_mismatch = attempt > 1 && self.history.is_empty();
             let raw = endpoint_worker::send_request(
                 bridge,
                 &self.endpoint_id,
                 &self.url,
+                self.stateful,
                 &prompt,
                 &self.role_schema,
                 None,
                 None,
+                allow_mismatch,
                 "planner",
                 tabs,
                 max_tabs,
                 tab_cooldown_ms,
             )
-            .await?;
+            .await;
+
+            let raw = match raw {
+                Ok(v) => v,
+                Err(e) => {
+                    if e.to_string().contains("req_id mismatch") {
+                        self.history.clear();
+                        let retry_raw = endpoint_worker::send_request(
+                            bridge,
+                            &self.endpoint_id,
+                            &self.url,
+                            self.stateful,
+                            &prompt,
+                            &self.role_schema,
+                            None,
+                            None,
+                            true,
+                            "planner",
+                            tabs,
+                            max_tabs,
+                            tab_cooldown_ms,
+                        )
+                        .await?;
+                        retry_raw
+                    } else {
+                        return Err(e);
+                    }
+                }
+            };
 
             self.history.push(raw.clone());
+            if self.history.len() > MAX_HISTORY {
+                self.history.remove(0);
+            }
 
             let parsed = JsonExtractor::extract(&raw)
                 .or_else(|_| try_parse_loose_json(&raw).ok_or_else(|| anyhow::anyhow!("planner json extract error")))

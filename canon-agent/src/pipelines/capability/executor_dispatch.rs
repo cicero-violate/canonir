@@ -89,6 +89,9 @@ fn handle_read_file(delta: &Delta, roots: &[PathBuf], max_output_lines: usize) -
         return Err("read_file handler received wrong delta".into());
     };
     let path = resolve_path(path, roots, false)?;
+    if path.is_dir() {
+        return handle_list_dir(&Delta::ListDir { path: path.display().to_string() }, roots, max_output_lines);
+    }
     let content = fs::read_to_string(&path).map_err(|e| format!("read_file failed for {}: {e}", path.display()))?;
     let out = format!("[read_file {}]\n{}\n", path.display(), truncate_lines(&content, max_output_lines));
     Ok((format!("read_file {}", path.display()), out))

@@ -1,0 +1,14 @@
+```json
+{
+  "results": [
+    {
+      "id": "t13",
+      "deltas": [
+        { "type": "read_file", "path": "canon-agent/src/pipelines/capability/engine.rs" },
+        { "type": "read_file", "path": "canon-agent/src/pipelines/capability/graph_runtime.rs" }
+      ],
+      "rationale": "The node execution context must align with how execution results, telemetry, capability enforcement, and graph updates are currently handled. engine.rs contains the execution pipeline and result application logic, while graph_runtime.rs shows kernel preparation and runtime graph state handling. Reading these ensures the execution context model correctly binds upstream results, captures telemetry, and propagates dependency state updates."
+    }
+  ]
+}
+```

@@ -87,6 +87,18 @@ pub(crate) async fn execute_graph_loop(
             serde_json::to_string_pretty(&summary).unwrap_or_default(),
         );
         eprintln!("[capability] {}", summary);
+        let completed_count = graph
+            .nodes
+            .iter()
+            .filter(|n| n.status == dag::Status::Completed)
+            .count();
+        eprintln!(
+            "[capability] iter={} ready={} completed={}/{}",
+            iter,
+            ready_ids.len(),
+            completed_count,
+            graph.nodes.len()
+        );
 
         let event = if graph.all_completed() {
             PipelineEvent::Completed
@@ -146,6 +158,20 @@ pub(crate) async fn execute_graph_loop(
             let log_dir = Path::new(LOG_ROOT).to_path_buf();
             let node_id = node.id.clone();
             let context = build_context(graph, &node.id, context_radius);
+            let node_type_str = format!("{:?}", node.node_type).to_lowercase();
+            let caps_str = node
+                .required_capabilities
+                .iter()
+                .map(|c| format!("{:?}", c).to_lowercase())
+                .collect::<Vec<_>>()
+                .join(",");
+            eprintln!(
+                "[capability] dispatch node={} type={} caps=[{}] endpoint={}",
+                node.id,
+                node_type_str,
+                caps_str,
+                endpoint_id
+            );
             let fut = async move {
                 let start = std::time::Instant::now();
                 let _permit = sem

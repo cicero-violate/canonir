@@ -1,0 +1,17 @@
+```json
+{
+  "results": [
+    {
+      "id": "t2",
+      "deltas": [
+        { "type": "read_file", "path": "dag/DAG_CONTROLLED_AGENT_PIPELINE.md" },
+        { "type": "read_file", "path": "canon-agent/src/pipelines/multi-dag/dag.rs" },
+        { "type": "read_file", "path": "canon-agent/src/pipelines/multi-dag/scheduler.rs" },
+        { "type": "read_file", "path": "specs/architecture.md" },
+        { "type": "read_command", "command": "rg", "args": ["TaskGraph|DAG|scheduler", "canon-agent", "-n"] }
+      ],
+      "rationale": "Deriving the canonical DAG task graph schema requires examining the existing DAG implementation, scheduler logic, and architecture specifications that define node structures, dependency representation, and scheduling metadata."
+    }
+  ]
+}
+```

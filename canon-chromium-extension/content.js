@@ -4,6 +4,8 @@
   if (!chrome?.runtime?.id) return;
   window.__ContentBridgeInstalled = true;
 
+  let lastTurnId = null;
+
   // Inject main bridge
   function injectScript(src) {
     const s = document.createElement("script");
@@ -40,7 +42,22 @@
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     if (event.data?.type === "INBOUND_MESSAGE") {
-      chrome.runtime.sendMessage(event.data, () => void chrome.runtime.lastError);
+      const payload = event.data.payload;
+      let patched = payload;
+      if (payload && typeof payload === "object") {
+        if (payload.turn_id == null && lastTurnId != null) {
+          patched = { ...payload, turn_id: lastTurnId };
+        }
+      } else if (typeof payload === "string") {
+        try {
+          const obj = JSON.parse(payload);
+          if (obj && obj.turn_id == null && lastTurnId != null) {
+            obj.turn_id = lastTurnId;
+            patched = obj;
+          }
+        } catch {}
+      }
+      chrome.runtime.sendMessage({ type: "INBOUND_MESSAGE", payload: patched }, () => void chrome.runtime.lastError);
     }
     if (event.data?.type === "NEW_CHAT_DONE") {
       console.log("[CS] NEW_CHAT_DONE from page");
@@ -56,6 +73,10 @@
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "OUTBOUND_SUBMIT") {
       console.log("[CS] OUTBOUND_SUBMIT received, posting to page");
+      const turnId = message?.payload?.turn_id;
+      if (typeof turnId === "number") {
+        lastTurnId = turnId;
+      }
       window.postMessage({ type: "OUTBOUND_SUBMIT", payload: message.payload }, "*");
       sendResponse({ ok: true });
       return true;

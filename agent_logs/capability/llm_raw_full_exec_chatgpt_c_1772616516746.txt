@@ -1,0 +1,14 @@
+```json
+{
+  "results": [
+    {
+      "id": "t12",
+      "deltas": [
+        { "type": "read_file", "path": "canon-agent/src/pipelines/capability/graph_runtime.rs" },
+        { "type": "read_file", "path": "canon-agent/src/pipelines/capability/dag.rs" }
+      ],
+      "rationale": "The DAGState snapshot structure must align with existing runtime graph representations and kernel preparation logic. Inspecting graph_runtime.rs reveals how kernels and frontier data are derived from the graph, while capability/dag.rs shows alternative TaskGraph representations used in the capability pipeline. This informs the design of an immutable DAGState containing status vectors, dependency bitsets, frontier cache, failure masks, and telemetry."
+    }
+  ]
+}
+```

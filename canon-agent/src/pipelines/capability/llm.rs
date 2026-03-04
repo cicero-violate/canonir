@@ -15,6 +15,7 @@ pub async fn call_agent_json(
     bridge: &WsBridge,
     endpoint_id: &str,
     url: &str,
+    stateful: bool,
     prompt: &str,
     role_schema: &str,
     phase: &str,
@@ -23,15 +24,48 @@ pub async fn call_agent_json(
     max_tabs: usize,
     tab_cooldown_ms: u64,
 ) -> Result<Value> {
+    call_agent_json_inner(
+        bridge,
+        endpoint_id,
+        url,
+        stateful,
+        prompt,
+        role_schema,
+        phase,
+        node_id,
+        tabs,
+        max_tabs,
+        tab_cooldown_ms,
+        false,
+    )
+    .await
+}
+
+async fn call_agent_json_inner(
+    bridge: &WsBridge,
+    endpoint_id: &str,
+    url: &str,
+    stateful: bool,
+    prompt: &str,
+    role_schema: &str,
+    phase: &str,
+    node_id: Option<&str>,
+    tabs: &TabsHandle,
+    max_tabs: usize,
+    tab_cooldown_ms: u64,
+    allow_req_id_mismatch: bool,
+) -> Result<Value> {
     let cache_key = cache_key_for(prompt, role_schema);
     let raw = endpoint_worker::send_request(
         bridge,
         endpoint_id,
         url,
+        stateful,
         prompt,
         role_schema,
         node_id,
         Some(cache_key),
+        allow_req_id_mismatch,
         phase,
         tabs,
         max_tabs,
@@ -67,6 +101,7 @@ pub async fn call_agent_json_with_retry(
     bridge: &WsBridge,
     endpoint_id: &str,
     url: &str,
+    stateful: bool,
     prompt: &str,
     role_schema: &str,
     phase: &str,
@@ -77,11 +112,94 @@ pub async fn call_agent_json_with_retry(
     max_retries: u32,
     delay_secs: u64,
 ) -> Result<Value> {
+    call_agent_json_with_retry_inner(
+        bridge,
+        endpoint_id,
+        url,
+        stateful,
+        prompt,
+        role_schema,
+        phase,
+        node_id,
+        tabs,
+        max_tabs,
+        tab_cooldown_ms,
+        max_retries,
+        delay_secs,
+        false,
+    )
+    .await
+}
+
+pub async fn call_agent_json_with_retry_allow_mismatch(
+    bridge: &WsBridge,
+    endpoint_id: &str,
+    url: &str,
+    stateful: bool,
+    prompt: &str,
+    role_schema: &str,
+    phase: &str,
+    node_id: Option<&str>,
+    tabs: &TabsHandle,
+    max_tabs: usize,
+    tab_cooldown_ms: u64,
+    max_retries: u32,
+    delay_secs: u64,
+) -> Result<Value> {
+    call_agent_json_with_retry_inner(
+        bridge,
+        endpoint_id,
+        url,
+        stateful,
+        prompt,
+        role_schema,
+        phase,
+        node_id,
+        tabs,
+        max_tabs,
+        tab_cooldown_ms,
+        max_retries,
+        delay_secs,
+        true,
+    )
+    .await
+}
+
+async fn call_agent_json_with_retry_inner(
+    bridge: &WsBridge,
+    endpoint_id: &str,
+    url: &str,
+    stateful: bool,
+    prompt: &str,
+    role_schema: &str,
+    phase: &str,
+    node_id: Option<&str>,
+    tabs: &TabsHandle,
+    max_tabs: usize,
+    tab_cooldown_ms: u64,
+    max_retries: u32,
+    delay_secs: u64,
+    allow_req_id_mismatch: bool,
+) -> Result<Value> {
     let mut last_err: Option<anyhow::Error> = None;
     for attempt in 0..max_retries {
         let start = now_ms();
         log_llm(format!("phase={} endpoint={} attempt={} start", phase, endpoint_id, attempt + 1));
-        match call_agent_json(bridge, endpoint_id, url, prompt, role_schema, phase, node_id, tabs, max_tabs, tab_cooldown_ms).await {
+        match call_agent_json_inner(
+            bridge,
+            endpoint_id,
+            url,
+            stateful,
+            prompt,
+            role_schema,
+            phase,
+            node_id,
+            tabs,
+            max_tabs,
+            tab_cooldown_ms,
+            allow_req_id_mismatch,
+        )
+        .await {
             Ok(v) => {
                 let elapsed = now_ms().saturating_sub(start);
                 log_llm(format!("phase={} endpoint={} attempt={} ok elapsed_ms={}", phase, endpoint_id, attempt + 1, elapsed));

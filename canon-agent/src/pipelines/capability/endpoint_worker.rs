@@ -31,6 +31,7 @@ pub struct LlmRequest {
     pub req_id: u64,
     pub node_id: Option<String>,
     pub cache_key: Option<u64>,
+    pub allow_req_id_mismatch: bool,
     pub prompt: String,
     pub role_schema: String,
     pub phase: String,
@@ -42,6 +43,7 @@ struct EndpointWorker {
     url: String,
     max_tabs: usize,
     tab_cooldown_ms: u64,
+    stateful: bool,
     bridge: WsBridge,
     tabs: TabsHandle,
     seen_hashes: HashSet<u64>,
@@ -64,10 +66,31 @@ impl EndpointWorker {
             format!("{}\n\n{}", req.role_schema.trim_end(), req.prompt)
         };
         let full_prompt = format!("[REQ_ID:{}]\n{}", req.req_id, full_prompt);
+        let prompt_chars = full_prompt.len();
+        let full_prompt = if prompt_chars > 32_000 {
+            let truncated = &full_prompt[..32_000];
+            // truncate at last newline to avoid mid-token split
+            let cut = truncated.rfind('\n').unwrap_or(32_000);
+            let mut s = full_prompt[..cut].to_string();
+            s.push_str("\n... [prompt truncated]\n");
+            s
+        } else {
+            full_prompt
+        };
+        eprintln!(
+            "[capability] req_id={} node={} phase={} prompt_chars={}{}",
+            req.req_id,
+            req.node_id.as_deref().unwrap_or("?"),
+            req.phase,
+            prompt_chars,
+            if prompt_chars > 32_000 { " (truncated)" } else { "" }
+        );
         if let Some(node_id) = req.node_id.as_deref() {
             response_router::register(req.req_id, node_id).await;
         }
-        let result = self.send_turn(&req.phase, req.req_id, full_prompt).await;
+        let result = self
+            .send_turn(&req.phase, req.req_id, req.allow_req_id_mismatch, full_prompt)
+            .await;
         if let Ok(raw) = result.as_ref() {
             if let Some(key) = req.cache_key {
                 self.cache.insert(key, raw.clone());
@@ -77,7 +100,13 @@ impl EndpointWorker {
         let _ = req.response.send(result);
     }
 
-    async fn send_turn(&mut self, phase: &str, req_id: u64, full_prompt: String) -> Result<String> {
+    async fn send_turn(
+        &mut self,
+        phase: &str,
+        req_id: u64,
+        allow_req_id_mismatch: bool,
+        full_prompt: String,
+    ) -> Result<String> {
         let tab_id = get_or_open_tab(
             &self.bridge,
             &self.endpoint_id,
@@ -118,11 +147,17 @@ impl EndpointWorker {
                 "phase={} endpoint={} tab={} req_id_mismatch expected={}",
                 phase, self.endpoint_id, tab_id, req_id
             ));
-            return Err(anyhow::anyhow!("req_id mismatch"));
+            if !allow_req_id_mismatch {
+                return Err(anyhow::anyhow!("req_id mismatch"));
+            }
+            log_llm(format!(
+                "phase={} endpoint={} tab={} req_id_mismatch_accepted",
+                phase, self.endpoint_id, tab_id
+            ));
         }
         let _ = response_router::resolve(req_id).await;
 
-        if is_gemini_url(&self.url) {
+        if !self.stateful && is_gemini_url(&self.url) {
             let _ = self.bridge.new_chat(tab_id).await;
             match self.bridge.wait_new_chat(tab_id, 20).await {
                 Ok(()) => log_llm(format!(
@@ -138,7 +173,7 @@ impl EndpointWorker {
                     return Err(anyhow::anyhow!("new_chat timeout"));
                 }
             }
-        } else if is_chatgpt_url(&self.url) {
+        } else if !self.stateful && is_chatgpt_url(&self.url) {
             let _ = self.bridge.new_chat(tab_id).await;
             match self.bridge.wait_new_chat(tab_id, 20).await {
                 Ok(()) => log_llm(format!(
@@ -192,10 +227,12 @@ pub async fn send_request(
     bridge: &WsBridge,
     endpoint_id: &str,
     url: &str,
+    stateful: bool,
     prompt: &str,
     role_schema: &str,
     node_id: Option<&str>,
     cache_key: Option<u64>,
+    allow_req_id_mismatch: bool,
     phase: &str,
     tabs: &TabsHandle,
     max_tabs: usize,
@@ -213,6 +250,7 @@ pub async fn send_request(
             url: url.to_string(),
             max_tabs,
             tab_cooldown_ms,
+            stateful,
             bridge: bridge.clone(),
             tabs: tabs.clone(),
             seen_hashes: HashSet::new(),
@@ -227,6 +265,7 @@ pub async fn send_request(
         req_id,
         node_id: node_id.map(|v| v.to_string()),
         cache_key,
+        allow_req_id_mismatch,
         prompt: prompt.to_string(),
         role_schema: role_schema.to_string(),
         phase: phase.to_string(),
@@ -257,6 +296,7 @@ pub async fn init_workers(
             url: endpoint.url.clone(),
             max_tabs: endpoint.max_tabs,
             tab_cooldown_ms: config.tab_cooldown_ms,
+            stateful: endpoint.stateful,
             bridge: bridge.clone(),
             tabs: tabs.clone(),
             seen_hashes: HashSet::new(),

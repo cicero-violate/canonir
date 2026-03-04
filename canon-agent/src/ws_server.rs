@@ -436,12 +436,11 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             let mut chunk = payload.clone();
             if payload.trim_start().starts_with('{') {
                 if let Ok(v) = serde_json::from_str::<Value>(&payload) {
-                    if let (Some(tid), Some(c)) = (
-                        v.get("turn_id").and_then(|v| v.as_u64()),
-                        v.get("chunk").and_then(|v| v.as_str()),
-                    ) {
-                        inbound_turn_id = Some(tid);
+                    if let Some(c) = v.get("chunk").and_then(|v| v.as_str()) {
                         chunk = c.to_string();
+                    }
+                    if let Some(tid) = v.get("turn_id").and_then(|v| v.as_u64()) {
+                        inbound_turn_id = Some(tid);
                     }
                 }
             }

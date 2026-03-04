@@ -1,5 +1,4 @@
 write_allowed_roots = [
-  "small_rust_project/src",
-  "small_rust_project/Cargo.toml"
+  "small_rust_project"
 ]
-require_final_render = true
+require_final_render = false

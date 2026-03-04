@@ -1,0 +1,17 @@
+```json
+{
+  "results": [
+    {
+      "id": "t11",
+      "deltas": [
+        { "type": "read_file", "path": "canon-agent/src/pipelines/multi-dag/dag.rs" },
+        { "type": "read_file", "path": "canon-agent/src/pipelines/multi-dag/scheduler.rs" },
+        { "type": "read_file", "path": "dag/DAG_CONTROLLED_AGENT_PIPELINE.md" },
+        { "type": "read_file", "path": "specs/architecture.md" },
+        { "type": "read_command", "command": "rg", "args": ["transition_allowed|Status::", "canon-agent", "-n"] }
+      ],
+      "rationale": "Defining the deterministic node lifecycle state machine requires examining the existing Status enum, allowed transitions in transition_allowed(), and scheduler readiness logic. Documentation files describe intended lifecycle semantics, while searching for status transitions ensures the new model aligns with existing execution and invariant enforcement."
+    }
+  ]
+}
+```

@@ -1,0 +1,76 @@
+```json
+{
+  "tasks": [
+    {
+      "id": "t1",
+      "description": "Analyze current workspace architecture and extract the structural model of the existing DAG-controlled multi-agent pipeline from canon-agent, canon-analyzer, canon-capture, and orchestration artifacts.",
+      "deps": [],
+      "required_capabilities": ["file_read", "read_dag", "stateless_invoke"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t2",
+      "description": "Derive the canonical DAG task graph schema including node structure, dependency representation, execution state model, and scheduling metadata required for a DAG-controlled multi-agent pipeline.",
+      "deps": [],
+      "required_capabilities": ["stateless_invoke", "invariant_check"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t3",
+      "description": "Design the frontier computation kernel that determines which DAG nodes are executable given dependency completion states and failure masks.",
+      "deps": [],
+      "required_capabilities": ["stateless_invoke", "invariant_check"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t4",
+      "description": "Define the GPU-suitable pure function kernel that evaluates dependency adjacency matrices and completion vectors to compute the ready-node frontier.",
+      "deps": [],
+      "required_capabilities": ["stateless_invoke"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t5",
+      "description": "Design failure propagation semantics across dependency edges including retry policies, failure masks, skip rules, and invariant guarantees.",
+      "deps": [],
+      "required_capabilities": ["stateless_invoke", "invariant_check"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t6",
+      "description": "Define the scheduler kernel that consumes the ready-node frontier and produces a deterministic execution order for parallel agent tasks.",
+      "deps": [],
+      "required_capabilities": ["stateless_invoke"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t7",
+      "description": "Specify the multi-agent execution contract including stateless invocation boundaries, capability enforcement, and invariant verification for each node execution.",
+      "deps": [],
+      "required_capabilities": ["stateless_invoke", "prompt_contract_enforce", "invariant_check"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t8",
+      "description": "Define the orchestration execution loop semantics that repeatedly computes ready nodes, schedules them, executes agent tasks, and updates DAG state until completion.",
+      "deps": [],
+      "required_capabilities": ["stateless_invoke", "schedule_ready", "invariant_check"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t9",
+      "description": "Specify structural invariants required for correctness of the DAG-controlled agent system including acyclicity, dependency validity, and deterministic scheduling guarantees.",
+      "deps": [],
+      "required_capabilities": ["invariant_check", "stateless_invoke"],
+      "node_type": "analysis"
+    },
+    {
+      "id": "t10",
+      "description": "Render the implementation plan and architecture specification for the DAG-controlled multi-agent pipeline into workspace documentation files describing kernels, scheduler, invariants, and execution semantics.",
+      "deps": [],
+      "required_capabilities": ["file_write"],
+      "node_type": "render"
+    }
+  ]
+}
+```
