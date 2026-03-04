@@ -8,7 +8,7 @@ use super::config::CapabilityPolicy;
 use super::dag::AuthorityContext;
 use super::capability::Capability;
 use super::dag::{Status, TaskGraph, TaskNode};
-use super::llm::call_agent_json_with_retry;
+use super::llm::call_agent_json_with_retry_allow_mismatch;
 use super::tab_management::TabsHandle;
 use super::Delta;
 use crate::ws_server::WsBridge;
@@ -70,6 +70,8 @@ pub struct ContextNode {
     pub deps: Vec<String>,
     pub required_capabilities: Vec<Capability>,
     pub status: Status,
+    pub result: Option<String>,
+    pub error: Option<String>,
 }
 
 const MUTATE_SCHEMA: &str = "Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"results\": [\n    { \"id\": \"t1\", \"deltas\": [ { \"type\": \"write_file\", \"path\": \"x\", \"content\": \"...\" } ], \"rationale\": \"string\" }\n  ]\n}\nAllowed delta types:\n- read_file { path }\n- list_dir { path }\n- read_command { command, args }\n- write_file { path, content }\n- replace_text { path, find, replace }\n- delete_file { path }\n";
@@ -171,6 +173,7 @@ pub async fn call_node(
     bridge: &WsBridge,
     endpoint_id: &str,
     url: &str,
+    stateful: bool,
     role_schema: &str,
     tabs: &TabsHandle,
     max_tabs: usize,
@@ -189,6 +192,7 @@ pub async fn call_node(
         bridge,
         endpoint_id,
         url,
+        stateful,
         role_schema,
         tabs,
         max_tabs,
@@ -251,10 +255,10 @@ fn apply_readonly_wrapper(
     max_output_lines: usize,
     log_dir: &Path,
     iter: u64,
-    _policy: &CapabilityPolicy,
+    policy: &CapabilityPolicy,
 ) -> Result<()> {
     if let NodeCallResult::Readonly { node_id, output } = result {
-        apply_readonly_output(node_id, output, graph, roots, max_output_lines, log_dir, iter)
+        apply_readonly_output(node_id, output, graph, roots, max_output_lines, log_dir, iter, policy.max_node_retries)
     } else {
         unreachable!("apply_readonly_wrapper received wrong variant")
     }
@@ -284,6 +288,7 @@ pub async fn dispatch_node(
     bridge: &WsBridge,
     endpoint_id: &str,
     url: &str,
+    stateful: bool,
     role_schema: &str,
     tabs: &TabsHandle,
     max_tabs: usize,
@@ -303,6 +308,7 @@ pub async fn dispatch_node(
         bridge,
         endpoint_id,
         url,
+        stateful,
         role_schema,
         tabs,
         max_tabs,
@@ -328,6 +334,7 @@ async fn call_mode(
     bridge: &WsBridge,
     endpoint_id: &str,
     url: &str,
+    stateful: bool,
     role_schema: &str,
     tabs: &TabsHandle,
     max_tabs: usize,
@@ -371,6 +378,7 @@ async fn call_mode(
         bridge,
         endpoint_id,
         url,
+        stateful,
         &prompt,
         config.schema,
         &input,
@@ -401,6 +409,7 @@ async fn llm_call_with_retry(
     bridge: &WsBridge,
     endpoint_id: &str,
     url: &str,
+    stateful: bool,
     prompt: &str,
     schema: &str,
     input: &Value,
@@ -413,8 +422,8 @@ async fn llm_call_with_retry(
     retries: u32,
     delay_secs: u64,
 ) -> Result<Value> {
-    let payload = call_agent_json_with_retry(
-        bridge, endpoint_id, url, prompt, role_schema, phase, node_id,
+    let payload = call_agent_json_with_retry_allow_mismatch(
+        bridge, endpoint_id, url, stateful, prompt, role_schema, phase, node_id,
         tabs, max_tabs, tab_cooldown_ms, retries, delay_secs,
     ).await?;
     Ok(payload)
@@ -495,6 +504,7 @@ fn apply_readonly_output(
     max_output_lines: usize,
     log_dir: &Path,
     iter: u64,
+    max_node_retries: u32,
 ) -> Result<()> {
     if output.results.is_empty() {
         let summary = serde_json::json!({"iter": iter, "phase": "readonly", "event": "empty_results", "node": node_id});
@@ -523,7 +533,21 @@ fn apply_readonly_output(
             let _ = std::fs::write(log_dir.join(format!("iter_{:03}_readonly_error.json", iter)),
                                    serde_json::to_string_pretty(&summary).unwrap_or_default());
             eprintln!("[capability] {}", summary);
-            let _ = graph.update_status(&result.id, Status::Ready);
+            let fail_count = if let Some(n) = graph.get_node_mut(&result.id) {
+                n.readonly_fail_count += 1;
+                n.readonly_fail_count
+            } else {
+                1
+            };
+            if fail_count >= max_node_retries {
+                eprintln!(
+                    r#"[capability] {{"iter":{},"phase":"readonly","event":"escalate_failed","node":"{}","fail_count":{}}}"#,
+                    iter, result.id, fail_count
+                );
+                let _ = graph.update_status(&result.id, Status::Failed);
+            } else {
+                let _ = graph.update_status(&result.id, Status::Ready);
+            }
         } else {
             let _ = graph.update_status(&result.id, Status::Completed);
         }

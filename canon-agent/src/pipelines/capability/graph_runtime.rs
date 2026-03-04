@@ -104,6 +104,8 @@ pub(crate) fn build_context(
                 deps: n.deps.clone(),
                 required_capabilities: n.required_capabilities.clone(),
                 status: n.status,
+                result: n.result.clone(),
+                error: n.error.clone(),
             });
         }
     }

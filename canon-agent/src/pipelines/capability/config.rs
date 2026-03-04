@@ -42,6 +42,8 @@ struct RawSystem {
     pub planner_max_new_nodes: usize,
     #[serde(default = "default_planner_max_new_edges")]
     pub planner_max_new_edges: usize,
+    #[serde(default = "default_max_node_retries")]
+    pub max_node_retries: u32,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -80,6 +82,7 @@ fn default_max_depth() -> usize { 6 }
 fn default_prune_unlinked() -> bool { true }
 fn default_planner_max_new_nodes() -> usize { 32 }
 fn default_planner_max_new_edges() -> usize { 64 }
+fn default_max_node_retries() -> u32 { 3 }
 fn default_max_tabs() -> usize { 1 }
 fn default_tab_cooldown_ms() -> u64 { 0 }
 
@@ -119,6 +122,7 @@ pub struct CapabilityConfig {
     pub prune_unlinked: bool,
     pub planner_max_new_nodes: usize,
     pub planner_max_new_edges: usize,
+    pub max_node_retries: u32,
     pub llm_endpoints: Vec<LlmEndpoint>,
     pub planner_endpoint: Option<LlmEndpoint>,
     pub llm_roles: HashMap<String, RawRoleConfig>,
@@ -168,6 +172,7 @@ impl CapabilityConfig {
             prune_unlinked: raw.system.prune_unlinked,
             planner_max_new_nodes: raw.system.planner_max_new_nodes,
             planner_max_new_edges: raw.system.planner_max_new_edges,
+            max_node_retries: raw.system.max_node_retries,
             llm_endpoints,
             planner_endpoint,
             llm_roles: raw.llm.roles,
@@ -220,10 +225,19 @@ struct RawPolicy {
 }
 
 #[derive(Debug, Clone)]
-#[derive(Default)]
 pub struct CapabilityPolicy {
     pub write_allowed_roots: Vec<PathBuf>,
     pub require_final_render: bool,
+    pub max_node_retries: u32,
+}
+impl Default for CapabilityPolicy {
+    fn default() -> Self {
+        Self {
+            write_allowed_roots: Vec::new(),
+            require_final_render: false,
+            max_node_retries: default_max_node_retries(),
+        }
+    }
 }
 
 impl CapabilityPolicy {
@@ -239,6 +253,7 @@ impl CapabilityPolicy {
                 if path.is_absolute() { path.to_path_buf() } else { workspace_root.join(path) }
             })
             .collect::<Vec<_>>();
-        Ok(Self { write_allowed_roots: roots, require_final_render: raw.require_final_render })
+        Ok(Self { write_allowed_roots: roots, require_final_render: raw.require_final_render, max_node_retries: default_max_node_retries() })
+        // max_node_retries is patched in by mod.rs after loading CapabilityConfig
     }
 }

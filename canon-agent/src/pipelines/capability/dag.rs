@@ -48,6 +48,8 @@ pub struct TaskNode {
     pub node_type: NodeType,
     pub result: Option<String>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub readonly_fail_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,25 +197,20 @@ impl AuthorityContext {
 }
 
 pub fn resolve_ready(graph: &mut TaskGraph) {
-    let id_to_idx: HashMap<&str, usize> = graph
+    let completed: std::collections::HashSet<String> = graph
         .nodes
         .iter()
-        .enumerate()
-        .map(|(i, n)| (n.id.as_str(), i))
+        .filter(|n| n.status == Status::Completed)
+        .map(|n| n.id.clone())
         .collect();
-    let adj: Vec<Vec<usize>> = graph
-        .nodes
-        .iter()
-        .map(|n| {
-            n.deps
-                .iter()
-                .filter_map(|d| id_to_idx.get(d.as_str()).copied())
-                .collect()
-        })
-        .collect();
-    let layers = algorithms::graph::scheduling::topological_layers(&adj);
-    for &idx in layers.first().into_iter().flatten() {
-        graph.nodes[idx].status = PENDING_TO_READY[graph.nodes[idx].status as usize];
+    for node in &mut graph.nodes {
+        if node.status != Status::Pending {
+            continue;
+        }
+        let deps_satisfied = node.deps.iter().all(|d| completed.contains(d));
+        if deps_satisfied {
+            node.status = PENDING_TO_READY[node.status as usize];
+        }
     }
 }
 

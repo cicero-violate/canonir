@@ -9,6 +9,7 @@ use tokio::sync::Semaphore;
 use super::config::{self, CapabilityConfig};
 use super::dag;
 use super::engine;
+use super::endpoint_scheduler;
 use super::graph_algo::{emit_planned_graph, compute_graph_signals, run_graph_algorithms};
 use super::graph_runtime::{build_context, enforce_semantic_validations, prune_unlinked_nodes};
 use super::tab_management::{self, TabsHandle};
@@ -53,6 +54,7 @@ pub(crate) async fn execute_graph_loop(
     cwd: &[PathBuf],
     workspace_listing: &str,
     endpoint: &config::LlmEndpoint,
+    exec_role: &str,
     policy: &config::CapabilityPolicy,
     context_radius: usize,
     max_concurrency: usize,
@@ -133,8 +135,13 @@ pub(crate) async fn execute_graph_loop(
                 }
             };
             let sem = semaphore.clone();
-            let endpoint_id = endpoint.id.clone();
-            let url = endpoint.url.clone();
+            let selected = endpoint_scheduler::select_endpoints_for_role(config, role_rr, exec_role, 1).await;
+            let exec_ep = selected.get(0).map(|e| (e.id.clone(), e.url.clone(), e.max_tabs, None))
+                .unwrap_or_else(|| (endpoint.id.clone(), endpoint.url.clone(), endpoint.max_tabs, Some(endpoint.stateful)));
+            let endpoint_id = exec_ep.0;
+            let url = exec_ep.1;
+            let max_tabs = exec_ep.2;
+            let stateful = exec_ep.3.unwrap_or(endpoint.stateful);
             let workspace_root = cwd[0].clone();
             let log_dir = Path::new(LOG_ROOT).to_path_buf();
             let node_id = node.id.clone();
@@ -151,9 +158,10 @@ pub(crate) async fn execute_graph_loop(
                     bridge,
                     &endpoint_id,
                     &url,
+                    stateful,
                     "",
                     tabs,
-                    endpoint.max_tabs,
+                    max_tabs,
                     tab_cooldown_ms,
                     &workspace_root,
                     &context,
@@ -249,6 +257,7 @@ pub(crate) async fn run_planner_execution_loop(
     cwd: &[PathBuf],
     workspace_listing: &str,
     endpoint: &config::LlmEndpoint,
+    exec_role: &str,
     policy: &config::CapabilityPolicy,
     context_radius: usize,
     max_concurrency: usize,
@@ -332,6 +341,7 @@ pub(crate) async fn run_planner_execution_loop(
             cwd,
             workspace_listing,
             endpoint,
+            exec_role,
             policy,
             context_radius,
             max_concurrency,
@@ -427,6 +437,7 @@ fn apply_planner_update(graph: &mut dag::TaskGraph, update: PlannerUpdate) -> Re
             node_type: spec.node_type,
             result: None,
             error: None,
+            readonly_fail_count: 0,
         });
     }
     existing.clear();

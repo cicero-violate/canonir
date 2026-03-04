@@ -91,12 +91,14 @@ impl CapabilityPipeline {
         let max_output_lines = self.config.max_output_lines;
         let workspace_listing = list_workspace_entries(&ctx.cwd[0], 50);
         let policy = config::CapabilityPolicy::load(&ctx.cwd[0])?;
+        let policy = config::CapabilityPolicy { max_node_retries: self.config.max_node_retries, ..policy };
 
         let decomp = decompose::decompose_goal(
             &goal,
             &self.bridge,
             &endpoint.id,
             &endpoint.url,
+            endpoint.stateful,
             "",
             &self.tabs,
             endpoint.max_tabs,
@@ -118,6 +120,7 @@ impl CapabilityPipeline {
             node_type: t.node_type,
             result: None,
             error: None,
+            readonly_fail_count: 0,
         }).collect();
         ensure_unique_node_ids(&mut nodes);
 
@@ -137,6 +140,7 @@ impl CapabilityPipeline {
             &ctx.cwd,
             &workspace_listing,
             endpoint,
+            "exec",
             &policy,
             self.config.context_radius,
             self.config.max_concurrency,
