@@ -46,5 +46,5 @@ Goal → Graph Features → Policy Decision → Planner (optional) → Scheduler
 7. ✗ **Goal Similarity Embedding**
    Better template retrieval using semantic goal similarity instead of only structural matching.
 
-8. ✗ **Deterministic Resume State**
+8. ✓ **Deterministic Resume State**
    Persist graph + policy + telemetry snapshot so runs can resume exactly.

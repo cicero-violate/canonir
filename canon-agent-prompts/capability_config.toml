@@ -36,6 +36,9 @@ mutation_rate = 0.25
 mutation_budget = 2
 mutation_candidates = 2
 template_population_size = 5
+enable_resume = true
+snapshot_interval_iters = 10
+snapshot_file = "/workspace/ai_sandbox/canon/agent_logs/state_snapshot.json"
 
 [llm]
 tab_cooldown_ms = 4000

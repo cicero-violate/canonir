@@ -26,6 +26,7 @@ pub mod policy_train;
 pub mod gpu_scheduler;
 pub mod capability_cost;
 pub mod template_mutation;
+pub mod state_snapshot;
 
 use super::{Pipeline, PipelineContext, PipelineOutcome};
 use crate::ir::SystemState;
@@ -148,7 +149,18 @@ impl CapabilityPipeline {
         };
 
         let mut cache_hit = false;
-        let mut graph = if store.exists(&template_name) {
+        let mut graph = if self.config.enable_resume {
+            let snap = state_snapshot::load(Path::new(&self.config.snapshot_file));
+            if let Some(snapshot) = snap {
+                telemetry::set_resume_iteration(snapshot.iteration);
+                let mut g = snapshot.graph;
+                g.reset_for_execution();
+                dag::resolve_ready(&mut g);
+                g
+            } else {
+                planner_generate().await?
+            }
+        } else if store.exists(&template_name) {
             match store.load(&template_name) {
                 Ok(g) if g.validate().is_ok() => {
                     eprintln!("[templates] cache hit");
@@ -239,6 +251,9 @@ impl CapabilityPipeline {
                 template_mutations: 0,
                 mutation_success_rate: 0.0,
                 mutation_reward_delta: 0.0,
+                snapshot_written: false,
+                snapshot_loaded: false,
+                resume_iteration: 0,
             };
             let snapshot = telemetry::TelemetrySnapshot {
                 planner: Default::default(),

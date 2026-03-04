@@ -30,6 +30,7 @@ use super::gpu_scheduler::driver::GpuScheduler;
 use super::decompose;
 use super::capability_cost::CapabilityCostTable;
 use super::template_mutation;
+use super::state_snapshot;
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -269,6 +270,7 @@ pub(crate) async fn execute_graph_loop(
     let mut failures = Vec::new();
     let mut repair_stats = RepairStats::default();
     for iter in 1..=max_iterations {
+        exec_metrics.last_snapshot_written = false;
         repair_stats = RepairStats::default();
         let features = graph_features(graph);
         let mut ready_ids = GpuScheduler::schedule(graph);
@@ -501,6 +503,12 @@ pub(crate) async fn execute_graph_loop(
         {
             apply_recovery(graph);
         }
+
+        if config.enable_resume && config.snapshot_interval_iters > 0 && iter % config.snapshot_interval_iters == 0 {
+            let snapshot = state_snapshot::StateSnapshot { graph: graph.clone(), iteration: iter };
+            state_snapshot::save(Path::new(&config.snapshot_file), &snapshot);
+            exec_metrics.last_snapshot_written = true;
+        }
     }
     anyhow::bail!("iteration limit exceeded")
 }
@@ -623,6 +631,7 @@ pub(crate) async fn run_planner_execution_loop(
     let mut last_mutations = 0u64;
     let mut last_mutation_success = 0u64;
     let mut last_mutation_reward_delta = 0.0;
+    let mut resume_iteration = telemetry::resume_iteration();
     while !graph.all_completed() && iter < max_iterations {
         eprintln!("{}", console::phase("planner", &format!("iter={} nodes={}", iter, graph.nodes.len())));
         let iter_start = std::time::Instant::now();
@@ -1001,6 +1010,9 @@ pub(crate) async fn run_planner_execution_loop(
             template_mutations: last_mutations,
             mutation_success_rate: if last_mutations == 0 { 0.0 } else { last_mutation_success as f64 / last_mutations as f64 },
             mutation_reward_delta: last_mutation_reward_delta,
+            snapshot_written: exec_metrics.last_snapshot_written,
+            snapshot_loaded: resume_iteration > 0,
+            resume_iteration,
         };
         let reward_history = store.recent_rewards(template_name, 6);
         let features = features.with_reward_history(&reward_history);
@@ -1082,6 +1094,7 @@ pub(crate) async fn run_planner_execution_loop(
             &snapshot,
         );
         iter += 1;
+        resume_iteration = iter;
     }
     let reward = telemetry::compute_reward(graph, iter, max_iterations);
     if graph.all_completed() && !graph.has_failed() {

@@ -88,6 +88,12 @@ struct RawSystem {
     pub failure_constraint_threshold: usize,
     #[serde(default = "default_max_constraints")]
     pub max_constraints: usize,
+    #[serde(default = "default_enable_resume")]
+    pub enable_resume: bool,
+    #[serde(default = "default_snapshot_interval_iters")]
+    pub snapshot_interval_iters: u64,
+    #[serde(default = "default_snapshot_file")]
+    pub snapshot_file: String,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -149,6 +155,11 @@ fn default_mutation_candidates() -> usize { 2 }
 fn default_template_population_size() -> usize { 5 }
 fn default_failure_constraint_threshold() -> usize { 2 }
 fn default_max_constraints() -> usize { 16 }
+fn default_enable_resume() -> bool { true }
+fn default_snapshot_interval_iters() -> u64 { 10 }
+fn default_snapshot_file() -> String {
+    "/workspace/ai_sandbox/canon/agent_logs/state_snapshot.json".to_string()
+}
 fn default_max_tabs() -> usize { 1 }
 fn default_tab_cooldown_ms() -> u64 { 0 }
 
@@ -211,6 +222,9 @@ pub struct CapabilityConfig {
     pub template_population_size: usize,
     pub failure_constraint_threshold: usize,
     pub max_constraints: usize,
+    pub enable_resume: bool,
+    pub snapshot_interval_iters: u64,
+    pub snapshot_file: String,
     pub llm_endpoints: Vec<LlmEndpoint>,
     pub planner_endpoint: Option<LlmEndpoint>,
     pub llm_roles: HashMap<String, RawRoleConfig>,
@@ -283,6 +297,9 @@ impl CapabilityConfig {
             template_population_size: raw.system.template_population_size,
             failure_constraint_threshold: raw.system.failure_constraint_threshold,
             max_constraints: raw.system.max_constraints,
+            enable_resume: raw.system.enable_resume,
+            snapshot_interval_iters: raw.system.snapshot_interval_iters,
+            snapshot_file: raw.system.snapshot_file,
             llm_endpoints,
             planner_endpoint,
             llm_roles: raw.llm.roles,

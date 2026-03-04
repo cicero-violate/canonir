@@ -22,6 +22,7 @@ pub struct ExecMetrics {
     pub last_repair_attempts: u64,
     pub last_repair_successes: u64,
     pub last_repair_kind: Option<String>,
+    pub last_snapshot_written: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
@@ -56,6 +57,9 @@ pub struct RuntimeMetrics {
     pub template_mutations: u64,
     pub mutation_success_rate: f64,
     pub mutation_reward_delta: f64,
+    pub snapshot_written: bool,
+    pub snapshot_loaded: bool,
+    pub resume_iteration: u64,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
@@ -96,9 +100,18 @@ pub fn compute_reward(graph: &TaskGraph, iterations_used: u64, max_iterations: u
 }
 
 pub static PENDING_REQUESTS: AtomicU64 = AtomicU64::new(0);
+pub static RESUME_ITERATION: AtomicU64 = AtomicU64::new(0);
 
 pub fn pending_requests() -> u64 {
     PENDING_REQUESTS.load(Ordering::Relaxed)
+}
+
+pub fn set_resume_iteration(iter: u64) {
+    RESUME_ITERATION.store(iter, Ordering::Relaxed);
+}
+
+pub fn resume_iteration() -> u64 {
+    RESUME_ITERATION.load(Ordering::Relaxed)
 }
 
 pub fn inc_pending() {
