@@ -30,6 +30,10 @@ pub struct RuntimeMetrics {
     pub branching_factor: f64,
     pub blocked_fraction: f64,
     pub completion_velocity: f64,
+    pub policy_prediction: f64,
+    pub policy_error: f64,
+    pub policy_weight_norm: f64,
+    pub dataset_size: u64,
 }
 
 #[derive(Debug, Default, Serialize, Clone)]

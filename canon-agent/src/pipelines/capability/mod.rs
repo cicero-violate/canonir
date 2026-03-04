@@ -22,6 +22,7 @@ pub mod templates;
 pub mod template_index;
 pub mod failure_store;
 pub mod policy;
+pub mod policy_train;
 pub mod gpu_scheduler;
 
 use super::{Pipeline, PipelineContext, PipelineOutcome};
@@ -209,6 +210,10 @@ impl CapabilityPipeline {
                 branching_factor: features.branching_factor,
                 blocked_fraction: features.blocked_fraction,
                 completion_velocity: features.completion_velocity,
+                policy_prediction: 0.0,
+                policy_error: 0.0,
+                policy_weight_norm: 0.0,
+                dataset_size: 0,
             };
             let snapshot = telemetry::TelemetrySnapshot {
                 planner: Default::default(),

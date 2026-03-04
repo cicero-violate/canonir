@@ -19,6 +19,7 @@ async-trait = "0.1"
 anyhow = "1"
 canon_telemetry = { path = "../canon_telemetry" }
 algorithms = { path = "../algorithms" }
+rand = "0.8"
 
 [features]
 default = ["cuda"]

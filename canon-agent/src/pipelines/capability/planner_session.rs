@@ -11,8 +11,7 @@ use super::dag::Status;
 use super::decompose::TaskSpec;
 use super::capability::Capability;
 use super::endpoint_worker;
-use super::graph_algo::GraphSignals;
-use super::graph_algo::graph_features;
+use super::graph_algo::{self, GraphSignals};
 use super::policy;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeSpec {
@@ -73,6 +72,7 @@ pub struct PlannerSession {
     history: Vec<String>,
     stateful: bool,
     reward_context: Option<RewardContext>,
+    prev_bias: Option<policy::PolicyBias>,
 }
 
 const MAX_HISTORY: usize = 5;
@@ -87,6 +87,7 @@ impl PlannerSession {
             history: Vec::new(),
             stateful: endpoint.stateful,
             reward_context: None,
+            prev_bias: None,
         }
     }
 
@@ -98,6 +99,8 @@ impl PlannerSession {
         &mut self,
         graph: &TaskGraph,
         signals: &GraphSignals,
+        features: &graph_algo::FeatureVector,
+        rewrite_requests: &[String],
         bridge: &WsBridge,
         tabs: &TabsHandle,
         max_tabs: usize,
@@ -108,6 +111,8 @@ impl PlannerSession {
         iter: u64,
         planner_max_new_nodes: usize,
         planner_max_new_edges: usize,
+        max_nodes: usize,
+        max_edges: usize,
     ) -> Result<PlannerUpdate> {
         let ids: Vec<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
         let signals_json = signals.to_json(&ids);
@@ -122,6 +127,11 @@ impl PlannerSession {
             .iter()
             .filter_map(|&idx| ids.get(idx).cloned())
             .collect::<Vec<_>>();
+        let rewrite_text = if rewrite_requests.is_empty() {
+            "Rewrite requests: none\n".to_string()
+        } else {
+            format!("Rewrite requests: {}\n", rewrite_requests.join(", "))
+        };
         let nodes_json: Vec<Value> = graph
             .nodes
             .iter()
@@ -195,11 +205,15 @@ Continue refining the current graph.\n",
                 base + &seed_section
             }
         };
-        let mut features = graph_features(graph);
+        let mut features = features.clone();
         if let Some(ctx) = self.reward_context.as_ref() {
             features = features.with_reward_history(&ctx.recent_rewards);
         }
-        let bias = policy::PolicyModel::load_default().predict(&features);
+        let normalized = graph_algo::normalize_features(&features, max_nodes, max_edges);
+        let bias_raw = policy::PolicyModel::load_default().predict(&normalized);
+        let bias_smoothed = policy::smooth_bias(self.prev_bias.as_ref(), bias_raw);
+        let bias = policy::maybe_explore(bias_smoothed, 0.05);
+        self.prev_bias = Some(bias.clone());
         let bias_text = policy::format_bias(&bias);
         let metrics_text = format!(
             "Metrics:\n\
@@ -208,7 +222,8 @@ roots={} leaves={} avg_out_deg={:.2} avg_in_deg={:.2} branching={:.2}\n\
 verify/mutate={:.2} observe/mutate={:.2} entropy={:.2}\n\
 priority_avg={:.2} budget_avg={:.2}\n\
 blocked_frac={:.2} ready_frac={:.2} failed_frac={:.2}\n\
-completion_velocity={:.3} retry_rate={:.3}\n",
+completion_velocity={:.3} retry_rate={:.3}\n\
+failure_pattern_rate={:.3} cycle_freq={:.3} deadlock_rate={:.3}\n",
             features.nodes,
             features.edges,
             features.depth,
@@ -228,6 +243,9 @@ completion_velocity={:.3} retry_rate={:.3}\n",
             features.failed_fraction,
             features.completion_velocity,
             features.retry_rate,
+            features.failure_pattern_rate,
+            features.cycle_frequency,
+            features.deadlock_rate,
         );
         let prompt = format!(
             "You are a planner. Maintain continuity across iterations.\n\
@@ -235,6 +253,7 @@ Planner limits: max_new_nodes={}, max_new_edges={}\n\
 Expandable nodes: {}\n\
 Ready nodes: {}\n\
 Unreachable nodes: {}\n\
+{}\
 Rules:\n\
 1) Prefer expanding root or blocked nodes.\n\
 2) Avoid expanding nodes already expanded.\n\
@@ -242,6 +261,7 @@ Rules:\n\
 4) Never exceed planner_max_new_nodes.\n\
 5) Retract nodes that are Pending or Failed with no dependents.\n\
 6) Rewrite nodes that are Pending with an imprecise description.\n\
+7) If rewrite requests are listed, include them in rewrite_nodes.\n\
 {}\n\
 {}\n\
 {}\n\
@@ -255,6 +275,7 @@ Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"descript
             expandable.join(", "),
             ready_nodes.join(", "),
             unreachable_nodes.join(", "),
+            rewrite_text,
             bias_text,
             metrics_text,
             reward_section,

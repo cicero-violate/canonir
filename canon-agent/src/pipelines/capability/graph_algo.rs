@@ -236,7 +236,8 @@ pub fn enforce_linking_constraints(graph: &dag::TaskGraph) -> Result<(), String>
     Ok(())
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct FeatureVector {
     pub nodes: usize,
     pub edges: usize,
@@ -259,6 +260,9 @@ pub struct FeatureVector {
     pub failed_fraction: f64,
     pub completion_velocity: f64,
     pub retry_rate: f64,
+    pub failure_pattern_rate: f64,
+    pub cycle_frequency: f64,
+    pub deadlock_rate: f64,
 }
 
 impl FeatureVector {
@@ -285,6 +289,9 @@ impl FeatureVector {
             self.failed_fraction,
             self.completion_velocity,
             self.retry_rate,
+            self.failure_pattern_rate,
+            self.cycle_frequency,
+            self.deadlock_rate,
         ]
     }
 
@@ -292,6 +299,13 @@ impl FeatureVector {
         if rewards.len() >= 2 {
             self.reward_trend = rewards[rewards.len() - 1] - rewards[0];
         }
+        self
+    }
+
+    pub fn with_failure_stats(mut self, stats: &super::failure_store::FailureStats) -> Self {
+        self.failure_pattern_rate = stats.failure_pattern_rate;
+        self.cycle_frequency = stats.cycle_frequency;
+        self.deadlock_rate = stats.deadlock_rate;
         self
     }
 }
@@ -558,7 +572,41 @@ pub fn graph_features(graph: &dag::TaskGraph) -> FeatureVector {
         failed_fraction,
         completion_velocity,
         retry_rate,
+        failure_pattern_rate: 0.0,
+        cycle_frequency: 0.0,
+        deadlock_rate: 0.0,
     }
+}
+
+pub fn normalize_features(f: &FeatureVector, max_nodes: usize, max_edges: usize) -> Vec<f64> {
+    let denom_nodes = max_nodes.max(1) as f64;
+    let denom_edges = max_edges.max(1) as f64;
+    vec![
+        f.nodes as f64 / denom_nodes,
+        f.edges as f64 / denom_edges,
+        f.depth as f64 / (max_nodes.max(1) as f64),
+        f.scc_count as f64 / (max_nodes.max(1) as f64),
+        f.failure_rate,
+        f.reward_trend,
+        f.avg_out_degree / 10.0,
+        f.avg_in_degree / 10.0,
+        f.branching_factor / 10.0,
+        f.leaf_count as f64 / denom_nodes,
+        f.root_count as f64 / denom_nodes,
+        f.verify_to_mutate_ratio,
+        f.observe_to_mutate_ratio,
+        f.node_type_entropy,
+        f.avg_node_priority / 10.0,
+        f.avg_node_budget / 10.0,
+        f.blocked_fraction,
+        f.ready_fraction,
+        f.failed_fraction,
+        f.completion_velocity,
+        f.retry_rate,
+        f.failure_pattern_rate,
+        f.cycle_frequency,
+        f.deadlock_rate,
+    ]
 }
 
 pub fn node_utility(graph: &dag::TaskGraph, node_id: &str, iter: u64) -> f64 {

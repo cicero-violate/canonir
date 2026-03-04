@@ -13,7 +13,7 @@ use super::capability::assert_class_disjoint;
 use super::dag;
 use super::engine;
 use super::endpoint_scheduler;
-use super::graph_algo::{emit_planned_graph, compute_graph_signals, run_graph_algorithms, graph_signature, node_utility, graph_features};
+use super::graph_algo::{emit_planned_graph, compute_graph_signals, run_graph_algorithms, graph_signature, node_utility, graph_features, normalize_features};
 use super::graph_runtime::{build_context, enforce_semantic_validations, prune_unlinked_nodes};
 use super::tab_management::{self, TabsHandle};
 use super::LOG_ROOT;
@@ -21,18 +21,12 @@ use super::TEMPLATE_ROOT;
 use super::planner_session::{PlannerSession, PlannerUpdate};
 use super::templates::TemplateStore;
 use super::failure_store::FailureStore;
+use super::policy_train::{self, PolicyDatasetEntry};
 use super::dag::TaskNode;
 use super::telemetry::{self, ExecMetrics, PlannerMetrics, RuntimeMetrics, TelemetrySnapshot};
 use super::console;
 use super::capability::dominant_class;
 use super::gpu_scheduler::driver::GpuScheduler;
-
-#[derive(serde::Serialize)]
-struct PolicyDatasetEntry {
-    features: serde_json::Value,
-    action: serde_json::Value,
-    reward: f64,
-}
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -430,6 +424,10 @@ fn process_node_result(
     }
     if let Some(n) = graph.get_node_mut(&node_id) {
         if n.readonly_fail_count > policy.max_node_retries {
+            n.reasoning_trace = Some(format!(
+                "REWRITE_REQUESTED: readonly failures exceeded {}",
+                policy.max_node_retries
+            ));
             n.readonly_fail_count = 0;
             n.status = dag::Status::Pending;
             n.error = None;
@@ -474,6 +472,17 @@ pub(crate) async fn run_planner_execution_loop(
     while !graph.all_completed() && iter < max_iterations {
         eprintln!("{}", console::phase("planner", &format!("iter={} nodes={}", iter, graph.nodes.len())));
         let iter_start = std::time::Instant::now();
+        let failure_stats = failure_store.stats();
+        let features = graph_features(graph).with_failure_stats(&failure_stats);
+        let rewrite_requests = graph
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                n.reasoning_trace.as_ref().and_then(|trace| {
+                    trace.starts_with("REWRITE_REQUESTED").then(|| n.id.clone())
+                })
+            })
+            .collect::<Vec<_>>();
         let signals = compute_graph_signals(graph);
         let log_dir = Path::new(LOG_ROOT).join("planner_logs");
         let mut revision_rewrites = None;
@@ -484,7 +493,7 @@ pub(crate) async fn run_planner_execution_loop(
             template_name,
             config.planner_plateau_window,
             config.planner_plateau_threshold,
-        );
+        ) || features.ready_fraction < 0.1;
         let remaining_nodes = config.max_nodes.saturating_sub(graph.nodes.len());
         let (planner_max_new_nodes, planner_max_new_edges) = if force_planner_expand {
             (
@@ -504,6 +513,8 @@ pub(crate) async fn run_planner_execution_loop(
                 .planner_iteration(
                     graph,
                     &signals,
+                    &features,
+                    &rewrite_requests,
                     bridge,
                     tabs,
                     endpoint.max_tabs,
@@ -514,6 +525,8 @@ pub(crate) async fn run_planner_execution_loop(
                     iter,
                     planner_max_new_nodes,
                     planner_max_new_edges,
+                    config.max_nodes,
+                    config.max_nodes.saturating_mul(4),
                 )
                 .await?;
             let mut candidate_graph = graph.clone();
@@ -609,6 +622,15 @@ pub(crate) async fn run_planner_execution_loop(
             planner_metrics.edges_added += update.new_edges.len() as u64;
             store.update(template_name, update)?;
             *graph = store.load(template_name)?;
+            if let Some(rewrites) = revision_rewrites {
+                if rewrites > 0 {
+                    for node in &mut graph.nodes {
+                        if rewrite_requests.contains(&node.id) {
+                            node.reasoning_trace = None;
+                        }
+                    }
+                }
+            }
         }
         let (exec_iters, exec_failures) = execute_graph_loop(
             graph,
@@ -638,7 +660,14 @@ pub(crate) async fn run_planner_execution_loop(
         let _exec_iters = exec_iters;
         let iterations_used = iter.saturating_add(1);
         planner_metrics.iterations += 1;
-        let features = graph_features(graph);
+        let reward = telemetry::compute_reward(graph, iterations_used, max_iterations);
+        let failure_stats = failure_store.stats();
+        let features = graph_features(graph).with_failure_stats(&failure_stats);
+        let normalized = normalize_features(&features, config.max_nodes, config.max_nodes.saturating_mul(4));
+        let policy_model = super::policy::PolicyModel::load_default();
+        let policy_bias = policy_model.predict(&normalized);
+        let policy_prediction = policy_bias.planner_bias;
+        let policy_error = reward - policy_prediction;
         let runtime = RuntimeMetrics {
             queue_depth: telemetry::pending_requests(),
             retry_rate: if planner_metrics.planner_calls == 0 {
@@ -651,13 +680,16 @@ pub(crate) async fn run_planner_execution_loop(
             branching_factor: features.branching_factor,
             blocked_fraction: features.blocked_fraction,
             completion_velocity: features.completion_velocity,
+            policy_prediction,
+            policy_error,
+            policy_weight_norm: policy_model.weight_norm(),
+            dataset_size: policy_train::dataset_size(),
         };
-        let reward = telemetry::compute_reward(graph, iterations_used, max_iterations);
         let reward_history = store.recent_rewards(template_name, 6);
         let features = features.with_reward_history(&reward_history);
         let failures = failure_store.failure_count();
         let (add_nodes, add_edges, rewrites) = last_update_counts.unwrap_or((0, 0, 0));
-        append_policy_dataset(PolicyDatasetEntry {
+        let entry = PolicyDatasetEntry {
             features: serde_json::json!({
                 "nodes": features.nodes,
                 "edges": features.edges,
@@ -680,6 +712,9 @@ pub(crate) async fn run_planner_execution_loop(
                 "failed_fraction": features.failed_fraction,
                 "completion_velocity": features.completion_velocity,
                 "retry_rate": features.retry_rate,
+                "failure_pattern_rate": features.failure_pattern_rate,
+                "cycle_frequency": features.cycle_frequency,
+                "deadlock_rate": features.deadlock_rate,
                 "failures": failures
             }),
             action: serde_json::json!({
@@ -688,7 +723,9 @@ pub(crate) async fn run_planner_execution_loop(
                 "rewrites": rewrites
             }),
             reward,
-        });
+        };
+        append_policy_dataset(entry.clone());
+        policy_train::update_online(&entry, config.max_nodes, config.max_nodes.saturating_mul(4));
         if let Some(rewrites) = revision_rewrites {
             let revision = TemplateRevisionLog {
                 template_hash: store.hash_for(template_name),

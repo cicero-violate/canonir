@@ -36,6 +36,16 @@ pub struct FailureStore {
     data: FailureFile,
 }
 
+#[derive(Debug, Clone)]
+pub struct FailureStats {
+    pub total: usize,
+    pub cycle: usize,
+    pub deadlock: usize,
+    pub failure_pattern_rate: f64,
+    pub cycle_frequency: f64,
+    pub deadlock_rate: f64,
+}
+
 impl FailureStore {
     pub fn load(template_hash: &str) -> Self {
         let dir = Path::new(TEMPLATE_ROOT).join("failures");
@@ -57,6 +67,28 @@ impl FailureStore {
 
     pub fn failure_count(&self) -> usize {
         self.data.failures.len()
+    }
+
+    pub fn stats(&self) -> FailureStats {
+        let mut cycle = 0usize;
+        let mut deadlock = 0usize;
+        for f in &self.data.failures {
+            match f.failure_type.as_str() {
+                "cycle" => cycle += 1,
+                "deadlock" => deadlock += 1,
+                _ => {}
+            }
+        }
+        let total = self.data.failures.len();
+        let denom = total.max(1) as f64;
+        FailureStats {
+            total,
+            cycle,
+            deadlock,
+            failure_pattern_rate: (total as f64 / 10.0).min(1.0),
+            cycle_frequency: cycle as f64 / denom,
+            deadlock_rate: deadlock as f64 / denom,
+        }
     }
 
     pub fn record(&mut self, signature: String, failure_type: &str, graph: &TaskGraph, iteration: u64) {
