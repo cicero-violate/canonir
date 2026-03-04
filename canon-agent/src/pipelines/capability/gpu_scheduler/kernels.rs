@@ -66,8 +66,18 @@ pub fn priority_sort(ready_mask: &[u8], priority: &[u16]) -> Vec<usize> {
     indices
 }
 
-pub fn deadlock_check(ready_mask: &[u8], status: &[u8]) -> bool {
-    let ready_sum = ready_mask.iter().map(|v| *v as u64).sum::<u64>();
-    let completed = status.iter().filter(|&&s| is_completed(s)).count();
-    ready_sum == 0 && completed < status.len()
+pub fn deadlock_check(graph: &GpuGraph) -> bool {
+    #[cfg(feature = "cuda")]
+    {
+        let deps_offset = graph.deps_offset.iter().map(|&v| v as i32).collect::<Vec<_>>();
+        let deps_flat = graph.deps_flat.iter().map(|&v| v as i32).collect::<Vec<_>>();
+        return scheduler_gpu::deadlock_gpu(&graph.status, &deps_offset, &deps_flat);
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        let ready_mask = compute_ready(graph);
+        let ready_sum = ready_mask.iter().map(|v| *v as u64).sum::<u64>();
+        let completed = graph.status.iter().filter(|&&s| is_completed(s)).count();
+        ready_sum == 0 && completed < graph.status.len()
+    }
 }

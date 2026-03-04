@@ -16,7 +16,6 @@ impl GpuScheduler {
 
     pub fn detect_deadlock(graph: &TaskGraph) -> bool {
         let (gpu, _index) = from_task_graph(graph);
-        let ready = compute_ready(&gpu);
-        deadlock_check(&ready, &gpu.status)
+        deadlock_check(&gpu)
     }
 }

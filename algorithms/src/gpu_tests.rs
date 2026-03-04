@@ -19,6 +19,7 @@ mod gpu_tests {
     use crate::graph::csr_unified::CsrUnified;
     use crate::graph::model_checking::model_check_gpu;
     use crate::control_flow::gpu::{dominators_gpu, reaching_definitions_gpu};
+    use crate::graph::scheduler_gpu::{ready_mask_gpu, pack_ready_priority, deadlock_gpu};
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -30,6 +31,43 @@ mod gpu_tests {
         g.add_edge(1, 3);
         g.add_edge(2, 3);
         g.to_csr()
+    }
+
+    // ── Scheduler GPU ───────────────────────────────────────────────────────
+
+    #[test]
+    fn scheduler_ready_mask_simple_chain() {
+        // 0 completed, 1 depends on 0, 2 depends on 1
+        let status = vec![3u8, 0u8, 0u8]; // Completed, Pending, Pending
+        let deps_offset = vec![0i32, 0, 1, 2];
+        let deps_flat = vec![0i32, 1i32];
+        let (ready, ready_count, completed) = ready_mask_gpu(&status, &deps_offset, &deps_flat);
+        assert_eq!(ready, vec![0u8, 1u8, 0u8]);
+        assert_eq!(ready_count, 1);
+        assert_eq!(completed, 1);
+    }
+
+    #[test]
+    fn scheduler_deadlock_cycle() {
+        // cycle between 0 and 1, both pending => deadlock
+        let status = vec![0u8, 0u8];
+        let deps_offset = vec![0i32, 1, 2];
+        let deps_flat = vec![1i32, 0i32];
+        assert!(deadlock_gpu(&status, &deps_offset, &deps_flat));
+    }
+
+    #[test]
+    fn scheduler_priority_sort_orders_highest_first() {
+        let ready = vec![1u8, 1u8, 0u8];
+        let priority = vec![2u16, 5u16, 0u16];
+        let mut keys = pack_ready_priority(&ready, &priority);
+        bitonic_sort_gpu(&mut keys);
+        let mut order = Vec::new();
+        for key in keys.into_iter().rev() {
+            if key < 0 { continue; }
+            order.push((key & 0xFFFF_FFFF) as usize);
+        }
+        assert_eq!(order, vec![1, 0]);
     }
 
     // ── BFS ──────────────────────────────────────────────────────────────────

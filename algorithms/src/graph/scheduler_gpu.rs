@@ -55,3 +55,11 @@ pub fn pack_ready_priority(ready_mask: &[u8], priority: &[u16]) -> Vec<i64> {
     }
     keys
 }
+
+/// Deadlock check using GPU ready-mask counters.
+#[cfg(feature = "cuda")]
+pub fn deadlock_gpu(status: &[u8], deps_offset: &[i32], deps_flat: &[i32]) -> bool {
+    let (_ready, ready_count, completed_count) = ready_mask_gpu(status, deps_offset, deps_flat);
+    let total = status.len() as i32;
+    ready_count == 0 && completed_count < total
+}
