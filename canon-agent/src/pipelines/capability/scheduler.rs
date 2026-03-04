@@ -169,7 +169,9 @@ pub(crate) async fn execute_graph_loop(
             .map(|n| serde_json::json!({"id": n.id, "status": n.status}))
             .collect::<Vec<_>>();
         if ready_ids.is_empty() && !graph.all_completed() && !graph.has_failed() {
-            failures.push(ExecFailure { kind: "deadlock", iter });
+            if GpuScheduler::detect_deadlock(graph) {
+                failures.push(ExecFailure { kind: "deadlock", iter });
+            }
         }
         if graph.nodes.iter().any(|n| n.readonly_fail_count > policy.max_node_retries) {
             failures.push(ExecFailure { kind: "verify_loop", iter });
