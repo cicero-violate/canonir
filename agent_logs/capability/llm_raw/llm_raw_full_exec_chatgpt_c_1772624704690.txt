@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t7",
+      "deltas": [
+        { "type": "read_file", "path": "canon-agent/src/pipelines/multi-dag/dag.rs" },
+        { "type": "read_file", "path": "canon-agent/src/pipelines/multi-dag/scheduler.rs" },
+        { "type": "read_file", "path": "dag/DAG_CONTROLLED_AGENT_PIPELINE.md" },
+        { "type": "read_command", "path": "rg -n \"ready_nodes|Ready|dependency|deps\" canon-agent/src/pipelines -S" }
+      ],
+      "rationale": "To implement compute_ready_nodes(graph_state) we must inspect the existing DAG node structure and dependency representation in dag.rs, review how readiness is currently computed in scheduler.rs, and confirm the intended frontier semantics from the DAG pipeline specification."
+    }
+  ]
+}
+```

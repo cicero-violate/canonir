@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t11",
+      "deltas": [
+        { "type": "read_file", "path": "canon-agent/src/pipelines/capability/telemetry.rs" },
+        { "type": "read_file", "path": "canon_telemetry/src/lib.rs" },
+        { "type": "read_file", "path": "orchestration_report.json" },
+        { "type": "read_command", "path": "rg -n \"metrics|throughput|latency|reward|success|duration\" canon-agent canon_telemetry -S" }
+      ],
+      "rationale": "To implement aggregate_execution_metrics we must inspect how node execution data and telemetry are currently represented. Reading telemetry modules and execution reports reveals available metric fields and aggregation patterns needed to compute throughput, latency distributions, success ratios, and cumulative reward signals deterministically."
+    }
+  ]
+}
+```

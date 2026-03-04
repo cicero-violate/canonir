@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t6",
+      "deltas": [
+        { "type": "read_file", "path": "PROJECT_OVERVIEW.md" },
+        { "type": "read_file", "path": "EXECUTION_REF.md" },
+        { "type": "read_file", "path": "STRUCTURAL_INVARIANTS_REPORT.md" },
+        { "type": "read_command", "command": "rg", "args": ["Agent trait|execution context|kernel|side effect|boundary", "."] }
+      ],
+      "rationale": "Defining the Agent trait and execution context requires understanding architectural constraints, DAG execution semantics, and invariant boundaries that ensure side effects occur only at DAG edges while kernel functions remain pure."
+    }
+  ]
+}
+```

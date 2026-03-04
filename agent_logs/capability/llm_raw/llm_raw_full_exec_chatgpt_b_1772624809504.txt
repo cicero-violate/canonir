@@ -1,0 +1,17 @@
+```json
+{
+  "results": [
+    {
+      "id": "t4",
+      "deltas": [
+        { "type": "read_file", "path": "EXECUTION_REF.md" },
+        { "type": "read_file", "path": "STRUCTURAL_INVARIANTS_REPORT.md" },
+        { "type": "read_file", "path": "orchestration_report.json" },
+        { "type": "list_dir", "path": "canon_telemetry" },
+        { "type": "read_command", "command": "rg", "args": ["execution_record|node_execution|duration|retry|invariant|dependency_update|inputs|outputs|execution_duration|execution_metadata", "."] }
+      ],
+      "rationale": "Defining the node execution record schema requires inspecting the execution reference, structural invariants, orchestration telemetry format, and existing repository references to execution records to determine the canonical fields for inputs, outputs, duration, retries, invariant validation results, and dependency updates."
+    }
+  ]
+}
+```

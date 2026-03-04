@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t4",
+      "deltas": [
+        { "type": "read_file", "path": "EXECUTION_REF.md" },
+        { "type": "read_file", "path": "STRUCTURAL_INVARIANTS_REPORT.md" },
+        { "type": "read_file", "path": "orchestration_report.json" },
+        { "type": "read_command", "command": "rg", "args": ["execution_record|node_execution|duration|retry|invariant|dependency", "."] }
+      ],
+      "rationale": "Defining the node execution record schema requires referencing execution semantics, invariant validation structures, and orchestration telemetry formats to determine the fields needed for inputs, outputs, duration, retries, invariant results, and dependency updates."
+    }
+  ]
+}
+```

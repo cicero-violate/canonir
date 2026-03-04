@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t3",
+      "deltas": [
+        { "type": "read_file", "path": "dag/DAG_CONTROLLED_AGENT_PIPELINE.md" },
+        { "type": "read_file", "path": "canon-agent/src/pipelines/multi-dag/scheduler.rs" },
+        { "type": "read_file", "path": "canon-agent/src/pipelines/multi-dag/dag.rs" },
+        { "type": "read_command", "path": "rg -n \"ready|schedule|scheduler|frontier|priority\" canon-agent/src/pipelines" }
+      ],
+      "rationale": "Designing the deterministic DAG scheduler requires inspecting the existing DAG pipeline specification and current scheduler implementation to understand ready-set detection, ordering behavior, and scheduling semantics before formalizing a stable ordering and priority scoring interface."
+    }
+  ]
+}
+```

@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t2",
+      "deltas": [
+        { "type": "read_file", "path": "PROJECT_GOAL.md" },
+        { "type": "read_file", "path": "PROJECT_OVERVIEW.md" },
+        { "type": "read_file", "path": "EXECUTION_REF.md" },
+        { "type": "read_command", "command": "rg", "args": ["observe|reason|prove|judge|mutate|execute", "."] }
+      ],
+      "rationale": "Identifying and formalizing the agent pipeline stages requires referencing the architectural documentation and searching the workspace for existing references to these stages to derive invariants and execution contracts."
+    }
+  ]
+}
+```

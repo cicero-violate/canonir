@@ -1,0 +1,16 @@
+```json
+{
+  "results": [
+    {
+      "id": "t10",
+      "deltas": [
+        { "type": "read_file", "path": "canon-agent/src/pipelines/multi-dag/dag.rs" },
+        { "type": "read_file", "path": "specs/architecture.md" },
+        { "type": "read_file", "path": "STRUCTURAL_INVARIANTS_REPORT.md" },
+        { "type": "read_command", "path": "rg -n \"cycle|acyclic|validate|invariant|dependency\" canon-agent specs dag -S" }
+      ],
+      "rationale": "To implement validate_dag_invariants(graph_state) the existing DAG validation logic and invariant definitions must be examined. Reading dag.rs reveals current cycle detection and dependency validation logic, architecture specs define required invariants, and the structural invariants report plus code search identify additional consistency checks needed for node uniqueness and dependency correctness."
+    }
+  ]
+}
+```
