@@ -1,23 +1,27 @@
 ### Variables
 
 [
-U = \text{PlannerUpdate}
+N = |V| \quad (\text{nodes})
 ]
 
 [
-G = (V,E)
+E = |E| \quad (\text{edges})
 ]
 
 [
-C_i = \text{capabilities of node } i
+F = \text{feature vector dimension}
 ]
 
 [
-Class(C_i) \in {Observe, Verify, Mutate}
+T = \text{templates}
 ]
 
 [
-Valid(U) \in {0,1}
+K = \text{mutation candidates}
+]
+
+[
+C = \text{LLM calls}
 ]
 
 ---
@@ -25,280 +29,362 @@ Valid(U) \in {0,1}
 ### Equations
 
 [
-Valid(U) =
-\begin{cases}
-1 & \text{if } \forall i:; |Class(C_i)| = 1 \
-0 & \text{otherwise}
-\end{cases}
+GraphOps = O(N + E)
 ]
 
-Planner validity rule.
+Graph traversal cost.
 
 [
-Repair(U) = f(U)
+FeatureCompute = O(N + E)
 ]
 
-Repair transforms invalid planner update into valid update.
+Graph feature extraction.
 
 [
-U' = Repair(U)
+TemplateSearch = O(T \cdot F)
+]
+
+Template similarity search.
+
+[
+MutationEval = O(K \cdot (N + E))
+]
+
+Template mutation evaluation.
+
+---
+
+# GPU Acceleration Opportunities (Ordered by Impact)
+
+## 1 — Graph Algorithms (Highest Leverage)
+
+**Files**
+
+```
+graph_algo.rs
+graph_runtime.rs
+gpu_scheduler/*
+```
+
+Heavy loops:
+
+* SCC detection
+* topological order
+* reachability
+* depth calculation
+* graph features
+
+Complexity
+
+[
+O(N + E)
+]
+
+for each planner iteration.
+
+GPU transformation:
+
+```
+CSR graph layout
+→ parallel BFS
+→ parallel SCC
+→ parallel reachability
+```
+
+You already started this with:
+
+```
+gpu_scheduler/layout.rs
+gpu_scheduler/kernels.rs
+```
+
+Expand kernels to include:
+
+```
+compute_depth
+compute_scc
+compute_reachability
+compute_feature_vector
+```
+
+This is **the #1 acceleration point**.
+
+---
+
+# 2 — Template Mutation Search
+
+**File**
+
+```
+template_mutation.rs
+```
+
+Functions:
+
+```
+generate_candidates()
+mutate_template_with_mode()
+edge_mutation()
+```
+
+Work:
+
+[
+K \text{ mutated graphs}
+]
+
+Each candidate requires:
+
+```
+feature extraction
+validation
+reward estimate
+```
+
+Total cost:
+
+[
+O(K(N+E))
+]
+
+GPU solution:
+
+Batch evaluation.
+
+```
+GPU kernel
+for candidate in candidates:
+    compute_features(candidate)
+```
+
+Speedup:
+
+[
+10× - 100×
 ]
 
 ---
 
-# Where Automatic Repair Goes
+# 3 — Policy Model Inference
 
-You already placed it correctly.
+**File**
+
+```
+policy.rs
+policy_engine.rs
+```
+
+Operations:
+
+```
+dot products
+vector transforms
+```
+
+Computation:
+
+[
+O(F)
+]
+
+Small but frequent.
+
+GPU useful only if batching:
+
+```
+batch evaluate policy across many graphs
+```
+
+Low priority.
+
+---
+
+# 4 — Template Similarity Search
+
+**File**
+
+```
+template_index.rs
+```
+
+Operations:
+
+```
+cosine()
+jaccard()
+structural_features()
+```
+
+Complexity:
+
+[
+O(TF)
+]
+
+GPU improvement:
+
+```
+matrix cosine similarity
+```
+
+Use:
+
+```
+faiss
+cuda BLAS
+```
+
+Medium leverage.
+
+---
+
+# 5 — Goal Embedding
+
+**File**
+
+```
+goal_embedding.rs
+```
+
+Operations:
+
+```
+cosine_similarity
+vector ops
+```
+
+Very small workload.
+
+GPU unnecessary.
+
+---
+
+# 6 — Scheduler Node Scoring
+
+**File**
 
 ```
 scheduler.rs
+score_node()
 ```
 
-Key functions:
+Work:
+
+[
+O(N)
+]
+
+But scoring happens **every iteration**.
+
+GPU improvement:
 
 ```
-validate_planner_update()
-auto_repair_planner_update()
-apply_planner_update()
+parallel node scoring
 ```
 
-Execution pipeline:
-
-```
-planner → validate → repair → validate → apply
-```
+Medium gain.
 
 ---
 
-# Step 1 — Hook Repair Into Validation
+# 7 — Failure Pattern Detection
 
-Inside:
+**File**
 
 ```
-run_planner_execution_loop()
+failure_store.rs
 ```
 
-Current flow likely:
+Operations:
 
-```rust
-validate_planner_update(graph, &update, ...)?;
-apply_planner_update(graph, update)?;
+```
+signature checks
+pattern matching
 ```
 
-Replace with:
+Small dataset.
 
-```rust
-if let Err(_) = validate_planner_update(graph, &update, ...) {
-    let repairs = auto_repair_planner_update(graph, &mut update);
-    if repairs == 0 {
-        return Err(anyhow!("planner update invalid and unrepaired"));
-    }
-
-    validate_planner_update(graph, &update, ...)?;
-}
-
-apply_planner_update(graph, update)?;
-```
+CPU sufficient.
 
 ---
 
-# Step 2 — Repair Strategy
+# GPU Priority Ranking
 
-Inside:
-
-```
-auto_repair_planner_update()
-```
-
-Main rule:
-
-### Split mixed capability nodes
-
-You already have helper:
-
-```
-split_caps()
-```
-
-Logic:
-
-```rust
-for node in update.new_nodes {
-
-    let (observe, verify, mutate) = split_caps(&node.required_capabilities);
-
-    let class_count =
-        (!observe.is_empty() as u8)
-      + (!verify.is_empty() as u8)
-      + (!mutate.is_empty() as u8);
-
-    if class_count <= 1 {
-        continue;
-    }
-
-    // repair: split node
-}
-```
+| Rank | Target                       | Speedup | Effort |
+| ---- | ---------------------------- | ------- | ------ |
+| 1    | Graph algorithms             | extreme | medium |
+| 2    | Template mutation evaluation | extreme | medium |
+| 3    | Template similarity search   | high    | low    |
+| 4    | Scheduler scoring            | medium  | low    |
+| 5    | Policy inference             | low     | low    |
 
 ---
 
-# Step 3 — Node Split
-
-Example planner output (invalid):
+# Ideal GPU Architecture
 
 ```
-node_A
-caps: [ApplyPatch, VerifyOutput]
+CPU
+ ├ planner
+ ├ scheduler
+ └ LLM calls
+
+GPU
+ ├ graph kernels
+ ├ mutation evaluation
+ ├ template search
 ```
 
-Split to:
+Execution loop:
 
 ```
-node_A_mutate
-node_A_verify
-```
-
-Implementation:
-
-```rust
-let base = node.id.clone();
-
-let mut used = HashSet::new();
-
-let id_mut = unique_id(format!("{}_mut", base), &mut used);
-let id_ver = unique_id(format!("{}_ver", base), &mut used);
-```
-
-Create nodes:
-
-```rust
-mutate_node.required_capabilities = mutate;
-verify_node.required_capabilities = verify;
-
-verify_node.deps.push(id_mut.clone());
-```
-
-Then replace node.
-
----
-
-# Step 4 — Rewire Edges
-
-If original node had deps:
-
-```
-deps → node
-```
-
-Transform:
-
-```
-deps → node_mutate → node_verify
-```
-
-If original node had outgoing edges:
-
-```
-node → children
-```
-
-Transform:
-
-```
-node_verify → children
-```
-
----
-
-# Step 5 — Enforce NodeType
-
-Use existing function:
-
-```
-normalize_node_type()
-```
-
-Rules:
-
-```
-Mutate → Render
-Verify → Analysis
-Observe → Analysis
-```
-
----
-
-# Step 6 — Prevent Infinite Repair
-
-Limit using config already present:
-
-```
-max_repairs_per_node
-```
-
-Guard:
-
-```rust
-if repair_count > max_repairs_per_node {
-    return 0;
-}
-```
-
----
-
-# Final Execution Flow
-
-```
-planner
+planner iteration
    ↓
-validate_planner_update
+GPU graph analysis
    ↓
-auto_repair_planner_update
+GPU template evaluation
    ↓
-validate again
-   ↓
-apply_planner_update
+CPU decision
    ↓
 execution
 ```
 
 ---
 
-# What This Achieves
+# Critical Insight
 
-The system becomes:
-
-[
-Planner_{raw} \rightarrow Planner_{repaired}
-]
-
-So even if the LLM outputs:
+You already built the **GPU entry point**:
 
 ```
-invalid graph
+gpu_scheduler/
 ```
 
-The system converts it to:
+This is the **correct architecture**.
+
+Next step is expanding kernels to:
 
 ```
-valid executable graph
+graph_features()
+compute_graph_signals()
+mutation scoring
 ```
-
-before execution.
 
 ---
 
-# Important Observation
+# Estimated Speed Gains
 
-Your architecture already contains **80% of the repair system**:
+If graph size grows:
 
-* `auto_repair_planner_update`
-* `split_caps`
-* `unique_id`
-* `repair_node`
-* `rule_node_split`
+| Nodes | CPU      | GPU       |
+| ----- | -------- | --------- |
+| 100   | same     | same      |
+| 1k    | slower   | faster    |
+| 10k   | slow     | very fast |
+| 100k  | unusable | workable  |
 
-You only need to ensure the **repair call is mandatory before rejection**.
+GPU becomes critical once:
+
+[
+N > 1000
+]
 
 ---
 
@@ -306,16 +392,14 @@ You only need to ensure the **repair call is mandatory before rejection**.
 Good = \max(\text{intelligence},\text{efficiency},\text{correctness},\text{alignment},\text{robustness},\text{performance},\text{scalability},\text{determinism},\text{transparency},\text{collaboration},\text{empowerment},\text{benefit},\text{learning},\text{future-proofing})
 ]
 
-Current strongest:
+Current strongest dimension:
 
 [
-\max = \text{determinism}
+\max = \text{scalability}
 ]
 
-because the graph validator guarantees system integrity.
+because the architecture already separates **graph compute → GPU kernels**.
 
 ---
 
-**Short answer**
-
-You already implemented automatic planner repair — you only need to **force `auto_repair_planner_update()` before rejecting planner updates in `run_planner_execution_loop()`**.
+If helpful, I can also show **the 4 GPU kernels that will give ~90% of the speedup**, which is much simpler than it looks.
