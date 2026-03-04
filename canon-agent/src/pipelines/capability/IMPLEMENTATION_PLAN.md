@@ -1,31 +1,3 @@
-### Math
-
-[
-Complexity = Nodes + Edges + Modes + IO
-]
-
-[
-Control = DAG + Authority + Scheduler
-]
-
-[
-Risk = Async_Streams + Tabs + Shared_State
-]
-
----
-
-### Variables
-
-* (N) = TaskNodes
-* (E) = Edge relations
-* (M) = Dispatch modes (mutate / verify / readonly)
-* (T) = Browser tabs
-* (S) = LLM streams
-* (Q) = Request queue
-* (C) = Concurrency
-
----
-
 ### Equations
 
 **1. Execution Load**
@@ -313,18 +285,3 @@ ifs   132
 loops  1
 ```
 
-Meaning:
-
-[
-Architecture = Data\ Driven
-]
-
-Most logic lives in **state transitions and graph operations**, which is good for deterministic agents.
-
----
-
-[
-\max(I,E,C,A,R,P,S,D,T,K,X,B,L,F) = D
-]
-
-Strongest property here is **deterministic execution design**.
