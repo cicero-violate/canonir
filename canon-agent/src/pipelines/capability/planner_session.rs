@@ -255,6 +255,11 @@ Expandable nodes: {}\n\
 Ready nodes: {}\n\
 Unreachable nodes: {}\n\
 {}\
+CAPABILITY SCHEMA (snake_case, do not mix classes in one node)\n\
+Observe: file_read, read_structural_surface, read_dag, compute_delta, radius_budget_eval, reward_signal_compute, stateless_invoke, goal_to_subgoals, schedule_ready, constraint_attach, prompt_contract_enforce, stdout_capture\n\
+Verify: detect_failures, invariant_check, boundary_guard, parse_orchestration_report, status_update_only, update_status\n\
+Mutate: file_write, apply_patch, bash, cargo_build, cargo_check, create_node, add_edge, refine_node, dependency_rewrite\n\
+If a task needs both Verify and Mutate, split into two nodes with a dependency edge.\n\
 Rules:\n\
 1) Prefer expanding root or blocked nodes.\n\
 2) Avoid expanding nodes already expanded.\n\
