@@ -89,3 +89,15 @@ rustc compiler source code can be found in here
 /workspace/ai_sandbox/canon/test_projects/rust_compiler_info/compiler
 
 
+## CODING STYLE
+1. **Preferred Style**	: Reduce branching (if, match, loop); use DAG, graph structures, and kernel functions for clarity.
+2. **Execution Model**	: Use dataflow and scheduling over nested control flow.
+3. **Logic Units**		: Prefer pure kernels over stateful procedures.
+4. **Dispatch**			: Implement with lookup tables rather than match chains.
+5. **Iteration**		: Use algorithms instead of manual loops.
+6. **Function Style**	: Keep functions pure, deterministic, with minimal branching.
+7. **Dispatch**			: Use static dispatch tables for clearer execution paths.
+8. **Graph Execution**	: Let DAG control the execution order; kernels handle computation.
+9. **Code Structure**	: Avoid deeply nested conditions; prefer dataflow and modular design.
+10. **Result**			: More efficient, maintainable code that's easier for LLMs to reason about.
+
