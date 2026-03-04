@@ -51,7 +51,7 @@ impl TemplateStore {
         Ok(graph)
     }
 
-    pub fn save(&self, name: &str, graph: &TaskGraph) -> Result<()> {
+    pub fn save(&mut self, name: &str, graph: &TaskGraph) -> Result<()> {
         fs::create_dir_all(&self.root)?;
         let json = serde_json::to_string_pretty(graph)?;
         fs::write(self.path_for(name), json)?;
@@ -149,7 +149,7 @@ impl TemplateStore {
         Ok(())
     }
 
-    pub fn update(&self, name: &str, update: PlannerUpdate) -> Result<()> {
+    pub fn update(&mut self, name: &str, update: PlannerUpdate) -> Result<()> {
         let mut graph = self.load(name)?;
         apply_planner_update(&mut graph, update)?;
         graph.validate().map_err(|e| anyhow::anyhow!(e))?;

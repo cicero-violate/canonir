@@ -8,6 +8,7 @@
 //!
 //! --all loops over the hard-coded fixture list, runs the full pipeline for
 //! each, and writes STRUCTURAL_INVARIANTS_REPORT.md at the repo root.
+//! In loop mode it repeats indefinitely (Ctrl+C to stop).
 
 use anyhow::{bail, Context, Result};
 use canon::CanonIR;
@@ -35,7 +36,7 @@ fn main() -> Result<()> {
 
     // Full pipeline mode (capture + emit)
     if args.first().map(|s| s.as_str()) == Some("--all") {
-        return run_all_fixtures();
+        return run_all_fixtures_loop();
     }
 
     // Single-fixture mode (original behaviour).
@@ -108,7 +109,22 @@ struct FixtureResult {
     error: Option<String>,
 }
 
-fn run_all_fixtures() -> Result<()> {
+fn run_all_fixtures_loop() -> Result<()> {
+    let mut iter = 0u64;
+    loop {
+        iter = iter.saturating_add(1);
+        println!("=== orchestration --all loop iter {} ===", iter);
+        let overall_ok = run_all_fixtures_once()?;
+        if overall_ok {
+            println!("[loop] all fixtures ok; continuing (Ctrl+C to stop).");
+        } else {
+            println!("[loop] failures detected; continuing (Ctrl+C to stop).");
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+}
+
+fn run_all_fixtures_once() -> Result<bool> {
     let mut results: Vec<FixtureResult> = Vec::new();
     let mut overall_ok = true;
 
@@ -168,10 +184,7 @@ fn run_all_fixtures() -> Result<()> {
     println!("Invariant report written to: {}", REPORT_PATH);
     println!("JSON report written to:      {}", JSON_REPORT_PATH);
 
-    if !overall_ok {
-        std::process::exit(1);
-    }
-    Ok(())
+    Ok(overall_ok)
 }
 
 // ---------------------------------------------------------------------------
