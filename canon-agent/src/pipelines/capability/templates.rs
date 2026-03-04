@@ -105,7 +105,10 @@ impl TemplateStore {
         self.save(name, graph)?;
         fs::write(self.reward_path(name), reward.to_string())?;
         let hash = self.hash_for(name);
-        let entry = template_index::entry_from_graph(&hash, name, graph, reward);
+        let mut entry = template_index::entry_from_graph(&hash, name, graph, reward);
+        if let Some(existing) = self.index.get(&hash) {
+            entry.failure_count = existing.failure_count;
+        }
         self.index.upsert(entry);
         self.index.save();
         Ok(())
@@ -139,5 +142,10 @@ impl TemplateStore {
         top_k: usize,
     ) -> Vec<template_index::SimilarTemplate> {
         self.index.find_similar(goal, graph, top_k)
+    }
+
+    pub fn record_failure(&mut self, template_hash: &str) {
+        self.index.bump_failure_count(template_hash);
+        self.index.save();
     }
 }

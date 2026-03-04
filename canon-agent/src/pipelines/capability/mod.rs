@@ -20,6 +20,7 @@ pub mod tab_management;
 pub mod console;
 pub mod templates;
 pub mod template_index;
+pub mod failure_store;
 
 use super::{Pipeline, PipelineContext, PipelineOutcome};
 use crate::ir::SystemState;
@@ -167,7 +168,9 @@ impl CapabilityPipeline {
 
         if cache_hit && !self.config.planner_refine_on_cache {
             let mut exec_metrics = Default::default();
-            let iterations_used = scheduler::execute_graph_loop(
+            let template_hash = store.hash_for(&template_name);
+            let mut failure_store = failure_store::FailureStore::load(&template_hash);
+            let (iterations_used, exec_failures) = scheduler::execute_graph_loop(
                 &mut graph,
                 &self.bridge,
                 &self.config,
@@ -188,6 +191,10 @@ impl CapabilityPipeline {
                 &mut exec_metrics,
             )
             .await?;
+            for failure in exec_failures {
+                failure_store.record_graph(failure.kind, &graph, failure.iter);
+                store.record_failure(&template_hash);
+            }
             let reward = telemetry::compute_reward(&graph, iterations_used, self.config.max_iterations);
             store.record_reward(&template_name, reward);
             let runtime = telemetry::RuntimeMetrics {
@@ -205,6 +212,10 @@ impl CapabilityPipeline {
                 goal: Some(template_name.clone()),
             };
             telemetry::record_snapshot(&Path::new(LOG_ROOT).join("metrics.json"), &snapshot);
+            telemetry::record_snapshot(
+                &Path::new(TEMPLATE_ROOT).join(format!("metrics_{}.json", template_hash)),
+                &snapshot,
+            );
             Ok(reward)
         } else {
             let planner_endpoint = self.config.planner_endpoint()?;

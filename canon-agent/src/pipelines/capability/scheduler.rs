@@ -13,13 +13,14 @@ use super::capability::assert_class_disjoint;
 use super::dag;
 use super::engine;
 use super::endpoint_scheduler;
-use super::graph_algo::{emit_planned_graph, compute_graph_signals, run_graph_algorithms};
+use super::graph_algo::{emit_planned_graph, compute_graph_signals, run_graph_algorithms, graph_signature};
 use super::graph_runtime::{build_context, enforce_semantic_validations, prune_unlinked_nodes};
 use super::tab_management::{self, TabsHandle};
 use super::LOG_ROOT;
 use super::TEMPLATE_ROOT;
 use super::planner_session::{PlannerSession, PlannerUpdate};
 use super::templates::TemplateStore;
+use super::failure_store::FailureStore;
 use super::dag::TaskNode;
 use super::telemetry::{self, ExecMetrics, PlannerMetrics, RuntimeMetrics, TelemetrySnapshot};
 use super::console;
@@ -39,6 +40,12 @@ enum PipelineEvent {
     Completed,
     Blocked,
     Retry,
+}
+
+#[derive(Clone)]
+struct ExecFailure {
+    kind: &'static str,
+    iter: u64,
 }
 
 const PIPELINE_TRANSITIONS: [[PipelineState; 3]; 3] = {
@@ -84,10 +91,11 @@ pub(crate) async fn execute_graph_loop(
     retry_delay: u64,
     max_output_lines: usize,
     exec_metrics: &mut ExecMetrics,
-) -> Result<u64> {
+) -> Result<(u64, Vec<ExecFailure>)> {
     let semaphore = Arc::new(Semaphore::new(max_concurrency.max(1)));
     let mut blocked_streak = 0u32;
     let mut state = PipelineState::Running;
+    let mut failures = Vec::new();
     for iter in 1..=max_iterations {
         dag::resolve_ready(graph);
         let status_snapshot = graph
@@ -96,6 +104,12 @@ pub(crate) async fn execute_graph_loop(
             .map(|n| serde_json::json!({"id": n.id, "status": n.status}))
             .collect::<Vec<_>>();
         let ready_ids: Vec<String> = graph.ready_nodes().iter().map(|n| n.id.clone()).collect();
+        if ready_ids.is_empty() && !graph.all_completed() && !graph.has_failed() {
+            failures.push(ExecFailure { kind: "deadlock", iter });
+        }
+        if graph.nodes.iter().any(|n| n.readonly_fail_count > policy.max_node_retries) {
+            failures.push(ExecFailure { kind: "verify_loop", iter });
+        }
         let summary = serde_json::json!({
             "iter": iter,
             "ready": ready_ids,
@@ -137,7 +151,7 @@ pub(crate) async fn execute_graph_loop(
         };
         state = PIPELINE_TRANSITIONS[state as usize][event as usize];
         match (state, event) {
-            (PipelineState::Stop, _) => return Ok(iter),
+            (PipelineState::Stop, _) => return Ok((iter, failures)),
             (_, PipelineEvent::Blocked) => {
                 blocked_streak += 1;
                 eprintln!(
@@ -345,6 +359,8 @@ pub(crate) async fn run_planner_execution_loop(
     store: &mut TemplateStore,
     template_name: &str,
 ) -> Result<f64> {
+    let template_hash = store.hash_for(template_name);
+    let mut failure_store = FailureStore::load(&template_hash);
     let mut planner_metrics = PlannerMetrics::default();
     let mut exec_metrics = ExecMetrics::default();
     let mut empty_streak = 0u32;
@@ -393,11 +409,41 @@ pub(crate) async fn run_planner_execution_loop(
                     planner_max_new_edges,
                 )
                 .await?;
-            if let Err(e) = validate_planner_update(graph, &candidate, config) {
+            let mut candidate_graph = graph.clone();
+            if let Err(e) = apply_planner_update(&mut candidate_graph, candidate.clone()) {
+                if attempt < attempts {
+                    tokio::time::sleep(std::time::Duration::from_secs(retry_delay)).await;
+                    continue;
+                }
+                planner_metrics.planner_failures += 1;
+                return Err(e);
+            }
+            let candidate_sig = graph_signature(&candidate_graph);
+            if failure_store.contains(&candidate_sig) {
                 let payload = serde_json::json!({
                     "iter": iter,
                     "attempt": attempt,
-                    "error": e.to_string(),
+                    "error": "planner candidate matches known failure signature",
+                    "signature": candidate_sig,
+                });
+                let path = log_dir.join(format!("planner_iter_{:04}_rejected_failure.json", iter));
+                if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
+                    let _ = std::fs::write(path, pretty);
+                }
+                if attempt < attempts {
+                    tokio::time::sleep(std::time::Duration::from_secs(retry_delay)).await;
+                    continue;
+                }
+            }
+            if let Err(e) = validate_planner_update(graph, &candidate, config, &mut failure_store, iter) {
+                let err_msg = e.to_string();
+                if err_msg.contains("cycle detected") || err_msg.contains("capability class") {
+                    store.record_failure(&template_hash);
+                }
+                let payload = serde_json::json!({
+                    "iter": iter,
+                    "attempt": attempt,
+                    "error": err_msg,
                     "planner_output": candidate,
                 });
                 let path = log_dir.join(format!("planner_iter_{:04}_validate_error.json", iter));
@@ -445,7 +491,7 @@ pub(crate) async fn run_planner_execution_loop(
             store.update(template_name, update)?;
             *graph = store.load(template_name)?;
         }
-        let _exec_iters = execute_graph_loop(
+        let (exec_iters, exec_failures) = execute_graph_loop(
             graph,
             bridge,
             config,
@@ -466,6 +512,11 @@ pub(crate) async fn run_planner_execution_loop(
             &mut exec_metrics,
         )
         .await?;
+        for failure in exec_failures {
+            failure_store.record_graph(failure.kind, graph, failure.iter);
+            store.record_failure(&template_hash);
+        }
+        let _exec_iters = exec_iters;
         let iterations_used = iter.saturating_add(1);
         planner_metrics.iterations += 1;
         let runtime = RuntimeMetrics {
@@ -503,6 +554,10 @@ pub(crate) async fn run_planner_execution_loop(
         };
         telemetry::record_snapshot(&Path::new(LOG_ROOT).join("planner_logs/metrics.json"), &snapshot);
         telemetry::record_snapshot(&Path::new(LOG_ROOT).join("metrics.json"), &snapshot);
+        telemetry::record_snapshot(
+            &Path::new(TEMPLATE_ROOT).join(format!("metrics_{}.json", template_hash)),
+            &snapshot,
+        );
         iter += 1;
     }
     let reward = telemetry::compute_reward(graph, iter, max_iterations);
@@ -519,6 +574,8 @@ fn validate_planner_update(
     graph: &dag::TaskGraph,
     update: &PlannerUpdate,
     config: &CapabilityConfig,
+    failure_store: &mut FailureStore,
+    iteration: u64,
 ) -> Result<()> {
     ensure(update.new_nodes.len() <= config.planner_max_new_nodes, "planner expansion limit exceeded")?;
     ensure(update.new_edges.len() <= config.planner_max_new_edges, "planner edge limit exceeded")?;
@@ -562,7 +619,15 @@ fn validate_planner_update(
 
     let mut test_graph = graph.clone();
     apply_planner_update(&mut test_graph, update.clone())?;
-    test_graph.validate().map_err(|e| anyhow::anyhow!(e))?;
+    if let Err(e) = test_graph.validate() {
+        let msg = e.to_string();
+        if msg.contains("cycle detected") {
+            failure_store.record_graph("cycle", &test_graph, iteration);
+        } else if msg.contains("capability class") {
+            failure_store.record_graph("invalid_authority", &test_graph, iteration);
+        }
+        return Err(anyhow::anyhow!(e));
+    }
     Ok(())
 }
 

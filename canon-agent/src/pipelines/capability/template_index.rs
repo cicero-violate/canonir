@@ -16,6 +16,8 @@ pub struct TemplateEntry {
     pub analysis_count: usize,
     pub render_count: usize,
     pub capability_set: Vec<String>,
+    #[serde(default)]
+    pub failure_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +55,16 @@ impl TemplateIndex {
 
     pub fn remove(&mut self, hash: &str) {
         self.entries.retain(|e| e.hash != hash);
+    }
+
+    pub fn get(&self, hash: &str) -> Option<&TemplateEntry> {
+        self.entries.iter().find(|e| e.hash == hash)
+    }
+
+    pub fn bump_failure_count(&mut self, hash: &str) {
+        if let Some(entry) = self.entries.iter_mut().find(|e| e.hash == hash) {
+            entry.failure_count = entry.failure_count.saturating_add(1);
+        }
     }
 
     pub fn find_similar(&self, goal: &str, graph: &TaskGraph, top_k: usize) -> Vec<SimilarTemplate> {
@@ -120,6 +132,7 @@ pub fn entry_from_graph(hash: &str, goal: &str, graph: &TaskGraph, reward: f64) 
         analysis_count,
         render_count,
         capability_set: caps,
+        failure_count: 0,
     }
 }
 

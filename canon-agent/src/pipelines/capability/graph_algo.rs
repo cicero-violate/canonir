@@ -5,6 +5,7 @@ use algorithms::graph::adj_list::AdjList;
 use algorithms::graph::csr::Csr;
 
 use super::{dag, decompose};
+use super::capability::Capability;
 
 fn algo_log_path(log_dir: &Path, iter: u32, name: &str) -> PathBuf {
     if iter == 0 {
@@ -194,4 +195,58 @@ pub fn enforce_linking_constraints(graph: &dag::TaskGraph) -> Result<(), String>
         }
     }
     Ok(())
+}
+
+pub fn graph_signature(graph: &dag::TaskGraph) -> String {
+    let mut nodes = graph.nodes.iter().map(|n| {
+        let mut caps: Vec<Capability> = n.required_capabilities.clone();
+        caps.sort_by_key(|c| format!("{:?}", c));
+        (n.id.clone(), format!("{:?}", n.node_type), caps)
+    }).collect::<Vec<_>>();
+    nodes.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut edges = Vec::new();
+    for n in &graph.nodes {
+        for dep in &n.deps {
+            edges.push((dep.clone(), n.id.clone()));
+        }
+    }
+    edges.sort();
+
+    let mut hasher = Fnv64::new();
+    hasher.write(b"nodes");
+    for (id, node_type, caps) in nodes {
+        hasher.write(id.as_bytes());
+        hasher.write(node_type.as_bytes());
+        for cap in caps {
+            hasher.write(format!("{:?}", cap).as_bytes());
+        }
+    }
+    hasher.write(b"edges");
+    for (from, to) in edges {
+        hasher.write(from.as_bytes());
+        hasher.write(to.as_bytes());
+    }
+    format!("{:016x}", hasher.finish())
+}
+
+struct Fnv64 {
+    state: u64,
+}
+
+impl Fnv64 {
+    fn new() -> Self {
+        Self { state: 0xcbf29ce484222325 }
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.state ^= *b as u64;
+            self.state = self.state.wrapping_mul(0x100000001b3);
+        }
+    }
+
+    fn finish(&self) -> u64 {
+        self.state
+    }
 }
