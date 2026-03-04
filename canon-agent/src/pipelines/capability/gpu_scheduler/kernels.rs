@@ -1,5 +1,18 @@
 use super::layout::{GpuGraph, is_completed, is_ready_candidate};
 
+#[cfg(feature = "cuda")]
+use algorithms::graph::scheduler_gpu;
+
+#[cfg(feature = "cuda")]
+pub fn compute_ready(graph: &GpuGraph) -> Vec<u8> {
+    let status = graph.status.clone();
+    let deps_offset = graph.deps_offset.iter().map(|&v| v as i32).collect::<Vec<_>>();
+    let deps_flat = graph.deps_flat.iter().map(|&v| v as i32).collect::<Vec<_>>();
+    let (ready, _ready_count, _completed) = scheduler_gpu::ready_mask_gpu(&status, &deps_offset, &deps_flat);
+    ready
+}
+
+#[cfg(not(feature = "cuda"))]
 pub fn compute_ready(graph: &GpuGraph) -> Vec<u8> {
     let mut ready = vec![0u8; graph.node_count as usize];
     for i in 0..graph.node_count as usize {

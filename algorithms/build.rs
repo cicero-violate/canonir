@@ -8,6 +8,7 @@ const CUDA_SOURCES: &[(&str, &str)] = &[
     ("src/graph/bfs.cu", "graph_bfs"),
     ("src/graph/bellman_ford.cu", "graph_bellman_ford"),
     ("src/graph/max_flow.cu", "graph_max_flow"),
+    ("src/graph/scheduler.cu", "graph_scheduler"),
     ("src/graph/reachability.cu", "graph_reachability"),
     ("src/graph/model_checking.cu", "graph_model_checking"),
     ("src/graph/csr_unified.cu", "graph_csr_unified"),

@@ -11,6 +11,8 @@ pub mod max_flow;
 pub mod model_checking;
 #[cfg(feature = "cuda")]
 pub mod gpu;
+#[cfg(feature = "cuda")]
+pub mod scheduler_gpu;
 pub mod invariant;
 pub mod reachability;
 pub mod region;
