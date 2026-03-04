@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use algorithms::graph::{csr::Csr, reachability, scc, topological_sort};
+#[cfg(feature = "cuda")]
+use algorithms::graph::model_checking;
 use super::dag;
 use super::decompose;
 use super::engine;
@@ -121,7 +123,7 @@ pub(crate) fn prune_unlinked_nodes(graph: &mut dag::TaskGraph) {
     let kernels = build_kernels(graph);
     let roots = prune_roots(&kernels);
     if roots.is_empty() {
-        graph.nodes.clear();
+        // Treat isolated nodes as roots to avoid wiping early graphs.
         return;
     }
     let reach = reachability::reachability_gpu(&kernels.csr, &roots);
@@ -135,6 +137,9 @@ pub(crate) fn prune_unlinked_nodes(graph: &mut dag::TaskGraph) {
 }
 
 pub(crate) fn enforce_semantic_validations(graph: &dag::TaskGraph) -> Result<()> {
+    // 0) Assertion checking: invariant must hold for every node (GPU when available).
+    assert_invariants_all_states(graph)?;
+
     // 1) All render nodes must be reachable from at least one analysis node.
     let kernels = build_kernels(graph);
     let analysis_roots: Vec<usize> = graph
@@ -153,7 +158,70 @@ pub(crate) fn enforce_semantic_validations(graph: &dag::TaskGraph) -> Result<()>
         }
     }
 
+    // 2) Model-check invariant on reachable nodes (GPU when available).
+    let invariant_mask: Vec<u8> = graph
+        .nodes
+        .iter()
+        .map(|n| {
+            let ok = !n.description.trim().is_empty() && !n.required_capabilities.is_empty();
+            ok as u8
+        })
+        .collect();
+    #[cfg(feature = "cuda")]
+    {
+        let ok = model_checking::model_check_gpu(&kernels.csr, &analysis_roots, &invariant_mask);
+        if !ok {
+            return Err(anyhow::anyhow!("model check failed: invariant violation on reachable node"));
+        }
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        for (idx, ok) in invariant_mask.iter().enumerate() {
+            if reach.get(idx).copied().unwrap_or(false) && *ok == 0 {
+                return Err(anyhow::anyhow!("model check failed: invariant violation on reachable node"));
+            }
+        }
+    }
+
     // 2) No depth beyond max_depth (approx by DFS).
     // This will be checked elsewhere by limiting expansion; kept as sanity.
+    Ok(())
+}
+
+fn assert_invariants_all_states(graph: &dag::TaskGraph) -> Result<()> {
+    if graph.nodes.is_empty() {
+        return Ok(());
+    }
+    let kernels = build_kernels(graph);
+    let invariant_mask: Vec<u8> = graph
+        .nodes
+        .iter()
+        .map(|n| {
+            let ok = !n.id.trim().is_empty()
+                && !n.description.trim().is_empty()
+                && !n.required_capabilities.is_empty()
+                && !n.deps.iter().any(|d| d == &n.id);
+            ok as u8
+        })
+        .collect();
+    let roots: Vec<usize> = (0..graph.nodes.len()).collect();
+    #[cfg(feature = "cuda")]
+    {
+        let ok = model_checking::model_check_gpu(&kernels.csr, &roots, &invariant_mask);
+        if !ok {
+            return Err(anyhow::anyhow!("assertion check failed: invariant violated"));
+        }
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        for (idx, ok) in invariant_mask.iter().enumerate() {
+            if *ok == 0 {
+                return Err(anyhow::anyhow!(
+                    "assertion check failed: invariant violated at node {}",
+                    graph.nodes[idx].id
+                ));
+            }
+        }
+    }
     Ok(())
 }
