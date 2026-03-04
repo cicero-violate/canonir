@@ -1,390 +1,246 @@
 ### Variables
 
 [
-N = |V| \quad (\text{nodes})
+C_i = \text{capabilities of node } i
 ]
 
 [
-E = |E| \quad (\text{edges})
+Class(C_i) \in {Observe, Verify, Mutate}
 ]
 
 [
-F = \text{feature vector dimension}
+Name(C_i) = \text{capability identifier}
 ]
 
 [
-T = \text{templates}
-]
-
-[
-K = \text{mutation candidates}
-]
-
-[
-C = \text{LLM calls}
+Valid(i) =
+\begin{cases}
+1 & |Class(C_i)| = 1 \land Name(C_i) \in Schema \
+0 & \text{otherwise}
+\end{cases}
 ]
 
 ---
 
 ### Equations
 
+Mixed class violation:
+
 [
-GraphOps = O(N + E)
+|Class(C_i)| > 1
 ]
 
-Graph traversal cost.
+Capability naming violation:
 
 [
-FeatureCompute = O(N + E)
+Name(C_i) \notin Schema
 ]
 
-Graph feature extraction.
+Graph validity:
 
 [
-TemplateSearch = O(T \cdot F)
-]
-
-Template similarity search.
-
-[
-MutationEval = O(K \cdot (N + E))
-]
-
-Template mutation evaluation.
-
----
-
-# GPU Acceleration Opportunities (Ordered by Impact)
-
-## 1 — Graph Algorithms (Highest Leverage)
-
-**Files**
-
-```
-graph_algo.rs
-graph_runtime.rs
-gpu_scheduler/*
-```
-
-Heavy loops:
-
-* SCC detection
-* topological order
-* reachability
-* depth calculation
-* graph features
-
-Complexity
-
-[
-O(N + E)
-]
-
-for each planner iteration.
-
-GPU transformation:
-
-```
-CSR graph layout
-→ parallel BFS
-→ parallel SCC
-→ parallel reachability
-```
-
-You already started this with:
-
-```
-gpu_scheduler/layout.rs
-gpu_scheduler/kernels.rs
-```
-
-Expand kernels to include:
-
-```
-compute_depth
-compute_scc
-compute_reachability
-compute_feature_vector
-```
-
-This is **the #1 acceleration point**.
-
----
-
-# 2 — Template Mutation Search
-
-**File**
-
-```
-template_mutation.rs
-```
-
-Functions:
-
-```
-generate_candidates()
-mutate_template_with_mode()
-edge_mutation()
-```
-
-Work:
-
-[
-K \text{ mutated graphs}
-]
-
-Each candidate requires:
-
-```
-feature extraction
-validation
-reward estimate
-```
-
-Total cost:
-
-[
-O(K(N+E))
-]
-
-GPU solution:
-
-Batch evaluation.
-
-```
-GPU kernel
-for candidate in candidates:
-    compute_features(candidate)
-```
-
-Speedup:
-
-[
-10× - 100×
+Valid(G)=\forall i\in V:;Valid(i)
 ]
 
 ---
 
-# 3 — Policy Model Inference
+# Correct Fix Strategy
 
-**File**
+You need **three structural corrections**.
 
+---
+
+# 1 — Split Mixed Capability Node
+
+Problem:
+
+```json
+fix_ir_generation_if_needed
+capabilities: ["file_write","invariant_check"]
 ```
-policy.rs
-policy_engine.rs
-```
-
-Operations:
-
-```
-dot products
-vector transforms
-```
-
-Computation:
 
 [
-O(F)
+Class = {Mutate, Verify}
 ]
 
-Small but frequent.
-
-GPU useful only if batching:
-
-```
-batch evaluate policy across many graphs
-```
-
-Low priority.
+Invalid.
 
 ---
 
-# 4 — Template Similarity Search
+### Correct Structure
 
-**File**
-
+```json
+{
+  "id": "analyze_ir_generation",
+  "description": "Verify IR generation output",
+  "required_capabilities": ["invariant_check"]
+}
 ```
-template_index.rs
-```
-
-Operations:
-
-```
-cosine()
-jaccard()
-structural_features()
-```
-
-Complexity:
 
 [
-O(TF)
+Class = Verify
 ]
 
-GPU improvement:
-
-```
-matrix cosine similarity
-```
-
-Use:
-
-```
-faiss
-cuda BLAS
-```
-
-Medium leverage.
-
 ---
 
-# 5 — Goal Embedding
-
-**File**
-
+```json
+{
+  "id": "fix_ir_generation",
+  "description": "Fix IR generation issues",
+  "required_capabilities": ["file_write"]
+}
 ```
-goal_embedding.rs
-```
-
-Operations:
-
-```
-cosine_similarity
-vector ops
-```
-
-Very small workload.
-
-GPU unnecessary.
-
----
-
-# 6 — Scheduler Node Scoring
-
-**File**
-
-```
-scheduler.rs
-score_node()
-```
-
-Work:
 
 [
-O(N)
+Class = Mutate
 ]
 
-But scoring happens **every iteration**.
+Dependency:
 
-GPU improvement:
-
-```
-parallel node scoring
+```json
+"deps": ["analyze_ir_generation"]
 ```
 
-Medium gain.
-
----
-
-# 7 — Failure Pattern Detection
-
-**File**
+Execution:
 
 ```
-failure_store.rs
-```
-
-Operations:
-
-```
-signature checks
-pattern matching
-```
-
-Small dataset.
-
-CPU sufficient.
-
----
-
-# GPU Priority Ranking
-
-| Rank | Target                       | Speedup | Effort |
-| ---- | ---------------------------- | ------- | ------ |
-| 1    | Graph algorithms             | extreme | medium |
-| 2    | Template mutation evaluation | extreme | medium |
-| 3    | Template similarity search   | high    | low    |
-| 4    | Scheduler scoring            | medium  | low    |
-| 5    | Policy inference             | low     | low    |
-
----
-
-# Ideal GPU Architecture
-
-```
-CPU
- ├ planner
- ├ scheduler
- └ LLM calls
-
-GPU
- ├ graph kernels
- ├ mutation evaluation
- ├ template search
-```
-
-Execution loop:
-
-```
-planner iteration
-   ↓
-GPU graph analysis
-   ↓
-GPU template evaluation
-   ↓
-CPU decision
-   ↓
-execution
+Verify → Mutate
 ```
 
 ---
 
-# Critical Insight
+# 2 — Normalize Capability Names
 
-You already built the **GPU entry point**:
-
-```
-gpu_scheduler/
-```
-
-This is the **correct architecture**.
-
-Next step is expanding kernels to:
+Current (invalid):
 
 ```
-graph_features()
-compute_graph_signals()
-mutation scoring
+StatelessInvoke
+FileRead
+ReadStructuralSurface
+InvariantCheck
+FileWrite
 ```
 
----
+Correct schema:
 
-# Estimated Speed Gains
+```
+stateless_invoke
+file_read
+read_structural_surface
+invariant_check
+file_write
+```
 
-If graph size grows:
-
-| Nodes | CPU      | GPU       |
-| ----- | -------- | --------- |
-| 100   | same     | same      |
-| 1k    | slower   | faster    |
-| 10k   | slow     | very fast |
-| 100k  | unusable | workable  |
-
-GPU becomes critical once:
+Rule:
 
 [
-N > 1000
+Name(C_i)=snake_case
 ]
+
+---
+
+# 3 — Replace Incorrect Capability
+
+Problem:
+
+```
+stateless_invoke → used for running cargo
+```
+
+But:
+
+[
+stateless_invoke \in Observe
+]
+
+Correct:
+
+```
+cargo_build
+bash
+```
+
+These belong to:
+
+[
+Mutate
+]
+
+---
+
+# Correct Node Example
+
+```json
+{
+  "id": "build_project",
+  "description": "Compile the project",
+  "required_capabilities": ["cargo_build"]
+}
+```
+
+---
+
+# Final Graph Example
+
+```json
+{
+  "nodes": [
+    {
+      "id": "read_surface",
+      "required_capabilities": ["read_structural_surface"]
+    },
+    {
+      "id": "analyze_ir_generation",
+      "deps": ["read_surface"],
+      "required_capabilities": ["invariant_check"]
+    },
+    {
+      "id": "fix_ir_generation",
+      "deps": ["analyze_ir_generation"],
+      "required_capabilities": ["file_write"]
+    },
+    {
+      "id": "build_project",
+      "deps": ["fix_ir_generation"],
+      "required_capabilities": ["cargo_build"]
+    }
+  ]
+}
+```
+
+---
+
+# Invariant After Fix
+
+[
+\forall node:\ |Class(C)|=1
+]
+
+[
+Name(C) \in Schema
+]
+
+[
+deps(G)\ \text{acyclic}
+]
+
+---
+
+# Why This Matters
+
+Your validator enforces:
+
+```id="qev4ew"
+assert_class_disjoint()
+```
+
+So any mixed node will always fail.
+
+Splitting nodes ensures:
+
+```
+Planner graph → Valid DAG
+```
 
 ---
 
@@ -392,14 +248,10 @@ N > 1000
 Good = \max(\text{intelligence},\text{efficiency},\text{correctness},\text{alignment},\text{robustness},\text{performance},\text{scalability},\text{determinism},\text{transparency},\text{collaboration},\text{empowerment},\text{benefit},\text{learning},\text{future-proofing})
 ]
 
-Current strongest dimension:
+Current dominant dimension:
 
 [
-\max = \text{scalability}
+\max = \text{correctness}
 ]
 
-because the architecture already separates **graph compute → GPU kernels**.
-
----
-
-If helpful, I can also show **the 4 GPU kernels that will give ~90% of the speedup**, which is much simpler than it looks.
+because node invariants enforce valid execution graphs.
