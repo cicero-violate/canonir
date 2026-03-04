@@ -54,16 +54,7 @@ impl PolicyModel {
         let weights = std::fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str::<PolicyWeights>(&s).ok())
-            .unwrap_or_else(|| PolicyWeights {
-                planner_bias: Vec::new(),
-                node_add_bias: Vec::new(),
-                edge_add_bias: Vec::new(),
-                rewrite_bias: Vec::new(),
-                run_planner_head: Vec::new(),
-                expansion_head: Vec::new(),
-                execution_head: Vec::new(),
-                unblock_head: Vec::new(),
-            });
+            .unwrap_or_else(default_weights);
         Self { weights }
     }
 
@@ -115,6 +106,20 @@ impl PolicyModel {
             .chain(self.weights.execution_head.iter())
             .chain(self.weights.unblock_head.iter());
         all.map(|v| v * v).sum::<f64>().sqrt()
+    }
+}
+
+fn default_weights() -> PolicyWeights {
+    PolicyWeights {
+        planner_bias: vec![0.2, 0.0, 0.0, 0.0],
+        node_add_bias: vec![0.2, 0.0, 0.0, 0.0],
+        edge_add_bias: vec![0.1, 0.0, 0.0, 0.0],
+        rewrite_bias: vec![0.1, 0.0, 0.0, 0.0],
+        run_planner_head: vec![0.3, 0.0, 0.0, 0.0],
+        expansion_head: vec![0.2, 0.0, 0.0, 0.0],
+        // Bias toward execution by default when no weights are present.
+        execution_head: vec![0.8, 0.0, 0.0, 0.0],
+        unblock_head: vec![0.2, 0.0, 0.0, 0.0],
     }
 }
 

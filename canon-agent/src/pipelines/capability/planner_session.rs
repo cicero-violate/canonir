@@ -268,6 +268,8 @@ Rules:\n\
 5) Retract nodes that are Pending or Failed with no dependents.\n\
 6) Rewrite nodes that are Pending with an imprecise description.\n\
 7) If rewrite requests are listed, include them in rewrite_nodes.\n\
+8) If the graph is empty, include a node that runs `cargo run --bin orchestration -- --all` with mutate-only capability (`bash` or `cargo_build`).\n\
+9) Do not avoid Mutate tasks; execute Mutate steps early if they unblock diagnostics.\n\
 POLICY BIAS\n\
 {}\n\
 SYSTEM GRAPH METRICS\n\
