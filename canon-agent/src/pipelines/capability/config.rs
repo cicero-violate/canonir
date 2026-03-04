@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 pub const CAPABILITY_CONFIG_TOML: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts/capability_config.toml";
 
@@ -134,5 +135,54 @@ impl CapabilityConfig {
 
     pub fn role_config(&self, role: &str) -> RawRoleConfig {
         self.llm_roles.get(role).cloned().unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoalSpec {
+    pub raw: String,
+}
+
+impl GoalSpec {
+    pub fn new(raw: impl Into<String>) -> Self {
+        Self { raw: raw.into() }
+    }
+
+    pub fn from_file(path: &str) -> Result<Self> {
+        let raw = std::fs::read_to_string(path).with_context(|| format!("failed to read goal file: {}", path))?;
+        Ok(Self::new(raw))
+    }
+}
+
+const CAPABILITY_POLICY_TOML: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts/capability_policy.toml";
+
+#[derive(Debug, Deserialize)]
+struct RawPolicy {
+    #[serde(default)]
+    pub write_allowed_roots: Vec<String>,
+    #[serde(default)]
+    pub require_final_render: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CapabilityPolicy {
+    pub write_allowed_roots: Vec<PathBuf>,
+    pub require_final_render: bool,
+}
+
+impl CapabilityPolicy {
+    pub fn load(workspace_root: &Path) -> Result<Self> {
+        let raw_toml = std::fs::read_to_string(CAPABILITY_POLICY_TOML)
+            .with_context(|| format!("cannot read {}", CAPABILITY_POLICY_TOML))?;
+        let raw: RawPolicy = toml::from_str(&raw_toml).context("cannot parse capability_policy.toml")?;
+        let roots = raw
+            .write_allowed_roots
+            .into_iter()
+            .map(|p| {
+                let path = Path::new(&p);
+                if path.is_absolute() { path.to_path_buf() } else { workspace_root.join(path) }
+            })
+            .collect::<Vec<_>>();
+        Ok(Self { write_allowed_roots: roots, require_final_render: raw.require_final_render })
     }
 }

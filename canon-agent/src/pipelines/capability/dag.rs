@@ -144,3 +144,68 @@ fn dfs_cycle<'a>(node: &'a str, adj: &HashMap<&'a str, Vec<&'a str>>, visited: &
     stack.remove(node);
     false
 }
+
+#[derive(Debug, Clone)]
+pub struct AuthorityContext {
+    pub node_id: String,
+    pub capabilities: HashSet<Capability>,
+}
+
+impl AuthorityContext {
+    pub fn new(node_id: String, caps: HashSet<Capability>) -> Result<Self, String> {
+        assert_mut_verify_disjoint(&caps)?;
+        Ok(Self { node_id, capabilities: caps })
+    }
+
+    pub fn has(&self, cap: Capability) -> bool {
+        self.capabilities.contains(&cap)
+    }
+
+    pub fn require(&self, cap: Capability) -> Result<(), String> {
+        if self.has(cap) {
+            Ok(())
+        } else {
+            Err(format!("node {} missing capability {:?}", self.node_id, cap))
+        }
+    }
+
+    pub fn is_verify_context(&self) -> bool {
+        self.capabilities.contains(&Capability::StatusUpdateOnly)
+    }
+
+    pub fn is_mutation_context(&self) -> bool {
+        self.capabilities.contains(&Capability::FileWrite) || self.capabilities.contains(&Capability::ApplyPatch)
+    }
+}
+
+pub fn resolve_ready(graph: &mut TaskGraph) {
+    let id_to_idx: HashMap<&str, usize> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
+    let adj: Vec<Vec<usize>> = graph
+        .nodes
+        .iter()
+        .map(|n| {
+            n.deps
+                .iter()
+                .filter_map(|d| id_to_idx.get(d.as_str()).copied())
+                .collect()
+        })
+        .collect();
+    let layers = algorithms::graph::scheduling::topological_layers(&adj);
+    if let Some(first) = layers.first() {
+        for &idx in first {
+            if graph.nodes[idx].status == Status::Pending {
+                graph.nodes[idx].status = Status::Ready;
+            }
+        }
+    }
+}
+
+pub fn grant_authority(node: &TaskNode) -> Result<AuthorityContext, String> {
+    let caps: std::collections::HashSet<Capability> = node.required_capabilities.iter().copied().collect();
+    AuthorityContext::new(node.id.clone(), caps)
+}

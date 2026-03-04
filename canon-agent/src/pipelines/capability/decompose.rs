@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::path::Path;
 
 use super::capability::Capability;
-use super::goal::GoalSpec;
+use super::config::GoalSpec;
 use super::llm::call_agent_json_with_retry;
 use crate::ws_server::WsBridge;
 
@@ -35,6 +35,136 @@ pub struct TaskSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecomposeOutput {
     pub tasks: Vec<TaskSpec>,
+}
+
+async fn decompose_inner(
+    prompt: String,
+    input: Value,
+    schema: &str,
+    caps: &[&str],
+    phase: &str,
+    log_path: std::path::PathBuf,
+    min_tasks: Option<usize>,
+    min_tasks_message: Option<usize>,
+    retry_on_parse: bool,
+    bridge: &WsBridge,
+    endpoint_id: &str,
+    url: &str,
+    role_schema: &str,
+    tabs: &tokio::sync::Mutex<super::tab_management::TabSlots>,
+    reuse_tabs: bool,
+    max_tabs: usize,
+    tab_cooldown_ms: u64,
+    retries: u32,
+    delay_secs: u64,
+) -> Result<DecomposeOutput> {
+    let mut payload: Value = call_agent_json_with_retry(
+        bridge,
+        endpoint_id,
+        url,
+        &prompt,
+        role_schema,
+        phase,
+        tabs,
+        reuse_tabs,
+        max_tabs,
+        tab_cooldown_ms,
+        retries,
+        delay_secs,
+    )
+    .await?;
+
+    let mut output: DecomposeOutput = if retry_on_parse {
+        match serde_json::from_value(payload.clone()) {
+            Ok(v) => v,
+            Err(_) => {
+                let retry_prompt = format!(
+                    "Your response did not match the schema.\n\
+Return exactly one fenced ```json block and nothing else.\n\
+Schema:\n\
+{{\n  \"tasks\": [\n    {{\n      \"id\": \"t1\",\n      \"description\": \"string\",\n      \"deps\": [],\n      \"required_capabilities\": [\"{}\"],\n      \"node_type\": \"analysis|render\"\n    }}\n  ]\n}}\n\
+Allowed capability values:\n{}\n\n\
+Invalid response:\n{}\n\n\
+Original input:\n{}",
+                    "file_write",
+                    caps.join(", "),
+                    serde_json::to_string_pretty(&payload).unwrap_or_default(),
+                    serde_json::to_string_pretty(&input).unwrap_or_default()
+                );
+                let retry_payload: Value = call_agent_json_with_retry(
+                    bridge,
+                    endpoint_id,
+                    url,
+                    &retry_prompt,
+                    role_schema,
+                    phase,
+                    tabs,
+                    reuse_tabs,
+                    max_tabs,
+                    tab_cooldown_ms,
+                    1,
+                    delay_secs,
+                )
+                .await?;
+                payload = retry_payload.clone();
+                serde_json::from_value(retry_payload.clone()).context("D_g output did not match schema")?
+            }
+        }
+    } else {
+        serde_json::from_value(payload.clone()).context("D_g output did not match schema")?
+    };
+
+    if let Some(min_tasks) = min_tasks {
+        if output.tasks.len() < min_tasks {
+            let min_tasks_message = min_tasks_message.unwrap_or(min_tasks);
+            let retry_prompt = format!(
+                "Your response must include at least {} tasks.\n\
+Return exactly one fenced ```json block and nothing else.\n\
+Schema:\n\
+{{\n  \"tasks\": [\n    {{\n      \"id\": \"t1\",\n      \"description\": \"string\",\n      \"deps\": [],\n      \"required_capabilities\": [\"{}\"],\n      \"node_type\": \"analysis|render\"\n    }}\n  ]\n}}\n\
+Allowed capability values:\n{}\n\n\
+Invalid response:\n{}\n\n\
+Original input:\n{}",
+                min_tasks_message,
+                "file_write",
+                caps.join(", "),
+                serde_json::to_string_pretty(&payload).unwrap_or_default(),
+                serde_json::to_string_pretty(&input).unwrap_or_default()
+            );
+            let retry_payload: Value = call_agent_json_with_retry(
+                bridge,
+                endpoint_id,
+                url,
+                &retry_prompt,
+                role_schema,
+                phase,
+                tabs,
+                reuse_tabs,
+                max_tabs,
+                tab_cooldown_ms,
+                1,
+                delay_secs,
+            )
+            .await?;
+            payload = retry_payload.clone();
+            let retry_output: DecomposeOutput =
+                serde_json::from_value(retry_payload.clone()).context("D_g output did not match schema")?;
+            if retry_output.tasks.len() < min_tasks {
+                return Err(anyhow::anyhow!("D_g returned too few tasks"));
+            }
+            output = retry_output;
+        }
+    }
+
+    for t in &mut output.tasks {
+        t.node_type = normalize_node_type(t.node_type, &t.required_capabilities, &t.description);
+    }
+
+    if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
+        let _ = std::fs::write(log_path, pretty);
+    }
+
+    Ok(output)
 }
 
 pub async fn decompose_goal(
@@ -83,66 +213,28 @@ Action space: you may only reference paths under the workspace root.\n{}\n\nINPU
         schema,
         serde_json::to_string_pretty(&input).unwrap_or_default()
     );
-    let mut payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "decompose_goal", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, retries, delay_secs).await?;
-    let output: DecomposeOutput = match serde_json::from_value(payload.clone()) {
-        Ok(v) => v,
-        Err(_) => {
-            let retry_prompt = format!(
-                "Your response did not match the schema.\n\
-Return exactly one fenced ```json block and nothing else.\n\
-Schema:\n\
-{{\n  \"tasks\": [\n    {{\n      \"id\": \"t1\",\n      \"description\": \"string\",\n      \"deps\": [],\n      \"required_capabilities\": [\"{}\"],\n      \"node_type\": \"analysis|render\"\n    }}\n  ]\n}}\n\
-Allowed capability values:\n{}\n\n\
-Invalid response:\n{}\n\n\
-Original input:\n{}",
-                "file_write",
-                caps.join(", "),
-                serde_json::to_string_pretty(&payload).unwrap_or_default(),
-                serde_json::to_string_pretty(&input).unwrap_or_default()
-            );
-            let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "decompose_goal", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, 1, delay_secs).await?;
-            payload = retry_payload.clone();
-            serde_json::from_value(retry_payload.clone()).context("D_g output did not match schema")?
-        }
-    };
-    if output.tasks.len() < 2 {
-        let retry_prompt = format!(
-            "Your response must include at least 3 tasks.\n\
-Return exactly one fenced ```json block and nothing else.\n\
-Schema:\n\
-{{\n  \"tasks\": [\n    {{\n      \"id\": \"t1\",\n      \"description\": \"string\",\n      \"deps\": [],\n      \"required_capabilities\": [\"{}\"],\n      \"node_type\": \"analysis|render\"\n    }}\n  ]\n}}\n\
-Allowed capability values:\n{}\n\n\
-Invalid response:\n{}\n\n\
-Original input:\n{}",
-            "file_write",
-            caps.join(", "),
-            serde_json::to_string_pretty(&payload).unwrap_or_default(),
-            serde_json::to_string_pretty(&input).unwrap_or_default()
-        );
-        let retry_payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &retry_prompt, role_schema, "decompose_goal", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, 1, delay_secs).await?;
-        payload = retry_payload.clone();
-        let retry_output: DecomposeOutput = serde_json::from_value(retry_payload.clone()).context("D_g output did not match schema")?;
-        if retry_output.tasks.len() < 2 {
-            return Err(anyhow::anyhow!("D_g returned too few tasks"));
-        }
-        let path = log_dir.join("decompose_output.json");
-        if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
-            let _ = std::fs::write(path, pretty);
-        }
-        return Ok(retry_output);
-    }
-
-    let mut output = output;
-    for t in &mut output.tasks {
-        t.node_type = normalize_node_type(t.node_type, &t.required_capabilities, &t.description);
-    }
-
-    let path = log_dir.join("decompose_output.json");
-    if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
-        let _ = std::fs::write(path, pretty);
-    }
-
-    Ok(output)
+    decompose_inner(
+        prompt,
+        input,
+        &schema,
+        &caps,
+        "decompose_goal",
+        log_dir.join("decompose_output.json"),
+        Some(2),
+        Some(3),
+        true,
+        bridge,
+        endpoint_id,
+        url,
+        role_schema,
+        tabs,
+        reuse_tabs,
+        max_tabs,
+        tab_cooldown_ms,
+        retries,
+        delay_secs,
+    )
+    .await
 }
 
 pub async fn decompose_node(
@@ -189,17 +281,28 @@ Workspace root: {}\nWorkspace entries: {}\nAction space: paths must be under wor
         schema,
         serde_json::to_string_pretty(&input).unwrap_or_default()
     );
-    let payload: Value = call_agent_json_with_retry(bridge, endpoint_id, url, &prompt, role_schema, "decompose_node", tabs, reuse_tabs, max_tabs, tab_cooldown_ms, retries, delay_secs).await?;
-    let mut output: DecomposeOutput = serde_json::from_value(payload.clone()).context("D_g output did not match schema")?;
-    for t in &mut output.tasks {
-        t.node_type = normalize_node_type(t.node_type, &t.required_capabilities, &t.description);
-    }
-
-    let path = log_dir.join(format!("decompose_{}.json", node.id));
-    if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
-        let _ = std::fs::write(path, pretty);
-    }
-    Ok(output)
+    decompose_inner(
+        prompt,
+        input,
+        &schema,
+        &caps,
+        "decompose_node",
+        log_dir.join(format!("decompose_{}.json", node.id)),
+        None,
+        None,
+        false,
+        bridge,
+        endpoint_id,
+        url,
+        role_schema,
+        tabs,
+        reuse_tabs,
+        max_tabs,
+        tab_cooldown_ms,
+        retries,
+        delay_secs,
+    )
+    .await
 }
 
 fn normalize_node_type(node_type: NodeType, caps: &[Capability], description: &str) -> NodeType {
