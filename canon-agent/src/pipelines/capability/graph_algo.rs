@@ -140,6 +140,12 @@ pub fn compute_graph_signals(graph: &dag::TaskGraph) -> GraphSignals {
         .enumerate()
         .filter_map(|(i, &d)| if d == 0 { Some(i) } else { None })
         .collect();
+    #[cfg(feature = "cuda")]
+    let topo_order = {
+        let csr = Csr::from_adj(&adj);
+        algorithms::graph::topological_sort_gpu::topological_sort_gpu(&csr)
+    };
+    #[cfg(not(feature = "cuda"))]
     let topo_order = algorithms::graph::topological_sort::topological_sort(&adj);
     let has_cycle = topo_order.len() != n;
     let sccs = algorithms::graph::scc::kosaraju_scc(&adj)

@@ -19,3 +19,5 @@ pub mod region;
 pub mod scheduling;
 pub mod scc;
 pub mod topological_sort;
+#[cfg(feature = "cuda")]
+pub mod topological_sort_gpu;

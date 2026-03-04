@@ -20,6 +20,7 @@ mod gpu_tests {
     use crate::graph::model_checking::model_check_gpu;
     use crate::control_flow::gpu::{dominators_gpu, reaching_definitions_gpu};
     use crate::graph::scheduler_gpu::{ready_mask_gpu, pack_ready_priority, deadlock_gpu};
+    use crate::graph::topological_sort_gpu::topological_sort_gpu;
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -31,6 +32,22 @@ mod gpu_tests {
         g.add_edge(1, 3);
         g.add_edge(2, 3);
         g.to_csr()
+    }
+
+    #[test]
+    fn topo_sort_gpu_respects_edges() {
+        // 0->1, 0->2, 1->3, 2->3
+        let csr = diamond_csr();
+        let order = topological_sort_gpu(&csr);
+        assert_eq!(order.len(), 4);
+        let mut pos = vec![0usize; 4];
+        for (i, &n) in order.iter().enumerate() {
+            pos[n] = i;
+        }
+        assert!(pos[0] < pos[1]);
+        assert!(pos[0] < pos[2]);
+        assert!(pos[1] < pos[3]);
+        assert!(pos[2] < pos[3]);
     }
 
     // ── Scheduler GPU ───────────────────────────────────────────────────────
