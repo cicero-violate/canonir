@@ -9,6 +9,8 @@ pub mod dfs;
 pub mod dijkstra;
 #[cfg(feature = "cuda")]
 pub mod depth_gpu;
+#[cfg(feature = "cuda")]
+pub mod feature_gpu;
 pub mod max_flow;
 pub mod model_checking;
 #[cfg(feature = "cuda")]

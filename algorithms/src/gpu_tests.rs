@@ -23,6 +23,7 @@ mod gpu_tests {
     use crate::graph::topological_sort_gpu::topological_sort_gpu;
     use crate::graph::scc_gpu::scc_gpu;
     use crate::graph::depth_gpu::longest_path_depth_gpu;
+    use crate::graph::feature_gpu::feature_stats_gpu;
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -83,6 +84,39 @@ mod gpu_tests {
         let depth = longest_path_depth_gpu(&csr);
 
         assert_eq!(depth, vec![0,1,1,2]);
+    }
+
+    #[test]
+    fn feature_gpu_counts_roots_leaves() {
+        let csr = Csr::from_edges(4, &[
+            (0,1),
+            (0,2),
+            (1,3),
+            (2,3)
+        ]);
+        let status = vec![0u8, 0u8, 0u8, 0u8];
+        let (indegree, outdegree) = crate::graph::feature_gpu::indegree_outdegree(&csr);
+        let priority = vec![1u16; 4];
+        let budget = vec![0u32; 4];
+        let retry = vec![0u32; 4];
+        let has_verify = vec![0u8; 4];
+        let has_mutate = vec![0u8; 4];
+        let has_observe = vec![0u8; 4];
+        let node_type = vec![0u8; 4];
+        let stats = feature_stats_gpu(
+            &status,
+            &indegree,
+            &outdegree,
+            &priority,
+            &budget,
+            &retry,
+            &has_verify,
+            &has_mutate,
+            &has_observe,
+            &node_type,
+        );
+        assert_eq!(stats.root_count, 1);
+        assert_eq!(stats.leaf_count, 1);
     }
 
     // ── Scheduler GPU ───────────────────────────────────────────────────────
