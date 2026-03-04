@@ -49,7 +49,7 @@ tab_cooldown_ms = 4000
 
 [llm.endpoints.planner]
 id = "planner_chatgpt_group"
-url = "https://chatgpt.com/gg/6992c359272881a19d30c226925f575d"
+url = "https://chatgpt.com/gg/69a86ca9112c8194bece166d0d686a70"
 role_markdown = "GENERIC_AGENT_ROLE.md"
 role = "planner"
 stateful = true
