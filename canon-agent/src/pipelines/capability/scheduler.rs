@@ -3,41 +3,41 @@ use anyhow::Result;
 use futures_util::future::join_all;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::io::Write;
 use tokio::sync::Semaphore;
 
-use super::config::{self, CapabilityConfig};
+use super::capability::dominant_class;
 use super::capability::Capability;
+use super::capability_cost::CapabilityCostTable;
+use super::config::{self, CapabilityConfig};
+use super::console;
 use super::dag;
-use super::engine;
+use super::decompose;
 use super::dispatch;
+use super::engine;
+use super::engine::TabsHandle;
 use super::execution_result::{self, RepairStats};
-use super::graph_algo::{compute_graph_signals, graph_signature, node_utility, graph_features, edge_count, normalize_features};
+use super::failure_store::FailureStore;
+use super::gpu_scheduler::driver::GpuScheduler;
+use super::graph_algo::{compute_graph_signals, edge_count, graph_features, graph_signature, node_utility, normalize_features};
 use super::graph_maintenance::{self, MaintenanceCtx};
 use super::graph_runtime::build_context;
-use super::engine::TabsHandle;
+use super::planner_session::{auto_repair_planner_update, validate_planner_update, PlannerSession};
+use super::planner_state::{PlannerEvent, PlannerPhase, PLANNER_TRANSITIONS};
+use super::planner_update::{apply_planner_update, EdgeSpec, PlannerUpdate};
+use super::policy;
+use super::policy_engine;
+use super::policy_train::{self, PolicyDatasetEntry};
+use super::scheduler_scoring;
+use super::scheduler_state::{ExecEvent, ExecStep, EXEC_TRANSITIONS};
+use super::state_snapshot;
+use super::telemetry::{self, ExecMetrics, PlannerMetrics, RuntimeMetrics, TelemetrySnapshot};
+use super::template_mutation;
+use super::templates::TemplateStore;
 use super::LOG_ROOT;
 use super::TEMPLATE_ROOT;
-use super::planner_session::{auto_repair_planner_update, validate_planner_update, PlannerSession};
-use super::planner_update::{PlannerUpdate, EdgeSpec, apply_planner_update};
-use super::templates::TemplateStore;
-use super::failure_store::FailureStore;
-use super::policy_train::{self, PolicyDatasetEntry};
-use super::telemetry::{self, ExecMetrics, PlannerMetrics, RuntimeMetrics, TelemetrySnapshot};
-use super::console;
-use super::capability::dominant_class;
-use super::gpu_scheduler::driver::GpuScheduler;
-use super::decompose;
-use super::capability_cost::CapabilityCostTable;
-use super::template_mutation;
-use super::state_snapshot;
-use super::scheduler_state::{ExecEvent, ExecStep, EXEC_TRANSITIONS};
-use super::policy_engine;
-use super::planner_state::{PlannerPhase, PlannerEvent, PLANNER_TRANSITIONS};
-use super::scheduler_scoring;
-use super::policy;
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -73,26 +73,9 @@ const PIPELINE_TRANSITIONS: [[PipelineState; 3]; 3] = {
 };
 
 pub(crate) async fn execute_graph_loop(
-    graph: &mut dag::TaskGraph,
-    bridge: &WsBridge,
-    config: &CapabilityConfig,
-    role_rr: &tokio::sync::Mutex<HashMap<String, usize>>,
-    tabs: &TabsHandle,
-    cwd: &[PathBuf],
-    workspace_listing: &str,
-    endpoint: &config::LlmEndpoint,
-    exec_role: &str,
-    policy: &config::CapabilityPolicy,
-    context_radius: usize,
-    max_concurrency: usize,
-    max_iterations: u64,
-    tab_cooldown_ms: u64,
-    retry_count: u32,
-    retry_delay: u64,
-    max_output_lines: usize,
-    execution_preference: f64,
-    cost_table: &mut CapabilityCostTable,
-    exec_metrics: &mut ExecMetrics,
+    graph: &mut dag::TaskGraph, bridge: &WsBridge, config: &CapabilityConfig, role_rr: &tokio::sync::Mutex<HashMap<String, usize>>, tabs: &TabsHandle, cwd: &[PathBuf], workspace_listing: &str,
+    endpoint: &config::LlmEndpoint, exec_role: &str, policy: &config::CapabilityPolicy, context_radius: usize, max_concurrency: usize, max_iterations: u64, tab_cooldown_ms: u64, retry_count: u32,
+    retry_delay: u64, max_output_lines: usize, execution_preference: f64, cost_table: &mut CapabilityCostTable, exec_metrics: &mut ExecMetrics,
 ) -> Result<(u64, Vec<ExecFailure>)> {
     let semaphore = Arc::new(Semaphore::new(max_concurrency.max(1)));
     let mut blocked_streak = 0u32;
@@ -117,11 +100,7 @@ pub(crate) async fn execute_graph_loop(
                     for id in &ready_ids {
                         let _ = graph.update_status(id, dag::Status::Ready);
                     }
-                    let status_snapshot = graph
-                        .nodes
-                        .iter()
-                        .map(|n| serde_json::json!({"id": n.id, "status": n.status}))
-                        .collect::<Vec<_>>();
+                    let status_snapshot = graph.nodes.iter().map(|n| serde_json::json!({"id": n.id, "status": n.status})).collect::<Vec<_>>();
                     if ready_ids.is_empty() && !graph.all_completed() && !graph.has_failed() {
                         if GpuScheduler::detect_deadlock(graph) {
                             failures.push(ExecFailure { kind: "deadlock", iter });
@@ -142,31 +121,11 @@ pub(crate) async fn execute_graph_loop(
                         "status": status_snapshot
                     });
                     let status_path = Path::new(LOG_ROOT).join(format!("iter_{:03}_status.json", iter));
-                    let _ = std::fs::write(
-                        status_path,
-                        serde_json::to_string_pretty(&summary).unwrap_or_default(),
-                    );
+                    let _ = std::fs::write(status_path, serde_json::to_string_pretty(&summary).unwrap_or_default());
                     eprintln!("{}", console::info("capability", &summary.to_string()));
-                    let completed_count = graph
-                        .nodes
-                        .iter()
-                        .filter(|n| n.status == dag::Status::Completed)
-                        .count();
+                    let completed_count = graph.nodes.iter().filter(|n| n.status == dag::Status::Completed).count();
                     let failed_count = graph.nodes.iter().filter(|n| n.status == dag::Status::Failed).count();
-                    eprintln!(
-                        "{}",
-                        console::phase(
-                            "tick",
-                            &format!(
-                                "iter={} ready={} completed={}/{} failed={}",
-                                iter,
-                                ready_ids.len(),
-                                completed_count,
-                                graph.nodes.len(),
-                                failed_count
-                            )
-                        )
-                    );
+                    eprintln!("{}", console::phase("tick", &format!("iter={} ready={} completed={}/{} failed={}", iter, ready_ids.len(), completed_count, graph.nodes.len(), failed_count)));
 
                     let event = if graph.all_completed() {
                         PipelineEvent::Completed
@@ -180,11 +139,7 @@ pub(crate) async fn execute_graph_loop(
                         (PipelineState::Stop, _) => return Ok((iter, failures)),
                         (_, PipelineEvent::Blocked) => {
                             blocked_streak += 1;
-                            eprintln!(
-                                r#"[capability] {{\"iter\":{},\"event\":\"blocked\",\"streak\":{}}}"#,
-                                iter,
-                                blocked_streak
-                            );
+                            eprintln!(r#"[capability] {{\"iter\":{},\"event\":\"blocked\",\"streak\":{}}}"#, iter, blocked_streak);
                             if blocked_streak >= 3 {
                                 let payload = serde_json::json!({
                                     "reason": "blocked",
@@ -206,14 +161,7 @@ pub(crate) async fn execute_graph_loop(
                     next_event = ExecEvent::Continue;
                 }
                 ExecStep::Dispatch => {
-                    let mut scored = scheduler_scoring::score_ready_nodes(
-                        &ready_ids,
-                        graph,
-                        &features,
-                        cost_table,
-                        execution_preference,
-                        config,
-                    );
+                    let mut scored = scheduler_scoring::score_ready_nodes(&ready_ids, graph, &features, cost_table, execution_preference, config);
                     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
                     ready_ids = scored.into_iter().map(|(id, _)| id).collect();
 
@@ -226,12 +174,7 @@ pub(crate) async fn execute_graph_loop(
                         let auth = match dag::grant_authority(&node) {
                             Ok(a) => a,
                             Err(e) => {
-                                eprintln!(
-                                    r#"[capability] {{\"iter\":{},\"event\":\"authority_error\",\"node\":\"{}\",\"error\":\"{}\"}}"#,
-                                    iter,
-                                    node.id,
-                                    e
-                                );
+                                eprintln!(r#"[capability] {{\"iter\":{},\"event\":\"authority_error\",\"node\":\"{}\",\"error\":\"{}\"}}"#, iter, node.id, e);
                                 let _ = graph.update_status(&node.id, dag::Status::Ready);
                                 continue;
                             }
@@ -244,24 +187,13 @@ pub(crate) async fn execute_graph_loop(
                             (&endpoint.id, &endpoint.url, endpoint.max_tabs, endpoint.stateful),
                             cwd[0].clone(),
                             Path::new(LOG_ROOT).to_path_buf(),
-                        ).await;
+                        )
+                        .await;
                         let mode = dominant_class(&node.required_capabilities);
                         let mode_label = console::mode_tag(mode);
                         dispatch::log_dispatch(&node, &mode_label, &ctx.endpoint_id);
                         let context = build_context(graph, &node.id, context_radius);
-                        let fut = dispatch::dispatch_node_call(
-                            node,
-                            auth,
-                            bridge,
-                            tabs,
-                            sem,
-                            ctx,
-                            context,
-                            iter,
-                            retry_count,
-                            retry_delay,
-                            tab_cooldown_ms,
-                        );
+                        let fut = dispatch::dispatch_node_call(node, auth, bridge, tabs, sem, ctx, context, iter, retry_count, retry_delay, tab_cooldown_ms);
                         futures.push(fut);
                     }
                     results = join_all(futures).await;
@@ -314,10 +246,7 @@ pub(crate) async fn execute_graph_loop(
                         recovery_retry_rate_threshold: config.recovery_retry_rate_threshold,
                         recovery_failed_fraction_threshold: config.recovery_failed_fraction_threshold,
                     })?;
-                    if config.enable_resume
-                        && config.snapshot_interval_iters > 0
-                        && iter % config.snapshot_interval_iters == 0
-                    {
+                    if config.enable_resume && config.snapshot_interval_iters > 0 && iter % config.snapshot_interval_iters == 0 {
                         let snapshot = state_snapshot::StateSnapshot { graph: graph.clone(), iteration: iter };
                         state_snapshot::save(Path::new(&config.snapshot_file), &snapshot);
                         exec_metrics.last_snapshot_written = true;
@@ -336,28 +265,10 @@ pub(crate) async fn execute_graph_loop(
     anyhow::bail!("iteration limit exceeded")
 }
 
-
 pub(crate) async fn run_planner_execution_loop(
-    planner: &mut PlannerSession,
-    graph: &mut dag::TaskGraph,
-    bridge: &WsBridge,
-    config: &CapabilityConfig,
-    role_rr: &tokio::sync::Mutex<HashMap<String, usize>>,
-    tabs: &TabsHandle,
-    cwd: &[PathBuf],
-    workspace_listing: &str,
-    endpoint: &config::LlmEndpoint,
-    exec_role: &str,
-    policy: &config::CapabilityPolicy,
-    context_radius: usize,
-    max_concurrency: usize,
-    max_iterations: u64,
-    tab_cooldown_ms: u64,
-    retry_count: u32,
-    retry_delay: u64,
-    max_output_lines: usize,
-    store: &mut TemplateStore,
-    template_name: &str,
+    planner: &mut PlannerSession, graph: &mut dag::TaskGraph, bridge: &WsBridge, config: &CapabilityConfig, role_rr: &tokio::sync::Mutex<HashMap<String, usize>>, tabs: &TabsHandle, cwd: &[PathBuf],
+    workspace_listing: &str, endpoint: &config::LlmEndpoint, exec_role: &str, policy: &config::CapabilityPolicy, context_radius: usize, max_concurrency: usize, max_iterations: u64,
+    tab_cooldown_ms: u64, retry_count: u32, retry_delay: u64, max_output_lines: usize, store: &mut TemplateStore, template_name: &str,
 ) -> Result<f64> {
     let template_hash = store.hash_for(template_name);
     let mut failure_store = FailureStore::load(&template_hash);
@@ -392,11 +303,7 @@ pub(crate) async fn run_planner_execution_loop(
         last_completed = completed_now;
         let failure_stats = failure_store.stats();
         let features = graph_features(graph).with_failure_stats(&failure_stats);
-        let policy_outcome = policy_engine::evaluate(
-            &features,
-            config.max_nodes,
-            config.max_nodes.saturating_mul(4),
-        );
+        let policy_outcome = policy_engine::evaluate(&features, config.max_nodes, config.max_nodes.saturating_mul(4));
         let policy_bias = policy_outcome.bias.clone();
         let policy_decision = policy_outcome.decision.clone();
         let mut run_planner = policy_decision.run_planner;
@@ -417,15 +324,7 @@ pub(crate) async fn run_planner_execution_loop(
         if expansion_scale.is_nan() || expansion_scale <= 0.0 {
             expansion_scale = 1.0;
         }
-        let rewrite_requests = graph
-            .nodes
-            .iter()
-            .filter_map(|n| {
-                n.reasoning_trace.as_ref().and_then(|trace| {
-                    trace.starts_with("REWRITE_REQUESTED").then(|| n.id.clone())
-                })
-            })
-            .collect::<Vec<_>>();
+        let rewrite_requests = graph.nodes.iter().filter_map(|n| n.reasoning_trace.as_ref().and_then(|trace| trace.starts_with("REWRITE_REQUESTED").then(|| n.id.clone()))).collect::<Vec<_>>();
         let mut phase = PlannerPhase::ReuseTemplate;
         let mut reuse_decision = false;
         let mut reuse_score = 0.0;
@@ -435,14 +334,7 @@ pub(crate) async fn run_planner_execution_loop(
         last_embedding_cache_hits = 0;
         if matches!(phase, PlannerPhase::ReuseTemplate) {
             if !run_planner {
-                let search = store.find_similar(
-                    template_name,
-                    graph,
-                    config.template_top_k,
-                    config.goal_similarity_weight,
-                    config.structural_similarity_weight,
-                    config.embedding_dim,
-                );
+                let search = store.find_similar(template_name, graph, config.template_top_k, config.goal_similarity_weight, config.structural_similarity_weight, config.embedding_dim);
                 last_embedding_cache_hits = search.cache_hits;
                 if let Some(best) = search.templates.into_iter().max_by(|a, b| {
                     let a_score = a.score * a.entry.reward;
@@ -481,10 +373,7 @@ pub(crate) async fn run_planner_execution_loop(
                     rewrite_requests.push(node.id.clone());
                 }
             }
-            eprintln!(
-                "{}",
-                console::info("recovery", &format!("reason={} rewrites={}", reason, rewrite_requests.len()))
-            );
+            eprintln!("{}", console::info("recovery", &format!("reason={} rewrites={}", reason, rewrite_requests.len())));
         }
         let signals = compute_graph_signals(graph);
         let log_dir = Path::new(LOG_ROOT).join("planner_logs");
@@ -494,16 +383,11 @@ pub(crate) async fn run_planner_execution_loop(
         let mut constraint_rejections = 0u64;
         let mut constraint_types: Vec<String> = Vec::new();
         let attempts = retry_count.max(1);
-        let force_planner_expand = store.is_plateaued(
-            template_name,
-            config.planner_plateau_window,
-            config.planner_plateau_threshold,
-        ) || features.ready_fraction < 0.1 || recovery_reason.is_some();
+        let force_planner_expand = store.is_plateaued(template_name, config.planner_plateau_window, config.planner_plateau_threshold) || features.ready_fraction < 0.1 || recovery_reason.is_some();
         let remaining_nodes = config.max_nodes.saturating_sub(graph.nodes.len());
         let (mut planner_max_new_nodes, mut planner_max_new_edges) = if force_planner_expand {
             (
-                (config.planner_max_new_nodes.saturating_mul(config.planner_plateau_expand_factor))
-                    .min(remaining_nodes.max(1)),
+                (config.planner_max_new_nodes.saturating_mul(config.planner_plateau_expand_factor)).min(remaining_nodes.max(1)),
                 config.planner_max_new_edges.saturating_mul(config.planner_plateau_expand_factor),
             )
         } else {
@@ -511,24 +395,13 @@ pub(crate) async fn run_planner_execution_loop(
         };
         let run_planner_now = run_planner && !reuse_decision;
         if run_planner_now {
-            planner_max_new_nodes = ((planner_max_new_nodes as f64) * expansion_scale)
-                .round()
-                .max(1.0)
-                .min(remaining_nodes.max(1) as f64) as usize;
-            planner_max_new_edges = ((planner_max_new_edges as f64) * expansion_scale)
-                .round()
-                .max(1.0) as usize;
+            planner_max_new_nodes = ((planner_max_new_nodes as f64) * expansion_scale).round().max(1.0).min(remaining_nodes.max(1) as f64) as usize;
+            planner_max_new_edges = ((planner_max_new_edges as f64) * expansion_scale).round().max(1.0) as usize;
         }
 
         if matches!(phase, PlannerPhase::MutateTemplate) && force_planner_expand && config.mutation_candidates > 0 {
             let base_reward = store.stored_reward(template_name);
-            let candidates = template_mutation::generate_candidates(
-                graph,
-                config.mutation_candidates,
-                config.mutation_budget,
-                config.mutation_rate,
-                iter,
-            );
+            let candidates = template_mutation::generate_candidates(graph, config.mutation_candidates, config.mutation_budget, config.mutation_rate, iter);
             let mut scored = template_mutation::evaluate_candidates(candidates);
             scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
             last_mutations = scored.len() as u64;
@@ -561,7 +434,9 @@ pub(crate) async fn run_planner_execution_loop(
                     execution_preference,
                     &mut cost_table,
                     &mut exec_metrics,
-                ).await {
+                )
+                .await
+                {
                     let reward = telemetry::compute_reward(&eval_graph, 1, config.max_expand_iters as u64);
                     success += 1;
                     if reward > best_reward {
@@ -590,11 +465,7 @@ pub(crate) async fn run_planner_execution_loop(
                 if let Some(ctx) = planner.reward_context() {
                     features_for_bias = features_for_bias.with_reward_history(&ctx.recent_rewards);
                 }
-                let normalized = normalize_features(
-                    &features_for_bias,
-                    config.max_nodes,
-                    config.max_nodes.saturating_mul(4),
-                );
+                let normalized = normalize_features(&features_for_bias, config.max_nodes, config.max_nodes.saturating_mul(4));
                 let bias_raw = policy::PolicyModel::load_default().predict(&normalized);
                 let bias_smoothed = policy::smooth_bias(prev_bias.as_ref(), bias_raw);
                 let bias = policy::maybe_explore(bias_smoothed, 0.05);
@@ -611,12 +482,7 @@ pub(crate) async fn run_planner_execution_loop(
                     planner_max_new_nodes,
                     planner_max_new_edges,
                 );
-                let mut candidate = PlannerUpdate {
-                    new_nodes: Vec::new(),
-                    new_edges: Vec::new(),
-                    retract_nodes: Vec::new(),
-                    rewrite_nodes: Vec::new(),
-                };
+                let mut candidate = PlannerUpdate { new_nodes: Vec::new(), new_edges: Vec::new(), retract_nodes: Vec::new(), rewrite_nodes: Vec::new() };
                 let attempts = retry_count.max(1);
                 for attempt in 1..=attempts {
                     let allow_mismatch = attempt > 1 && planner.is_history_empty();
@@ -721,16 +587,9 @@ pub(crate) async fn run_planner_execution_loop(
                         continue;
                     }
                 }
-                if let Err(e) = validate_planner_update(
-                    graph,
-                    &candidate,
-                    planner_max_new_nodes,
-                    planner_max_new_edges,
-                    &mut failure_store,
-                    iter,
-                    config.failure_constraint_threshold,
-                    config.max_constraints,
-                ) {
+                if let Err(e) =
+                    validate_planner_update(graph, &candidate, planner_max_new_nodes, planner_max_new_edges, &mut failure_store, iter, config.failure_constraint_threshold, config.max_constraints)
+                {
                     let err_msg = e.to_string();
                     if err_msg.starts_with("constraint violated:") {
                         constraint_rejections += 1;
@@ -778,11 +637,7 @@ pub(crate) async fn run_planner_execution_loop(
         }
         if let Some(update) = update {
             revision_rewrites = Some(update.rewrite_nodes.len());
-            last_update_counts = Some((
-                update.new_nodes.len(),
-                update.new_edges.len(),
-                update.rewrite_nodes.len(),
-            ));
+            last_update_counts = Some((update.new_nodes.len(), update.new_edges.len(), update.rewrite_nodes.len()));
             if update.new_nodes.is_empty() && update.new_edges.is_empty() {
                 empty_streak += 1;
             } else {
@@ -798,11 +653,7 @@ pub(crate) async fn run_planner_execution_loop(
             updated.validate().map_err(|e| anyhow::anyhow!(e))?;
             store.save(template_name, &updated)?;
             *graph = updated;
-            eprintln!(
-                "[planner] applied update: nodes={} edges={}",
-                graph.nodes.len(),
-                edge_count(graph)
-            );
+            eprintln!("[planner] applied update: nodes={} edges={}", graph.nodes.len(), edge_count(graph));
             if let Some(rewrites) = revision_rewrites {
                 if rewrites > 0 {
                     for node in &mut graph.nodes {
@@ -872,11 +723,7 @@ pub(crate) async fn run_planner_execution_loop(
         };
         let runtime = RuntimeMetrics {
             queue_depth: telemetry::pending_requests(),
-            retry_rate: if planner_metrics.planner_calls == 0 {
-                0.0
-            } else {
-                planner_metrics.planner_retries as f64 / planner_metrics.planner_calls as f64
-            },
+            retry_rate: if planner_metrics.planner_calls == 0 { 0.0 } else { planner_metrics.planner_retries as f64 / planner_metrics.planner_calls as f64 },
             progress_fraction: telemetry::progress_fraction(graph),
             iteration_time_ms: iter_start.elapsed().as_millis() as u64,
             branching_factor: features.branching_factor,
@@ -894,11 +741,7 @@ pub(crate) async fn run_planner_execution_loop(
             template_score: last_template_score,
             template_selected: last_template_selected.clone(),
             repair_attempts: exec_metrics.last_repair_attempts,
-            repair_success_rate: if exec_metrics.last_repair_attempts == 0 {
-                0.0
-            } else {
-                exec_metrics.last_repair_successes as f64 / exec_metrics.last_repair_attempts as f64
-            },
+            repair_success_rate: if exec_metrics.last_repair_attempts == 0 { 0.0 } else { exec_metrics.last_repair_successes as f64 / exec_metrics.last_repair_attempts as f64 },
             repair_type: exec_metrics.last_repair_kind.clone(),
             constraint_rejections,
             constraint_hit_rate: if attempts == 0 { 0.0 } else { constraint_rejections as f64 / attempts as f64 },

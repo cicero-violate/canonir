@@ -242,10 +242,7 @@ impl BuildReport {
 /// `offline` mirrors `CARGO_NET_OFFLINE=true` used in `run_script.sh`.
 pub fn build(emit_dir: &Path, offline: bool) -> io::Result<BuildReport> {
     let mut cmd = Command::new("cargo");
-    cmd.arg("check")
-        .arg("--message-format")
-        .arg("json")
-        .current_dir(emit_dir);
+    cmd.arg("check").arg("--message-format").arg("json").current_dir(emit_dir);
     if offline {
         cmd.env("CARGO_NET_OFFLINE", "true");
     }

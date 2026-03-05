@@ -21,13 +21,7 @@ pub struct MaintenanceCtx<'a> {
     pub recovery_failed_fraction_threshold: f64,
 }
 
-pub(crate) fn prune_low_value_nodes(
-    graph: &mut dag::TaskGraph,
-    iter: u64,
-    auto_prune: bool,
-    prune_min_age: u64,
-    prune_threshold: f64,
-) {
+pub(crate) fn prune_low_value_nodes(graph: &mut dag::TaskGraph, iter: u64, auto_prune: bool, prune_min_age: u64, prune_threshold: f64) {
     if !auto_prune {
         return;
     }
@@ -89,18 +83,8 @@ pub fn maintain_graph(ctx: MaintenanceCtx<'_>) -> Result<()> {
         prune_unlinked_nodes(ctx.graph);
     }
     enforce_semantic_validations(ctx.graph)?;
-    prune_low_value_nodes(
-        ctx.graph,
-        ctx.iter,
-        ctx.auto_prune,
-        ctx.prune_min_age,
-        ctx.prune_threshold,
-    );
-    let risk = risk_score(
-        ctx.features_retry_rate,
-        ctx.features_failed_fraction,
-        ctx.features_branching_factor,
-    );
+    prune_low_value_nodes(ctx.graph, ctx.iter, ctx.auto_prune, ctx.prune_min_age, ctx.prune_threshold);
+    let risk = risk_score(ctx.features_retry_rate, ctx.features_failed_fraction, ctx.features_branching_factor);
     let threshold = (ctx.recovery_retry_rate_threshold + ctx.recovery_failed_fraction_threshold) / 2.0;
     if risk > threshold {
         apply_recovery(ctx.graph);

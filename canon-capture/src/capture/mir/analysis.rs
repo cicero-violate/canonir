@@ -7,8 +7,8 @@ use crate::capture::mir::ops as mir_ops;
 use crate::capture::mir::resolver::LocalNameResolver;
 use crate::capture::mir::util as mir_util;
 use crate::types::Stmt;
-use std::collections::HashSet;
 use algorithms::control_flow::cfg_pattern::{compute_back_edges, detect_iterator_loops};
+use std::collections::HashSet;
 
 pub(crate) struct SwitchAnalysis {
     pub(crate) switch_sources: BTreeSet<usize>,
@@ -155,15 +155,7 @@ pub(crate) fn analyze_switch_structure(body: &mir::Body<'_>) -> SwitchAnalysis {
         switch_source_writes_ret.insert(*src, writes_ret);
     }
 
-    SwitchAnalysis {
-        switch_sources,
-        switchint_arm_blocks,
-        switch_arm_writes_ret,
-        switch_arm_returns,
-        switch_source_writes_ret,
-        iterator_switches,
-        iterator_body_blocks,
-    }
+    SwitchAnalysis { switch_sources, switchint_arm_blocks, switch_arm_writes_ret, switch_arm_returns, switch_source_writes_ret, iterator_switches, iterator_body_blocks }
 }
 
 fn region_has_cycle(region: &BTreeSet<usize>, succs: &[Vec<usize>]) -> bool {

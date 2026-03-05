@@ -1,15 +1,15 @@
-use super::layout::{GpuGraph, is_completed, is_ready_candidate};
+use super::layout::{is_completed, is_ready_candidate, GpuGraph};
 
 use algorithms::graph::csr::Csr;
 
 #[cfg(feature = "cuda")]
 use algorithms::graph::scheduler_gpu;
 #[cfg(feature = "cuda")]
-use algorithms::sorting::gpu as sorting_gpu;
-#[cfg(feature = "cuda")]
-use algorithms::graph::{scc_gpu, topological_sort_gpu, depth_gpu, reachability};
+use algorithms::graph::{depth_gpu, reachability, scc_gpu, topological_sort_gpu};
 #[cfg(not(feature = "cuda"))]
 use algorithms::graph::{scc, topological_sort};
+#[cfg(feature = "cuda")]
+use algorithms::sorting::gpu as sorting_gpu;
 
 #[cfg(feature = "cuda")]
 pub fn compute_ready(graph: &GpuGraph) -> Vec<u8> {
@@ -61,10 +61,7 @@ pub fn priority_sort(ready_mask: &[u8], priority: &[u16]) -> Vec<usize> {
 
 #[cfg(not(feature = "cuda"))]
 pub fn priority_sort(ready_mask: &[u8], priority: &[u16]) -> Vec<usize> {
-    let mut indices: Vec<usize> = ready_mask.iter()
-        .enumerate()
-        .filter_map(|(i, &r)| if r == 1 { Some(i) } else { None })
-        .collect();
+    let mut indices: Vec<usize> = ready_mask.iter().enumerate().filter_map(|(i, &r)| if r == 1 { Some(i) } else { None }).collect();
     indices.sort_by(|a, b| {
         let pa = priority.get(*a).copied().unwrap_or(0);
         let pb = priority.get(*b).copied().unwrap_or(0);
@@ -106,11 +103,7 @@ pub fn compute_roots(adj: &[Vec<usize>]) -> Vec<usize> {
     {
         let csr = Csr::from_adj(adj);
         let indegree = topological_sort_gpu::indegree_gpu(&csr);
-        return indegree
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &d)| (d == 0).then_some(i))
-            .collect();
+        return indegree.iter().enumerate().filter_map(|(i, &d)| (d == 0).then_some(i)).collect();
     }
     #[cfg(not(feature = "cuda"))]
     {
@@ -122,11 +115,7 @@ pub fn compute_roots(adj: &[Vec<usize>]) -> Vec<usize> {
                 }
             }
         }
-        return indegree
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &d)| (d == 0).then_some(i))
-            .collect();
+        return indegree.iter().enumerate().filter_map(|(i, &d)| (d == 0).then_some(i)).collect();
     }
 }
 

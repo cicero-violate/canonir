@@ -1,16 +1,16 @@
 use crate::solver::csr_to_adj;
-use crate::solver::gpu_algorithms::kosaraju_scc;
 #[cfg(feature = "cuda")]
 use crate::solver::gpu_algorithms::ac3_gpu_apply;
+use crate::solver::gpu_algorithms::kosaraju_scc;
 #[cfg(feature = "cuda")]
 use algorithms::constraints::ac3::{ConstraintGraph, Domain};
 use anyhow::Result;
 use canon::edge::EdgeKind;
 use canon::id::NodeId;
-use canon::node::{CanonId, CanonNodeKind, TypeKind};
-use canon::CanonIR;
 #[cfg(feature = "cuda")]
 use canon::ir::TypeKey;
+use canon::node::{CanonId, CanonNodeKind, TypeKind};
+use canon::CanonIR;
 use std::collections::{HashMap, HashSet};
 
 pub fn solve(ir: &mut CanonIR) -> Result<()> {
@@ -69,22 +69,14 @@ fn build_type_constraint_graph(ir: &CanonIR) -> (Vec<Domain>, ConstraintGraph, V
             concrete_types.push(node_idx as i32);
         }
     }
-    let fallback_domain: Vec<i32> = if concrete_types.is_empty() {
-        type_nodes.iter().map(|&i| i as i32).collect()
-    } else {
-        concrete_types.clone()
-    };
+    let fallback_domain: Vec<i32> = if concrete_types.is_empty() { type_nodes.iter().map(|&i| i as i32).collect() } else { concrete_types.clone() };
 
     let mut domains = Vec::with_capacity(type_nodes.len());
     for &node_idx in &type_nodes {
         let Some(CanonNodeKind::Type { kind }) = ir.nodes.get(node_idx).map(|n| &n.kind) else {
             continue;
         };
-        let dom = if is_concrete_type(kind) {
-            vec![node_idx as i32]
-        } else {
-            fallback_domain.clone()
-        };
+        let dom = if is_concrete_type(kind) { vec![node_idx as i32] } else { fallback_domain.clone() };
         domains.push(dom);
     }
 
@@ -113,10 +105,7 @@ fn build_type_constraint_graph(ir: &CanonIR) -> (Vec<Domain>, ConstraintGraph, V
 
 #[cfg(feature = "cuda")]
 fn is_concrete_type(kind: &TypeKind) -> bool {
-    !matches!(
-        kind,
-        TypeKind::Param(_) | TypeKind::Extern(_) | TypeKind::Unresolved(_) | TypeKind::TypeRef { .. }
-    )
+    !matches!(kind, TypeKind::Param(_) | TypeKind::Extern(_) | TypeKind::Unresolved(_) | TypeKind::TypeRef { .. })
 }
 
 #[cfg(feature = "cuda")]

@@ -70,10 +70,7 @@ impl FailureStore {
         let data = std::fs::read_to_string(&path)
             .ok()
             .and_then(|s| serde_json::from_str::<FailureFile>(&s).ok())
-            .unwrap_or_else(|| FailureFile {
-                template_hash: template_hash.to_string(),
-                failures: Vec::new(),
-            });
+            .unwrap_or_else(|| FailureFile { template_hash: template_hash.to_string(), failures: Vec::new() });
         Self { path, log_path, data }
     }
 
@@ -97,14 +94,7 @@ impl FailureStore {
         }
         let total = self.data.failures.len();
         let denom = total.max(1) as f64;
-        FailureStats {
-            total,
-            cycle,
-            deadlock,
-            failure_pattern_rate: (total as f64 / 10.0).min(1.0),
-            cycle_frequency: cycle as f64 / denom,
-            deadlock_rate: deadlock as f64 / denom,
-        }
+        FailureStats { total, cycle, deadlock, failure_pattern_rate: (total as f64 / 10.0).min(1.0), cycle_frequency: cycle as f64 / denom, deadlock_rate: deadlock as f64 / denom }
     }
 
     pub fn constraints(&self, threshold: usize, max_constraints: usize) -> Vec<Constraint> {
@@ -144,19 +134,11 @@ impl FailureStore {
             failure_type: failure_type.to_string(),
             node_count: graph.nodes.len(),
             edge_count: graph.nodes.iter().map(|n| n.deps.len()).sum(),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
+            timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
         };
         self.data.failures.push(entry);
         self.persist();
-        self.append_log(FailureLogEntry {
-            template_hash: self.data.template_hash.clone(),
-            failure_type: failure_type.to_string(),
-            signature,
-            iteration,
-        });
+        self.append_log(FailureLogEntry { template_hash: self.data.template_hash.clone(), failure_type: failure_type.to_string(), signature, iteration });
     }
 
     pub fn record_graph(&mut self, failure_type: &str, graph: &TaskGraph, iteration: u64) {
@@ -174,11 +156,7 @@ impl FailureStore {
     fn append_log(&self, entry: FailureLogEntry) {
         if let Ok(line) = serde_json::to_string(&entry) {
             let _ = std::fs::create_dir_all(self.log_path.parent().unwrap_or(Path::new(".")));
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&self.log_path)
-                .and_then(|mut f| f.write_all(format!("{}\n", line).as_bytes()));
+            let _ = std::fs::OpenOptions::new().create(true).append(true).open(&self.log_path).and_then(|mut f| f.write_all(format!("{}\n", line).as_bytes()));
         }
     }
 }

@@ -4,11 +4,15 @@
 //!   cargo run --example gpu_example --features cuda
 
 #[cfg(feature = "cuda")]
+use algorithms::constraints::ac3::{ac3_gpu_apply, ConstraintGraph};
+#[cfg(feature = "cuda")]
+use algorithms::constraints::forward_checking::forward_check_gpu_build;
+#[cfg(feature = "cuda")]
 use algorithms::control_flow::gpu::{dominators_gpu, reaching_definitions_gpu};
 #[cfg(feature = "cuda")]
-use algorithms::graph::adj_list::AdjList;
-#[cfg(feature = "cuda")]
 use algorithms::cryptography::merkle_tree_gpu::{merkle_build_gpu, root, PAGE_SIZE};
+#[cfg(feature = "cuda")]
+use algorithms::graph::adj_list::AdjList;
 #[cfg(feature = "cuda")]
 use algorithms::graph::bellman_ford_gpu::bellman_ford_gpu;
 #[cfg(feature = "cuda")]
@@ -18,15 +22,11 @@ use algorithms::graph::gpu::bfs_gpu as bfs_gpu_csr;
 #[cfg(feature = "cuda")]
 use algorithms::graph::gpu::bfs_gpu;
 #[cfg(feature = "cuda")]
-use algorithms::graph::reachability::reachability_gpu;
+use algorithms::graph::max_flow::max_flow_gpu;
 #[cfg(feature = "cuda")]
 use algorithms::graph::model_checking::model_check_gpu;
 #[cfg(feature = "cuda")]
-use algorithms::graph::max_flow::max_flow_gpu;
-#[cfg(feature = "cuda")]
-use algorithms::constraints::ac3::{ConstraintGraph, ac3_gpu_apply};
-#[cfg(feature = "cuda")]
-use algorithms::constraints::forward_checking::forward_check_gpu_build;
+use algorithms::graph::reachability::reachability_gpu;
 #[cfg(feature = "cuda")]
 use algorithms::numerical::gpu::{matrix_multiply_gpu, sieve_gpu};
 #[cfg(feature = "cuda")]
@@ -114,20 +114,15 @@ fn main() {
                 "roots": [0],
                 "invariant_mask": invariant,
                 "result": ok,
-            }).to_string(),
+            })
+            .to_string(),
         );
 
         // ── 1d. GPU Max Flow (push-relabel) ────────────────────────────────
         println!("\n=== GPU Max Flow ===");
         // Simple network:
         // 0->1 (3), 0->2 (2), 1->2 (1), 1->3 (2), 2->3 (4)
-        let flow_edges: Vec<(usize, usize, i64)> = vec![
-            (0, 1, 3),
-            (0, 2, 2),
-            (1, 2, 1),
-            (1, 3, 2),
-            (2, 3, 4),
-        ];
+        let flow_edges: Vec<(usize, usize, i64)> = vec![(0, 1, 3), (0, 2, 2), (1, 2, 1), (1, 3, 2), (2, 3, 4)];
         let max_flow = max_flow_gpu(4, &flow_edges, 0, 3);
         println!("max flow 0->3 = {}", max_flow);
         let max_flow_path = format!("{}/max_flow.json", results_dir);
@@ -138,7 +133,8 @@ fn main() {
                 "source": 0,
                 "sink": 3,
                 "max_flow": max_flow,
-            }).to_string(),
+            })
+            .to_string(),
         );
 
         // ── 1e. GPU AC-3 / Forward Checking ────────────────────────────────
@@ -161,7 +157,8 @@ fn main() {
                 "ac3_pruned": pruned,
                 "assignment": assignment,
                 "forward_check_pruned": pruned_fc,
-            }).to_string(),
+            })
+            .to_string(),
         );
 
         // ── 2. Bitonic sort ──────────────────────────────────────────────────

@@ -2,15 +2,15 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::llm_provider::JsonExtractor;
-use super::config::LlmEndpoint;
-use super::dag::TaskGraph;
-use super::dag::Status;
-use super::decompose::TaskSpec;
 use super::capability::{assert_class_disjoint, Capability, CapabilityClass};
+use super::config::LlmEndpoint;
+use super::dag::Status;
+use super::dag::TaskGraph;
+use super::decompose::TaskSpec;
+use super::failure_store::FailureStore;
 use super::graph_algo::{self, GraphSignals};
 use super::planner_update::{apply_planner_update, EdgeSpec, PlannerUpdate, RetractSpec, RewriteSpec};
-use super::failure_store::FailureStore;
+use crate::llm_provider::JsonExtractor;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewardContext {
     pub recent_rewards: Vec<f64>,
@@ -50,15 +50,7 @@ const MAX_HISTORY: usize = 5;
 
 impl PlannerSession {
     pub fn new(endpoint: &LlmEndpoint, goal: String) -> Self {
-        Self {
-            endpoint_id: endpoint.id.clone(),
-            url: endpoint.url.clone(),
-            role_schema: endpoint.role_markdown.clone(),
-            goal,
-            history: Vec::new(),
-            stateful: endpoint.stateful,
-            reward_context: None,
-        }
+        Self { endpoint_id: endpoint.id.clone(), url: endpoint.url.clone(), role_schema: endpoint.role_markdown.clone(), goal, history: Vec::new(), stateful: endpoint.stateful, reward_context: None }
     }
 
     pub fn set_reward_context(&mut self, ctx: RewardContext) {
@@ -70,34 +62,15 @@ impl PlannerSession {
     }
 
     pub fn build_prompt(
-        &mut self,
-        graph: &TaskGraph,
-        signals: &GraphSignals,
-        features: &graph_algo::FeatureVector,
-        cost_summary: &str,
-        rewrite_requests: &[String],
-        bias_text: &str,
-        planner_max_new_nodes: usize,
+        &mut self, graph: &TaskGraph, signals: &GraphSignals, features: &graph_algo::FeatureVector, cost_summary: &str, rewrite_requests: &[String], bias_text: &str, planner_max_new_nodes: usize,
         planner_max_new_edges: usize,
     ) -> String {
         let ids: Vec<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
         let signals_json = signals.to_json(&ids);
         let expandable = expandable_nodes(graph);
-        let ready_nodes = graph
-            .ready_nodes()
-            .iter()
-            .map(|n| n.id.clone())
-            .collect::<Vec<_>>();
-        let unreachable_nodes = signals
-            .unreachable
-            .iter()
-            .filter_map(|&idx| ids.get(idx).cloned())
-            .collect::<Vec<_>>();
-        let rewrite_text = if rewrite_requests.is_empty() {
-            "Rewrite requests: none\n".to_string()
-        } else {
-            format!("Rewrite requests: {}\n", rewrite_requests.join(", "))
-        };
+        let ready_nodes = graph.ready_nodes().iter().map(|n| n.id.clone()).collect::<Vec<_>>();
+        let unreachable_nodes = signals.unreachable.iter().filter_map(|&idx| ids.get(idx).cloned()).collect::<Vec<_>>();
+        let rewrite_text = if rewrite_requests.is_empty() { "Rewrite requests: none\n".to_string() } else { format!("Rewrite requests: {}\n", rewrite_requests.join(", ")) };
         let nodes_json: Vec<Value> = graph
             .nodes
             .iter()
@@ -121,10 +94,7 @@ impl PlannerSession {
         let reward_section = match &self.reward_context {
             None => String::new(),
             Some(r) => {
-                let trend = r.recent_rewards.iter()
-                    .map(|v| format!("{:.3}", v))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let trend = r.recent_rewards.iter().map(|v| format!("{:.3}", v)).collect::<Vec<_>>().join(", ");
                 let seed_section = match r.bootstrap_seed.as_ref() {
                     None => String::new(),
                     Some(seed) => format!(
@@ -260,14 +230,7 @@ Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"descript
         prompt
     }
 
-    pub fn apply_raw_response(
-        &mut self,
-        raw: String,
-        log_dir: &std::path::Path,
-        iter: u64,
-        graph_nodes_len: usize,
-        signals: &GraphSignals,
-    ) -> Result<PlannerUpdate> {
+    pub fn apply_raw_response(&mut self, raw: String, log_dir: &std::path::Path, iter: u64, graph_nodes_len: usize, signals: &GraphSignals) -> Result<PlannerUpdate> {
         self.history.push(raw.clone());
         if self.history.len() > MAX_HISTORY {
             self.history.remove(0);
@@ -288,12 +251,7 @@ Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"descript
                     iter,
                     graph_nodes_len,
                     signals,
-                    &PlannerUpdate {
-                        new_nodes: Vec::new(),
-                        new_edges: Vec::new(),
-                        retract_nodes: Vec::new(),
-                        rewrite_nodes: Vec::new(),
-                    },
+                    &PlannerUpdate { new_nodes: Vec::new(), new_edges: Vec::new(), retract_nodes: Vec::new(), rewrite_nodes: Vec::new() },
                     &raw,
                     Some(&e.to_string()),
                 );
@@ -312,13 +270,7 @@ Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"descript
 }
 
 pub(crate) fn validate_planner_update(
-    graph: &TaskGraph,
-    update: &PlannerUpdate,
-    planner_max_new_nodes: usize,
-    planner_max_new_edges: usize,
-    failure_store: &mut FailureStore,
-    iteration: u64,
-    failure_constraint_threshold: usize,
+    graph: &TaskGraph, update: &PlannerUpdate, planner_max_new_nodes: usize, planner_max_new_edges: usize, failure_store: &mut FailureStore, iteration: u64, failure_constraint_threshold: usize,
     max_constraints: usize,
 ) -> Result<()> {
     ensure(update.new_nodes.len() <= planner_max_new_nodes, "planner expansion limit exceeded")?;
@@ -335,8 +287,7 @@ pub(crate) fn validate_planner_update(
         ensure(!spec.id.trim().is_empty(), "planner node id empty")?;
         ensure(!spec.description.trim().is_empty(), "planner node description empty")?;
         ensure(!spec.required_capabilities.iter().any(|c| matches!(c, Capability::Unknown)), "planner node has unknown capability")?;
-        ensure(!(existing.contains_key(&spec.id) || new_ids.contains_key(&spec.id)),
-               &format!("duplicate node id {}", spec.id))?;
+        ensure(!(existing.contains_key(&spec.id) || new_ids.contains_key(&spec.id)), &format!("duplicate node id {}", spec.id))?;
         new_ids.insert(spec.id.clone(), new_ids.len());
         Ok::<(), anyhow::Error>(())
     })?;
@@ -349,14 +300,12 @@ pub(crate) fn validate_planner_update(
     })?;
 
     update.retract_nodes.iter().try_for_each(|spec| {
-        let status = status_by_id.get(&spec.id).copied()
-            .ok_or_else(|| anyhow::anyhow!("retract references unknown node"))?;
+        let status = status_by_id.get(&spec.id).copied().ok_or_else(|| anyhow::anyhow!("retract references unknown node"))?;
         ensure(matches!(status, Status::Pending | Status::Failed), "retract node must be pending or failed")
     })?;
 
     update.rewrite_nodes.iter().try_for_each(|spec| {
-        let status = status_by_id.get(&spec.id).copied()
-            .ok_or_else(|| anyhow::anyhow!("rewrite references unknown node"))?;
+        let status = status_by_id.get(&spec.id).copied().ok_or_else(|| anyhow::anyhow!("rewrite references unknown node"))?;
         ensure(matches!(status, Status::Pending), "rewrite node must be pending")?;
         ensure(!spec.new_capabilities.iter().any(|c| matches!(c, Capability::Unknown)), "rewrite node has unknown capability")?;
         let caps: std::collections::HashSet<_> = spec.new_capabilities.iter().copied().collect();
@@ -386,23 +335,15 @@ pub(crate) fn validate_planner_update(
     Ok(())
 }
 
-fn check_constraint(
-    graph: &TaskGraph,
-    signals: &graph_algo::GraphSignals,
-    constraint: &super::failure_store::Constraint,
-) -> Option<String> {
+fn check_constraint(graph: &TaskGraph, signals: &graph_algo::GraphSignals, constraint: &super::failure_store::Constraint) -> Option<String> {
     use super::failure_store::ConstraintRule;
     match &constraint.rule {
         ConstraintRule::NoCycle => signals.has_cycle.then(|| "constraint violated: NoCycle".to_string()),
-        ConstraintRule::NoUnreachable => (!signals.unreachable.is_empty())
-            .then(|| "constraint violated: NoUnreachable".to_string()),
+        ConstraintRule::NoUnreachable => (!signals.unreachable.is_empty()).then(|| "constraint violated: NoUnreachable".to_string()),
         ConstraintRule::CapabilityConflict => None,
         ConstraintRule::InvalidDependency => None,
         ConstraintRule::PatternRewrite { pattern, .. } => {
-            let bad = graph
-                .nodes
-                .iter()
-                .any(|n| n.description.to_lowercase().contains(pattern));
+            let bad = graph.nodes.iter().any(|n| n.description.to_lowercase().contains(pattern));
             bad.then(|| format!("constraint violated: PatternRewrite({})", pattern))
         }
         ConstraintRule::SignatureBan => {
@@ -413,8 +354,7 @@ fn check_constraint(
 }
 
 pub(crate) fn auto_repair_planner_update(graph: &TaskGraph, update: &mut PlannerUpdate) -> RepairReport {
-    let mut used: std::collections::HashSet<String> =
-        graph.nodes.iter().map(|n| n.id.clone()).collect();
+    let mut used: std::collections::HashSet<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
     for spec in &update.new_nodes {
         used.insert(spec.id.clone());
     }
@@ -526,11 +466,7 @@ fn normalize_capabilities(caps: &mut Vec<Capability>, description: &str) {
             None
         };
         if let Some(rep) = replacement {
-            *caps = caps
-                .iter()
-                .filter(|c| !matches!(c, Capability::StatelessInvoke))
-                .copied()
-                .collect();
+            *caps = caps.iter().filter(|c| !matches!(c, Capability::StatelessInvoke)).copied().collect();
             caps.push(rep);
         }
     }
@@ -547,13 +483,11 @@ fn seed_orchestration_node_if_empty(graph: &TaskGraph, update: &mut PlannerUpdat
     if has_orch {
         return;
     }
-    let mut used: std::collections::HashSet<String> =
-        update.new_nodes.iter().map(|n| n.id.clone()).collect();
+    let mut used: std::collections::HashSet<String> = update.new_nodes.iter().map(|n| n.id.clone()).collect();
     let id = unique_id("run_orchestration_build".to_string(), &mut used);
     update.new_nodes.push(TaskSpec {
         id,
-        description: "Run `cargo run --bin orchestration -- --all` to reproduce the pipeline and capture diagnostics."
-            .to_string(),
+        description: "Run `cargo run --bin orchestration -- --all` to reproduce the pipeline and capture diagnostics.".to_string(),
         deps: Vec::new(),
         required_capabilities: vec![Capability::Bash],
         node_type: super::decompose::NodeType::Analysis,
@@ -604,16 +538,7 @@ fn expandable_nodes(graph: &TaskGraph) -> Vec<String> {
             has_children.insert(dep.clone());
         }
     }
-    graph
-        .nodes
-        .iter()
-        .filter(|n| {
-            n.status == Status::Pending
-                && n.node_type == super::decompose::NodeType::Analysis
-                && !has_children.contains(&n.id)
-        })
-        .map(|n| n.id.clone())
-        .collect()
+    graph.nodes.iter().filter(|n| n.status == Status::Pending && n.node_type == super::decompose::NodeType::Analysis && !has_children.contains(&n.id)).map(|n| n.id.clone()).collect()
 }
 
 fn try_parse_loose_json(raw: &str) -> Option<Value> {
@@ -626,15 +551,7 @@ fn try_parse_loose_json(raw: &str) -> Option<Value> {
     serde_json::from_str(slice).ok()
 }
 
-fn log_planner_iteration(
-    log_dir: &std::path::Path,
-    iter: u64,
-    graph_nodes: usize,
-    signals: &GraphSignals,
-    update: &PlannerUpdate,
-    raw: &str,
-    error: Option<&str>,
-) {
+fn log_planner_iteration(log_dir: &std::path::Path, iter: u64, graph_nodes: usize, signals: &GraphSignals, update: &PlannerUpdate, raw: &str, error: Option<&str>) {
     let _ = std::fs::create_dir_all(log_dir);
     let payload = serde_json::json!({
         "iter": iter,

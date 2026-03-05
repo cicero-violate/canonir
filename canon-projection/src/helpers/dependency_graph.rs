@@ -30,11 +30,7 @@ pub fn compute_emit_order(graph: &DependencyGraph) -> Vec<ItemId> {
         }
     }
 
-    let mut queue: Vec<ItemId> = indegree
-        .iter()
-        .filter(|(_, deg)| **deg == 0)
-        .map(|(n, _)| n.clone())
-        .collect();
+    let mut queue: Vec<ItemId> = indegree.iter().filter(|(_, deg)| **deg == 0).map(|(n, _)| n.clone()).collect();
 
     queue.sort();
 

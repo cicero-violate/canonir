@@ -44,10 +44,7 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 }
 
 pub fn load_cache() -> HashMap<String, Vec<f32>> {
-    std::fs::read_to_string(CACHE_PATH)
-        .ok()
-        .and_then(|s| serde_json::from_str::<HashMap<String, Vec<f32>>>(&s).ok())
-        .unwrap_or_default()
+    std::fs::read_to_string(CACHE_PATH).ok().and_then(|s| serde_json::from_str::<HashMap<String, Vec<f32>>>(&s).ok()).unwrap_or_default()
 }
 
 pub fn save_cache(cache: &HashMap<String, Vec<f32>>) {

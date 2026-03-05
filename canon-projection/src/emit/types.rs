@@ -141,11 +141,8 @@ pub fn render_type_id(ir: &CanonIR, id: CanonId) -> String {
         | CanonNodeKind::TypeAlias { name_id, .. }
         | CanonNodeKind::Fn { name_id, .. } => ir.lookup_name(*name_id).to_string(),
         _ => {
-            panic!(
-                "projection encountered non-type node in render_type_id (id={:?}) — aborting per FAIL-FAST policy",
-                id
-            );
-        },
+            panic!("projection encountered non-type node in render_type_id (id={:?}) — aborting per FAIL-FAST policy", id);
+        }
     }
 }
 
@@ -194,10 +191,7 @@ fn render_type_kind(ir: &CanonIR, kind: &TypeKind) -> String {
         }
         TypeKind::Extern(path_id) => ir.lookup_path(*path_id).to_string(),
         TypeKind::Unresolved(path_id) => {
-            panic!(
-                "projection encountered unresolved CanonIR type `{}` — aborting per FAIL-FAST policy",
-                ir.lookup_path(*path_id)
-            );
+            panic!("projection encountered unresolved CanonIR type `{}` — aborting per FAIL-FAST policy", ir.lookup_path(*path_id));
         }
         TypeKind::TypeRef { name_id } => ir.lookup_name(*name_id).to_string(),
     }

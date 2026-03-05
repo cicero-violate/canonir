@@ -9,10 +9,7 @@ pub enum StructuralError {
 }
 
 /// Validate emitted structure
-pub fn validate_emitted_rust_structure(
-    items: &[ItemId],
-    dependencies: &HashMap<ItemId, HashSet<ItemId>>,
-) -> Vec<StructuralError> {
+pub fn validate_emitted_rust_structure(items: &[ItemId], dependencies: &HashMap<ItemId, HashSet<ItemId>>) -> Vec<StructuralError> {
     let mut errors = Vec::new();
 
     let mut seen = HashSet::new();

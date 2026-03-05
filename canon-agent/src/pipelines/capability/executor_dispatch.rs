@@ -5,8 +5,8 @@ use std::process::Command;
 
 use once_cell::sync::Lazy;
 
-use super::Delta;
 use super::act::{has_parent_dir_component, is_within_roots, resolve_path, truncate_lines};
+use super::Delta;
 
 type ReadHandler = fn(&Delta, &[PathBuf], usize) -> Result<(String, String), String>;
 type WriteHandler = fn(&Delta, &[PathBuf], &[PathBuf], usize) -> Result<String, String>;
@@ -37,39 +37,17 @@ static WRITE_EXECUTORS: Lazy<HashMap<DeltaType, WriteHandler>> = Lazy::new(|| {
     map
 });
 
-const READONLY_COMMANDS: &[&str] = &[
-    "rg",
-    "cat",
-    "ls",
-    "find",
-    "head",
-    "tail",
-    "wc",
-    "stat",
-    "sed",
-    "awk",
-    "pwd",
-    "tree",
-];
+const READONLY_COMMANDS: &[&str] = &["rg", "cat", "ls", "find", "head", "tail", "wc", "stat", "sed", "awk", "pwd", "tree"];
 
 pub fn execute_read_only(delta: &Delta, roots: &[PathBuf], max_output_lines: usize) -> Result<(String, String), String> {
     let kind = delta_type(delta);
-    let handler = READ_EXECUTORS
-        .get(&kind)
-        .ok_or_else(|| "read_only delta type not allowed in this phase".to_string())?;
+    let handler = READ_EXECUTORS.get(&kind).ok_or_else(|| "read_only delta type not allowed in this phase".to_string())?;
     handler(delta, roots, max_output_lines)
 }
 
-pub fn execute_mutation(
-    delta: &Delta,
-    roots: &[PathBuf],
-    allowed_write_roots: &[PathBuf],
-    max_output_lines: usize,
-) -> Result<String, String> {
+pub fn execute_mutation(delta: &Delta, roots: &[PathBuf], allowed_write_roots: &[PathBuf], max_output_lines: usize) -> Result<String, String> {
     let kind = delta_type(delta);
-    let handler = WRITE_EXECUTORS
-        .get(&kind)
-        .ok_or_else(|| "mutation delta type not allowed in this phase".to_string())?;
+    let handler = WRITE_EXECUTORS.get(&kind).ok_or_else(|| "mutation delta type not allowed in this phase".to_string())?;
     handler(delta, roots, allowed_write_roots, max_output_lines)
 }
 
@@ -102,11 +80,8 @@ fn handle_list_dir(delta: &Delta, roots: &[PathBuf], max_output_lines: usize) ->
         return Err("list_dir handler received wrong delta".into());
     };
     let path = resolve_path(path, roots, false)?;
-    let mut entries: Vec<String> = fs::read_dir(&path)
-        .map_err(|e| format!("list_dir failed for {}: {e}", path.display()))?
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .collect();
+    let mut entries: Vec<String> =
+        fs::read_dir(&path).map_err(|e| format!("list_dir failed for {}: {e}", path.display()))?.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
     entries.sort();
     let out = format!("[list_dir {}]\n{}\n", path.display(), entries.join("\n"));
     Ok((format!("list_dir {}", path.display()), truncate_lines(&out, max_output_lines)))
@@ -122,11 +97,7 @@ fn handle_read_command(delta: &Delta, roots: &[PathBuf], max_output_lines: usize
     if has_parent_dir_component(args) {
         return Err("read_command args contain '..'".into());
     }
-    let output = Command::new(command)
-        .args(args)
-        .current_dir(&roots[0])
-        .output()
-        .map_err(|e| format!("read_command failed to spawn: {e}"))?;
+    let output = Command::new(command).args(args).current_dir(&roots[0]).output().map_err(|e| format!("read_command failed to spawn: {e}"))?;
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !stderr.trim().is_empty() {
@@ -144,12 +115,7 @@ fn handle_read_command(delta: &Delta, roots: &[PathBuf], max_output_lines: usize
     Ok((format!("read_command {}", command), out))
 }
 
-fn handle_write_file(
-    delta: &Delta,
-    roots: &[PathBuf],
-    allowed_write_roots: &[PathBuf],
-    _max_output_lines: usize,
-) -> Result<String, String> {
+fn handle_write_file(delta: &Delta, roots: &[PathBuf], allowed_write_roots: &[PathBuf], _max_output_lines: usize) -> Result<String, String> {
     let Delta::WriteFile { path, content } = delta else {
         return Err("write_file handler received wrong delta".into());
     };
@@ -168,12 +134,7 @@ fn handle_write_file(
     Ok(format!("write_file {} ({} bytes)", path.display(), content.len()))
 }
 
-fn handle_replace_text(
-    delta: &Delta,
-    roots: &[PathBuf],
-    allowed_write_roots: &[PathBuf],
-    _max_output_lines: usize,
-) -> Result<String, String> {
+fn handle_replace_text(delta: &Delta, roots: &[PathBuf], allowed_write_roots: &[PathBuf], _max_output_lines: usize) -> Result<String, String> {
     let Delta::ReplaceText { path, find, replace } = delta else {
         return Err("replace_text handler received wrong delta".into());
     };
@@ -194,12 +155,7 @@ fn handle_replace_text(
     Ok(format!("replace_text {} ({} replacements)", path.display(), occurrences))
 }
 
-fn handle_delete_file(
-    delta: &Delta,
-    roots: &[PathBuf],
-    allowed_write_roots: &[PathBuf],
-    _max_output_lines: usize,
-) -> Result<String, String> {
+fn handle_delete_file(delta: &Delta, roots: &[PathBuf], allowed_write_roots: &[PathBuf], _max_output_lines: usize) -> Result<String, String> {
     let Delta::DeleteFile { path } = delta else {
         return Err("delete_file handler received wrong delta".into());
     };

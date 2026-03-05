@@ -2,12 +2,12 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
 
-use algorithms::graph::{csr::Csr, reachability, scc, topological_sort};
+use super::dag;
+use super::dag::ContextNode;
+use super::decompose;
 #[cfg(feature = "cuda")]
 use algorithms::graph::model_checking;
-use super::dag;
-use super::decompose;
-use super::dag::ContextNode;
+use algorithms::graph::{csr::Csr, reachability, scc, topological_sort};
 
 struct GraphKernels {
     adj: Vec<Vec<usize>>,
@@ -17,12 +17,7 @@ struct GraphKernels {
 }
 
 fn build_kernels(graph: &dag::TaskGraph) -> GraphKernels {
-    let id_to_idx: HashMap<&str, usize> = graph
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.id.as_str(), i))
-        .collect();
+    let id_to_idx: HashMap<&str, usize> = graph.nodes.iter().enumerate().map(|(i, n)| (n.id.as_str(), i)).collect();
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); graph.nodes.len()];
     for n in &graph.nodes {
         let to = match id_to_idx.get(n.id.as_str()) {
@@ -42,27 +37,15 @@ fn build_kernels(graph: &dag::TaskGraph) -> GraphKernels {
 }
 
 fn prune_roots(kernels: &GraphKernels) -> Vec<usize> {
-    let all: std::collections::HashSet<usize> = kernels.topo.iter()
-        .chain(kernels.sccs.iter().flatten())
-        .copied()
-        .collect();
+    let all: std::collections::HashSet<usize> = kernels.topo.iter().chain(kernels.sccs.iter().flatten()).copied().collect();
     all.into_iter().filter(|&i| !kernels.adj[i].is_empty()).collect()
 }
 
-pub(crate) fn build_context(
-    graph: &dag::TaskGraph,
-    node_id: &str,
-    radius: usize,
-) -> Vec<ContextNode> {
+pub(crate) fn build_context(graph: &dag::TaskGraph, node_id: &str, radius: usize) -> Vec<ContextNode> {
     if radius == 0 {
         return Vec::new();
     }
-    let id_to_idx: HashMap<&str, usize> = graph
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.id.as_str(), i))
-        .collect();
+    let id_to_idx: HashMap<&str, usize> = graph.nodes.iter().enumerate().map(|(i, n)| (n.id.as_str(), i)).collect();
     let mut rev_adj: Vec<Vec<usize>> = vec![Vec::new(); graph.nodes.len()];
     for (idx, node) in graph.nodes.iter().enumerate() {
         for dep in &node.deps {
@@ -76,23 +59,27 @@ pub(crate) fn build_context(
     let roots: Vec<usize> = start.into_iter().collect();
     let reach = reachability::reachability_bounded(&csr, &roots, radius);
 
-    let by_id: HashMap<&str, &dag::TaskNode> = graph
+    let by_id: HashMap<&str, &dag::TaskNode> = graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+
+    let failure_summary = graph
         .nodes
         .iter()
-        .map(|n| (n.id.as_str(), n))
-        .collect();
-
-    let failure_summary = graph.nodes.iter().enumerate()
+        .enumerate()
         .filter(|(i, n)| reach.get(*i).copied().unwrap_or(false) && n.status == dag::Status::Failed)
         .filter_map(|(_, n)| n.error.as_deref().map(|e| format!("{}: {}", n.id, e)))
         .collect::<Vec<_>>()
         .join("\n");
     let failure_summary = if failure_summary.is_empty() { None } else { Some(failure_summary) };
 
-    graph.nodes.iter().enumerate()
+    graph
+        .nodes
+        .iter()
+        .enumerate()
         .filter(|(i, _)| reach.get(*i).copied().unwrap_or(false))
         .map(|(_, n)| {
-            let causal_summary = n.deps.iter()
+            let causal_summary = n
+                .deps
+                .iter()
                 .filter_map(|dep_id| by_id.get(dep_id.as_str()))
                 .filter(|dep| dep.status == dag::Status::Completed)
                 .filter_map(|dep| dep.result.as_deref())
@@ -100,17 +87,17 @@ pub(crate) fn build_context(
                 .join("\n---\n");
             let causal_summary = if causal_summary.is_empty() { None } else { Some(causal_summary) };
             ContextNode {
-            id: n.id.clone(),
-            description: n.description.clone(),
-            node_type: n.node_type,
-            deps: n.deps.clone(),
-            required_capabilities: n.required_capabilities.clone(),
-            status: n.status,
-            result: n.result.clone(),
-            error: n.error.clone(),
-            causal_summary,
-            failure_summary: failure_summary.clone(),
-        }
+                id: n.id.clone(),
+                description: n.description.clone(),
+                node_type: n.node_type,
+                deps: n.deps.clone(),
+                required_capabilities: n.required_capabilities.clone(),
+                status: n.status,
+                result: n.result.clone(),
+                error: n.error.clone(),
+                causal_summary,
+                failure_summary: failure_summary.clone(),
+            }
         })
         .collect()
 }
@@ -141,19 +128,11 @@ pub(crate) fn enforce_semantic_validations(graph: &dag::TaskGraph) -> Result<()>
 
     // 1) All render nodes must be reachable from at least one analysis node.
     let kernels = build_kernels(graph);
-    let analysis_roots: Vec<usize> = graph
-        .nodes
-        .iter()
-        .enumerate()
-        .filter_map(|(i, n)| (n.node_type == decompose::NodeType::Analysis).then_some(i))
-        .collect();
+    let analysis_roots: Vec<usize> = graph.nodes.iter().enumerate().filter_map(|(i, n)| (n.node_type == decompose::NodeType::Analysis).then_some(i)).collect();
     let reach = reachability::reachability_gpu(&kernels.csr, &analysis_roots);
     for (idx, n) in graph.nodes.iter().enumerate() {
         if n.node_type == decompose::NodeType::Render && !reach.get(idx).copied().unwrap_or(false) {
-            return Err(anyhow::anyhow!(
-                "render node {} not reachable from analysis node",
-                n.id
-            ));
+            return Err(anyhow::anyhow!("render node {} not reachable from analysis node", n.id));
         }
     }
 
@@ -196,10 +175,7 @@ fn assert_invariants_all_states(graph: &dag::TaskGraph) -> Result<()> {
         .nodes
         .iter()
         .map(|n| {
-            let ok = !n.id.trim().is_empty()
-                && !n.description.trim().is_empty()
-                && !n.required_capabilities.is_empty()
-                && !n.deps.iter().any(|d| d == &n.id);
+            let ok = !n.id.trim().is_empty() && !n.description.trim().is_empty() && !n.required_capabilities.is_empty() && !n.deps.iter().any(|d| d == &n.id);
             ok as u8
         })
         .collect();
@@ -215,10 +191,7 @@ fn assert_invariants_all_states(graph: &dag::TaskGraph) -> Result<()> {
     {
         for (idx, ok) in invariant_mask.iter().enumerate() {
             if *ok == 0 {
-                return Err(anyhow::anyhow!(
-                    "assertion check failed: invariant violated at node {}",
-                    graph.nodes[idx].id
-                ));
+                return Err(anyhow::anyhow!("assertion check failed: invariant violated at node {}", graph.nodes[idx].id));
             }
         }
     }

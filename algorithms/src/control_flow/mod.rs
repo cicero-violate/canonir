@@ -1,5 +1,5 @@
-pub mod cfg_pattern;
 pub mod branching;
+pub mod cfg_pattern;
 pub mod dataflow;
 pub mod dominators;
 #[cfg(feature = "cuda")]

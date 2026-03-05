@@ -25,6 +25,7 @@ prettyplease = "0.2"
 proc-macro2 = "1"
 syn = { version = "2", features = ["full", "visit-mut", "visit"] }
 walkdir = "2.5"
+regex = "1"
 
 rustc_driver = { path = "/home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/rustc-src/rust/compiler/rustc_driver", optional = true }
 rustc_interface = { path = "/home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/rustc-src/rust/compiler/rustc_interface", optional = true }

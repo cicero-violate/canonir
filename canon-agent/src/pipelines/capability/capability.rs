@@ -109,20 +109,14 @@ impl Capability {
 }
 
 pub fn dominant_class(caps: &[Capability]) -> CapabilityClass {
-    caps.iter()
-        .map(|c| c.class())
-        .max_by_key(|&c| c as u8)
-        .unwrap_or(CapabilityClass::Observe)
+    caps.iter().map(|c| c.class()).max_by_key(|&c| c as u8).unwrap_or(CapabilityClass::Observe)
 }
 
 pub fn assert_class_disjoint(caps: &HashSet<Capability>) -> Result<(), String> {
     let has_mutate = caps.iter().any(|c| c.class() == CapabilityClass::Mutate);
     let has_verify = caps.iter().any(|c| c.class() == CapabilityClass::Verify);
     if has_mutate && has_verify {
-        return Err(format!(
-            "capability class violation: node mixes Mutate and Verify capabilities: {:?}",
-            caps.iter().filter(|c| c.class() != CapabilityClass::Observe).collect::<Vec<_>>()
-        ));
+        return Err(format!("capability class violation: node mixes Mutate and Verify capabilities: {:?}", caps.iter().filter(|c| c.class() != CapabilityClass::Observe).collect::<Vec<_>>()));
     }
     Ok(())
 }

@@ -65,12 +65,7 @@ pub fn summarize_deltas(deltas: &[Delta]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-pub fn apply_mutations(
-    deltas: &[Delta],
-    roots: &[PathBuf],
-    allowed_write_roots: &[PathBuf],
-    max_output_lines: usize,
-) -> (String, Vec<DeltaOutcome>, Option<String>) {
+pub fn apply_mutations(deltas: &[Delta], roots: &[PathBuf], allowed_write_roots: &[PathBuf], max_output_lines: usize) -> (String, Vec<DeltaOutcome>, Option<String>) {
     let mut output = String::new();
     let mut results = Vec::new();
     let mut error: Option<String> = None;
@@ -114,11 +109,7 @@ fn repair_delta_path(delta: &Delta, roots: &[PathBuf], repairs: &mut Vec<DeltaRe
                     Delta::ListDir { .. } => Delta::ListDir { path: root.display().to_string() },
                     _ => delta.clone(),
                 };
-                repairs.push(DeltaRepairLog {
-                    original: delta.clone(),
-                    repaired: repaired.clone(),
-                    reason: "path does not exist; redirected to workspace root".to_string(),
-                });
+                repairs.push(DeltaRepairLog { original: delta.clone(), repaired: repaired.clone(), reason: "path does not exist; redirected to workspace root".to_string() });
                 return repaired;
             }
             delta.clone()
@@ -137,7 +128,6 @@ fn delta_label(delta: &Delta) -> String {
         Delta::DeleteFile { path } => format!("delete_file {}", path),
     }
 }
-
 
 pub(crate) fn resolve_path(path: &str, roots: &[PathBuf], allow_nonexistent: bool) -> Result<PathBuf, String> {
     let p = Path::new(path);
@@ -159,7 +149,11 @@ pub(crate) fn resolve_path(path: &str, roots: &[PathBuf], allow_nonexistent: boo
 }
 
 fn anchor(p: &Path, root: &Path) -> PathBuf {
-    if p.is_absolute() { p.to_path_buf() } else { root.join(p) }
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        root.join(p)
+    }
 }
 
 pub(crate) fn is_within_roots(path: &Path, roots: &[PathBuf]) -> bool {

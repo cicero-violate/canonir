@@ -23,6 +23,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -34,6 +35,14 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
+
+fn append_jsonl(path: &str, value: &Value) {
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(line) = serde_json::to_string(value) {
+            let _ = writeln!(file, "{}", line);
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Public error type
@@ -268,12 +277,7 @@ impl WsBridge {
 
 pub fn spawn(addr: SocketAddr, response_timeout_secs: u64) -> WsBridge {
     let state = Arc::new(Mutex::new(ServerState::new()));
-    let bridge = WsBridge {
-        state: state.clone(),
-        next_req_id: Arc::new(AtomicU64::new(1)),
-        next_turn_id: Arc::new(AtomicU64::new(1)),
-        response_timeout_secs,
-    };
+    let bridge = WsBridge { state: state.clone(), next_req_id: Arc::new(AtomicU64::new(1)), next_turn_id: Arc::new(AtomicU64::new(1)), response_timeout_secs };
 
     tokio::spawn(async move {
         loop {
@@ -380,10 +384,7 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             let mut st = state.lock().await;
             st.live_tabs.insert(tab_id);
             let site = SiteType::from_url(url);
-            st.tab_assemblers
-                .entry(tab_id)
-                .and_modify(|asm| asm.set_site(site))
-                .or_insert_with(|| FrameAssembler::new(site));
+            st.tab_assemblers.entry(tab_id).and_modify(|asm| asm.set_site(site)).or_insert_with(|| FrameAssembler::new(site));
         }
 
         "TAB_CLOSED" => {
@@ -409,10 +410,7 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
 
             let mut st = state.lock().await;
             let site = SiteType::from_url(url);
-            st.tab_assemblers
-                .entry(tab_id)
-                .and_modify(|asm| asm.set_site(site))
-                .or_insert_with(|| FrameAssembler::new(site));
+            st.tab_assemblers.entry(tab_id).and_modify(|asm| asm.set_site(site)).or_insert_with(|| FrameAssembler::new(site));
 
             if let Some(rid) = req_id {
                 if let Some(tx) = st.pending_open.remove(&rid) {
@@ -456,8 +454,14 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
 
             // Dump every inbound frame to disk for parser inspection.
             st.frame_counter += 1;
-            let dump_path = format!("./frames/frame_{:06}_tab{}.txt", st.frame_counter, tab_id);
-            let _ = std::fs::write(&dump_path, &chunk);
+            let inbound_record = json!({
+                "frame_counter": st.frame_counter,
+                "tab_id": tab_id,
+                "turn_id": inbound_turn_id,
+                "expected_turn_id": expected,
+                "chunk": chunk,
+            });
+            append_jsonl("./frames/inbound.jsonl", &inbound_record);
 
             let assembled = if let Some(asm) = st.tab_assemblers.get_mut(&tab_id) {
                 asm.push(&chunk)
@@ -470,8 +474,12 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
 
             if let Some(text) = assembled {
                 // Dump assembled message for debugging (Gemini/ChatGPT).
-                let assembled_path = format!("./frames/assembled_tab{}.txt", tab_id);
-                let _ = std::fs::write(&assembled_path, &text);
+                let assembled_record = json!({
+                    "tab_id": tab_id,
+                    "turn_id": inbound_turn_id.or(expected),
+                    "text": text,
+                });
+                append_jsonl("./frames/assembled.jsonl", &assembled_record);
                 if let Some(tx) = st.pending.remove(&tab_id) {
                     let _ = tx.send(text);
                 }

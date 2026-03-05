@@ -1,11 +1,11 @@
 use crate::solver::csr_to_adj;
-use crate::solver::gpu_algorithms::dominators;
-#[cfg(feature = "cuda")]
-use crate::solver::graph_to_csr;
-#[cfg(feature = "cuda")]
-use crate::solver::gpu_algorithms::reachability_gpu;
 #[cfg(not(feature = "cuda"))]
 use crate::solver::gpu_algorithms::dfs;
+use crate::solver::gpu_algorithms::dominators;
+#[cfg(feature = "cuda")]
+use crate::solver::gpu_algorithms::reachability_gpu;
+#[cfg(feature = "cuda")]
+use crate::solver::graph_to_csr;
 use anyhow::Result;
 use canon::CanonIR;
 use std::collections::HashMap;

@@ -29,18 +29,12 @@ impl AgentConfig {
         let (path, raw) = match std::fs::read_to_string(&primary) {
             Ok(raw) => (primary, raw),
             Err(_) => {
-                let raw = std::fs::read_to_string(&fallback)
-                    .map_err(|e| format!("failed to read {}: {e}", fallback.display()))?;
+                let raw = std::fs::read_to_string(&fallback).map_err(|e| format!("failed to read {}: {e}", fallback.display()))?;
                 (fallback, raw)
             }
         };
         let cfg: RawAgentConfig = toml::from_str(&raw).map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
-        let chatgpt_url = cfg
-            .agents
-            .cards
-            .first()
-            .map(|c| c.agent_url.clone())
-            .ok_or_else(|| format!("agent_config.toml missing agents.cards[0].agent_url"))?;
+        let chatgpt_url = cfg.agents.cards.first().map(|c| c.agent_url.clone()).ok_or_else(|| format!("agent_config.toml missing agents.cards[0].agent_url"))?;
         Ok(AgentConfig {
             chatgpt_url,
             max_ticks: cfg.runner.as_ref().and_then(|r| r.max_ticks),

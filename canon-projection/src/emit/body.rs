@@ -97,11 +97,7 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>, suppresse
         CfgOp::Assign { lhs, rhs } => {
             let lhs_name = local_name(ir, *lhs);
             let rhs_name = local_name(ir, *rhs);
-            if rhs_name == "__canon_suppressed__"
-                || suppressed.contains(&rhs_name)
-                || rhs_name == "__canon_call_gap__"
-                || rhs_name == "__canon_switch_gap__"
-            {
+            if rhs_name == "__canon_suppressed__" || suppressed.contains(&rhs_name) || rhs_name == "__canon_call_gap__" || rhs_name == "__canon_switch_gap__" {
                 // Preserve authoritative type boundary: if RHS collapsed,
                 // do NOT assign a unit-producing expression into the local.
                 // Instead, reinitialize with a typed fallback so bindings
@@ -146,7 +142,7 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>, suppresse
                 // Prevent implicit unit fallback in non-unit-returning functions.
                 // Emit explicit unreachable to avoid introducing `()`.
                 "return panic!(\"canon unreachable\");".into()
-            },
+            }
         },
         CfgOp::Call { func, args, dest } => {
             let fname = callable_name(ir, *func);
@@ -202,13 +198,7 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>, suppresse
                     Some(d) => {
                         let dest_name = local_name(ir, *d);
                         suppressed.insert(dest_name.clone());
-                        bind_or_assign_typed(
-                            ir,
-                            *d,
-                            &dest_name,
-                            "::core::default::Default::default()".to_string(),
-                            declared,
-                        )
+                        bind_or_assign_typed(ir, *d, &dest_name, "::core::default::Default::default()".to_string(), declared)
                     }
                     None => "::core::default::Default::default();".to_string(),
                 };

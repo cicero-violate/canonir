@@ -182,17 +182,8 @@ fn transition_allowed(from: Status, to: Status) -> bool {
 }
 
 fn detect_cycle(graph: &TaskGraph) -> Result<(), String> {
-    let id_to_idx: HashMap<&str, usize> = graph
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.id.as_str(), i))
-        .collect();
-    let adj: Vec<Vec<usize>> = graph
-        .nodes
-        .iter()
-        .map(|n| n.deps.iter().filter_map(|d| id_to_idx.get(d.as_str()).copied()).collect())
-        .collect();
+    let id_to_idx: HashMap<&str, usize> = graph.nodes.iter().enumerate().map(|(i, n)| (n.id.as_str(), i)).collect();
+    let adj: Vec<Vec<usize>> = graph.nodes.iter().map(|n| n.deps.iter().filter_map(|d| id_to_idx.get(d.as_str()).copied()).collect()).collect();
     let sccs = algorithms::graph::scc::kosaraju_scc(&adj);
     if sccs.iter().any(|c| c.len() > 1) {
         return Err("cycle detected in task graph".into());
@@ -234,12 +225,7 @@ impl AuthorityContext {
 }
 
 pub fn resolve_ready(graph: &mut TaskGraph) {
-    let completed: std::collections::HashSet<String> = graph
-        .nodes
-        .iter()
-        .filter(|n| n.status == Status::Completed)
-        .map(|n| n.id.clone())
-        .collect();
+    let completed: std::collections::HashSet<String> = graph.nodes.iter().filter(|n| n.status == Status::Completed).map(|n| n.id.clone()).collect();
     for node in &mut graph.nodes {
         if node.status != Status::Pending {
             continue;

@@ -1,7 +1,7 @@
 #[cfg(feature = "cuda")]
-use crate::solver::graph_to_csr;
-#[cfg(feature = "cuda")]
 use crate::solver::gpu_algorithms::reachability_gpu;
+#[cfg(feature = "cuda")]
+use crate::solver::graph_to_csr;
 use algorithms::graph::region::outlives_cycles;
 use anyhow::{bail, Result};
 use canon::id::NodeId;

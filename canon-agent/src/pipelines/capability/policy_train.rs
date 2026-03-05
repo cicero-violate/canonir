@@ -19,16 +19,11 @@ pub struct PolicyDatasetEntry {
 
 pub fn load_dataset() -> Vec<PolicyDatasetEntry> {
     let text = std::fs::read_to_string(DATASET_PATH).unwrap_or_default();
-    text.lines()
-        .filter_map(|line| serde_json::from_str::<PolicyDatasetEntry>(line).ok())
-        .collect()
+    text.lines().filter_map(|line| serde_json::from_str::<PolicyDatasetEntry>(line).ok()).collect()
 }
 
 pub fn dataset_size() -> u64 {
-    std::fs::read_to_string(DATASET_PATH)
-        .ok()
-        .map(|s| s.lines().count() as u64)
-        .unwrap_or(0)
+    std::fs::read_to_string(DATASET_PATH).ok().map(|s| s.lines().count() as u64).unwrap_or(0)
 }
 
 fn features_from_json(value: &serde_json::Value) -> Option<FeatureVector> {
@@ -93,11 +88,7 @@ pub fn append_policy_dataset(entry: &PolicyDatasetEntry) {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .and_then(|mut f| std::io::Write::write_all(&mut f, format!("{}\n", line).as_bytes()));
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open(path).and_then(|mut f| std::io::Write::write_all(&mut f, format!("{}\n", line).as_bytes()));
     }
 }
 

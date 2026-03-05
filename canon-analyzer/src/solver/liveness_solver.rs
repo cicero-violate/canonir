@@ -1,14 +1,14 @@
 #[cfg(not(feature = "cuda"))]
 use crate::solver::csr_to_adj;
 #[cfg(feature = "cuda")]
-use crate::solver::graph_to_csr;
-#[cfg(feature = "cuda")]
 use crate::solver::gpu_algorithms::reachability_gpu;
-#[cfg(not(feature = "cuda"))]
-use std::collections::VecDeque;
+#[cfg(feature = "cuda")]
+use crate::solver::graph_to_csr;
 use anyhow::Result;
 use canon::node::{flags, CanonNodeKind};
 use canon::CanonIR;
+#[cfg(not(feature = "cuda"))]
+use std::collections::VecDeque;
 
 pub fn solve(ir: &mut CanonIR) -> Result<()> {
     let call_v = ir.call_graph.vertex_count();

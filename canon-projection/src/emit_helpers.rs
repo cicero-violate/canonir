@@ -11,11 +11,7 @@ pub fn topo_sort(graph: &HashMap<String, Vec<String>>) -> Result<Vec<String>, St
         }
     }
 
-    let mut ready: Vec<String> = indegree
-        .iter()
-        .filter(|(_, d)| **d == 0)
-        .map(|(n, _)| n.clone())
-        .collect();
+    let mut ready: Vec<String> = indegree.iter().filter(|(_, d)| **d == 0).map(|(n, _)| n.clone()).collect();
 
     ready.sort();
 

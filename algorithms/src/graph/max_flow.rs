@@ -52,15 +52,7 @@ pub fn max_flow_push_relabel(node_count: usize, edges: &[(usize, usize, i64)], s
 
 #[cfg(feature = "cuda")]
 unsafe extern "C" {
-    fn gpu_max_flow_push_relabel(
-        v: i32,
-        e: i32,
-        src: *const i32,
-        dst: *const i32,
-        cap: *const i64,
-        source: i32,
-        sink: i32,
-    ) -> i64;
+    fn gpu_max_flow_push_relabel(v: i32, e: i32, src: *const i32, dst: *const i32, cap: *const i64, source: i32, sink: i32) -> i64;
 }
 
 /// GPU entrypoint (currently CPU fallback compiled by nvcc).
@@ -74,17 +66,7 @@ pub fn max_flow_gpu(node_count: usize, edges: &[(usize, usize, i64)], source: us
         dst.push(v as i32);
         cap.push(c as i64);
     }
-    unsafe {
-        gpu_max_flow_push_relabel(
-            node_count as i32,
-            edges.len() as i32,
-            src.as_ptr(),
-            dst.as_ptr(),
-            cap.as_ptr(),
-            source as i32,
-            sink as i32,
-        )
-    }
+    unsafe { gpu_max_flow_push_relabel(node_count as i32, edges.len() as i32, src.as_ptr(), dst.as_ptr(), cap.as_ptr(), source as i32, sink as i32) }
 }
 
 fn add_edge(g: &mut [Vec<Edge>], u: usize, v: usize, cap: i64) {
@@ -94,15 +76,7 @@ fn add_edge(g: &mut [Vec<Edge>], u: usize, v: usize, cap: i64) {
     g[v].push(Edge { to: u, rev: rev_v, cap: 0 });
 }
 
-fn discharge(
-    u: usize,
-    g: &mut [Vec<Edge>],
-    height: &mut [usize],
-    excess: &mut [i64],
-    source: usize,
-    sink: usize,
-    active: &mut VecDeque<usize>,
-) {
+fn discharge(u: usize, g: &mut [Vec<Edge>], height: &mut [usize], excess: &mut [i64], source: usize, sink: usize, active: &mut VecDeque<usize>) {
     while excess[u] > 0 {
         let mut pushed = false;
         for i in 0..g[u].len() {

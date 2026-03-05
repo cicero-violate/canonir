@@ -3,11 +3,11 @@ use rustc_middle::ty::TyCtxt;
 use std::collections::HashSet;
 // structural fallback adjustments applied
 
+use crate::capture::mir::analysis::SwitchAnalysis;
 use crate::capture::mir::guard as mir_guard;
 use crate::capture::mir::ops as mir_ops;
 use crate::capture::mir::resolver::LocalNameResolver;
 use crate::capture::mir::util as mir_util;
-use crate::capture::mir::analysis::SwitchAnalysis;
 use crate::types::{Stmt, Terminator};
 
 #[allow(clippy::too_many_arguments)]
@@ -49,10 +49,7 @@ pub(crate) fn lower_call_terminator<'tcx>(
         if let Some(dest) = mir_util::label_place_dest(resolver, destination) {
             if destination.local.as_u32() != 0 {
                 // Define destination with a typed default to preserve MIR type.
-                stmts.push(Stmt::Assign {
-                    lhs: dest.clone(),
-                    rhs: "::core::default::Default::default()".to_string(),
-                });
+                stmts.push(Stmt::Assign { lhs: dest.clone(), rhs: "::core::default::Default::default()".to_string() });
                 defined.insert(dest);
             }
         }
@@ -115,17 +112,8 @@ pub(crate) fn lower_call_terminator<'tcx>(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_non_call_terminator<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    term_ref: &mir::Terminator<'tcx>,
-    returns_unit: bool,
-    resolver: &LocalNameResolver,
-    mir_to_emitted: &[Option<u32>],
-    stmts: &mut Vec<Stmt>,
-    defined: &mut HashSet<String>,
-    has_ret_binding: bool,
-    has_match_dest: bool,
-    mir_idx: usize,
-    switch_analysis: &SwitchAnalysis,
+    tcx: TyCtxt<'tcx>, term_ref: &mir::Terminator<'tcx>, returns_unit: bool, resolver: &LocalNameResolver, mir_to_emitted: &[Option<u32>], stmts: &mut Vec<Stmt>, defined: &mut HashSet<String>,
+    has_ret_binding: bool, has_match_dest: bool, mir_idx: usize, switch_analysis: &SwitchAnalysis,
 ) -> Terminator {
     match &term_ref.kind {
         mir::TerminatorKind::Return => {
@@ -160,10 +148,7 @@ pub(crate) fn lower_non_call_terminator<'tcx>(
 }
 
 fn mir_call_args_labels_fallback<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    local_decls: &mir::LocalDecls<'tcx>,
-    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
-    resolver: &LocalNameResolver,
+    tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>], resolver: &LocalNameResolver,
 ) -> Option<Vec<String>> {
     if let Some(labels) = mir_ops::mir_call_args_labels(tcx, args, resolver, local_decls) {
         return Some(labels);

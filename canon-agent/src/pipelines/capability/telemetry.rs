@@ -81,23 +81,12 @@ pub fn record_snapshot(path: &Path, snapshot: &TelemetrySnapshot) {
     }
 }
 
-pub fn record_all_snapshots(
-    snapshot: &TelemetrySnapshot,
-    log_root: &str,
-    template_root: &str,
-    template_hash: &str,
-) {
+pub fn record_all_snapshots(snapshot: &TelemetrySnapshot, log_root: &str, template_root: &str, template_hash: &str) {
     record_snapshot(&Path::new(log_root).join("planner_logs/metrics.json"), snapshot);
     record_snapshot(&Path::new(log_root).join("metrics.json"), snapshot);
-    record_snapshot(
-        &Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"),
-        snapshot,
-    );
+    record_snapshot(&Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"), snapshot);
     let _ = std::fs::create_dir_all(Path::new(template_root));
-    record_snapshot(
-        &Path::new(template_root).join(format!("metrics_{}.json", template_hash)),
-        snapshot,
-    );
+    record_snapshot(&Path::new(template_root).join(format!("metrics_{}.json", template_hash)), snapshot);
 }
 
 pub fn update_avg_u64(current: u64, next: u64) -> u64 {
@@ -108,17 +97,15 @@ pub fn progress_fraction(graph: &TaskGraph) -> f64 {
     if graph.nodes.is_empty() {
         return 0.0;
     }
-    let completed = graph
-        .nodes
-        .iter()
-        .filter(|n| n.status == super::dag::Status::Completed)
-        .count();
+    let completed = graph.nodes.iter().filter(|n| n.status == super::dag::Status::Completed).count();
     completed as f64 / graph.nodes.len() as f64
 }
 
 pub fn compute_reward(graph: &TaskGraph, iterations_used: u64, max_iterations: u64) -> f64 {
     let n_total = graph.nodes.len() as f64;
-    if n_total == 0.0 { return 0.0; }
+    if n_total == 0.0 {
+        return 0.0;
+    }
     let n_completed = graph.nodes.iter().filter(|n| n.status == super::dag::Status::Completed).count() as f64;
     let n_failed = graph.nodes.iter().filter(|n| n.status == super::dag::Status::Failed).count() as f64;
     let iter_ratio = iterations_used as f64 / max_iterations.max(1) as f64;

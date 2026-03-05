@@ -142,13 +142,7 @@ fn stage_lower_block_statements<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>,
 }
 
 fn stage_lower_block_terminator<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    body: &mir::Body<'tcx>,
-    returns_unit: bool,
-    mir_idx: mir::BasicBlock,
-    bb: &mir::BasicBlockData<'tcx>,
-    blocks: &[mir_passes::EmittedBlock],
-    plan: &mut LowerPlan,
+    tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, returns_unit: bool, mir_idx: mir::BasicBlock, bb: &mir::BasicBlockData<'tcx>, blocks: &[mir_passes::EmittedBlock], plan: &mut LowerPlan,
     stmts: &mut Vec<Stmt>,
 ) -> Terminator {
     let has_match_dest = mir_passes::blocks_have_ret_match(blocks) || stmts_have_ret_match(stmts);

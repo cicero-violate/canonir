@@ -39,6 +39,8 @@ pub mod control_flow;
 pub mod cryptography;
 pub mod data_structures;
 pub mod dynamic_programming;
+#[cfg(all(test, feature = "cuda"))]
+mod gpu_tests;
 pub mod graph;
 pub mod memory_systems;
 pub mod numerical;
@@ -47,5 +49,3 @@ pub mod parsing_compilation;
 pub mod searching;
 pub mod sorting;
 pub mod string_algorithms;
-#[cfg(all(test, feature = "cuda"))]
-mod gpu_tests;

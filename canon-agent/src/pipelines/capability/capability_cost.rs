@@ -22,10 +22,7 @@ pub struct CapabilityCostTable {
 
 impl CapabilityCostTable {
     pub fn load() -> Self {
-        std::fs::read_to_string(COST_PATH)
-            .ok()
-            .and_then(|s| serde_json::from_str::<CapabilityCostTable>(&s).ok())
-            .unwrap_or_default()
+        std::fs::read_to_string(COST_PATH).ok().and_then(|s| serde_json::from_str::<CapabilityCostTable>(&s).ok()).unwrap_or_default()
     }
 
     pub fn save(&self) {
@@ -50,11 +47,7 @@ impl CapabilityCostTable {
     }
 
     pub fn node_cost(&self, caps: &[Capability], latency_weight: f64, failure_weight: f64) -> f64 {
-        caps.iter()
-            .map(|c| self.costs.get(c))
-            .flatten()
-            .map(|c| latency_weight * c.latency_avg + failure_weight * c.failure_rate)
-            .sum()
+        caps.iter().map(|c| self.costs.get(c)).flatten().map(|c| latency_weight * c.latency_avg + failure_weight * c.failure_rate).sum()
     }
 
     pub fn avg_latency(&self) -> f64 {
@@ -66,7 +59,11 @@ impl CapabilityCostTable {
                 count += 1;
             }
         }
-        if count == 0 { 0.0 } else { total / count as f64 }
+        if count == 0 {
+            0.0
+        } else {
+            total / count as f64
+        }
     }
 
     pub fn avg_failure(&self) -> f64 {
@@ -78,11 +75,17 @@ impl CapabilityCostTable {
                 count += 1;
             }
         }
-        if count == 0 { 0.0 } else { total / count as f64 }
+        if count == 0 {
+            0.0
+        } else {
+            total / count as f64
+        }
     }
 
     pub fn summary(&self, max_entries: usize, latency_weight: f64, failure_weight: f64) -> String {
-        let mut entries: Vec<(Capability, f64, f64, f64)> = self.costs.iter()
+        let mut entries: Vec<(Capability, f64, f64, f64)> = self
+            .costs
+            .iter()
             .map(|(cap, cost)| {
                 let score = latency_weight * cost.latency_avg + failure_weight * cost.failure_rate;
                 (*cap, cost.latency_avg, cost.failure_rate, score)
@@ -98,15 +101,7 @@ impl CapabilityCostTable {
     }
 }
 
-pub fn apply_node_cost_update(
-    table: &mut CapabilityCostTable,
-    node: &TaskNode,
-    latency_ms: f64,
-    success: bool,
-    decay: f64,
-    latency_weight: f64,
-    failure_weight: f64,
-) -> f64 {
+pub fn apply_node_cost_update(table: &mut CapabilityCostTable, node: &TaskNode, latency_ms: f64, success: bool, decay: f64, latency_weight: f64, failure_weight: f64) -> f64 {
     for cap in &node.required_capabilities {
         table.update(*cap, latency_ms, success, decay);
     }

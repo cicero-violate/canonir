@@ -8,10 +8,10 @@ use anyhow::Result;
 
 use super::capability::assert_class_disjoint;
 use super::dag::TaskGraph;
-use super::planner_update::{apply_planner_update, PlannerUpdate};
-use super::template_index;
 use super::goal_embedding;
 use super::graph_algo;
+use super::planner_update::{apply_planner_update, PlannerUpdate};
+use super::template_index;
 use super::TEMPLATE_ROOT;
 
 pub struct TemplateStore {
@@ -81,20 +81,13 @@ impl TemplateStore {
     }
 
     pub fn stored_reward(&self, name: &str) -> f64 {
-        fs::read_to_string(self.reward_path(name))
-            .ok()
-            .and_then(|s| s.trim().parse::<f64>().ok())
-            .unwrap_or(f64::NEG_INFINITY)
+        fs::read_to_string(self.reward_path(name)).ok().and_then(|s| s.trim().parse::<f64>().ok()).unwrap_or(f64::NEG_INFINITY)
     }
 
     pub fn record_reward(&self, name: &str, reward: f64) {
         let path = self.history_path(name);
         let line = format!("{}\n", reward);
-        let _ = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .and_then(|mut f| f.write_all(line.as_bytes()));
+        let _ = fs::OpenOptions::new().create(true).append(true).open(&path).and_then(|mut f| f.write_all(line.as_bytes()));
     }
 
     pub fn recent_rewards(&self, name: &str, n: usize) -> Vec<f64> {
@@ -172,15 +165,7 @@ impl TemplateStore {
         self.index.save();
     }
 
-    pub fn find_similar(
-        &self,
-        goal: &str,
-        graph: &TaskGraph,
-        top_k: usize,
-        goal_w: f64,
-        struct_w: f64,
-        embedding_dim: usize,
-    ) -> template_index::SimilarSearch {
+    pub fn find_similar(&self, goal: &str, graph: &TaskGraph, top_k: usize, goal_w: f64, struct_w: f64, embedding_dim: usize) -> template_index::SimilarSearch {
         self.index.find_similar(goal, graph, top_k, goal_w, struct_w, embedding_dim)
     }
 
@@ -189,14 +174,7 @@ impl TemplateStore {
         self.index.save();
     }
 
-    pub fn record_revision(
-        &self,
-        template_name: &str,
-        graph: &TaskGraph,
-        reward: f64,
-        rewrites: usize,
-        iter: u64,
-    ) {
+    pub fn record_revision(&self, template_name: &str, graph: &TaskGraph, reward: f64, rewrites: usize, iter: u64) {
         #[derive(serde::Serialize)]
         struct TemplateRevisionLog {
             template_hash: String,
@@ -205,13 +183,7 @@ impl TemplateStore {
             edges: usize,
             rewrites: usize,
         }
-        let revision = TemplateRevisionLog {
-            template_hash: self.hash_for(template_name),
-            reward,
-            nodes: graph.nodes.len(),
-            edges: graph_algo::edge_count(graph),
-            rewrites,
-        };
+        let revision = TemplateRevisionLog { template_hash: self.hash_for(template_name), reward, nodes: graph.nodes.len(), edges: graph_algo::edge_count(graph), rewrites };
         let path = PathBuf::from(TEMPLATE_ROOT).join(format!("template_revision_{:04}.json", iter));
         if let Ok(pretty) = serde_json::to_string_pretty(&revision) {
             let _ = std::fs::create_dir_all(Path::new(TEMPLATE_ROOT));

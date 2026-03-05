@@ -1,41 +1,41 @@
 //! Capability-driven DAG pipeline.
 
+pub mod act;
 pub mod capability;
-pub mod dag;
+pub mod capability_cost;
 pub mod config;
-pub mod graph_algo;
-pub mod graph_runtime;
-pub mod graph_maintenance;
-pub mod executor_dispatch;
+pub mod console;
+pub mod dag;
+pub mod decompose;
+pub mod dispatch;
 pub mod endpoint_scheduler;
 pub mod endpoint_worker;
-pub mod response_router;
-pub mod scheduler;
-pub mod scheduler_state;
-pub mod scheduler_scoring;
-pub mod dispatch;
-pub mod execution_result;
-pub mod planner_session;
-pub mod planner_update;
-pub mod planner_state;
-pub mod telemetry;
-pub mod llm;
-pub mod decompose;
 pub mod engine;
-pub mod act;
-mod tab_management;
-pub mod console;
-pub mod templates;
-pub mod template_index;
+pub mod execution_result;
+pub mod executor_dispatch;
 pub mod failure_store;
+pub mod goal_embedding;
+pub mod gpu_scheduler;
+pub mod graph_algo;
+pub mod graph_maintenance;
+pub mod graph_runtime;
+pub mod llm;
+pub mod planner_session;
+pub mod planner_state;
+pub mod planner_update;
 pub mod policy;
 pub mod policy_engine;
 pub mod policy_train;
-pub mod gpu_scheduler;
-pub mod capability_cost;
-pub mod template_mutation;
+pub mod response_router;
+pub mod scheduler;
+pub mod scheduler_scoring;
+pub mod scheduler_state;
 pub mod state_snapshot;
-pub mod goal_embedding;
+mod tab_management;
+pub mod telemetry;
+pub mod template_index;
+pub mod template_mutation;
+pub mod templates;
 
 use super::{Pipeline, PipelineContext, PipelineOutcome};
 use crate::ir::SystemState;
@@ -44,12 +44,12 @@ use crate::ws_server::WsBridge;
 use anyhow::Result;
 use config::{CapabilityConfig, GoalSpec};
 use graph_algo::{emit_planned_graph, run_graph_algorithms};
-use templates::TemplateStore;
-use policy_train::PolicyDatasetEntry;
-use std::path::{Path, PathBuf};
-use std::collections::HashMap;
-use std::sync::Arc;
 use policy::PolicyModel;
+use policy_train::PolicyDatasetEntry;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use templates::TemplateStore;
 
 pub(crate) const LOG_ROOT: &str = "/workspace/ai_sandbox/canon/agent_logs/capability";
 pub(crate) const TEMPLATE_ROOT: &str = "/workspace/ai_sandbox/canon/agent_logs/templates";
@@ -75,12 +75,7 @@ pub struct CapabilityPipeline {
 impl CapabilityPipeline {
     pub fn new(bridge: WsBridge) -> Self {
         let config = CapabilityConfig::load().expect("failed to load capability config");
-        Self {
-            bridge,
-            config,
-            tabs: engine::new_tabs(),
-            role_rr: tokio::sync::Mutex::new(HashMap::new()),
-        }
+        Self { bridge, config, tabs: engine::new_tabs(), role_rr: tokio::sync::Mutex::new(HashMap::new()) }
     }
 
     fn ensure_log_dir() {
@@ -128,12 +123,7 @@ impl CapabilityPipeline {
             let _ = std::fs::write(Self::log_path("goal_spec.json"), pretty);
         }
 
-        let endpoint = self
-            .config
-            .llm_endpoints
-            .iter()
-            .find(|e| e.role.as_deref() != Some("planner"))
-            .unwrap_or(&self.config.llm_endpoints[0]);
+        let endpoint = self.config.llm_endpoints.iter().find(|e| e.role.as_deref() != Some("planner")).unwrap_or(&self.config.llm_endpoints[0]);
         let retry_count = self.config.llm_retry_count;
         let retry_delay = self.config.llm_retry_delay_secs;
         let max_output_lines = self.config.max_output_lines;
@@ -145,12 +135,7 @@ impl CapabilityPipeline {
         let template_name = goal.raw.clone();
 
         let mut planner_generate = || async {
-            let request = decompose::build_goal_request(
-                &goal.raw,
-                &ctx.cwd[0],
-                &workspace_listing,
-                Path::new(LOG_ROOT),
-            );
+            let request = decompose::build_goal_request(&goal.raw, &ctx.cwd[0], &workspace_listing, Path::new(LOG_ROOT));
             let mut payload = engine::call_llm_json_with_retry_allow_mismatch(
                 &self.bridge,
                 &endpoint.id,
@@ -230,22 +215,26 @@ impl CapabilityPipeline {
             };
             eprintln!("[capability] decompose_goal tasks={}", decomp.tasks.len());
 
-        let mut nodes: Vec<dag::TaskNode> = decomp.tasks.into_iter().map(|t| dag::TaskNode {
-            id: t.id,
-            description: t.description,
-            status: dag::Status::Pending,
-            deps: t.deps,
-            required_capabilities: t.required_capabilities,
-            node_type: t.node_type,
-            priority: t.priority,
-            budget: t.budget,
-            reasoning_trace: t.reasoning_trace,
-            result: None,
-            error: None,
-            readonly_fail_count: 0,
-            repair_attempts: 0,
-            completed_iter: None,
-        }).collect();
+            let mut nodes: Vec<dag::TaskNode> = decomp
+                .tasks
+                .into_iter()
+                .map(|t| dag::TaskNode {
+                    id: t.id,
+                    description: t.description,
+                    status: dag::Status::Pending,
+                    deps: t.deps,
+                    required_capabilities: t.required_capabilities,
+                    node_type: t.node_type,
+                    priority: t.priority,
+                    budget: t.budget,
+                    reasoning_trace: t.reasoning_trace,
+                    result: None,
+                    error: None,
+                    readonly_fail_count: 0,
+                    repair_attempts: 0,
+                    completed_iter: None,
+                })
+                .collect();
             ensure_unique_node_ids(&mut nodes);
             ensure_unique_node_ids(&mut nodes);
             Ok::<dag::TaskGraph, anyhow::Error>(dag::TaskGraph { nodes, id_index: HashMap::new() })
@@ -321,11 +310,7 @@ impl CapabilityPipeline {
                 store.record_failure(&template_hash);
             }
             let features = graph_algo::graph_features(&graph).with_failure_stats(&failure_store.stats());
-            let policy_outcome = policy_engine::evaluate(
-                &features,
-                self.config.max_nodes,
-                self.config.max_nodes.saturating_mul(4),
-            );
+            let policy_outcome = policy_engine::evaluate(&features, self.config.max_nodes, self.config.max_nodes.saturating_mul(4));
             let reward = telemetry::compute_reward(&graph, iterations_used, self.config.max_iterations);
             let entry = PolicyDatasetEntry {
                 features: serde_json::json!({
@@ -417,40 +402,19 @@ impl CapabilityPipeline {
                 goal: Some(template_name.clone()),
             };
             telemetry::record_snapshot(&Path::new(LOG_ROOT).join("metrics.json"), &snapshot);
-            telemetry::record_snapshot(
-                &Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"),
-                &snapshot,
-            );
+            telemetry::record_snapshot(&Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"), &snapshot);
             let _ = std::fs::create_dir_all(Path::new(TEMPLATE_ROOT));
-            telemetry::record_snapshot(
-                &Path::new(TEMPLATE_ROOT).join(format!("metrics_{}.json", template_hash)),
-                &snapshot,
-            );
+            telemetry::record_snapshot(&Path::new(TEMPLATE_ROOT).join(format!("metrics_{}.json", template_hash)), &snapshot);
             Ok(reward)
         } else {
             let planner_endpoint = self.config.planner_endpoint()?;
             let mut planner_session = planner_session::PlannerSession::new(planner_endpoint, goal.raw.clone());
             let recent = store.recent_rewards(&template_name, 4);
-            let plateaued = store.is_plateaued(
-                &template_name,
-                self.config.planner_plateau_window,
-                self.config.planner_plateau_threshold,
-            );
-            let similar = store.find_similar(
-                &goal.raw,
-                &graph,
-                1,
-                self.config.goal_similarity_weight,
-                self.config.structural_similarity_weight,
-                self.config.embedding_dim,
-            );
+            let plateaued = store.is_plateaued(&template_name, self.config.planner_plateau_window, self.config.planner_plateau_threshold);
+            let similar = store.find_similar(&goal.raw, &graph, 1, self.config.goal_similarity_weight, self.config.structural_similarity_weight, self.config.embedding_dim);
             let bootstrap_seed = similar.templates.into_iter().next().map(|s| {
                 let seed_graph = store.load(&s.entry.goal).ok();
-                let node_summaries = seed_graph.as_ref().map(|g| {
-                    g.nodes.iter()
-                        .map(|n| format!("{}: {}", n.id, n.description))
-                        .collect::<Vec<_>>()
-                }).unwrap_or_default();
+                let node_summaries = seed_graph.as_ref().map(|g| g.nodes.iter().map(|n| format!("{}: {}", n.id, n.description)).collect::<Vec<_>>()).unwrap_or_default();
                 planner_session::BootstrapSeed {
                     goal: s.entry.goal.clone(),
                     similarity_score: s.score,
@@ -497,13 +461,7 @@ impl CapabilityPipeline {
 }
 
 fn list_workspace_entries(root: &Path, limit: usize) -> String {
-    let mut entries: Vec<String> = std::fs::read_dir(root)
-        .map(|rd| {
-            rd.filter_map(|e| e.ok())
-                .map(|e| e.file_name().to_string_lossy().to_string())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let mut entries: Vec<String> = std::fs::read_dir(root).map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect::<Vec<_>>()).unwrap_or_default();
     entries.sort();
     entries.truncate(limit);
     entries.join(", ")
@@ -520,7 +478,6 @@ fn ensure_unique_node_ids(nodes: &mut Vec<dag::TaskNode>) {
         *count += 1;
     }
 }
-
 
 #[async_trait::async_trait]
 impl Pipeline for CapabilityPipeline {

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 use super::capability::{assert_class_disjoint, Capability};
-use super::dag::{TaskGraph, TaskNode, Status};
+use super::dag::{Status, TaskGraph, TaskNode};
 use super::decompose::TaskSpec;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,14 +37,8 @@ pub struct PlannerUpdate {
 }
 
 pub fn apply_planner_update(graph: &mut TaskGraph, update: PlannerUpdate) -> Result<()> {
-    let retract_ids: HashSet<String> = update.retract_nodes.into_iter()
-        .filter_map(|spec| {
-            graph.nodes.iter()
-                .find(|n| n.id == spec.id)
-                .filter(|n| matches!(n.status, Status::Pending | Status::Failed))
-                .map(|_| spec.id)
-        })
-        .collect();
+    let retract_ids: HashSet<String> =
+        update.retract_nodes.into_iter().filter_map(|spec| graph.nodes.iter().find(|n| n.id == spec.id).filter(|n| matches!(n.status, Status::Pending | Status::Failed)).map(|_| spec.id)).collect();
 
     if !retract_ids.is_empty() {
         graph.nodes.retain(|n| !retract_ids.contains(&n.id));
@@ -65,37 +59,33 @@ pub fn apply_planner_update(graph: &mut TaskGraph, update: PlannerUpdate) -> Res
         }
     }
 
-    let existing: HashSet<String> =
-        graph.nodes.iter().map(|n| n.id.clone()).collect();
+    let existing: HashSet<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
 
-    graph.nodes.extend(
-        update.new_nodes.into_iter()
-            .filter(|s| !existing.contains(&s.id))
-            .map(|spec| TaskNode {
-                id: spec.id,
-                description: spec.description,
-                status: Status::Pending,
-                deps: spec.deps,
-                required_capabilities: spec.required_capabilities,
-                node_type: spec.node_type,
-                priority: spec.priority,
-                budget: spec.budget,
-                reasoning_trace: spec.reasoning_trace,
-                result: None,
-                error: None,
-                readonly_fail_count: 0,
-                repair_attempts: 0,
-                completed_iter: None,
-            })
-    );
+    graph.nodes.extend(update.new_nodes.into_iter().filter(|s| !existing.contains(&s.id)).map(|spec| TaskNode {
+        id: spec.id,
+        description: spec.description,
+        status: Status::Pending,
+        deps: spec.deps,
+        required_capabilities: spec.required_capabilities,
+        node_type: spec.node_type,
+        priority: spec.priority,
+        budget: spec.budget,
+        reasoning_trace: spec.reasoning_trace,
+        result: None,
+        error: None,
+        readonly_fail_count: 0,
+        repair_attempts: 0,
+        completed_iter: None,
+    }));
 
-    let id_to_idx: HashMap<String, usize> =
-        graph.nodes.iter().enumerate().map(|(i, n)| (n.id.clone(), i)).collect();
+    let id_to_idx: HashMap<String, usize> = graph.nodes.iter().enumerate().map(|(i, n)| (n.id.clone(), i)).collect();
 
     for edge in update.new_edges {
         if let Some(&to_idx) = id_to_idx.get(&edge.to) {
             let deps = &mut graph.nodes[to_idx].deps;
-            if !deps.contains(&edge.from) { deps.push(edge.from); }
+            if !deps.contains(&edge.from) {
+                deps.push(edge.from);
+            }
         }
     }
     Ok(())

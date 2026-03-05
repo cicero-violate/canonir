@@ -70,13 +70,7 @@ pub fn detect_iterator_loops(adj: &[Vec<usize>], back_edges: &HashSet<(usize, us
         // Collect all body blocks: reachable from body_entry without crossing exit_block.
         let body_blocks = collect_body_blocks(body_entry, adj, exit_block, switch_block);
 
-        patterns.push(IteratorLoopPattern {
-            loop_head,
-            switch_block,
-            body_entry,
-            exit_block,
-            body_blocks,
-        });
+        patterns.push(IteratorLoopPattern { loop_head, switch_block, body_entry, exit_block, body_blocks });
     }
     patterns
 }
@@ -96,13 +90,7 @@ pub fn compute_back_edges(adj: &[Vec<usize>]) -> HashSet<(usize, usize)> {
     back_edges
 }
 
-fn dfs_back_edges(
-    u: usize,
-    adj: &[Vec<usize>],
-    visited: &mut Vec<bool>,
-    on_stack: &mut Vec<bool>,
-    back_edges: &mut HashSet<(usize, usize)>,
-) {
+fn dfs_back_edges(u: usize, adj: &[Vec<usize>], visited: &mut Vec<bool>, on_stack: &mut Vec<bool>, back_edges: &mut HashSet<(usize, usize)>) {
     visited[u] = true;
     on_stack[u] = true;
     for &v in &adj[u] {
@@ -118,12 +106,7 @@ fn dfs_back_edges(
     on_stack[u] = false;
 }
 
-fn reachable_has_back_edge(
-    start: usize,
-    adj: &[Vec<usize>],
-    back_edges: &HashSet<(usize, usize)>,
-    stop_at: usize,
-) -> bool {
+fn reachable_has_back_edge(start: usize, adj: &[Vec<usize>], back_edges: &HashSet<(usize, usize)>, stop_at: usize) -> bool {
     let n = adj.len();
     let mut visited = vec![false; n];
     let mut stack = vec![start];
@@ -154,12 +137,7 @@ fn find_loop_head(switch_block: usize, adj: &[Vec<usize>], back_edges: &HashSet<
     switch_block
 }
 
-fn collect_body_blocks(
-    entry: usize,
-    adj: &[Vec<usize>],
-    exit_block: usize,
-    switch_block: usize,
-) -> HashSet<usize> {
+fn collect_body_blocks(entry: usize, adj: &[Vec<usize>], exit_block: usize, switch_block: usize) -> HashSet<usize> {
     let n = adj.len();
     let mut visited = HashSet::new();
     let mut stack = vec![entry];

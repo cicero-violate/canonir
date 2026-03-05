@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use algorithms::graph::adj_list::AdjList;
 use algorithms::graph::csr::Csr;
 
-use super::{dag, decompose};
 use super::capability::Capability;
 use super::gpu_scheduler::kernels as gpu_kernels;
+use super::{dag, decompose};
 
 fn algo_log_path(log_dir: &Path, iter: u32, name: &str) -> PathBuf {
     if iter == 0 {
@@ -40,15 +40,7 @@ pub fn emit_planned_graph(graph: &dag::TaskGraph, log_dir: &Path, iter: u32) {
             edges.push(GraphEdge { from: dep.as_str(), to: n.id.as_str() });
         }
     }
-    let nodes = graph
-        .nodes
-        .iter()
-        .map(|n| GraphNode {
-            id: n.id.as_str(),
-            deps: &n.deps,
-            node_type: n.node_type,
-        })
-        .collect();
+    let nodes = graph.nodes.iter().map(|n| GraphNode { id: n.id.as_str(), deps: &n.deps, node_type: n.node_type }).collect();
     let snapshot = GraphSnapshot { nodes, edges };
     let path = algo_log_path(log_dir, iter, "planned_graph.json");
     if let Ok(pretty) = serde_json::to_string_pretty(&snapshot) {
@@ -118,12 +110,7 @@ impl GraphSignals {
 
 pub fn compute_graph_signals(graph: &dag::TaskGraph) -> GraphSignals {
     let n = graph.nodes.len();
-    let id_to_index: HashMap<&str, usize> = graph
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(idx, node)| (node.id.as_str(), idx))
-        .collect();
+    let id_to_index: HashMap<&str, usize> = graph.nodes.iter().enumerate().map(|(idx, node)| (node.id.as_str(), idx)).collect();
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
     for node in &graph.nodes {
         if let Some(&to) = id_to_index.get(node.id.as_str()) {
@@ -138,23 +125,10 @@ pub fn compute_graph_signals(graph: &dag::TaskGraph) -> GraphSignals {
     let roots = gpu_kernels::compute_roots(&adj);
     let topo_order = gpu_kernels::compute_topo_order(&adj);
     let has_cycle = topo_order.len() != n;
-    let sccs = gpu_kernels::compute_scc(&adj)
-        .into_iter()
-        .filter(|c| c.len() > 1)
-        .collect::<Vec<_>>();
+    let sccs = gpu_kernels::compute_scc(&adj).into_iter().filter(|c| c.len() > 1).collect::<Vec<_>>();
     let reach = gpu_kernels::compute_reachability(&adj, &roots);
-    let unreachable = reach
-        .iter()
-        .enumerate()
-        .filter_map(|(i, &ok)| (!ok).then_some(i))
-        .collect::<Vec<_>>();
-    GraphSignals {
-        roots,
-        topo_order,
-        sccs,
-        unreachable,
-        has_cycle,
-    }
+    let unreachable = reach.iter().enumerate().filter_map(|(i, &ok)| (!ok).then_some(i)).collect::<Vec<_>>();
+    GraphSignals { roots, topo_order, sccs, unreachable, has_cycle }
 }
 
 fn reachability_mask(adj: &[Vec<usize>], roots: &[usize]) -> Vec<bool> {
@@ -168,16 +142,8 @@ pub fn planner_signals_for_graph(graph: &dag::TaskGraph) -> String {
     let roots = signals.roots.iter().map(|&i| to_id(i)).collect::<Vec<_>>().join(", ");
     let unreachable = signals.unreachable.iter().map(|&i| to_id(i)).collect::<Vec<_>>().join(", ");
     let topo = signals.topo_order.iter().map(|&i| to_id(i)).collect::<Vec<_>>().join(", ");
-    let sccs = signals
-        .sccs
-        .iter()
-        .map(|comp| comp.iter().map(|&i| to_id(i)).collect::<Vec<_>>().join(" -> "))
-        .collect::<Vec<_>>()
-        .join(" | ");
-    format!(
-        "roots=[{}]; unreachable=[{}]; topo_order=[{}]; sccs=[{}]; has_cycle={}",
-        roots, unreachable, topo, sccs, signals.has_cycle
-    )
+    let sccs = signals.sccs.iter().map(|comp| comp.iter().map(|&i| to_id(i)).collect::<Vec<_>>().join(" -> ")).collect::<Vec<_>>().join(" | ");
+    format!("roots=[{}]; unreachable=[{}]; topo_order=[{}]; sccs=[{}]; has_cycle={}", roots, unreachable, topo, sccs, signals.has_cycle)
 }
 
 pub fn enforce_linking_constraints(graph: &dag::TaskGraph) -> Result<(), String> {
@@ -332,38 +298,17 @@ pub fn graph_features(graph: &dag::TaskGraph) -> FeatureVector {
             node_type.push(if n.node_type == decompose::NodeType::Analysis { 0 } else { 1 });
             if n.status == dag::Status::Completed {
                 completed += 1;
-                if let Some(t) = n.completed_iter { max_completed_iter = max_completed_iter.max(t); }
+                if let Some(t) = n.completed_iter {
+                    max_completed_iter = max_completed_iter.max(t);
+                }
             }
         }
-        let stats = algorithms::graph::feature_gpu::feature_stats_gpu(
-            &status,
-            &indegree,
-            &outdegree,
-            &priority,
-            &budget,
-            &retry,
-            &has_verify,
-            &has_mutate,
-            &has_observe,
-            &node_type,
-        );
+        let stats = algorithms::graph::feature_gpu::feature_stats_gpu(&status, &indegree, &outdegree, &priority, &budget, &retry, &has_verify, &has_mutate, &has_observe, &node_type);
         let avg_out_degree = if nodes == 0 { 0.0 } else { edges as f64 / nodes as f64 };
         let avg_in_degree = avg_out_degree;
-        let branching_factor = if stats.non_leaf_count == 0 {
-            0.0
-        } else {
-            stats.outdegree_sum as f64 / stats.non_leaf_count as f64
-        };
-        let verify_to_mutate_ratio = if stats.mutate_count == 0 {
-            0.0
-        } else {
-            stats.verify_count as f64 / stats.mutate_count as f64
-        };
-        let observe_to_mutate_ratio = if stats.mutate_count == 0 {
-            0.0
-        } else {
-            stats.observe_count as f64 / stats.mutate_count as f64
-        };
+        let branching_factor = if stats.non_leaf_count == 0 { 0.0 } else { stats.outdegree_sum as f64 / stats.non_leaf_count as f64 };
+        let verify_to_mutate_ratio = if stats.mutate_count == 0 { 0.0 } else { stats.verify_count as f64 / stats.mutate_count as f64 };
+        let observe_to_mutate_ratio = if stats.mutate_count == 0 { 0.0 } else { stats.observe_count as f64 / stats.mutate_count as f64 };
         let total = nodes.max(1) as f64;
         let p_a = stats.analysis_count as f64 / total;
         let p_r = stats.render_count as f64 / total;
@@ -432,7 +377,11 @@ pub fn graph_features(graph: &dag::TaskGraph) -> FeatureVector {
         let avg_in_degree = avg_out_degree;
         let branching_factor = {
             let non_leaf = outdegree.iter().filter(|&&d| d > 0).count();
-            if non_leaf == 0 { 0.0 } else { outdegree.iter().sum::<usize>() as f64 / non_leaf as f64 }
+            if non_leaf == 0 {
+                0.0
+            } else {
+                outdegree.iter().sum::<usize>() as f64 / non_leaf as f64
+            }
         };
         let mut verify_count = 0usize;
         let mut mutate_count = 0usize;
@@ -448,7 +397,11 @@ pub fn graph_features(graph: &dag::TaskGraph) -> FeatureVector {
         let mut retry_total = 0f64;
         let mut max_completed_iter = 0u64;
         for n in &graph.nodes {
-            if n.node_type == decompose::NodeType::Analysis { analysis_count += 1; } else { render_count += 1; }
+            if n.node_type == decompose::NodeType::Analysis {
+                analysis_count += 1;
+            } else {
+                render_count += 1;
+            }
             for cap in &n.required_capabilities {
                 match cap.class() {
                     super::capability::CapabilityClass::Verify => verify_count += 1,
@@ -457,14 +410,18 @@ pub fn graph_features(graph: &dag::TaskGraph) -> FeatureVector {
                 }
             }
             priority_sum += n.priority as f64;
-            if let Some(b) = n.budget { budget_sum += b as f64; }
+            if let Some(b) = n.budget {
+                budget_sum += b as f64;
+            }
             match n.status {
                 dag::Status::Blocked => blocked += 1,
                 dag::Status::Ready => ready += 1,
                 dag::Status::Failed => failed_count += 1,
                 dag::Status::Completed => {
                     completed += 1;
-                    if let Some(t) = n.completed_iter { max_completed_iter = max_completed_iter.max(t); }
+                    if let Some(t) = n.completed_iter {
+                        max_completed_iter = max_completed_iter.max(t);
+                    }
                 }
                 _ => {}
             }
@@ -568,9 +525,7 @@ pub fn node_utility(graph: &dag::TaskGraph, node_id: &str, iter: u64) -> f64 {
         Some(n) => n,
         None => return 0.0,
     };
-    let dependents = graph.nodes.iter()
-        .filter(|n| n.deps.iter().any(|d| d == node_id))
-        .count();
+    let dependents = graph.nodes.iter().filter(|n| n.deps.iter().any(|d| d == node_id)).count();
     let completion_value = if node.status == dag::Status::Completed && node.error.is_none() { 1.0 } else { 0.0 };
     let age = node.completed_iter.map(|t| iter.saturating_sub(t)).unwrap_or(0) as f64;
     0.6 * dependents as f64 + 0.3 * completion_value - 0.1 * age
@@ -581,11 +536,15 @@ pub fn edge_count(graph: &dag::TaskGraph) -> usize {
 }
 
 pub fn graph_signature(graph: &dag::TaskGraph) -> String {
-    let mut nodes = graph.nodes.iter().map(|n| {
-        let mut caps: Vec<Capability> = n.required_capabilities.clone();
-        caps.sort_by_key(|c| format!("{:?}", c));
-        (n.id.clone(), format!("{:?}", n.node_type), caps)
-    }).collect::<Vec<_>>();
+    let mut nodes = graph
+        .nodes
+        .iter()
+        .map(|n| {
+            let mut caps: Vec<Capability> = n.required_capabilities.clone();
+            caps.sort_by_key(|c| format!("{:?}", c));
+            (n.id.clone(), format!("{:?}", n.node_type), caps)
+        })
+        .collect::<Vec<_>>();
     nodes.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut edges = Vec::new();
@@ -617,9 +576,7 @@ fn compute_max_depth(graph: &dag::TaskGraph) -> usize {
     if graph.nodes.is_empty() {
         return 0;
     }
-    let id_to_idx: HashMap<&str, usize> = graph.nodes.iter().enumerate()
-        .map(|(i, n)| (n.id.as_str(), i))
-        .collect();
+    let id_to_idx: HashMap<&str, usize> = graph.nodes.iter().enumerate().map(|(i, n)| (n.id.as_str(), i)).collect();
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); graph.nodes.len()];
     for (idx, node) in graph.nodes.iter().enumerate() {
         for dep in &node.deps {

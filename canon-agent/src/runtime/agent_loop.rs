@@ -3,11 +3,11 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-use crate::pipelines::{Pipeline, PipelineContext};
-use crate::pipelines::capability::CapabilityPipeline;
-use crate::pipelines::capability::telemetry::TelemetrySnapshot;
 use crate::ir::SystemState;
 use crate::layout::FileTopology;
+use crate::pipelines::capability::telemetry::TelemetrySnapshot;
+use crate::pipelines::capability::CapabilityPipeline;
+use crate::pipelines::{Pipeline, PipelineContext};
 
 const LOG_ROOT: &str = "/workspace/ai_sandbox/canon/agent_logs/capability";
 
@@ -21,31 +21,16 @@ pub struct AgentLoopConfig {
 
 impl Default for AgentLoopConfig {
     fn default() -> Self {
-        Self {
-            max_ticks: 0,
-            backoff_ms: 200,
-            stagnation_window: 3,
-            retry_threshold: 0.4,
-            deadlock_threshold: 0.2,
-        }
+        Self { max_ticks: 0, backoff_ms: 200, stagnation_window: 3, retry_threshold: 0.4, deadlock_threshold: 0.2 }
     }
 }
 
-pub async fn run_agent_loop(
-    pipeline: &CapabilityPipeline,
-    base_ctx: &PipelineContext,
-    ir: &mut SystemState,
-    layout: &mut FileTopology,
-    config: AgentLoopConfig,
-) -> Result<()> {
+pub async fn run_agent_loop(pipeline: &CapabilityPipeline, base_ctx: &PipelineContext, ir: &mut SystemState, layout: &mut FileTopology, config: AgentLoopConfig) -> Result<()> {
     let mut stagnation = 0u64;
     let mut tick = 0u64;
     loop {
         tick += 1;
-        let ctx = PipelineContext {
-            tick,
-            ..base_ctx.clone()
-        };
+        let ctx = PipelineContext { tick, ..base_ctx.clone() };
         let outcome = match pipeline.run_tick(&ctx, ir, layout).await {
             Ok(outcome) => {
                 eprintln!("[agent-loop] tick {} done — {}", tick, outcome.summary);

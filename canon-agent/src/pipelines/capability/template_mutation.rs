@@ -1,6 +1,6 @@
 use super::capability::Capability;
 use super::dag::TaskGraph;
-use super::graph_algo::{node_utility, FeatureVector, graph_features};
+use super::graph_algo::{graph_features, node_utility, FeatureVector};
 
 pub struct CandidateScore {
     pub graph: TaskGraph,
@@ -8,13 +8,7 @@ pub struct CandidateScore {
     pub score: f64,
 }
 
-pub fn generate_candidates(
-    graph: &TaskGraph,
-    count: usize,
-    mutation_budget: usize,
-    mutation_rate: f64,
-    iter: u64,
-) -> Vec<TaskGraph> {
+pub fn generate_candidates(graph: &TaskGraph, count: usize, mutation_budget: usize, mutation_rate: f64, iter: u64) -> Vec<TaskGraph> {
     let mut out = Vec::new();
     if count == 0 {
         return out;
@@ -42,18 +36,10 @@ fn mutation_score(features: &FeatureVector) -> f64 {
     let w1 = 1.0;
     let w2 = 0.7;
     let w3 = 0.5;
-    (w1 * features.completion_velocity)
-        - (w2 * features.failed_fraction)
-        - (w3 * features.blocked_fraction)
+    (w1 * features.completion_velocity) - (w2 * features.failed_fraction) - (w3 * features.blocked_fraction)
 }
 
-fn mutate_template_with_mode(
-    graph: &TaskGraph,
-    mode: usize,
-    mutation_budget: usize,
-    mutation_rate: f64,
-    iter: u64,
-) -> TaskGraph {
+fn mutate_template_with_mode(graph: &TaskGraph, mode: usize, mutation_budget: usize, mutation_rate: f64, iter: u64) -> TaskGraph {
     let mut g = graph.clone();
     if mutation_rate <= 0.0 || mutation_budget == 0 {
         return g;
@@ -100,9 +86,7 @@ fn rewrite_descriptions(graph: &mut TaskGraph) -> usize {
 fn mutate_capabilities(graph: &mut TaskGraph) -> usize {
     for n in &mut graph.nodes {
         if n.required_capabilities.contains(&Capability::CargoBuild) {
-            n.required_capabilities = n.required_capabilities.iter().map(|c| {
-                if *c == Capability::CargoBuild { Capability::CargoCheck } else { *c }
-            }).collect();
+            n.required_capabilities = n.required_capabilities.iter().map(|c| if *c == Capability::CargoBuild { Capability::CargoCheck } else { *c }).collect();
             return 1;
         }
     }

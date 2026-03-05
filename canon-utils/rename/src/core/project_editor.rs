@@ -1,6 +1,6 @@
-use crate::core::oracle::StructuralEditOracleApi;
 #[cfg(feature = "rustc_frontend")]
 use crate::core::oracle::StructuralEditOracle;
+use crate::core::oracle::StructuralEditOracleApi;
 #[cfg(feature = "rustc_frontend")]
 use crate::core::rustc_resolver::{RustcResolver, SpanRange};
 use crate::core::symbol_id::normalize_symbol_id;
@@ -73,11 +73,27 @@ impl ProjectEditor {
         let mut original_sources = HashMap::new();
         for file in files {
             let content = std::fs::read_to_string(&file)?;
-            let ast = syn::parse_file(&content)
-                .with_context(|| format!("Failed to parse {}", file.display()))?;
             let module_path = module_path_for_file(&source_root, &file)?;
             registry.module_files.insert(module_path.clone(), file.clone());
-            index_file_symbols(&ast, &file, &module_path, &mut registry.handles);
+            let ast = match syn::parse_file(&content) {
+                Ok(ast) => {
+                    index_file_symbols(&ast, &file, &module_path, &mut registry.handles);
+                    ast
+                }
+                Err(_) => {
+                    index_file_symbols_by_text(
+                        &content,
+                        &file,
+                        &module_path,
+                        &mut registry.handles,
+                    );
+                    syn::File {
+                        shebang: None,
+                        attrs: Vec::new(),
+                        items: Vec::new(),
+                    }
+                }
+            };
             registry.asts.insert(file.clone(), ast);
             registry.sources.insert(file.clone(), content.clone());
             original_sources.insert(file, content);
@@ -97,7 +113,6 @@ impl ProjectEditor {
             rustc: None,
         })
     }
-
     #[cfg(feature = "rustc_frontend")]
     pub fn load_with_rustc(project: &Path) -> Result<Self> {
         let oracle = Box::new(StructuralEditOracle);
@@ -107,7 +122,7 @@ impl ProjectEditor {
         Ok(editor)
     }
     pub fn queue(&mut self, symbol_id: &str, op: NodeOp) -> Result<()> {
-        let norm = normalize_symbol_id(symbol_id);
+        let norm = crate::core::symbol_id::normalize_symbol_id(symbol_id);
         let handle = match &op {
             NodeOp::MutateField { handle, .. } | NodeOp::MoveSymbol { handle, .. } => {
                 Some(handle)
@@ -131,7 +146,7 @@ impl ProjectEditor {
         symbol_id: &str,
         mutation: FieldMutation,
     ) -> Result<()> {
-        let norm = normalize_symbol_id(symbol_id);
+        let norm = crate::core::symbol_id::normalize_symbol_id(symbol_id);
         let handle = self
             .registry
             .handles
@@ -145,7 +160,7 @@ impl ProjectEditor {
         self.queue(&norm, op)
     }
     pub fn has_symbol(&self, symbol_id: &str) -> bool {
-        let norm = normalize_symbol_id(symbol_id);
+        let norm = crate::core::symbol_id::normalize_symbol_id(symbol_id);
         self.registry.handles.contains_key(&norm)
     }
     pub fn queue_module_rename(&mut self, old_module_path: &str, new_name: &str) {
@@ -273,7 +288,11 @@ impl ProjectEditor {
         }
         for path in &self.last_touched_files {
             if let Some(ast) = self.registry.asts.get(path) {
-                let rendered = prettyplease::unparse(ast);
+                let rendered = if ast.items.is_empty() {
+                    self.registry.sources.get(path).cloned().unwrap_or_default()
+                } else {
+                    prettyplease::unparse(ast)
+                };
                 out.push_str(&format!("=== {} ===\n", path.display()));
                 out.push_str(&rendered);
                 out.push('\n');
@@ -291,8 +310,15 @@ impl ProjectEditor {
         let mut written = Vec::new();
         for path in &self.last_touched_files {
             if let Some(ast) = self.registry.asts.get(path) {
-                let rendered = prettyplease::unparse(ast);
+                let rendered = if ast.items.is_empty() {
+                    self.registry.sources.get(path).cloned().unwrap_or_default()
+                } else {
+                    prettyplease::unparse(ast)
+                };
                 std::fs::write(path, rendered)?;
+                written.push(path.clone());
+            } else if let Some(source) = self.registry.sources.get(path) {
+                std::fs::write(path, source)?;
                 written.push(path.clone());
             }
         }
@@ -309,7 +335,9 @@ impl ProjectEditor {
         #[cfg(feature = "rustc_frontend")]
         if let Some(resolver) = &self.rustc {
             let symbol_id = format!("{}::{}", handle.module_path, old_name);
-            let touched = self.apply_symbol_rename_with_rustc(resolver, &symbol_id, new_name)?;
+            let occurrences = resolver.collect_occurrences(&symbol_id)?;
+            let touched = self
+                .apply_symbol_rename_with_occurrences(&occurrences, new_name)?;
             return Ok(touched);
         }
         {
@@ -343,17 +371,14 @@ impl ProjectEditor {
         }
         Ok(touched)
     }
-
     #[cfg(feature = "rustc_frontend")]
-    fn apply_symbol_rename_with_rustc(
+    fn apply_symbol_rename_with_occurrences(
         &mut self,
-        resolver: &RustcResolver,
-        symbol_id: &str,
+        occurrences: &std::collections::HashMap<PathBuf, Vec<SpanRange>>,
         new_name: &str,
     ) -> Result<HashSet<PathBuf>> {
-        let occurrences = resolver.collect_occurrences(symbol_id)?;
         let mut touched = HashSet::new();
-        for (path, mut spans) in occurrences {
+        for (path, mut spans) in occurrences.clone() {
             let source = match self.registry.sources.get(&path) {
                 Some(content) => content.clone(),
                 None => continue,
@@ -362,15 +387,20 @@ impl ProjectEditor {
             let mut updated = source.clone();
             for span in spans {
                 if span.hi > updated.len() || span.lo > span.hi {
-                    return Err(anyhow!("invalid span for {}: {}..{}", path.display(), span.lo, span.hi));
+                    return Err(
+                        anyhow!(
+                            "invalid span for {}: {}..{}", path.display(), span.lo, span
+                            .hi
+                        ),
+                    );
                 }
                 updated.replace_range(span.lo..span.hi, new_name);
             }
             if updated != source {
-                let ast = syn::parse_file(&updated)
-                    .with_context(|| format!("Failed to parse {}", path.display()))?;
-                self.registry.sources.insert(path.clone(), updated);
-                self.registry.asts.insert(path.clone(), ast);
+                self.registry.sources.insert(path.clone(), updated.clone());
+                if let Ok(ast) = syn::parse_file(&updated) {
+                    self.registry.asts.insert(path.clone(), ast);
+                }
                 touched.insert(path);
             }
         }
@@ -600,6 +630,36 @@ fn index_file_symbols(
     handles: &mut HashMap<String, SymbolHandle>,
 ) {
     index_items(&ast.items, file, module_path, handles);
+}
+fn index_file_symbols_by_text(
+    content: &str,
+    file: &Path,
+    module_path: &str,
+    handles: &mut HashMap<String, SymbolHandle>,
+) {
+    let re = regex::Regex::new(
+            r"(?m)^\\s*(pub\\s+)?(fn|struct|enum|const|static|type|trait|mod)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+        )
+        .ok();
+    let Some(re) = re else {
+        return;
+    };
+    for cap in re.captures_iter(content) {
+        let kind = match &cap[2] {
+            "fn" => SymbolKind::Fn,
+            "struct" => SymbolKind::Struct,
+            "enum" => SymbolKind::Enum,
+            "const" => SymbolKind::Const,
+            "static" => SymbolKind::Static,
+            "type" => SymbolKind::Type,
+            "trait" => SymbolKind::Trait,
+            "mod" => SymbolKind::Module,
+            _ => continue,
+        };
+        let name = &cap[3];
+        let ident = syn::Ident::new(name, Span::call_site());
+        insert_handle(file, module_path, &ident, kind, handles);
+    }
 }
 fn index_items(
     items: &[Item],

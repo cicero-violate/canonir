@@ -7,12 +7,7 @@ use std::collections::BinaryHeap;
 /// `heuristic(v)` must be admissible for optimality.
 ///
 /// Returns (cost, path) from start to goal if reachable.
-pub fn a_star(
-    graph: &[Vec<(usize, u64)>],
-    start: usize,
-    goal: usize,
-    heuristic: impl Fn(usize) -> u64,
-) -> Option<(u64, Vec<usize>)> {
+pub fn a_star(graph: &[Vec<(usize, u64)>], start: usize, goal: usize, heuristic: impl Fn(usize) -> u64) -> Option<(u64, Vec<usize>)> {
     if start >= graph.len() || goal >= graph.len() {
         return None;
     }

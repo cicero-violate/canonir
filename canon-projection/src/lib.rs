@@ -4,8 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub mod emit;
-pub mod helpers;
 pub mod emit_helpers;
+pub mod helpers;
 pub mod layout;
 
 pub use layout::{FilePlan, ItemPlan, Plan};

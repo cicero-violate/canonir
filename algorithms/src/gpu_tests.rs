@@ -3,27 +3,27 @@
 
 #[cfg(all(test, feature = "cuda"))]
 mod gpu_tests {
-    use crate::graph::adj_list::AdjList;
-    use crate::graph::csr::Csr;
-    use crate::graph::gpu::bfs_gpu;
-    use crate::graph::reachability::reachability_gpu;
-    use crate::graph::max_flow::max_flow_gpu;
-    use crate::constraints::ac3::{ConstraintGraph, ac3_gpu_apply};
+    use crate::constraints::ac3::{ac3_gpu_apply, ConstraintGraph};
     use crate::constraints::forward_checking::forward_check_gpu_build;
-    use crate::sorting::gpu::bitonic_sort_gpu;
-    use crate::searching::gpu::linear_search_gpu;
-    use crate::numerical::gpu::{matrix_multiply_gpu, sieve_gpu};
-    use crate::string_algorithms::gpu::rabin_karp_gpu;
-    use crate::cryptography::merkle_tree_gpu::{merkle_build_gpu, root, PAGE_SIZE};
-    use crate::graph::bellman_ford_gpu::bellman_ford_gpu;
-    use crate::graph::csr_unified::CsrUnified;
-    use crate::graph::model_checking::model_check_gpu;
     use crate::control_flow::gpu::{dominators_gpu, reaching_definitions_gpu};
-    use crate::graph::scheduler_gpu::{ready_mask_gpu, pack_ready_priority, deadlock_gpu};
-    use crate::graph::topological_sort_gpu::topological_sort_gpu;
-    use crate::graph::scc_gpu::scc_gpu;
+    use crate::cryptography::merkle_tree_gpu::{merkle_build_gpu, root, PAGE_SIZE};
+    use crate::graph::adj_list::AdjList;
+    use crate::graph::bellman_ford_gpu::bellman_ford_gpu;
+    use crate::graph::csr::Csr;
+    use crate::graph::csr_unified::CsrUnified;
     use crate::graph::depth_gpu::longest_path_depth_gpu;
     use crate::graph::feature_gpu::feature_stats_gpu;
+    use crate::graph::gpu::bfs_gpu;
+    use crate::graph::max_flow::max_flow_gpu;
+    use crate::graph::model_checking::model_check_gpu;
+    use crate::graph::reachability::reachability_gpu;
+    use crate::graph::scc_gpu::scc_gpu;
+    use crate::graph::scheduler_gpu::{deadlock_gpu, pack_ready_priority, ready_mask_gpu};
+    use crate::graph::topological_sort_gpu::topological_sort_gpu;
+    use crate::numerical::gpu::{matrix_multiply_gpu, sieve_gpu};
+    use crate::searching::gpu::linear_search_gpu;
+    use crate::sorting::gpu::bitonic_sort_gpu;
+    use crate::string_algorithms::gpu::rabin_karp_gpu;
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -56,44 +56,34 @@ mod gpu_tests {
     #[test]
     fn scc_gpu_detects_cycle() {
         // 0 -> 1 -> 2 -> 0 forms a single SCC
-        let csr = Csr::from_edges(3, &[(0,1),(1,2),(2,0)]);
+        let csr = Csr::from_edges(3, &[(0, 1), (1, 2), (2, 0)]);
         let sccs = scc_gpu(&csr);
         assert_eq!(sccs.len(), 1);
         let mut comp = sccs[0].clone();
         comp.sort_unstable();
-        assert_eq!(comp, vec![0,1,2]);
+        assert_eq!(comp, vec![0, 1, 2]);
     }
 
     #[test]
     fn depth_gpu_longest_path_chain() {
         // 0->1->2->3, depth should be 0,1,2,3
-        let csr = Csr::from_edges(4, &[(0,1),(1,2),(2,3)]);
+        let csr = Csr::from_edges(4, &[(0, 1), (1, 2), (2, 3)]);
         let depth = longest_path_depth_gpu(&csr);
-        assert_eq!(depth, vec![0,1,2,3]);
+        assert_eq!(depth, vec![0, 1, 2, 3]);
     }
 
     #[test]
     fn depth_gpu_diamond() {
-        let csr = Csr::from_edges(4, &[
-            (0,1),
-            (0,2),
-            (1,3),
-            (2,3)
-        ]);
+        let csr = Csr::from_edges(4, &[(0, 1), (0, 2), (1, 3), (2, 3)]);
 
         let depth = longest_path_depth_gpu(&csr);
 
-        assert_eq!(depth, vec![0,1,1,2]);
+        assert_eq!(depth, vec![0, 1, 1, 2]);
     }
 
     #[test]
     fn feature_gpu_counts_roots_leaves() {
-        let csr = Csr::from_edges(4, &[
-            (0,1),
-            (0,2),
-            (1,3),
-            (2,3)
-        ]);
+        let csr = Csr::from_edges(4, &[(0, 1), (0, 2), (1, 3), (2, 3)]);
         let status = vec![0u8, 0u8, 0u8, 0u8];
         let (indegree, outdegree) = crate::graph::feature_gpu::indegree_outdegree(&csr);
         let priority = vec![1u16; 4];
@@ -103,18 +93,7 @@ mod gpu_tests {
         let has_mutate = vec![0u8; 4];
         let has_observe = vec![0u8; 4];
         let node_type = vec![0u8; 4];
-        let stats = feature_stats_gpu(
-            &status,
-            &indegree,
-            &outdegree,
-            &priority,
-            &budget,
-            &retry,
-            &has_verify,
-            &has_mutate,
-            &has_observe,
-            &node_type,
-        );
+        let stats = feature_stats_gpu(&status, &indegree, &outdegree, &priority, &budget, &retry, &has_verify, &has_mutate, &has_observe, &node_type);
         assert_eq!(stats.root_count, 1);
         assert_eq!(stats.leaf_count, 1);
     }
@@ -150,7 +129,9 @@ mod gpu_tests {
         bitonic_sort_gpu(&mut keys);
         let mut order = Vec::new();
         for key in keys.into_iter().rev() {
-            if key < 0 { continue; }
+            if key < 0 {
+                continue;
+            }
             order.push((key & 0xFFFF_FFFF) as usize);
         }
         assert_eq!(order, vec![1, 0]);
@@ -179,7 +160,7 @@ mod gpu_tests {
     #[test]
     fn bfs_linear_chain() {
         // 0->1->2->3->4, BFS from 0
-        let csr = Csr::from_edges(5, &[(0,1),(1,2),(2,3),(3,4)]);
+        let csr = Csr::from_edges(5, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
         let levels = bfs_gpu(&csr, 0);
         assert_eq!(levels, vec![0, 1, 2, 3, 4]);
     }
@@ -227,7 +208,7 @@ mod gpu_tests {
     fn max_flow_diamond_network() {
         // 0->1(3), 0->2(2), 1->2(1), 1->3(2), 2->3(4)
         // max flow = 5 (paths: 0->1->3 cap2, 0->2->3 cap2, 0->1->2->3 cap1)
-        let edges = vec![(0,1,3i64),(0,2,2),(1,2,1),(1,3,2),(2,3,4)];
+        let edges = vec![(0, 1, 3i64), (0, 2, 2), (1, 2, 1), (1, 3, 2), (2, 3, 4)];
         let flow = max_flow_gpu(4, &edges, 0, 3);
         assert_eq!(flow, 5);
     }
@@ -242,7 +223,7 @@ mod gpu_tests {
     #[test]
     fn max_flow_parallel_paths() {
         // 0->1(5), 0->2(5), 1->3(5), 2->3(5) => max flow = 10
-        let edges = vec![(0,1,5i64),(0,2,5),(1,3,5),(2,3,5)];
+        let edges = vec![(0, 1, 5i64), (0, 2, 5), (1, 3, 5), (2, 3, 5)];
         let flow = max_flow_gpu(4, &edges, 0, 3);
         assert_eq!(flow, 10);
     }
@@ -250,7 +231,7 @@ mod gpu_tests {
     #[test]
     fn max_flow_bottleneck() {
         // 0->1(100), 1->2(1), 2->3(100) => max flow = 1
-        let edges = vec![(0,1,100i64),(1,2,1),(2,3,100)];
+        let edges = vec![(0, 1, 100i64), (1, 2, 1), (2, 3, 100)];
         let flow = max_flow_gpu(4, &edges, 0, 3);
         assert_eq!(flow, 1);
     }
@@ -410,7 +391,7 @@ mod gpu_tests {
     #[test]
     fn matmul_zero_matrix() {
         let zero = vec![0i64; 9];
-        let id: Vec<i64> = vec![1,0,0, 0,1,0, 0,0,1];
+        let id: Vec<i64> = vec![1, 0, 0, 0, 1, 0, 0, 0, 1];
         let c = matrix_multiply_gpu(&zero, &id, 3);
         assert_eq!(c, zero);
     }
@@ -420,7 +401,7 @@ mod gpu_tests {
     #[test]
     fn sieve_primes_up_to_50() {
         let primes = sieve_gpu(50);
-        assert_eq!(primes, vec![2,3,5,7,11,13,17,19,23,29,31,37,41,43,47]);
+        assert_eq!(primes, vec![2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47]);
     }
 
     #[test]
@@ -452,7 +433,7 @@ mod gpu_tests {
 
     #[test]
     fn rabin_karp_finds_two_occurrences() {
-        let text    = b"abracadabra";
+        let text = b"abracadabra";
         let pattern = b"abra";
         let mut matches = rabin_karp_gpu(text, pattern);
         matches.sort_unstable();
@@ -461,14 +442,14 @@ mod gpu_tests {
 
     #[test]
     fn rabin_karp_no_match() {
-        let text    = b"abracadabra";
+        let text = b"abracadabra";
         let pattern = b"xyz";
         assert_eq!(rabin_karp_gpu(text, pattern), vec![]);
     }
 
     #[test]
     fn rabin_karp_full_string_match() {
-        let text    = b"hello";
+        let text = b"hello";
         let pattern = b"hello";
         assert_eq!(rabin_karp_gpu(text, pattern), vec![0]);
     }
@@ -476,7 +457,7 @@ mod gpu_tests {
     #[test]
     fn rabin_karp_overlapping_pattern() {
         // "aaaa" contains "aa" at positions 0, 1, 2
-        let text    = b"aaaa";
+        let text = b"aaaa";
         let pattern = b"aa";
         let mut matches = rabin_karp_gpu(text, pattern);
         matches.sort_unstable();
@@ -588,10 +569,12 @@ mod gpu_tests {
         let dom_bits = dominators_gpu(&pred_csr, 0, n);
 
         let dom_set = |node: usize| -> Vec<usize> {
-            (0..n).filter(|&i| {
-                let word = dom_bits[node * words + (i >> 6)];
-                (word >> (i & 63)) & 1 == 1
-            }).collect()
+            (0..n)
+                .filter(|&i| {
+                    let word = dom_bits[node * words + (i >> 6)];
+                    (word >> (i & 63)) & 1 == 1
+                })
+                .collect()
         };
 
         assert_eq!(dom_set(0), vec![0]);
@@ -652,10 +635,12 @@ mod gpu_tests {
         let out = reaching_definitions_gpu(&pred_csr, block_count, def_count, &r#gen, &kill);
 
         let def_set = |b: usize| -> Vec<usize> {
-            (0..def_count).filter(|&i| {
-                let word = out[b * words + (i >> 6)];
-                (word >> (i & 63)) & 1 == 1
-            }).collect()
+            (0..def_count)
+                .filter(|&i| {
+                    let word = out[b * words + (i >> 6)];
+                    (word >> (i & 63)) & 1 == 1
+                })
+                .collect()
         };
 
         assert_eq!(def_set(0), vec![0]);
@@ -679,10 +664,12 @@ mod gpu_tests {
         let out = reaching_definitions_gpu(&pred_csr, block_count, def_count, &r#gen, &kill);
 
         let def_set = |b: usize| -> Vec<usize> {
-            (0..def_count).filter(|&i| {
-                let word = out[b * words + (i >> 6)];
-                (word >> (i & 63)) & 1 == 1
-            }).collect()
+            (0..def_count)
+                .filter(|&i| {
+                    let word = out[b * words + (i >> 6)];
+                    (word >> (i & 63)) & 1 == 1
+                })
+                .collect()
         };
 
         assert_eq!(def_set(0), vec![0]);
@@ -736,7 +723,7 @@ mod gpu_tests {
         g.add_edge(1, 3);
         g.add_edge(2, 3);
         let ucsr = CsrUnified::from_adj(&g);
-        let csr  = g.to_csr();
+        let csr = g.to_csr();
         assert_eq!(ucsr.row_ptr_slice(), csr.row_ptr.as_slice());
         assert_eq!(ucsr.col_idx_slice(), csr.col_idx.as_slice());
     }
@@ -751,7 +738,7 @@ mod gpu_tests {
         g.add_edge(2, 3);
         let ucsr = CsrUnified::from_adj(&g);
         let csr2 = CsrStd { row_ptr: ucsr.row_ptr_slice().to_vec(), col_idx: ucsr.col_idx_slice().to_vec() };
-        let levels_std     = bfs_gpu(&g.to_csr(), 0);
+        let levels_std = bfs_gpu(&g.to_csr(), 0);
         let levels_unified = bfs_gpu(&csr2, 0);
         assert_eq!(levels_std, levels_unified);
     }

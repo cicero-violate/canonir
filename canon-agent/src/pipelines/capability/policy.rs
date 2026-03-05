@@ -1,7 +1,6 @@
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use rand::Rng;
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyWeights {
@@ -51,10 +50,7 @@ impl PolicyModel {
     }
 
     pub fn load(path: &Path) -> Self {
-        let weights = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<PolicyWeights>(&s).ok())
-            .unwrap_or_else(default_weights);
+        let weights = std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str::<PolicyWeights>(&s).ok()).unwrap_or_else(default_weights);
         Self { weights }
     }
 
@@ -65,9 +61,7 @@ impl PolicyModel {
 
     pub fn predict(&self, features: &[f64]) -> PolicyBias {
         let fv = features;
-        let dot = |w: &Vec<f64>| -> f64 {
-            w.iter().zip(fv.iter()).map(|(a, b)| a * b).sum()
-        };
+        let dot = |w: &Vec<f64>| -> f64 { w.iter().zip(fv.iter()).map(|(a, b)| a * b).sum() };
         PolicyBias {
             planner_bias: dot(&self.weights.planner_bias),
             node_add_bias: dot(&self.weights.node_add_bias),
@@ -77,9 +71,7 @@ impl PolicyModel {
     }
 
     pub fn decide(&self, features: &[f64]) -> PolicyDecision {
-        let dot = |w: &Vec<f64>| -> f64 {
-            w.iter().zip(features.iter()).map(|(a, b)| a * b).sum()
-        };
+        let dot = |w: &Vec<f64>| -> f64 { w.iter().zip(features.iter()).map(|(a, b)| a * b).sum() };
         let raw_run = dot(&self.weights.run_planner_head);
         let raw_expand = dot(&self.weights.expansion_head);
         let raw_exec = dot(&self.weights.execution_head);
@@ -88,16 +80,14 @@ impl PolicyModel {
         let expansion_scale = (1.0 + raw_expand).clamp(0.5, 2.0);
         let execution_preference = raw_exec.clamp(-1.0, 1.0);
         let prioritize_unblock = raw_unblock > 0.0;
-        PolicyDecision {
-            run_planner,
-            expansion_scale,
-            prioritize_unblock,
-            execution_preference,
-        }
+        PolicyDecision { run_planner, expansion_scale, prioritize_unblock, execution_preference }
     }
 
     pub fn weight_norm(&self) -> f64 {
-        let all = self.weights.planner_bias.iter()
+        let all = self
+            .weights
+            .planner_bias
+            .iter()
             .chain(self.weights.node_add_bias.iter())
             .chain(self.weights.edge_add_bias.iter())
             .chain(self.weights.rewrite_bias.iter())
@@ -130,10 +120,7 @@ pub fn format_bias(bias: &PolicyBias) -> String {
     format!(
         "Policy bias:\nplanner_bias={:.3}\nnode_add_bias={:.3}\nedge_add_bias={:.3}\nrewrite_bias={:.3}\n\
 Prefer actions with positive bias and avoid strongly negative bias.\n",
-        bias.planner_bias,
-        bias.node_add_bias,
-        bias.edge_add_bias,
-        bias.rewrite_bias
+        bias.planner_bias, bias.node_add_bias, bias.edge_add_bias, bias.rewrite_bias
     )
 }
 

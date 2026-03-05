@@ -1,15 +1,11 @@
-use super::ac3::{ConstraintGraph, Domain};
 use super::ac3::GpuArcConstraints;
+use super::ac3::{ConstraintGraph, Domain};
 
 /// Forward checking for a partial assignment.
 ///
 /// `assignment[i] = Some(value)` if assigned, otherwise None.
 /// Returns pruned domains or None if inconsistency is detected.
-pub fn forward_check(
-    domains: &[Domain],
-    assignment: &[Option<i32>],
-    graph: &ConstraintGraph,
-) -> Option<Vec<Domain>> {
+pub fn forward_check(domains: &[Domain], assignment: &[Option<i32>], graph: &ConstraintGraph) -> Option<Vec<Domain>> {
     if domains.len() != assignment.len() {
         return None;
     }
@@ -34,11 +30,7 @@ pub fn forward_check(
 }
 
 /// Build GPU buffers and apply current assignment to prune domains.
-pub fn forward_check_gpu_build(
-    domains: &[Domain],
-    assignment: &[Option<i32>],
-    graph: &ConstraintGraph,
-) -> Option<GpuArcConstraints> {
+pub fn forward_check_gpu_build(domains: &[Domain], assignment: &[Option<i32>], graph: &ConstraintGraph) -> Option<GpuArcConstraints> {
     if domains.len() != assignment.len() {
         return None;
     }
@@ -79,17 +71,8 @@ pub fn forward_check_gpu_build(
 #[cfg(feature = "cuda")]
 unsafe extern "C" {
     fn gpu_forward_check(
-        var_count: i32,
-        domain_offsets: *const i32,
-        domain_active: *mut i32,
-        assignment: *const i32,
-        arc_count: i32,
-        arc_i: *const i32,
-        arc_j: *const i32,
-        arc_dom_i_len: *const i32,
-        arc_dom_j_len: *const i32,
-        arc_constraint_offset: *const i32,
-        constraint_values: *const u8,
+        var_count: i32, domain_offsets: *const i32, domain_active: *mut i32, assignment: *const i32, arc_count: i32, arc_i: *const i32, arc_j: *const i32, arc_dom_i_len: *const i32,
+        arc_dom_j_len: *const i32, arc_constraint_offset: *const i32, constraint_values: *const u8,
     ) -> i32;
 }
 
@@ -97,15 +80,7 @@ unsafe extern "C" {
 /// Domains are represented by index (0..len-1) and tracked via domain_active.
 #[cfg(feature = "cuda")]
 pub fn forward_check_gpu(
-    var_count: usize,
-    domain_offsets: &[i32],
-    domain_active: &mut [i32],
-    assignment: &[i32],
-    arc_i: &[i32],
-    arc_j: &[i32],
-    arc_dom_i_len: &[i32],
-    arc_dom_j_len: &[i32],
-    arc_constraint_offset: &[i32],
+    var_count: usize, domain_offsets: &[i32], domain_active: &mut [i32], assignment: &[i32], arc_i: &[i32], arc_j: &[i32], arc_dom_i_len: &[i32], arc_dom_j_len: &[i32], arc_constraint_offset: &[i32],
     constraint_values: &[u8],
 ) -> bool {
     unsafe {

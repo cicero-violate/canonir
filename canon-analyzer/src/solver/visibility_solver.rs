@@ -1,9 +1,9 @@
 use crate::solver::csr_to_adj;
-use std::collections::VecDeque;
 use anyhow::Result;
 use canon::node::{flags, CanonNodeKind};
 use canon::CanonIR;
 use canon::{edge::EdgeKind, id::NodeId};
+use std::collections::VecDeque;
 
 pub fn solve(ir: &mut CanonIR) -> Result<()> {
     let n = ir.nodes.len();

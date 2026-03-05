@@ -57,20 +57,36 @@ pub enum DecomposeRetry {
     EnsureRender { prompt: String, original: DecomposeOutput },
 }
 
-pub fn build_goal_request(
-    goal_raw: &str,
-    workspace_root: &Path,
-    workspace_listing: &str,
-    log_dir: &Path,
-) -> DecomposeRequest {
+pub fn build_goal_request(goal_raw: &str, workspace_root: &Path, workspace_listing: &str, log_dir: &Path) -> DecomposeRequest {
     let input = serde_json::json!({ "goal": goal_raw });
     let caps = vec![
-        "create_node","add_edge","update_status","read_dag","schedule_ready",
-        "goal_to_subgoals","constraint_attach","refine_node","dependency_rewrite","radius_budget_eval",
-        "apply_patch","file_read","file_write","bash","cargo_build","cargo_check","stdout_capture",
-        "parse_orchestration_report","detect_failures","status_update_only",
-        "read_structural_surface","compute_delta","reward_signal_compute",
-        "invariant_check","boundary_guard","prompt_contract_enforce","stateless_invoke"
+        "create_node",
+        "add_edge",
+        "update_status",
+        "read_dag",
+        "schedule_ready",
+        "goal_to_subgoals",
+        "constraint_attach",
+        "refine_node",
+        "dependency_rewrite",
+        "radius_budget_eval",
+        "apply_patch",
+        "file_read",
+        "file_write",
+        "bash",
+        "cargo_build",
+        "cargo_check",
+        "stdout_capture",
+        "parse_orchestration_report",
+        "detect_failures",
+        "status_update_only",
+        "read_structural_surface",
+        "compute_delta",
+        "reward_signal_compute",
+        "invariant_check",
+        "boundary_guard",
+        "prompt_contract_enforce",
+        "stateless_invoke",
     ];
     let schema = format!(
         "Return exactly one fenced ```json block and nothing else.\n\
@@ -108,20 +124,36 @@ Action space: you may only reference paths under the workspace root.\n{}\n\nINPU
     }
 }
 
-pub fn build_node_request(
-    node: TaskSpec,
-    workspace_root: &Path,
-    workspace_listing: &str,
-    log_dir: &Path,
-) -> DecomposeRequest {
+pub fn build_node_request(node: TaskSpec, workspace_root: &Path, workspace_listing: &str, log_dir: &Path) -> DecomposeRequest {
     let input = serde_json::json!({ "node": { "id": node.id, "description": node.description } });
     let caps = vec![
-        "create_node","add_edge","update_status","read_dag","schedule_ready",
-        "goal_to_subgoals","constraint_attach","refine_node","dependency_rewrite","radius_budget_eval",
-        "apply_patch","file_read","file_write","bash","cargo_build","cargo_check","stdout_capture",
-        "parse_orchestration_report","detect_failures","status_update_only",
-        "read_structural_surface","compute_delta","reward_signal_compute",
-        "invariant_check","boundary_guard","prompt_contract_enforce","stateless_invoke"
+        "create_node",
+        "add_edge",
+        "update_status",
+        "read_dag",
+        "schedule_ready",
+        "goal_to_subgoals",
+        "constraint_attach",
+        "refine_node",
+        "dependency_rewrite",
+        "radius_budget_eval",
+        "apply_patch",
+        "file_read",
+        "file_write",
+        "bash",
+        "cargo_build",
+        "cargo_check",
+        "stdout_capture",
+        "parse_orchestration_report",
+        "detect_failures",
+        "status_update_only",
+        "read_structural_surface",
+        "compute_delta",
+        "reward_signal_compute",
+        "invariant_check",
+        "boundary_guard",
+        "prompt_contract_enforce",
+        "stateless_invoke",
     ];
     let schema = format!(
         "Return exactly one fenced ```json block and nothing else.\n\
@@ -156,10 +188,7 @@ Workspace root: {}\nWorkspace entries: {}\nAction space: paths must be under wor
     }
 }
 
-pub fn evaluate_payload(
-    payload: Value,
-    request: &DecomposeRequest,
-) -> Result<DecomposeOutput, DecomposeRetry> {
+pub fn evaluate_payload(payload: Value, request: &DecomposeRequest) -> Result<DecomposeOutput, DecomposeRetry> {
     let mut output: DecomposeOutput = match serde_json::from_value(payload.clone()) {
         Ok(v) => v,
         Err(e) => {

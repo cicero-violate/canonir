@@ -156,8 +156,7 @@ fn run_all_fixtures_once() -> Result<bool> {
 
         // --- DO NOT wipe emit dir ---
         // Preserve previous emit outputs to allow iterative inspection.
-        std::fs::create_dir_all(&emit_dir)
-            .with_context(|| format!("cannot ensure emit dir for {}", fixture))?;
+        std::fs::create_dir_all(&emit_dir).with_context(|| format!("cannot ensure emit dir for {}", fixture))?;
 
         // orchestration (silent)
         let result = match run_pipeline(capture_json, emit_dir.clone(), None, type_authority.as_ref()) {
@@ -491,8 +490,7 @@ fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBu
     }
 
     println!("Running cargo build on emitted source...");
-    let build_report = canon_telemetry::build(&out_dir, true)
-        .context("cargo build invocation failed")?;
+    let build_report = canon_telemetry::build(&out_dir, true).context("cargo build invocation failed")?;
 
     // --- Canon Repair Signal Extraction ---
     {
@@ -555,15 +553,9 @@ fn run_pipeline(json_path: PathBuf, out_dir: PathBuf, mutate_path: Option<PathBu
 
 fn run_emit_only() -> Result<()> {
     for &fixture in FIXTURES {
-        let capture_json = PathBuf::from(format!(
-            "{}/capture/{}/canon_capture.json",
-            TEST_ROOT, fixture
-        ));
+        let capture_json = PathBuf::from(format!("{}/capture/{}/canon_capture.json", TEST_ROOT, fixture));
 
-        let emit_dir = PathBuf::from(format!(
-            "{}/emit/{}",
-            TEST_ROOT, fixture
-        ));
+        let emit_dir = PathBuf::from(format!("{}/emit/{}", TEST_ROOT, fixture));
 
         println!("Emit-only: loading {:?}", capture_json);
         run_pipeline(capture_json, emit_dir, None, None)?;

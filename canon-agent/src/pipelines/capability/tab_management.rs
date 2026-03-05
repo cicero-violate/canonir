@@ -2,8 +2,8 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::ws_server::WsBridge;
 use super::console;
+use crate::ws_server::WsBridge;
 
 pub struct TabSlots {
     pub owner: HashMap<String, u32>,
@@ -26,13 +26,7 @@ pub struct TabMeta {
 
 pub type TabsHandle = Arc<tokio::sync::Mutex<TabSlots>>;
 
-pub async fn get_or_open_tab(
-    bridge: &WsBridge,
-    endpoint_id: &str,
-    url: &str,
-    tabs: &TabsHandle,
-    _max_tabs: usize,
-) -> Result<u32> {
+pub async fn get_or_open_tab(bridge: &WsBridge, endpoint_id: &str, url: &str, tabs: &TabsHandle, _max_tabs: usize) -> Result<u32> {
     if let Some(id) = get_owner_tab(endpoint_id, tabs).await {
         log_llm(format!("endpoint={} reuse owner_tab={}", endpoint_id, id));
         return Ok(id);
@@ -114,10 +108,7 @@ pub async fn summarize_tab_state(endpoint_id: &str, tabs: &TabsHandle) -> Option
 }
 
 pub fn now_ms() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
 }
 
 pub fn log_llm(message: String) {

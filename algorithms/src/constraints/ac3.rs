@@ -11,9 +11,7 @@ pub struct ConstraintGraph {
 
 impl ConstraintGraph {
     pub fn add_constraint<F>(&mut self, i: usize, j: usize, f: F)
-    where
-        F: Fn(i32, i32) -> bool + Send + Sync + 'static,
-    {
+    where F: Fn(i32, i32) -> bool + Send + Sync + 'static {
         self.constraints.insert((i, j), Box::new(f));
     }
 
@@ -61,10 +59,7 @@ pub struct GpuArcConstraints {
 }
 
 impl GpuArcConstraints {
-    pub fn new(
-        domains: &[Domain],
-        graph: &ConstraintGraph,
-    ) -> Self {
+    pub fn new(domains: &[Domain], graph: &ConstraintGraph) -> Self {
         let mut domain_offsets = Vec::with_capacity(domains.len() + 1);
         domain_offsets.push(0i32);
         let mut domain_value_offsets = Vec::with_capacity(domains.len() + 1);
@@ -109,18 +104,7 @@ impl GpuArcConstraints {
             arc_constraint_offset.push(offset as i32);
         }
 
-        Self {
-            arc_i,
-            arc_j,
-            arc_dom_i_len,
-            arc_dom_j_len,
-            arc_constraint_offset,
-            domain_offsets,
-            domain_active,
-            constraint_values,
-            domain_values,
-            domain_value_offsets,
-        }
+        Self { arc_i, arc_j, arc_dom_i_len, arc_dom_j_len, arc_constraint_offset, domain_offsets, domain_active, constraint_values, domain_values, domain_value_offsets }
     }
 
     /// Validate internal buffer sizes and offsets.
@@ -136,10 +120,7 @@ impl GpuArcConstraints {
         if total != self.domain_values.len() {
             return Err("domain_values length mismatch".into());
         }
-        if self.arc_i.len() != self.arc_j.len()
-            || self.arc_i.len() != self.arc_dom_i_len.len()
-            || self.arc_i.len() != self.arc_dom_j_len.len()
-            || self.arc_i.len() != self.arc_constraint_offset.len()
+        if self.arc_i.len() != self.arc_j.len() || self.arc_i.len() != self.arc_dom_i_len.len() || self.arc_i.len() != self.arc_dom_j_len.len() || self.arc_i.len() != self.arc_constraint_offset.len()
         {
             return Err("arc array length mismatch".into());
         }
@@ -188,16 +169,8 @@ impl GpuArcConstraints {
 #[cfg(feature = "cuda")]
 unsafe extern "C" {
     fn gpu_ac3_revise(
-        arc_count: i32,
-        var_count: i32,
-        arc_i: *const i32,
-        arc_j: *const i32,
-        arc_dom_i_len: *const i32,
-        arc_dom_j_len: *const i32,
-        arc_constraint_offset: *const i32,
-        domain_offsets: *const i32,
-        domain_active: *mut i32,
-        constraint_values: *const u8,
+        arc_count: i32, var_count: i32, arc_i: *const i32, arc_j: *const i32, arc_dom_i_len: *const i32, arc_dom_j_len: *const i32, arc_constraint_offset: *const i32, domain_offsets: *const i32,
+        domain_active: *mut i32, constraint_values: *const u8,
     ) -> i32;
 }
 
@@ -205,14 +178,7 @@ unsafe extern "C" {
 /// Domains are represented by index (0..len-1) and tracked via domain_active.
 #[cfg(feature = "cuda")]
 pub fn ac3_gpu(
-    arc_i: &[i32],
-    arc_j: &[i32],
-    arc_dom_i_len: &[i32],
-    arc_dom_j_len: &[i32],
-    arc_constraint_offset: &[i32],
-    domain_offsets: &[i32],
-    domain_active: &mut [i32],
-    constraint_values: &[u8],
+    arc_i: &[i32], arc_j: &[i32], arc_dom_i_len: &[i32], arc_dom_j_len: &[i32], arc_constraint_offset: &[i32], domain_offsets: &[i32], domain_active: &mut [i32], constraint_values: &[u8],
 ) -> bool {
     let var_count = domain_offsets.len().saturating_sub(1) as i32;
     unsafe {
@@ -239,16 +205,7 @@ pub fn ac3_gpu_apply(domains: &[Domain], graph: &ConstraintGraph) -> Option<Vec<
     if gpu.validate().is_err() {
         return None;
     }
-    let _changed = ac3_gpu(
-        &gpu.arc_i,
-        &gpu.arc_j,
-        &gpu.arc_dom_i_len,
-        &gpu.arc_dom_j_len,
-        &gpu.arc_constraint_offset,
-        &gpu.domain_offsets,
-        &mut gpu.domain_active,
-        &gpu.constraint_values,
-    );
+    let _changed = ac3_gpu(&gpu.arc_i, &gpu.arc_j, &gpu.arc_dom_i_len, &gpu.arc_dom_j_len, &gpu.arc_constraint_offset, &gpu.domain_offsets, &mut gpu.domain_active, &gpu.constraint_values);
     Some(gpu.to_domains())
 }
 

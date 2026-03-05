@@ -127,53 +127,141 @@ impl Default for RawEndpoints {
     }
 }
 
-fn default_max_output_lines() -> usize { 2000 }
-fn default_max_iterations() -> u64 { 50 }
-fn default_llm_retry_count() -> u32 { 3 }
-fn default_llm_retry_delay() -> u64 { 5 }
-fn default_response_timeout_secs() -> u64 { 60 }
-fn default_max_concurrency() -> usize { 4 }
-fn default_max_nodes() -> usize { 64 }
-fn default_max_expand_iters() -> u32 { 6 }
-fn default_context_radius() -> usize { 1 }
-fn default_max_depth() -> usize { 6 }
-fn default_prune_unlinked() -> bool { true }
-fn default_planner_max_new_nodes() -> usize { 32 }
-fn default_planner_max_new_edges() -> usize { 64 }
-fn default_planner_refine_on_cache() -> bool { true }
-fn default_planner_plateau_window() -> usize { 10 }
-fn default_planner_plateau_threshold() -> f64 { 0.01 }
-fn default_planner_plateau_expand_factor() -> usize { 2 }
-fn default_auto_prune() -> bool { true }
-fn default_prune_threshold() -> f64 { 0.2 }
-fn default_prune_min_age() -> u64 { 5 }
-fn default_template_reuse_threshold() -> f64 { 0.15 }
-fn default_template_top_k() -> usize { 5 }
-fn default_recovery_retry_rate_threshold() -> f64 { 0.3 }
-fn default_recovery_failed_fraction_threshold() -> f64 { 0.3 }
-fn default_max_node_retries() -> u32 { 3 }
-fn default_repair_radius() -> usize { 1 }
-fn default_max_repairs_per_node() -> u32 { 3 }
-fn default_cost_latency_weight() -> f64 { 0.001 }
-fn default_cost_failure_weight() -> f64 { 1.0 }
-fn default_cost_decay_rate() -> f64 { 0.2 }
-fn default_mutation_rate() -> f64 { 0.25 }
-fn default_mutation_budget() -> usize { 2 }
-fn default_mutation_candidates() -> usize { 2 }
-fn default_template_population_size() -> usize { 5 }
-fn default_failure_constraint_threshold() -> usize { 2 }
-fn default_max_constraints() -> usize { 16 }
-fn default_enable_resume() -> bool { true }
-fn default_snapshot_interval_iters() -> u64 { 10 }
+fn default_max_output_lines() -> usize {
+    2000
+}
+fn default_max_iterations() -> u64 {
+    50
+}
+fn default_llm_retry_count() -> u32 {
+    3
+}
+fn default_llm_retry_delay() -> u64 {
+    5
+}
+fn default_response_timeout_secs() -> u64 {
+    60
+}
+fn default_max_concurrency() -> usize {
+    4
+}
+fn default_max_nodes() -> usize {
+    64
+}
+fn default_max_expand_iters() -> u32 {
+    6
+}
+fn default_context_radius() -> usize {
+    1
+}
+fn default_max_depth() -> usize {
+    6
+}
+fn default_prune_unlinked() -> bool {
+    true
+}
+fn default_planner_max_new_nodes() -> usize {
+    32
+}
+fn default_planner_max_new_edges() -> usize {
+    64
+}
+fn default_planner_refine_on_cache() -> bool {
+    true
+}
+fn default_planner_plateau_window() -> usize {
+    10
+}
+fn default_planner_plateau_threshold() -> f64 {
+    0.01
+}
+fn default_planner_plateau_expand_factor() -> usize {
+    2
+}
+fn default_auto_prune() -> bool {
+    true
+}
+fn default_prune_threshold() -> f64 {
+    0.2
+}
+fn default_prune_min_age() -> u64 {
+    5
+}
+fn default_template_reuse_threshold() -> f64 {
+    0.15
+}
+fn default_template_top_k() -> usize {
+    5
+}
+fn default_recovery_retry_rate_threshold() -> f64 {
+    0.3
+}
+fn default_recovery_failed_fraction_threshold() -> f64 {
+    0.3
+}
+fn default_max_node_retries() -> u32 {
+    3
+}
+fn default_repair_radius() -> usize {
+    1
+}
+fn default_max_repairs_per_node() -> u32 {
+    3
+}
+fn default_cost_latency_weight() -> f64 {
+    0.001
+}
+fn default_cost_failure_weight() -> f64 {
+    1.0
+}
+fn default_cost_decay_rate() -> f64 {
+    0.2
+}
+fn default_mutation_rate() -> f64 {
+    0.25
+}
+fn default_mutation_budget() -> usize {
+    2
+}
+fn default_mutation_candidates() -> usize {
+    2
+}
+fn default_template_population_size() -> usize {
+    5
+}
+fn default_failure_constraint_threshold() -> usize {
+    2
+}
+fn default_max_constraints() -> usize {
+    16
+}
+fn default_enable_resume() -> bool {
+    true
+}
+fn default_snapshot_interval_iters() -> u64 {
+    10
+}
 fn default_snapshot_file() -> String {
     "/workspace/ai_sandbox/canon/agent_logs/state_snapshot.json".to_string()
 }
-fn default_goal_similarity_weight() -> f64 { 0.6 }
-fn default_structural_similarity_weight() -> f64 { 0.4 }
-fn default_embedding_model() -> String { "hash".to_string() }
-fn default_embedding_dim() -> usize { 64 }
-fn default_max_tabs() -> usize { 1 }
-fn default_tab_cooldown_ms() -> u64 { 0 }
+fn default_goal_similarity_weight() -> f64 {
+    0.6
+}
+fn default_structural_similarity_weight() -> f64 {
+    0.4
+}
+fn default_embedding_model() -> String {
+    "hash".to_string()
+}
+fn default_embedding_dim() -> usize {
+    64
+}
+fn default_max_tabs() -> usize {
+    1
+}
+fn default_tab_cooldown_ms() -> u64 {
+    0
+}
 
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct RawRoleConfig {
@@ -328,10 +416,7 @@ impl CapabilityConfig {
     }
 
     pub fn endpoint_by_id(&self, id: &str) -> Result<&LlmEndpoint> {
-        self.llm_endpoints
-            .iter()
-            .find(|e| e.id == id)
-            .ok_or_else(|| anyhow::anyhow!("no llm endpoint for id={}", id))
+        self.llm_endpoints.iter().find(|e| e.id == id).ok_or_else(|| anyhow::anyhow!("no llm endpoint for id={}", id))
     }
 
     pub fn role_config(&self, role: &str) -> RawRoleConfig {
@@ -339,9 +424,7 @@ impl CapabilityConfig {
     }
 
     pub fn planner_endpoint(&self) -> Result<&LlmEndpoint> {
-        self.planner_endpoint
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("no planner endpoint configured"))
+        self.planner_endpoint.as_ref().ok_or_else(|| anyhow::anyhow!("no planner endpoint configured"))
     }
 }
 
@@ -379,25 +462,24 @@ pub struct CapabilityPolicy {
 }
 impl Default for CapabilityPolicy {
     fn default() -> Self {
-        Self {
-            write_allowed_roots: Vec::new(),
-            require_final_render: false,
-            max_node_retries: default_max_node_retries(),
-        }
+        Self { write_allowed_roots: Vec::new(), require_final_render: false, max_node_retries: default_max_node_retries() }
     }
 }
 
 impl CapabilityPolicy {
     pub fn load(workspace_root: &Path) -> Result<Self> {
-        let raw_toml = std::fs::read_to_string(CAPABILITY_POLICY_TOML)
-            .with_context(|| format!("cannot read {}", CAPABILITY_POLICY_TOML))?;
+        let raw_toml = std::fs::read_to_string(CAPABILITY_POLICY_TOML).with_context(|| format!("cannot read {}", CAPABILITY_POLICY_TOML))?;
         let raw: RawPolicy = toml::from_str(&raw_toml).context("cannot parse capability_policy.toml")?;
         let roots = raw
             .write_allowed_roots
             .into_iter()
             .map(|p| {
                 let path = Path::new(&p);
-                if path.is_absolute() { path.to_path_buf() } else { workspace_root.join(path) }
+                if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    workspace_root.join(path)
+                }
             })
             .collect::<Vec<_>>();
         Ok(Self { write_allowed_roots: roots, require_final_render: raw.require_final_render, max_node_retries: default_max_node_retries() })

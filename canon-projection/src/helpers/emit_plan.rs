@@ -11,20 +11,13 @@ pub struct EmitEntry {
     pub path: String,
 }
 
-pub fn compute_emit_plan(
-    crate_name: &str,
-    ordered_items: &[(ItemId, ModulePath)],
-) -> Vec<EmitEntry> {
+pub fn compute_emit_plan(crate_name: &str, ordered_items: &[(ItemId, ModulePath)]) -> Vec<EmitEntry> {
     let mut plan = Vec::new();
 
     for (item, module) in ordered_items {
         let path = module_to_fs_path(crate_name, module);
 
-        plan.push(EmitEntry {
-            item: item.clone(),
-            module: module.clone(),
-            path,
-        });
+        plan.push(EmitEntry { item: item.clone(), module: module.clone(), path });
     }
 
     plan

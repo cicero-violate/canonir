@@ -26,33 +26,14 @@ pub struct FeatureStats {
 #[cfg(feature = "cuda")]
 unsafe extern "C" {
     fn gpu_feature_stats(
-        status: *const u8,
-        indegree: *const i32,
-        outdegree: *const i32,
-        priority: *const u16,
-        budget: *const u32,
-        retry: *const u32,
-        has_verify: *const u8,
-        has_mutate: *const u8,
-        has_observe: *const u8,
-        node_type: *const u8,
-        v: i32,
-        out: *mut FeatureStats,
+        status: *const u8, indegree: *const i32, outdegree: *const i32, priority: *const u16, budget: *const u32, retry: *const u32, has_verify: *const u8, has_mutate: *const u8,
+        has_observe: *const u8, node_type: *const u8, v: i32, out: *mut FeatureStats,
     );
 }
 
 #[cfg(feature = "cuda")]
 pub fn feature_stats_gpu(
-    status: &[u8],
-    indegree: &[i32],
-    outdegree: &[i32],
-    priority: &[u16],
-    budget: &[u32],
-    retry: &[u32],
-    has_verify: &[u8],
-    has_mutate: &[u8],
-    has_observe: &[u8],
-    node_type: &[u8],
+    status: &[u8], indegree: &[i32], outdegree: &[i32], priority: &[u16], budget: &[u32], retry: &[u32], has_verify: &[u8], has_mutate: &[u8], has_observe: &[u8], node_type: &[u8],
 ) -> FeatureStats {
     let v = status.len() as i32;
     let mut out = FeatureStats::default();

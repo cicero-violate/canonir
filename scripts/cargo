@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "clean" ]] && [[ "${CARGO_CLEAN_OK:-}" != "1" ]]; then
+  echo "Refusing to run 'cargo clean' without CARGO_CLEAN_OK=1" >&2
+  echo "Usage: CARGO_CLEAN_OK=1 cargo clean" >&2
+  exit 1
+fi
+
+if [[ "${1:-}" == "build" ]]; then
+  want_json=true
+  for arg in "$@"; do
+    if [[ "$arg" == "--message-format" || "$arg" == --message-format=* ]]; then
+      want_json=false
+      break
+    fi
+  done
+  if $want_json; then
+    out_path="${PWD}/cargo_build.json"
+    cargo build --message-format=json "${@:2}" >"$out_path"
+    status=$?
+    echo "cargo_build.json written in ${PWD}"
+    python -c "import json,collections\nerrors=collections.Counter()\nwith open('cargo_build.json','r') as f:\n    for line in f:\n        if not line.strip():\n            continue\n        try:\n            v=json.loads(line)\n        except Exception:\n            continue\n        if v.get('reason')!='compiler-message':\n            continue\n        msg=v.get('message') or {}\n        if msg.get('level')!='error':\n            continue\n        code=((msg.get('code') or {}).get('code')) or '<no_code>'\n        rendered=msg.get('rendered') or ''\n        head=rendered.strip().splitlines()[0] if rendered.strip() else msg.get('message','')\n        key=f\"{code}: {head}\" if head else code\n        errors[key]+=1\nif not errors:\n    print('No compiler errors found in cargo_build.json')\nelse:\n    print('Error summary (count desc):')\n    for k,c in sorted(errors.items(), key=lambda kv: (-kv[1], kv[0])):\n        print(f\"{c}x {k}\")"
+    exit $status
+  fi
+fi
+
+exec cargo "$@"

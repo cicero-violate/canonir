@@ -205,18 +205,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 workspace: cwd[0].clone(),
                 tick: 0,
             };
-            let loop_config = canon_agent::runtime::agent_loop::AgentLoopConfig {
-                max_ticks,
-                ..Default::default()
-            };
-            canon_agent::runtime::agent_loop::run_agent_loop(
-                &pipeline,
-                &ctx,
-                &mut ir,
-                &mut layout,
-                loop_config,
-            )
-            .await?;
+            let loop_config = canon_agent::runtime::agent_loop::AgentLoopConfig { max_ticks, ..Default::default() };
+            canon_agent::runtime::agent_loop::run_agent_loop(&pipeline, &ctx, &mut ir, &mut layout, loop_config).await?;
         }
 
         _ => {

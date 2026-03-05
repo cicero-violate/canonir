@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::super::dag::{TaskGraph, Status};
+use super::super::dag::{Status, TaskGraph};
 
 #[derive(Debug, Clone)]
 pub struct GpuGraph {
@@ -36,23 +36,10 @@ pub fn from_task_graph(graph: &TaskGraph) -> (GpuGraph, GraphIndex) {
         deps_offset.push(deps_flat.len() as u32);
     }
 
-    let status = graph.nodes.iter()
-        .map(|n| n.status as u8)
-        .collect::<Vec<_>>();
-    let priority = graph.nodes.iter()
-        .map(|n| n.priority as u16)
-        .collect::<Vec<_>>();
+    let status = graph.nodes.iter().map(|n| n.status as u8).collect::<Vec<_>>();
+    let priority = graph.nodes.iter().map(|n| n.priority as u16).collect::<Vec<_>>();
 
-    (
-        GpuGraph {
-            node_count: graph.nodes.len() as u32,
-            status,
-            priority,
-            deps_offset,
-            deps_flat,
-        },
-        GraphIndex { id_to_index, index_to_id },
-    )
+    (GpuGraph { node_count: graph.nodes.len() as u32, status, priority, deps_offset, deps_flat }, GraphIndex { id_to_index, index_to_id })
 }
 
 pub fn is_completed(status: u8) -> bool {

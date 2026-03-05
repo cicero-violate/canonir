@@ -12,12 +12,7 @@ pub(crate) enum ArgLabel {
     Omit,
 }
 
-pub(crate) fn mir_operand_label_for_arg<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    operand: &mir::Operand<'tcx>,
-    resolver: &LocalNameResolver,
-    local_decls: Option<&mir::LocalDecls<'tcx>>,
-) -> Option<ArgLabel> {
+pub(crate) fn mir_operand_label_for_arg<'tcx>(tcx: TyCtxt<'tcx>, operand: &mir::Operand<'tcx>, resolver: &LocalNameResolver, local_decls: Option<&mir::LocalDecls<'tcx>>) -> Option<ArgLabel> {
     match operand {
         mir::Operand::Constant(c) if constant_is_implicit_zst_value(c) => Some(ArgLabel::Omit),
         _ => mir_operand_label_with_decls(tcx, operand, resolver, local_decls).map(ArgLabel::Value),
@@ -32,12 +27,7 @@ pub(crate) fn mir_operand_label<'tcx>(tcx: TyCtxt<'tcx>, operand: &mir::Operand<
     mir_operand_label_with_decls(tcx, operand, resolver, None)
 }
 
-pub(crate) fn mir_operand_label_with_decls<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    operand: &mir::Operand<'tcx>,
-    resolver: &LocalNameResolver,
-    local_decls: Option<&mir::LocalDecls<'tcx>>,
-) -> Option<String> {
+pub(crate) fn mir_operand_label_with_decls<'tcx>(tcx: TyCtxt<'tcx>, operand: &mir::Operand<'tcx>, resolver: &LocalNameResolver, local_decls: Option<&mir::LocalDecls<'tcx>>) -> Option<String> {
     match operand {
         mir::Operand::Copy(place) | mir::Operand::Move(place) => {
             if let Some(label) = label_operand_place(place, resolver) {
@@ -83,10 +73,7 @@ fn label_operand_place(place: &mir::Place<'_>, resolver: &LocalNameResolver) -> 
 }
 
 pub(crate) fn mir_call_args_labels<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
-    resolver: &LocalNameResolver,
-    local_decls: &mir::LocalDecls<'tcx>,
+    tcx: TyCtxt<'tcx>, args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>], resolver: &LocalNameResolver, local_decls: &mir::LocalDecls<'tcx>,
 ) -> Option<Vec<String>> {
     let mut out = Vec::with_capacity(args.len());
     for arg in args {
@@ -128,12 +115,7 @@ pub(crate) fn is_deref_call_target<'tcx>(tcx: TyCtxt<'tcx>, func: &mir::Operand<
 }
 
 pub(crate) fn mir_method_call_stmt<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    local_decls: &mir::LocalDecls<'tcx>,
-    func: &mir::Operand<'tcx>,
-    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
-    resolver: &LocalNameResolver,
-    dest: String,
+    tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, func: &mir::Operand<'tcx>, args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>], resolver: &LocalNameResolver, dest: String,
 ) -> Option<Stmt> {
     if args.is_empty() {
         return None;
@@ -167,12 +149,7 @@ pub(crate) fn mir_method_call_stmt<'tcx>(
 }
 
 pub(crate) fn mir_call_stmt<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    local_decls: &mir::LocalDecls<'tcx>,
-    func: &mir::Operand<'tcx>,
-    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
-    resolver: &LocalNameResolver,
-    dest: String,
+    tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, func: &mir::Operand<'tcx>, args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>], resolver: &LocalNameResolver, dest: String,
 ) -> Option<Stmt> {
     let func = if let Some((did, _)) = func.const_fn_def() {
         if matches!(tcx.def_kind(did), rustc_hir::def::DefKind::AssocFn) {
@@ -211,12 +188,5 @@ fn dynamic_trait_method_name(func_label: &str) -> Option<String> {
 }
 
 fn is_closure_or_fn_ptr(ty: ty::Ty<'_>) -> bool {
-    matches!(
-        ty.kind(),
-        ty::TyKind::Closure(..)
-            | ty::TyKind::Coroutine(..)
-            | ty::TyKind::CoroutineClosure(..)
-            | ty::TyKind::FnPtr(..)
-            | ty::TyKind::FnDef(..)
-    )
+    matches!(ty.kind(), ty::TyKind::Closure(..) | ty::TyKind::Coroutine(..) | ty::TyKind::CoroutineClosure(..) | ty::TyKind::FnPtr(..) | ty::TyKind::FnDef(..))
 }
