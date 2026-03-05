@@ -1,0 +1,18 @@
+[package]
+name = "gpjson_rs"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[lib]
+name = "gpjson_rs"
+path = "src/lib.rs"
+
+[features]
+default = ["cuda"]
+cuda = []
+
+[dependencies]
+
+[dev-dependencies]
+serde_json = "1.0"
