@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = [rustc_frontend]
+default = ["rustc_frontend"]
 rustc_frontend = [
     "rustc_driver",
     "rustc_interface",
