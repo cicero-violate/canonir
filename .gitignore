@@ -84,6 +84,7 @@ __pycache__/
 other_projects/rust-source
 other_projects/rust-source.local/
 other_projects/
+other_sources/
 
 # === Misc. Backups ===
 *.old
