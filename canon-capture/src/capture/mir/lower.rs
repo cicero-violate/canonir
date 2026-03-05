@@ -4,6 +4,7 @@ use rustc_middle::ty::{self, TyCtxt};
 use rustc_span::def_id::DefId;
 use std::collections::HashSet;
 
+use crate::capture::helpers::{lower_ty, render_type_expr};
 use crate::capture::mir::analysis as mir_analysis;
 use crate::capture::mir::expr as mir_expr;
 use crate::capture::mir::guard as mir_guard;
@@ -91,6 +92,8 @@ fn stage_build_plan<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, param_names
 fn stage_emit_draft<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, returns_unit: bool, plan: &mut LowerPlan) -> mir_passes::BodyDraft {
     let emitted_block_capacity = plan.mir_to_emitted.iter().filter(|slot| slot.is_some()).count();
     let mut emitted_blocks: Vec<mir_passes::EmittedBlock> = Vec::with_capacity(emitted_block_capacity);
+    let mut pending_local_decls = build_local_decl_stmts(tcx, body, &plan.resolver);
+    let mut locals_injected = false;
 
     // Do NOT pre-mark __ret as defined. It must be structurally assigned
     // by lowering or by deterministic fallback to avoid masked gaps.
@@ -105,6 +108,10 @@ fn stage_emit_draft<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, returns_uni
         }
 
         let mut stmts = stage_prepare_block_stmts();
+        if !locals_injected && !pending_local_decls.is_empty() {
+            stmts.append(&mut pending_local_decls);
+            locals_injected = true;
+        }
         stage_lower_block_statements(tcx, body, bb, &emitted_blocks, plan, &mut stmts);
         let term = stage_lower_block_terminator(tcx, body, returns_unit, mir_idx, bb, &emitted_blocks, plan, &mut stmts);
         // Do not emit suppressed __ret bindings at block end.
@@ -422,6 +429,38 @@ fn stmts_have_ret_match(stmts: &[Stmt]) -> bool {
 
 fn stmts_have_ret_binding(stmts: &[Stmt]) -> bool {
     stmts.iter().any(mir_util::stmt_defines_ret)
+}
+
+fn build_local_decl_stmts<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, resolver: &LocalNameResolver) -> Vec<Stmt> {
+    let mut out = Vec::new();
+    let arg_count = body.arg_count as u32;
+    for local in body.local_decls.indices() {
+        let local_u32 = local.as_u32();
+        if local_u32 >= 1 && local_u32 <= arg_count {
+            // Parameters are declared in the signature.
+            continue;
+        }
+        let Some(name) = resolver.label_local(local) else {
+            continue;
+        };
+        let ty = lower_ty(tcx, body.local_decls[local].ty);
+        if !local_type_is_emittable(tcx, &ty) {
+            continue;
+        }
+        out.push(Stmt::Let { pat: name, ty: Some(ty), init: None });
+    }
+    out
+}
+
+fn local_type_is_emittable(tcx: TyCtxt<'_>, ty: &crate::types::TypeExpr) -> bool {
+    let rendered = render_type_expr(tcx, ty);
+    if rendered.contains("fmt::rt::Argument") {
+        return false;
+    }
+    if rendered.contains("fmt::Arguments") {
+        return false;
+    }
+    true
 }
 
 // Post-structural return materialization hook.

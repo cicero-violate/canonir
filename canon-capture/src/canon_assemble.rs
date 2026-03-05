@@ -349,6 +349,21 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
         Body::None => None,
         Body::Blocks(blocks) => {
             let mut block_ids = Vec::with_capacity(blocks.len());
+            let mut locals: std::collections::HashMap<String, CanonId> = std::collections::HashMap::new();
+            fn get_or_create_local(
+                canon: &mut CanonIR,
+                locals: &mut std::collections::HashMap<String, CanonId>,
+                name: &str,
+                ty: CanonId,
+            ) -> CanonId {
+                if let Some(id) = locals.get(name) {
+                    return *id;
+                }
+                let name_id = NameId(canon.name_intern.intern(name));
+                let id = canon.push_node(CanonNodeKind::Local { name_id, ty, flags: 0 });
+                locals.insert(name.to_string(), id);
+                id
+            }
             for bb in blocks {
                 let mut ops = Vec::new();
                 // Centralized unresolved placeholder type to avoid
@@ -401,14 +416,13 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                     use crate::types::Stmt;
                     let op = match stmt {
                         Stmt::Let { pat, ty, init } => {
-                            let name_id = NameId(canon.name_intern.intern(pat));
                             let ty_id = if let Some(t) = ty.as_ref() { intern_ty_expr(canon, t) } else { unknown_ty(fallback_ty) };
                             // Do not synthesize a separate Local for initializer here.
                             // Initializations are modeled by subsequent Assign/Call ops.
                             // Emitting a fresh Local for `init` here breaks dataflow and
                             // causes widespread unit-typed pollution in the emit phase.
                             let rhs = None;
-                            let lhs = canon.push_node(CanonNodeKind::Local { name_id, ty: ty_id, flags: 0 });
+                            let lhs = get_or_create_local(canon, &mut locals, pat, ty_id);
                             CfgOp::Let { lhs, ty: ty_id, rhs }
                         }
                         Stmt::Assign { lhs, rhs } => {
@@ -418,69 +432,53 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                             // `():` or cause E0308/E0599 mismatches. Defer concretization
                             // to analysis/type authority instead of collapsing to unit.
                             let ty = unknown_ty(fallback_ty);
-                            let lhs_name = NameId(canon.name_intern.intern(lhs));
-                            let rhs_name = NameId(canon.name_intern.intern(rhs));
-                            let lhs_id = canon.push_node(CanonNodeKind::Local { name_id: lhs_name, ty, flags: 0 });
-                            let rhs_id = canon.push_node(CanonNodeKind::Local { name_id: rhs_name, ty, flags: 0 });
+                            let lhs_name = lhs.as_str();
+                            let lhs_id = get_or_create_local(canon, &mut locals, lhs_name, ty);
+                            let rhs_id = get_or_create_local(canon, &mut locals, rhs, ty);
                             CfgOp::Assign { lhs: lhs_id, rhs: rhs_id }
                         }
                         Stmt::Expr(e) => {
-                            let eid = NameId(canon.name_intern.intern(e));
                             // Avoid forcing expression temporaries to unit type.
                             // Use unresolved placeholder to prevent `()` pollution downstream.
                             // Use unit type instead of manufacturing an "unknown" unresolved type.
                             // Unresolved placeholders must not survive into analysis.
                             let ty = unknown_ty(fallback_ty);
-                            let loc = canon.push_node(CanonNodeKind::Local { name_id: eid, ty, flags: 0 });
+                            let loc = get_or_create_local(canon, &mut locals, e, ty);
                             CfgOp::Expr(loc)
                         }
                         Stmt::Call { func, args, dest } => {
                             // Avoid interning malformed helper path segments like "_"
                             let ty = unknown_ty(fallback_ty);
-                            let func_name = NameId(canon.name_intern.intern(func));
-                            let func_id = canon.push_node(CanonNodeKind::Local { name_id: func_name, ty, flags: 0 });
+                            let func_id = get_or_create_local(canon, &mut locals, func, ty);
                             let args: Vec<CanonId> = args
                                 .iter()
                                 .map(|arg| {
-                                    let arg_name = NameId(canon.name_intern.intern(arg));
-                                    canon.push_node(CanonNodeKind::Local { name_id: arg_name, ty, flags: 0 })
+                                    get_or_create_local(canon, &mut locals, arg, ty)
                                 })
                                 .collect();
-                            let dest = dest.as_deref().map(|name| {
-                                let name_id = NameId(canon.name_intern.intern(name));
-                                canon.push_node(CanonNodeKind::Local { name_id, ty, flags: 0 })
-                            });
+                            let dest = dest.as_deref().map(|name| get_or_create_local(canon, &mut locals, name, ty));
                             CfgOp::Call { func: func_id, args, dest }
                         }
                         Stmt::FieldAccess { base, field, dest } => {
                             // Avoid interning malformed helper path segments like "_"
                             let ty = unknown_ty(fallback_ty);
-                            let base_name = NameId(canon.name_intern.intern(base));
-                            let base_id = canon.push_node(CanonNodeKind::Local { name_id: base_name, ty, flags: 0 });
+                            let base_id = get_or_create_local(canon, &mut locals, base, ty);
                             let field_id = NameId(canon.name_intern.intern(field));
-                            let dest_id = dest.as_deref().map(|name| {
-                                let name_id = NameId(canon.name_intern.intern(name));
-                                canon.push_node(CanonNodeKind::Local { name_id, ty, flags: 0 })
-                            });
+                            let dest_id = dest.as_deref().map(|name| get_or_create_local(canon, &mut locals, name, ty));
                             CfgOp::FieldAccess { base: base_id, field: field_id, dest: dest_id }
                         }
                         Stmt::MethodCall { receiver, method, args, dest } => {
                             // Avoid interning malformed helper path segments like "_"
                             let ty = unknown_ty(fallback_ty);
-                            let receiver_name = NameId(canon.name_intern.intern(receiver));
-                            let receiver_id = canon.push_node(CanonNodeKind::Local { name_id: receiver_name, ty, flags: 0 });
+                            let receiver_id = get_or_create_local(canon, &mut locals, receiver, ty);
                             let arg_ids: Vec<CanonId> = args
                                 .iter()
                                 .map(|arg| {
-                                    let arg_name = NameId(canon.name_intern.intern(arg));
-                                    canon.push_node(CanonNodeKind::Local { name_id: arg_name, ty, flags: 0 })
+                                    get_or_create_local(canon, &mut locals, arg, ty)
                                 })
                                 .collect();
                             let method_id = NameId(canon.name_intern.intern(method));
-                            let dest_id = dest.as_deref().map(|name| {
-                                let name_id = NameId(canon.name_intern.intern(name));
-                                canon.push_node(CanonNodeKind::Local { name_id, ty, flags: 0 })
-                            });
+                            let dest_id = dest.as_deref().map(|name| get_or_create_local(canon, &mut locals, name, ty));
                             CfgOp::MethodCall { receiver: receiver_id, method: method_id, args: arg_ids, dest: dest_id }
                         }
                         Stmt::StructLit { ty, fields, dest } => {
@@ -491,23 +489,16 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                                 .iter()
                                 .map(|(field, value)| {
                                     let field_name = NameId(canon.name_intern.intern(field));
-                                    let value_name = NameId(canon.name_intern.intern(value));
-                                    (field_name, canon.push_node(CanonNodeKind::Local { name_id: value_name, ty: value_ty, flags: 0 }))
+                                    (field_name, get_or_create_local(canon, &mut locals, value, value_ty))
                                 })
                                 .collect();
-                            let dest_id = dest.as_deref().map(|name| {
-                                let name_id = NameId(canon.name_intern.intern(name));
-                                canon.push_node(CanonNodeKind::Local { name_id, ty: value_ty, flags: 0 })
-                            });
+                            let dest_id = dest.as_deref().map(|name| get_or_create_local(canon, &mut locals, name, value_ty));
                             CfgOp::StructLit { ty: ty_id, fields: lowered_fields, dest: dest_id }
                         }
                         Stmt::Match { dest } => {
                             // Avoid unit-typing match destinations; preserve unresolved type.
                             let ty = unknown_ty(fallback_ty);
-                            let dest = dest.as_deref().map(|name| {
-                                let name_id = NameId(canon.name_intern.intern(name));
-                                canon.push_node(CanonNodeKind::Local { name_id, ty, flags: 0 })
-                            });
+                            let dest = dest.as_deref().map(|name| get_or_create_local(canon, &mut locals, name, ty));
                             CfgOp::Match { dest }
                         }
                         Stmt::Return(val) => {
@@ -520,9 +511,8 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                                 // The capture layer must ensure `__ret`
                                 // already matches the authoritative return type.
                                 let rendered = e;
-                                let eid = NameId(canon.name_intern.intern(rendered));
                                 let ty = unknown_ty(fallback_ty);
-                                canon.push_node(CanonNodeKind::Local { name_id: eid, ty, flags: 0 })
+                                get_or_create_local(canon, &mut locals, rendered, ty)
                             });
                             CfgOp::Return(v)
                         }
@@ -533,9 +523,8 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                 match &bb.terminator {
                     Terminator::Goto(t) => ops.push(CfgOp::Goto(*t)),
                     Terminator::Branch { cond, true_bb, false_bb } => {
-                        let cid = NameId(canon.name_intern.intern(cond));
                         let ty = bool_ty(canon);
-                        let cloc = canon.push_node(CanonNodeKind::Local { name_id: cid, ty, flags: 0 });
+                        let cloc = get_or_create_local(canon, &mut locals, cond, ty);
                         ops.push(CfgOp::Branch { cond: cloc, true_bb: *true_bb, false_bb: *false_bb });
                     }
                     Terminator::Return => {}

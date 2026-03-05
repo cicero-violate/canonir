@@ -422,7 +422,14 @@ pub(crate) fn lower_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> TypeExpr {
         }
         ty::TyKind::Adt(adt, args) => {
             let base = norm::path(tcx, adt.did());
-            let lowered_args: Vec<TypeExpr> = args.types().map(|t| lower_ty(tcx, t)).collect();
+            let lowered_args: Vec<TypeExpr> = args
+                .iter()
+                .map(|arg| match arg.kind() {
+                    ty::GenericArgKind::Lifetime(_) => TypeExpr::Path("'_".to_string()),
+                    ty::GenericArgKind::Type(ty) => lower_ty(tcx, ty),
+                    ty::GenericArgKind::Const(_) => TypeExpr::Path("_".to_string()),
+                })
+                .collect();
             if lowered_args.is_empty() {
                 TypeExpr::Path(base)
             } else {

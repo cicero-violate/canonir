@@ -17,7 +17,6 @@ pub mod canon_assemble;
 pub mod capture;
 pub mod index;
 pub mod norm;
-pub mod project;
 pub mod types;
 
 /// Per-def capture output: nodes + edge hints (local to one DefId).

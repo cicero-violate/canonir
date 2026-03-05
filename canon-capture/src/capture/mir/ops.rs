@@ -1,5 +1,6 @@
 use rustc_middle::mir;
-use rustc_middle::ty::{self, TyCtxt};
+use rustc_middle::ty::{self, TyCtxt, TypingEnv};
+use rustc_span::DUMMY_SP;
 
 use crate::capture::helpers::{lower_ty, render_type_expr};
 use crate::capture::mir::filters;
@@ -13,6 +14,11 @@ pub(crate) enum ArgLabel {
 }
 
 pub(crate) fn mir_operand_label_for_arg<'tcx>(tcx: TyCtxt<'tcx>, operand: &mir::Operand<'tcx>, resolver: &LocalNameResolver, local_decls: Option<&mir::LocalDecls<'tcx>>) -> Option<ArgLabel> {
+    if let mir::Operand::Constant(c) = operand {
+        if let Some(expr) = closure_placeholder_expr_from_const(tcx, c) {
+            return Some(ArgLabel::Value(expr));
+        }
+    }
     match operand {
         mir::Operand::Constant(c) if constant_is_implicit_zst_value(c) => Some(ArgLabel::Omit),
         _ => mir_operand_label_with_decls(tcx, operand, resolver, local_decls).map(ArgLabel::Value),
@@ -42,6 +48,15 @@ pub(crate) fn mir_operand_label_with_decls<'tcx>(tcx: TyCtxt<'tcx>, operand: &mi
             None
         }
         mir::Operand::Constant(c) => {
+            if let Some(lit) = const_str_literal(tcx, c) {
+                return Some(lit);
+            }
+            if let Some(lit) = const_span_literal(tcx, c) {
+                return Some(lit);
+            }
+            if let Some(expr) = closure_placeholder_expr_from_const(tcx, c) {
+                return Some(expr);
+            }
             if let ty::TyKind::FnDef(did, _) = c.const_.ty().kind() {
                 return Some(norm::path(tcx, *did));
             }
@@ -189,4 +204,104 @@ fn dynamic_trait_method_name(func_label: &str) -> Option<String> {
 
 fn is_closure_or_fn_ptr(ty: ty::Ty<'_>) -> bool {
     matches!(ty.kind(), ty::TyKind::Closure(..) | ty::TyKind::Coroutine(..) | ty::TyKind::CoroutineClosure(..) | ty::TyKind::FnPtr(..) | ty::TyKind::FnDef(..))
+}
+
+fn closure_placeholder_expr_from_const<'tcx>(tcx: TyCtxt<'tcx>, constant: &mir::ConstOperand<'tcx>) -> Option<String> {
+    closure_placeholder_expr_from_ty(tcx, constant.const_.ty())
+}
+
+fn const_str_literal<'tcx>(tcx: TyCtxt<'tcx>, constant: &mir::ConstOperand<'tcx>) -> Option<String> {
+    let ty = constant.const_.ty();
+    let ty::TyKind::Ref(_, inner, _) = ty.kind() else {
+        return None;
+    };
+    let val = match constant.const_ {
+        mir::Const::Val(val, _) => Some(val),
+        _ => constant
+            .const_
+            .eval(tcx, TypingEnv::fully_monomorphized(), DUMMY_SP)
+            .ok(),
+    }?;
+    match inner.kind() {
+        ty::TyKind::Str => {
+            let bytes = val.try_get_slice_bytes_for_diagnostics(tcx)?;
+            let s = std::str::from_utf8(bytes).ok()?;
+            Some(format!("{s:?}"))
+        }
+        ty::TyKind::Slice(elem) if matches!(elem.kind(), ty::TyKind::Uint(ty::UintTy::U8)) => {
+            let bytes = val.try_get_slice_bytes_for_diagnostics(tcx)?;
+            let lit = bytes.iter().map(|b| format!("{b:#04x}")).collect::<Vec<_>>().join(", ");
+            Some(format!("&[{lit}]"))
+        }
+        _ => None,
+    }
+}
+
+fn const_span_literal(tcx: TyCtxt<'_>, constant: &mir::ConstOperand<'_>) -> Option<String> {
+    let snippet = tcx.sess.source_map().span_to_snippet(constant.span).ok()?;
+    let trimmed = snippet.trim();
+    if trimmed.starts_with('"') || trimmed.starts_with("r\"") || trimmed.starts_with("b\"") || trimmed.starts_with("br\"") {
+        return Some(trimmed.to_string());
+    }
+    None
+}
+
+pub(crate) fn closure_placeholder_expr_from_aggregate<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    _def_id: rustc_span::def_id::DefId,
+    args: ty::GenericArgsRef<'tcx>,
+) -> Option<String> {
+    let closure_args = args.as_closure();
+    closure_placeholder_expr_from_sig(tcx, closure_args.sig())
+}
+
+fn closure_placeholder_expr_from_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> Option<String> {
+    match ty.kind() {
+        ty::TyKind::Closure(_def_id, args) => {
+            let closure_args = args.as_closure();
+            closure_placeholder_expr_from_sig(tcx, closure_args.sig())
+        }
+        ty::TyKind::FnDef(def_id, args) if tcx.is_closure_like(*def_id) => {
+            let sig = tcx.fn_sig(*def_id).instantiate(tcx, args);
+            closure_placeholder_expr_from_sig(tcx, sig)
+        }
+        ty::TyKind::FnPtr(sig_tys, hdr) => closure_placeholder_expr_from_sig(tcx, sig_tys.with(*hdr)),
+        _ => None,
+    }
+}
+
+fn closure_placeholder_expr_from_sig<'tcx>(tcx: TyCtxt<'tcx>, sig: ty::Binder<'tcx, ty::FnSig<'tcx>>) -> Option<String> {
+    let inputs = sig.inputs().skip_binder();
+    let output = sig.output().skip_binder();
+
+    let mut arg_tys: Vec<ty::Ty<'tcx>> = Vec::new();
+    if inputs.len() == 1 {
+        let first = *inputs.get(0)?;
+        if let ty::TyKind::Tuple(tys) = first.kind() {
+            arg_tys.extend(tys.iter());
+        } else {
+            arg_tys.push(first);
+        }
+    } else {
+        arg_tys.extend(inputs.iter());
+    }
+
+    let args = arg_tys
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| {
+            let name = format!("_arg{i}");
+            let ty_expr = render_type_expr(tcx, &lower_ty(tcx, *ty));
+            format!("{name}: {ty_expr}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let ret_expr = render_type_expr(tcx, &lower_ty(tcx, output));
+    let args = if args.is_empty() { String::new() } else { args };
+    if args.is_empty() {
+        Some(format!("|| -> {ret_expr} {{ panic!(\"canon closure placeholder\") }}"))
+    } else {
+        Some(format!("|{args}| -> {ret_expr} {{ panic!(\"canon closure placeholder\") }}"))
+    }
 }

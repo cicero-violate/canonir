@@ -48,8 +48,9 @@ pub(crate) fn lower_call_terminator<'tcx>(
         // call lowering to handle the surrounding expression.
         if let Some(dest) = mir_util::label_place_dest(resolver, destination) {
             if destination.local.as_u32() != 0 {
-                // Define destination with a typed default to preserve MIR type.
-                stmts.push(Stmt::Assign { lhs: dest.clone(), rhs: "::core::default::Default::default()".to_string() });
+                // Use a diverging expression to preserve the authoritative type
+                // without requiring `Default` on compiler-private fmt types.
+                stmts.push(Stmt::Assign { lhs: dest.clone(), rhs: "panic!(\"canon filtered internal call\")".to_string() });
                 defined.insert(dest);
             }
         }

@@ -1,6 +1,6 @@
 use rustc_abi::{FieldIdx, VariantIdx};
 use rustc_middle::mir;
-use rustc_middle::ty::{self, TyCtxt};
+use rustc_middle::ty::{self, TyCtxt, TypingEnv};
 
 use crate::capture::helpers::{lower_ty, render_type_expr};
 use crate::capture::mir::filters;
@@ -16,7 +16,8 @@ pub(crate) fn render_projected_place_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: 
     }
     let mut expr = resolver.label_local(place.local)?;
     let mut cursor_ty = local_decls[place.local].ty;
-    let mut pending_downcast: Option<(VariantIdx, ty::Ty<'tcx>)> = None;
+    let mut pending_downcast: Option<(VariantIdx, ty::Ty<'tcx>, bool)> = None;
+    let mut expr_is_ref = false;
     for elem in place.projection.iter() {
         match elem {
             mir::ProjectionElem::Deref => {
@@ -26,18 +27,21 @@ pub(crate) fn render_projected_place_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: 
                 // of borrowed values. Instead, keep the base expression
                 // unchanged and only advance the type cursor.
                 cursor_ty = match cursor_ty.kind() {
-                    ty::TyKind::Ref(_, inner, _) => *inner,
+                    ty::TyKind::Ref(_, inner, _) => {
+                        expr_is_ref = true;
+                        *inner
+                    }
                     ty::TyKind::RawPtr(inner, _) => *inner,
                     _ => cursor_ty.builtin_deref(true)?,
                 };
             }
             mir::ProjectionElem::Downcast(variant_name, variant_idx) => {
                 let _ = variant_name;
-                pending_downcast = Some((variant_idx, cursor_ty));
+                pending_downcast = Some((variant_idx, cursor_ty, expr_is_ref));
             }
             mir::ProjectionElem::Field(field_idx, field_ty) => {
                 let field = if let Some(downcast) = pending_downcast.take() {
-                    expr = render_downcast_field_expr(tcx, &expr, downcast.1, downcast.0, field_idx)?;
+                    expr = render_downcast_field_expr(tcx, &expr, downcast.1, downcast.0, field_idx, downcast.2)?;
                     String::new()
                 } else {
                     match cursor_ty.kind() {
@@ -94,8 +98,15 @@ pub(crate) fn render_projected_place_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: 
     Some(expr)
 }
 
-fn render_downcast_field_expr<'tcx>(tcx: TyCtxt<'tcx>, base_expr: &str, enum_ty: ty::Ty<'tcx>, variant_idx: VariantIdx, field_idx: FieldIdx) -> Option<String> {
-    let ty::TyKind::Adt(adt, _) = enum_ty.kind() else {
+fn render_downcast_field_expr<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    base_expr: &str,
+    enum_ty: ty::Ty<'tcx>,
+    variant_idx: VariantIdx,
+    field_idx: FieldIdx,
+    base_is_ref: bool,
+) -> Option<String> {
+    let ty::TyKind::Adt(adt, args) = enum_ty.kind() else {
         return None;
     };
     if !adt.is_enum() {
@@ -108,6 +119,7 @@ fn render_downcast_field_expr<'tcx>(tcx: TyCtxt<'tcx>, base_expr: &str, enum_ty:
     if idx >= variant.fields.len() {
         return None;
     }
+    let bind_prefix = if base_is_ref { "ref " } else { "" };
 
     let bindings: Vec<String> = (0..variant.fields.len()).map(|i| format!("__canon_f{i}")).collect();
     let select = bindings[idx].clone();
@@ -119,22 +131,24 @@ fn render_downcast_field_expr<'tcx>(tcx: TyCtxt<'tcx>, base_expr: &str, enum_ty:
                 !name.is_empty() && !name.chars().all(|c| c.is_ascii_digit())
             }) =>
         {
-            let named = fields.iter().zip(bindings.iter()).map(|(f, b)| format!("{}: {b}", f.name)).collect::<Vec<_>>().join(", ");
+            let named = fields
+                .iter()
+                .zip(bindings.iter())
+                .map(|(f, b)| format!("{}: {bind_prefix}{b}", f.name))
+                .collect::<Vec<_>>()
+                .join(", ");
             format!("{variant_path} {{ {named} }}")
         }
         _ => {
-            let tuple = bindings.join(", ");
+            let tuple = bindings.iter().map(|b| format!("{bind_prefix}{b}")).collect::<Vec<_>>().join(", ");
             format!("{variant_path}({tuple})")
         }
     };
 
-    // Match on a reference to avoid moving out of borrowed enum values (e.g., &self).
-    // This prevents generated code like `match *self` from moving non-Copy fields.
-    // Ensure we never accidentally match on a dereferenced value like `*self`.
-    // If the base expression already starts with a deref, strip the leading `*`
-    // and match on a reference to the underlying expression instead.
+    // Match on the base expression to avoid moving out of borrowed enum values.
+    // Always return the binding as-is (reference when base_is_ref is true).
     let safe_base = base_expr.strip_prefix('*').unwrap_or(base_expr);
-    Some(format!("match {safe_base} {{ {pattern} => *{select}, _ => panic!(\"canon downcast projection mismatch\") }}"))
+    Some(format!("match {safe_base} {{ {pattern} => {select}, _ => panic!(\"canon downcast projection mismatch\") }}"))
 }
 
 pub(crate) fn mir_binop_token(op: mir::BinOp) -> Option<&'static str> {
@@ -180,17 +194,42 @@ pub(crate) fn mir_assign_stmt<'tcx>(
     tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, lhs: &mir::Place<'tcx>, rvalue: &mir::Rvalue<'tcx>, resolver: &LocalNameResolver, defined: &std::collections::HashSet<String>,
     suppressed_sentinel_names: &std::collections::HashSet<String>,
 ) -> Option<Stmt> {
-    let lhs = resolver.label_place(lhs)?;
+    let lhs_place = lhs;
+    let lhs = resolver.label_place(lhs_place)?;
     // If we cannot render the rvalue into a concrete expression, do NOT
     // silently collapse it to unit. That destroys type information and
     // propagates `()` into non-unit locals (Vec, Option, String, etc.),
     // leading to downstream type errors in emitted Rust.
     // Instead, return None so the caller can decide whether to
     // structurally suppress or handle the assignment.
-    let rhs = match mir_rvalue_expr(tcx, local_decls, rvalue, resolver) {
+    let mut rhs = match mir_rvalue_expr(tcx, local_decls, rvalue, resolver) {
         Some(expr) => expr,
         None => return None,
     };
+    // If MIR expects a value but the rvalue produces a reference, insert a deref.
+    let lhs_ty = local_decls[lhs_place.local].ty;
+    let rhs_ty = rvalue.ty(local_decls, tcx);
+    if let mir::Rvalue::Use(mir::Operand::Copy(place) | mir::Operand::Move(place)) = rvalue {
+        let has_deref = place.projection.iter().any(|p| matches!(p, mir::ProjectionElem::Deref));
+        if has_deref && !rhs.starts_with('*') && !matches!(lhs_ty.kind(), ty::TyKind::Ref(..)) {
+            rhs = format!("*{rhs}");
+        }
+    }
+    match (lhs_ty.kind(), rhs_ty.kind()) {
+        (ty::TyKind::Ref(..), ty::TyKind::Ref(..)) => {}
+        (_, ty::TyKind::Ref(_, inner, _)) => {
+            let is_copy = tcx.type_is_copy_modulo_regions(TypingEnv::fully_monomorphized(), *inner);
+            if is_copy && !rhs.starts_with('*') {
+                rhs = format!("*{rhs}");
+            }
+        }
+        (ty::TyKind::Ref(..), _) => {
+            if !rhs.starts_with('&') {
+                rhs = format!("&{rhs}");
+            }
+        }
+        _ => {}
+    }
     if assign_rhs_should_suppress(&rhs) {
         return None;
     }
@@ -278,7 +317,7 @@ pub(crate) fn mir_struct_lit_stmt<'tcx>(tcx: TyCtxt<'tcx>, lhs: &mir::Place<'tcx
 }
 
 fn assign_rhs_should_suppress(rhs: &str) -> bool {
-    filters::is_zero_arg_enum_ctor_expr_str(rhs) || rhs.contains("SizedTypeProperties") || rhs.contains("std::alloc::Global") || rhs.contains("alloc::Global")
+    rhs.contains("SizedTypeProperties") || rhs.contains("std::alloc::Global") || rhs.contains("alloc::Global")
 }
 
 fn mir_rvalue_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>, rvalue: &mir::Rvalue<'tcx>, resolver: &LocalNameResolver) -> Option<String> {
@@ -341,6 +380,9 @@ fn mir_rvalue_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>,
                     Some(norm::path(tcx, *adt_did))
                 }
             }
+            mir::AggregateKind::Closure(def_id, args) => {
+                mir_ops::closure_placeholder_expr_from_aggregate(tcx, *def_id, args)
+            }
             mir::AggregateKind::Tuple => {
                 let elems = operands.iter().map(|op| mir_ops::mir_operand_label(tcx, op, resolver)).collect::<Option<Vec<_>>>()?;
                 if elems.len() == 1 {
@@ -360,7 +402,10 @@ fn mir_rvalue_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>,
             Some(format!("[{}; {count}]", mir_ops::mir_operand_label(tcx, operand, resolver)?))
         }
         mir::Rvalue::Discriminant(place) => Some(format!("{} as isize", resolver.label_place(place)?)),
-        mir::Rvalue::CopyForDeref(place) => resolver.label_place(place),
+        mir::Rvalue::CopyForDeref(place) => {
+            let base = resolver.label_place(place)?;
+            Some(format!("*{base}"))
+        }
         _ => None,
     }
 }

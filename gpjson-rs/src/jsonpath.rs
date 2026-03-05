@@ -270,6 +270,7 @@ pub struct JSONPathParser {
     scanner: JSONPathScanner,
     ir: IRBuilder,
     max_level: usize,
+    skip_terminal_store: bool,
 }
 
 impl JSONPathParser {
@@ -278,13 +279,16 @@ impl JSONPathParser {
             scanner: JSONPathScanner::new(s),
             ir: IRBuilder::new(),
             max_level: 0,
+            skip_terminal_store: false,
         }
     }
 
     pub fn compile(mut self) -> Result<JSONPathResult, JSONPathError> {
         self.scanner.expect_char(b'$')?;
         self.compile_next_expression()?;
-        self.ir.store_result();
+        if !self.skip_terminal_store {
+            self.ir.store_result();
+        }
         self.ir.end();
 
         let result = JSONPathResult {
@@ -382,11 +386,8 @@ impl JSONPathParser {
             max_max_level = max_max_level.max(self.max_level);
             self.max_level = current_max_level;
 
-            if i == end_index - 1 {
-                // last
-            } else {
-                self.ir.store_result();
-            }
+            // Always store results at the deepest level before moving up.
+            self.ir.store_result();
 
             self.scanner.reset();
 
@@ -394,6 +395,10 @@ impl JSONPathParser {
             let diff = end_level - start_level;
             for _ in 0..diff {
                 self.ir.up();
+            }
+
+            if i == end_index - 1 {
+                self.skip_terminal_store = true;
             }
         }
 

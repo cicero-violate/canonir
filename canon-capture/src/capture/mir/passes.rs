@@ -56,10 +56,11 @@ pub(crate) fn emit_special_block(returns_unit: bool, mir_idx_usize: usize, block
         return Some(EmittedBlock { role: BlockRole::SwitchSource, block: BasicBlock { stmts: Vec::new(), terminator: Terminator::Unreachable } });
     }
     if switch_analysis.switchint_arm_blocks.contains(&mir_idx_usize) {
-        if switch_analysis.switch_arm_writes_ret.contains(&mir_idx_usize) || switch_analysis.switch_arm_returns.contains(&mir_idx_usize) {
-            return None;
-        }
-        return Some(EmittedBlock { role: BlockRole::SwitchArm, block: BasicBlock { stmts: Vec::new(), terminator: Terminator::None } });
+        // Do not drop switch arm bodies. Switch arm blocks frequently
+        // contain the only structural assignments that bind locals
+        // (e.g., iterator `child` bindings). Emitting empty arm blocks
+        // causes undefined local errors in emitted Rust.
+        return None;
     }
     None
 }

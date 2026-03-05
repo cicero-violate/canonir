@@ -25,4 +25,55 @@ if [[ "${1:-}" == "build" ]]; then
   fi
 fi
 
+if [[ "${1:-}" == "test" ]]; then
+  want_json=true
+  for arg in "$@"; do
+    if [[ "$arg" == "--message-format" || "$arg" == --message-format=* ]]; then
+      want_json=false
+      break
+    fi
+  done
+  if $want_json; then
+    out_path="${PWD}/cargo_test.json"
+    cargo test --message-format=json "${@:2}" >"$out_path"
+    status=$?
+    echo "cargo_test.json written in ${PWD}"
+    python - <<'PY'
+import json
+from collections import Counter, defaultdict
+
+failures = Counter()
+tests = defaultdict(lambda: {"passed": 0, "failed": 0, "ignored": 0})
+
+with open("cargo_test.json", "r") as f:
+    for line in f:
+        if not line.strip():
+            continue
+        try:
+            msg = json.loads(line)
+        except Exception:
+            continue
+        if msg.get("type") == "test":
+            name = msg.get("name") or "<unknown>"
+            event = msg.get("event")
+            if event in ("ok", "failed", "ignored"):
+                if event == "ok":
+                    tests[name]["passed"] += 1
+                elif event == "failed":
+                    tests[name]["failed"] += 1
+                    failures[name] += 1
+                else:
+                    tests[name]["ignored"] += 1
+
+if not failures:
+    print("No failing tests detected in cargo_test.json")
+else:
+    print("Failing tests (count desc):")
+    for name, count in sorted(failures.items(), key=lambda kv: (-kv[1], kv[0])):
+        print(f"{count}x {name}")
+PY
+    exit $status
+  fi
+fi
+
 exec cargo "$@"

@@ -53,7 +53,6 @@ pub(crate) fn is_filtered_internal_call_path(path: &str) -> bool {
     ) || fmt_arguments_ctor
         || fmt_rt_argument_ctor
         || normalized.ends_with("::new_display")
-        || normalized.ends_with("::parse")
         || normalized.ends_with("::branch")
         || normalized.ends_with("::from_residual")
         || normalized.ends_with("::from_output")

@@ -166,9 +166,12 @@ pub fn query_file<P: AsRef<Path>>(
     let result_size = ((file_arc.len() as i64 + 64 - 1) / 64) as usize;
 
     let string_index_device = DeviceBuffer::new(result_size * 8)?;
+    string_index_device.memset(0)?;
     let escape_carry_device = DeviceBuffer::new(CARRY_INDEX_SIZE)?;
     let escape_index_device = DeviceBuffer::new(result_size * 8)?;
     let newline_count_device = DeviceBuffer::new(CARRY_INDEX_SIZE * 4)?;
+
+    escape_index_device.memset(0)?;
 
     kernel_combined_escape_carry_newline_count_index(
         file_device.as_ptr() as *mut i8,
@@ -204,6 +207,7 @@ pub fn query_file<P: AsRef<Path>>(
     let number_of_lines = sum as usize;
 
     let newline_index_device = DeviceBuffer::new(number_of_lines * 8)?;
+    newline_index_device.memset(0)?;
 
     kernel_combined_escape_newline_index(
         file_device.as_ptr() as *mut i8,

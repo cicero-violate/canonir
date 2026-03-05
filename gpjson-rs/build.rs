@@ -2,6 +2,8 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
+// All .cu files grouped by domain directory.
+// Each entry: (source path relative to crate root, object name)
 const CUDA_SOURCES: &[(&str, &str)] = &[
     ("resources/kernels/create_combined_escape_carry_newline_count_index.cu", "create_combined_escape_carry_newline_count_index"),
     ("resources/kernels/create_combined_escape_newline_index.cu", "create_combined_escape_newline_index"),
@@ -35,10 +37,19 @@ fn main() {
 
         let obj = out_dir.join(format!("{}.o", name));
 
+        // nvcc: compile .cu -> .o
         let status = Command::new(&nvcc)
             .args([*src, "-c", "-o"])
             .arg(&obj)
-            .args(["-Xcompiler", "-fPIC", "-std=c++17", "-ccbin", "/usr/bin/g++-11"])
+            .args([
+                "-Xcompiler",
+                "-fPIC",
+                "-std=c++17",
+                "-ccbin",
+                "/usr/bin/g++-11",
+                "-include",
+                "assert.h",
+            ])
             .status()
             .unwrap_or_else(|_| panic!("nvcc failed to start for {}", src));
         if !status.success() {
@@ -48,6 +59,7 @@ fn main() {
         obj_paths.push(obj);
     }
 
+    // ar: pack all .o files into a single libgpjson_gpu.a
     let lib = out_dir.join("libgpjson_gpu.a");
     let mut ar_cmd = Command::new(&ar);
     ar_cmd.args(["crus", lib.to_str().unwrap()]);
@@ -63,5 +75,6 @@ fn main() {
     println!("cargo:rustc-link-lib=static=gpjson_gpu");
     println!("cargo:rustc-link-search=native={}/lib64", cuda_home);
     println!("cargo:rustc-link-lib=dylib=cudart");
+    println!("cargo:rustc-link-lib=dylib=curand");
     println!("cargo:rustc-link-lib=dylib=stdc++");
 }
