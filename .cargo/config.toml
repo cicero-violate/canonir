@@ -1,12 +1,6 @@
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold", "-A warnings"]
+
 [env]
 RUSTC_BOOTSTRAP = "1"
-
-[build]
-rustflags = ["-A", "warnings"]
-# rustflags = ["-Awarnings","--error-format=short"]
-
-[alias]
-# json-build = "build --message-format=json"
-# json-check = "check --message-format=json"
-# json-run = "run --message-format=json"
-json-build = "build --message-format=json --color=never --locked"
