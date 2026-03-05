@@ -10,6 +10,7 @@ members = [
   "canon-analyzer",
   "canon-projection", "canon-agent",
   "canon-utils/rename",
+  "gpjson-rs",
 ]
 exclude = [
   "test_projects",
