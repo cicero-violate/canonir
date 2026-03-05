@@ -7,8 +7,7 @@ use algorithms::graph::{csr::Csr, reachability, scc, topological_sort};
 use algorithms::graph::model_checking;
 use super::dag;
 use super::decompose;
-use super::engine;
-use super::tab_management::{self, TabsHandle};
+use super::dag::ContextNode;
 
 struct GraphKernels {
     adj: Vec<Vec<usize>>,
@@ -54,7 +53,7 @@ pub(crate) fn build_context(
     graph: &dag::TaskGraph,
     node_id: &str,
     radius: usize,
-) -> Vec<engine::ContextNode> {
+) -> Vec<ContextNode> {
     if radius == 0 {
         return Vec::new();
     }
@@ -100,7 +99,7 @@ pub(crate) fn build_context(
                 .collect::<Vec<_>>()
                 .join("\n---\n");
             let causal_summary = if causal_summary.is_empty() { None } else { Some(causal_summary) };
-            engine::ContextNode {
+            ContextNode {
             id: n.id.clone(),
             description: n.description.clone(),
             node_type: n.node_type,

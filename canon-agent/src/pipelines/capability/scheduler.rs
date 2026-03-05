@@ -9,21 +9,21 @@ use std::io::Write;
 use tokio::sync::Semaphore;
 
 use super::config::{self, CapabilityConfig};
-use super::capability::{assert_class_disjoint, Capability, CapabilityClass};
+use super::capability::Capability;
 use super::dag;
 use super::engine;
 use super::dispatch;
-use super::graph_algo::{compute_graph_signals, graph_signature, node_utility, graph_features};
+use super::execution_result::{self, RepairStats};
+use super::graph_algo::{compute_graph_signals, graph_signature, node_utility, graph_features, edge_count};
 use super::graph_maintenance::{self, MaintenanceCtx};
 use super::graph_runtime::build_context;
 use super::tab_management::{self, TabsHandle};
 use super::LOG_ROOT;
 use super::TEMPLATE_ROOT;
-use super::planner_session::{PlannerSession, PlannerUpdate, EdgeSpec};
-use super::templates::TemplateStore;
+use super::planner_session::{auto_repair_planner_update, validate_planner_update, PlannerSession, PlannerUpdate, EdgeSpec};
+use super::templates::{TemplateStore, apply_planner_update};
 use super::failure_store::FailureStore;
 use super::policy_train::{self, PolicyDatasetEntry};
-use super::dag::TaskNode;
 use super::telemetry::{self, ExecMetrics, PlannerMetrics, RuntimeMetrics, TelemetrySnapshot};
 use super::console;
 use super::capability::dominant_class;
@@ -69,231 +69,6 @@ const PIPELINE_TRANSITIONS: [[PipelineState; 3]; 3] = {
     t[PipelineState::Blocked as usize][PipelineEvent::Blocked as usize] = PipelineState::Blocked;
     t
 };
-
-#[derive(Serialize)]
-struct TemplateRevisionLog {
-    template_hash: String,
-    reward: f64,
-    nodes: usize,
-    edges: usize,
-    rewrites: usize,
-}
-
-#[derive(Default)]
-struct RepairStats {
-    attempts: u64,
-    successes: u64,
-    last_kind: Option<String>,
-}
-
-fn edge_count(graph: &dag::TaskGraph) -> usize {
-    graph.nodes.iter().map(|n| n.deps.len()).sum()
-}
-
-pub(crate) fn prune_low_value_nodes(graph: &mut dag::TaskGraph, iter: u64, config: &CapabilityConfig) {
-    if !config.auto_prune {
-        return;
-    }
-    let mut parents = std::collections::HashSet::new();
-    for node in &graph.nodes {
-        for dep in &node.deps {
-            parents.insert(dep.clone());
-        }
-    }
-    let mut pruned = Vec::new();
-    for node in &graph.nodes {
-        if node.status != dag::Status::Completed {
-            continue;
-        }
-        if node.deps.is_empty() {
-            continue;
-        }
-        if parents.contains(&node.id) {
-            continue;
-        }
-        let age = node.completed_iter.map(|t| iter.saturating_sub(t)).unwrap_or(0);
-        if age < config.prune_min_age {
-            continue;
-        }
-        let util = node_utility(graph, &node.id, iter);
-        if util < config.prune_threshold {
-            pruned.push(node.id.clone());
-        }
-    }
-    if pruned.is_empty() {
-        return;
-    }
-    graph.nodes.retain(|n| !pruned.contains(&n.id));
-    for node in &mut graph.nodes {
-        node.deps.retain(|d| !pruned.contains(d));
-    }
-    graph.rebuild_index();
-}
-
-fn append_policy_dataset(entry: PolicyDatasetEntry) {
-    let path = Path::new("/workspace/ai_sandbox/canon/agent_logs/policy_dataset.jsonl");
-    if let Ok(line) = serde_json::to_string(&entry) {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .and_then(|mut f| std::io::Write::write_all(&mut f, format!("{}\n", line).as_bytes()));
-    }
-}
-
-pub(crate) fn apply_recovery(graph: &mut dag::TaskGraph) {
-    for node in &mut graph.nodes {
-        if node.status == dag::Status::Failed {
-            node.status = dag::Status::Pending;
-            node.readonly_fail_count = 0;
-            node.error = None;
-            node.result = None;
-        }
-    }
-    graph.rebuild_index();
-}
-
-fn repair_node(
-    graph: &mut dag::TaskGraph,
-    node_id: &str,
-    policy: &config::CapabilityPolicy,
-    repair_radius: usize,
-    max_repairs: u32,
-) -> Option<String> {
-    let node = graph.get_node_mut(node_id)?;
-    if node.repair_attempts >= max_repairs {
-        return None;
-    }
-    node.repair_attempts += 1;
-    drop(node);
-
-    let rules: &[fn(&mut dag::TaskGraph, &str, &config::CapabilityPolicy, usize) -> Option<&'static str>] = &[
-        rule_retry,
-        rule_capability_downgrade,
-        rule_dependency_rewire,
-        rule_node_split,
-    ];
-
-    for rule in rules {
-        if let Some(kind) = rule(graph, node_id, policy, repair_radius) {
-            return Some(kind.to_string());
-        }
-    }
-
-    None
-}
-
-fn rule_retry(
-    graph: &mut dag::TaskGraph,
-    node_id: &str,
-    policy: &config::CapabilityPolicy,
-    _repair_radius: usize,
-) -> Option<&'static str> {
-    let node = graph.get_node_mut(node_id)?;
-    if node.readonly_fail_count < policy.max_node_retries {
-        node.status = dag::Status::Ready;
-        node.error = None;
-        node.result = None;
-        return Some("retry");
-    }
-    None
-}
-
-fn rule_capability_downgrade(
-    graph: &mut dag::TaskGraph,
-    node_id: &str,
-    _policy: &config::CapabilityPolicy,
-    _repair_radius: usize,
-) -> Option<&'static str> {
-    let node = graph.get_node_mut(node_id)?;
-    if node
-        .required_capabilities
-        .iter()
-        .any(|c| c.class() == super::capability::CapabilityClass::Mutate)
-    {
-        node.required_capabilities = vec![super::capability::Capability::FileRead];
-        node.status = dag::Status::Pending;
-        node.error = None;
-        node.result = None;
-        return Some("capability_downgrade");
-    }
-    None
-}
-
-fn rule_dependency_rewire(
-    graph: &mut dag::TaskGraph,
-    node_id: &str,
-    _policy: &config::CapabilityPolicy,
-    repair_radius: usize,
-) -> Option<&'static str> {
-    if repair_radius < 1 {
-        return None;
-    }
-    let failed_deps: std::collections::HashSet<String> = graph
-        .nodes
-        .iter()
-        .filter(|n| n.status == dag::Status::Failed)
-        .map(|n| n.id.clone())
-        .collect();
-    let node = graph.get_node_mut(node_id)?;
-    let before = node.deps.len();
-    node.deps.retain(|dep| !failed_deps.contains(dep));
-    if node.deps.len() != before {
-        node.status = dag::Status::Pending;
-        return Some("dependency_rewire");
-    }
-    None
-}
-
-fn rule_node_split(
-    graph: &mut dag::TaskGraph,
-    node_id: &str,
-    _policy: &config::CapabilityPolicy,
-    _repair_radius: usize,
-) -> Option<&'static str> {
-    let node_snapshot = graph.get_node(node_id).cloned()?;
-    if node_snapshot.description.len() <= 120 {
-        return None;
-    }
-    let new_id = format!("{}_analysis", node_snapshot.id);
-    if graph.get_node(&new_id).is_some() {
-        return None;
-    }
-    let new_node = TaskNode {
-        id: new_id.clone(),
-        description: format!("Analyze: {}", node_snapshot.description),
-        status: dag::Status::Pending,
-        deps: node_snapshot.deps.clone(),
-        required_capabilities: vec![super::capability::Capability::ReadDag],
-        node_type: decompose::NodeType::Analysis,
-        priority: node_snapshot.priority,
-        budget: node_snapshot.budget,
-        reasoning_trace: None,
-        result: None,
-        error: None,
-        readonly_fail_count: 0,
-        repair_attempts: 0,
-        completed_iter: None,
-    };
-    if let Some(node) = graph.get_node_mut(node_id) {
-        node.deps = vec![new_id.clone()];
-    }
-    graph.nodes.push(new_node);
-    graph.rebuild_index();
-    Some("node_split")
-}
-
-fn take_recovery_signal() -> Option<String> {
-    let path = Path::new(LOG_ROOT).join("recovery_signal.json");
-    let raw = std::fs::read_to_string(&path).ok()?;
-    let _ = std::fs::remove_file(&path);
-    serde_json::from_str::<serde_json::Value>(&raw)
-        .ok()
-        .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(|s| s.to_string()))
-}
 
 pub(crate) async fn execute_graph_loop(
     graph: &mut dag::TaskGraph,
@@ -348,6 +123,12 @@ pub(crate) async fn execute_graph_loop(
                     if ready_ids.is_empty() && !graph.all_completed() && !graph.has_failed() {
                         if GpuScheduler::detect_deadlock(graph) {
                             failures.push(ExecFailure { kind: "deadlock", iter });
+                            let payload = serde_json::json!({
+                                "reason": "deadlock",
+                                "iter": iter,
+                            });
+                            let path = Path::new(LOG_ROOT).join("recovery_signal.json");
+                            let _ = std::fs::write(path, serde_json::to_string_pretty(&payload).unwrap_or_default());
                         }
                     }
                     if graph.nodes.iter().any(|n| n.readonly_fail_count > policy.max_node_retries) {
@@ -403,7 +184,14 @@ pub(crate) async fn execute_graph_loop(
                                 blocked_streak
                             );
                             if blocked_streak >= 3 {
-                                anyhow::bail!("blocked");
+                                let payload = serde_json::json!({
+                                    "reason": "blocked",
+                                    "iter": iter,
+                                });
+                                let path = Path::new(LOG_ROOT).join("recovery_signal.json");
+                                let _ = std::fs::write(path, serde_json::to_string_pretty(&payload).unwrap_or_default());
+                                cost_table.save();
+                                return Ok((iter, failures));
                             }
                             next_event = ExecEvent::Blocked;
                             skip_iter = true;
@@ -480,7 +268,7 @@ pub(crate) async fn execute_graph_loop(
                     let mut total_ms = 0u128;
                     let mut count = 0u64;
                     for item in results.drain(..) {
-                        if let Some(ms) = process_node_result(
+                        if let Some(ms) = execution_result::process_node_result(
                             item,
                             graph,
                             cwd,
@@ -506,18 +294,22 @@ pub(crate) async fn execute_graph_loop(
                     exec_metrics.nodes_executed = exec_metrics.nodes_executed.saturating_add(count);
                     if count > 0 {
                         let avg = (total_ms / count as u128) as u64;
-                        exec_metrics.avg_latency_ms = update_avg(exec_metrics.avg_latency_ms, avg);
+                        exec_metrics.avg_latency_ms = telemetry::update_avg_u64(exec_metrics.avg_latency_ms, avg);
                     }
                 }
                 ExecStep::MaintainGraph => {
                     graph_maintenance::maintain_graph(MaintenanceCtx {
                         graph,
-                        config,
                         iter,
                         features_retry_rate: features.retry_rate,
                         features_failed_fraction: features.failed_fraction,
                         features_branching_factor: features.branching_factor,
-                        cost_table,
+                        prune_unlinked: config.prune_unlinked,
+                        auto_prune: config.auto_prune,
+                        prune_min_age: config.prune_min_age,
+                        prune_threshold: config.prune_threshold,
+                        recovery_retry_rate_threshold: config.recovery_retry_rate_threshold,
+                        recovery_failed_fraction_threshold: config.recovery_failed_fraction_threshold,
                     })?;
                     if config.enable_resume
                         && config.snapshot_interval_iters > 0
@@ -537,92 +329,10 @@ pub(crate) async fn execute_graph_loop(
             continue;
         }
     }
+    cost_table.save();
     anyhow::bail!("iteration limit exceeded")
 }
 
-
-fn process_node_result(
-    item: Result<(String, Result<engine::NodeCallResult>, std::time::Duration)>,
-    graph: &mut dag::TaskGraph,
-    cwd: &[PathBuf],
-    max_output_lines: usize,
-    iter: u64,
-    policy: &config::CapabilityPolicy,
-    exec_metrics: &mut ExecMetrics,
-    repair_stats: &mut RepairStats,
-    repair_radius: usize,
-    max_repairs: u32,
-    cost_table: &mut CapabilityCostTable,
-    cost_decay_rate: f64,
-    cost_latency_weight: f64,
-    cost_failure_weight: f64,
-) -> Option<u128> {
-    let (node_id, call_result, elapsed) = match item {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!(
-                r#"[capability] {{"iter":{},"event":"join_error","error":"{}"}}"#,
-                iter,
-                e
-            );
-            return None;
-        }
-    };
-    let ms = elapsed.as_millis();
-    let outcome = call_result.and_then(|r| engine::apply_node_result(
-        r,
-        graph,
-        cwd,
-        max_output_lines,
-        Path::new(LOG_ROOT),
-        iter,
-        policy,
-    ));
-    if let Err(e) = outcome {
-        eprintln!(
-            r#"[capability] {{"iter":{},"event":"call_or_apply_error","node":"{}","error":"{}"}}"#,
-            iter,
-            node_id,
-            e
-        );
-        if let Some(kind) = repair_node(graph, &node_id, policy, repair_radius, max_repairs) {
-            repair_stats.attempts += 1;
-            repair_stats.successes += 1;
-            repair_stats.last_kind = Some(kind);
-        } else {
-            let _ = graph.update_status(&node_id, dag::Status::Failed);
-            if let Some(n) = graph.get_node_mut(&node_id) {
-                n.error = Some(e.to_string());
-            }
-            repair_stats.attempts += 1;
-            repair_stats.last_kind = Some("repair_failed".to_string());
-        }
-        exec_metrics.nodes_failed += 1;
-    }
-    if let Some(n) = graph.get_node_mut(&node_id) {
-        let success = matches!(n.status, dag::Status::Completed);
-        let latency_ms = ms as f64;
-        for cap in &n.required_capabilities {
-            cost_table.update(*cap, latency_ms, success, cost_decay_rate);
-        }
-        let _node_cost = cost_table.node_cost(&n.required_capabilities, cost_latency_weight, cost_failure_weight);
-        if n.readonly_fail_count > policy.max_node_retries {
-            n.reasoning_trace = Some(format!(
-                "REWRITE_REQUESTED: readonly failures exceeded {}",
-                policy.max_node_retries
-            ));
-            n.readonly_fail_count = 0;
-            n.status = dag::Status::Pending;
-            n.error = None;
-            n.result = None;
-        }
-    }
-    Some(ms)
-}
-
-fn update_avg(current: u64, next: u64) -> u64 {
-    current.checked_add(next).map(|s| s / 2).unwrap_or(next)
-}
 
 pub(crate) async fn run_planner_execution_loop(
     planner: &mut PlannerSession,
@@ -663,9 +373,19 @@ pub(crate) async fn run_planner_execution_loop(
     let mut last_mutation_success = 0u64;
     let mut last_mutation_reward_delta = 0.0;
     let mut resume_iteration = telemetry::resume_iteration();
+    let mut last_signal_sig = String::new();
+    let mut last_completed = 0usize;
+    let mut stagnant_iters = 0u64;
     while !graph.all_completed() && iter < max_iterations {
         eprintln!("{}", console::phase("planner", &format!("iter={} nodes={}", iter, graph.nodes.len())));
         let iter_start = std::time::Instant::now();
+        let completed_now = graph.nodes.iter().filter(|n| n.status == dag::Status::Completed).count();
+        if completed_now <= last_completed {
+            stagnant_iters = stagnant_iters.saturating_add(1);
+        } else {
+            stagnant_iters = 0;
+        }
+        last_completed = completed_now;
         let failure_stats = failure_store.stats();
         let features = graph_features(graph).with_failure_stats(&failure_stats);
         let policy_outcome = policy_engine::evaluate(&features, config);
@@ -674,6 +394,15 @@ pub(crate) async fn run_planner_execution_loop(
         let mut run_planner = policy_decision.run_planner;
         let mut expansion_scale = policy_decision.expansion_scale;
         let execution_preference = policy_decision.execution_preference;
+        let current_sig = graph_signature(graph);
+        let signal_changed = !current_sig.is_empty() && current_sig != last_signal_sig;
+        if signal_changed {
+            last_signal_sig = current_sig;
+            run_planner = true;
+        }
+        if stagnant_iters >= 2 {
+            run_planner = true;
+        }
         if graph.nodes.is_empty() || features.deadlock_rate > 0.0 {
             run_planner = true;
         }
@@ -736,7 +465,7 @@ pub(crate) async fn run_planner_execution_loop(
             }
             phase = PLANNER_TRANSITIONS[phase as usize][PlannerEvent::ReuseDone as usize];
         }
-        let recovery_reason = take_recovery_signal();
+        let recovery_reason = graph_maintenance::take_recovery_signal();
         let mut rewrite_requests = rewrite_requests;
         if let Some(reason) = recovery_reason.as_ref() {
             for node in &graph.nodes {
@@ -984,8 +713,16 @@ pub(crate) async fn run_planner_execution_loop(
             }
             planner_metrics.nodes_added += update.new_nodes.len() as u64;
             planner_metrics.edges_added += update.new_edges.len() as u64;
-            store.update(template_name, update)?;
-            *graph = store.load(template_name)?;
+            let mut updated = graph.clone();
+            apply_planner_update(&mut updated, update)?;
+            updated.validate().map_err(|e| anyhow::anyhow!(e))?;
+            store.save(template_name, &updated)?;
+            *graph = updated;
+            eprintln!(
+                "[planner] applied update: nodes={} edges={}",
+                graph.nodes.len(),
+                edge_count(graph)
+            );
             if let Some(rewrites) = revision_rewrites {
                 if rewrites > 0 {
                     for node in &mut graph.nodes {
@@ -1143,21 +880,10 @@ pub(crate) async fn run_planner_execution_loop(
             }),
             reward,
         };
-        append_policy_dataset(entry.clone());
+        policy_train::append_policy_dataset(&entry);
         policy_train::update_online(&entry, config.max_nodes, config.max_nodes.saturating_mul(4));
         if let Some(rewrites) = revision_rewrites {
-            let revision = TemplateRevisionLog {
-                template_hash: store.hash_for(template_name),
-                reward,
-                nodes: graph.nodes.len(),
-                edges: edge_count(graph),
-                rewrites,
-            };
-            let path = Path::new(TEMPLATE_ROOT).join(format!("template_revision_{:04}.json", iter));
-            if let Ok(pretty) = serde_json::to_string_pretty(&revision) {
-                let _ = std::fs::create_dir_all(Path::new(TEMPLATE_ROOT));
-                let _ = std::fs::write(path, pretty);
-            }
+            store.record_revision(template_name, graph, reward, rewrites, iter);
         }
         let snapshot = TelemetrySnapshot {
             planner: planner_metrics.clone(),
@@ -1167,17 +893,7 @@ pub(crate) async fn run_planner_execution_loop(
             template_hash: Some(store.hash_for(template_name)),
             goal: Some(template_name.to_string()),
         };
-        telemetry::record_snapshot(&Path::new(LOG_ROOT).join("planner_logs/metrics.json"), &snapshot);
-        telemetry::record_snapshot(&Path::new(LOG_ROOT).join("metrics.json"), &snapshot);
-        telemetry::record_snapshot(
-            &Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"),
-            &snapshot,
-        );
-        let _ = std::fs::create_dir_all(Path::new(TEMPLATE_ROOT));
-        telemetry::record_snapshot(
-            &Path::new(TEMPLATE_ROOT).join(format!("metrics_{}.json", template_hash)),
-            &snapshot,
-        );
+        telemetry::record_all_snapshots(&snapshot, LOG_ROOT, TEMPLATE_ROOT, &template_hash);
         iter += 1;
         resume_iteration = iter;
     }
@@ -1189,332 +905,4 @@ pub(crate) async fn run_planner_execution_loop(
     }
     store.record_reward(template_name, reward);
     Ok(reward)
-}
-
-fn validate_planner_update(
-    graph: &dag::TaskGraph,
-    update: &PlannerUpdate,
-    planner_max_new_nodes: usize,
-    planner_max_new_edges: usize,
-    failure_store: &mut FailureStore,
-    iteration: u64,
-    failure_constraint_threshold: usize,
-    max_constraints: usize,
-) -> Result<()> {
-    ensure(update.new_nodes.len() <= planner_max_new_nodes, "planner expansion limit exceeded")?;
-    ensure(update.new_edges.len() <= planner_max_new_edges, "planner edge limit exceeded")?;
-
-    let mut existing: HashMap<String, usize> = HashMap::new();
-    let mut status_by_id: HashMap<String, dag::Status> = HashMap::new();
-    for (idx, node) in graph.nodes.iter().enumerate() {
-        existing.insert(node.id.clone(), idx);
-        status_by_id.insert(node.id.clone(), node.status);
-    }
-    let mut new_ids: HashMap<String, usize> = HashMap::new();
-    update.new_nodes.iter().try_for_each(|spec| {
-        ensure(!spec.id.trim().is_empty(), "planner node id empty")?;
-        ensure(!spec.description.trim().is_empty(), "planner node description empty")?;
-        ensure(!spec.required_capabilities.iter().any(|c| matches!(c, Capability::Unknown)), "planner node has unknown capability")?;
-        ensure(!(existing.contains_key(&spec.id) || new_ids.contains_key(&spec.id)),
-               &format!("duplicate node id {}", spec.id))?;
-        new_ids.insert(spec.id.clone(), new_ids.len());
-        Ok::<(), anyhow::Error>(())
-    })?;
-
-    update.new_edges.iter().try_for_each(|edge| {
-        ensure(!edge.from.trim().is_empty() && !edge.to.trim().is_empty(), "planner edge endpoints empty")?;
-        let from_ok = existing.contains_key(&edge.from) || new_ids.contains_key(&edge.from);
-        let to_ok = existing.contains_key(&edge.to) || new_ids.contains_key(&edge.to);
-        ensure(from_ok && to_ok, "planner edge references unknown node")
-    })?;
-
-    update.retract_nodes.iter().try_for_each(|spec| {
-        let status = status_by_id.get(&spec.id).copied()
-            .ok_or_else(|| anyhow::anyhow!("retract references unknown node"))?;
-        ensure(matches!(status, dag::Status::Pending | dag::Status::Failed), "retract node must be pending or failed")
-    })?;
-
-    update.rewrite_nodes.iter().try_for_each(|spec| {
-        let status = status_by_id.get(&spec.id).copied()
-            .ok_or_else(|| anyhow::anyhow!("rewrite references unknown node"))?;
-        ensure(matches!(status, dag::Status::Pending), "rewrite node must be pending")?;
-        ensure(!spec.new_capabilities.iter().any(|c| matches!(c, Capability::Unknown)), "rewrite node has unknown capability")?;
-        let caps: std::collections::HashSet<_> = spec.new_capabilities.iter().copied().collect();
-        assert_class_disjoint(&caps).map_err(|e| anyhow::anyhow!(e))
-    })?;
-
-    let mut test_graph = graph.clone();
-    apply_planner_update(&mut test_graph, update.clone())?;
-    if let Err(e) = test_graph.validate() {
-        let msg = e.to_string();
-        if msg.contains("cycle detected") {
-            failure_store.record_graph("cycle", &test_graph, iteration);
-        } else if msg.contains("capability class") {
-            failure_store.record_graph("invalid_authority", &test_graph, iteration);
-        }
-        return Err(anyhow::anyhow!(e));
-    }
-    let constraints = failure_store.constraints(failure_constraint_threshold, max_constraints);
-    if !constraints.is_empty() {
-        let signals = compute_graph_signals(&test_graph);
-        for c in constraints {
-            if let Some(err) = check_constraint(&test_graph, &signals, &c) {
-                return Err(anyhow::anyhow!(err));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn check_constraint(
-    graph: &dag::TaskGraph,
-    signals: &super::graph_algo::GraphSignals,
-    constraint: &super::failure_store::Constraint,
-) -> Option<String> {
-    use super::failure_store::ConstraintRule;
-    match &constraint.rule {
-        ConstraintRule::NoCycle => signals.has_cycle.then(|| "constraint violated: NoCycle".to_string()),
-        ConstraintRule::NoUnreachable => (!signals.unreachable.is_empty())
-            .then(|| "constraint violated: NoUnreachable".to_string()),
-        ConstraintRule::CapabilityConflict => None,
-        ConstraintRule::InvalidDependency => None,
-        ConstraintRule::PatternRewrite { pattern, .. } => {
-            let bad = graph
-                .nodes
-                .iter()
-                .any(|n| n.description.to_lowercase().contains(pattern));
-            bad.then(|| format!("constraint violated: PatternRewrite({})", pattern))
-        }
-        ConstraintRule::SignatureBan => {
-            let sig = graph_signature(graph);
-            (sig == constraint.signature).then(|| "constraint violated: SignatureBan".to_string())
-        }
-    }
-}
-
-struct RepairReport {
-    count: u64,
-    ids: Vec<String>,
-}
-
-fn auto_repair_planner_update(graph: &dag::TaskGraph, update: &mut PlannerUpdate) -> RepairReport {
-    let mut used: std::collections::HashSet<String> =
-        graph.nodes.iter().map(|n| n.id.clone()).collect();
-    for spec in &update.new_nodes {
-        used.insert(spec.id.clone());
-    }
-    for spec in &update.rewrite_nodes {
-        used.insert(spec.id.clone());
-    }
-
-    let mut repairs = 0u64;
-    let mut ids = Vec::new();
-    let mut repaired_nodes: Vec<decompose::TaskSpec> = Vec::new();
-
-    for mut spec in update.new_nodes.drain(..) {
-        normalize_capabilities(&mut spec.required_capabilities, &spec.description);
-        let (observe, verify, mutate) = split_caps(&spec.required_capabilities);
-        if !mutate.is_empty() && !verify.is_empty() {
-            repairs += 1;
-            ids.push(spec.id.clone());
-            let verify_id = unique_id(format!("{}_verify", spec.id), &mut used);
-            let mut verify_caps = verify;
-            verify_caps.extend(observe);
-            let verify_node = decompose::TaskSpec {
-                id: verify_id.clone(),
-                description: format!("Verify preconditions for {}: {}", spec.id, spec.description),
-                deps: spec.deps.clone(),
-                required_capabilities: verify_caps,
-                node_type: decompose::NodeType::Analysis,
-                priority: spec.priority,
-                budget: spec.budget,
-                reasoning_trace: Some("AUTO_REPAIR: split verify/mutate".to_string()),
-            };
-            let mut mutate_deps = spec.deps.clone();
-            if !mutate_deps.contains(&verify_id) {
-                mutate_deps.push(verify_id.clone());
-            }
-            let mutate_node = decompose::TaskSpec {
-                id: spec.id,
-                description: spec.description,
-                deps: mutate_deps,
-                required_capabilities: mutate,
-                node_type: spec.node_type,
-                priority: spec.priority,
-                budget: spec.budget,
-                reasoning_trace: spec.reasoning_trace,
-            };
-            let mutate_id = mutate_node.id.clone();
-            repaired_nodes.push(verify_node);
-            repaired_nodes.push(mutate_node);
-            update.new_edges.push(EdgeSpec { from: verify_id, to: mutate_id });
-        } else {
-            let mut caps = if !mutate.is_empty() { mutate } else { verify };
-            if !caps.is_empty() {
-                caps.extend(observe);
-                let mut spec = spec;
-                spec.required_capabilities = caps;
-                repaired_nodes.push(spec);
-            } else {
-                repaired_nodes.push(spec);
-            }
-        }
-    }
-
-    for spec in update.rewrite_nodes.iter_mut() {
-        normalize_capabilities(&mut spec.new_capabilities, &spec.new_description);
-        let (observe, verify, mutate) = split_caps(&spec.new_capabilities);
-        if !mutate.is_empty() && !verify.is_empty() {
-            repairs += 1;
-            ids.push(spec.id.clone());
-            let verify_id = unique_id(format!("{}_verify", spec.id), &mut used);
-            let mut verify_caps = verify;
-            verify_caps.extend(observe);
-            update.new_nodes.push(decompose::TaskSpec {
-                id: verify_id.clone(),
-                description: format!("Verify preconditions for {}: {}", spec.id, spec.new_description),
-                deps: Vec::new(),
-                required_capabilities: verify_caps,
-                node_type: decompose::NodeType::Analysis,
-                priority: 5,
-                budget: None,
-                reasoning_trace: Some("AUTO_REPAIR: split rewrite verify/mutate".to_string()),
-            });
-            update.new_edges.push(EdgeSpec { from: verify_id, to: spec.id.clone() });
-            spec.new_capabilities = mutate;
-        } else if !mutate.is_empty() {
-            let mut caps = mutate;
-            caps.extend(observe);
-            spec.new_capabilities = caps;
-        } else {
-            let mut caps = verify;
-            caps.extend(observe);
-            spec.new_capabilities = caps;
-        }
-    }
-
-    update.new_nodes.extend(repaired_nodes);
-    RepairReport { count: repairs, ids }
-}
-
-fn normalize_capabilities(caps: &mut Vec<Capability>, description: &str) {
-    let lower = description.to_lowercase();
-    if caps.iter().any(|c| matches!(c, Capability::StatelessInvoke)) {
-        let replacement = if lower.contains("cargo check") {
-            Some(Capability::CargoCheck)
-        } else if lower.contains("cargo build") || lower.contains("cargo run") {
-            Some(Capability::CargoBuild)
-        } else if lower.contains("bash") || lower.contains("shell") {
-            Some(Capability::Bash)
-        } else {
-            None
-        };
-        if let Some(rep) = replacement {
-            *caps = caps
-                .iter()
-                .filter(|c| !matches!(c, Capability::StatelessInvoke))
-                .copied()
-                .collect();
-            caps.push(rep);
-        }
-    }
-}
-
-fn split_caps(caps: &[Capability]) -> (Vec<Capability>, Vec<Capability>, Vec<Capability>) {
-    let mut observe = Vec::new();
-    let mut verify = Vec::new();
-    let mut mutate = Vec::new();
-    for &cap in caps {
-        match cap.class() {
-            CapabilityClass::Observe => observe.push(cap),
-            CapabilityClass::Verify => verify.push(cap),
-            CapabilityClass::Mutate => mutate.push(cap),
-        }
-    }
-    (observe, verify, mutate)
-}
-
-fn unique_id(base: String, used: &mut std::collections::HashSet<String>) -> String {
-    if !used.contains(&base) {
-        used.insert(base.clone());
-        return base;
-    }
-    let mut idx = 1u32;
-    loop {
-        let candidate = format!("{}_{}", base, idx);
-        if !used.contains(&candidate) {
-            used.insert(candidate.clone());
-            return candidate;
-        }
-        idx = idx.saturating_add(1);
-    }
-}
-
-pub(crate) fn apply_planner_update(graph: &mut dag::TaskGraph, update: PlannerUpdate) -> Result<()> {
-    let retract_ids: std::collections::HashSet<String> = update.retract_nodes.into_iter()
-        .filter_map(|spec| {
-            graph.nodes.iter()
-                .find(|n| n.id == spec.id)
-                .filter(|n| matches!(n.status, dag::Status::Pending | dag::Status::Failed))
-                .map(|_| spec.id)
-        })
-        .collect();
-
-    if !retract_ids.is_empty() {
-        graph.nodes.retain(|n| !retract_ids.contains(&n.id));
-        for node in &mut graph.nodes {
-            node.deps.retain(|d| !retract_ids.contains(d));
-        }
-        graph.rebuild_index();
-    }
-
-    for spec in update.rewrite_nodes {
-        if let Some(node) = graph.get_node_mut(&spec.id) {
-            if node.status == dag::Status::Pending {
-                let caps: std::collections::HashSet<_> = spec.new_capabilities.iter().copied().collect();
-                assert_class_disjoint(&caps).map_err(|e| anyhow::anyhow!(e))?;
-                node.description = spec.new_description;
-                node.required_capabilities = spec.new_capabilities;
-            }
-        }
-    }
-
-    let existing: std::collections::HashSet<String> =
-        graph.nodes.iter().map(|n| n.id.clone()).collect();
-
-    graph.nodes.extend(
-        update.new_nodes.into_iter()
-            .filter(|s| !existing.contains(&s.id))
-            .map(|spec| TaskNode {
-                id: spec.id,
-                description: spec.description,
-                status: dag::Status::Pending,
-                deps: spec.deps,
-                required_capabilities: spec.required_capabilities,
-                node_type: spec.node_type,
-                priority: spec.priority,
-                budget: spec.budget,
-                reasoning_trace: spec.reasoning_trace,
-                result: None,
-                error: None,
-                readonly_fail_count: 0,
-                repair_attempts: 0,
-                completed_iter: None,
-            })
-    );
-
-    let id_to_idx: HashMap<String, usize> =
-        graph.nodes.iter().enumerate().map(|(i, n)| (n.id.clone(), i)).collect();
-
-    for edge in update.new_edges {
-        if let Some(&to_idx) = id_to_idx.get(&edge.to) {
-            let deps = &mut graph.nodes[to_idx].deps;
-            if !deps.contains(&edge.from) { deps.push(edge.from); }
-        }
-    }
-    Ok(())
-}
-
-fn ensure(cond: bool, msg: &str) -> Result<()> {
-    cond.then_some(()).ok_or_else(|| anyhow::anyhow!("{}", msg))
 }

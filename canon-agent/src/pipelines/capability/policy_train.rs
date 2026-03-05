@@ -87,6 +87,20 @@ pub fn update_online(entry: &PolicyDatasetEntry, max_nodes: usize, max_edges: us
     }
 }
 
+pub fn append_policy_dataset(entry: &PolicyDatasetEntry) {
+    let path = Path::new(DATASET_PATH);
+    if let Ok(line) = serde_json::to_string(entry) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, format!("{}\n", line).as_bytes()));
+    }
+}
+
 fn dot(w: &[f64], f: &[f64]) -> f64 {
     w.iter().zip(f.iter()).map(|(a, b)| a * b).sum()
 }

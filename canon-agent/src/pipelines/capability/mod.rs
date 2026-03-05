@@ -14,6 +14,7 @@ pub mod scheduler;
 pub mod scheduler_state;
 pub mod scheduler_scoring;
 pub mod dispatch;
+pub mod execution_result;
 pub mod planner_session;
 pub mod planner_state;
 pub mod telemetry;
@@ -43,6 +44,7 @@ use anyhow::Result;
 use config::{CapabilityConfig, GoalSpec};
 use graph_algo::{emit_planned_graph, run_graph_algorithms};
 use templates::TemplateStore;
+use policy_train::PolicyDatasetEntry;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -250,9 +252,52 @@ impl CapabilityPipeline {
                 failure_store.record_graph(failure.kind, &graph, failure.iter);
                 store.record_failure(&template_hash);
             }
+            let features = graph_algo::graph_features(&graph).with_failure_stats(&failure_store.stats());
+            let policy_outcome = policy_engine::evaluate(&features, &self.config);
             let reward = telemetry::compute_reward(&graph, iterations_used, self.config.max_iterations);
+            let entry = PolicyDatasetEntry {
+                features: serde_json::json!({
+                    "nodes": features.nodes,
+                    "edges": features.edges,
+                    "depth": features.depth,
+                    "scc_count": features.scc_count,
+                    "failure_rate": features.failure_rate,
+                    "reward_trend": features.reward_trend,
+                    "avg_out_degree": features.avg_out_degree,
+                    "avg_in_degree": features.avg_in_degree,
+                    "branching_factor": features.branching_factor,
+                    "leaf_count": features.leaf_count,
+                    "root_count": features.root_count,
+                    "verify_to_mutate_ratio": features.verify_to_mutate_ratio,
+                    "observe_to_mutate_ratio": features.observe_to_mutate_ratio,
+                    "node_type_entropy": features.node_type_entropy,
+                    "avg_node_priority": features.avg_node_priority,
+                    "avg_node_budget": features.avg_node_budget,
+                    "blocked_fraction": features.blocked_fraction,
+                    "ready_fraction": features.ready_fraction,
+                    "failed_fraction": features.failed_fraction,
+                    "completion_velocity": features.completion_velocity,
+                    "retry_rate": features.retry_rate,
+                    "failure_pattern_rate": features.failure_pattern_rate,
+                    "cycle_frequency": features.cycle_frequency,
+                    "deadlock_rate": features.deadlock_rate,
+                    "failures": failure_store.failure_count(),
+                }),
+                action: serde_json::json!({
+                    "add_nodes": 0,
+                    "add_edges": 0,
+                    "rewrites": 0
+                }),
+                policy_decision: serde_json::json!({
+                    "run_planner": policy_outcome.decision.run_planner,
+                    "expansion_scale": policy_outcome.decision.expansion_scale,
+                    "execution_preference": policy_outcome.decision.execution_preference
+                }),
+                reward,
+            };
+            policy_train::append_policy_dataset(&entry);
+            policy_train::update_online(&entry, self.config.max_nodes, self.config.max_nodes.saturating_mul(4));
             store.record_reward(&template_name, reward);
-            let features = graph_algo::graph_features(&graph);
             let runtime = telemetry::RuntimeMetrics {
                 queue_depth: telemetry::pending_requests(),
                 retry_rate: 0.0,

@@ -576,6 +576,10 @@ pub fn node_utility(graph: &dag::TaskGraph, node_id: &str, iter: u64) -> f64 {
     0.6 * dependents as f64 + 0.3 * completion_value - 0.1 * age
 }
 
+pub fn edge_count(graph: &dag::TaskGraph) -> usize {
+    graph.nodes.iter().map(|n| n.deps.len()).sum()
+}
+
 pub fn graph_signature(graph: &dag::TaskGraph) -> String {
     let mut nodes = graph.nodes.iter().map(|n| {
         let mut caps: Vec<Capability> = n.required_capabilities.clone();

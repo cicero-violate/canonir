@@ -1,16 +1,19 @@
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
-use std::path::{PathBuf};
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use super::dag::TaskGraph;
+use super::capability::assert_class_disjoint;
+use super::dag::{TaskGraph, TaskNode};
 use super::planner_session::PlannerUpdate;
-use super::scheduler::apply_planner_update;
 use super::template_index;
 use super::goal_embedding;
+use super::graph_algo;
+use super::TEMPLATE_ROOT;
 
 pub struct TemplateStore {
     root: PathBuf,
@@ -186,4 +189,99 @@ impl TemplateStore {
         self.index.bump_failure_count(template_hash);
         self.index.save();
     }
+
+    pub fn record_revision(
+        &self,
+        template_name: &str,
+        graph: &TaskGraph,
+        reward: f64,
+        rewrites: usize,
+        iter: u64,
+    ) {
+        #[derive(serde::Serialize)]
+        struct TemplateRevisionLog {
+            template_hash: String,
+            reward: f64,
+            nodes: usize,
+            edges: usize,
+            rewrites: usize,
+        }
+        let revision = TemplateRevisionLog {
+            template_hash: self.hash_for(template_name),
+            reward,
+            nodes: graph.nodes.len(),
+            edges: graph_algo::edge_count(graph),
+            rewrites,
+        };
+        let path = PathBuf::from(TEMPLATE_ROOT).join(format!("template_revision_{:04}.json", iter));
+        if let Ok(pretty) = serde_json::to_string_pretty(&revision) {
+            let _ = std::fs::create_dir_all(Path::new(TEMPLATE_ROOT));
+            let _ = std::fs::write(path, pretty);
+        }
+    }
+}
+
+pub(crate) fn apply_planner_update(graph: &mut TaskGraph, update: PlannerUpdate) -> Result<()> {
+    let retract_ids: HashSet<String> = update.retract_nodes.into_iter()
+        .filter_map(|spec| {
+            graph.nodes.iter()
+                .find(|n| n.id == spec.id)
+                .filter(|n| matches!(n.status, super::dag::Status::Pending | super::dag::Status::Failed))
+                .map(|_| spec.id)
+        })
+        .collect();
+
+    if !retract_ids.is_empty() {
+        graph.nodes.retain(|n| !retract_ids.contains(&n.id));
+        for node in &mut graph.nodes {
+            node.deps.retain(|d| !retract_ids.contains(d));
+        }
+        graph.rebuild_index();
+    }
+
+    for spec in update.rewrite_nodes {
+        if let Some(node) = graph.get_node_mut(&spec.id) {
+            if node.status == super::dag::Status::Pending {
+                let caps: HashSet<_> = spec.new_capabilities.iter().copied().collect();
+                assert_class_disjoint(&caps).map_err(|e| anyhow::anyhow!(e))?;
+                node.description = spec.new_description;
+                node.required_capabilities = spec.new_capabilities;
+            }
+        }
+    }
+
+    let existing: HashSet<String> =
+        graph.nodes.iter().map(|n| n.id.clone()).collect();
+
+    graph.nodes.extend(
+        update.new_nodes.into_iter()
+            .filter(|s| !existing.contains(&s.id))
+            .map(|spec| TaskNode {
+                id: spec.id,
+                description: spec.description,
+                status: super::dag::Status::Pending,
+                deps: spec.deps,
+                required_capabilities: spec.required_capabilities,
+                node_type: spec.node_type,
+                priority: spec.priority,
+                budget: spec.budget,
+                reasoning_trace: spec.reasoning_trace,
+                result: None,
+                error: None,
+                readonly_fail_count: 0,
+                repair_attempts: 0,
+                completed_iter: None,
+            })
+    );
+
+    let id_to_idx: HashMap<String, usize> =
+        graph.nodes.iter().enumerate().map(|(i, n)| (n.id.clone(), i)).collect();
+
+    for edge in update.new_edges {
+        if let Some(&to_idx) = id_to_idx.get(&edge.to) {
+            let deps = &mut graph.nodes[to_idx].deps;
+            if !deps.contains(&edge.from) { deps.push(edge.from); }
+        }
+    }
+    Ok(())
 }

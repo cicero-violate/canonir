@@ -6,7 +6,7 @@ use anyhow::Result;
 use tokio::sync::Semaphore;
 
 use super::config::CapabilityConfig;
-use super::dag::{AuthorityContext, TaskNode};
+use super::dag::{AuthorityContext, ContextNode, TaskNode};
 use super::endpoint_scheduler;
 use super::engine;
 use super::tab_management::TabsHandle;
@@ -76,7 +76,7 @@ pub async fn dispatch_node_call(
     tabs: &TabsHandle,
     sem: Arc<Semaphore>,
     ctx: DispatchCtx,
-    context: Vec<engine::ContextNode>,
+    context: Vec<ContextNode>,
     iter: u64,
     retry_count: u32,
     retry_delay: u64,

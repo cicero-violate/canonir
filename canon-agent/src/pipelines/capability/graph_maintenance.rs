@@ -2,22 +2,81 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::capability_cost::CapabilityCostTable;
-use super::config::CapabilityConfig;
 use super::dag;
-use super::graph_algo::{emit_planned_graph, run_graph_algorithms};
+use super::graph_algo::{emit_planned_graph, node_utility, run_graph_algorithms};
 use super::graph_runtime::{enforce_semantic_validations, prune_unlinked_nodes};
-use super::scheduler::{apply_recovery, prune_low_value_nodes};
 use super::LOG_ROOT;
 
 pub struct MaintenanceCtx<'a> {
     pub graph: &'a mut dag::TaskGraph,
-    pub config: &'a CapabilityConfig,
     pub iter: u64,
     pub features_retry_rate: f64,
     pub features_failed_fraction: f64,
     pub features_branching_factor: f64,
-    pub cost_table: &'a mut CapabilityCostTable,
+    pub prune_unlinked: bool,
+    pub auto_prune: bool,
+    pub prune_min_age: u64,
+    pub prune_threshold: f64,
+    pub recovery_retry_rate_threshold: f64,
+    pub recovery_failed_fraction_threshold: f64,
+}
+
+pub(crate) fn prune_low_value_nodes(
+    graph: &mut dag::TaskGraph,
+    iter: u64,
+    auto_prune: bool,
+    prune_min_age: u64,
+    prune_threshold: f64,
+) {
+    if !auto_prune {
+        return;
+    }
+    let mut parents = std::collections::HashSet::new();
+    for node in &graph.nodes {
+        for dep in &node.deps {
+            parents.insert(dep.clone());
+        }
+    }
+    let mut pruned = Vec::new();
+    for node in &graph.nodes {
+        if node.status != dag::Status::Completed {
+            continue;
+        }
+        if node.deps.is_empty() {
+            continue;
+        }
+        if parents.contains(&node.id) {
+            continue;
+        }
+        let age = node.completed_iter.map(|t| iter.saturating_sub(t)).unwrap_or(0);
+        if age < prune_min_age {
+            continue;
+        }
+        let util = node_utility(graph, &node.id, iter);
+        if util < prune_threshold {
+            pruned.push(node.id.clone());
+        }
+    }
+    if pruned.is_empty() {
+        return;
+    }
+    graph.nodes.retain(|n| !pruned.contains(&n.id));
+    for node in &mut graph.nodes {
+        node.deps.retain(|d| !pruned.contains(d));
+    }
+    graph.rebuild_index();
+}
+
+pub(crate) fn apply_recovery(graph: &mut dag::TaskGraph) {
+    for node in &mut graph.nodes {
+        if node.status == dag::Status::Failed {
+            node.status = dag::Status::Pending;
+            node.readonly_fail_count = 0;
+            node.error = None;
+            node.result = None;
+        }
+    }
+    graph.rebuild_index();
 }
 
 pub fn maintain_graph(ctx: MaintenanceCtx<'_>) -> Result<()> {
@@ -26,22 +85,36 @@ pub fn maintain_graph(ctx: MaintenanceCtx<'_>) -> Result<()> {
     emit_planned_graph(ctx.graph, Path::new(LOG_ROOT), iter_u32);
     run_graph_algorithms(ctx.graph, Path::new(LOG_ROOT), iter_u32);
 
-    if ctx.config.prune_unlinked {
+    if ctx.prune_unlinked {
         prune_unlinked_nodes(ctx.graph);
     }
     enforce_semantic_validations(ctx.graph)?;
-    prune_low_value_nodes(ctx.graph, ctx.iter, ctx.config);
+    prune_low_value_nodes(
+        ctx.graph,
+        ctx.iter,
+        ctx.auto_prune,
+        ctx.prune_min_age,
+        ctx.prune_threshold,
+    );
     let risk = risk_score(
         ctx.features_retry_rate,
         ctx.features_failed_fraction,
         ctx.features_branching_factor,
     );
-    let threshold = (ctx.config.recovery_retry_rate_threshold + ctx.config.recovery_failed_fraction_threshold) / 2.0;
+    let threshold = (ctx.recovery_retry_rate_threshold + ctx.recovery_failed_fraction_threshold) / 2.0;
     if risk > threshold {
         apply_recovery(ctx.graph);
     }
-    ctx.cost_table.save();
     Ok(())
+}
+
+pub(crate) fn take_recovery_signal() -> Option<String> {
+    let path = Path::new(LOG_ROOT).join("recovery_signal.json");
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let _ = std::fs::remove_file(&path);
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(|s| s.to_string()))
 }
 
 fn risk_score(retry_rate: f64, failed_fraction: f64, branching_factor: f64) -> f64 {

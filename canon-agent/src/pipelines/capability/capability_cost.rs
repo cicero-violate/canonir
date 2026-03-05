@@ -4,6 +4,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::capability::Capability;
+use super::dag::TaskNode;
 
 const COST_PATH: &str = "/workspace/ai_sandbox/canon/agent_logs/capability_costs.json";
 
@@ -95,4 +96,19 @@ impl CapabilityCostTable {
         }
         lines.join("\n")
     }
+}
+
+pub fn apply_node_cost_update(
+    table: &mut CapabilityCostTable,
+    node: &TaskNode,
+    latency_ms: f64,
+    success: bool,
+    decay: f64,
+    latency_weight: f64,
+    failure_weight: f64,
+) -> f64 {
+    for cap in &node.required_capabilities {
+        table.update(*cap, latency_ms, success, decay);
+    }
+    table.node_cost(&node.required_capabilities, latency_weight, failure_weight)
 }

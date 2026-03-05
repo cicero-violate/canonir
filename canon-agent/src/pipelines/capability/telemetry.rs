@@ -81,6 +81,29 @@ pub fn record_snapshot(path: &Path, snapshot: &TelemetrySnapshot) {
     }
 }
 
+pub fn record_all_snapshots(
+    snapshot: &TelemetrySnapshot,
+    log_root: &str,
+    template_root: &str,
+    template_hash: &str,
+) {
+    record_snapshot(&Path::new(log_root).join("planner_logs/metrics.json"), snapshot);
+    record_snapshot(&Path::new(log_root).join("metrics.json"), snapshot);
+    record_snapshot(
+        &Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"),
+        snapshot,
+    );
+    let _ = std::fs::create_dir_all(Path::new(template_root));
+    record_snapshot(
+        &Path::new(template_root).join(format!("metrics_{}.json", template_hash)),
+        snapshot,
+    );
+}
+
+pub fn update_avg_u64(current: u64, next: u64) -> u64 {
+    current.checked_add(next).map(|s| s / 2).unwrap_or(next)
+}
+
 pub fn progress_fraction(graph: &TaskGraph) -> f64 {
     if graph.nodes.is_empty() {
         return 0.0;

@@ -2,13 +2,14 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::collections::HashSet;
 
 use super::act::{apply_mutations, apply_read_only, summarize_deltas};
 use super::config::CapabilityPolicy;
 use super::dag::AuthorityContext;
 use super::capability::{Capability, CapabilityClass};
 use super::console;
-use super::dag::{Status, TaskGraph, TaskNode};
+use super::dag::{ContextNode, Status, TaskGraph, TaskNode};
 use super::llm::call_agent_json_with_retry_allow_mismatch;
 use super::tab_management::TabsHandle;
 use super::Delta;
@@ -59,25 +60,16 @@ pub enum NodeCallResult {
     Verify { node_id: String, output: VerifyOutput },
 }
 
+pub struct NodeProcessReport {
+    pub node_id: String,
+    pub had_error: bool,
+    pub repair_kind: Option<String>,
+    pub repair_succeeded: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 enum DispatchMode { Mutate, Verify, Readonly }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContextNode {
-    pub id: String,
-    pub description: String,
-    pub node_type: super::decompose::NodeType,
-    pub deps: Vec<String>,
-    pub required_capabilities: Vec<Capability>,
-    pub status: Status,
-    pub result: Option<String>,
-    pub error: Option<String>,
-    #[serde(default)]
-    pub causal_summary: Option<String>,
-    #[serde(default)]
-    pub failure_summary: Option<String>,
-}
 
 const MUTATE_SCHEMA: &str = "Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"results\": [\n    { \"id\": \"t1\", \"deltas\": [ { \"type\": \"write_file\", \"path\": \"x\", \"content\": \"...\" } ], \"rationale\": \"string\" }\n  ]\n}\nAllowed delta types:\n- read_file { path }\n- list_dir { path }\n- read_command { command, args }\n- write_file { path, content }\n- replace_text { path, find, replace }\n- delete_file { path }\n";
 const VERIFY_SCHEMA: &str = "Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"updates\": [\n    { \"id\": \"t1\", \"status\": \"completed\", \"error\": null }\n  ]\n}\nAllowed status values: pending, ready, running, completed, failed, blocked.\n";
@@ -110,6 +102,199 @@ const MODE_CONFIGS: [ModeConfig; 3] = [
 type ParseFn = fn(Value, &TaskNode, u64) -> Result<NodeCallResult>;
 
 const PARSE_FNS: [ParseFn; 3] = [parse_mutate, parse_verify, parse_readonly];
+
+pub(crate) fn repair_node(
+    graph: &mut TaskGraph,
+    node_id: &str,
+    policy: &CapabilityPolicy,
+    repair_radius: usize,
+    max_repairs: u32,
+) -> Option<String> {
+    let node = graph.get_node_mut(node_id)?;
+    if node.repair_attempts >= max_repairs {
+        return None;
+    }
+    node.repair_attempts += 1;
+    drop(node);
+
+    let rules: &[fn(&mut TaskGraph, &str, &CapabilityPolicy, usize) -> Option<&'static str>] = &[
+        rule_retry,
+        rule_capability_downgrade,
+        rule_dependency_rewire,
+        rule_node_split,
+    ];
+
+    for rule in rules {
+        if let Some(kind) = rule(graph, node_id, policy, repair_radius) {
+            return Some(kind.to_string());
+        }
+    }
+
+    None
+}
+
+pub(crate) fn process_call_result(
+    node_id: String,
+    call_result: Result<NodeCallResult>,
+    graph: &mut TaskGraph,
+    cwd: &[PathBuf],
+    max_output_lines: usize,
+    log_root: &Path,
+    iter: u64,
+    policy: &CapabilityPolicy,
+    repair_radius: usize,
+    max_repairs: u32,
+) -> Result<NodeProcessReport> {
+    let outcome = call_result.and_then(|r| apply_node_result(
+        r,
+        graph,
+        cwd,
+        max_output_lines,
+        log_root,
+        iter,
+        policy,
+    ));
+    if let Err(e) = outcome {
+        if let Some(kind) = repair_node(graph, &node_id, policy, repair_radius, max_repairs) {
+            return Ok(NodeProcessReport {
+                node_id,
+                had_error: true,
+                repair_kind: Some(kind),
+                repair_succeeded: true,
+            });
+        }
+        let _ = graph.update_status(&node_id, Status::Failed);
+        if let Some(n) = graph.get_node_mut(&node_id) {
+            n.error = Some(e.to_string());
+        }
+        return Ok(NodeProcessReport {
+            node_id,
+            had_error: true,
+            repair_kind: Some("repair_failed".to_string()),
+            repair_succeeded: false,
+        });
+    }
+
+    if let Some(n) = graph.get_node_mut(&node_id) {
+        if n.readonly_fail_count > policy.max_node_retries {
+            n.reasoning_trace = Some(format!(
+                "REWRITE_REQUESTED: readonly failures exceeded {}",
+                policy.max_node_retries
+            ));
+            n.readonly_fail_count = 0;
+            n.status = Status::Pending;
+            n.error = None;
+            n.result = None;
+        }
+    }
+
+    Ok(NodeProcessReport {
+        node_id,
+        had_error: false,
+        repair_kind: None,
+        repair_succeeded: false,
+    })
+}
+
+fn rule_retry(
+    graph: &mut TaskGraph,
+    node_id: &str,
+    policy: &CapabilityPolicy,
+    _repair_radius: usize,
+) -> Option<&'static str> {
+    let node = graph.get_node_mut(node_id)?;
+    if node.readonly_fail_count < policy.max_node_retries {
+        node.status = Status::Ready;
+        node.error = None;
+        node.result = None;
+        return Some("retry");
+    }
+    None
+}
+
+fn rule_capability_downgrade(
+    graph: &mut TaskGraph,
+    node_id: &str,
+    _policy: &CapabilityPolicy,
+    _repair_radius: usize,
+) -> Option<&'static str> {
+    let node = graph.get_node_mut(node_id)?;
+    if node
+        .required_capabilities
+        .iter()
+        .any(|c| c.class() == CapabilityClass::Mutate)
+    {
+        node.required_capabilities = vec![Capability::FileRead];
+        node.status = Status::Pending;
+        node.error = None;
+        node.result = None;
+        return Some("capability_downgrade");
+    }
+    None
+}
+
+fn rule_dependency_rewire(
+    graph: &mut TaskGraph,
+    node_id: &str,
+    _policy: &CapabilityPolicy,
+    repair_radius: usize,
+) -> Option<&'static str> {
+    if repair_radius < 1 {
+        return None;
+    }
+    let failed_deps: HashSet<String> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.status == Status::Failed)
+        .map(|n| n.id.clone())
+        .collect();
+    let node = graph.get_node_mut(node_id)?;
+    let before = node.deps.len();
+    node.deps.retain(|dep| !failed_deps.contains(dep));
+    if node.deps.len() != before {
+        node.status = Status::Pending;
+        return Some("dependency_rewire");
+    }
+    None
+}
+
+fn rule_node_split(
+    graph: &mut TaskGraph,
+    node_id: &str,
+    _policy: &CapabilityPolicy,
+    _repair_radius: usize,
+) -> Option<&'static str> {
+    let node_snapshot = graph.get_node(node_id).cloned()?;
+    if node_snapshot.description.len() <= 120 {
+        return None;
+    }
+    let new_id = format!("{}_analysis", node_snapshot.id);
+    if graph.get_node(&new_id).is_some() {
+        return None;
+    }
+    let new_node = TaskNode {
+        id: new_id.clone(),
+        description: format!("Analyze: {}", node_snapshot.description),
+        status: Status::Pending,
+        deps: node_snapshot.deps.clone(),
+        required_capabilities: vec![Capability::ReadDag],
+        node_type: super::decompose::NodeType::Analysis,
+        priority: node_snapshot.priority,
+        budget: node_snapshot.budget,
+        reasoning_trace: None,
+        result: None,
+        error: None,
+        readonly_fail_count: 0,
+        repair_attempts: 0,
+        completed_iter: None,
+    };
+    if let Some(node) = graph.get_node_mut(node_id) {
+        node.deps = vec![new_id.clone()];
+    }
+    graph.nodes.push(new_node);
+    graph.rebuild_index();
+    Some("node_split")
+}
 
 fn parse_mutate(payload: Value, node: &TaskNode, iter: u64) -> Result<NodeCallResult> {
     let output = parse_exec_output(&payload, &node.id)?;

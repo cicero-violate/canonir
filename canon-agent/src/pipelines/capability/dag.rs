@@ -63,6 +63,22 @@ pub struct TaskNode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextNode {
+    pub id: String,
+    pub description: String,
+    pub node_type: NodeType,
+    pub deps: Vec<String>,
+    pub required_capabilities: Vec<Capability>,
+    pub status: Status,
+    pub result: Option<String>,
+    pub error: Option<String>,
+    #[serde(default)]
+    pub causal_summary: Option<String>,
+    #[serde(default)]
+    pub failure_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskGraph {
     pub nodes: Vec<TaskNode>,
     #[serde(skip, default)]

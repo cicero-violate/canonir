@@ -137,10 +137,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let max_ticks: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20);
 
             let addr = "127.0.0.1:9100".parse()?;
-            let config = canon_agent::pipelines::multi_dag::config::AgentConfig::load()?;
+            let config = canon_agent::pipelines::capability::config::CapabilityConfig::load()?;
             let bridge = ws_server::spawn(addr, config.response_timeout_secs);
 
-            let pipeline = canon_agent::pipelines::multi_dag::AgentPipeline::new(bridge);
+            let pipeline = canon_agent::pipelines::capability::CapabilityPipeline::new(bridge);
 
             // InvariantPipeline operates purely on files — ir and layout are unused.
             let mut ir = SystemState::new(

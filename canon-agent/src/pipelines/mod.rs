@@ -10,8 +10,6 @@
 //! The runner is pipeline-agnostic — it drives ticks and manages
 //! the reward ledger; the pipeline decides what happens inside each tick.
 
-#[path = "multi-dag/mod.rs"]
-pub mod multi_dag;
 pub mod capability;
 pub mod refactor;
 
