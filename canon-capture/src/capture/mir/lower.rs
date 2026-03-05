@@ -229,6 +229,11 @@ fn stage_finalize_body_with_ret_fallback(tcx: TyCtxt<'_>, def_id: DefId, returns
     // provide a structurally valid return. Emitting `__ret = ()` here
     // pollutes non-unit functions with unit-typed return locals.
     if !returns_unit {
+        for bb in &mut blocks {
+            bb.stmts.retain(|s| {
+                !matches!(s, Stmt::Assign { lhs, rhs } if lhs == "__ret" && rhs.trim() == "()")
+            });
+        }
         let mut has_ret_binding = false;
         for bb in &blocks {
             if bb.stmts.iter().any(|s| matches!(s, Stmt::Assign { lhs, .. } if lhs == "__ret")) {

@@ -422,12 +422,26 @@ pub(crate) fn lower_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> TypeExpr {
         }
         ty::TyKind::Adt(adt, args) => {
             let base = norm::path(tcx, adt.did());
-            let lowered_args: Vec<TypeExpr> = args
+            let generics = tcx.generics_of(adt.did());
+            let lowered_args: Vec<TypeExpr> = generics
+                .own_params
                 .iter()
-                .map(|arg| match arg.kind() {
-                    ty::GenericArgKind::Lifetime(_) => TypeExpr::Path("'_".to_string()),
-                    ty::GenericArgKind::Type(ty) => lower_ty(tcx, ty),
-                    ty::GenericArgKind::Const(_) => TypeExpr::Path("_".to_string()),
+                .map(|param| {
+                    let arg = args[param.index as usize];
+                    match param.kind {
+                        ty::GenericParamDefKind::Lifetime => match arg.kind() {
+                            ty::GenericArgKind::Lifetime(region) => match region.kind() {
+                                ty::RegionKind::ReStatic => TypeExpr::Path("'static".to_string()),
+                                _ => TypeExpr::Path("'_".to_string()),
+                            },
+                            _ => TypeExpr::Path("'_".to_string()),
+                        },
+                        ty::GenericParamDefKind::Type { .. } => match arg.kind() {
+                            ty::GenericArgKind::Type(ty) => lower_ty(tcx, ty),
+                            _ => TypeExpr::Path("_".to_string()),
+                        },
+                        ty::GenericParamDefKind::Const { .. } => TypeExpr::Path("_".to_string()),
+                    }
                 })
                 .collect();
             if lowered_args.is_empty() {
