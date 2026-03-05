@@ -17,7 +17,7 @@ use super::execution_result::{self, RepairStats};
 use super::graph_algo::{compute_graph_signals, graph_signature, node_utility, graph_features, edge_count};
 use super::graph_maintenance::{self, MaintenanceCtx};
 use super::graph_runtime::build_context;
-use super::tab_management::{self, TabsHandle};
+use super::engine::TabsHandle;
 use super::LOG_ROOT;
 use super::TEMPLATE_ROOT;
 use super::planner_session::{auto_repair_planner_update, validate_planner_update, PlannerSession, PlannerUpdate, EdgeSpec};
@@ -578,27 +578,85 @@ pub(crate) async fn run_planner_execution_loop(
                 if attempt > 1 {
                     planner_metrics.planner_retries += 1;
                 }
-                let mut candidate = planner
-                    .planner_iteration(
-                        graph,
-                        &signals,
-                        &features,
-                        &cost_table.summary(5, config.cost_latency_weight, config.cost_failure_weight),
-                        &rewrite_requests,
+                let prompt = planner.build_prompt(
+                    graph,
+                    &signals,
+                    &features,
+                    &cost_table.summary(5, config.cost_latency_weight, config.cost_failure_weight),
+                    &rewrite_requests,
+                    planner_max_new_nodes,
+                    planner_max_new_edges,
+                    config.max_nodes,
+                    config.max_nodes.saturating_mul(4),
+                );
+                let mut candidate = PlannerUpdate {
+                    new_nodes: Vec::new(),
+                    new_edges: Vec::new(),
+                    retract_nodes: Vec::new(),
+                    rewrite_nodes: Vec::new(),
+                };
+                let attempts = retry_count.max(1);
+                for attempt in 1..=attempts {
+                    let allow_mismatch = attempt > 1 && planner.is_history_empty();
+                    let raw = engine::call_llm_raw_with_retry_allow_mismatch(
                         bridge,
+                        &endpoint.id,
+                        &endpoint.url,
+                        endpoint.stateful,
+                        &prompt,
+                        &endpoint.role_markdown,
+                        "planner",
+                        None,
                         tabs,
                         endpoint.max_tabs,
                         tab_cooldown_ms,
                         retry_count,
                         retry_delay,
-                        &log_dir,
-                        iter,
-                        planner_max_new_nodes,
-                        planner_max_new_edges,
-                        config.max_nodes,
-                        config.max_nodes.saturating_mul(4),
                     )
-                    .await?;
+                    .await;
+                    let raw = match raw {
+                        Ok(v) => v,
+                        Err(e) => {
+                            if e.to_string().contains("req_id mismatch") {
+                                planner.clear_history();
+                                let retry_raw = engine::call_llm_raw_with_retry_allow_mismatch(
+                                    bridge,
+                                    &endpoint.id,
+                                    &endpoint.url,
+                                    endpoint.stateful,
+                                    &prompt,
+                                    &endpoint.role_markdown,
+                                    "planner",
+                                    None,
+                                    tabs,
+                                    endpoint.max_tabs,
+                                    tab_cooldown_ms,
+                                    retry_count,
+                                    retry_delay,
+                                )
+                                .await?;
+                                retry_raw
+                            } else if attempt < attempts {
+                                continue;
+                            } else {
+                                return Err(e);
+                            }
+                        }
+                    };
+                    match planner.apply_raw_response(raw, &log_dir, iter, graph.nodes.len(), &signals) {
+                        Ok(update) => {
+                            candidate = update;
+                            break;
+                        }
+                        Err(e) => {
+                            if attempt < attempts {
+                                tokio::time::sleep(std::time::Duration::from_secs(retry_delay)).await;
+                                continue;
+                            }
+                            return Err(e);
+                        }
+                    }
+                }
                 let repaired = auto_repair_planner_update(graph, &mut candidate);
                 if repaired.count > 0 {
                     let ids = repaired.ids.join(", ");

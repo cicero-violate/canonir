@@ -10,8 +10,8 @@ use super::dag::AuthorityContext;
 use super::capability::{Capability, CapabilityClass};
 use super::console;
 use super::dag::{ContextNode, Status, TaskGraph, TaskNode};
-use super::llm::call_agent_json_with_retry_allow_mismatch;
-use super::tab_management::TabsHandle;
+use super::llm::{call_agent_json_with_retry_allow_mismatch, call_agent_raw_with_retry_allow_mismatch};
+pub use super::tab_management::TabsHandle;
 use super::Delta;
 use crate::ws_server::WsBridge;
 
@@ -58,6 +58,40 @@ pub enum NodeCallResult {
     Mutate { node_id: String, output: ExecOutput },
     Readonly { node_id: String, output: ExecOutput },
     Verify { node_id: String, output: VerifyOutput },
+}
+
+
+pub async fn call_llm_raw_with_retry_allow_mismatch(
+    bridge: &WsBridge,
+    endpoint_id: &str,
+    url: &str,
+    stateful: bool,
+    prompt: &str,
+    role_schema: &str,
+    phase: &str,
+    node_id: Option<&str>,
+    tabs: &TabsHandle,
+    max_tabs: usize,
+    tab_cooldown_ms: u64,
+    max_retries: u32,
+    delay_secs: u64,
+) -> Result<String> {
+    call_agent_raw_with_retry_allow_mismatch(
+        bridge,
+        endpoint_id,
+        url,
+        stateful,
+        prompt,
+        role_schema,
+        phase,
+        node_id,
+        tabs,
+        max_tabs,
+        tab_cooldown_ms,
+        max_retries,
+        delay_secs,
+    )
+    .await
 }
 
 pub struct NodeProcessReport {

@@ -5,10 +5,10 @@ use anyhow::Result;
 use super::dag;
 use super::graph_algo::{emit_planned_graph, node_utility, run_graph_algorithms};
 use super::graph_runtime::{enforce_semantic_validations, prune_unlinked_nodes};
-use super::LOG_ROOT;
 
 pub struct MaintenanceCtx<'a> {
     pub graph: &'a mut dag::TaskGraph,
+    pub log_dir: &'a Path,
     pub iter: u64,
     pub features_retry_rate: f64,
     pub features_failed_fraction: f64,
@@ -82,8 +82,8 @@ pub(crate) fn apply_recovery(graph: &mut dag::TaskGraph) {
 pub fn maintain_graph(ctx: MaintenanceCtx<'_>) -> Result<()> {
     super::ensure_unique_node_ids(&mut ctx.graph.nodes);
     let iter_u32 = u32::try_from(ctx.iter).unwrap_or(u32::MAX);
-    emit_planned_graph(ctx.graph, Path::new(LOG_ROOT), iter_u32);
-    run_graph_algorithms(ctx.graph, Path::new(LOG_ROOT), iter_u32);
+    emit_planned_graph(ctx.graph, ctx.log_dir, iter_u32);
+    run_graph_algorithms(ctx.graph, ctx.log_dir, iter_u32);
 
     if ctx.prune_unlinked {
         prune_unlinked_nodes(ctx.graph);
@@ -106,15 +106,6 @@ pub fn maintain_graph(ctx: MaintenanceCtx<'_>) -> Result<()> {
         apply_recovery(ctx.graph);
     }
     Ok(())
-}
-
-pub(crate) fn take_recovery_signal() -> Option<String> {
-    let path = Path::new(LOG_ROOT).join("recovery_signal.json");
-    let raw = std::fs::read_to_string(&path).ok()?;
-    let _ = std::fs::remove_file(&path);
-    serde_json::from_str::<serde_json::Value>(&raw)
-        .ok()
-        .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(|s| s.to_string()))
 }
 
 fn risk_score(retry_rate: f64, failed_fraction: f64, branching_factor: f64) -> f64 {

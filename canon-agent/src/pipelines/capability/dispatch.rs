@@ -8,8 +8,7 @@ use tokio::sync::Semaphore;
 use super::config::CapabilityConfig;
 use super::dag::{AuthorityContext, ContextNode, TaskNode};
 use super::endpoint_scheduler;
-use super::engine;
-use super::tab_management::TabsHandle;
+use super::engine::{self, TabsHandle};
 use super::console;
 use crate::ws_server::WsBridge;
 

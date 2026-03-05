@@ -3,14 +3,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::llm_provider::JsonExtractor;
-use crate::ws_server::WsBridge;
-
 use super::config::LlmEndpoint;
 use super::dag::TaskGraph;
 use super::dag::Status;
 use super::decompose::TaskSpec;
 use super::capability::{assert_class_disjoint, Capability, CapabilityClass};
-use super::endpoint_worker;
 use super::graph_algo::{self, GraphSignals};
 use super::policy;
 use super::templates::apply_planner_update;
@@ -20,7 +17,6 @@ pub struct EdgeSpec {
     pub from: String,
     pub to: String,
 }
-use super::tab_management::TabsHandle;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewardContext {
@@ -102,26 +98,18 @@ impl PlannerSession {
         self.reward_context = Some(ctx);
     }
 
-    pub async fn planner_iteration(
+    pub fn build_prompt(
         &mut self,
         graph: &TaskGraph,
         signals: &GraphSignals,
         features: &graph_algo::FeatureVector,
         cost_summary: &str,
         rewrite_requests: &[String],
-        bridge: &WsBridge,
-        tabs: &TabsHandle,
-        max_tabs: usize,
-        tab_cooldown_ms: u64,
-        retries: u32,
-        delay_secs: u64,
-        log_dir: &std::path::Path,
-        iter: u64,
         planner_max_new_nodes: usize,
         planner_max_new_edges: usize,
         max_nodes: usize,
         max_edges: usize,
-    ) -> Result<PlannerUpdate> {
+    ) -> String {
         let ids: Vec<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
         let signals_json = signals.to_json(&ids);
         let expandable = expandable_nodes(graph);
@@ -305,92 +293,57 @@ Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"descript
             history_tail.join("\n")
         );
 
-        let attempts = retries.max(1);
-        for attempt in 1..=attempts {
-            let allow_mismatch = attempt > 1 && self.history.is_empty();
-            let raw = endpoint_worker::send_request(
-                bridge,
-                &self.endpoint_id,
-                &self.url,
-                self.stateful,
-                &prompt,
-                &self.role_schema,
-                None,
-                None,
-                allow_mismatch,
-                "planner",
-                tabs,
-                max_tabs,
-                tab_cooldown_ms,
-            )
-            .await;
+        prompt
+    }
 
-            let raw = match raw {
-                Ok(v) => v,
-                Err(e) => {
-                    if e.to_string().contains("req_id mismatch") {
-                        self.history.clear();
-                        let retry_raw = endpoint_worker::send_request(
-                            bridge,
-                            &self.endpoint_id,
-                            &self.url,
-                            self.stateful,
-                            &prompt,
-                            &self.role_schema,
-                            None,
-                            None,
-                            true,
-                            "planner",
-                            tabs,
-                            max_tabs,
-                            tab_cooldown_ms,
-                        )
-                        .await?;
-                        retry_raw
-                    } else {
-                        return Err(e);
-                    }
-                }
-            };
+    pub fn apply_raw_response(
+        &mut self,
+        raw: String,
+        log_dir: &std::path::Path,
+        iter: u64,
+        graph_nodes_len: usize,
+        signals: &GraphSignals,
+    ) -> Result<PlannerUpdate> {
+        self.history.push(raw.clone());
+        if self.history.len() > MAX_HISTORY {
+            self.history.remove(0);
+        }
 
-            self.history.push(raw.clone());
-            if self.history.len() > MAX_HISTORY {
-                self.history.remove(0);
+        let parsed = JsonExtractor::extract(&raw)
+            .or_else(|_| try_parse_loose_json(&raw).ok_or_else(|| anyhow::anyhow!("planner json extract error")))
+            .and_then(|payload| serde_json::from_value(payload).context("planner update did not match schema"));
+
+        match parsed {
+            Ok(update) => {
+                log_planner_iteration(log_dir, iter, graph_nodes_len, signals, &update, &raw, None);
+                Ok(update)
             }
-
-            let parsed = JsonExtractor::extract(&raw)
-                .or_else(|_| try_parse_loose_json(&raw).ok_or_else(|| anyhow::anyhow!("planner json extract error")))
-                .and_then(|payload| serde_json::from_value(payload).context("planner update did not match schema"));
-
-            match parsed {
-                Ok(update) => {
-                    log_planner_iteration(log_dir, iter, graph.nodes.len(), signals, &update, &raw, None);
-                    return Ok(update);
-                }
-                Err(e) => {
-                    log_planner_iteration(
-                        log_dir,
-                        iter,
-                        graph.nodes.len(),
-                        signals,
-                        &PlannerUpdate {
-                            new_nodes: Vec::new(),
-                            new_edges: Vec::new(),
-                            retract_nodes: Vec::new(),
-                            rewrite_nodes: Vec::new(),
-                        },
-                        &raw,
-                        Some(&e.to_string()),
-                    );
-                    if attempt < attempts {
-                        tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
-                        continue;
-                    }
-                    return Err(e);
-                }
+            Err(e) => {
+                log_planner_iteration(
+                    log_dir,
+                    iter,
+                    graph_nodes_len,
+                    signals,
+                    &PlannerUpdate {
+                        new_nodes: Vec::new(),
+                        new_edges: Vec::new(),
+                        retract_nodes: Vec::new(),
+                        rewrite_nodes: Vec::new(),
+                    },
+                    &raw,
+                    Some(&e.to_string()),
+                );
+                Err(e)
             }
         }
-        Err(anyhow::anyhow!("planner retries exhausted"))
+    }
+
+    pub fn clear_history(&mut self) {
+        self.history.clear();
+    }
+
+    pub fn is_history_empty(&self) -> bool {
+        self.history.is_empty()
     }
 }
 

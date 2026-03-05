@@ -43,6 +43,7 @@ use crate::ws_server::WsBridge;
 use anyhow::Result;
 use config::{CapabilityConfig, GoalSpec};
 use graph_algo::{emit_planned_graph, run_graph_algorithms};
+use llm::call_agent_json_with_retry_allow_mismatch;
 use templates::TemplateStore;
 use policy_train::PolicyDatasetEntry;
 use std::path::{Path, PathBuf};
@@ -144,22 +145,89 @@ impl CapabilityPipeline {
         let template_name = goal.raw.clone();
 
         let mut planner_generate = || async {
-            let decomp = decompose::decompose_goal(
-                &goal,
+            let request = decompose::build_goal_request(
+                &goal.raw,
+                &ctx.cwd[0],
+                &workspace_listing,
+                Path::new(LOG_ROOT),
+            );
+            let mut payload = call_agent_json_with_retry_allow_mismatch(
                 &self.bridge,
                 &endpoint.id,
                 &endpoint.url,
                 endpoint.stateful,
+                &request.prompt,
                 "",
+                request.phase,
+                None,
                 &self.tabs,
                 endpoint.max_tabs,
-                &ctx.cwd[0],
-                &workspace_listing,
-                Path::new(LOG_ROOT),
+                self.config.tab_cooldown_ms,
                 self.config.llm_retry_count,
                 self.config.llm_retry_delay_secs,
-                self.config.tab_cooldown_ms,
-            ).await?;
+            )
+            .await?;
+            let mut extra_retries = 2u32;
+            let decomp = loop {
+                match decompose::evaluate_payload(payload.clone(), &request) {
+                    Ok(output) => {
+                        decompose::write_payload_log(&request.log_path, &payload);
+                        break output;
+                    }
+                    Err(decompose::DecomposeRetry::Retry { prompt }) => {
+                        if extra_retries == 0 {
+                            return Err(anyhow::anyhow!("decompose_goal retries exhausted"));
+                        }
+                        extra_retries = extra_retries.saturating_sub(1);
+                        payload = call_agent_json_with_retry_allow_mismatch(
+                            &self.bridge,
+                            &endpoint.id,
+                            &endpoint.url,
+                            endpoint.stateful,
+                            &prompt,
+                            "",
+                            request.phase,
+                            None,
+                            &self.tabs,
+                            endpoint.max_tabs,
+                            self.config.tab_cooldown_ms,
+                            1,
+                            self.config.llm_retry_delay_secs,
+                        )
+                        .await?;
+                    }
+                    Err(decompose::DecomposeRetry::EnsureRender { prompt, original }) => {
+                        if extra_retries == 0 {
+                            return Err(anyhow::anyhow!("decompose_goal retries exhausted"));
+                        }
+                        extra_retries = extra_retries.saturating_sub(1);
+                        let retry_payload = call_agent_json_with_retry_allow_mismatch(
+                            &self.bridge,
+                            &endpoint.id,
+                            &endpoint.url,
+                            endpoint.stateful,
+                            &prompt,
+                            "",
+                            request.phase,
+                            None,
+                            &self.tabs,
+                            endpoint.max_tabs,
+                            self.config.tab_cooldown_ms,
+                            1,
+                            self.config.llm_retry_delay_secs,
+                        )
+                        .await?;
+                        let retry_output = decompose::parse_payload(retry_payload.clone())?;
+                        let merged = decompose::merge_outputs(original, retry_output);
+                        let has_render = merged.tasks.iter().any(|t| t.node_type == decompose::NodeType::Render);
+                        if !has_render {
+                            return Err(anyhow::anyhow!("decompose_goal retry still missing render node"));
+                        }
+                        decompose::write_payload_log(&request.log_path, &retry_payload);
+                        break merged;
+                    }
+                }
+            };
             eprintln!("[capability] decompose_goal tasks={}", decomp.tasks.len());
 
         let mut nodes: Vec<dag::TaskNode> = decomp.tasks.into_iter().map(|t| dag::TaskNode {

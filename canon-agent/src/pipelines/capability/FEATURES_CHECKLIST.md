@@ -20,7 +20,7 @@ Checklist of intended features and the primary function/module that enables them
 | [x]    | Policy decision logging                                  | `RuntimeMetrics.policy_*` fields in `telemetry.rs`                                                                           |
 | [x]    | Capability cost model                                    | `capability_cost::CapabilityCostTable`, `process_node_result` updates                                                        |
 | [x]    | Cost-aware scheduling                                    | `scheduler_scoring::score_ready_nodes`, `CapabilityCostTable::node_cost`                                                     |
-| [x]    | Cost-aware planner hints                                 | `CapabilityCostTable::summary` passed to `PlannerSession::planner_iteration`                                                 |
+| [x]    | Cost-aware planner hints                                 | `CapabilityCostTable::summary` passed to `PlannerSession::build_prompt`                                                      |
 | [x]    | Template mutation engine                                 | `template_mutation::generate_candidates`, `template_mutation::evaluate_candidates`, `run_planner_execution_loop`             |
 | [x]    | Mutation evaluation & selection                          | `TemplateStore::save_with_reward`, `template_mutation::evaluate_candidates`                                                  |
 | [x]    | Deterministic resume snapshot save                       | `state_snapshot::save`, `execute_graph_loop` (snapshot interval)                                                             |
