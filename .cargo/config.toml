@@ -1,6 +1,18 @@
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
-rustflags = ["-C", "link-arg=-fuse-ld=mold", "-Awarnings"]
+rustflags = [
+  "-C",
+  "link-arg=-fuse-ld=mold",
+  "-Awarnings",
+]
 
 [env]
 RUSTC_BOOTSTRAP = "1"
+CFG_RELEASE = "1.95.0-nightly"
+CFG_COMMIT_HASH = "7f99507f5"
+CFG_COMMIT_DATE = "2026-02-19"
+CFG_VERSION = "1.95.0-nightly (7f99507f5 2026-02-19)"
+CFG_CHANNEL = "nightly"
+CFG_RELEASE_CHANNEL = "nightly"
+RUSTC_INSTALL_BINDIR = "bin"
+CFG_COMPILER_HOST_TRIPLE = "x86_64-unknown-linux-gnu"
