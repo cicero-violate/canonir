@@ -1,6 +1,5 @@
 use rustc_middle::mir;
-use rustc_middle::ty::{self, TyCtxt, TypingEnv};
-use rustc_span::DUMMY_SP;
+use rustc_middle::ty::{self, TyCtxt};
 
 use crate::capture::helpers::{lower_ty, render_type_expr};
 use crate::capture::mir::filters;
@@ -48,10 +47,7 @@ pub(crate) fn mir_operand_label_with_decls<'tcx>(tcx: TyCtxt<'tcx>, operand: &mi
             None
         }
         mir::Operand::Constant(c) => {
-            if let Some(lit) = const_str_literal(tcx, c) {
-                return Some(lit);
-            }
-            if let Some(lit) = const_span_literal(tcx, c) {
+            if let Some(lit) = const_literal_expr(tcx, c) {
                 return Some(lit);
             }
             if let Some(expr) = closure_placeholder_expr_from_const(tcx, c) {
@@ -207,43 +203,78 @@ fn is_closure_or_fn_ptr(ty: ty::Ty<'_>) -> bool {
 }
 
 fn closure_placeholder_expr_from_const<'tcx>(tcx: TyCtxt<'tcx>, constant: &mir::ConstOperand<'tcx>) -> Option<String> {
-    closure_placeholder_expr_from_ty(tcx, constant.const_.ty())
-}
-
-fn const_str_literal<'tcx>(tcx: TyCtxt<'tcx>, constant: &mir::ConstOperand<'tcx>) -> Option<String> {
-    let ty = constant.const_.ty();
-    let ty::TyKind::Ref(_, inner, _) = ty.kind() else {
-        return None;
-    };
-    let val = match constant.const_ {
-        mir::Const::Val(val, _) => Some(val),
-        _ => constant
-            .const_
-            .eval(tcx, TypingEnv::fully_monomorphized(), DUMMY_SP)
-            .ok(),
-    }?;
-    match inner.kind() {
-        ty::TyKind::Str => {
-            let bytes = val.try_get_slice_bytes_for_diagnostics(tcx)?;
-            let s = std::str::from_utf8(bytes).ok()?;
-            Some(format!("{s:?}"))
-        }
-        ty::TyKind::Slice(elem) if matches!(elem.kind(), ty::TyKind::Uint(ty::UintTy::U8)) => {
-            let bytes = val.try_get_slice_bytes_for_diagnostics(tcx)?;
-            let lit = bytes.iter().map(|b| format!("{b:#04x}")).collect::<Vec<_>>().join(", ");
-            Some(format!("&[{lit}]"))
+    match constant.const_.ty().kind() {
+        ty::TyKind::Closure(..) | ty::TyKind::Coroutine(..) | ty::TyKind::CoroutineClosure(..) => {
+            closure_placeholder_expr_from_ty(tcx, constant.const_.ty())
         }
         _ => None,
     }
 }
 
+fn const_literal_expr<'tcx>(tcx: TyCtxt<'tcx>, constant: &mir::ConstOperand<'tcx>) -> Option<String> {
+    let (inner_ty, ref_depth) = peel_ref_layers(constant.const_.ty());
+    let mut lit = const_span_literal(tcx, constant)
+        .or_else(|| unevaluated_anon_const_literal(tcx, constant))?;
+
+    let builtin_refs = builtin_ref_layers(&lit, inner_ty);
+    if ref_depth > builtin_refs {
+        let extra = "&".repeat(ref_depth - builtin_refs);
+        lit = format!("{extra}{lit}");
+    }
+    Some(lit)
+}
+
+fn peel_ref_layers<'tcx>(mut ty: ty::Ty<'tcx>) -> (ty::Ty<'tcx>, usize) {
+    let mut depth = 0usize;
+    while let ty::TyKind::Ref(_, inner, _) = ty.kind() {
+        depth += 1;
+        ty = *inner;
+    }
+    (ty, depth)
+}
+
 fn const_span_literal(tcx: TyCtxt<'_>, constant: &mir::ConstOperand<'_>) -> Option<String> {
     let snippet = tcx.sess.source_map().span_to_snippet(constant.span).ok()?;
     let trimmed = snippet.trim();
-    if trimmed.starts_with('"') || trimmed.starts_with("r\"") || trimmed.starts_with("b\"") || trimmed.starts_with("br\"") {
+    if is_string_like_literal(trimmed) {
         return Some(trimmed.to_string());
     }
     None
+}
+
+fn unevaluated_anon_const_literal<'tcx>(tcx: TyCtxt<'tcx>, constant: &mir::ConstOperand<'tcx>) -> Option<String> {
+    let mir::Const::Unevaluated(uneval, _) = constant.const_ else {
+        return None;
+    };
+    let local = uneval.def.as_local()?;
+    let rustc_hir::Node::AnonConst(anon) = tcx.hir_node_by_def_id(local) else {
+        return None;
+    };
+    let body = tcx.hir_body(anon.body);
+    let snippet = tcx.sess.source_map().span_to_snippet(body.value.span).ok()?;
+    let trimmed = snippet.trim();
+    if is_string_like_literal(trimmed) {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+fn is_string_like_literal(s: &str) -> bool {
+    let t = s.trim_start_matches('&').trim();
+    t.starts_with('"') || t.starts_with("r\"") || t.starts_with("b\"") || t.starts_with("br\"")
+}
+
+fn builtin_ref_layers(inner_lit: &str, inner_ty: ty::Ty<'_>) -> usize {
+    let trimmed = inner_lit.trim();
+    if trimmed.starts_with('&') {
+        return 1;
+    }
+    match inner_ty.kind() {
+        ty::TyKind::Str => 1,
+        ty::TyKind::Slice(elem) if matches!(elem.kind(), ty::TyKind::Uint(ty::UintTy::U8)) => 1,
+        _ => 0,
+    }
 }
 
 pub(crate) fn closure_placeholder_expr_from_aggregate<'tcx>(
@@ -261,11 +292,6 @@ fn closure_placeholder_expr_from_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -
             let closure_args = args.as_closure();
             closure_placeholder_expr_from_sig(tcx, closure_args.sig())
         }
-        ty::TyKind::FnDef(def_id, args) if tcx.is_closure_like(*def_id) => {
-            let sig = tcx.fn_sig(*def_id).instantiate(tcx, args);
-            closure_placeholder_expr_from_sig(tcx, sig)
-        }
-        ty::TyKind::FnPtr(sig_tys, hdr) => closure_placeholder_expr_from_sig(tcx, sig_tys.with(*hdr)),
         _ => None,
     }
 }
@@ -274,34 +300,73 @@ fn closure_placeholder_expr_from_sig<'tcx>(tcx: TyCtxt<'tcx>, sig: ty::Binder<'t
     let inputs = sig.inputs().skip_binder();
     let output = sig.output().skip_binder();
 
-    let mut arg_tys: Vec<ty::Ty<'tcx>> = Vec::new();
-    if inputs.len() == 1 {
-        let first = *inputs.get(0)?;
-        if let ty::TyKind::Tuple(tys) = first.kind() {
-            arg_tys.extend(tys.iter());
-        } else {
-            arg_tys.push(first);
+    let mut arg_tys: Vec<ty::Ty<'tcx>> = inputs.iter().copied().collect();
+    // Closure signatures use the rust-call ABI where arguments are often
+    // packed into a single tuple. Emit canonical fn(T1, T2, ..) placeholders.
+    if arg_tys.len() == 1 {
+        if let ty::TyKind::Tuple(items) = arg_tys[0].kind() {
+            arg_tys = items.iter().copied().collect();
         }
-    } else {
-        arg_tys.extend(inputs.iter());
     }
+
+    let param_types = arg_tys
+        .iter()
+        .map(|ty| normalize_singleton_tuple_type(render_type_expr(tcx, &lower_ty(tcx, *ty))))
+        .collect::<Vec<_>>()
+        .join(", ");
 
     let args = arg_tys
         .iter()
         .enumerate()
         .map(|(i, ty)| {
             let name = format!("_arg{i}");
-            let ty_expr = render_type_expr(tcx, &lower_ty(tcx, *ty));
+            let ty_expr = normalize_singleton_tuple_type(render_type_expr(tcx, &lower_ty(tcx, *ty)));
             format!("{name}: {ty_expr}")
         })
         .collect::<Vec<_>>()
         .join(", ");
 
     let ret_expr = render_type_expr(tcx, &lower_ty(tcx, output));
-    let args = if args.is_empty() { String::new() } else { args };
-    if args.is_empty() {
-        Some(format!("|| -> {ret_expr} {{ panic!(\"canon closure placeholder\") }}"))
+    let closure = if args.is_empty() {
+        format!("|| -> {ret_expr} {{ panic!(\"canon closure placeholder\") }}")
     } else {
-        Some(format!("|{args}| -> {ret_expr} {{ panic!(\"canon closure placeholder\") }}"))
+        format!("|{args}| -> {ret_expr} {{ panic!(\"canon closure placeholder\") }}")
+    };
+    Some(format!("({closure}) as fn({param_types}) -> {ret_expr}"))
+}
+
+fn normalize_singleton_tuple_type(rendered: String) -> String {
+    let s = rendered.trim();
+    let Some(inner) = s.strip_prefix('(').and_then(|v| v.strip_suffix(')')) else {
+        return rendered;
+    };
+
+    let mut angle = 0i32;
+    let mut paren = 0i32;
+    let mut bracket = 0i32;
+    let mut comma_positions: Vec<usize> = Vec::new();
+    for (idx, ch) in inner.char_indices() {
+        match ch {
+            '<' => angle += 1,
+            '>' => angle -= 1,
+            '(' => paren += 1,
+            ')' => paren -= 1,
+            '[' => bracket += 1,
+            ']' => bracket -= 1,
+            ',' if angle == 0 && paren == 0 && bracket == 0 => comma_positions.push(idx),
+            _ => {}
+        }
     }
+    if comma_positions.len() != 1 {
+        return rendered;
+    }
+    let comma = comma_positions[0];
+    if !inner[comma + 1..].trim().is_empty() {
+        return rendered;
+    }
+    let elem = inner[..comma].trim();
+    if elem.is_empty() {
+        return rendered;
+    }
+    elem.to_string()
 }

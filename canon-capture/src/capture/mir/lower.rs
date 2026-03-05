@@ -450,6 +450,9 @@ fn build_local_decl_stmts<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, resol
         };
         let ty = lower_ty(tcx, body.local_decls[local].ty);
         if !local_type_is_emittable(tcx, &ty) {
+            // Keep the local declaration so subsequent assignments compile,
+            // but avoid emitting an explicit type rustc cannot parse/infer.
+            out.push(Stmt::Let { pat: name, ty: None, init: None });
             continue;
         }
         out.push(Stmt::Let { pat: name, ty: Some(ty), init: None });
@@ -463,6 +466,18 @@ fn local_type_is_emittable(tcx: TyCtxt<'_>, ty: &crate::types::TypeExpr) -> bool
         return false;
     }
     if rendered.contains("fmt::Arguments") {
+        return false;
+    }
+    // MIR iterator internals often materialize as function-pointer map
+    // combinators whose explicit local type requires HRTB lifetimes.
+    // Keep these unannotated so rustc infers them from assignments.
+    if rendered.contains("Map<") && rendered.contains("fn(") {
+        return false;
+    }
+    if rendered.contains("fn(") {
+        return false;
+    }
+    if rendered.contains("'_") {
         return false;
     }
     true

@@ -48,7 +48,12 @@ impl RustcResolver {
             return Err(anyhow!("expected lib.rs under {}", self.source_root.display()));
         }
         let mut callback = CollectorCallbacks::new("__debug_dump__".to_string());
-        let args = cargo_rustc_args(&self.project_root, &self.source_root, &self.crate_name)?;
+        let mut args = cargo_rustc_args(&self.project_root, &self.source_root, &self.crate_name)?;
+        // Reduce incremental + parallelism to avoid rustc dep-graph reentrancy panics.
+        args.push("-Z".to_string());
+        args.push("incremental-verify-ich=no".to_string());
+        args.push("-Z".to_string());
+        args.push("threads=1".to_string());
         run_rustc_in_dir(&self.project_root, &args, &mut callback);
         Ok(callback.into_def_paths())
     }
@@ -131,7 +136,8 @@ impl RustcArgsCapture {
         if !matches!(mode, CompileMode::Check { test: false } | CompileMode::Build) {
             return false;
         }
-        if target.name() != self.crate_name {
+        let normalized = self.crate_name.replace('-', "_");
+        if target.name() != self.crate_name && target.name() != normalized {
             return false;
         }
         target.src_path().path() == Some(self.source_file.as_path())
@@ -195,14 +201,30 @@ fn ensure_sysroot(ws: &Workspace<'_>, args: &mut Vec<String>) -> Result<()> {
 }
 
 fn run_rustc_in_dir(callback_dir: &Path, args: &[String], callback: &mut CollectorCallbacks) {
-    let prev = std::env::current_dir().ok();
+    let prev_dir = std::env::current_dir().ok();
+    let prev_incremental = std::env::var("CARGO_INCREMENTAL").ok();
+    let prev_force_incremental = std::env::var("RUSTC_FORCE_INCREMENTAL").ok();
+    std::env::set_var("CARGO_INCREMENTAL", "0");
+    std::env::set_var("RUSTC_FORCE_INCREMENTAL", "0");
+
     if std::env::set_current_dir(callback_dir).is_ok() {
         rustc_driver::run_compiler(args, callback);
-        if let Some(prev) = prev {
+        if let Some(prev) = prev_dir {
             let _ = std::env::set_current_dir(prev);
         }
     } else {
         rustc_driver::run_compiler(args, callback);
+    }
+
+    if let Some(value) = prev_incremental {
+        std::env::set_var("CARGO_INCREMENTAL", value);
+    } else {
+        std::env::remove_var("CARGO_INCREMENTAL");
+    }
+    if let Some(value) = prev_force_incremental {
+        std::env::set_var("RUSTC_FORCE_INCREMENTAL", value);
+    } else {
+        std::env::remove_var("RUSTC_FORCE_INCREMENTAL");
     }
 }
 

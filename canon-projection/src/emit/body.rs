@@ -65,6 +65,7 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>, suppresse
                 }
                 _ => render_type_id(ir, *ty),
             };
+            let ty_emittable = type_annotation_is_emittable(&ty_str);
 
             if let Some(r) = rhs {
                 let rhs_expr = local_name(ir, *r);
@@ -80,7 +81,11 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>, suppresse
                     format!("{} = {};", lhs_name, rhs_expr)
                 } else {
                     declared.insert(lhs_name.clone());
-                    format!("let mut {}: {} = {};", lhs_name, ty_str, rhs_expr)
+                    if ty_emittable {
+                        format!("let mut {}: {} = {};", lhs_name, ty_str, rhs_expr)
+                    } else {
+                        format!("let mut {} = {};", lhs_name, rhs_expr)
+                    }
                 }
             } else {
                 if declared.contains(&lhs_name) {
@@ -90,7 +95,11 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>, suppresse
                     // Do NOT emit uninitialized authoritative locals.
                     // Preserve the declared type boundary with a diverging
                     // expression rather than permitting unit fallback.
-                    format!("let mut {}: {} = panic!(\"canon uninit\");", lhs_name, ty_str)
+                    if ty_emittable {
+                        format!("let mut {}: {} = panic!(\"canon uninit\");", lhs_name, ty_str)
+                    } else {
+                        format!("let mut {} = panic!(\"canon uninit\");", lhs_name)
+                    }
                 }
             }
         }
@@ -389,6 +398,7 @@ fn bind_or_assign_typed(ir: &CanonIR, id: CanonId, name: &str, expr: String, dec
 
         match ty_opt {
             Some(ty) => {
+                let emittable = type_annotation_is_emittable(&ty);
                 // Do NOT force unit-typed locals to be explicitly annotated as `()`.
                 // The capture fallback uses unit for many untyped temporaries; if we
                 // emit `let x: () = ...;` we destroy downstream type inference and
@@ -400,6 +410,8 @@ fn bind_or_assign_typed(ir: &CanonIR, id: CanonId, name: &str, expr: String, dec
                 // subsequent assignments to initialize.
                 if name == "__ret" && expr_trim == "()" && ty.trim() != "()" {
                     format!("let mut {name}: {ty};")
+                } else if !emittable {
+                    format!("let mut {name} = {expr};")
                 } else if expr_trim.starts_with("panic!") {
                     format!("let mut {name}: {ty} = {expr};")
                 } else if ty.trim() == "()" {
@@ -423,4 +435,14 @@ fn render_suppressed_binding(_name: &str, _declared: &mut HashSet<String>) -> St
     // Suppressed bindings must not materialize into emitted Rust.
     // Structural completeness must be enforced in lowering, not masked here.
     String::new()
+}
+
+fn type_annotation_is_emittable(ty: &str) -> bool {
+    if ty.contains("fn(") {
+        return false;
+    }
+    if ty.contains("'_") {
+        return false;
+    }
+    true
 }

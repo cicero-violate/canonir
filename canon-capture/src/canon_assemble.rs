@@ -431,6 +431,13 @@ fn seal_body(canon: &mut CanonIR, body: &Body) -> Option<CanonId> {
                             // (e.g., temporaries feeding __ret), which then project as
                             // `():` or cause E0308/E0599 mismatches. Defer concretization
                             // to analysis/type authority instead of collapsing to unit.
+                            if lhs == "__ret" && rhs.trim() == "()" {
+                                // Ignore synthetic unit writes into the return place.
+                                // Non-unit return values are lowered by later assignments,
+                                // and unit initialization here causes `let mut __ret = ();`
+                                // to leak into projection.
+                                continue;
+                            }
                             let ty = unknown_ty(fallback_ty);
                             let lhs_name = lhs.as_str();
                             let lhs_id = get_or_create_local(canon, &mut locals, lhs_name, ty);

@@ -166,7 +166,13 @@ fn render_type_kind(ir: &CanonIR, kind: &TypeKind) -> String {
         }
         TypeKind::Array { inner, len } => format!("[{}; {}]", render_type_id(ir, *inner), len),
         TypeKind::Slice(inner) => format!("[{}]", render_type_id(ir, *inner)),
-        TypeKind::Tuple(items) => format!("({})", items.iter().map(|id| render_type_id(ir, *id)).collect::<Vec<_>>().join(", ")),
+        TypeKind::Tuple(items) => {
+            if items.len() == 1 {
+                format!("({},)", render_type_id(ir, items[0]))
+            } else {
+                format!("({})", items.iter().map(|id| render_type_id(ir, *id)).collect::<Vec<_>>().join(", "))
+            }
+        }
         TypeKind::FnPtr(sig_id) => match &ir.node(*sig_id).kind {
             CanonNodeKind::FnSig { params, ret, .. } => {
                 let params = params
