@@ -87,7 +87,7 @@ extract_function("emit_impl", $ARGV);
 USEFUL INFORMATION
 rustc compiler source code can be found in here
 ~/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/
-
+/workspace/git_repos/cargo
 
 ## CODING STYLE
 
