@@ -1,4 +1,3 @@
-use super::config::CapabilityConfig;
 use super::graph_algo::normalize_features;
 use super::policy::{PolicyBias, PolicyDecision, PolicyModel};
 
@@ -9,8 +8,8 @@ pub struct PolicyOutcome {
     pub weight_norm: f64,
 }
 
-pub fn evaluate(features: &super::graph_algo::FeatureVector, config: &CapabilityConfig) -> PolicyOutcome {
-    let normalized = normalize_features(features, config.max_nodes, config.max_nodes.saturating_mul(4));
+pub fn evaluate(features: &super::graph_algo::FeatureVector, max_nodes: usize, max_edges: usize) -> PolicyOutcome {
+    let normalized = normalize_features(features, max_nodes, max_edges);
     let model = PolicyModel::load_default();
     let bias = model.predict(&normalized);
     let decision = model.decide(&normalized);

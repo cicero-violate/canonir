@@ -11,7 +11,7 @@ use super::capability::{Capability, CapabilityClass};
 use super::console;
 use super::dag::{ContextNode, Status, TaskGraph, TaskNode};
 use super::llm::{call_agent_json_with_retry_allow_mismatch, call_agent_raw_with_retry_allow_mismatch};
-pub use super::tab_management::TabsHandle;
+pub use super::endpoint_worker::{TabsHandle, new_tabs};
 use super::Delta;
 use crate::ws_server::WsBridge;
 
@@ -92,6 +92,56 @@ pub async fn call_llm_raw_with_retry_allow_mismatch(
         delay_secs,
     )
     .await
+}
+
+pub async fn call_llm_json_with_retry_allow_mismatch(
+    bridge: &WsBridge,
+    endpoint_id: &str,
+    url: &str,
+    stateful: bool,
+    prompt: &str,
+    role_schema: &str,
+    phase: &str,
+    node_id: Option<&str>,
+    tabs: &TabsHandle,
+    max_tabs: usize,
+    tab_cooldown_ms: u64,
+    max_retries: u32,
+    delay_secs: u64,
+) -> Result<Value> {
+    call_agent_json_with_retry_allow_mismatch(
+        bridge,
+        endpoint_id,
+        url,
+        stateful,
+        prompt,
+        role_schema,
+        phase,
+        node_id,
+        tabs,
+        max_tabs,
+        tab_cooldown_ms,
+        max_retries,
+        delay_secs,
+    )
+    .await
+}
+
+pub async fn init_io_workers(
+    bridge: &WsBridge,
+    config: &super::config::CapabilityConfig,
+    tabs: &TabsHandle,
+) {
+    super::endpoint_worker::init_workers(bridge, config, tabs).await;
+}
+
+pub fn take_recovery_signal(log_root: &Path) -> Option<String> {
+    let path = log_root.join("recovery_signal.json");
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let _ = std::fs::remove_file(&path);
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(|s| s.to_string()))
 }
 
 pub struct NodeProcessReport {

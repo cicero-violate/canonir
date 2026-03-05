@@ -16,13 +16,14 @@ pub mod scheduler_scoring;
 pub mod dispatch;
 pub mod execution_result;
 pub mod planner_session;
+pub mod planner_update;
 pub mod planner_state;
 pub mod telemetry;
 pub mod llm;
 pub mod decompose;
 pub mod engine;
 pub mod act;
-pub mod tab_management;
+mod tab_management;
 pub mod console;
 pub mod templates;
 pub mod template_index;
@@ -43,7 +44,6 @@ use crate::ws_server::WsBridge;
 use anyhow::Result;
 use config::{CapabilityConfig, GoalSpec};
 use graph_algo::{emit_planned_graph, run_graph_algorithms};
-use llm::call_agent_json_with_retry_allow_mismatch;
 use templates::TemplateStore;
 use policy_train::PolicyDatasetEntry;
 use std::path::{Path, PathBuf};
@@ -68,7 +68,7 @@ pub enum Delta {
 pub struct CapabilityPipeline {
     bridge: WsBridge,
     config: CapabilityConfig,
-    tabs: tab_management::TabsHandle,
+    tabs: engine::TabsHandle,
     role_rr: tokio::sync::Mutex<HashMap<String, usize>>,
 }
 
@@ -78,7 +78,7 @@ impl CapabilityPipeline {
         Self {
             bridge,
             config,
-            tabs: Arc::new(tokio::sync::Mutex::new(tab_management::TabSlots::new())),
+            tabs: engine::new_tabs(),
             role_rr: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
@@ -121,7 +121,7 @@ impl CapabilityPipeline {
         if self.config.llm_endpoints.is_empty() {
             anyhow::bail!("capability config has no llm endpoints");
         }
-        endpoint_worker::init_workers(&self.bridge, &self.config, &self.tabs).await;
+        engine::init_io_workers(&self.bridge, &self.config, &self.tabs).await;
 
         let goal = GoalSpec::from_file(&self.config.goal_file)?;
         if let Ok(pretty) = serde_json::to_string_pretty(&goal) {
@@ -151,7 +151,7 @@ impl CapabilityPipeline {
                 &workspace_listing,
                 Path::new(LOG_ROOT),
             );
-            let mut payload = call_agent_json_with_retry_allow_mismatch(
+            let mut payload = engine::call_llm_json_with_retry_allow_mismatch(
                 &self.bridge,
                 &endpoint.id,
                 &endpoint.url,
@@ -179,7 +179,7 @@ impl CapabilityPipeline {
                             return Err(anyhow::anyhow!("decompose_goal retries exhausted"));
                         }
                         extra_retries = extra_retries.saturating_sub(1);
-                        payload = call_agent_json_with_retry_allow_mismatch(
+                        payload = engine::call_llm_json_with_retry_allow_mismatch(
                             &self.bridge,
                             &endpoint.id,
                             &endpoint.url,
@@ -201,7 +201,7 @@ impl CapabilityPipeline {
                             return Err(anyhow::anyhow!("decompose_goal retries exhausted"));
                         }
                         extra_retries = extra_retries.saturating_sub(1);
-                        let retry_payload = call_agent_json_with_retry_allow_mismatch(
+                        let retry_payload = engine::call_llm_json_with_retry_allow_mismatch(
                             &self.bridge,
                             &endpoint.id,
                             &endpoint.url,
@@ -321,7 +321,11 @@ impl CapabilityPipeline {
                 store.record_failure(&template_hash);
             }
             let features = graph_algo::graph_features(&graph).with_failure_stats(&failure_store.stats());
-            let policy_outcome = policy_engine::evaluate(&features, &self.config);
+            let policy_outcome = policy_engine::evaluate(
+                &features,
+                self.config.max_nodes,
+                self.config.max_nodes.saturating_mul(4),
+            );
             let reward = telemetry::compute_reward(&graph, iterations_used, self.config.max_iterations);
             let entry = PolicyDatasetEntry {
                 features: serde_json::json!({

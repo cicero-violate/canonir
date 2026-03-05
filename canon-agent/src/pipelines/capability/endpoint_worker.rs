@@ -12,20 +12,23 @@ use crate::ws_server::WsBridge;
 use super::config::CapabilityConfig;
 use super::response_router;
 use super::telemetry;
+pub use super::tab_management::{TabsHandle, log_llm, now_ms};
 use super::tab_management::{
     drop_tab,
     get_or_open_tab,
-    log_llm,
     mark_tab_cooldown,
     mark_tab_in_flight,
     mark_tab_response,
     mark_tab_sent,
-    TabsHandle,
 };
 
 static WORKERS: Lazy<Mutex<HashMap<String, mpsc::Sender<LlmRequest>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static NEXT_REQ_ID: AtomicU64 = AtomicU64::new(1);
+
+pub fn new_tabs() -> TabsHandle {
+    std::sync::Arc::new(tokio::sync::Mutex::new(super::tab_management::TabSlots::new()))
+}
 
 pub struct LlmRequest {
     pub req_id: u64,

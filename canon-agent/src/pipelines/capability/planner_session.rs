@@ -9,15 +9,8 @@ use super::dag::Status;
 use super::decompose::TaskSpec;
 use super::capability::{assert_class_disjoint, Capability, CapabilityClass};
 use super::graph_algo::{self, GraphSignals};
-use super::policy;
-use super::templates::apply_planner_update;
+use super::planner_update::{apply_planner_update, EdgeSpec, PlannerUpdate, RetractSpec, RewriteSpec};
 use super::failure_store::FailureStore;
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EdgeSpec {
-    pub from: String,
-    pub to: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewardContext {
     pub recent_rewards: Vec<f64>,
@@ -38,30 +31,6 @@ pub struct BootstrapSeed {
     pub edge_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RetractSpec {
-    pub id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RewriteSpec {
-    pub id: String,
-    pub new_description: String,
-    pub new_capabilities: Vec<Capability>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlannerUpdate {
-    #[serde(default)]
-    pub new_nodes: Vec<TaskSpec>,
-    #[serde(default)]
-    pub new_edges: Vec<EdgeSpec>,
-    #[serde(default)]
-    pub retract_nodes: Vec<RetractSpec>,
-    #[serde(default)]
-    pub rewrite_nodes: Vec<RewriteSpec>,
-}
-
 pub(crate) struct RepairReport {
     pub count: u64,
     pub ids: Vec<String>,
@@ -75,7 +44,6 @@ pub struct PlannerSession {
     history: Vec<String>,
     stateful: bool,
     reward_context: Option<RewardContext>,
-    prev_bias: Option<policy::PolicyBias>,
 }
 
 const MAX_HISTORY: usize = 5;
@@ -90,12 +58,15 @@ impl PlannerSession {
             history: Vec::new(),
             stateful: endpoint.stateful,
             reward_context: None,
-            prev_bias: None,
         }
     }
 
     pub fn set_reward_context(&mut self, ctx: RewardContext) {
         self.reward_context = Some(ctx);
+    }
+
+    pub fn reward_context(&self) -> Option<&RewardContext> {
+        self.reward_context.as_ref()
     }
 
     pub fn build_prompt(
@@ -105,10 +76,9 @@ impl PlannerSession {
         features: &graph_algo::FeatureVector,
         cost_summary: &str,
         rewrite_requests: &[String],
+        bias_text: &str,
         planner_max_new_nodes: usize,
         planner_max_new_edges: usize,
-        max_nodes: usize,
-        max_edges: usize,
     ) -> String {
         let ids: Vec<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
         let signals_json = signals.to_json(&ids);
@@ -205,12 +175,6 @@ Continue refining the current graph.\n",
         if let Some(ctx) = self.reward_context.as_ref() {
             features = features.with_reward_history(&ctx.recent_rewards);
         }
-        let normalized = graph_algo::normalize_features(&features, max_nodes, max_edges);
-        let bias_raw = policy::PolicyModel::load_default().predict(&normalized);
-        let bias_smoothed = policy::smooth_bias(self.prev_bias.as_ref(), bias_raw);
-        let bias = policy::maybe_explore(bias_smoothed, 0.05);
-        self.prev_bias = Some(bias.clone());
-        let bias_text = policy::format_bias(&bias);
         let metrics_text = format!(
             "Metrics:\n\
 nodes={} edges={} depth={} scc_count={}\n\

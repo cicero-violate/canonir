@@ -4,12 +4,7 @@ use std::hash::{Hash, Hasher};
 
 use crate::llm_provider::JsonExtractor;
 use crate::ws_server::WsBridge;
-use super::endpoint_worker;
-use super::tab_management::{
-    TabsHandle,
-    log_llm,
-    now_ms,
-};
+use super::endpoint_worker::{self, TabsHandle, log_llm, now_ms};
 
 pub async fn call_agent_json(
     bridge: &WsBridge,

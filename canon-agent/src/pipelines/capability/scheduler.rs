@@ -14,14 +14,15 @@ use super::dag;
 use super::engine;
 use super::dispatch;
 use super::execution_result::{self, RepairStats};
-use super::graph_algo::{compute_graph_signals, graph_signature, node_utility, graph_features, edge_count};
+use super::graph_algo::{compute_graph_signals, graph_signature, node_utility, graph_features, edge_count, normalize_features};
 use super::graph_maintenance::{self, MaintenanceCtx};
 use super::graph_runtime::build_context;
 use super::engine::TabsHandle;
 use super::LOG_ROOT;
 use super::TEMPLATE_ROOT;
-use super::planner_session::{auto_repair_planner_update, validate_planner_update, PlannerSession, PlannerUpdate, EdgeSpec};
-use super::templates::{TemplateStore, apply_planner_update};
+use super::planner_session::{auto_repair_planner_update, validate_planner_update, PlannerSession};
+use super::planner_update::{PlannerUpdate, EdgeSpec, apply_planner_update};
+use super::templates::TemplateStore;
 use super::failure_store::FailureStore;
 use super::policy_train::{self, PolicyDatasetEntry};
 use super::telemetry::{self, ExecMetrics, PlannerMetrics, RuntimeMetrics, TelemetrySnapshot};
@@ -36,6 +37,7 @@ use super::scheduler_state::{ExecEvent, ExecStep, EXEC_TRANSITIONS};
 use super::policy_engine;
 use super::planner_state::{PlannerPhase, PlannerEvent, PLANNER_TRANSITIONS};
 use super::scheduler_scoring;
+use super::policy;
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -300,6 +302,7 @@ pub(crate) async fn execute_graph_loop(
                 ExecStep::MaintainGraph => {
                     graph_maintenance::maintain_graph(MaintenanceCtx {
                         graph,
+                        log_dir: Path::new(LOG_ROOT),
                         iter,
                         features_retry_rate: features.retry_rate,
                         features_failed_fraction: features.failed_fraction,
@@ -373,6 +376,7 @@ pub(crate) async fn run_planner_execution_loop(
     let mut last_mutation_success = 0u64;
     let mut last_mutation_reward_delta = 0.0;
     let mut resume_iteration = telemetry::resume_iteration();
+    let mut prev_bias: Option<policy::PolicyBias> = None;
     let mut last_signal_sig = String::new();
     let mut last_completed = 0usize;
     let mut stagnant_iters = 0u64;
@@ -388,7 +392,11 @@ pub(crate) async fn run_planner_execution_loop(
         last_completed = completed_now;
         let failure_stats = failure_store.stats();
         let features = graph_features(graph).with_failure_stats(&failure_stats);
-        let policy_outcome = policy_engine::evaluate(&features, config);
+        let policy_outcome = policy_engine::evaluate(
+            &features,
+            config.max_nodes,
+            config.max_nodes.saturating_mul(4),
+        );
         let policy_bias = policy_outcome.bias.clone();
         let policy_decision = policy_outcome.decision.clone();
         let mut run_planner = policy_decision.run_planner;
@@ -465,7 +473,7 @@ pub(crate) async fn run_planner_execution_loop(
             }
             phase = PLANNER_TRANSITIONS[phase as usize][PlannerEvent::ReuseDone as usize];
         }
-        let recovery_reason = graph_maintenance::take_recovery_signal();
+        let recovery_reason = engine::take_recovery_signal(Path::new(LOG_ROOT));
         let mut rewrite_requests = rewrite_requests;
         if let Some(reason) = recovery_reason.as_ref() {
             for node in &graph.nodes {
@@ -578,16 +586,30 @@ pub(crate) async fn run_planner_execution_loop(
                 if attempt > 1 {
                     planner_metrics.planner_retries += 1;
                 }
+                let mut features_for_bias = features.clone();
+                if let Some(ctx) = planner.reward_context() {
+                    features_for_bias = features_for_bias.with_reward_history(&ctx.recent_rewards);
+                }
+                let normalized = normalize_features(
+                    &features_for_bias,
+                    config.max_nodes,
+                    config.max_nodes.saturating_mul(4),
+                );
+                let bias_raw = policy::PolicyModel::load_default().predict(&normalized);
+                let bias_smoothed = policy::smooth_bias(prev_bias.as_ref(), bias_raw);
+                let bias = policy::maybe_explore(bias_smoothed, 0.05);
+                prev_bias = Some(bias.clone());
+                let bias_text = policy::format_bias(&bias);
+
                 let prompt = planner.build_prompt(
                     graph,
                     &signals,
                     &features,
                     &cost_table.summary(5, config.cost_latency_weight, config.cost_failure_weight),
                     &rewrite_requests,
+                    &bias_text,
                     planner_max_new_nodes,
                     planner_max_new_edges,
-                    config.max_nodes,
-                    config.max_nodes.saturating_mul(4),
                 );
                 let mut candidate = PlannerUpdate {
                     new_nodes: Vec::new(),

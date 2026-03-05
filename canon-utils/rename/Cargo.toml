@@ -1,0 +1,36 @@
+[package]
+name = "rename"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+rustc_frontend = [
+    "rustc_driver",
+    "rustc_interface",
+    "rustc_hir",
+    "rustc_span",
+    "rustc_session",
+    "rustc_middle",
+    "rustc_ast",
+    "rustc_errors",
+    "rustc_data_structures",
+]
+
+[dependencies]
+anyhow = "1"
+prettyplease = "0.2"
+proc-macro2 = "1"
+syn = { version = "2", features = ["full", "visit-mut", "visit"] }
+walkdir = "2.5"
+
+rustc_driver = { path = "/home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/rustc-src/rust/compiler/rustc_driver", optional = true }
+rustc_interface = { path = "/home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/rustc-src/rust/compiler/rustc_interface", optional = true }
+rustc_hir = { path = "/home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/rustc-src/rust/compiler/rustc_hir", optional = true }
+rustc_span = { path = "/home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/rustc-src/rust/compiler/rustc_span", optional = true }
+rustc_session = { path = "/home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/rustc-src/rust/compiler/rustc_session", optional = true }
+rustc_middle = { path = "/home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/rustc-src/rust/compiler/rustc_middle", optional = true }
+rustc_ast = { path = "/home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/rustc-src/rust/compiler/rustc_ast", optional = true }
+rustc_errors = { path = "/home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/rustc-src/rust/compiler/rustc_errors", optional = true }
+rustc_data_structures = { path = "/home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/rustc-src/rust/compiler/rustc_data_structures", optional = true }
+
+[workspace]
