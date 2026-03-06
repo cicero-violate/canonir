@@ -1,13 +1,7 @@
-use canon::csr_graph::CsrGraph;
-use canon::edge::EdgeKind;
-use canon::node::{CanonId, CanonNodeKind};
-use canon::CanonIR;
-use canon_analyzer::solver::constraint_solver::build_problem;
-use canon_analyzer::solver::search_optimizer_solver::optimize;
 use rename::core::oracle::StructuralEditOracle;
 use rename::core::project_editor::ProjectEditor;
 use serde_json::json;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
