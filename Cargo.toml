@@ -8,7 +8,9 @@ members = [
   "rustc_capture",
   "canon",
   "canon-analyzer",
-  "canon-projection", "canon-agent",
+  "canon-projection",
+  "canon-agent-v1",
+  "canon-agent-v2",
   "canon-utils/rename",
   "gpjson-rs",
 ]
