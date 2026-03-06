@@ -1,12 +1,9 @@
-#![feature(rustc_private)]
-
-use rename::core::rustc_session::RustcSession;
+use rename::core::project_editor::ProjectEditor;
 use serde_json::json;
 use std::collections::{BTreeMap, HashSet};
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
-use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -24,7 +21,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     accumulate_error_counts_json(&baseline_check.diagnostics, &mut baseline_error_counts);
     let baseline_error_total = sum_counts(&baseline_error_counts);
 
-    let session = Arc::new(RustcSession::build(project)?);
     let ordered = parse_simple_ident_mappings(renames_md)?;
     let offset = std::env::var("RENAME_OFFSET").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
     let limit = std::env::var("RENAME_LIMIT").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(usize::MAX);
@@ -89,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut total_skipped = 0usize;
     let mut attempt_id = 0usize;
 
-    let symbol_ids = load_symbol_ids(&session)?;
+    let symbol_ids = load_symbol_ids(project)?;
     println!("registry: {} symbols loaded", symbol_ids.len());
 
     for (old_ident, new_ident) in solver_plan.selected_pairs {
@@ -201,13 +197,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Keep each attempt independent from baseline source state.
             let _ = restore_project_src(project);
-            let outcome = run_incremental_attempt(
-                project,
-                &session,
-                &old_symbol,
-                &new_symbol,
-                &baseline_error_counts,
-            )?;
+            let outcome = run_incremental_attempt(project, &old_symbol, &new_symbol, &baseline_error_counts)?;
             let _ = restore_project_src(project);
 
             match outcome.result.as_str() {
@@ -338,21 +328,11 @@ struct KindStats {
     introduced_errors: usize,
 }
 
-fn run_incremental_attempt(
-    project: &Path,
-    session: &Arc<RustcSession>,
-    old_symbol: &str,
-    new_symbol: &str,
-    baseline_error_counts: &BTreeMap<String, usize>,
-) -> Result<AttemptOutcome, Box<dyn std::error::Error>> {
+fn run_incremental_attempt(project: &Path, old_symbol: &str, new_symbol: &str, baseline_error_counts: &BTreeMap<String, usize>) -> Result<AttemptOutcome, Box<dyn std::error::Error>> {
     let transform_start = Instant::now();
     let mut outcome = AttemptOutcome { result: "fail".to_string(), rename_applied: false, decision_reason: "introduced_errors".to_string(), ..Default::default() };
 
-    let rename_report = rename::rename_symbol_pairs_with_session(
-        project,
-        Arc::clone(session),
-        &[(old_symbol.to_string(), new_symbol.to_string())],
-    );
+    let rename_report = rename::rename_symbol_pairs(project, &[(old_symbol.to_string(), new_symbol.to_string())]);
 
     if let Some(err) = rename_report.error {
         outcome.rename_error = Some(err);
@@ -446,8 +426,9 @@ fn is_ident(value: &str) -> bool {
     chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
-fn load_symbol_ids(session: &RustcSession) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
-    Ok(session.symbol_catalog())
+fn load_symbol_ids(project: &Path) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+    let editor = ProjectEditor::load_with_rustc(project)?;
+    Ok(editor.symbol_catalog())
 }
 
 fn run_cmd(project: &Path, cmd: &str, args: &[&str]) -> bool {

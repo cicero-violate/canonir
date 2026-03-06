@@ -1,13 +1,15 @@
-#![cfg_attr(feature = "rustc_frontend", feature(rustc_private))]
+#![feature(rustc_private)]
 
 pub mod core;
 pub mod fs;
 pub mod structured;
 
 use std::path::Path;
+use std::sync::Arc;
 
 use core::oracle::StructuralEditOracle;
 use core::project_editor::ProjectEditor;
+use core::rustc_session::RustcSession;
 use structured::FieldMutation;
 
 #[derive(Debug, Clone, Default)]
@@ -27,10 +29,25 @@ impl RenameRunReport {
     }
 }
 
-#[cfg(feature = "rustc_frontend")]
 pub fn rename_symbol_pairs(project: &Path, renames: &[(String, String)]) -> RenameRunReport {
     let mut report = RenameRunReport::default();
-    let mut editor = match ProjectEditor::load(project, Box::new(StructuralEditOracle)) {
+    let session = match RustcSession::build(project) {
+        Ok(session) => Arc::new(session),
+        Err(err) => {
+            report.error = Some(format!("{err:?}"));
+            return report;
+        }
+    };
+    rename_symbol_pairs_with_session(project, session, renames)
+}
+
+pub fn rename_symbol_pairs_with_session(
+    project: &Path,
+    session: Arc<RustcSession>,
+    renames: &[(String, String)],
+) -> RenameRunReport {
+    let mut report = RenameRunReport::default();
+    let mut editor = match ProjectEditor::load_with_session(project, session) {
         Ok(editor) => editor,
         Err(err) => {
             report.error = Some(format!("{err:?}"));
@@ -83,13 +100,4 @@ pub fn rename_symbol_pairs(project: &Path, renames: &[(String, String)]) -> Rena
     }
 
     report
-}
-
-#[cfg(not(feature = "rustc_frontend"))]
-pub fn rename_symbol_pairs(_project: &Path, _renames: &[(String, String)]) -> RenameRunReport {
-    RenameRunReport {
-        rustc_args: Vec::new(),
-        def_paths: Vec::new(),
-        error: Some("rustc_frontend feature disabled".to_string()),
-    }
 }

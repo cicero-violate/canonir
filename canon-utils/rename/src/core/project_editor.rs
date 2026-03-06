@@ -1,15 +1,15 @@
-#[cfg(feature = "rustc_frontend")]
 use crate::core::oracle::StructuralEditOracle;
 use crate::core::oracle::StructuralEditOracleApi;
-#[cfg(feature = "rustc_frontend")]
-use crate::core::rustc_resolver::{RustcResolver, SpanRange};
+use crate::core::rustc_session::{RustcSession, SpanRange};
 use crate::core::symbol_id::normalize_symbol_id;
+use crate::core::syn_patcher;
 use crate::fs::collect_rs_files;
 use crate::structured::{FieldMutation, NodeOp, SymbolHandle, SymbolKind};
 use anyhow::{anyhow, Context, Result};
 use proc_macro2::Span;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use syn::visit_mut::VisitMut;
 use syn::{
     Item, ItemConst, ItemEnum, ItemFn, ItemMod, ItemStatic, ItemStruct, ItemTrait,
@@ -44,8 +44,7 @@ pub struct ProjectEditor {
     pending_dir_renames: Vec<DirRename>,
     pending_file_moves: Vec<(PathBuf, PathBuf)>,
     last_touched_files: HashSet<PathBuf>,
-    #[cfg(feature = "rustc_frontend")]
-    rustc: Option<RustcResolver>,
+    session: Option<Arc<RustcSession>>,
 }
 #[derive(Clone)]
 pub(crate) struct QueuedOp {
@@ -63,9 +62,19 @@ struct DirRename {
     new_dir: PathBuf,
 }
 impl ProjectEditor {
-    pub fn load(
+    pub fn load_with_rustc(project: &Path) -> Result<Self> {
+        let oracle = Box::new(StructuralEditOracle);
+        let session = Arc::new(RustcSession::build(project)?);
+        Self::load_with_session_inner(project, oracle, session)
+    }
+    pub fn load_with_session(project: &Path, session: Arc<RustcSession>) -> Result<Self> {
+        let oracle = Box::new(StructuralEditOracle);
+        Self::load_with_session_inner(project, oracle, session)
+    }
+    fn load_with_session_inner(
         project: &Path,
         oracle: Box<dyn StructuralEditOracleApi>,
+        session: Arc<RustcSession>,
     ) -> Result<Self> {
         let source_root = determine_source_root(project);
         let files = collect_rs_files(&source_root)?;
@@ -109,17 +118,8 @@ impl ProjectEditor {
             pending_dir_renames: Vec::new(),
             pending_file_moves: Vec::new(),
             last_touched_files: HashSet::new(),
-            #[cfg(feature = "rustc_frontend")]
-            rustc: None,
+            session: Some(session),
         })
-    }
-    #[cfg(feature = "rustc_frontend")]
-    pub fn load_with_rustc(project: &Path) -> Result<Self> {
-        let oracle = Box::new(StructuralEditOracle);
-        let mut editor = Self::load(project, oracle)?;
-        let resolver = RustcResolver::new(project)?;
-        editor.rustc = Some(resolver);
-        Ok(editor)
     }
     pub fn queue(&mut self, symbol_id: &str, op: NodeOp) -> Result<()> {
         let norm = crate::core::symbol_id::normalize_symbol_id(symbol_id);
@@ -147,26 +147,59 @@ impl ProjectEditor {
         mutation: FieldMutation,
     ) -> Result<()> {
         let norm = crate::core::symbol_id::normalize_symbol_id(symbol_id);
-        let handle = self
-            .registry
-            .handles
-            .get(&norm)
-            .cloned()
-            .with_context(|| format!("no handle found for {symbol_id}"))?;
+        let handle = if let Some(handle) = self.registry.handles.get(&norm).cloned() {
+            handle
+        } else if matches!(mutation, FieldMutation::RenameIdent(_)) {
+            self.synthetic_handle_from_symbol_id(&norm)?
+        } else {
+            return Err(anyhow!("no handle found for {symbol_id}"));
+        };
         let op = NodeOp::MutateField {
             handle,
             mutation,
         };
         self.queue(&norm, op)
     }
+    fn synthetic_handle_from_symbol_id(&self, symbol_id: &str) -> Result<SymbolHandle> {
+        let (module_path, name) = symbol_id
+            .rsplit_once("::")
+            .ok_or_else(|| anyhow!("invalid symbol id: {symbol_id}"))?;
+        let kind = self
+            .session
+            .as_ref()
+            .and_then(|session| session.symbol_kind(symbol_id))
+            .map(symbol_kind_from_str)
+            .unwrap_or(SymbolKind::Fn);
+        let file = self
+            .registry
+            .module_files
+            .get(module_path)
+            .cloned()
+            .unwrap_or_else(PathBuf::new);
+        Ok(SymbolHandle {
+            file,
+            module_path: module_path.to_string(),
+            name: name.to_string(),
+            kind,
+        })
+    }
     pub fn has_symbol(&self, symbol_id: &str) -> bool {
         let norm = crate::core::symbol_id::normalize_symbol_id(symbol_id);
+        if let Some(session) = &self.session {
+            return session.spans_for(&norm).is_some();
+        }
         self.registry.handles.contains_key(&norm)
     }
     pub fn symbol_ids(&self) -> Vec<String> {
+        if let Some(session) = &self.session {
+            return session.symbol_ids();
+        }
         self.registry.handles.keys().cloned().collect()
     }
     pub fn symbol_catalog(&self) -> Vec<(String, String)> {
+        if let Some(session) = &self.session {
+            return session.symbol_catalog();
+        }
         self.registry
             .handles
             .iter()
@@ -241,7 +274,7 @@ impl ProjectEditor {
                 NodeOp::MutateField { handle, mutation } => {
                     match mutation {
                         FieldMutation::RenameIdent(new_name) => {
-                            let touched = self.apply_symbol_rename(handle, new_name)?;
+                            let touched = self.apply_symbol_rename(&queued.symbol_id, new_name)?;
                             touched_files.extend(touched);
                         }
                     }
@@ -348,82 +381,41 @@ impl ProjectEditor {
     }
     fn apply_symbol_rename(
         &mut self,
-        handle: &SymbolHandle,
+        symbol_id: &str,
         new_name: &str,
     ) -> Result<HashSet<PathBuf>> {
-        let mut touched = HashSet::new();
-        let file = handle.file.clone();
-        let old_name = handle.name.clone();
-        #[cfg(feature = "rustc_frontend")]
-        if let Some(resolver) = &self.rustc {
-            let symbol_id = format!("{}::{}", handle.module_path, old_name);
-            let occurrences = resolver.collect_occurrences(&symbol_id)?;
-            let touched = self
-                .apply_symbol_rename_with_occurrences(&occurrences, new_name)?;
+        if let Some(session) = &self.session {
+            let norm = normalize_symbol_id(symbol_id);
+            let occurrences = session
+                .spans_for(&norm)
+                .ok_or_else(|| anyhow!("symbol not found via rustc: {symbol_id}"))?
+                .clone();
+            let touched =
+                self.apply_symbol_rename_with_occurrences(&occurrences, new_name)?;
             return Ok(touched);
         }
-        {
-            let ast = self
-                .registry
-                .asts
-                .get_mut(&file)
-                .ok_or_else(|| anyhow!("missing AST for {}", file.display()))?;
-            let changed = rename_item_in_file(ast, handle, new_name);
-            if changed {
-                touched.insert(file.clone());
-            }
-        }
-        let old_full = build_full_path(&handle.module_path, &old_name);
-        let new_full = build_full_path(&handle.module_path, new_name);
-        for (path, ast) in self.registry.asts.iter_mut() {
-            let mut rewriter = PathRewriter::replace_full(&old_full, &new_full);
-            if rewriter.visit_file(ast) {
-                touched.insert(path.clone());
-            }
-        }
-        for (path, ast) in self.registry.asts.iter_mut() {
-            let should_rewrite = *path == file || file_has_use_of(ast, &old_full)
-                || file_has_use_of(ast, &new_full);
-            if should_rewrite {
-                let mut ident_rewriter = IdentRewriter::new(&old_name, new_name);
-                if ident_rewriter.visit_file(ast) {
-                    touched.insert(path.clone());
-                }
-            }
-        }
-        Ok(touched)
+        Err(anyhow!(
+            "rustc session not initialized; use ProjectEditor::load_with_rustc"
+        ))
     }
-    #[cfg(feature = "rustc_frontend")]
     fn apply_symbol_rename_with_occurrences(
         &mut self,
         occurrences: &std::collections::HashMap<PathBuf, Vec<SpanRange>>,
         new_name: &str,
     ) -> Result<HashSet<PathBuf>> {
         let mut touched = HashSet::new();
-        for (path, mut spans) in occurrences.clone() {
-            let source = match self.registry.sources.get(&path) {
+        for (path, spans) in occurrences {
+            let source = match self.registry.sources.get(path) {
                 Some(content) => content.clone(),
                 None => continue,
             };
-            spans.sort_by(|a, b| b.lo.cmp(&a.lo));
-            let mut updated = source.clone();
-            for span in spans {
-                if span.hi > updated.len() || span.lo > span.hi {
-                    return Err(
-                        anyhow!(
-                            "invalid span for {}: {}..{}", path.display(), span.lo, span
-                            .hi
-                        ),
-                    );
-                }
-                updated.replace_range(span.lo..span.hi, new_name);
-            }
+            let updated = syn_patcher::patch_file(&source, spans, new_name)?;
             if updated != source {
-                self.registry.sources.insert(path.clone(), updated.clone());
+                self.registry.sources.insert(path.to_path_buf(), updated.clone());
                 if let Ok(ast) = syn::parse_file(&updated) {
-                    self.registry.asts.insert(path.clone(), ast);
+                    self.registry.asts.insert(path.to_path_buf(), ast);
                 }
-                touched.insert(path);
+                touched.insert(path.to_path_buf());
             }
         }
         Ok(touched)
@@ -808,6 +800,58 @@ fn rename_item_in_file(
     }
     changed
 }
+fn rewrite_string_attrs_in_file(
+    ast: &mut syn::File,
+    old_name: &str,
+    new_name: &str,
+) -> bool {
+    struct AttrStringRewriter<'a> {
+        old: &'a str,
+        new: &'a str,
+        changed: bool,
+    }
+
+    impl VisitMut for AttrStringRewriter<'_> {
+        fn visit_attribute_mut(&mut self, attr: &mut syn::Attribute) {
+            if let syn::Meta::List(ref mut meta_list) = attr.meta {
+                let tokens = meta_list.tokens.clone();
+                let mut new_tokens = proc_macro2::TokenStream::new();
+                let mut token_iter = tokens.into_iter().peekable();
+                let mut local_changed = false;
+                while let Some(tt) = token_iter.next() {
+                    match &tt {
+                        proc_macro2::TokenTree::Literal(lit) => {
+                            let s = lit.to_string();
+                            if s == format!("\"{}\"", self.old) {
+                                let new_lit = proc_macro2::Literal::string(self.new);
+                                new_tokens.extend(std::iter::once(
+                                    proc_macro2::TokenTree::Literal(new_lit),
+                                ));
+                                local_changed = true;
+                                continue;
+                            }
+                        }
+                        _ => {}
+                    }
+                    new_tokens.extend(std::iter::once(tt));
+                }
+                if local_changed {
+                    meta_list.tokens = new_tokens;
+                    self.changed = true;
+                }
+            }
+            syn::visit_mut::visit_attribute_mut(self, attr);
+        }
+    }
+
+    let mut rewriter = AttrStringRewriter {
+        old: old_name,
+        new: new_name,
+        changed: false,
+    };
+    rewriter.visit_file_mut(ast);
+    rewriter.changed
+}
 fn remove_top_level_item(
     ast: &mut syn::File,
     name: &str,
@@ -856,6 +900,35 @@ fn build_full_path(module_path: &str, name: &str) -> Vec<String> {
     segments.push(name.to_string());
     segments
 }
+fn symbol_kind_from_str(kind: &str) -> SymbolKind {
+    match kind {
+        "fn" => SymbolKind::Fn,
+        "struct" => SymbolKind::Struct,
+        "enum" => SymbolKind::Enum,
+        "const" => SymbolKind::Const,
+        "static" => SymbolKind::Static,
+        "type" => SymbolKind::Type,
+        "trait" => SymbolKind::Trait,
+        "module" => SymbolKind::Module,
+        _ => SymbolKind::Fn,
+    }
+}
+fn use_tree_group_prefix(
+    tree: &mut syn::UseTree,
+) -> Option<(Vec<String>, &mut syn::UseGroup)> {
+    let mut prefix = Vec::new();
+    let mut current = tree;
+    loop {
+        match current {
+            syn::UseTree::Path(use_path) => {
+                prefix.push(use_path.ident.to_string());
+                current = &mut *use_path.tree;
+            }
+            syn::UseTree::Group(group) => return Some((prefix, group)),
+            _ => return None,
+        }
+    }
+}
 struct PathRewriter {
     old_full: Option<Vec<String>>,
     new_full: Option<Vec<String>>,
@@ -892,6 +965,10 @@ impl PathRewriter {
         if let (Some(old_full), Some(new_full)) = (&self.old_full, &self.new_full) {
             if segments == old_full {
                 *segments = new_full.clone();
+            } else if segments.starts_with(old_full) {
+                let mut replaced = new_full.clone();
+                replaced.extend_from_slice(&segments[old_full.len()..]);
+                *segments = replaced;
             }
         }
         if let (Some(old_prefix), Some(new_prefix)) = (
@@ -940,6 +1017,27 @@ impl VisitMut for PathRewriter {
                 return;
             }
         }
+        if let Some((prefix, group)) = use_tree_group_prefix(tree) {
+            let mut local_changed = false;
+            for item in group.items.iter_mut() {
+                if let Some((segments, tail)) = flatten_use_tree(item) {
+                    let mut candidate = prefix.clone();
+                    candidate.extend_from_slice(&segments);
+                    let mut rewritten = candidate.clone();
+                    if self.rewrite_segments(&mut rewritten) {
+                        if rewritten.starts_with(&prefix) {
+                            let rewritten_tail = &rewritten[prefix.len()..];
+                            *item = build_use_tree(rewritten_tail, tail);
+                            local_changed = true;
+                        }
+                    }
+                }
+            }
+            if local_changed {
+                self.changed = true;
+                return;
+            }
+        }
         syn::visit_mut::visit_use_tree_mut(self, tree);
     }
 }
@@ -970,6 +1068,57 @@ impl VisitMut for IdentRewriter {
         }
         syn::visit_mut::visit_ident_mut(self, i);
     }
+    fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
+        let (new_tokens, local_changed) =
+            rewrite_tokens_ident(mac.tokens.clone(), &self.old, &self.new);
+        if local_changed {
+            mac.tokens = new_tokens;
+            self.changed = true;
+        }
+        syn::visit_mut::visit_macro_mut(self, mac);
+    }
+}
+
+fn rewrite_tokens_ident(
+    stream: proc_macro2::TokenStream,
+    old: &str,
+    new: &str,
+) -> (proc_macro2::TokenStream, bool) {
+    let mut out = proc_macro2::TokenStream::new();
+    let mut changed = false;
+    for tt in stream.into_iter() {
+        match tt {
+            proc_macro2::TokenTree::Ident(ident) => {
+                if ident.to_string() == old {
+                    out.extend(std::iter::once(proc_macro2::TokenTree::Ident(
+                        proc_macro2::Ident::new(new, ident.span()),
+                    )));
+                    changed = true;
+                } else {
+                    out.extend(std::iter::once(proc_macro2::TokenTree::Ident(ident)));
+                }
+            }
+            proc_macro2::TokenTree::Group(group) => {
+                let (inner, inner_changed) =
+                    rewrite_tokens_ident(group.stream(), old, new);
+                if inner_changed {
+                    let mut new_group =
+                        proc_macro2::Group::new(group.delimiter(), inner);
+                    new_group.set_span(group.span());
+                    out.extend(std::iter::once(proc_macro2::TokenTree::Group(
+                        new_group,
+                    )));
+                    changed = true;
+                } else {
+                    out.extend(std::iter::once(proc_macro2::TokenTree::Group(
+                        group,
+                    )));
+                }
+            }
+            other => out.extend(std::iter::once(other)),
+        }
+    }
+    (out, changed)
 }
 #[derive(Clone)]
 enum UseTail {
@@ -1007,6 +1156,19 @@ fn file_has_use_of(file: &syn::File, target: &[String]) -> bool {
     }
     false
 }
+fn file_has_use_of_any(file: &syn::File, targets: &[&[String]]) -> bool {
+    if targets.is_empty() {
+        return false;
+    }
+    for item in &file.items {
+        if let Item::Use(item_use) = item {
+            if targets.iter().any(|t| use_tree_contains_path_or_suffix(&item_use.tree, t, &[])) {
+                return true;
+            }
+        }
+    }
+    false
+}
 fn use_tree_contains_path(tree: &syn::UseTree, target: &[String]) -> bool {
     match tree {
         syn::UseTree::Group(group) => {
@@ -1019,6 +1181,34 @@ fn use_tree_contains_path(tree: &syn::UseTree, target: &[String]) -> bool {
                 false
             }
         }
+    }
+}
+fn use_tree_contains_path_or_suffix(
+    tree: &syn::UseTree,
+    target: &[String],
+    prefix: &[String],
+) -> bool {
+    match tree {
+        syn::UseTree::Path(path) => {
+            let mut next_prefix = prefix.to_vec();
+            next_prefix.push(path.ident.to_string());
+            use_tree_contains_path_or_suffix(&path.tree, target, &next_prefix)
+        }
+        syn::UseTree::Group(group) => group
+            .items
+            .iter()
+            .any(|t| use_tree_contains_path_or_suffix(t, target, prefix)),
+        syn::UseTree::Name(name) => {
+            let mut full = prefix.to_vec();
+            full.push(name.ident.to_string());
+            full == target
+        }
+        syn::UseTree::Rename(rename) => {
+            let mut full = prefix.to_vec();
+            full.push(rename.ident.to_string());
+            full == target
+        }
+        _ => false,
     }
 }
 fn build_use_tree(segments: &[String], tail: UseTail) -> syn::UseTree {
