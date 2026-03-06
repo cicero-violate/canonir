@@ -9,7 +9,7 @@ members = [
   "canon",
   "canon-analyzer",
   "canon-projection",
-  "canon-agent-v1",
+  "canon-agent",
   "canon-agent-v2",
   "canon-utils/rename",
   "gpjson-rs",
