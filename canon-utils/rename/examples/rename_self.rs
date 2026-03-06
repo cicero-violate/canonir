@@ -31,7 +31,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let offset = std::env::var("RENAME_OFFSET").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
     let limit = std::env::var("RENAME_LIMIT").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(usize::MAX);
     let bounded: Vec<(String, String)> = ordered.into_iter().skip(offset).take(limit).collect();
-    let solver_plan = build_solver_plan(&bounded);
+    let solver_plan = SolverPlan {
+        input_total: bounded.len(),
+        transform_total: bounded.len(),
+        dependency_count: 0,
+        conflict_count: 0,
+        cyclic_component_count: 0,
+        sat_selected_total: bounded.len(),
+        selected_total: bounded.len(),
+        selected_pairs: bounded.clone(),
+    };
 
     append_report_line(
         report_path,
@@ -82,10 +91,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut total_skipped = 0usize;
     let mut attempt_id = 0usize;
 
+    let symbol_ids = load_symbol_ids(project)?;
+    println!("registry: {} symbols loaded", symbol_ids.len());
+
     for (old_ident, new_ident) in solver_plan.selected_pairs {
         if is_degenerate_rename(&old_ident, &new_ident) {
             total_skipped += 1;
             attempt_id += 1;
+            println!("[{attempt_id:>4}] SKIP  {old_ident} -> {new_ident}  (degenerate)");
             append_report_line(
                 report_path,
                 &json!({
@@ -129,13 +142,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        let symbol_ids = load_symbol_ids(project)?;
-        let mut candidates: Vec<(String, String)> = symbol_ids.into_iter().filter(|(id, _)| id.ends_with(&format!("::{old_ident}"))).collect();
+        let mut candidates: Vec<(String, String)> = symbol_ids.iter().filter(|(id, _)| id.ends_with(&format!("::{old_ident}"))).cloned().collect();
         candidates.sort();
 
         if candidates.is_empty() {
             total_skipped += 1;
             attempt_id += 1;
+            println!("[{attempt_id:>4}] SKIP  {old_ident} -> {new_ident}  (missing_symbol)");
             append_report_line(
                 report_path,
                 &json!({
@@ -185,6 +198,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             total_attempts += 1;
             attempt_id += 1;
 
+            print!("[{attempt_id:>4}] TRY   {old_symbol} -> {new_symbol} ... ");
+            let _ = std::io::stdout().flush();
+
             // Keep each attempt independent from baseline source state.
             let _ = restore_project_src(project);
             let outcome = run_incremental_attempt(project, &old_symbol, &new_symbol, &baseline_error_counts)?;
@@ -195,6 +211,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "fail" => total_fail += 1,
                 _ => {}
             }
+            let tag = if outcome.accept { "PASS" } else { "FAIL" };
+            println!("{tag}  applied={}  delta={}  reason={}  ({}ms)", outcome.rename_applied, outcome.delta_total, outcome.decision_reason, outcome.transform_ms + outcome.compile_ms);
+
             merge_counts(&outcome.error_types, &mut introduced_summary);
             update_kind_stats(&mut kind_stats, &symbol_kind, outcome.accept, outcome.delta_total.max(0) as usize);
 
