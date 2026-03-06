@@ -73,7 +73,7 @@ impl ProjectEditor {
         let mut original_sources = HashMap::new();
         for file in files {
             let content = std::fs::read_to_string(&file)?;
-            let module_path = module_path_for_file(&source_root, &file)?;
+            let module_path = module_path_from_file(&source_root, &file)?;
             registry.module_files.insert(module_path.clone(), file.clone());
             let ast = match syn::parse_file(&content) {
                 Ok(ast) => {
@@ -162,6 +162,28 @@ impl ProjectEditor {
     pub fn has_symbol(&self, symbol_id: &str) -> bool {
         let norm = crate::core::symbol_id::normalize_symbol_id(symbol_id);
         self.registry.handles.contains_key(&norm)
+    }
+    pub fn symbol_ids(&self) -> Vec<String> {
+        self.registry.handles.keys().cloned().collect()
+    }
+    pub fn symbol_catalog(&self) -> Vec<(String, String)> {
+        self.registry
+            .handles
+            .iter()
+            .map(|(id, handle)| {
+                let kind = match handle.kind {
+                    SymbolKind::Fn => "fn",
+                    SymbolKind::Struct => "struct",
+                    SymbolKind::Enum => "enum",
+                    SymbolKind::Const => "const",
+                    SymbolKind::Static => "static",
+                    SymbolKind::Type => "type",
+                    SymbolKind::Trait => "trait",
+                    SymbolKind::Module => "module",
+                };
+                (id.clone(), kind.to_string())
+            })
+            .collect()
     }
     pub fn queue_module_rename(&mut self, old_module_path: &str, new_name: &str) {
         self.pending_module_renames
@@ -564,7 +586,7 @@ impl ProjectEditor {
         self.registry.handles.clear();
         self.registry.module_files.clear();
         for (file, ast) in &self.registry.asts {
-            let module_path = module_path_for_file(&self.source_root, file)?;
+            let module_path = module_path_from_file(&self.source_root, file)?;
             self.registry.module_files.insert(module_path.clone(), file.clone());
             index_file_symbols(ast, file, &module_path, &mut self.registry.handles);
         }
@@ -575,7 +597,7 @@ fn determine_source_root(project: &Path) -> PathBuf {
     let src = project.join("src");
     if src.is_dir() { src } else { project.to_path_buf() }
 }
-fn module_path_for_file(root: &Path, file: &Path) -> Result<String> {
+fn module_path_from_file(root: &Path, file: &Path) -> Result<String> {
     let rel = file.strip_prefix(root).unwrap_or(file);
     let mut components: Vec<String> = rel
         .components()
@@ -638,7 +660,7 @@ fn index_file_symbols_by_text(
     handles: &mut HashMap<String, SymbolHandle>,
 ) {
     let re = regex::Regex::new(
-            r"(?m)^\\s*(pub\\s+)?(fn|struct|enum|const|static|type|trait|mod)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+            r"(?m)^\s*(pub\s+)?(fn|struct|enum|const|static|type|trait|mod)\s+([A-Za-z_][A-Za-z0-9_]*)",
         )
         .ok();
     let Some(re) = re else {

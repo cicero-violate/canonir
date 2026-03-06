@@ -39,21 +39,20 @@ pub fn rename_symbol_pairs(project: &Path, renames: &[(String, String)]) -> Rena
     };
 
     for (old_symbol, new_symbol) in renames {
-        let (source_symbol, target_symbol) = if editor.has_symbol(old_symbol) {
-            (old_symbol.as_str(), new_symbol.as_str())
-        } else {
-            (new_symbol.as_str(), old_symbol.as_str())
-        };
-        let new_ident = target_symbol.rsplit("::").next().unwrap_or(target_symbol);
+        if !editor.has_symbol(old_symbol) {
+            report.error = Some(format!("symbol not found in registry: {old_symbol}"));
+            return report;
+        }
+        let new_ident = new_symbol.rsplit("::").next().unwrap_or(new_symbol.as_str());
         if let Err(err) =
-            editor.queue_by_id(source_symbol, FieldMutation::RenameIdent(new_ident.to_string()))
+            editor.queue_by_id(old_symbol, FieldMutation::RenameIdent(new_ident.to_string()))
         {
             report.error = Some(format!("{err:?}"));
             return report;
         }
     }
 
-    if let Err(err) = editor
+    let preview_output = editor
         .validate()
         .and_then(|conflicts| {
             if conflicts.is_empty() {
@@ -62,10 +61,24 @@ pub fn rename_symbol_pairs(project: &Path, renames: &[(String, String)]) -> Rena
                 Err(anyhow::anyhow!("validation conflicts: {conflicts:?}"))
             }
         })
-        .and_then(|_| editor.apply().map(|_| ()))
-        .and_then(|_| editor.preview().map(|_| ()))
-        .and_then(|_| editor.commit().map(|_| ()))
-    {
+        .and_then(|_| editor.apply().and_then(|report| {
+            if report.conflicts.is_empty() {
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!("apply conflicts: {:?}", report.conflicts))
+            }
+        }))
+        .and_then(|_| editor.preview());
+
+    match preview_output {
+        Err(err) => {
+            report.error = Some(format!("{err:?}"));
+            return report;
+        }
+        Ok(preview) => report.def_paths.push(preview),
+    }
+
+    if let Err(err) = editor.commit() {
         report.error = Some(format!("{err:?}"));
     }
 
