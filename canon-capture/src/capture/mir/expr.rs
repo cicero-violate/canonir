@@ -244,6 +244,9 @@ pub(crate) fn mir_assign_stmt<'tcx>(
         }
         return Some(Stmt::Assign { lhs, rhs });
     }
+    if matches!(rvalue, mir::Rvalue::Use(mir::Operand::Constant(_))) {
+        return Some(Stmt::Assign { lhs, rhs });
+    }
     if !mir_guard::value_known(&rhs, defined, suppressed_sentinel_names) {
         return None;
     }
@@ -330,6 +333,25 @@ fn mir_rvalue_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>,
                     render_projected_place_expr(tcx, local_decls, place, resolver)
                 }
             }
+            // Constants should lower directly and not depend on local labeling.
+            mir::Operand::Constant(c) => render_constant_operand_expr(tcx, c)
+                .or_else(|| {
+                    let raw = c.const_.to_string();
+                    let s = raw.trim();
+                    if s.is_empty() || is_forbidden_const_fragment(s) {
+                        None
+                    } else if let Some(rest) = s.strip_prefix("const ") {
+                        let rest = rest.trim();
+                        if rest.is_empty() || is_forbidden_const_fragment(rest) {
+                            None
+                        } else {
+                            Some(rest.to_string())
+                        }
+                    } else {
+                        Some(s.to_string())
+                    }
+                })
+                .or_else(|| mir_ops::mir_operand_label(tcx, op, resolver)),
             _ => mir_ops::mir_operand_label(tcx, op, resolver),
         },
         mir::Rvalue::Ref(_, borrow_kind, place) => {
@@ -383,6 +405,12 @@ fn mir_rvalue_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>,
             mir::AggregateKind::Closure(def_id, args) => {
                 mir_ops::closure_placeholder_expr_from_aggregate(tcx, *def_id, args)
             }
+            mir::AggregateKind::Coroutine(def_id, args) => {
+                mir_ops::closure_placeholder_expr_from_aggregate(tcx, *def_id, args)
+            }
+            mir::AggregateKind::CoroutineClosure(def_id, args) => {
+                mir_ops::closure_placeholder_expr_from_aggregate(tcx, *def_id, args)
+            }
             mir::AggregateKind::Tuple => {
                 let elems = operands.iter().map(|op| mir_ops::mir_operand_label(tcx, op, resolver)).collect::<Option<Vec<_>>>()?;
                 if elems.len() == 1 {
@@ -401,13 +429,81 @@ fn mir_rvalue_expr<'tcx>(tcx: TyCtxt<'tcx>, local_decls: &mir::LocalDecls<'tcx>,
             let count = count.try_to_target_usize(tcx)?;
             Some(format!("[{}; {count}]", mir_ops::mir_operand_label(tcx, operand, resolver)?))
         }
-        mir::Rvalue::Discriminant(place) => Some(format!("{} as isize", resolver.label_place(place)?)),
+        mir::Rvalue::Discriminant(place) => {
+            let base = render_projected_place_expr(tcx, local_decls, place, resolver)?;
+            Some(format!("{base} as isize"))
+        }
         mir::Rvalue::CopyForDeref(place) => {
             let base = resolver.label_place(place)?;
             Some(format!("*{base}"))
         }
         _ => None,
     }
+}
+
+fn render_constant_operand_expr<'tcx>(tcx: TyCtxt<'tcx>, c: &mir::ConstOperand<'tcx>) -> Option<String> {
+    if let Some(snippet) = tcx.sess.source_map().span_to_snippet(c.span).ok() {
+        if let Some(normalized) = normalize_constant_text(c, &snippet) {
+            return Some(normalized);
+        }
+    }
+
+    let raw = c.const_.to_string();
+    if let Some(normalized) = normalize_constant_text(c, &raw) {
+        return Some(normalized);
+    }
+    let s = raw.trim();
+    if !s.is_empty() && is_forbidden_const_fragment(s) {
+        return Some("panic!(\"canon unresolved const fragment\")".to_string());
+    }
+    None
+}
+
+fn normalize_constant_text<'tcx>(c: &mir::ConstOperand<'tcx>, text: &str) -> Option<String> {
+    let mut s = text.trim();
+    if s.is_empty() || s == "_" {
+        return None;
+    }
+    if let Some(rest) = s.strip_prefix("const ") {
+        s = rest.trim();
+    }
+    if s.is_empty() || s == "_" {
+        return None;
+    }
+    if is_forbidden_const_fragment(s) {
+        return None;
+    }
+
+    if const_operand_is_str(c.const_.ty()) {
+        if is_string_literal_text(s) {
+            return Some(s.to_string());
+        }
+        if let Some(rest) = s.strip_prefix('&') {
+            let rest = rest.trim();
+            if is_string_literal_text(rest) {
+                return Some(rest.to_string());
+            }
+        }
+        return Some(format!("{s:?}"));
+    }
+
+    Some(s.to_string())
+}
+
+fn const_operand_is_str(mut ty: ty::Ty<'_>) -> bool {
+    while let ty::TyKind::Ref(_, inner, _) = ty.kind() {
+        ty = *inner;
+    }
+    matches!(ty.kind(), ty::TyKind::Str)
+}
+
+fn is_string_literal_text(s: &str) -> bool {
+    s.starts_with('"') || s.starts_with("r\"") || s.starts_with("r#")
+}
+
+fn is_forbidden_const_fragment(s: &str) -> bool {
+    let t = s.trim();
+    t.contains('$') || matches!(t, ")" | "}" | "];" | ");" | "};" | "]")
 }
 
 fn is_primitive_value_ty(ty: ty::Ty<'_>) -> bool {

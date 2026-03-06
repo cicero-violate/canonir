@@ -16,6 +16,7 @@ const CUDA_SOURCES: &[(&str, &str)] = &[
     ("src/graph/model_checking.cu", "graph_model_checking"),
     ("src/graph/csr_unified.cu", "graph_csr_unified"),
     ("src/constraints/constraints.cu", "constraints_kernels"),
+    ("src/constraints/unification.cu", "constraints_unification"),
     ("src/control_flow/dominators.cu", "control_flow_dominators"),
     ("src/control_flow/dataflow.cu", "control_flow_dataflow"),
     ("src/cryptography/merkle_tree.cu", "cryptography_merkle_tree"),

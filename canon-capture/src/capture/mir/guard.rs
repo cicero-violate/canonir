@@ -77,6 +77,10 @@ fn is_structural_expr(value: &str) -> bool {
         || value.contains('&')
         || value.contains(' ')
         || value.starts_with('"')
+        || value.starts_with("b\"")
+        || value.starts_with("br\"")
+        || value.starts_with("&b\"")
+        || value.starts_with("&br\"")
         || value.starts_with('\'')
         || value == "true"
         || value == "false"

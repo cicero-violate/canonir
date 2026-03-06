@@ -401,12 +401,7 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
         // Ensure every non-__ret local receives a structural definition.
         // This prevents undefined temporary locals in emitted Rust.
         if lhs_name != "__ret" {
-            ctx.stmts.push(Stmt::Assign {
-                lhs: lhs_name.clone(),
-                // Diverging placeholder preserves type flow without fabricating values
-                rhs: "panic!(\"canon missing assignment lowering\")".to_string(),
-            });
-            ctx.defined.insert(lhs_name.clone());
+            panic!("canon-capture invariant violation: unresolved assignment lowering lhs={lhs_name:?} rvalue={rvalue:?}");
         }
     }
 
@@ -418,12 +413,7 @@ fn lower_assign_statement<'tcx>(stmt: &mir::Statement<'tcx>, ctx: &mut AssignLow
     // without a structural definition.
     if let Some(lhs_name) = ctx.resolver.label_place(lhs) {
         if lhs_name != "__ret" && !ctx.defined.contains(&lhs_name) {
-            ctx.stmts.push(Stmt::Assign {
-                lhs: lhs_name.clone(),
-                // Diverging safety-net placeholder (no fabrication)
-                rhs: "panic!(\"canon safety-net assignment\")".to_string(),
-            });
-            ctx.defined.insert(lhs_name);
+            panic!("canon-capture invariant violation: local undefined after lowering lhs={lhs_name:?} rvalue={rvalue:?}");
         }
     }
 }
@@ -449,38 +439,9 @@ fn build_local_decl_stmts<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>, resol
             continue;
         };
         let ty = lower_ty(tcx, body.local_decls[local].ty);
-        if !local_type_is_emittable(tcx, &ty) {
-            // Keep the local declaration so subsequent assignments compile,
-            // but avoid emitting an explicit type rustc cannot parse/infer.
-            out.push(Stmt::Let { pat: name, ty: None, init: None });
-            continue;
-        }
         out.push(Stmt::Let { pat: name, ty: Some(ty), init: None });
     }
     out
-}
-
-fn local_type_is_emittable(tcx: TyCtxt<'_>, ty: &crate::types::TypeExpr) -> bool {
-    let rendered = render_type_expr(tcx, ty);
-    if rendered.contains("fmt::rt::Argument") {
-        return false;
-    }
-    if rendered.contains("fmt::Arguments") {
-        return false;
-    }
-    // MIR iterator internals often materialize as function-pointer map
-    // combinators whose explicit local type requires HRTB lifetimes.
-    // Keep these unannotated so rustc infers them from assignments.
-    if rendered.contains("Map<") && rendered.contains("fn(") {
-        return false;
-    }
-    if rendered.contains("fn(") {
-        return false;
-    }
-    if rendered.contains("'_") {
-        return false;
-    }
-    true
 }
 
 // Post-structural return materialization hook.
@@ -496,15 +457,5 @@ pub(crate) fn materialize_return_local(_body: &mut Body) {
 // when missing. This function intentionally performs no additional
 // mutation to avoid duplicating return synthesis logic.
 pub(crate) fn resolve_ret_gaps_with(_body: &mut Body, _default_expr: &str) {
-    if let Body::Blocks(blocks) = _body {
-        for bb in blocks.iter_mut() {
-            for stmt in bb.stmts.iter_mut() {
-                if let Stmt::Assign { lhs, rhs } = stmt {
-                    if lhs == "__ret" && rhs.contains("panic!(\"canon") {
-                        *rhs = _default_expr.to_string();
-                    }
-                }
-            }
-        }
-    }
+    let _ = (_body, _default_expr);
 }

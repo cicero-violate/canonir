@@ -1,6 +1,8 @@
 pub mod a_star;
 pub mod backtracking;
+pub mod beam_search;
 pub mod branch_and_bound;
+pub mod delta_debug;
 pub mod genetic_algorithm;
 #[cfg(feature = "cuda")]
 pub mod gpu;

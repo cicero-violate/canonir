@@ -39,21 +39,6 @@ pub(crate) fn lower_call_terminator<'tcx>(
         } else {
             panic!("canon-capture invariant violation: unsupported must_use call lowering");
         }
-    } else if mir_ops::filtered_internal_call_target(tcx, func, resolver) || mir_ops::is_format_call_target(tcx, func) {
-        // Formatting/runtime constructor calls (e.g. fmt::Arguments::new,
-        // fmt::rt::Argument::new, std::io::_print) are compiler-internal
-        // plumbing. They must not introduce private fmt::rt types into
-        // emitted Rust. Instead of emitting a typed fallback cast, we
-        // structurally skip lowering here and rely on higher-level
-        // call lowering to handle the surrounding expression.
-        if let Some(dest) = mir_util::label_place_dest(resolver, destination) {
-            if destination.local.as_u32() != 0 {
-                // Use a diverging expression to preserve the authoritative type
-                // without requiring `Default` on compiler-private fmt types.
-                stmts.push(Stmt::Assign { lhs: dest.clone(), rhs: "panic!(\"canon filtered internal call\")".to_string() });
-                defined.insert(dest);
-            }
-        }
     } else if let Some(dest) = mir_util::label_place_dest(resolver, destination)
         && let Some(method_stmt) = mir_ops::mir_method_call_stmt(tcx, local_decls, func, args, resolver, dest.clone())
     {
@@ -91,15 +76,7 @@ pub(crate) fn lower_call_terminator<'tcx>(
                 panic!("canon invariant violation: unsupported call lowering for private fmt internal type `{}`", ty_expr);
             }
 
-            stmts.push(Stmt::Assign {
-                lhs: dest.clone(),
-                // Use a diverging expression without casting to preserve
-                // authoritative MIR type while avoiding fabricated casts.
-                // Avoid synthesizing a unit-typed fallback; keep it diverging
-                // so type authority can constrain the destination properly.
-                rhs: "panic!(\"canon call lowering fallback\")".to_string(),
-            });
-            defined.insert(dest);
+            panic!("canon-capture invariant violation: unresolved call lowering func={func:?} args={args:?} destination={destination:?}");
         }
     }
 

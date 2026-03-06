@@ -425,7 +425,7 @@ pub(crate) fn lower_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> TypeExpr {
             let mut lowered_args: Vec<TypeExpr> = Vec::new();
             lowered_args.extend(args.regions().map(|region| match region.kind() {
                 ty::RegionKind::ReStatic => TypeExpr::Path("'static".to_string()),
-                _ => TypeExpr::Path("'_".to_string()),
+                _ => TypeExpr::Path("'static".to_string()),
             }));
             lowered_args.extend(args.types().map(|ty| lower_ty(tcx, ty)));
             lowered_args.extend(args.consts().map(|_| TypeExpr::Path("_".to_string())));

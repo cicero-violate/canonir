@@ -5,6 +5,7 @@
 mod gpu_tests {
     use crate::constraints::ac3::{ac3_gpu_apply, ConstraintGraph};
     use crate::constraints::forward_checking::forward_check_gpu_build;
+    use crate::constraints::unification::{solve_constraints_gpu, EqualityConstraint};
     use crate::control_flow::gpu::{dominators_gpu, reaching_definitions_gpu};
     use crate::cryptography::merkle_tree_gpu::{merkle_build_gpu, root, PAGE_SIZE};
     use crate::graph::adj_list::AdjList;
@@ -21,6 +22,7 @@ mod gpu_tests {
     use crate::graph::scheduler_gpu::{deadlock_gpu, pack_ready_priority, ready_mask_gpu};
     use crate::graph::topological_sort_gpu::topological_sort_gpu;
     use crate::numerical::gpu::{matrix_multiply_gpu, sieve_gpu};
+    use crate::parsing_compilation::type_unification::{unify_types_gpu, TypeConstraintGraph};
     use crate::searching::gpu::linear_search_gpu;
     use crate::sorting::gpu::bitonic_sort_gpu;
     use crate::string_algorithms::gpu::rabin_karp_gpu;
@@ -741,5 +743,29 @@ mod gpu_tests {
         let levels_std = bfs_gpu(&g.to_csr(), 0);
         let levels_unified = bfs_gpu(&csr2, 0);
         assert_eq!(levels_std, levels_unified);
+    }
+
+    #[test]
+    fn union_find_gpu_merges_constraint_components() {
+        let constraints = vec![
+            EqualityConstraint::new(0, 1),
+            EqualityConstraint::new(1, 2),
+            EqualityConstraint::new(4, 5),
+        ];
+        let reps = solve_constraints_gpu(6, &constraints).unwrap();
+        assert_eq!(reps[0], reps[1]);
+        assert_eq!(reps[1], reps[2]);
+        assert_eq!(reps[4], reps[5]);
+        assert_ne!(reps[0], reps[3]);
+    }
+
+    #[test]
+    fn type_unification_gpu_solves_equalities() {
+        let graph = TypeConstraintGraph::from_equalities(7, &[(0, 1), (1, 2), (3, 4), (5, 6)]).unwrap();
+        let result = unify_types_gpu(&graph).unwrap();
+        assert!(result.equivalent(0, 2));
+        assert!(result.equivalent(3, 4));
+        assert!(result.equivalent(5, 6));
+        assert!(!result.equivalent(0, 3));
     }
 }

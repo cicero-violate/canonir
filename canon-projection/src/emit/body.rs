@@ -1,5 +1,5 @@
 use canon::ir::CanonIR;
-use canon::node::{CanonId, CanonNodeKind, CfgOp};
+use canon::node::{CanonId, CanonNodeKind, CfgOp, TypeKind};
 use std::collections::HashSet;
 
 use crate::emit::types::render_type_id;
@@ -65,7 +65,6 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>, suppresse
                 }
                 _ => render_type_id(ir, *ty),
             };
-            let ty_emittable = type_annotation_is_emittable(&ty_str);
 
             if let Some(r) = rhs {
                 let rhs_expr = local_name(ir, *r);
@@ -81,7 +80,7 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>, suppresse
                     format!("{} = {};", lhs_name, rhs_expr)
                 } else {
                     declared.insert(lhs_name.clone());
-                    if ty_emittable {
+                    if should_emit_type_annotation(ir, *lhs, *ty) {
                         format!("let mut {}: {} = {};", lhs_name, ty_str, rhs_expr)
                     } else {
                         format!("let mut {} = {};", lhs_name, rhs_expr)
@@ -95,7 +94,7 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>, suppresse
                     // Do NOT emit uninitialized authoritative locals.
                     // Preserve the declared type boundary with a diverging
                     // expression rather than permitting unit fallback.
-                    if ty_emittable {
+                    if should_emit_type_annotation(ir, *lhs, *ty) {
                         format!("let mut {}: {} = panic!(\"canon uninit\");", lhs_name, ty_str)
                     } else {
                         format!("let mut {} = panic!(\"canon uninit\");", lhs_name)
@@ -107,13 +106,7 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>, suppresse
             let lhs_name = local_name(ir, *lhs);
             let rhs_name = local_name(ir, *rhs);
             if rhs_name == "__canon_suppressed__" || suppressed.contains(&rhs_name) || rhs_name == "__canon_call_gap__" || rhs_name == "__canon_switch_gap__" {
-                // Preserve authoritative type boundary: if RHS collapsed,
-                // do NOT assign a unit-producing expression into the local.
-                // Instead, reinitialize with a typed fallback so bindings
-                // like `__ret: String` never become `()`.
-                suppressed.insert(lhs_name.clone());
-                let fallback = "::core::default::Default::default()".to_string();
-                bind_or_assign_typed(ir, *lhs, &lhs_name, fallback, declared)
+                panic!("canon-projection invariant violation: unresolved assignment RHS for `{lhs_name}`")
             } else {
                 bind_or_assign_typed(ir, *lhs, &lhs_name, rhs_name, declared)
             }
@@ -200,17 +193,7 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>, suppresse
             // E0599 and downstream unit pollution into authoritative locals
             // such as `__ret`.
             if receiver_name == "()" || arg_names.iter().any(|a| a == "()") {
-                // Never materialize a method call on unit. Instead emit a
-                // typed fallback so the destination local does not become `()`
-                // and trigger E0599/E0308 cascades downstream.
-                return match dest {
-                    Some(d) => {
-                        let dest_name = local_name(ir, *d);
-                        suppressed.insert(dest_name.clone());
-                        bind_or_assign_typed(ir, *d, &dest_name, "::core::default::Default::default()".to_string(), declared)
-                    }
-                    None => "::core::default::Default::default();".to_string(),
-                };
+                panic!("canon-projection invariant violation: unresolved method call receiver/args")
             }
             // If the receiver was suppressed, emit a diverging expression instead
             // of allowing it to materialize as unit `()` in method position.
@@ -330,48 +313,60 @@ fn render_op(ir: &CanonIR, op: &CfgOp, declared: &mut HashSet<String>, suppresse
 
 fn callable_name(ir: &CanonIR, id: CanonId) -> String {
     match &ir.node(id).kind {
-        CanonNodeKind::Fn { name_id, .. } => ir.lookup_name(*name_id).to_string(),
+        CanonNodeKind::Fn { name_id, .. } => {
+            let name = normalize_value_fragment(ir.lookup_name(*name_id));
+            if is_forbidden_expr_fragment(&name) {
+                "__canon_unresolved_call_target".to_string()
+            } else {
+                name
+            }
+        }
         CanonNodeKind::Local { name_id, .. } => {
-            let raw = ir.lookup_name(*name_id);
-            resolve_local_callable_path(ir, raw).unwrap_or_else(|| raw.to_string())
+            let name = normalize_value_fragment(ir.lookup_name(*name_id));
+            if is_forbidden_expr_fragment(&name) {
+                "__canon_unresolved_call_target".to_string()
+            } else {
+                name
+            }
         }
         _ => format!("node_{}", id.0),
     }
 }
 
-fn resolve_local_callable_path(ir: &CanonIR, raw: &str) -> Option<String> {
-    let tail = raw.strip_prefix("crate::")?;
-    if tail.contains("::") {
-        return Some(raw.to_string());
-    }
-    let target_name = tail;
-    let target_fn = ir.nodes.iter().find(|n| matches!(&n.kind, CanonNodeKind::Fn { name_id, .. } if ir.lookup_name(*name_id) == target_name))?;
-
-    for node in &ir.nodes {
-        let CanonNodeKind::Module { path_id, .. } = &node.kind else {
-            continue;
-        };
-        let src = canon::id::NodeId(node.id.0);
-        let has_contains = ir.module_graph.neighbours(src).any(|(dst, edge)| matches!(edge, canon::edge::EdgeKind::Contains) && dst.0 == target_fn.id.0);
-        if has_contains {
-            let module_path = ir.lookup_path(*path_id);
-            if module_path == "crate" {
-                return Some(format!("crate::{target_name}"));
-            }
-            return Some(format!("{module_path}::{target_name}"));
-        }
-    }
-    Some(raw.to_string())
-}
 
 fn local_name(ir: &CanonIR, id: CanonId) -> String {
-    match &ir.node(id).kind {
+    let raw = match &ir.node(id).kind {
         CanonNodeKind::Local { name_id, .. } => ir.lookup_name(*name_id).to_string(),
         CanonNodeKind::Param { name_id, .. } => ir.lookup_name(*name_id).to_string(),
         CanonNodeKind::Const { name_id, .. } => ir.lookup_name(*name_id).to_string(),
         CanonNodeKind::Static { name_id, .. } => ir.lookup_name(*name_id).to_string(),
         _ => format!("v{}", id.0),
+    };
+    let raw = normalize_value_fragment(&raw);
+    if is_forbidden_expr_fragment(&raw) {
+        "panic!(\"canon unresolved token\")".to_string()
+    } else {
+        raw
     }
+}
+
+fn normalize_value_fragment(raw: &str) -> String {
+    let s = raw.trim();
+    if let Some(rest) = s.strip_prefix("ref mut ") {
+        return rest.trim().to_string();
+    }
+    if let Some(rest) = s.strip_prefix("ref ") {
+        return rest.trim().to_string();
+    }
+    if let Some(rest) = s.strip_prefix("mut ") {
+        return rest.trim().to_string();
+    }
+    s.to_string()
+}
+
+fn is_forbidden_expr_fragment(s: &str) -> bool {
+    let t = s.trim();
+    t.contains('$') || matches!(t, ")" | "}" | "]" | ");" | "};" | "];")
 }
 
 fn bind_or_assign_typed(ir: &CanonIR, id: CanonId, name: &str, expr: String, declared: &mut HashSet<String>) -> String {
@@ -398,7 +393,7 @@ fn bind_or_assign_typed(ir: &CanonIR, id: CanonId, name: &str, expr: String, dec
 
         match ty_opt {
             Some(ty) => {
-                let emittable = type_annotation_is_emittable(&ty);
+                let emittable = should_emit_type_annotation_for_node(ir, id);
                 // Do NOT force unit-typed locals to be explicitly annotated as `()`.
                 // The capture fallback uses unit for many untyped temporaries; if we
                 // emit `let x: () = ...;` we destroy downstream type inference and
@@ -437,12 +432,26 @@ fn render_suppressed_binding(_name: &str, _declared: &mut HashSet<String>) -> St
     String::new()
 }
 
-fn type_annotation_is_emittable(ty: &str) -> bool {
-    if ty.contains("fn(") {
-        return false;
+
+fn should_emit_type_annotation(ir: &CanonIR, local_id: CanonId, fallback_ty: CanonId) -> bool {
+    let ty_id = match &ir.node(local_id).kind {
+        CanonNodeKind::Local { ty, .. } | CanonNodeKind::Param { ty, .. } => *ty,
+        _ => fallback_ty,
+    };
+    should_emit_type_annotation_for_type(ir, ty_id)
+}
+
+fn should_emit_type_annotation_for_node(ir: &CanonIR, id: CanonId) -> bool {
+    let ty_id = match &ir.node(id).kind {
+        CanonNodeKind::Local { ty, .. } | CanonNodeKind::Param { ty, .. } => *ty,
+        _ => return false,
+    };
+    should_emit_type_annotation_for_type(ir, ty_id)
+}
+
+fn should_emit_type_annotation_for_type(ir: &CanonIR, ty_id: CanonId) -> bool {
+    match &ir.node(ty_id).kind {
+        CanonNodeKind::Type { kind } => !matches!(kind, TypeKind::FnPtr(_)),
+        _ => true,
     }
-    if ty.contains("'_") {
-        return false;
-    }
-    true
 }

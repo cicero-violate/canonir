@@ -134,7 +134,7 @@ fn render_derives_attr(ir: &CanonIR, derives: &[CanonId], pad: &str) -> String {
 pub fn render_type_id(ir: &CanonIR, id: CanonId) -> String {
     match &ir.node(id).kind {
         CanonNodeKind::Type { kind } => render_type_kind(ir, kind),
-        CanonNodeKind::TypeRef { name_id } => ir.lookup_name(*name_id).to_string(),
+        CanonNodeKind::TypeRef { name_id } => normalize_lifetime_name(ir.lookup_name(*name_id)).to_string(),
         CanonNodeKind::Struct { name_id, .. }
         | CanonNodeKind::Enum { name_id, .. }
         | CanonNodeKind::Trait { name_id, .. }
@@ -153,7 +153,11 @@ fn render_type_kind(ir: &CanonIR, kind: &TypeKind) -> String {
         TypeKind::Ref { lifetime, inner, mutable } => {
             let lt = lifetime
                 .and_then(|id| match &ir.node(id).kind {
-                    CanonNodeKind::Lifetime { name_id } => Some(format!("{} ", ir.lookup_name(*name_id))),
+                    CanonNodeKind::Lifetime { name_id } => {
+                        let raw = ir.lookup_name(*name_id);
+                        let rendered = if raw == "'_" { "'static" } else { raw };
+                        Some(format!("{rendered} "))
+                    }
                     _ => None,
                 })
                 .unwrap_or_default();
@@ -189,7 +193,7 @@ fn render_type_kind(ir: &CanonIR, kind: &TypeKind) -> String {
         },
         TypeKind::ImplTrait(id) => format!("impl {}", render_type_id(ir, *id)),
         TypeKind::DynTrait(id) => format!("dyn {}", render_type_id(ir, *id)),
-        TypeKind::Param(name_id) => ir.lookup_name(*name_id).to_string(),
+        TypeKind::Param(name_id) => normalize_lifetime_name(ir.lookup_name(*name_id)).to_string(),
         TypeKind::Applied { base, args } => {
             let base = render_type_id(ir, *base);
             let args = args.iter().map(|id| render_type_id(ir, *id)).collect::<Vec<_>>().join(", ");
@@ -199,8 +203,12 @@ fn render_type_kind(ir: &CanonIR, kind: &TypeKind) -> String {
         TypeKind::Unresolved(path_id) => {
             panic!("projection encountered unresolved CanonIR type `{}` — aborting per FAIL-FAST policy", ir.lookup_path(*path_id));
         }
-        TypeKind::TypeRef { name_id } => ir.lookup_name(*name_id).to_string(),
+        TypeKind::TypeRef { name_id } => normalize_lifetime_name(ir.lookup_name(*name_id)).to_string(),
     }
+}
+
+fn normalize_lifetime_name(s: &str) -> &str {
+    if s == "'_" { "'static" } else { s }
 }
 
 fn render_prim(p: &PrimTy) -> String {

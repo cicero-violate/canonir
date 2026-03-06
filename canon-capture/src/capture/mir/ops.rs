@@ -14,7 +14,7 @@ pub(crate) enum ArgLabel {
 
 pub(crate) fn mir_operand_label_for_arg<'tcx>(tcx: TyCtxt<'tcx>, operand: &mir::Operand<'tcx>, resolver: &LocalNameResolver, local_decls: Option<&mir::LocalDecls<'tcx>>) -> Option<ArgLabel> {
     if let mir::Operand::Constant(c) = operand {
-        if let Some(expr) = closure_placeholder_expr_from_const(tcx, c) {
+        if let Some(expr) = closure_expr_from_const(tcx, c) {
             return Some(ArgLabel::Value(expr));
         }
     }
@@ -50,7 +50,18 @@ pub(crate) fn mir_operand_label_with_decls<'tcx>(tcx: TyCtxt<'tcx>, operand: &mi
             if let Some(lit) = const_literal_expr(tcx, c) {
                 return Some(lit);
             }
-            if let Some(expr) = closure_placeholder_expr_from_const(tcx, c) {
+            if is_byte_string_ty(c.const_.ty()) {
+                if let Ok(snippet) = tcx.sess.source_map().span_to_snippet(c.span)
+                    && let Some(bs) = extract_byte_string_literal(&snippet)
+                {
+                    return Some(bs);
+                }
+                let raw = c.const_.to_string();
+                if let Some(bs) = extract_byte_string_literal(&raw) {
+                    return Some(bs);
+                }
+            }
+            if let Some(expr) = closure_expr_from_const(tcx, c) {
                 return Some(expr);
             }
             if let ty::TyKind::FnDef(did, _) = c.const_.ty().kind() {
@@ -202,11 +213,11 @@ fn is_closure_or_fn_ptr(ty: ty::Ty<'_>) -> bool {
     matches!(ty.kind(), ty::TyKind::Closure(..) | ty::TyKind::Coroutine(..) | ty::TyKind::CoroutineClosure(..) | ty::TyKind::FnPtr(..) | ty::TyKind::FnDef(..))
 }
 
-fn closure_placeholder_expr_from_const<'tcx>(tcx: TyCtxt<'tcx>, constant: &mir::ConstOperand<'tcx>) -> Option<String> {
+fn closure_expr_from_const<'tcx>(tcx: TyCtxt<'tcx>, constant: &mir::ConstOperand<'tcx>) -> Option<String> {
     match constant.const_.ty().kind() {
-        ty::TyKind::Closure(..) | ty::TyKind::Coroutine(..) | ty::TyKind::CoroutineClosure(..) => {
-            closure_placeholder_expr_from_ty(tcx, constant.const_.ty())
-        }
+        ty::TyKind::Closure(def_id, ..) => closure_expr_from_def_id(tcx, *def_id),
+        ty::TyKind::Coroutine(def_id, ..) => closure_expr_from_def_id(tcx, *def_id),
+        ty::TyKind::CoroutineClosure(def_id, ..) => closure_expr_from_def_id(tcx, *def_id),
         _ => None,
     }
 }
@@ -265,6 +276,23 @@ fn is_string_like_literal(s: &str) -> bool {
     t.starts_with('"') || t.starts_with("r\"") || t.starts_with("b\"") || t.starts_with("br\"")
 }
 
+fn extract_byte_string_literal(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if s.starts_with("b\"") || s.starts_with("br\"") || s.starts_with("&b\"") || s.starts_with("&br\"") {
+        return Some(s.to_string());
+    }
+    if let Some(i) = s.find("b\"") {
+        return Some(s[i..].to_string());
+    }
+    if let Some(i) = s.find("br\"") {
+        return Some(s[i..].to_string());
+    }
+    None
+}
+
 fn builtin_ref_layers(inner_lit: &str, inner_ty: ty::Ty<'_>) -> usize {
     let trimmed = inner_lit.trim();
     if trimmed.starts_with('&') {
@@ -277,96 +305,56 @@ fn builtin_ref_layers(inner_lit: &str, inner_ty: ty::Ty<'_>) -> usize {
     }
 }
 
-pub(crate) fn closure_placeholder_expr_from_aggregate<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    _def_id: rustc_span::def_id::DefId,
-    args: ty::GenericArgsRef<'tcx>,
-) -> Option<String> {
-    let closure_args = args.as_closure();
-    closure_placeholder_expr_from_sig(tcx, closure_args.sig())
+fn is_byte_string_ty(mut ty: ty::Ty<'_>) -> bool {
+    while let ty::TyKind::Ref(_, inner, _) = ty.kind() {
+        ty = *inner;
+    }
+    match ty.kind() {
+        ty::TyKind::Array(elem, _) | ty::TyKind::Slice(elem) => {
+            matches!(elem.kind(), ty::TyKind::Uint(ty::UintTy::U8))
+        }
+        _ => false,
+    }
 }
 
-fn closure_placeholder_expr_from_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> Option<String> {
-    match ty.kind() {
-        ty::TyKind::Closure(_def_id, args) => {
-            let closure_args = args.as_closure();
-            closure_placeholder_expr_from_sig(tcx, closure_args.sig())
+pub(crate) fn closure_placeholder_expr_from_aggregate<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: rustc_span::def_id::DefId,
+    _args: ty::GenericArgsRef<'tcx>,
+) -> Option<String> {
+    closure_expr_from_def_id(tcx, def_id)
+}
+
+fn closure_expr_from_def_id(tcx: TyCtxt<'_>, def_id: rustc_span::def_id::DefId) -> Option<String> {
+    // Structural source extraction from rustc metadata/HIR; no text heuristics.
+    let snippet = if let Some(local_def_id) = def_id.as_local() {
+        match tcx.hir_node_by_def_id(local_def_id) {
+            rustc_hir::Node::Expr(expr) => tcx.sess.source_map().span_to_snippet(expr.span).ok(),
+            rustc_hir::Node::Item(item) => tcx.sess.source_map().span_to_snippet(item.span).ok(),
+            _ => tcx.sess.source_map().span_to_snippet(tcx.def_span(def_id)).ok(),
         }
-        _ => None,
+    } else {
+        tcx.sess.source_map().span_to_snippet(tcx.def_span(def_id)).ok()
+    }?;
+    let trimmed = snippet.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 
 fn closure_placeholder_expr_from_sig<'tcx>(tcx: TyCtxt<'tcx>, sig: ty::Binder<'tcx, ty::FnSig<'tcx>>) -> Option<String> {
     let inputs = sig.inputs().skip_binder();
     let output = sig.output().skip_binder();
-
-    let mut arg_tys: Vec<ty::Ty<'tcx>> = inputs.iter().copied().collect();
-    // Closure signatures use the rust-call ABI where arguments are often
-    // packed into a single tuple. Emit canonical fn(T1, T2, ..) placeholders.
-    if arg_tys.len() == 1 {
-        if let ty::TyKind::Tuple(items) = arg_tys[0].kind() {
-            arg_tys = items.iter().copied().collect();
-        }
-    }
-
-    let param_types = arg_tys
+    let arg_tys = inputs
         .iter()
-        .map(|ty| normalize_singleton_tuple_type(render_type_expr(tcx, &lower_ty(tcx, *ty))))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let args = arg_tys
-        .iter()
-        .enumerate()
-        .map(|(i, ty)| {
-            let name = format!("_arg{i}");
-            let ty_expr = normalize_singleton_tuple_type(render_type_expr(tcx, &lower_ty(tcx, *ty)));
-            format!("{name}: {ty_expr}")
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let ret_expr = render_type_expr(tcx, &lower_ty(tcx, output));
-    let closure = if args.is_empty() {
-        format!("|| -> {ret_expr} {{ panic!(\"canon closure placeholder\") }}")
-    } else {
-        format!("|{args}| -> {ret_expr} {{ panic!(\"canon closure placeholder\") }}")
-    };
-    Some(format!("({closure}) as fn({param_types}) -> {ret_expr}"))
-}
-
-fn normalize_singleton_tuple_type(rendered: String) -> String {
-    let s = rendered.trim();
-    let Some(inner) = s.strip_prefix('(').and_then(|v| v.strip_suffix(')')) else {
-        return rendered;
-    };
-
-    let mut angle = 0i32;
-    let mut paren = 0i32;
-    let mut bracket = 0i32;
-    let mut comma_positions: Vec<usize> = Vec::new();
-    for (idx, ch) in inner.char_indices() {
-        match ch {
-            '<' => angle += 1,
-            '>' => angle -= 1,
-            '(' => paren += 1,
-            ')' => paren -= 1,
-            '[' => bracket += 1,
-            ']' => bracket -= 1,
-            ',' if angle == 0 && paren == 0 && bracket == 0 => comma_positions.push(idx),
-            _ => {}
-        }
-    }
-    if comma_positions.len() != 1 {
-        return rendered;
-    }
-    let comma = comma_positions[0];
-    if !inner[comma + 1..].trim().is_empty() {
-        return rendered;
-    }
-    let elem = inner[..comma].trim();
-    if elem.is_empty() {
-        return rendered;
-    }
-    elem.to_string()
+        .map(|ty| render_type_expr(tcx, &lower_ty(tcx, *ty)))
+        .collect::<Vec<_>>();
+    let ret_ty = render_type_expr(tcx, &lower_ty(tcx, output));
+    panic!(
+        "canon-capture invariant violation: unresolved closure lowering args={:?} ret={}",
+        arg_tys,
+        ret_ty
+    );
 }

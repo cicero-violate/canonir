@@ -1,0 +1,60 @@
+# ---- Complexity thresholds ----
+
+cognitive-complexity-threshold = 30
+too-many-arguments-threshold = 7
+too-many-lines-threshold = 200
+type-complexity-threshold = 250
+enum-variant-name-threshold = 3
+vec-box-size-threshold = 4096
+large-error-threshold = 256
+excessive-nesting-threshold = 4
+
+# ---- Function size / structure ----
+
+trivial-copy-size-limit = 16
+pass-by-value-size-limit = 256
+max-fn-params-bools = 3
+
+# ---- Collection / allocation heuristics ----
+
+array-size-threshold = 512
+
+# ---- Documentation ----
+
+missing-docs-in-crate-items = false
+
+# ---- Naming ----
+
+enum-variant-size-threshold = 200
+
+# ---- Import rules ----
+
+warn-on-all-wildcard-imports = true
+
+# ---- Disallowed APIs ----
+
+disallowed-methods = [
+    "std::mem::forget",
+]
+
+disallowed-types = [
+    "std::collections::LinkedList",
+]
+
+# ---- Disallowed macros ----
+
+disallowed-macros = [
+    "dbg",
+]
+
+# ---- Allowed macros ----
+
+# (Removed invalid block: Clippy does not support `allowed-macros`)
+
+# ---- Lint policy overrides ----
+
+allow-private-module-inception = true
+
+# ---- Performance tuning ----
+
+msrv = "1.70"

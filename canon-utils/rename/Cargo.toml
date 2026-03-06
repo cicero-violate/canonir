@@ -26,6 +26,9 @@ proc-macro2 = "1"
 syn = { version = "2", features = ["full", "visit-mut", "visit"] }
 walkdir = "2.5"
 regex = "1"
+serde_json = "1"
+canon = { path = "../../canon" }
+canon-analyzer = { path = "../../canon-analyzer" }
 
 rustc_driver = { path = "/home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/rustc-src/rust/compiler/rustc_driver", optional = true }
 rustc_interface = { path = "/home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/rustc-src/rust/compiler/rustc_interface", optional = true }
