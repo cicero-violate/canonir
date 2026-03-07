@@ -12,6 +12,7 @@ walkdir = "2.5"
 regex = "1"
 serde_json = "1"
 num_cpus = "1"
+chrono = "0.4"
 canon = { path = "../../canon" }
 canon-analyzer = { path = "../../canon-analyzer" }
 canon-capture = { path = "../../canon-capture" }

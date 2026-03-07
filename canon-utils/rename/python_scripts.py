@@ -55,9 +55,16 @@ def main():
         description="Summarize rename_report.jsonl failures and sample errors"
     )
     parser.add_argument(
-        "--report",
+        "report",
+        nargs="?",
         default=None,
         help="Path to rename_report*.jsonl (defaults to newest in canon-utils/rename)",
+    )
+    parser.add_argument(
+        "--report",
+        dest="report_flag",
+        default=None,
+        help="Path to rename_report*.jsonl (overrides positional)",
     )
     parser.add_argument(
         "--no-samples",
@@ -66,7 +73,8 @@ def main():
     )
     args = parser.parse_args()
 
-    report_path = Path(args.report) if args.report else default_report_path()
+    report_arg = args.report_flag or args.report
+    report_path = Path(report_arg) if report_arg else default_report_path()
     if not report_path.exists():
         raise SystemExit(f"report file not found: {report_path}")
 

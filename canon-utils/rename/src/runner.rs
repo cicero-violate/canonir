@@ -1,0 +1,854 @@
+use crate::core::project_editor::ProjectEditor;
+use crate::core::rustc_session::RustcSession;
+use crate::structured::FieldMutation;
+use serde_json::json;
+use std::collections::{BTreeMap, HashSet};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone, Copy)]
+pub enum RenameSelfMode {
+    Incremental,
+    Bulk,
+}
+
+impl RenameSelfMode {
+    fn from_env() -> Self {
+        match std::env::var("RENAME_MODE")
+            .unwrap_or_else(|_| "incremental".to_string())
+            .to_lowercase()
+            .as_str()
+        {
+            "bulk" => RenameSelfMode::Bulk,
+            _ => RenameSelfMode::Incremental,
+        }
+    }
+}
+
+pub struct RenameSelfConfig {
+    pub project: PathBuf,
+    pub renames_md: PathBuf,
+    pub report_dir: PathBuf,
+    pub offset: usize,
+    pub limit: usize,
+    pub mode: RenameSelfMode,
+}
+
+impl RenameSelfConfig {
+    pub fn from_env() -> Self {
+        let project = PathBuf::from("/workspace/ai_sandbox/canon/canon-agent");
+        let renames_md =
+            PathBuf::from("/workspace/ai_sandbox/canon/canon-agent/src/pipelines/capability/RENAMES.md");
+        let report_dir = PathBuf::from("/workspace/ai_sandbox/canon/canon-utils/rename");
+        let offset = std::env::var("RENAME_OFFSET")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(0);
+        let limit = std::env::var("RENAME_LIMIT")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(usize::MAX);
+        Self {
+            project,
+            renames_md,
+            report_dir,
+            offset,
+            limit,
+            mode: RenameSelfMode::from_env(),
+        }
+    }
+}
+
+pub struct RenameSelfResult {
+    pub report_path: PathBuf,
+    pub status: String,
+}
+
+pub fn run_rename_self_from_env() -> Result<RenameSelfResult, Box<dyn std::error::Error>> {
+    run_rename_self(RenameSelfConfig::from_env())
+}
+
+pub fn run_rename_self(
+    config: RenameSelfConfig,
+) -> Result<RenameSelfResult, Box<dyn std::error::Error>> {
+    let project = config.project;
+    let project_name = project
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("canon-agent-v1")
+        .to_string();
+    let renames_md = config.renames_md.to_string_lossy().to_string();
+    let report_name = format!("rename_report_{}_{}.jsonl", project_name, now_compact_utc());
+    let report_path = config.report_dir.join(report_name);
+    let run_id = format!("run-{}", now_unix_secs());
+    let run_started_at_unix = now_unix_secs();
+    let run_started_at = Instant::now();
+    let baseline_commit = git_head_commit(&project)?;
+    let baseline_check = run_cargo_check_json(&project)?;
+    let mut baseline_error_counts = BTreeMap::new();
+    accumulate_error_counts_json(&baseline_check.diagnostics, &mut baseline_error_counts);
+    let baseline_error_total = sum_counts(&baseline_error_counts);
+
+    let session = Arc::new(RustcSession::build(&project)?);
+    let ordered = parse_simple_ident_mappings(renames_md)?;
+    let bounded: Vec<(String, String)> = ordered
+        .into_iter()
+        .skip(config.offset)
+        .take(config.limit)
+        .collect();
+    let solver_plan = SolverPlan {
+        input_total: bounded.len(),
+        transform_total: bounded.len(),
+        dependency_count: 0,
+        conflict_count: 0,
+        cyclic_component_count: 0,
+        sat_selected_total: bounded.len(),
+        selected_total: bounded.len(),
+        selected_pairs: bounded.clone(),
+    };
+
+    append_report_line(
+        report_path.to_string_lossy().as_ref(),
+        &json!({
+            "type": "run_start",
+            "run_id": run_id,
+            "project": project_name,
+            "baseline": {
+                "state": "S0",
+                "commit": baseline_commit,
+                "error_types": baseline_error_counts,
+                "error_total": baseline_error_total
+            },
+            "config": {
+                "offset": config.offset,
+                "limit": if config.limit == usize::MAX { serde_json::Value::Null } else { json!(config.limit) },
+                "runner": "rename_self",
+                "compile_cmd": "cargo check",
+                "mode": match config.mode { RenameSelfMode::Incremental => "incremental", RenameSelfMode::Bulk => "bulk" }
+            },
+            "started_at_unix": run_started_at_unix,
+            "ts": now_iso_utc()
+        }),
+    )?;
+
+    append_report_line(
+        report_path.to_string_lossy().as_ref(),
+        &json!({
+            "type": "solver_summary",
+            "run_id": run_id,
+            "solver": {
+                "input_total": solver_plan.input_total,
+                "transform_total": solver_plan.transform_total,
+                "dependency_count": solver_plan.dependency_count,
+                "conflict_count": solver_plan.conflict_count,
+                "cyclic_component_count": solver_plan.cyclic_component_count,
+                "sat_selected_total": solver_plan.sat_selected_total,
+                "selected_total": solver_plan.selected_total
+            },
+            "ts": now_iso_utc()
+        }),
+    )?;
+
+    let mut introduced_summary: BTreeMap<String, usize> = BTreeMap::new();
+    let mut kind_stats: BTreeMap<String, KindStats> = BTreeMap::new();
+    let mut total_attempts = 0usize;
+    let mut total_pass = 0usize;
+    let mut total_fail = 0usize;
+    let mut total_skipped = 0usize;
+    let mut attempt_id = 0usize;
+
+    let symbol_ids = load_symbol_ids(&session)?;
+    println!("registry: {} symbols loaded", symbol_ids.len());
+
+    if matches!(config.mode, RenameSelfMode::Bulk) {
+        let resolved = resolve_symbol_pairs(&solver_plan.selected_pairs, &symbol_ids);
+        total_attempts = resolved.len();
+        println!(
+            "bulk: requested={} resolved={} (offset={} limit={})",
+            solver_plan.selected_pairs.len(),
+            resolved.len(),
+            config.offset,
+            config.limit
+        );
+        let _ = restore_project_src(&project);
+        let outcome = run_bulk_attempt(
+            &project,
+            &session,
+            &resolved,
+            &baseline_error_counts,
+        )?;
+        if !outcome.accept {
+            let _ = restore_project_src(&project);
+        }
+
+        match outcome.result.as_str() {
+            "pass" => total_pass += 1,
+            "fail" => total_fail += 1,
+            _ => {}
+        }
+        let tag = if outcome.accept { "PASS" } else { "FAIL" };
+        println!(
+            "{tag}  applied={}  delta={}  reason={}  ({}ms)",
+            outcome.rename_applied,
+            outcome.delta_total,
+            outcome.decision_reason,
+            outcome.transform_ms + outcome.compile_ms
+        );
+        println!(
+            "bulk errors: total_after={} delta_total={} types={:?} touched_files={}",
+            outcome.error_total_after,
+            outcome.delta_total,
+            outcome.delta_error_types,
+            outcome.touched_files.len()
+        );
+
+        append_report_line(
+            report_path.to_string_lossy().as_ref(),
+            &json!({
+                "type": "attempt",
+                "run_id": run_id,
+                "attempt_id": 1,
+                "transform": {
+                    "kind": "rename",
+                    "transform_type": "bulk_symbol_rename",
+                    "symbol_kind": "mixed",
+                    "state_from": "S0",
+                    "state_to": "S1",
+                    "symbol_id": "bulk",
+                    "old_name": "bulk",
+                    "new_name": "bulk",
+                    "rename_applied": outcome.rename_applied,
+                    "touched_files": outcome.touched_files
+                },
+                "compile": {
+                    "status": outcome.result,
+                    "invoked": true,
+                    "error_types_after": outcome.error_types,
+                    "error_total_after": outcome.error_total_after
+                },
+                "delta": {
+                    "delta_error_types": outcome.delta_error_types,
+                    "delta_total": outcome.delta_total
+                },
+                "decision": {
+                    "accept": outcome.accept,
+                    "reason": outcome.decision_reason
+                },
+                "timing_ms": {
+                    "transform": outcome.transform_ms,
+                    "compile": outcome.compile_ms
+                },
+                "ts": now_iso_utc()
+            }),
+        )?;
+    } else {
+        for (old_ident, new_ident) in solver_plan.selected_pairs {
+            if is_degenerate_rename(&old_ident, &new_ident) {
+                total_skipped += 1;
+                attempt_id += 1;
+                println!("[{attempt_id:>4}] SKIP  {old_ident} -> {new_ident}  (degenerate)");
+                append_report_line(
+                    report_path.to_string_lossy().as_ref(),
+                    &json!({
+                        "type": "attempt",
+                        "run_id": run_id,
+                        "attempt_id": attempt_id,
+                        "transform": {
+                            "kind": "rename",
+                            "transform_type": "symbol_rename",
+                            "symbol_kind": "unknown",
+                            "state_from": "S0",
+                            "state_to": format!("S{}", attempt_id),
+                            "symbol_id": old_ident,
+                            "old_name": old_ident,
+                            "new_name": new_ident,
+                            "rename_applied": false,
+                            "touched_files": []
+                        },
+                        "compile": {
+                            "status": "skipped",
+                            "invoked": false,
+                            "error_types_after": {},
+                            "error_total_after": 0
+                        },
+                        "delta": {
+                            "delta_error_types": {},
+                            "delta_total": 0
+                        },
+                        "decision": {
+                            "accept": false,
+                            "reason": "invalid_transform_name"
+                        },
+                        "timing_ms": {
+                            "transform": 0,
+                            "compile": 0
+                        },
+                        "ts": now_iso_utc()
+                    }),
+                )?;
+                update_kind_stats(&mut kind_stats, "unknown", false, 0);
+                continue;
+            }
+
+            let mut candidates: Vec<(String, String)> = symbol_ids
+                .iter()
+                .filter(|(id, _)| id.ends_with(&format!("::{old_ident}")))
+                .cloned()
+                .collect();
+            candidates.sort();
+
+            if candidates.is_empty() {
+                total_skipped += 1;
+                attempt_id += 1;
+                println!("[{attempt_id:>4}] SKIP  {old_ident} -> {new_ident}  (missing_symbol)");
+                append_report_line(
+                    report_path.to_string_lossy().as_ref(),
+                    &json!({
+                        "type": "attempt",
+                        "run_id": run_id,
+                        "attempt_id": attempt_id,
+                        "transform": {
+                            "kind": "rename",
+                            "transform_type": "symbol_rename",
+                            "symbol_kind": "unknown",
+                            "state_from": "S0",
+                            "state_to": format!("S{}", attempt_id),
+                            "symbol_id": old_ident,
+                            "old_name": old_ident,
+                            "new_name": new_ident,
+                            "rename_applied": false,
+                            "touched_files": []
+                        },
+                        "compile": {
+                            "status": "skipped",
+                            "invoked": false,
+                            "error_types_after": {},
+                            "error_total_after": 0
+                        },
+                        "delta": {
+                            "delta_error_types": {},
+                            "delta_total": 0
+                        },
+                        "decision": {
+                            "accept": false,
+                            "reason": "missing_symbol"
+                        },
+                        "timing_ms": {
+                            "transform": 0,
+                            "compile": 0
+                        },
+                        "ts": now_iso_utc()
+                    }),
+                )?;
+                update_kind_stats(&mut kind_stats, "unknown", false, 0);
+                continue;
+            }
+
+            for (old_symbol, symbol_kind) in candidates {
+                let prefix = old_symbol.rsplit_once("::").map(|(p, _)| p).unwrap_or("");
+                let new_symbol = if prefix.is_empty() {
+                    new_ident.clone()
+                } else {
+                    format!("{prefix}::{new_ident}")
+                };
+                total_attempts += 1;
+                attempt_id += 1;
+
+                print!("[{attempt_id:>4}] TRY   {old_symbol} -> {new_symbol} ... ");
+                let _ = std::io::stdout().flush();
+
+                let _ = restore_project_src(&project);
+                let outcome = run_incremental_attempt(
+                    &project,
+                    &session,
+                    &old_symbol,
+                    &new_symbol,
+                    &baseline_error_counts,
+                )?;
+                let _ = restore_project_src(&project);
+
+                match outcome.result.as_str() {
+                    "pass" => total_pass += 1,
+                    "fail" => total_fail += 1,
+                    _ => {}
+                }
+                let tag = if outcome.accept { "PASS" } else { "FAIL" };
+                println!(
+                    "{tag}  applied={}  delta={}  reason={}  ({}ms)",
+                    outcome.rename_applied,
+                    outcome.delta_total,
+                    outcome.decision_reason,
+                    outcome.transform_ms + outcome.compile_ms
+                );
+
+                merge_counts(&outcome.error_types, &mut introduced_summary);
+                update_kind_stats(
+                    &mut kind_stats,
+                    &symbol_kind,
+                    outcome.accept,
+                    outcome.delta_total.max(0) as usize,
+                );
+
+                append_report_line(
+                    report_path.to_string_lossy().as_ref(),
+                    &json!({
+                        "type": "attempt",
+                        "run_id": run_id,
+                        "attempt_id": attempt_id,
+                        "transform": {
+                            "kind": "rename",
+                            "transform_type": "symbol_rename",
+                            "symbol_kind": symbol_kind,
+                            "state_from": "S0",
+                            "state_to": format!("S{}", attempt_id),
+                            "symbol_id": old_symbol.as_str(),
+                            "old_name": old_symbol.rsplit_once("::").map(|(_, s)| s).unwrap_or(old_symbol.as_str()),
+                            "new_name": new_symbol.rsplit_once("::").map(|(_, s)| s).unwrap_or(new_symbol.as_str()),
+                            "rename_applied": outcome.rename_applied,
+                            "touched_files": outcome.touched_files
+                        },
+                        "compile": {
+                            "status": outcome.result,
+                            "invoked": true,
+                            "error_types_after": outcome.error_types,
+                            "error_total_after": outcome.error_total_after
+                        },
+                        "delta": {
+                            "delta_error_types": outcome.delta_error_types,
+                            "delta_total": outcome.delta_total
+                        },
+                        "decision": {
+                            "accept": outcome.accept,
+                            "reason": outcome.decision_reason
+                        },
+                        "timing_ms": {
+                            "transform": outcome.transform_ms,
+                            "compile": outcome.compile_ms
+                        },
+                        "ts": now_iso_utc()
+                    }),
+                )?;
+            }
+        }
+    }
+
+    let timing_total_ms = run_started_at.elapsed().as_millis();
+    let summary = json!({
+        "type": "run_summary",
+        "run_id": run_id,
+        "baseline_error_total": baseline_error_total,
+        "attempts": total_attempts,
+        "pass": total_pass,
+        "fail": total_fail,
+        "skipped": total_skipped,
+        "introduced_error_types": introduced_summary,
+        "timing_ms": {
+            "total": timing_total_ms,
+        },
+        "ts": now_iso_utc()
+    });
+    append_report_line(report_path.to_string_lossy().as_ref(), &summary)?;
+
+    let status = if total_fail == 0 { "ok" } else { "fail" }.to_string();
+    println!(
+        "summary: attempts={} pass={} fail={} skipped={} baseline_errors={} introduced_errors={}",
+        total_attempts,
+        total_pass,
+        total_fail,
+        total_skipped,
+        baseline_error_total,
+        introduced_summary.values().sum::<usize>()
+    );
+    println!("status: {}", status);
+    println!("report: {}", report_path.display());
+    Ok(RenameSelfResult {
+        report_path,
+        status,
+    })
+}
+
+struct OutputCapture {
+    stdout: String,
+    stderr: String,
+}
+
+struct CargoCheckJson {
+    diagnostics: Vec<serde_json::Value>,
+}
+
+struct IncrementalOutcome {
+    result: String,
+    rename_applied: bool,
+    touched_files: Vec<String>,
+    error_types: BTreeMap<String, usize>,
+    error_total_after: usize,
+    delta_error_types: BTreeMap<String, i64>,
+    delta_total: i64,
+    decision_reason: String,
+    accept: bool,
+    transform_ms: u128,
+    compile_ms: u128,
+}
+
+struct BulkOutcome {
+    result: String,
+    rename_applied: bool,
+    touched_files: Vec<String>,
+    error_types: BTreeMap<String, usize>,
+    error_total_after: usize,
+    delta_error_types: BTreeMap<String, i64>,
+    delta_total: i64,
+    decision_reason: String,
+    accept: bool,
+    transform_ms: u128,
+    compile_ms: u128,
+}
+
+fn run_bulk_attempt(
+    project: &Path,
+    session: &Arc<RustcSession>,
+    renames: &[(String, String)],
+    baseline_error_counts: &BTreeMap<String, usize>,
+) -> Result<BulkOutcome, Box<dyn std::error::Error>> {
+    let transform_started = Instant::now();
+    let mut editor = ProjectEditor::load_with_session(project, session.clone())?;
+    let mut touched_files = Vec::new();
+    for (old_symbol, new_symbol) in renames {
+        let new_ident = new_symbol
+            .rsplit_once("::")
+            .map(|(_, s)| s)
+            .unwrap_or(new_symbol.as_str());
+        editor.queue_by_id(old_symbol, FieldMutation::RenameIdent(new_ident.to_string()))?;
+    }
+    let mut rename_applied = false;
+    if editor.validate()?.is_empty() {
+        let report = editor.apply()?;
+        touched_files = report
+            .touched_files
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        rename_applied = !touched_files.is_empty() && report.conflicts.is_empty();
+    }
+    let transform_ms = transform_started.elapsed().as_millis();
+
+    let compile_started = Instant::now();
+    let check = run_cargo_check_json(project)?;
+    let mut error_counts = BTreeMap::new();
+    accumulate_error_counts_json(&check.diagnostics, &mut error_counts);
+    let error_total_after = sum_counts(&error_counts);
+    let delta_error_types = compute_delta_error_counts(baseline_error_counts, &error_counts);
+    let delta_total = sum_counts_i64(&delta_error_types);
+    let compile_ms = compile_started.elapsed().as_millis();
+
+    let accept = delta_total == 0 && rename_applied;
+    let decision_reason = if accept {
+        "accepted"
+    } else if !rename_applied {
+        "no_changes"
+    } else {
+        "introduced_errors"
+    }
+    .to_string();
+    if accept {
+        let _ = editor.commit();
+    }
+
+    Ok(BulkOutcome {
+        result: if accept { "pass" } else { "fail" }.to_string(),
+        rename_applied,
+        touched_files,
+        error_types: error_counts,
+        error_total_after,
+        delta_error_types,
+        delta_total,
+        decision_reason,
+        accept,
+        transform_ms,
+        compile_ms,
+    })
+}
+
+fn resolve_symbol_pairs(
+    pairs: &[(String, String)],
+    symbol_ids: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut resolved = Vec::new();
+    for (old_ident, new_ident) in pairs {
+        let mut candidates: Vec<(String, String)> = symbol_ids
+            .iter()
+            .filter(|(id, _)| id.ends_with(&format!("::{old_ident}")))
+            .cloned()
+            .collect();
+        candidates.sort();
+        for (old_symbol, _kind) in candidates {
+            let prefix = old_symbol.rsplit_once("::").map(|(p, _)| p).unwrap_or("");
+            let new_symbol = if prefix.is_empty() {
+                new_ident.clone()
+            } else {
+                format!("{prefix}::{new_ident}")
+            };
+            resolved.push((old_symbol, new_symbol));
+        }
+    }
+    resolved
+}
+
+fn run_incremental_attempt(
+    project: &Path,
+    session: &Arc<RustcSession>,
+    old_symbol: &str,
+    new_symbol: &str,
+    baseline_error_counts: &BTreeMap<String, usize>,
+) -> Result<IncrementalOutcome, Box<dyn std::error::Error>> {
+    let transform_started = Instant::now();
+    let mut editor = ProjectEditor::load_with_session(project, session.clone())?;
+    let new_ident = new_symbol
+        .rsplit_once("::")
+        .map(|(_, s)| s)
+        .unwrap_or(new_symbol);
+    editor.queue_by_id(old_symbol, FieldMutation::RenameIdent(new_ident.to_string()))?;
+
+    let mut rename_applied = false;
+    let mut touched_files = Vec::new();
+    if editor.validate()?.is_empty() {
+        let report = editor.apply()?;
+        touched_files = report
+            .touched_files
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        rename_applied = !touched_files.is_empty() && report.conflicts.is_empty();
+    }
+    let transform_ms = transform_started.elapsed().as_millis();
+
+    let compile_started = Instant::now();
+    let check = run_cargo_check_json(project)?;
+    let mut error_counts = BTreeMap::new();
+    accumulate_error_counts_json(&check.diagnostics, &mut error_counts);
+    let error_total_after = sum_counts(&error_counts);
+    let delta_error_types = compute_delta_error_counts(baseline_error_counts, &error_counts);
+    let delta_total = sum_counts_i64(&delta_error_types);
+    let compile_ms = compile_started.elapsed().as_millis();
+
+    let accept = delta_total == 0 && rename_applied;
+    let decision_reason = if accept {
+        "accepted"
+    } else if !rename_applied {
+        "no_changes"
+    } else {
+        "introduced_errors"
+    }
+    .to_string();
+    if accept {
+        let _ = editor.commit();
+    }
+
+    Ok(IncrementalOutcome {
+        result: if accept { "pass" } else { "fail" }.to_string(),
+        rename_applied,
+        touched_files,
+        error_types: error_counts,
+        error_total_after,
+        delta_error_types,
+        delta_total,
+        decision_reason,
+        accept,
+        transform_ms,
+        compile_ms,
+    })
+}
+
+fn restore_project_src(project: &Path) -> bool {
+    run_cmd(project, "git", &["restore", "--source=HEAD", "--worktree", "--staged", "src"])
+}
+
+fn parse_simple_ident_mappings(path: String) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+    let content = std::fs::read_to_string(path)?;
+    let mut entries = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with("| `") {
+            let parts: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
+            if parts.len() >= 3 {
+                let old = parts[1].trim_matches('`');
+                let new = parts[2].trim_matches('`');
+                if is_ident(old) && is_ident(new) {
+                    entries.push((old.to_string(), new.to_string()));
+                }
+            }
+        }
+    }
+    Ok(entries)
+}
+
+fn is_ident(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else { return false };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn load_symbol_ids(session: &RustcSession) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+    Ok(session.symbol_catalog())
+}
+
+fn run_cmd(project: &Path, cmd: &str, args: &[&str]) -> bool {
+    Command::new(cmd)
+        .args(args)
+        .current_dir(project)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn run_capture(project: &Path, cmd: &str, args: &[&str]) -> Result<OutputCapture, Box<dyn std::error::Error>> {
+    let output = Command::new(cmd)
+        .args(args)
+        .current_dir(project)
+        .output()?;
+    Ok(OutputCapture {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
+}
+
+fn run_cargo_check_json(project: &Path) -> Result<CargoCheckJson, Box<dyn std::error::Error>> {
+    let mut cmd = Command::new("cargo");
+    cmd.arg("check")
+        .arg("--message-format=json")
+        .current_dir(project);
+    let output = cmd.output()?;
+    let mut diagnostics = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+            if value.get("reason").and_then(|v| v.as_str()) == Some("compiler-message") {
+                if let Some(message) = value.get("message") {
+                    diagnostics.push(message.clone());
+                }
+            }
+        }
+    }
+    Ok(CargoCheckJson { diagnostics })
+}
+
+fn accumulate_error_counts_json(messages: &[serde_json::Value], counts: &mut BTreeMap<String, usize>) {
+    for msg in messages {
+        if msg.get("level").and_then(|v| v.as_str()) != Some("error") {
+            continue;
+        }
+        if let Some(code) = msg.get("code").and_then(|c| c.get("code")).and_then(|c| c.as_str()) {
+            *counts.entry(code.to_string()).or_default() += 1;
+        }
+    }
+}
+
+fn merge_counts(from: &BTreeMap<String, usize>, into: &mut BTreeMap<String, usize>) {
+    for (k, v) in from {
+        *into.entry(k.clone()).or_default() += *v;
+    }
+}
+
+fn update_kind_stats(stats: &mut BTreeMap<String, KindStats>, symbol_kind: &str, accepted: bool, introduced_errors: usize) {
+    let entry = stats.entry(symbol_kind.to_string()).or_insert_with(KindStats::default);
+    entry.attempts += 1;
+    if accepted {
+        entry.accepted += 1;
+    } else if introduced_errors > 0 {
+        entry.introduced_errors += 1;
+    }
+}
+
+fn compute_delta_error_counts(baseline: &BTreeMap<String, usize>, after: &BTreeMap<String, usize>) -> BTreeMap<String, i64> {
+    let mut out = BTreeMap::new();
+    for key in baseline.keys().chain(after.keys()) {
+        let base = *baseline.get(key).unwrap_or(&0) as i64;
+        let new = *after.get(key).unwrap_or(&0) as i64;
+        let delta = new - base;
+        if delta != 0 {
+            out.insert(key.clone(), delta);
+        }
+    }
+    out
+}
+
+fn is_degenerate_rename(old: &str, new: &str) -> bool {
+    old == new || old.ends_with(new) || new.ends_with(old)
+}
+
+fn sum_counts(counts: &BTreeMap<String, usize>) -> usize {
+    counts.values().sum()
+}
+
+fn sum_counts_i64(counts: &BTreeMap<String, i64>) -> i64 {
+    counts.values().sum()
+}
+
+fn git_head_commit(project: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    let out = run_capture(project, "git", &["rev-parse", "HEAD"])?;
+    Ok(out.stdout.trim().to_string())
+}
+
+fn append_report_line(path: &str, payload: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    let mut line = serde_json::to_string(payload)?;
+    line.push('\n');
+    file.write_all(line.as_bytes())?;
+    Ok(())
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn now_iso_utc() -> String {
+    let now = chrono::Utc::now();
+    now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+fn now_compact_utc() -> String {
+    let now = chrono::Utc::now();
+    now.format("%Y%m%dT%H%M%SZ").to_string()
+}
+
+fn round3(value: f64) -> f64 {
+    (value * 1000.0).round() / 1000.0
+}
+
+fn tail_text(value: &str, max_chars: usize) -> Option<String> {
+    if value.len() <= max_chars {
+        Some(value.to_string())
+    } else {
+        Some(value.chars().rev().take(max_chars).collect::<String>().chars().rev().collect())
+    }
+}
+
+#[derive(Default)]
+struct KindStats {
+    attempts: usize,
+    accepted: usize,
+    introduced_errors: usize,
+}
+
+#[derive(Debug, Clone)]
+struct SolverPlan {
+    input_total: usize,
+    transform_total: usize,
+    dependency_count: usize,
+    conflict_count: usize,
+    cyclic_component_count: usize,
+    sat_selected_total: usize,
+    selected_total: usize,
+    selected_pairs: Vec<(String, String)>,
+}

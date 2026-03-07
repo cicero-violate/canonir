@@ -3,6 +3,7 @@
 pub mod core;
 pub mod fs;
 pub mod structured;
+pub mod runner;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -101,3 +102,5 @@ pub fn rename_symbol_pairs_with_session(
 
     report
 }
+
+pub use runner::{run_rename_self, run_rename_self_from_env, RenameSelfConfig, RenameSelfMode, RenameSelfResult};

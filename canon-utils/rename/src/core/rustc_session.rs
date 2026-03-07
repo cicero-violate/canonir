@@ -1,9 +1,11 @@
 use anyhow::{anyhow, Result};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 extern crate rustc_driver;
 extern crate rustc_hir;
@@ -44,10 +46,9 @@ impl RustcSession {
         }
 
         let out_path = span_output_path()?;
-        let shared = Arc::new(Mutex::new(CollectorOutput::default()));
         let file = File::create(&out_path)?;
         let writer = BufWriter::new(file);
-        let mut callbacks = BulkCollectorCallbacks::new(shared.clone(), writer)?;
+        let mut callbacks = BulkCollectorCallbacks::new(writer);
 
         let status = rustc_driver::catch_fatal_errors(|| {
             rustc_driver::run_compiler(&rustc_args, &mut callbacks);
@@ -55,16 +56,17 @@ impl RustcSession {
 
         callbacks.finalize()?;
 
-        let output = shared.lock().map_err(|_| anyhow!("span collector lock poisoned"))?;
-        if output.symbol_kinds.is_empty() {
+        let (mut span_index, symbol_kinds, saw_done) = load_spans_from_file(&out_path)?;
+        if symbol_kinds.is_empty() {
             if status.is_err() {
                 return Err(anyhow!("rustc_driver failed during span collection"));
             }
             return Err(anyhow!("span collector produced no output"));
         }
 
-        let mut span_index = output.span_index.clone();
-        let mut symbol_kinds = output.symbol_kinds.clone();
+        if !saw_done {
+            return Err(anyhow!("span collector did not finish writing spans"));
+        }
 
         let mut symbol_catalog: Vec<(String, String)> = symbol_kinds
             .iter()
@@ -108,38 +110,27 @@ impl RustcSession {
     }
 }
 
-#[derive(Default)]
-struct CollectorOutput {
-    span_index: HashMap<String, HashMap<PathBuf, Vec<SpanRange>>>,
-    symbol_kinds: HashMap<String, String>,
-}
-
 struct BulkCollectorCallbacks {
-    shared: Arc<Mutex<CollectorOutput>>,
     def_id_to_symbol: HashMap<rustc_hir::def_id::DefId, String>,
+    symbol_kinds: HashMap<String, String>,
     out: BufWriter<File>,
     span_count: usize,
 }
 
 impl BulkCollectorCallbacks {
-    fn new(shared: Arc<Mutex<CollectorOutput>>, out: BufWriter<File>) -> Result<Self> {
-        Ok(Self {
-            shared,
+    fn new(out: BufWriter<File>) -> Self {
+        Self {
             def_id_to_symbol: HashMap::new(),
+            symbol_kinds: HashMap::new(),
             out,
             span_count: 0,
-        })
+        }
     }
 
     fn finalize(&mut self) -> Result<()> {
         let line = json!({
             "type": "done",
-            "symbol_count": self
-                .shared
-                .lock()
-                .map_err(|_| anyhow!("span collector lock poisoned"))?
-                .symbol_kinds
-                .len(),
+            "symbol_count": self.symbol_kinds.len(),
             "span_count": self.span_count
         })
         .to_string();
@@ -161,31 +152,20 @@ impl BulkCollectorCallbacks {
         let FileName::Real(real_path) = filename else { return };
         let Some(path) = real_path.local_path().map(|p| p.to_path_buf()) else { return };
         let kind = self
-            .shared
-            .lock()
-            .ok()
-            .and_then(|output| output.symbol_kinds.get(symbol_id).cloned())
+            .symbol_kinds
+            .get(symbol_id)
+            .cloned()
             .unwrap_or_else(|| "unknown".to_string());
 
-        if let Ok(mut output) = self.shared.lock() {
-            output
-                .span_index
-                .entry(symbol_id.to_string())
-                .or_default()
-                .entry(path.clone())
-                .or_default()
-                .push(SpanRange {
-                    lo: lo.pos.0 as usize,
-                    hi: hi.pos.0 as usize,
-                });
-        }
-
+        let base = lo.sf.start_pos.0;
+        let lo_pos = lo.pos.0.saturating_sub(base);
+        let hi_pos = hi.pos.0.saturating_sub(base);
         let line = json!({
             "symbol_id": symbol_id,
             "kind": kind,
             "file": path.display().to_string(),
-            "lo": lo.pos.0,
-            "hi": hi.pos.0
+            "lo": lo_pos,
+            "hi": hi_pos
         })
         .to_string();
         if writeln!(self.out, "{line}").is_ok() {
@@ -214,15 +194,10 @@ impl Callbacks for BulkCollectorCallbacks {
                 format!("crate::{path}")
             };
             let kind = def_kind_to_symbol_kind(tcx.def_kind(def_id));
-            if let Ok(mut output) = self.shared.lock() {
-                output
-                    .symbol_kinds
-                    .entry(symbol_id.clone())
-                    .or_insert_with(|| kind.to_string());
-            }
+            self.symbol_kinds
+                .entry(symbol_id.clone())
+                .or_insert_with(|| kind.to_string());
             self.def_id_to_symbol.insert(def_id, symbol_id.clone());
-            let def_span = tcx.def_span(def_id);
-            self.emit_span(&symbol_id, source_map, def_span);
         }
 
         let mut visitor = PathVisitor {
@@ -248,6 +223,18 @@ fn def_kind_to_symbol_kind(kind: DefKind) -> &'static str {
     }
 }
 
+fn def_id_symbol_for_item(
+    sink: &mut BulkCollectorCallbacks,
+    item: &rustc_hir::Item<'_>,
+) -> Option<String> {
+    let def_id = item.owner_id.to_def_id();
+    sink.def_id_to_symbol.get(&def_id).cloned()
+}
+
+fn item_ident_span(item: &rustc_hir::Item<'_>) -> Option<Span> {
+    item.kind.ident().map(|ident| ident.span)
+}
+
 struct PathVisitor<'sm, 'cb> {
     source_map: &'sm SourceMap,
     sink: &'cb mut BulkCollectorCallbacks,
@@ -258,6 +245,25 @@ impl<'sm, 'cb, 'v> Visitor<'v> for PathVisitor<'sm, 'cb> {
         if item.span.from_expansion() {
             return;
         }
+        if let Some(symbol_id) = def_id_symbol_for_item(&mut *self.sink, item) {
+            if let Some(ident_span) = item_ident_span(item) {
+                self.sink.emit_span(&symbol_id, self.source_map, ident_span);
+            }
+        }
+        if let rustc_hir::ItemKind::Use(path, use_kind) = &item.kind {
+            if let rustc_hir::UseKind::Single(ident) = use_kind {
+                for res in path.res.present_items() {
+                    if let Res::Def(_, def_id) = res {
+                        if let Some(symbol_id) =
+                            self.sink.def_id_to_symbol.get(&def_id).cloned()
+                        {
+                            self.sink
+                                .emit_span(&symbol_id, self.source_map, ident.span);
+                        }
+                    }
+                }
+            }
+        }
         intravisit::walk_item(self, item);
     }
 
@@ -265,19 +271,47 @@ impl<'sm, 'cb, 'v> Visitor<'v> for PathVisitor<'sm, 'cb> {
         if item.span.from_expansion() {
             return;
         }
+        let def_id = item.owner_id.to_def_id();
+        if let Some(symbol_id) = self.sink.def_id_to_symbol.get(&def_id).cloned() {
+            self.sink
+                .emit_span(&symbol_id, self.source_map, item.ident.span);
+        }
         intravisit::walk_impl_item(self, item);
     }
 
     fn visit_path(&mut self, path: &rustc_hir::Path<'_>, _id: rustc_hir::HirId) {
         if let Res::Def(_, def_id) = path.res {
             if let Some(symbol_id) = self.sink.def_id_to_symbol.get(&def_id).cloned() {
-                if let Some(seg) = path.segments.last() {
-                    self.sink
-                        .emit_span(&symbol_id, self.source_map, seg.ident.span);
+                let short = symbol_id.rsplit("::").next().unwrap_or("");
+                for seg in path.segments.iter() {
+                    if seg.ident.as_str() == short {
+                        self.sink
+                            .emit_span(&symbol_id, self.source_map, seg.ident.span);
+                    }
                 }
             }
         }
         intravisit::walk_path(self, path);
+    }
+
+    fn visit_ty(&mut self, ty: &'v rustc_hir::Ty<'v, rustc_hir::AmbigArg>) {
+        if let rustc_hir::TyKind::Path(qpath) = &ty.kind {
+            self.emit_qpath_span(qpath);
+        }
+        intravisit::walk_ty(self, ty);
+    }
+
+    fn visit_expr(&mut self, expr: &'v rustc_hir::Expr<'v>) {
+        match &expr.kind {
+            rustc_hir::ExprKind::Struct(qpath, ..) => {
+                self.emit_qpath_span(qpath);
+            }
+            rustc_hir::ExprKind::Path(qpath) => {
+                self.emit_qpath_span(qpath);
+            }
+            _ => {}
+        }
+        intravisit::walk_expr(self, expr);
     }
 
     fn visit_use(
@@ -285,18 +319,29 @@ impl<'sm, 'cb, 'v> Visitor<'v> for PathVisitor<'sm, 'cb> {
         path: &'v rustc_hir::UsePath<'v>,
         hir_id: rustc_hir::HirId,
     ) {
-        let rustc_hir::Path { segments, res, .. } = *path;
-        for res in res.present_items() {
-            if let Res::Def(_, def_id) = res {
-                if let Some(symbol_id) = self.sink.def_id_to_symbol.get(&def_id).cloned() {
-                    if let Some(seg) = segments.last() {
-                        self.sink
-                            .emit_span(&symbol_id, self.source_map, seg.ident.span);
+        intravisit::walk_use(self, path, hir_id);
+    }
+}
+
+impl<'sm, 'cb> PathVisitor<'sm, 'cb> {
+    fn emit_qpath_span(&mut self, qpath: &rustc_hir::QPath<'_>) {
+        match qpath {
+            rustc_hir::QPath::Resolved(_, path) => {
+                if let Res::Def(_, def_id) = path.res {
+                    if let Some(symbol_id) = self.sink.def_id_to_symbol.get(&def_id).cloned() {
+                        let short = symbol_id.rsplit("::").next().unwrap_or("");
+                        for seg in path.segments.iter() {
+                            if seg.ident.as_str() == short {
+                                self.sink
+                                    .emit_span(&symbol_id, self.source_map, seg.ident.span);
+                            }
+                        }
                     }
                 }
             }
+            rustc_hir::QPath::TypeRelative(_, _) => {}
+            _ => {}
         }
-        intravisit::walk_use(self, path, hir_id);
     }
 }
 
@@ -304,4 +349,78 @@ fn span_output_path() -> Result<PathBuf> {
     let dir = PathBuf::from("/workspace/ai_sandbox/canon/canon-utils/rename/span_file");
     std::fs::create_dir_all(&dir)?;
     Ok(dir.join("spans.jsonl"))
+}
+
+fn load_spans_from_file(
+    path: &Path,
+) -> Result<(
+    HashMap<String, HashMap<PathBuf, Vec<SpanRange>>>,
+    HashMap<String, String>,
+    bool,
+)> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    let mut span_index: HashMap<String, HashMap<PathBuf, Vec<SpanRange>>> = HashMap::new();
+    let mut symbol_kinds: HashMap<String, String> = HashMap::new();
+    let mut saw_done = false;
+
+    while reader.read_line(&mut line)? > 0 {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            line.clear();
+            continue;
+        }
+        let value: Value = match serde_json::from_str(trimmed) {
+            Ok(value) => value,
+            Err(_) => {
+                line.clear();
+                continue;
+            }
+        };
+        if let Some(kind) = value.get("type").and_then(|v| v.as_str()) {
+            if kind == "done" {
+                saw_done = true;
+            }
+            line.clear();
+            continue;
+        }
+        let symbol_id = match value.get("symbol_id").and_then(|v| v.as_str()) {
+            Some(value) => value,
+            None => {
+                line.clear();
+                continue;
+            }
+        };
+        let kind = value
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let file = match value.get("file").and_then(|v| v.as_str()) {
+            Some(value) => value,
+            None => {
+                line.clear();
+                continue;
+            }
+        };
+        let lo = value.get("lo").and_then(|v| v.as_u64()).unwrap_or(0);
+        let hi = value.get("hi").and_then(|v| v.as_u64()).unwrap_or(0);
+
+        symbol_kinds
+            .entry(symbol_id.to_string())
+            .or_insert_with(|| kind.to_string());
+        span_index
+            .entry(symbol_id.to_string())
+            .or_default()
+            .entry(PathBuf::from(file))
+            .or_default()
+            .push(SpanRange {
+                lo: lo as usize,
+                hi: hi as usize,
+            });
+
+        line.clear();
+    }
+
+    Ok((span_index, symbol_kinds, saw_done))
 }
