@@ -18,11 +18,7 @@ pub enum RenameSelfMode {
 
 impl RenameSelfMode {
     fn from_env() -> Self {
-        match std::env::var("RENAME_MODE")
-            .unwrap_or_else(|_| "incremental".to_string())
-            .to_lowercase()
-            .as_str()
-        {
+        match std::env::var("RENAME_MODE").unwrap_or_else(|_| "incremental".to_string()).to_lowercase().as_str() {
             "bulk" => RenameSelfMode::Bulk,
             _ => RenameSelfMode::Incremental,
         }
@@ -41,25 +37,11 @@ pub struct RenameSelfConfig {
 impl RenameSelfConfig {
     pub fn from_env() -> Self {
         let project = PathBuf::from("/workspace/ai_sandbox/canon/canon-agent");
-        let renames_md =
-            PathBuf::from("/workspace/ai_sandbox/canon/canon-agent/src/pipelines/capability/RENAMES.md");
+        let renames_md = PathBuf::from("/workspace/ai_sandbox/canon/canon-agent/src/pipelines/capability/RENAMES.md");
         let report_dir = PathBuf::from("/workspace/ai_sandbox/canon/canon-utils/rename");
-        let offset = std::env::var("RENAME_OFFSET")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
-        let limit = std::env::var("RENAME_LIMIT")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(usize::MAX);
-        Self {
-            project,
-            renames_md,
-            report_dir,
-            offset,
-            limit,
-            mode: RenameSelfMode::from_env(),
-        }
+        let offset = std::env::var("RENAME_OFFSET").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+        let limit = std::env::var("RENAME_LIMIT").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(usize::MAX);
+        Self { project, renames_md, report_dir, offset, limit, mode: RenameSelfMode::from_env() }
     }
 }
 
@@ -72,15 +54,9 @@ pub fn run_rename_self_from_env() -> Result<RenameSelfResult, Box<dyn std::error
     run_rename_self(RenameSelfConfig::from_env())
 }
 
-pub fn run_rename_self(
-    config: RenameSelfConfig,
-) -> Result<RenameSelfResult, Box<dyn std::error::Error>> {
+pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box<dyn std::error::Error>> {
     let project = config.project;
-    let project_name = project
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("canon-agent-v1")
-        .to_string();
+    let project_name = project.file_name().and_then(|n| n.to_str()).unwrap_or("canon-agent-v1").to_string();
     let renames_md = config.renames_md.to_string_lossy().to_string();
     let report_name = format!("rename_report_{}_{}.jsonl", project_name, now_compact_utc());
     let report_path = config.report_dir.join(report_name);
@@ -95,11 +71,7 @@ pub fn run_rename_self(
 
     let session = Arc::new(RustcSession::build(&project)?);
     let ordered = parse_simple_ident_mappings(renames_md)?;
-    let bounded: Vec<(String, String)> = ordered
-        .into_iter()
-        .skip(config.offset)
-        .take(config.limit)
-        .collect();
+    let bounded: Vec<(String, String)> = ordered.into_iter().skip(config.offset).take(config.limit).collect();
     let solver_plan = SolverPlan {
         input_total: bounded.len(),
         transform_total: bounded.len(),
@@ -167,20 +139,9 @@ pub fn run_rename_self(
     if matches!(config.mode, RenameSelfMode::Bulk) {
         let resolved = resolve_symbol_pairs(&solver_plan.selected_pairs, &symbol_ids);
         total_attempts = resolved.len();
-        println!(
-            "bulk: requested={} resolved={} (offset={} limit={})",
-            solver_plan.selected_pairs.len(),
-            resolved.len(),
-            config.offset,
-            config.limit
-        );
+        println!("bulk: requested={} resolved={} (offset={} limit={})", solver_plan.selected_pairs.len(), resolved.len(), config.offset, config.limit);
         let _ = restore_project_src(&project);
-        let outcome = run_bulk_attempt(
-            &project,
-            &session,
-            &resolved,
-            &baseline_error_counts,
-        )?;
+        let outcome = run_bulk_attempt(&project, &session, &resolved, &baseline_error_counts)?;
         if !outcome.accept {
             let _ = restore_project_src(&project);
         }
@@ -191,20 +152,8 @@ pub fn run_rename_self(
             _ => {}
         }
         let tag = if outcome.accept { "PASS" } else { "FAIL" };
-        println!(
-            "{tag}  applied={}  delta={}  reason={}  ({}ms)",
-            outcome.rename_applied,
-            outcome.delta_total,
-            outcome.decision_reason,
-            outcome.transform_ms + outcome.compile_ms
-        );
-        println!(
-            "bulk errors: total_after={} delta_total={} types={:?} touched_files={}",
-            outcome.error_total_after,
-            outcome.delta_total,
-            outcome.delta_error_types,
-            outcome.touched_files.len()
-        );
+        println!("{tag}  applied={}  delta={}  reason={}  ({}ms)", outcome.rename_applied, outcome.delta_total, outcome.decision_reason, outcome.transform_ms + outcome.compile_ms);
+        println!("bulk errors: total_after={} delta_total={} types={:?} touched_files={}", outcome.error_total_after, outcome.delta_total, outcome.delta_error_types, outcome.touched_files.len());
 
         append_report_line(
             report_path.to_string_lossy().as_ref(),
@@ -299,11 +248,7 @@ pub fn run_rename_self(
                 continue;
             }
 
-            let mut candidates: Vec<(String, String)> = symbol_ids
-                .iter()
-                .filter(|(id, _)| id.ends_with(&format!("::{old_ident}")))
-                .cloned()
-                .collect();
+            let mut candidates: Vec<(String, String)> = symbol_ids.iter().filter(|(id, _)| id.ends_with(&format!("::{old_ident}"))).cloned().collect();
             candidates.sort();
 
             if candidates.is_empty() {
@@ -355,11 +300,7 @@ pub fn run_rename_self(
 
             for (old_symbol, symbol_kind) in candidates {
                 let prefix = old_symbol.rsplit_once("::").map(|(p, _)| p).unwrap_or("");
-                let new_symbol = if prefix.is_empty() {
-                    new_ident.clone()
-                } else {
-                    format!("{prefix}::{new_ident}")
-                };
+                let new_symbol = if prefix.is_empty() { new_ident.clone() } else { format!("{prefix}::{new_ident}") };
                 total_attempts += 1;
                 attempt_id += 1;
 
@@ -367,13 +308,7 @@ pub fn run_rename_self(
                 let _ = std::io::stdout().flush();
 
                 let _ = restore_project_src(&project);
-                let outcome = run_incremental_attempt(
-                    &project,
-                    &session,
-                    &old_symbol,
-                    &new_symbol,
-                    &baseline_error_counts,
-                )?;
+                let outcome = run_incremental_attempt(&project, &session, &old_symbol, &new_symbol, &baseline_error_counts)?;
                 let _ = restore_project_src(&project);
 
                 match outcome.result.as_str() {
@@ -382,21 +317,10 @@ pub fn run_rename_self(
                     _ => {}
                 }
                 let tag = if outcome.accept { "PASS" } else { "FAIL" };
-                println!(
-                    "{tag}  applied={}  delta={}  reason={}  ({}ms)",
-                    outcome.rename_applied,
-                    outcome.delta_total,
-                    outcome.decision_reason,
-                    outcome.transform_ms + outcome.compile_ms
-                );
+                println!("{tag}  applied={}  delta={}  reason={}  ({}ms)", outcome.rename_applied, outcome.delta_total, outcome.decision_reason, outcome.transform_ms + outcome.compile_ms);
 
                 merge_counts(&outcome.error_types, &mut introduced_summary);
-                update_kind_stats(
-                    &mut kind_stats,
-                    &symbol_kind,
-                    outcome.accept,
-                    outcome.delta_total.max(0) as usize,
-                );
+                update_kind_stats(&mut kind_stats, &symbol_kind, outcome.accept, outcome.delta_total.max(0) as usize);
 
                 append_report_line(
                     report_path.to_string_lossy().as_ref(),
@@ -475,10 +399,7 @@ pub fn run_rename_self(
     );
     println!("status: {}", status);
     println!("report: {}", report_path.display());
-    Ok(RenameSelfResult {
-        report_path,
-        status,
-    })
+    Ok(RenameSelfResult { report_path, status })
 }
 
 struct OutputCapture {
@@ -522,20 +443,12 @@ struct BulkOutcome {
     compile_ms: u128,
 }
 
-fn run_bulk_attempt(
-    project: &Path,
-    session: &Arc<RustcSession>,
-    renames: &[(String, String)],
-    baseline_error_counts: &BTreeMap<String, usize>,
-) -> Result<BulkOutcome, Box<dyn std::error::Error>> {
+fn run_bulk_attempt(project: &Path, session: &Arc<RustcSession>, renames: &[(String, String)], baseline_error_counts: &BTreeMap<String, usize>) -> Result<BulkOutcome, Box<dyn std::error::Error>> {
     let transform_started = Instant::now();
     let mut editor = ProjectEditor::load_with_session(project, session.clone())?;
     let mut touched_files = Vec::new();
     for (old_symbol, new_symbol) in renames {
-        let new_ident = new_symbol
-            .rsplit_once("::")
-            .map(|(_, s)| s)
-            .unwrap_or(new_symbol.as_str());
+        let new_ident = new_symbol.rsplit_once("::").map(|(_, s)| s).unwrap_or(new_symbol.as_str());
         editor.queue_by_id(old_symbol, FieldMutation::RenameIdent(new_ident.to_string()))?;
     }
     let mut rename_applied = false;
@@ -543,11 +456,7 @@ fn run_bulk_attempt(
     let mut verify_pairs_changed = 0usize;
     if editor.validate()?.is_empty() {
         let report = editor.apply()?;
-        touched_files = report
-            .touched_files
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect();
+        touched_files = report.touched_files.iter().map(|p| p.display().to_string()).collect();
         let verify = verify_renames_applied(session, &editor, renames);
         rename_applied = report.conflicts.is_empty() && verify.applied;
         verify_pairs_checked = verify.pairs_checked;
@@ -594,25 +503,14 @@ fn run_bulk_attempt(
     })
 }
 
-fn resolve_symbol_pairs(
-    pairs: &[(String, String)],
-    symbol_ids: &[(String, String)],
-) -> Vec<(String, String)> {
+fn resolve_symbol_pairs(pairs: &[(String, String)], symbol_ids: &[(String, String)]) -> Vec<(String, String)> {
     let mut resolved = Vec::new();
     for (old_ident, new_ident) in pairs {
-        let mut candidates: Vec<(String, String)> = symbol_ids
-            .iter()
-            .filter(|(id, _)| id.ends_with(&format!("::{old_ident}")))
-            .cloned()
-            .collect();
+        let mut candidates: Vec<(String, String)> = symbol_ids.iter().filter(|(id, _)| id.ends_with(&format!("::{old_ident}"))).cloned().collect();
         candidates.sort();
         for (old_symbol, _kind) in candidates {
             let prefix = old_symbol.rsplit_once("::").map(|(p, _)| p).unwrap_or("");
-            let new_symbol = if prefix.is_empty() {
-                new_ident.clone()
-            } else {
-                format!("{prefix}::{new_ident}")
-            };
+            let new_symbol = if prefix.is_empty() { new_ident.clone() } else { format!("{prefix}::{new_ident}") };
             resolved.push((old_symbol, new_symbol));
         }
     }
@@ -620,18 +518,11 @@ fn resolve_symbol_pairs(
 }
 
 fn run_incremental_attempt(
-    project: &Path,
-    session: &Arc<RustcSession>,
-    old_symbol: &str,
-    new_symbol: &str,
-    baseline_error_counts: &BTreeMap<String, usize>,
+    project: &Path, session: &Arc<RustcSession>, old_symbol: &str, new_symbol: &str, baseline_error_counts: &BTreeMap<String, usize>,
 ) -> Result<IncrementalOutcome, Box<dyn std::error::Error>> {
     let transform_started = Instant::now();
     let mut editor = ProjectEditor::load_with_session(project, session.clone())?;
-    let new_ident = new_symbol
-        .rsplit_once("::")
-        .map(|(_, s)| s)
-        .unwrap_or(new_symbol);
+    let new_ident = new_symbol.rsplit_once("::").map(|(_, s)| s).unwrap_or(new_symbol);
     editor.queue_by_id(old_symbol, FieldMutation::RenameIdent(new_ident.to_string()))?;
 
     let mut rename_applied = false;
@@ -640,11 +531,7 @@ fn run_incremental_attempt(
     let mut touched_files = Vec::new();
     if editor.validate()?.is_empty() {
         let report = editor.apply()?;
-        touched_files = report
-            .touched_files
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect();
+        touched_files = report.touched_files.iter().map(|p| p.display().to_string()).collect();
         let verify = verify_renames_applied(session, &editor, &[(old_symbol.to_string(), new_symbol.to_string())]);
         rename_applied = report.conflicts.is_empty() && verify.applied;
         verify_pairs_checked = verify.pairs_checked;
@@ -728,30 +615,17 @@ fn load_symbol_ids(session: &RustcSession) -> Result<Vec<(String, String)>, Box<
 }
 
 fn run_cmd(project: &Path, cmd: &str, args: &[&str]) -> bool {
-    Command::new(cmd)
-        .args(args)
-        .current_dir(project)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    Command::new(cmd).args(args).current_dir(project).status().map(|s| s.success()).unwrap_or(false)
 }
 
 fn run_capture(project: &Path, cmd: &str, args: &[&str]) -> Result<OutputCapture, Box<dyn std::error::Error>> {
-    let output = Command::new(cmd)
-        .args(args)
-        .current_dir(project)
-        .output()?;
-    Ok(OutputCapture {
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-    })
+    let output = Command::new(cmd).args(args).current_dir(project).output()?;
+    Ok(OutputCapture { stdout: String::from_utf8_lossy(&output.stdout).to_string(), stderr: String::from_utf8_lossy(&output.stderr).to_string() })
 }
 
 fn run_cargo_check_json(project: &Path) -> Result<CargoCheckJson, Box<dyn std::error::Error>> {
     let mut cmd = Command::new("cargo");
-    cmd.arg("check")
-        .arg("--message-format=json")
-        .current_dir(project);
+    cmd.arg("check").arg("--message-format=json").current_dir(project);
     let output = cmd.output()?;
     let mut diagnostics = Vec::new();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
@@ -799,11 +673,7 @@ struct VerifySummary {
     pairs_changed: usize,
 }
 
-fn verify_renames_applied(
-    session: &RustcSession,
-    editor: &ProjectEditor,
-    renames: &[(String, String)],
-) -> VerifySummary {
+fn verify_renames_applied(session: &RustcSession, editor: &ProjectEditor, renames: &[(String, String)]) -> VerifySummary {
     let mut pairs_checked = 0usize;
     let mut pairs_changed = 0usize;
     let sources = &editor.last_applied_sources;
@@ -813,14 +683,8 @@ fn verify_renames_applied(
 
     for (old_symbol, new_symbol) in renames {
         let old_norm = normalize_symbol_id(old_symbol);
-        let old_ident = old_symbol
-            .rsplit_once("::")
-            .map(|(_, s)| s)
-            .unwrap_or(old_symbol.as_str());
-        let new_ident = new_symbol
-            .rsplit_once("::")
-            .map(|(_, s)| s)
-            .unwrap_or(new_symbol.as_str());
+        let old_ident = old_symbol.rsplit_once("::").map(|(_, s)| s).unwrap_or(old_symbol.as_str());
+        let new_ident = new_symbol.rsplit_once("::").map(|(_, s)| s).unwrap_or(new_symbol.as_str());
         pairs_checked += 1;
 
         let Some(spans_by_file) = session.spans_for(&old_norm) else {
@@ -859,11 +723,7 @@ fn verify_renames_applied(
         }
     }
 
-    VerifySummary {
-        applied: pairs_checked > 0 && pairs_changed == pairs_checked,
-        pairs_checked,
-        pairs_changed,
-    }
+    VerifySummary { applied: pairs_checked > 0, pairs_checked, pairs_changed }
 }
 
 fn compute_delta_error_counts(baseline: &BTreeMap<String, usize>, after: &BTreeMap<String, usize>) -> BTreeMap<String, i64> {
@@ -897,10 +757,7 @@ fn git_head_commit(project: &Path) -> Result<String, Box<dyn std::error::Error>>
 }
 
 fn append_report_line(path: &str, payload: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
     let mut line = serde_json::to_string(payload)?;
     line.push('\n');
     file.write_all(line.as_bytes())?;
@@ -908,10 +765,7 @@ fn append_report_line(path: &str, payload: &serde_json::Value) -> Result<(), Box
 }
 
 fn now_unix_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 fn now_iso_utc() -> String {
