@@ -1,5 +1,6 @@
 use crate::core::project_editor::ProjectEditor;
 use crate::core::rustc_session::RustcSession;
+use crate::core::symbol_id::normalize_symbol_id;
 use crate::structured::FieldMutation;
 use serde_json::json;
 use std::collections::{BTreeMap, HashSet};
@@ -221,7 +222,12 @@ pub fn run_rename_self(
                     "old_name": "bulk",
                     "new_name": "bulk",
                     "rename_applied": outcome.rename_applied,
-                    "touched_files": outcome.touched_files
+                    "touched_files": outcome.touched_files,
+                    "verification": {
+                        "method": "span_match",
+                        "pairs_checked": outcome.verify_pairs_checked,
+                        "pairs_changed": outcome.verify_pairs_changed
+                    }
                 },
                 "compile": {
                     "status": outcome.result,
@@ -408,7 +414,12 @@ pub fn run_rename_self(
                             "old_name": old_symbol.rsplit_once("::").map(|(_, s)| s).unwrap_or(old_symbol.as_str()),
                             "new_name": new_symbol.rsplit_once("::").map(|(_, s)| s).unwrap_or(new_symbol.as_str()),
                             "rename_applied": outcome.rename_applied,
-                            "touched_files": outcome.touched_files
+                            "touched_files": outcome.touched_files,
+                            "verification": {
+                                "method": "span_match",
+                                "pairs_checked": outcome.verify_pairs_checked,
+                                "pairs_changed": outcome.verify_pairs_changed
+                            }
                         },
                         "compile": {
                             "status": outcome.result,
@@ -482,6 +493,8 @@ struct CargoCheckJson {
 struct IncrementalOutcome {
     result: String,
     rename_applied: bool,
+    verify_pairs_checked: usize,
+    verify_pairs_changed: usize,
     touched_files: Vec<String>,
     error_types: BTreeMap<String, usize>,
     error_total_after: usize,
@@ -496,6 +509,8 @@ struct IncrementalOutcome {
 struct BulkOutcome {
     result: String,
     rename_applied: bool,
+    verify_pairs_checked: usize,
+    verify_pairs_changed: usize,
     touched_files: Vec<String>,
     error_types: BTreeMap<String, usize>,
     error_total_after: usize,
@@ -524,6 +539,8 @@ fn run_bulk_attempt(
         editor.queue_by_id(old_symbol, FieldMutation::RenameIdent(new_ident.to_string()))?;
     }
     let mut rename_applied = false;
+    let mut verify_pairs_checked = 0usize;
+    let mut verify_pairs_changed = 0usize;
     if editor.validate()?.is_empty() {
         let report = editor.apply()?;
         touched_files = report
@@ -531,7 +548,10 @@ fn run_bulk_attempt(
             .iter()
             .map(|p| p.display().to_string())
             .collect();
-        rename_applied = !touched_files.is_empty() && report.conflicts.is_empty();
+        let verify = verify_renames_applied(session, &editor, renames);
+        rename_applied = report.conflicts.is_empty() && verify.applied;
+        verify_pairs_checked = verify.pairs_checked;
+        verify_pairs_changed = verify.pairs_changed;
     }
     let transform_ms = transform_started.elapsed().as_millis();
 
@@ -560,6 +580,8 @@ fn run_bulk_attempt(
     Ok(BulkOutcome {
         result: if accept { "pass" } else { "fail" }.to_string(),
         rename_applied,
+        verify_pairs_checked,
+        verify_pairs_changed,
         touched_files,
         error_types: error_counts,
         error_total_after,
@@ -613,6 +635,8 @@ fn run_incremental_attempt(
     editor.queue_by_id(old_symbol, FieldMutation::RenameIdent(new_ident.to_string()))?;
 
     let mut rename_applied = false;
+    let mut verify_pairs_checked = 0usize;
+    let mut verify_pairs_changed = 0usize;
     let mut touched_files = Vec::new();
     if editor.validate()?.is_empty() {
         let report = editor.apply()?;
@@ -621,7 +645,10 @@ fn run_incremental_attempt(
             .iter()
             .map(|p| p.display().to_string())
             .collect();
-        rename_applied = !touched_files.is_empty() && report.conflicts.is_empty();
+        let verify = verify_renames_applied(session, &editor, &[(old_symbol.to_string(), new_symbol.to_string())]);
+        rename_applied = report.conflicts.is_empty() && verify.applied;
+        verify_pairs_checked = verify.pairs_checked;
+        verify_pairs_changed = verify.pairs_changed;
     }
     let transform_ms = transform_started.elapsed().as_millis();
 
@@ -650,6 +677,8 @@ fn run_incremental_attempt(
     Ok(IncrementalOutcome {
         result: if accept { "pass" } else { "fail" }.to_string(),
         rename_applied,
+        verify_pairs_checked,
+        verify_pairs_changed,
         touched_files,
         error_types: error_counts,
         error_total_after,
@@ -761,6 +790,79 @@ fn update_kind_stats(stats: &mut BTreeMap<String, KindStats>, symbol_kind: &str,
         entry.accepted += 1;
     } else if introduced_errors > 0 {
         entry.introduced_errors += 1;
+    }
+}
+
+struct VerifySummary {
+    applied: bool,
+    pairs_checked: usize,
+    pairs_changed: usize,
+}
+
+fn verify_renames_applied(
+    session: &RustcSession,
+    editor: &ProjectEditor,
+    renames: &[(String, String)],
+) -> VerifySummary {
+    let mut pairs_checked = 0usize;
+    let mut pairs_changed = 0usize;
+    let sources = &editor.last_applied_sources;
+    if sources.is_empty() || renames.is_empty() {
+        return VerifySummary { applied: false, pairs_checked, pairs_changed };
+    }
+
+    for (old_symbol, new_symbol) in renames {
+        let old_norm = normalize_symbol_id(old_symbol);
+        let old_ident = old_symbol
+            .rsplit_once("::")
+            .map(|(_, s)| s)
+            .unwrap_or(old_symbol.as_str());
+        let new_ident = new_symbol
+            .rsplit_once("::")
+            .map(|(_, s)| s)
+            .unwrap_or(new_symbol.as_str());
+        pairs_checked += 1;
+
+        let Some(spans_by_file) = session.spans_for(&old_norm) else {
+            continue;
+        };
+
+        let mut saw_file = false;
+        let mut all_files_match = true;
+        for (path, spans) in spans_by_file {
+            if spans.is_empty() {
+                continue;
+            }
+            saw_file = true;
+            let Some(after) = sources.get(path) else {
+                all_files_match = false;
+                break;
+            };
+            // New ident must appear somewhere in the patched file.
+            if !after.contains(new_ident) {
+                all_files_match = false;
+                break;
+            }
+            // Spot-check: old ident must not still sit at the first span position.
+            if let Some(first_span) = spans.first() {
+                let lo = first_span.lo;
+                let hi = lo + old_ident.len();
+                if after.as_bytes().get(lo..hi) == Some(old_ident.as_bytes()) {
+                    all_files_match = false;
+                    break;
+                }
+            }
+        }
+
+        if saw_file && all_files_match {
+            pairs_changed += 1;
+        }
+    }
+
+    VerifySummary {
+        applied: pairs_checked > 0 && pairs_changed == pairs_checked,
+        pairs_checked,
+        pairs_changed,
     }
 }
 
