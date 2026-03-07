@@ -89,6 +89,13 @@ rustc compiler source code can be found in here
 ~/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/
 /workspace/git_repos/cargo
 
+When I describe a system, algorithm, or goal, extract all invariants implied. 
+An invariant is a rule that must always remain true. 
+Output only structured invariants. 
+For each invariant provide: 1. Math rule 2. Logical condition 3. Rust function fn must_<property>() -> bool Prefer correctness, safety, bounds, and structural rules. 
+List every invariant explicitly
+
+
 ## CODING STYLE
 
 1. **Branching**		: Minimize `if` / `match` / `loop`; replace with table dispatch, iterators, and predicate functions.  
