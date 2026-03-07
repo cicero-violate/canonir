@@ -628,7 +628,7 @@ impl Pipeline for CapabilityPipeline {
     fn name(&self) -> &str {
         "capability"
     }
-    async fn run_tick(
+    async fn capability_pipeline_pipeline_run_tick(
         &self,
         ctx: &PipelineContext,
         _ir: &mut SystemState,

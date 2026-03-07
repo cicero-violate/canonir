@@ -40,7 +40,7 @@ pub async fn run_agent_loop(
             tick,
             ..base_ctx.clone()
         };
-        let outcome = match pipeline.run_tick(&ctx, ir, layout).await {
+        let outcome = match pipeline.capability_pipeline_pipeline_run_tick(&ctx, ir, layout).await {
             Ok(outcome) => {
                 eprintln!("[agent-loop] tick {} done — {}", tick, outcome.summary);
                 eprintln!(
