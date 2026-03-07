@@ -64,20 +64,31 @@ impl ProjectEditor {
             parsed_files.push((file_path.clone(), stored_ast));
         }
 
-        // Pass 1: collect module_files using file-derived module paths.
-        let mut module_files_pass1: HashMap<String, PathBuf> = HashMap::new();
+        // Build module_files via iterative refinement so #[path] chains resolve.
+        let mut module_files: HashMap<String, PathBuf> = HashMap::new();
         for (file, ast) in &parsed_files {
             let module_path = module_path_from_file(&source_root, file)?;
-            module_files_pass1.insert(module_path.clone(), file.clone());
-            index_module_files(ast, file, &module_path, &mut module_files_pass1);
+            module_files.insert(module_path.clone(), file.clone());
+            index_module_files(ast, file, &module_path, &mut module_files);
+        }
+        for _ in 0..8 {
+            let mut updated = module_files.clone();
+            for (file, ast) in &parsed_files {
+                let module_path = module_path_for_file(&module_files, &source_root, file)?;
+                updated.insert(module_path.clone(), file.clone());
+                index_module_files(ast, file, &module_path, &mut updated);
+            }
+            if updated == module_files {
+                break;
+            }
+            module_files = updated;
         }
 
-        // Pass 2: rebuild handles + module_files using best module path per file.
+        // Rebuild handles + module_files using best module path per file.
         registry.handles.clear();
         registry.module_files.clear();
         for (file, ast) in &parsed_files {
-            let module_path =
-                module_path_for_file(&module_files_pass1, &source_root, file)?;
+            let module_path = module_path_for_file(&module_files, &source_root, file)?;
             registry
                 .module_files
                 .insert(module_path.clone(), file.clone());
@@ -94,6 +105,19 @@ impl ProjectEditor {
                 index_file_symbols(ast, file, &module_path, &mut registry.handles);
             }
             index_module_files(ast, file, &module_path, &mut registry.module_files);
+        }
+        if std::env::var("RENAME_DEBUG_MODULES").ok().as_deref() == Some("1") {
+            let mut interesting: Vec<(String, PathBuf)> = registry
+                .module_files
+                .iter()
+                .filter(|(module_path, _)| module_path.contains("gpu_scheduler"))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            interesting.sort_by(|a, b| a.0.cmp(&b.0));
+            eprintln!("debug module_files gpu_scheduler:");
+            for (module_path, path) in interesting {
+                eprintln!("  {module_path} -> {}", path.display());
+            }
         }
         Ok(Self {
             registry,
@@ -426,7 +450,7 @@ fn module_path_for_file(
         let score_b = module_path_score(b);
         score_b
             .cmp(&score_a)
-            .then_with(|| a.len().cmp(&b.len()))
+            .then_with(|| b.len().cmp(&a.len()))
             .then_with(|| a.cmp(b))
     });
     Ok(candidates[0].clone())

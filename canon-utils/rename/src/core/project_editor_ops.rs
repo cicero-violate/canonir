@@ -76,6 +76,7 @@ impl ProjectEditor {
         }
         self.changesets.clear();
 
+        self.rewrite_sources_for(&touched_files)?;
         self.last_applied_sources.clear();
         for path in &touched_files {
             if let Some(source) = self.registry.sources.get(path) {
@@ -83,8 +84,6 @@ impl ProjectEditor {
                     .insert(path.clone(), source.clone());
             }
         }
-
-        self.rewrite_sources_for(&touched_files)?;
         self.rebuild_registry()?;
 
         self.pending_file_moves.extend(file_moves.clone());
@@ -158,12 +157,8 @@ impl ProjectEditor {
     }
 
     pub fn commit(&self) -> Result<Vec<PathBuf>> {
-        for (from, to) in &self.pending_file_moves {
-            if let Some(parent) = to.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::rename(from, to)?;
-        }
+        let move_map: std::collections::HashMap<PathBuf, PathBuf> =
+            self.pending_file_moves.iter().cloned().collect();
         let mut written = Vec::new();
         for path in &self.last_touched_files {
             if let Some(ast) = self.registry.asts.get(path) {
@@ -173,11 +168,17 @@ impl ProjectEditor {
                     prettyplease::unparse(ast)
                 };
                 std::fs::write(path, rendered)?;
-                written.push(path.clone());
             } else if let Some(source) = self.registry.sources.get(path) {
                 std::fs::write(path, source)?;
-                written.push(path.clone());
             }
+            let final_path = move_map.get(path).cloned().unwrap_or_else(|| path.clone());
+            written.push(final_path);
+        }
+        for (from, to) in &self.pending_file_moves {
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::rename(from, to)?;
         }
         Ok(written)
     }
@@ -447,12 +448,7 @@ impl ProjectEditor {
                     }
                 }
             } else {
-                let old_file = module_file.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                let new_file_name = if old_file.ends_with(&format!("_{old_name}.rs")) {
-                    old_file.replacen(&format!("_{old_name}.rs"), &format!("_{new_name}.rs"), 1)
-                } else {
-                    format!("{new_name}.rs")
-                };
+                let new_file_name = format!("{new_name}.rs");
                 let new_file = module_file.with_file_name(new_file_name);
                 file_moves.push((module_file, new_file));
             }
@@ -580,10 +576,13 @@ fn rename_mod_decl(ast: &mut syn::File, old_name: &str, new_name: &str) -> bool 
     changed
 }
 
-fn rewrite_mod_path_attr(ast: &mut syn::File, old_name: &str, new_name: &str) -> bool {
+fn rewrite_mod_path_attr(ast: &mut syn::File, old_name: &str, _new_name: &str) -> bool {
     let mut changed = false;
     for item in &mut ast.items {
         let Item::Mod(item_mod) = item else { continue };
+        if item_mod.ident != old_name {
+            continue;
+        }
         let before = item_mod.attrs.len();
         item_mod.attrs.retain(|attr| !attr.path().is_ident("path"));
         if item_mod.attrs.len() != before {

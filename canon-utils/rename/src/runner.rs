@@ -576,7 +576,8 @@ fn run_bulk_attempt(project: &Path, session: &Arc<RustcSession>, renames: &[(Str
         "introduced_errors"
     }
     .to_string();
-    if !accept {
+    let skip_restore = std::env::var("RENAME_SKIP_RESTORE").ok().as_deref() == Some("1");
+    if !accept && !skip_restore {
         restore_project_src(project);
     }
 
@@ -646,7 +647,8 @@ fn run_incremental_attempt(
         "introduced_errors"
     }
     .to_string();
-    if !accept {
+    let skip_restore = std::env::var("RENAME_SKIP_RESTORE").ok().as_deref() == Some("1");
+    if !accept && !skip_restore {
         restore_project_src(project);
     }
 
@@ -723,6 +725,15 @@ fn run_cargo_check_json(project: &Path) -> Result<CargoCheckJson, Box<dyn std::e
                 if let Some(message) = value.get("message") {
                     diagnostics.push(message.clone());
                 }
+            }
+        }
+    }
+    if diagnostics.is_empty() && !output.stderr.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for line in stderr.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("error") {
+                diagnostics.push(serde_json::json!({ "level": "error", "message": trimmed }));
             }
         }
     }
