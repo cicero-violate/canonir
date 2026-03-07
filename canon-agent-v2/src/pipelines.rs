@@ -1,12 +1,9 @@
 //! Pluggable pipeline trait for the canon-agent runner.
-
 #[path = "capability_mod.rs"]
 pub mod capability;
-
 use crate::ir::SystemState;
 use crate::layout::FileTopology;
 use std::path::PathBuf;
-
 /// Everything a pipeline tick needs to read and act on the world.
 #[derive(Debug, Clone)]
 pub struct PipelineContext {
@@ -23,7 +20,6 @@ pub struct PipelineContext {
     /// Current tick number (1-based).
     pub tick: u64,
 }
-
 /// Scalar reward signal from one tick. Positive = progress, negative = regression.
 #[derive(Debug, Clone)]
 pub struct PipelineOutcome {
@@ -31,10 +27,14 @@ pub struct PipelineOutcome {
     pub summary: String,
     pub advanced: bool,
 }
-
 /// A stateless, async pipeline that runs one agent tick.
 #[async_trait::async_trait]
 pub trait Pipeline: Send + Sync {
     fn name(&self) -> &str;
-    async fn run_tick(&self, ctx: &PipelineContext, ir: &mut SystemState, layout: &mut FileTopology) -> anyhow::Result<PipelineOutcome>;
+    async fn capability_pipeline_pipeline_run_tick(
+        &self,
+        ctx: &PipelineContext,
+        ir: &mut SystemState,
+        layout: &mut FileTopology,
+    ) -> anyhow::Result<PipelineOutcome>;
 }
