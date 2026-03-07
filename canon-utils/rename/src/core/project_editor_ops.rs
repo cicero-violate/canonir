@@ -4,6 +4,7 @@ use super::project_editor_helpers::{
 };
 use crate::core::rustc_session::SpanRange;
 use crate::core::syn_patcher;
+use crate::core::syn_patcher::SpanReplacement;
 use crate::structured::{NodeOp, SymbolHandle, SymbolKind};
 use anyhow::{anyhow, Result};
 use proc_macro2::Span;
@@ -13,13 +14,34 @@ use syn::{Item, ItemConst, ItemEnum, ItemFn, ItemMod, ItemStatic, ItemStruct, It
 
 use super::project_editor_helpers::module_path_from_file;
 use super::project_editor_rewrite::{file_has_use_of_any, rewrite_string_attrs_in_file, IdentRewriter, PathRewriter};
-use super::project_editor_types::{ChangeReport, EditConflict, ProjectEditor};
+use super::project_editor_types::{ChangeReport, EditConflict, ProjectEditor, QueuedOp};
 
 impl ProjectEditor {
     pub fn apply(&mut self) -> Result<ChangeReport> {
         let mut touched_files = HashSet::new();
         let mut conflicts = Vec::new();
         let mut file_moves = Vec::new();
+
+        let mut queued_renames: Vec<(String, String)> = Vec::new();
+        let mut remaining_changesets: std::collections::HashMap<PathBuf, Vec<QueuedOp>> =
+            std::collections::HashMap::new();
+        for (file, ops) in self.changesets.clone() {
+            let mut remaining_ops = Vec::new();
+            for op in ops {
+                match &op.op {
+                    NodeOp::MutateField { handle: _, mutation } => match mutation {
+                        crate::structured::FieldMutation::RenameIdent(new_name) => {
+                            queued_renames.push((op.symbol_id.clone(), new_name.clone()));
+                        }
+                    },
+                    _ => remaining_ops.push(op),
+                }
+            }
+            if !remaining_ops.is_empty() {
+                remaining_changesets.insert(file, remaining_ops);
+            }
+        }
+        self.changesets = remaining_changesets;
 
         for op in self.pending_dir_renames.clone() {
             let (touched, moves) = self.apply_dir_rename(&op.old_dir, &op.new_dir)?;
@@ -36,20 +58,19 @@ impl ProjectEditor {
         }
         self.pending_module_renames.clear();
 
-        for (file, ops) in self.changesets.clone() {
+        if !queued_renames.is_empty() {
+            let touched = self.apply_symbol_renames_bulk(&queued_renames)?;
+            touched_files.extend(touched);
+        }
+
+        for (_file, ops) in self.changesets.clone() {
             for op in ops {
                 match &op.op {
-                    NodeOp::MutateField { handle, mutation } => match mutation {
-                        crate::structured::FieldMutation::RenameIdent(new_name) => {
-                            let touched =
-                                self.apply_symbol_rename(&op.symbol_id, new_name)?;
-                            touched_files.extend(touched);
-                        }
-                    },
                     NodeOp::MoveSymbol { handle, new_module_path, .. } => {
                         let touched = self.apply_move_symbol(handle, new_module_path)?;
                         touched_files.extend(touched);
                     }
+                    NodeOp::MutateField { .. } => {}
                 }
             }
         }
@@ -201,7 +222,15 @@ impl ProjectEditor {
             } else {
                 source
             };
-            let updated = syn_patcher::patch_file(&source, spans, new_name)?;
+            let replacements: Vec<SpanReplacement> = spans
+                .iter()
+                .cloned()
+                .map(|span| SpanReplacement {
+                    span,
+                    replacement: new_name.to_string(),
+                })
+                .collect();
+            let updated = syn_patcher::patch_file(&source, &replacements)?;
             if updated != source {
                 self.registry.sources.insert(path.to_path_buf(), updated.clone());
                 if let Ok(ast) = syn::parse_file(&updated) {
@@ -210,6 +239,118 @@ impl ProjectEditor {
                 touched.insert(path.to_path_buf());
             }
         }
+        Ok(touched)
+    }
+
+    fn apply_symbol_renames_bulk(
+        &mut self,
+        renames: &[(String, String)],
+    ) -> Result<HashSet<PathBuf>> {
+        let Some(session) = &self.session else {
+            return Err(anyhow!(
+                "rustc session not initialized; use ProjectEditor::load_with_rustc"
+            ));
+        };
+
+        let mut per_file: std::collections::HashMap<PathBuf, Vec<SpanReplacement>> =
+            std::collections::HashMap::new();
+        let mut per_file_attr_pairs: std::collections::HashMap<PathBuf, Vec<(String, String)>> =
+            std::collections::HashMap::new();
+
+        for (symbol_id, new_name) in renames {
+            let old_ident = symbol_id
+                .rsplit_once("::")
+                .map(|(_, s)| s)
+                .unwrap_or(symbol_id.as_str())
+                .to_string();
+            let norm = crate::core::symbol_id::normalize_symbol_id(symbol_id);
+            let occurrences = session
+                .spans_for(&norm)
+                .ok_or_else(|| anyhow!("symbol not found via rustc: {symbol_id}"))?;
+            for (path, spans) in occurrences {
+                let entry = per_file.entry(path.clone()).or_default();
+                for span in spans {
+                    entry.push(SpanReplacement {
+                        span: span.clone(),
+                        replacement: new_name.clone(),
+                    });
+                }
+                per_file_attr_pairs
+                    .entry(path.clone())
+                    .or_default()
+                    .push((old_ident.clone(), new_name.clone()));
+            }
+        }
+
+        let mut touched = HashSet::new();
+        for (path, mut replacements) in per_file {
+            replacements.sort_by(|a, b| {
+                a.span
+                    .lo
+                    .cmp(&b.span.lo)
+                    .then_with(|| a.span.hi.cmp(&b.span.hi))
+                    .then_with(|| a.replacement.cmp(&b.replacement))
+            });
+            replacements.dedup_by(|a, b| {
+                a.span.lo == b.span.lo
+                    && a.span.hi == b.span.hi
+                    && a.replacement == b.replacement
+            });
+
+            for window in replacements.windows(2) {
+                let a = &window[0];
+                let b = &window[1];
+                if a.span.lo == b.span.lo && a.span.hi == b.span.hi && a.replacement != b.replacement
+                {
+                    return Err(anyhow!(
+                        "conflicting replacements at {}..{} in {}",
+                        a.span.lo,
+                        a.span.hi,
+                        path.display()
+                    ));
+                }
+            }
+
+            let source = match self.registry.sources.get(&path) {
+                Some(content) => content.clone(),
+                None => continue,
+            };
+            let source = match session.normalized_source(&path) {
+                Some(s) => s.clone(),
+                None => source,
+            };
+            let mut updated = syn_patcher::patch_file(&source, &replacements)?;
+            let mut changed = updated != source;
+            if let Ok(ast) = syn::parse_file(&updated) {
+                let mut ast = ast;
+                let mut attr_pairs = per_file_attr_pairs
+                    .get(&path)
+                    .cloned()
+                    .unwrap_or_default();
+                attr_pairs.sort();
+                attr_pairs.dedup();
+                let mut attr_changed = false;
+                for (old_name, new_name) in &attr_pairs {
+                    if rewrite_string_attrs_in_file(&mut ast, old_name, new_name) {
+                        attr_changed = true;
+                    }
+                }
+                if attr_changed {
+                    updated = prettyplease::unparse(&ast);
+                    changed = true;
+                }
+                if changed {
+                    self.registry.sources.insert(path.to_path_buf(), updated.clone());
+                    self.registry.asts.insert(path.to_path_buf(), ast);
+                }
+            } else if changed {
+                self.registry.sources.insert(path.to_path_buf(), updated.clone());
+            }
+            if changed {
+                touched.insert(path);
+            }
+        }
+
         Ok(touched)
     }
 

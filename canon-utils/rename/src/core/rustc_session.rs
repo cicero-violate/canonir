@@ -38,31 +38,42 @@ impl RustcSession {
     pub fn build(project_root: &Path) -> Result<Self> {
         let source_root = crate::core::rustc_resolver::determine_source_root(project_root);
         let crate_name = crate::core::rustc_resolver::infer_crate_name(project_root)?;
-        let mut rustc_args =
+        let mut all_rustc_args =
             crate::core::rustc_resolver::cargo_rustc_args(project_root, &source_root, &crate_name)?;
-        if !rustc_args.iter().any(|arg| arg == "-Z") {
-            let threads = num_cpus::get().max(1);
-            rustc_args.push("-Z".to_string());
-            rustc_args.push(format!("threads={threads}"));
+        for rustc_args in &mut all_rustc_args {
+            if !rustc_args.iter().any(|arg| arg == "-Z") {
+                let threads = num_cpus::get().max(1);
+                rustc_args.push("-Z".to_string());
+                rustc_args.push(format!("threads={threads}"));
+            }
         }
 
         let out_path = span_output_path()?;
-        let file = File::create(&out_path)?;
-        let writer = BufWriter::new(file);
-        let mut callbacks = BulkCollectorCallbacks::new(writer);
+        // Truncate any previous output before appending per-target spans.
+        let _ = File::create(&out_path)?;
+        let mut status = Ok(());
+        for rustc_args in &all_rustc_args {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&out_path)?;
+            let writer = BufWriter::new(file);
+            let mut callbacks = BulkCollectorCallbacks::new(writer, crate_name.clone());
 
-        let status = rustc_driver::catch_fatal_errors(|| {
-            rustc_driver::run_compiler(&rustc_args, &mut callbacks);
-        });
+            let pass_status = rustc_driver::catch_fatal_errors(|| {
+                rustc_driver::run_compiler(rustc_args, &mut callbacks);
+            });
 
-        callbacks.finalize()?;
+            if status.is_ok() && pass_status.is_err() {
+                status = Err(anyhow!("rustc_driver failed during span collection"));
+            }
+
+            callbacks.finalize()?;
+        }
 
         let (mut span_index, symbol_kinds, normalized_sources, saw_done) =
             load_spans_from_file(&out_path)?;
         if symbol_kinds.is_empty() {
-            if status.is_err() {
-                return Err(anyhow!("rustc_driver failed during span collection"));
-            }
             return Err(anyhow!("span collector produced no output"));
         }
 
@@ -123,16 +134,18 @@ struct BulkCollectorCallbacks {
     out: BufWriter<File>,
     span_count: usize,
     emitted_source_files: std::collections::HashSet<PathBuf>,
+    crate_name: String,
 }
 
 impl BulkCollectorCallbacks {
-    fn new(out: BufWriter<File>) -> Self {
+    fn new(out: BufWriter<File>, crate_name: String) -> Self {
         Self {
             def_id_to_symbol: HashMap::new(),
             symbol_kinds: HashMap::new(),
             out,
             span_count: 0,
             emitted_source_files: std::collections::HashSet::new(),
+            crate_name,
         }
     }
 
@@ -228,6 +241,7 @@ impl Callbacks for BulkCollectorCallbacks {
         let mut visitor = PathVisitor {
             source_map,
             sink: self,
+            tcx,
         };
         tcx.hir_visit_all_item_likes_in_crate(&mut visitor);
         Compilation::Stop
@@ -260,12 +274,19 @@ fn item_ident_span(item: &rustc_hir::Item<'_>) -> Option<Span> {
     item.kind.ident().map(|ident| ident.span)
 }
 
-struct PathVisitor<'sm, 'cb> {
+struct PathVisitor<'sm, 'cb, 'v> {
     source_map: &'sm SourceMap,
     sink: &'cb mut BulkCollectorCallbacks,
+    tcx: rustc_middle::ty::TyCtxt<'v>,
 }
 
-impl<'sm, 'cb, 'v> Visitor<'v> for PathVisitor<'sm, 'cb> {
+impl<'sm, 'cb, 'v> Visitor<'v> for PathVisitor<'sm, 'cb, 'v> {
+    type NestedFilter = rustc_middle::hir::nested_filter::OnlyBodies;
+
+    fn maybe_tcx(&mut self) -> Self::MaybeTyCtxt {
+        self.tcx
+    }
+
     fn visit_item(&mut self, item: &'v rustc_hir::Item<'v>) {
         if item.span.from_expansion() {
             return;
@@ -276,17 +297,30 @@ impl<'sm, 'cb, 'v> Visitor<'v> for PathVisitor<'sm, 'cb> {
             }
         }
         if let rustc_hir::ItemKind::Use(path, use_kind) = &item.kind {
-            if let rustc_hir::UseKind::Single(ident) = use_kind {
-                for res in path.res.present_items() {
-                    if let Res::Def(_, def_id) = res {
-                        if let Some(symbol_id) =
-                            self.sink.def_id_to_symbol.get(&def_id).cloned()
-                        {
-                            self.sink
-                                .emit_span(&symbol_id, self.source_map, ident.span);
+            match use_kind {
+                rustc_hir::UseKind::Single(ident) => {
+                    for res in path.res.present_items() {
+                        if let Res::Def(_, def_id) = res {
+                            if let Some(symbol_id) = self.symbol_id_for_def(def_id) {
+                                self.sink
+                                    .emit_span(&symbol_id, self.source_map, ident.span);
+                            }
                         }
                     }
                 }
+                rustc_hir::UseKind::Glob => {
+                    if let Some(seg) = path.segments.last() {
+                        for res in path.res.present_items() {
+                            if let Res::Def(_, def_id) = res {
+                                if let Some(symbol_id) = self.symbol_id_for_def(def_id) {
+                                    self.sink
+                                        .emit_span(&symbol_id, self.source_map, seg.ident.span);
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         intravisit::walk_item(self, item);
@@ -304,21 +338,6 @@ impl<'sm, 'cb, 'v> Visitor<'v> for PathVisitor<'sm, 'cb> {
         intravisit::walk_impl_item(self, item);
     }
 
-    fn visit_path(&mut self, path: &rustc_hir::Path<'_>, _id: rustc_hir::HirId) {
-        if let Res::Def(_, def_id) = path.res {
-            if let Some(symbol_id) = self.sink.def_id_to_symbol.get(&def_id).cloned() {
-                let short = symbol_id.rsplit("::").next().unwrap_or("");
-                for seg in path.segments.iter() {
-                    if seg.ident.as_str() == short {
-                        self.sink
-                            .emit_span(&symbol_id, self.source_map, seg.ident.span);
-                    }
-                }
-            }
-        }
-        intravisit::walk_path(self, path);
-    }
-
     fn visit_ty(&mut self, ty: &'v rustc_hir::Ty<'v, rustc_hir::AmbigArg>) {
         if let rustc_hir::TyKind::Path(qpath) = &ty.kind {
             self.emit_qpath_span(qpath);
@@ -332,7 +351,40 @@ impl<'sm, 'cb, 'v> Visitor<'v> for PathVisitor<'sm, 'cb> {
                 self.emit_qpath_span(qpath);
             }
             rustc_hir::ExprKind::Path(qpath) => {
-                self.emit_qpath_span(qpath);
+                match qpath {
+                    rustc_hir::QPath::TypeRelative(_, segment) => {
+                        let hir_id = expr.hir_id;
+                        let res = self
+                            .tcx
+                            .typeck(hir_id.owner.def_id)
+                            .qpath_res(qpath, hir_id);
+                        if let Res::Def(_, def_id) = res {
+                            if let Some(symbol_id) = self.symbol_id_for_def(def_id) {
+                                self.sink.emit_span(
+                                    &symbol_id,
+                                    self.source_map,
+                                    segment.ident.span,
+                                );
+                            }
+                        }
+                    }
+                    _ => {
+                        self.emit_qpath_span(qpath);
+                    }
+                }
+            }
+            rustc_hir::ExprKind::MethodCall(segment, _receiver, _, _) => {
+                let hir_id = expr.hir_id;
+                if let Some(def_id) = self
+                    .tcx
+                    .typeck(hir_id.owner.def_id)
+                    .type_dependent_def_id(hir_id)
+                {
+                    if let Some(symbol_id) = self.symbol_id_for_def(def_id) {
+                        self.sink
+                            .emit_span(&symbol_id, self.source_map, segment.ident.span);
+                    }
+                }
             }
             _ => {}
         }
@@ -346,14 +398,82 @@ impl<'sm, 'cb, 'v> Visitor<'v> for PathVisitor<'sm, 'cb> {
     ) {
         intravisit::walk_use(self, path, hir_id);
     }
+
+    fn visit_variant(&mut self, v: &'v rustc_hir::Variant<'v>) {
+        if v.span.from_expansion() {
+            return;
+        }
+        let def_id = v.def_id.to_def_id();
+        if let Some(symbol_id) = self.symbol_id_for_def(def_id) {
+            self.sink
+                .emit_span(&symbol_id, self.source_map, v.ident.span);
+        }
+        intravisit::walk_variant(self, v);
+    }
+
+    fn visit_pat(&mut self, pat: &'v rustc_hir::Pat<'v>) {
+        match &pat.kind {
+            rustc_hir::PatKind::TupleStruct(qpath, _, _) => {
+                self.emit_qpath_span(qpath);
+            }
+            rustc_hir::PatKind::Struct(qpath, _, _) => {
+                self.emit_qpath_span(qpath);
+            }
+            rustc_hir::PatKind::Expr(pat_expr) => {
+                if let rustc_hir::PatExprKind::Path(qpath) = pat_expr.kind {
+                    self.emit_qpath_span(&qpath);
+                }
+            }
+            _ => {}
+        }
+        intravisit::walk_pat(self, pat);
+    }
 }
 
-impl<'sm, 'cb> PathVisitor<'sm, 'cb> {
+impl<'sm, 'cb, 'v> PathVisitor<'sm, 'cb, 'v> {
+    fn symbol_id_for_def(&mut self, def_id: rustc_hir::def_id::DefId) -> Option<String> {
+        if let Some(symbol_id) = self.sink.def_id_to_symbol.get(&def_id).cloned() {
+            return Some(symbol_id);
+        }
+        let path = self.tcx.def_path_str(def_id);
+        let mut local_path = None;
+        if def_id.is_local() {
+            local_path = Some(path.as_str());
+        } else {
+            let crate_name = self.sink.crate_name.as_str();
+            let normalized = crate_name.replace('-', "_");
+            let prefix = format!("{crate_name}::");
+            let prefix_norm = format!("{normalized}::");
+            if path == crate_name || path == normalized {
+                local_path = Some("crate");
+            } else if path.starts_with(&prefix) {
+                local_path = Some(&path[prefix.len()..]);
+            } else if path.starts_with(&prefix_norm) {
+                local_path = Some(&path[prefix_norm.len()..]);
+            } else {
+                return None;
+            }
+        }
+        let Some(local_path) = local_path else { return None };
+        let symbol_id = if local_path == "crate" {
+            "crate".to_string()
+        } else {
+            format!("crate::{local_path}")
+        };
+        let kind = def_kind_to_symbol_kind(self.tcx.def_kind(def_id));
+        self.sink
+            .symbol_kinds
+            .entry(symbol_id.clone())
+            .or_insert_with(|| kind.to_string());
+        self.sink.def_id_to_symbol.insert(def_id, symbol_id.clone());
+        Some(symbol_id)
+    }
+
     fn emit_qpath_span(&mut self, qpath: &rustc_hir::QPath<'_>) {
         match qpath {
             rustc_hir::QPath::Resolved(_, path) => {
                 if let Res::Def(_, def_id) = path.res {
-                    if let Some(symbol_id) = self.sink.def_id_to_symbol.get(&def_id).cloned() {
+                    if let Some(symbol_id) = self.symbol_id_for_def(def_id) {
                         let short = symbol_id.rsplit("::").next().unwrap_or("");
                         for seg in path.segments.iter() {
                             if seg.ident.as_str() == short {
@@ -362,9 +482,44 @@ impl<'sm, 'cb> PathVisitor<'sm, 'cb> {
                             }
                         }
                     }
+                    let def_kind = self.tcx.def_kind(def_id);
+                    let mut enum_def_id = None;
+                    match def_kind {
+                        rustc_hir::def::DefKind::Variant => {
+                            enum_def_id = Some(self.tcx.parent(def_id));
+                        }
+                        rustc_hir::def::DefKind::Ctor(_, _) => {
+                            let variant_def_id = self.tcx.parent(def_id);
+                            if self.tcx.def_kind(variant_def_id)
+                                == rustc_hir::def::DefKind::Variant
+                            {
+                                enum_def_id = Some(self.tcx.parent(variant_def_id));
+                            }
+                        }
+                        _ => {}
+                    }
+                    if let Some(enum_def_id) = enum_def_id {
+                        if let Some(enum_symbol_id) = self.symbol_id_for_def(enum_def_id) {
+                            let short = enum_symbol_id.rsplit("::").next().unwrap_or("");
+                            if path.segments.len() >= 2 {
+                                let seg = &path.segments[path.segments.len() - 2];
+                                if seg.ident.as_str() == short {
+                                    self.sink
+                                        .emit_span(&enum_symbol_id, self.source_map, seg.ident.span);
+                                }
+                            }
+                        }
+                    }
                 }
             }
-            rustc_hir::QPath::TypeRelative(_, _) => {}
+            rustc_hir::QPath::TypeRelative(_, segment) => {
+                if let Res::Def(_, def_id) = segment.res {
+                    if let Some(symbol_id) = self.symbol_id_for_def(def_id) {
+                        self.sink
+                            .emit_span(&symbol_id, self.source_map, segment.ident.span);
+                    }
+                }
+            }
             _ => {}
         }
     }

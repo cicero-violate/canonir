@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 def load_attempts(report_path: Path):
@@ -15,9 +15,28 @@ def load_attempts(report_path: Path):
                 continue
             yield d
 
+def load_degenerate(report_path: Path):
+    pairs = []
+    with report_path.open() as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            d = json.loads(line)
+            if d.get("type") != "skipped" or d.get("reason") != "degenerate":
+                continue
+            for item in d.get("pairs", []):
+                old = item.get("old_name") or item.get("symbol_id") or ""
+                new = item.get("new_name") or ""
+                if old or new:
+                    pairs.append((old, new))
+    return pairs
+
 def summarize_failures(attempts):
     reasons = Counter()
-    error_codes = Counter()
+    error_codes_introduced = Counter()
+    error_codes_after = Counter()
+    error_codes_delta = Counter()
     compile_invoked = Counter()
     error_totals = Counter()
     for d in attempts:
@@ -25,22 +44,30 @@ def summarize_failures(attempts):
         if not reason:
             continue
         reasons[reason] += 1
-        compile_invoked[d.get("compile", {}).get("invoked")] += 1
-        error_totals[d.get("compile", {}).get("error_total_after")] += 1
-        if reason == "introduced_errors":
-            for code in d.get("compile", {}).get("error_types_after", {}):
-                error_codes[code] += 1
-    return reasons, error_codes, compile_invoked, error_totals
+        compile_block = d.get("compile", {})
+        compile_invoked[compile_block.get("invoked")] += 1
+        error_totals[compile_block.get("error_total_after")] += 1
 
-def sample_failures(attempts):
-    samples = {}
+        for code, count in (compile_block.get("error_types_after") or {}).items():
+            error_codes_after[code] += int(count)
+            if reason == "introduced_errors":
+                error_codes_introduced[code] += int(count)
+
+        if reason == "introduced_errors":
+            for code, count in (d.get("delta", {}).get("delta_error_types") or {}).items():
+                if int(count) > 0:
+                    error_codes_delta[code] += int(count)
+    return reasons, error_codes_introduced, error_codes_after, error_codes_delta, compile_invoked, error_totals
+
+def sample_failures(attempts, limit):
+    samples = defaultdict(list)
     for d in attempts:
-        if d.get("decision", {}).get("reason") != "introduced_errors":
+        codes = list((d.get("compile", {}) or {}).get("error_types_after", {}).keys())
+        if not codes:
             continue
-        codes = list(d.get("compile", {}).get("error_types_after", {}).keys())
-        code = codes[0] if codes else "unknown"
-        if code not in samples:
-            samples[code] = d
+        for code in codes:
+            if len(samples[code]) < limit:
+                samples[code].append(d)
     return samples
 
 def print_attempt_summaries(attempts):
@@ -92,6 +119,12 @@ def main():
         action="store_true",
         help="Skip printing sample failures",
     )
+    parser.add_argument(
+        "--example-limit",
+        type=int,
+        default=2,
+        help="Max example attempts per error code",
+    )
     args = parser.parse_args()
 
     report_arg = args.report_flag or args.report
@@ -100,7 +133,15 @@ def main():
         raise SystemExit(f"report file not found: {report_path}")
 
     attempts = list(load_attempts(report_path))
-    reasons, error_codes, compile_invoked, error_totals = summarize_failures(iter(attempts))
+    degenerate_pairs = load_degenerate(report_path)
+    (
+        reasons,
+        error_codes_introduced,
+        error_codes_after,
+        error_codes_delta,
+        compile_invoked,
+        error_totals,
+    ) = summarize_failures(iter(attempts))
 
     print("Failure reasons:")
     for reason, count in sorted(reasons.items(), key=lambda x: -x[1]):
@@ -114,33 +155,60 @@ def main():
     for k, v in sorted(error_totals.items(), key=lambda x: -x[1]):
         print(f"  {k}: {v}")
     print()
-    print("Error codes in failing renames:")
-    for code, count in sorted(error_codes.items(), key=lambda x: -x[1]):
+    print("Error codes (introduced_errors only):")
+    for code, count in sorted(error_codes_introduced.items(), key=lambda x: -x[1]):
         print(f"  {code}: {count}")
-
     print()
-    print("Attempt details:")
-    print_attempt_summaries(iter(attempts))
+    print("Error codes (all compile attempts):")
+    for code, count in sorted(error_codes_after.items(), key=lambda x: -x[1]):
+        print(f"  {code}: {count}")
+    if error_codes_delta:
+        print()
+        print("Error codes (delta_error_types, introduced only):")
+        for code, count in sorted(error_codes_delta.items(), key=lambda x: -x[1]):
+            print(f"  {code}: {count}")
+    if degenerate_pairs:
+        print()
+        print(f"Degenerate renames: {len(degenerate_pairs)}")
+        for old, new in degenerate_pairs:
+            print(f"  {old} -> {new}")
 
     if args.no_samples:
         return
 
-    print("Samples (introduced_errors only):")
-    samples = sample_failures(iter(attempts))
-    for code, d in samples.items():
+    print("Examples by error code:")
+    samples = sample_failures(iter(attempts), args.example_limit)
+    printed_msg_hint = False
+    for code, entries in samples.items():
         print(f"=== {code} ===")
-        tr = d.get("transform", {})
-        compile_block = d.get("compile", {})
-        verify = tr.get("verification", {})
-        print(f"  {tr.get('symbol_id')} -> {tr.get('new_name')}")
-        print(f"  compile.invoked={compile_block.get('invoked')} error_total_after={compile_block.get('error_total_after')}")
-        if verify:
-            print(f"  verify.method={verify.get('method')} pairs_checked={verify.get('pairs_checked')} pairs_changed={verify.get('pairs_changed')}")
-        msgs = d.get("compile", {}).get("messages", [])
-        for m in msgs[:2]:
+        for d in entries:
+            tr = d.get("transform", {})
+            compile_block = d.get("compile", {})
+            verify = tr.get("verification", {})
+            delta = d.get("delta", {})
+            print(f"  attempt_id={d.get('attempt_id')} reason={d.get('decision', {}).get('reason')}")
+            print(f"  {tr.get('symbol_id')} -> {tr.get('new_name')}")
             print(
-                f"  [{m.get('level')}] {m.get('message')} @ {m.get('file')}:{m.get('line')}"
+                f"  touched_files={len(tr.get('touched_files') or [])} "
+                f"compile.invoked={compile_block.get('invoked')} "
+                f"error_total_after={compile_block.get('error_total_after')} "
+                f"delta_total={delta.get('delta_total')}"
             )
+            if verify:
+                print(
+                    f"  verify.method={verify.get('method')} "
+                    f"pairs_checked={verify.get('pairs_checked')} "
+                    f"pairs_changed={verify.get('pairs_changed')}"
+                )
+            msgs = d.get("compile", {}).get("messages", [])
+            if msgs:
+                for m in msgs[:2]:
+                    print(
+                        f"  [{m.get('level')}] {m.get('message')} @ {m.get('file')}:{m.get('line')}"
+                    )
+            elif not printed_msg_hint:
+                print("  (no compiler messages captured in report)")
+                printed_msg_hint = True
         print()
 
 if __name__ == "__main__":

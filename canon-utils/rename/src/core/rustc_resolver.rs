@@ -31,42 +31,66 @@ pub(crate) fn infer_crate_name(project_root: &Path) -> Result<String> {
     Err(anyhow!("could not infer crate name from {}", cargo_toml.display()))
 }
 
-pub(crate) fn cargo_rustc_args(project_root: &Path, source_root: &Path, crate_name: &str) -> Result<Vec<String>> {
+pub(crate) fn cargo_rustc_args(
+    project_root: &Path,
+    source_root: &Path,
+    crate_name: &str,
+) -> Result<Vec<Vec<String>>> {
     let mut gctx = GlobalContext::default()?;
     gctx.shell().set_verbosity(Verbosity::Quiet);
     let manifest_path = project_root.join("Cargo.toml");
     let ws = Workspace::new(&manifest_path, &gctx)?;
     let mut options = CompileOptions::new(&gctx, UserIntent::Check { test: false })?;
-    options.filter = CompileFilter::new(LibRule::True, FilterRule::none(), FilterRule::none(), FilterRule::none(), FilterRule::none());
+    options.filter = CompileFilter::new(
+        LibRule::True,
+        FilterRule::All,
+        FilterRule::none(),
+        FilterRule::none(),
+        FilterRule::none(),
+    );
     options.build_config.force_rebuild = true;
-    let source_file = source_root.join("lib.rs");
-    let capture = std::sync::Arc::new(RustcArgsCapture::new(source_file, crate_name.to_string()));
+    let lib_file = source_root.join("lib.rs");
+    let bin_file = source_root.join("main.rs");
+    let mut source_files = vec![lib_file];
+    if bin_file.exists() {
+        source_files.push(bin_file);
+    }
+    let capture = std::sync::Arc::new(RustcArgsCapture::new(source_files, crate_name.to_string()));
     let exec: std::sync::Arc<dyn Executor> = capture.clone();
     let _compilation = compile_with_exec(&ws, &options, &exec)?;
-    let mut args = capture.take_args().ok_or_else(|| anyhow!("failed to capture rustc args for {}", crate_name))?;
-    ensure_sysroot(&ws, &mut args)?;
-    absolutize_input_paths(ws.root(), &mut args);
-    Ok(args)
+    let mut all_args =
+        capture.take_args().ok_or_else(|| anyhow!("failed to capture rustc args for {}", crate_name))?;
+    for args in &mut all_args {
+        ensure_sysroot(&ws, args)?;
+        absolutize_input_paths(ws.root(), args);
+    }
+    Ok(all_args)
 }
 
 struct RustcArgsCapture {
-    source_file: PathBuf,
+    source_files: Vec<PathBuf>,
     crate_name: String,
-    args: Mutex<Option<Vec<String>>>,
+    args: Mutex<Vec<Vec<String>>>,
     exec: DefaultExecutor,
 }
 
 impl RustcArgsCapture {
-    fn new(source_file: PathBuf, crate_name: String) -> Self {
-        Self { source_file, crate_name, args: Mutex::new(None), exec: DefaultExecutor }
+    fn new(source_files: Vec<PathBuf>, crate_name: String) -> Self {
+        Self { source_files, crate_name, args: Mutex::new(Vec::new()), exec: DefaultExecutor }
     }
 
-    fn take_args(&self) -> Option<Vec<String>> {
-        self.args.lock().ok().and_then(|mut guard| guard.take())
+    fn take_args(&self) -> Option<Vec<Vec<String>>> {
+        self.args.lock().ok().map(|mut guard| {
+            if guard.is_empty() {
+                None
+            } else {
+                Some(std::mem::take(&mut *guard))
+            }
+        })?
     }
 
     fn should_capture(&self, target: &cargo::core::Target, mode: CompileMode) -> bool {
-        if !target.is_lib() {
+        if !target.is_lib() && !target.is_bin() {
             return false;
         }
         if !matches!(mode, CompileMode::Check { test: false } | CompileMode::Build) {
@@ -76,7 +100,9 @@ impl RustcArgsCapture {
         if target.name() != self.crate_name && target.name() != normalized {
             return false;
         }
-        target.src_path().path() == Some(self.source_file.as_path())
+        self.source_files
+            .iter()
+            .any(|path| target.src_path().path() == Some(path.as_path()))
     }
 
     fn record_args(&self, cmd: &ProcessBuilder) {
@@ -84,10 +110,7 @@ impl RustcArgsCapture {
             Ok(guard) => guard,
             Err(_) => return,
         };
-        if guard.is_some() {
-            return;
-        }
-        *guard = Some(process_builder_to_rustc_args(cmd));
+        guard.push(process_builder_to_rustc_args(cmd));
     }
 }
 

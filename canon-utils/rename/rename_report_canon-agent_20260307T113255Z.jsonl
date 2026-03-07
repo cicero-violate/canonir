@@ -1,2 +1,0 @@
-{"baseline":{"commit":"6fc8f0775eafd5ba56ecd634ca0670c548cc0fbd","error_total":0,"error_types":{},"state":"S0"},"config":{"compile_cmd":"cargo check","limit":20,"mode":"bulk","offset":0,"runner":"rename_self"},"project":"canon-agent","run_id":"run-1772883175","started_at_unix":1772883175,"ts":"2026-03-07T11:33:00Z","type":"run_start"}
-{"run_id":"run-1772883175","solver":{"conflict_count":0,"cyclic_component_count":0,"dependency_count":0,"input_total":20,"sat_selected_total":20,"selected_total":20,"transform_total":20},"ts":"2026-03-07T11:33:00Z","type":"solver_summary"}

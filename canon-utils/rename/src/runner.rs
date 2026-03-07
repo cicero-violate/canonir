@@ -132,6 +132,8 @@ pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box
     let mut total_fail = 0usize;
     let mut total_skipped = 0usize;
     let mut attempt_id = 0usize;
+    let mut degenerate_pairs: Vec<(String, String)> = Vec::new();
+    let mut wrote_degenerate_report = false;
 
     let symbol_ids = load_symbol_ids(&session)?;
     println!("registry: {} symbols loaded", symbol_ids.len());
@@ -141,7 +143,41 @@ pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box
         total_attempts = resolved.len();
         println!("bulk: requested={} resolved={} (offset={} limit={})", solver_plan.selected_pairs.len(), resolved.len(), config.offset, config.limit);
         let _ = restore_project_src(&project);
-        let outcome = run_bulk_attempt(&project, &session, &resolved, &baseline_error_counts)?;
+        let mut degenerate: Vec<(String, String)> = Vec::new();
+        let non_degenerate: Vec<(String, String)> = resolved
+            .iter()
+            .filter(|(old, new)| {
+                let old_ident = old.rsplit("::").next().unwrap_or(old.as_str());
+                let new_ident = new.rsplit("::").next().unwrap_or(new.as_str());
+                let is_deg = is_degenerate_rename(old_ident, new_ident);
+                if is_deg {
+                    degenerate.push((old.clone(), new.clone()));
+                    degenerate_pairs.push((old_ident.to_string(), new_ident.to_string()));
+                }
+                !is_deg
+            })
+            .cloned()
+            .collect();
+        total_skipped += resolved.len().saturating_sub(non_degenerate.len());
+        if !degenerate.is_empty() {
+            append_report_line(
+                report_path.to_string_lossy().as_ref(),
+                &json!({
+                    "type": "skipped",
+                    "run_id": run_id,
+                    "reason": "degenerate",
+                    "count": degenerate.len(),
+                    "pairs": degenerate.iter().map(|(old, new)| json!({
+                        "symbol_id": old,
+                        "old_name": old.rsplit_once("::").map(|(_, s)| s).unwrap_or(old.as_str()),
+                        "new_name": new.rsplit_once("::").map(|(_, s)| s).unwrap_or(new.as_str())
+                    })).collect::<Vec<_>>(),
+                    "ts": now_iso_utc()
+                }),
+            )?;
+            wrote_degenerate_report = true;
+        }
+        let outcome = run_bulk_attempt(&project, &session, &non_degenerate, &baseline_error_counts)?;
         if !outcome.accept {
             let _ = restore_project_src(&project);
         }
@@ -182,7 +218,8 @@ pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box
                     "status": outcome.result,
                     "invoked": true,
                     "error_types_after": outcome.error_types,
-                    "error_total_after": outcome.error_total_after
+                    "error_total_after": outcome.error_total_after,
+                    "messages": outcome.error_messages
                 },
                 "delta": {
                     "delta_error_types": outcome.delta_error_types,
@@ -203,6 +240,7 @@ pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box
         for (old_ident, new_ident) in solver_plan.selected_pairs {
             if is_degenerate_rename(&old_ident, &new_ident) {
                 total_skipped += 1;
+                degenerate_pairs.push((old_ident.to_string(), new_ident.to_string()));
                 attempt_id += 1;
                 println!("[{attempt_id:>4}] SKIP  {old_ident} -> {new_ident}  (degenerate)");
                 append_report_line(
@@ -227,7 +265,8 @@ pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box
                             "status": "skipped",
                             "invoked": false,
                             "error_types_after": {},
-                            "error_total_after": 0
+                            "error_total_after": 0,
+                            "messages": []
                         },
                         "delta": {
                             "delta_error_types": {},
@@ -277,7 +316,8 @@ pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box
                             "status": "skipped",
                             "invoked": false,
                             "error_types_after": {},
-                            "error_total_after": 0
+                            "error_total_after": 0,
+                            "messages": []
                         },
                         "delta": {
                             "delta_error_types": {},
@@ -349,7 +389,8 @@ pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box
                             "status": outcome.result,
                             "invoked": true,
                             "error_types_after": outcome.error_types,
-                            "error_total_after": outcome.error_total_after
+                            "error_total_after": outcome.error_total_after,
+                            "messages": outcome.error_messages
                         },
                         "delta": {
                             "delta_error_types": outcome.delta_error_types,
@@ -397,8 +438,31 @@ pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box
         baseline_error_total,
         introduced_summary.values().sum::<usize>()
     );
+    if !degenerate_pairs.is_empty() {
+        println!("degenerate: {}", degenerate_pairs.len());
+        for (old_name, new_name) in &degenerate_pairs {
+            println!("  {old_name} -> {new_name}");
+        }
+    }
     println!("status: {}", status);
     println!("report: {}", report_path.display());
+
+    if !degenerate_pairs.is_empty() && !wrote_degenerate_report {
+        append_report_line(
+            report_path.to_string_lossy().as_ref(),
+            &json!({
+                "type": "skipped",
+                "run_id": run_id,
+                "reason": "degenerate",
+                "count": degenerate_pairs.len(),
+                "pairs": degenerate_pairs.iter().map(|(old, new)| json!({
+                    "old_name": old,
+                    "new_name": new
+                })).collect::<Vec<_>>(),
+                "ts": now_iso_utc()
+            }),
+        )?;
+    }
     Ok(RenameSelfResult { report_path, status })
 }
 
@@ -418,6 +482,7 @@ struct IncrementalOutcome {
     verify_pairs_changed: usize,
     touched_files: Vec<String>,
     error_types: BTreeMap<String, usize>,
+    error_messages: Vec<serde_json::Value>,
     error_total_after: usize,
     delta_error_types: BTreeMap<String, i64>,
     delta_total: i64,
@@ -434,6 +499,7 @@ struct BulkOutcome {
     verify_pairs_changed: usize,
     touched_files: Vec<String>,
     error_types: BTreeMap<String, usize>,
+    error_messages: Vec<serde_json::Value>,
     error_total_after: usize,
     delta_error_types: BTreeMap<String, i64>,
     delta_total: i64,
@@ -448,8 +514,15 @@ fn run_bulk_attempt(project: &Path, session: &Arc<RustcSession>, renames: &[(Str
     let mut editor = ProjectEditor::load_with_session(project, session.clone())?;
     let mut touched_files = Vec::new();
     for (old_symbol, new_symbol) in renames {
-        let new_ident = new_symbol.rsplit_once("::").map(|(_, s)| s).unwrap_or(new_symbol.as_str());
-        editor.queue_by_id(old_symbol, FieldMutation::RenameIdent(new_ident.to_string()))?;
+        let new_ident = new_symbol
+            .rsplit_once("::")
+            .map(|(_, s)| s)
+            .unwrap_or(new_symbol.as_str());
+        if session.symbol_kind(old_symbol) == Some("module") {
+            editor.queue_module_rename(old_symbol, new_ident);
+        } else {
+            editor.queue_by_id(old_symbol, FieldMutation::RenameIdent(new_ident.to_string()))?;
+        }
     }
     let mut rename_applied = false;
     let mut verify_pairs_checked = 0usize;
@@ -475,6 +548,7 @@ fn run_bulk_attempt(project: &Path, session: &Arc<RustcSession>, renames: &[(Str
     let check = run_cargo_check_json(project)?;
     let mut error_counts = BTreeMap::new();
     accumulate_error_counts_json(&check.diagnostics, &mut error_counts);
+    let error_messages = summarize_error_messages(&check.diagnostics);
     let error_total_after = sum_counts(&error_counts);
     let delta_error_types = compute_delta_error_counts(baseline_error_counts, &error_counts);
     let delta_total = sum_counts_i64(&delta_error_types);
@@ -500,6 +574,7 @@ fn run_bulk_attempt(project: &Path, session: &Arc<RustcSession>, renames: &[(Str
         verify_pairs_changed,
         touched_files,
         error_types: error_counts,
+        error_messages,
         error_total_after,
         delta_error_types,
         delta_total,
@@ -557,6 +632,7 @@ fn run_incremental_attempt(
     let check = run_cargo_check_json(project)?;
     let mut error_counts = BTreeMap::new();
     accumulate_error_counts_json(&check.diagnostics, &mut error_counts);
+    let error_messages = summarize_error_messages(&check.diagnostics);
     let error_total_after = sum_counts(&error_counts);
     let delta_error_types = compute_delta_error_counts(baseline_error_counts, &error_counts);
     let delta_total = sum_counts_i64(&delta_error_types);
@@ -582,6 +658,7 @@ fn run_incremental_attempt(
         verify_pairs_changed,
         touched_files,
         error_types: error_counts,
+        error_messages,
         error_total_after,
         delta_error_types,
         delta_total,
@@ -652,6 +729,41 @@ fn run_cargo_check_json(project: &Path) -> Result<CargoCheckJson, Box<dyn std::e
         }
     }
     Ok(CargoCheckJson { diagnostics })
+}
+
+fn summarize_error_messages(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    const MAX_MESSAGES: usize = 50;
+    let mut out = Vec::new();
+    for msg in messages {
+        if msg.get("level").and_then(|v| v.as_str()) != Some("error") {
+            continue;
+        }
+        let code = msg.get("code").and_then(|c| c.get("code")).and_then(|c| c.as_str());
+        let message = msg.get("message").and_then(|m| m.as_str());
+        let mut file: Option<&str> = None;
+        let mut line: Option<u64> = None;
+        if let Some(spans) = msg.get("spans").and_then(|s| s.as_array()) {
+            let primary = spans
+                .iter()
+                .find(|s| s.get("is_primary").and_then(|v| v.as_bool()) == Some(true))
+                .or_else(|| spans.first());
+            if let Some(span) = primary {
+                file = span.get("file_name").and_then(|v| v.as_str());
+                line = span.get("line_start").and_then(|v| v.as_u64());
+            }
+        }
+        out.push(json!({
+            "level": "error",
+            "code": code,
+            "message": message,
+            "file": file,
+            "line": line,
+        }));
+        if out.len() >= MAX_MESSAGES {
+            break;
+        }
+    }
+    out
 }
 
 fn accumulate_error_counts_json(messages: &[serde_json::Value], counts: &mut BTreeMap<String, usize>) {
@@ -754,7 +866,34 @@ fn compute_delta_error_counts(baseline: &BTreeMap<String, usize>, after: &BTreeM
 }
 
 fn is_degenerate_rename(old: &str, new: &str) -> bool {
-    old == new || old.ends_with(new) || new.ends_with(old)
+    if old == new {
+        return true;
+    }
+    // Skip exact self-doubling: Foo -> FooFoo
+    if new == format!("{old}{old}") {
+        return true;
+    }
+    // Skip if new == prefix + old where prefix is just old again (case-insensitive snake).
+    if new.len() > old.len() {
+        let prefix = &new[..new.len() - old.len()];
+        if to_snake(prefix) == to_snake(old) {
+            return true;
+        }
+    }
+    false
+}
+
+fn to_snake(s: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            out.push('_');
+        }
+        if let Some(lower) = c.to_lowercase().next() {
+            out.push(lower);
+        }
+    }
+    out
 }
 
 fn sum_counts(counts: &BTreeMap<String, usize>) -> usize {
