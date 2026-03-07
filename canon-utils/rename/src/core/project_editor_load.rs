@@ -37,22 +37,15 @@ impl ProjectEditor {
         let files = collect_rs_files(&source_root)?;
         let mut registry = NodeRegistry::default();
         let mut original_sources = HashMap::new();
+        let mut parsed_files: Vec<(PathBuf, syn::File)> = Vec::new();
         for file in files {
-            let content = std::fs::read_to_string(&file)?;
-            let module_path = module_path_from_file(&source_root, &file)?;
-            registry.module_files.insert(module_path.clone(), file.clone());
+            let file_path = file.clone();
+            let content = std::fs::read_to_string(&file_path)?;
             let ast = match syn::parse_file(&content) {
                 Ok(ast) => {
-                    index_file_symbols(&ast, &file, &module_path, &mut registry.handles);
                     ast
                 }
                 Err(_) => {
-                    index_file_symbols_by_text(
-                        &content,
-                        &file,
-                        &module_path,
-                        &mut registry.handles,
-                    );
                     syn::File {
                         shebang: None,
                         attrs: Vec::new(),
@@ -60,9 +53,47 @@ impl ProjectEditor {
                     }
                 }
             };
-            registry.asts.insert(file.clone(), ast);
-            registry.sources.insert(file.clone(), content.clone());
-            original_sources.insert(file, content);
+            registry.asts.insert(file_path.clone(), ast);
+            registry.sources.insert(file_path.clone(), content.clone());
+            original_sources.insert(file_path.clone(), content);
+            let stored_ast = registry
+                .asts
+                .get(&file_path)
+                .cloned()
+                .unwrap_or_else(|| syn::File { shebang: None, attrs: Vec::new(), items: Vec::new() });
+            parsed_files.push((file_path.clone(), stored_ast));
+        }
+
+        // Pass 1: collect module_files using file-derived module paths.
+        let mut module_files_pass1: HashMap<String, PathBuf> = HashMap::new();
+        for (file, ast) in &parsed_files {
+            let module_path = module_path_from_file(&source_root, file)?;
+            module_files_pass1.insert(module_path.clone(), file.clone());
+            index_module_files(ast, file, &module_path, &mut module_files_pass1);
+        }
+
+        // Pass 2: rebuild handles + module_files using best module path per file.
+        registry.handles.clear();
+        registry.module_files.clear();
+        for (file, ast) in &parsed_files {
+            let module_path =
+                module_path_for_file(&module_files_pass1, &source_root, file)?;
+            registry
+                .module_files
+                .insert(module_path.clone(), file.clone());
+            if ast.items.is_empty() {
+                if let Some(content) = registry.sources.get(file) {
+                    index_file_symbols_by_text(
+                        content,
+                        file,
+                        &module_path,
+                        &mut registry.handles,
+                    );
+                }
+            } else {
+                index_file_symbols(ast, file, &module_path, &mut registry.handles);
+            }
+            index_module_files(ast, file, &module_path, &mut registry.module_files);
         }
         Ok(Self {
             registry,
@@ -296,4 +327,116 @@ pub(crate) fn insert_handle(
             kind,
         },
     );
+}
+
+fn index_module_files(
+    ast: &syn::File,
+    file: &Path,
+    module_path: &str,
+    module_files: &mut HashMap<String, PathBuf>,
+) {
+    let base_dir = file.parent().unwrap_or_else(|| Path::new(""));
+    for item in &ast.items {
+        let Item::Mod(item_mod) = item else { continue };
+        let mod_name = item_mod.ident.to_string();
+        let mod_path = if module_path == "crate" {
+            format!("crate::{mod_name}")
+        } else {
+            format!("{module_path}::{mod_name}")
+        };
+        if let Some(path_lit) = module_path_attr_value(item_mod) {
+            let path = if Path::new(&path_lit).is_absolute() {
+                PathBuf::from(&path_lit)
+            } else {
+                base_dir.join(&path_lit)
+            };
+            module_files.insert(mod_path, path);
+            continue;
+        }
+
+        // No #[path] attribute: try conventional module files.
+        let direct = base_dir.join(format!("{mod_name}.rs"));
+        if direct.is_file() {
+            module_files.insert(mod_path, direct);
+            continue;
+        }
+        let nested = base_dir.join(&mod_name).join("mod.rs");
+        if nested.is_file() {
+            module_files.insert(mod_path, nested);
+            continue;
+        }
+
+        // Legacy fallback: match files like capability_<mod>.rs
+        let mut candidates = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(base_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name == format!("{mod_name}.rs")
+                    || name.ends_with(&format!("_{mod_name}.rs"))
+                {
+                    candidates.push(path);
+                }
+            }
+        }
+        candidates.sort();
+        candidates.dedup();
+        if candidates.len() == 1 {
+            module_files.insert(mod_path, candidates.remove(0));
+        }
+    }
+}
+
+fn module_path_attr_value(item_mod: &ItemMod) -> Option<String> {
+    for attr in &item_mod.attrs {
+        if !attr.path().is_ident("path") {
+            continue;
+        }
+        let syn::Meta::NameValue(name_value) = &attr.meta else { continue };
+        let syn::Expr::Lit(expr_lit) = &name_value.value else { continue };
+        let syn::Lit::Str(lit) = &expr_lit.lit else { continue };
+        return Some(lit.value());
+    }
+    None
+}
+
+fn module_path_for_file(
+    module_files: &HashMap<String, PathBuf>,
+    source_root: &Path,
+    file: &Path,
+) -> Result<String> {
+    let mut candidates: Vec<String> = module_files
+        .iter()
+        .filter_map(|(module_path, path)| {
+            if path == file {
+                Some(module_path.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    if candidates.is_empty() {
+        return module_path_from_file(source_root, file);
+    }
+    candidates.sort_by(|a, b| {
+        let score_a = module_path_score(a);
+        let score_b = module_path_score(b);
+        score_b
+            .cmp(&score_a)
+            .then_with(|| a.len().cmp(&b.len()))
+            .then_with(|| a.cmp(b))
+    });
+    Ok(candidates[0].clone())
+}
+
+fn module_path_score(path: &str) -> i32 {
+    let last = path.rsplit("::").next().unwrap_or("");
+    if last == "mod" || last.ends_with("_mod") {
+        0
+    } else {
+        1
+    }
 }

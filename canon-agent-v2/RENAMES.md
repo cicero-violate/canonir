@@ -458,3 +458,45 @@
 | `save_cache`                                 | `goal_embedding_save_cache`                                      | prefix with goal_embedding to reduce ambiguity             |
 | `goal_hash`                                  | `goal_embedding_goal_hash`                                       | prefix with goal_embedding to reduce ambiguity             |
 | `fnv64`                                      | `goal_embedding_fnv64`                                           | prefix with goal_embedding to reduce ambiguity             |
+
+
+## File Renames
+| Old Name | New Name | Reason |
+| --- | --- | --- |
+| `capability_capability.rs` | `Types_capability.rs` | domain prefix |
+| `capability_capability_cost.rs` | `Types_capability_cost.rs` | domain prefix |
+| `capability_config.rs` | `Types_config.rs` | domain prefix |
+| `capability_console.rs` | `IO_console.rs` | domain prefix |
+| `capability_dag.rs` | `Graph_dag.rs` | domain prefix |
+| `capability_dispatch.rs` | `Execution_dispatch.rs` | domain prefix |
+| `capability_endpoint_scheduler.rs` | `Execution_endpoint_scheduler.rs` | domain prefix |
+| `capability_endpoint_worker.rs` | `Execution_endpoint_worker.rs` | domain prefix |
+| `capability_engine.rs` | `Engine_engine.rs` | domain prefix |
+| `capability_execution_result.rs` | `Execution_result.rs` | domain prefix |
+| `capability_executor_dispatch.rs` | `Execution_executor_dispatch.rs` | domain prefix |
+| `capability_failure_store.rs` | `Types_failure_store.rs` | domain prefix |
+| `capability_goal_embedding.rs` | `Types_goal_embedding.rs` | domain prefix |
+| `capability_gpu_scheduler.rs` | `Engine_gpu_scheduler.rs` | domain prefix |
+| `capability_gpu_scheduler_driver.rs` | `Engine_gpu_scheduler_driver.rs` | domain prefix |
+| `capability_gpu_scheduler_kernels.rs` | `Engine_gpu_scheduler_kernels.rs` | domain prefix |
+| `capability_gpu_scheduler_layout.rs` | `Engine_gpu_scheduler_layout.rs` | domain prefix |
+| `capability_graph_algo.rs` | `Graph_algo.rs` | domain prefix |
+| `capability_graph_maintenance.rs` | `Graph_maintenance.rs` | domain prefix |
+| `capability_graph_runtime.rs` | `Graph_runtime.rs` | domain prefix |
+| `capability_llm.rs` | `IO_llm.rs` | domain prefix |
+| `capability_planner_session.rs` | `Planner_session.rs` | domain prefix |
+| `capability_planner_state.rs` | `Planner_state.rs` | domain prefix |
+| `capability_planner_update.rs` | `Planner_update.rs` | domain prefix |
+| `capability_policy.rs` | `Policy_policy.rs` | domain prefix |
+| `capability_policy_engine.rs` | `Policy_engine.rs` | domain prefix |
+| `capability_policy_train.rs` | `Policy_train.rs` | domain prefix |
+| `capability_response_router.rs` | `Policy_response_router.rs` | domain prefix |
+| `capability_scheduler.rs` | `Execution_scheduler.rs` | domain prefix |
+| `capability_scheduler_scoring.rs` | `Execution_scheduler_scoring.rs` | domain prefix |
+| `capability_scheduler_state.rs` | `Execution_scheduler_state.rs` | domain prefix |
+| `capability_state_snapshot.rs` | `Execution_state_snapshot.rs` | domain prefix |
+| `capability_tab_management.rs` | `IO_tab_management.rs` | domain prefix |
+| `capability_telemetry.rs` | `IO_telemetry.rs` | domain prefix |
+| `capability_template_index.rs` | `Planner_template_index.rs` | domain prefix |
+| `capability_template_mutation.rs` | `Planner_template_mutation.rs` | domain prefix |
+| `ws_server.rs` | `IO_ws_server.rs` | domain prefix |

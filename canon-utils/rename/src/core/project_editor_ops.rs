@@ -424,7 +424,11 @@ impl ProjectEditor {
             .cloned()
         {
             if let Some(ast) = self.registry.asts.get_mut(&parent_file) {
-                if rename_mod_decl(ast, &old_name, new_name) {
+                let mut changed = rename_mod_decl(ast, &old_name, new_name);
+                if rewrite_mod_path_attr(ast, &old_name, new_name) {
+                    changed = true;
+                }
+                if changed {
                     touched.insert(parent_file);
                 }
             }
@@ -443,9 +447,17 @@ impl ProjectEditor {
                     }
                 }
             } else {
-                let new_file = module_file.with_file_name(format!("{new_name}.rs"));
+                let old_file = module_file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                let new_file_name = if old_file.ends_with(&format!("_{old_name}.rs")) {
+                    old_file.replacen(&format!("_{old_name}.rs"), &format!("_{new_name}.rs"), 1)
+                } else {
+                    format!("{new_name}.rs")
+                };
+                let new_file = module_file.with_file_name(new_file_name);
                 file_moves.push((module_file, new_file));
             }
+        } else {
+            return Err(anyhow!("no file for module path {old_module_path}"));
         }
         for (path, ast) in self.registry.asts.iter_mut() {
             let mut rewriter = PathRewriter::replace_prefix(
@@ -563,6 +575,19 @@ fn rename_mod_decl(ast: &mut syn::File, old_name: &str, new_name: &str) -> bool 
                 item_mod.ident = syn::Ident::new(new_name, Span::call_site());
                 changed = true;
             }
+        }
+    }
+    changed
+}
+
+fn rewrite_mod_path_attr(ast: &mut syn::File, old_name: &str, new_name: &str) -> bool {
+    let mut changed = false;
+    for item in &mut ast.items {
+        let Item::Mod(item_mod) = item else { continue };
+        let before = item_mod.attrs.len();
+        item_mod.attrs.retain(|attr| !attr.path().is_ident("path"));
+        if item_mod.attrs.len() != before {
+            changed = true;
         }
     }
     changed

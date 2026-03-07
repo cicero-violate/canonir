@@ -27,7 +27,7 @@ impl RenameSelfMode {
 
 pub struct RenameSelfConfig {
     pub project: PathBuf,
-    pub renames_md: PathBuf,
+    pub symbols_json: PathBuf,
     pub report_dir: PathBuf,
     pub offset: usize,
     pub limit: usize,
@@ -37,11 +37,11 @@ pub struct RenameSelfConfig {
 impl RenameSelfConfig {
     pub fn from_env() -> Self {
         let project = PathBuf::from("/workspace/ai_sandbox/canon/canon-agent-v2");
-        let renames_md = PathBuf::from("/workspace/ai_sandbox/canon/canon-agent-v2/RENAMES.md");
+        let symbols_json = PathBuf::from("/workspace/ai_sandbox/canon/canon-agent-v2/symbols.json");
         let report_dir = PathBuf::from("/workspace/ai_sandbox/canon/canon-utils/rename");
         let offset = std::env::var("RENAME_OFFSET").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
         let limit = std::env::var("RENAME_LIMIT").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(usize::MAX);
-        Self { project, renames_md, report_dir, offset, limit, mode: RenameSelfMode::from_env() }
+        Self { project, symbols_json, report_dir, offset, limit, mode: RenameSelfMode::from_env() }
     }
 }
 
@@ -57,7 +57,7 @@ pub fn run_rename_self_from_env() -> Result<RenameSelfResult, Box<dyn std::error
 pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box<dyn std::error::Error>> {
     let project = config.project;
     let project_name = project.file_name().and_then(|n| n.to_str()).unwrap_or("canon-agent-v1").to_string();
-    let renames_md = config.renames_md.to_string_lossy().to_string();
+    let symbols_json = config.symbols_json.to_string_lossy().to_string();
     let report_name = format!("rename_report_{}_{}.jsonl", project_name, now_compact_utc());
     let report_path = config.report_dir.join(report_name);
     let run_id = format!("run-{}", now_unix_secs());
@@ -70,7 +70,7 @@ pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box
     let baseline_error_total = sum_counts(&baseline_error_counts);
 
     let session = Arc::new(RustcSession::build(&project)?);
-    let ordered = parse_simple_ident_mappings(renames_md)?;
+    let ordered = parse_symbols_json(symbols_json)?;
     let bounded: Vec<(String, String)> = ordered.into_iter().skip(config.offset).take(config.limit).collect();
     let solver_plan = SolverPlan {
         input_total: bounded.len(),
@@ -139,7 +139,7 @@ pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box
     println!("registry: {} symbols loaded", symbol_ids.len());
 
     if matches!(config.mode, RenameSelfMode::Bulk) {
-        let resolved = resolve_symbol_pairs(&solver_plan.selected_pairs, &symbol_ids);
+        let resolved = solver_plan.selected_pairs.clone();
         total_attempts = resolved.len();
         println!("bulk: requested={} resolved={} (offset={} limit={})", solver_plan.selected_pairs.len(), resolved.len(), config.offset, config.limit);
         let _ = restore_project_src(&project);
@@ -287,13 +287,30 @@ pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box
                 continue;
             }
 
-            let mut candidates: Vec<(String, String)> = symbol_ids.iter().filter(|(id, _)| id.ends_with(&format!("::{old_ident}"))).cloned().collect();
-            candidates.sort();
+            let old_symbol = old_ident.clone();
+            let new_symbol = {
+                let prefix = old_symbol.rsplit_once("::").map(|(p, _)| p).unwrap_or("");
+                if prefix.is_empty() { new_ident.clone() } else { format!("{prefix}::{new_ident}") }
+            };
+            let symbol_kind = symbol_ids
+                .iter()
+                .find(|(id, _)| id == &old_symbol)
+                .map(|(_, k)| k.as_str())
+                .unwrap_or("unknown")
+                .to_string();
 
-            if candidates.is_empty() {
+            if !session.symbol_ids().iter().any(|id| id == &old_symbol) {
                 total_skipped += 1;
                 attempt_id += 1;
-                println!("[{attempt_id:>4}] SKIP  {old_ident} -> {new_ident}  (missing_symbol)");
+                println!("[{attempt_id:>4}] SKIP  {old_symbol} -> {new_symbol}  (missing_symbol)");
+                let old_name = old_symbol
+                    .rsplit_once("::")
+                    .map(|(_, s)| s)
+                    .unwrap_or(old_symbol.as_str());
+                let new_name = new_symbol
+                    .rsplit_once("::")
+                    .map(|(_, s)| s)
+                    .unwrap_or(new_symbol.as_str());
                 append_report_line(
                     report_path.to_string_lossy().as_ref(),
                     &json!({
@@ -306,9 +323,9 @@ pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box
                             "symbol_kind": "unknown",
                             "state_from": "S0",
                             "state_to": format!("S{}", attempt_id),
-                            "symbol_id": old_ident,
-                            "old_name": old_ident,
-                            "new_name": new_ident,
+                            "symbol_id": old_symbol.as_str(),
+                            "old_name": old_name,
+                            "new_name": new_name,
                             "rename_applied": false,
                             "touched_files": []
                         },
@@ -338,76 +355,72 @@ pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box
                 continue;
             }
 
-            for (old_symbol, symbol_kind) in candidates {
-                let prefix = old_symbol.rsplit_once("::").map(|(p, _)| p).unwrap_or("");
-                let new_symbol = if prefix.is_empty() { new_ident.clone() } else { format!("{prefix}::{new_ident}") };
-                total_attempts += 1;
-                attempt_id += 1;
+            total_attempts += 1;
+            attempt_id += 1;
 
-                print!("[{attempt_id:>4}] TRY   {old_symbol} -> {new_symbol} ... ");
-                let _ = std::io::stdout().flush();
+            print!("[{attempt_id:>4}] TRY   {old_symbol} -> {new_symbol} ... ");
+            let _ = std::io::stdout().flush();
 
-                let _ = restore_project_src(&project);
-                let outcome = run_incremental_attempt(&project, &session, &old_symbol, &new_symbol, &baseline_error_counts)?;
-                let _ = restore_project_src(&project);
+            let _ = restore_project_src(&project);
+            let outcome = run_incremental_attempt(&project, &session, &old_symbol, &new_symbol, &baseline_error_counts)?;
+            let _ = restore_project_src(&project);
 
-                match outcome.result.as_str() {
-                    "pass" => total_pass += 1,
-                    "fail" => total_fail += 1,
-                    _ => {}
-                }
-                let tag = if outcome.accept { "PASS" } else { "FAIL" };
-                println!("{tag}  applied={}  delta={}  reason={}  ({}ms)", outcome.rename_applied, outcome.delta_total, outcome.decision_reason, outcome.transform_ms + outcome.compile_ms);
-
-                merge_counts(&outcome.error_types, &mut introduced_summary);
-                update_kind_stats(&mut kind_stats, &symbol_kind, outcome.accept, outcome.delta_total.max(0) as usize);
-
-                append_report_line(
-                    report_path.to_string_lossy().as_ref(),
-                    &json!({
-                        "type": "attempt",
-                        "run_id": run_id,
-                        "attempt_id": attempt_id,
-                        "transform": {
-                            "kind": "rename",
-                            "transform_type": "symbol_rename",
-                            "symbol_kind": symbol_kind,
-                            "state_from": "S0",
-                            "state_to": format!("S{}", attempt_id),
-                            "symbol_id": old_symbol.as_str(),
-                            "old_name": old_symbol.rsplit_once("::").map(|(_, s)| s).unwrap_or(old_symbol.as_str()),
-                            "new_name": new_symbol.rsplit_once("::").map(|(_, s)| s).unwrap_or(new_symbol.as_str()),
-                            "rename_applied": outcome.rename_applied,
-                            "touched_files": outcome.touched_files,
-                            "verification": {
-                                "method": "span_match",
-                                "pairs_checked": outcome.verify_pairs_checked,
-                                "pairs_changed": outcome.verify_pairs_changed
-                            }
-                        },
-                        "compile": {
-                            "status": outcome.result,
-                            "invoked": true,
-                            "error_types_after": outcome.error_types,
-                            "error_total_after": outcome.error_total_after,
-                            "messages": outcome.error_messages
-                        },
-                        "delta": {
-                            "delta_error_types": outcome.delta_error_types,
-                            "delta_total": outcome.delta_total
-                        },
-                        "decision": {
-                            "accept": outcome.accept,
-                            "reason": outcome.decision_reason
-                        },
-                        "timing_ms": {
-                            "transform": outcome.transform_ms,
-                            "compile": outcome.compile_ms
-                        },
-                        "ts": now_iso_utc()
-                    }),
-                )?;
+            match outcome.result.as_str() {
+                "pass" => total_pass += 1,
+                "fail" => total_fail += 1,
+                _ => {}
             }
+            let tag = if outcome.accept { "PASS" } else { "FAIL" };
+            println!("{tag}  applied={}  delta={}  reason={}  ({}ms)", outcome.rename_applied, outcome.delta_total, outcome.decision_reason, outcome.transform_ms + outcome.compile_ms);
+
+            merge_counts(&outcome.error_types, &mut introduced_summary);
+            update_kind_stats(&mut kind_stats, &symbol_kind, outcome.accept, outcome.delta_total.max(0) as usize);
+
+            append_report_line(
+                report_path.to_string_lossy().as_ref(),
+                &json!({
+                    "type": "attempt",
+                    "run_id": run_id,
+                    "attempt_id": attempt_id,
+                    "transform": {
+                        "kind": "rename",
+                        "transform_type": "symbol_rename",
+                        "symbol_kind": symbol_kind,
+                        "state_from": "S0",
+                        "state_to": format!("S{}", attempt_id),
+                        "symbol_id": old_symbol.as_str(),
+                        "old_name": old_symbol.rsplit_once("::").map(|(_, s)| s).unwrap_or(old_symbol.as_str()),
+                        "new_name": new_symbol.rsplit_once("::").map(|(_, s)| s).unwrap_or(new_symbol.as_str()),
+                        "rename_applied": outcome.rename_applied,
+                        "touched_files": outcome.touched_files,
+                        "verification": {
+                            "method": "span_match",
+                            "pairs_checked": outcome.verify_pairs_checked,
+                            "pairs_changed": outcome.verify_pairs_changed
+                        }
+                    },
+                    "compile": {
+                        "status": outcome.result,
+                        "invoked": true,
+                        "error_types_after": outcome.error_types,
+                        "error_total_after": outcome.error_total_after,
+                        "messages": outcome.error_messages
+                    },
+                    "delta": {
+                        "delta_error_types": outcome.delta_error_types,
+                        "delta_total": outcome.delta_total
+                    },
+                    "decision": {
+                        "accept": outcome.accept,
+                        "reason": outcome.decision_reason
+                    },
+                    "timing_ms": {
+                        "transform": outcome.transform_ms,
+                        "compile": outcome.compile_ms
+                    },
+                    "ts": now_iso_utc()
+                }),
+            )?;
         }
     }
 
@@ -585,20 +598,6 @@ fn run_bulk_attempt(project: &Path, session: &Arc<RustcSession>, renames: &[(Str
     })
 }
 
-fn resolve_symbol_pairs(pairs: &[(String, String)], symbol_ids: &[(String, String)]) -> Vec<(String, String)> {
-    let mut resolved = Vec::new();
-    for (old_ident, new_ident) in pairs {
-        let mut candidates: Vec<(String, String)> = symbol_ids.iter().filter(|(id, _)| id.ends_with(&format!("::{old_ident}"))).cloned().collect();
-        candidates.sort();
-        for (old_symbol, _kind) in candidates {
-            let prefix = old_symbol.rsplit_once("::").map(|(p, _)| p).unwrap_or("");
-            let new_symbol = if prefix.is_empty() { new_ident.clone() } else { format!("{prefix}::{new_ident}") };
-            resolved.push((old_symbol, new_symbol));
-        }
-    }
-    resolved
-}
-
 fn run_incremental_attempt(
     project: &Path, session: &Arc<RustcSession>, old_symbol: &str, new_symbol: &str, baseline_error_counts: &BTreeMap<String, usize>,
 ) -> Result<IncrementalOutcome, Box<dyn std::error::Error>> {
@@ -673,32 +672,31 @@ fn restore_project_src(project: &Path) -> bool {
     run_cmd(project, "git", &["restore", "--source=HEAD", "--worktree", "--staged", "src"])
 }
 
-fn parse_simple_ident_mappings(path: String) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
-    let content = std::fs::read_to_string(path)?;
-    let mut entries = Vec::new();
-    for line in content.lines() {
-        let line = line.trim();
-        if line.starts_with("| `") {
-            let parts: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
-            if parts.len() >= 3 {
-                let old = parts[1].trim_matches('`');
-                let new = parts[2].trim_matches('`');
-                if is_ident(old) && is_ident(new) {
-                    entries.push((old.to_string(), new.to_string()));
-                }
-            }
+fn parse_symbols_json(path: String) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+    let content = std::fs::read_to_string(&path)?;
+    let entries: Vec<serde_json::Value> = serde_json::from_str(&content)?;
+    let mut pairs = Vec::new();
+    for entry in &entries {
+        if entry.get("kind").and_then(|v| v.as_str()) == Some("file") {
+            continue;
         }
+        let old = entry
+            .get("old")
+            .and_then(|v| v.as_str())
+            .or_else(|| entry.get("symbol_id").and_then(|v| v.as_str()))
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "missing 'old' or 'symbol_id' field")
+            })?;
+        let new = entry
+            .get("new")
+            .and_then(|v| v.as_str())
+            .or_else(|| entry.get("new_name").and_then(|v| v.as_str()))
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "missing 'new' or 'new_name' field")
+            })?;
+        pairs.push((old.to_string(), new.to_string()));
     }
-    Ok(entries)
-}
-
-fn is_ident(value: &str) -> bool {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else { return false };
-    if !(first.is_ascii_alphabetic() || first == '_') {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    Ok(pairs)
 }
 
 fn load_symbol_ids(session: &RustcSession) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {

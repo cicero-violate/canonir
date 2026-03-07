@@ -338,6 +338,18 @@ impl<'sm, 'cb, 'v> Visitor<'v> for PathVisitor<'sm, 'cb, 'v> {
         intravisit::walk_impl_item(self, item);
     }
 
+    fn visit_trait_item(&mut self, item: &'v rustc_hir::TraitItem<'v>) {
+        if item.span.from_expansion() {
+            return;
+        }
+        let def_id = item.owner_id.to_def_id();
+        if let Some(symbol_id) = self.sink.def_id_to_symbol.get(&def_id).cloned() {
+            self.sink
+                .emit_span(&symbol_id, self.source_map, item.ident.span);
+        }
+        intravisit::walk_trait_item(self, item);
+    }
+
     fn visit_ty(&mut self, ty: &'v rustc_hir::Ty<'v, rustc_hir::AmbigArg>) {
         if let rustc_hir::TyKind::Path(qpath) = &ty.kind {
             self.emit_qpath_span(qpath);
