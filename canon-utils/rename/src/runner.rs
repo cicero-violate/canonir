@@ -465,6 +465,13 @@ fn run_bulk_attempt(project: &Path, session: &Arc<RustcSession>, renames: &[(Str
     let transform_ms = transform_started.elapsed().as_millis();
 
     let compile_started = Instant::now();
+    if rename_applied {
+        match editor.commit() {
+            Ok(written) => println!("commit: wrote {} files", written.len()),
+            Err(e) => println!("commit ERROR: {e}"),
+        }
+    }
+
     let check = run_cargo_check_json(project)?;
     let mut error_counts = BTreeMap::new();
     accumulate_error_counts_json(&check.diagnostics, &mut error_counts);
@@ -482,8 +489,8 @@ fn run_bulk_attempt(project: &Path, session: &Arc<RustcSession>, renames: &[(Str
         "introduced_errors"
     }
     .to_string();
-    if accept {
-        let _ = editor.commit();
+    if !accept {
+        restore_project_src(project);
     }
 
     Ok(BulkOutcome {
@@ -539,6 +546,13 @@ fn run_incremental_attempt(
     }
     let transform_ms = transform_started.elapsed().as_millis();
 
+    if rename_applied {
+        match editor.commit() {
+            Ok(written) => println!("commit: wrote {} files", written.len()),
+            Err(e) => println!("commit ERROR: {e}"),
+        }
+    }
+
     let compile_started = Instant::now();
     let check = run_cargo_check_json(project)?;
     let mut error_counts = BTreeMap::new();
@@ -557,8 +571,8 @@ fn run_incremental_attempt(
         "introduced_errors"
     }
     .to_string();
-    if accept {
-        let _ = editor.commit();
+    if !accept {
+        restore_project_src(project);
     }
 
     Ok(IncrementalOutcome {

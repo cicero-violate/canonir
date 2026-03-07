@@ -7,12 +7,22 @@ pub fn patch_file(src: &str, spans: &[SpanRange], new_ident: &str) -> Result<Str
     }
     let mut sorted = spans.to_vec();
     sorted.sort_by(|a, b| b.lo.cmp(&a.lo));
-    let mut updated = src.to_string();
-    for span in sorted {
-        if span.hi > updated.len() || span.lo > span.hi {
+    let src_bytes = src.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(src.len());
+    let mut cursor = 0usize;
+    let mut sorted_asc = sorted;
+    sorted_asc.sort_by_key(|s| s.lo);
+    for span in &sorted_asc {
+        if span.lo > span.hi || span.hi > src_bytes.len() {
             return Err(anyhow!("invalid span {}..{}", span.lo, span.hi));
         }
-        updated.replace_range(span.lo..span.hi, new_ident);
+        if span.lo < cursor {
+            return Err(anyhow!("overlapping spans at {}", span.lo));
+        }
+        out.extend_from_slice(&src_bytes[cursor..span.lo]);
+        out.extend_from_slice(new_ident.as_bytes());
+        cursor = span.hi;
     }
-    Ok(updated)
+    out.extend_from_slice(&src_bytes[cursor..]);
+    String::from_utf8(out).map_err(|e| anyhow!("utf8 error after patch: {e}"))
 }

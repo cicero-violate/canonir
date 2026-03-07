@@ -69,6 +69,7 @@ impl ProjectEditor {
             changesets: HashMap::new(),
             oracle,
             original_sources,
+            last_applied_sources: HashMap::new(),
             project_root: project.to_path_buf(),
             source_root,
             pending_module_renames: Vec::new(),

@@ -31,6 +31,7 @@ pub struct RustcSession {
     span_index: HashMap<String, HashMap<PathBuf, Vec<SpanRange>>>,
     symbol_kinds: HashMap<String, String>,
     symbol_catalog: Vec<(String, String)>,
+    pub normalized_sources: HashMap<PathBuf, String>,
 }
 
 impl RustcSession {
@@ -56,7 +57,8 @@ impl RustcSession {
 
         callbacks.finalize()?;
 
-        let (mut span_index, symbol_kinds, saw_done) = load_spans_from_file(&out_path)?;
+        let (mut span_index, symbol_kinds, normalized_sources, saw_done) =
+            load_spans_from_file(&out_path)?;
         if symbol_kinds.is_empty() {
             if status.is_err() {
                 return Err(anyhow!("rustc_driver failed during span collection"));
@@ -85,11 +87,16 @@ impl RustcSession {
             span_index,
             symbol_kinds,
             symbol_catalog,
+            normalized_sources,
         })
     }
 
     pub fn spans_for(&self, symbol_id: &str) -> Option<&HashMap<PathBuf, Vec<SpanRange>>> {
         self.span_index.get(symbol_id)
+    }
+
+    pub fn normalized_source(&self, path: &PathBuf) -> Option<&String> {
+        self.normalized_sources.get(path)
     }
 
     pub fn symbol_catalog(&self) -> Vec<(String, String)> {
@@ -115,6 +122,7 @@ struct BulkCollectorCallbacks {
     symbol_kinds: HashMap<String, String>,
     out: BufWriter<File>,
     span_count: usize,
+    emitted_source_files: std::collections::HashSet<PathBuf>,
 }
 
 impl BulkCollectorCallbacks {
@@ -124,6 +132,7 @@ impl BulkCollectorCallbacks {
             symbol_kinds: HashMap::new(),
             out,
             span_count: 0,
+            emitted_source_files: std::collections::HashSet::new(),
         }
     }
 
@@ -151,15 +160,31 @@ impl BulkCollectorCallbacks {
         let filename = &lo.sf.name;
         let FileName::Real(real_path) = filename else { return };
         let Some(path) = real_path.local_path().map(|p| p.to_path_buf()) else { return };
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
         let kind = self
             .symbol_kinds
             .get(symbol_id)
             .cloned()
             .unwrap_or_else(|| "unknown".to_string());
 
-        let base = lo.sf.start_pos.0;
-        let lo_pos = lo.pos.0.saturating_sub(base);
-        let hi_pos = hi.pos.0.saturating_sub(base);
+        let lo_pos = lo.pos.0 as usize;
+        let hi_pos = hi.pos.0 as usize;
+
+        // Emit the normalized source text once per file so the patcher can use
+        // it instead of re-reading from disk (disk bytes may differ due to
+        // CRLF normalization or BOM removal that rustc performs on load).
+        if self.emitted_source_files.insert(path.clone()) {
+            if let Some(src) = lo.sf.src.as_deref() {
+                let src_line = json!({
+                    "type": "source",
+                    "file": path.display().to_string(),
+                    "src": src
+                })
+                .to_string();
+                let _ = writeln!(self.out, "{src_line}");
+            }
+        }
+
         let line = json!({
             "symbol_id": symbol_id,
             "kind": kind,
@@ -356,6 +381,7 @@ fn load_spans_from_file(
 ) -> Result<(
     HashMap<String, HashMap<PathBuf, Vec<SpanRange>>>,
     HashMap<String, String>,
+    HashMap<PathBuf, String>,
     bool,
 )> {
     let file = File::open(path)?;
@@ -363,6 +389,7 @@ fn load_spans_from_file(
     let mut line = String::new();
     let mut span_index: HashMap<String, HashMap<PathBuf, Vec<SpanRange>>> = HashMap::new();
     let mut symbol_kinds: HashMap<String, String> = HashMap::new();
+    let mut normalized_sources: HashMap<PathBuf, String> = HashMap::new();
     let mut saw_done = false;
 
     while reader.read_line(&mut line)? > 0 {
@@ -381,6 +408,13 @@ fn load_spans_from_file(
         if let Some(kind) = value.get("type").and_then(|v| v.as_str()) {
             if kind == "done" {
                 saw_done = true;
+            } else if kind == "source" {
+                if let (Some(file), Some(src)) = (
+                    value.get("file").and_then(|v| v.as_str()),
+                    value.get("src").and_then(|v| v.as_str()),
+                ) {
+                    normalized_sources.insert(PathBuf::from(file), src.to_string());
+                }
             }
             line.clear();
             continue;
@@ -422,5 +456,5 @@ fn load_spans_from_file(
         line.clear();
     }
 
-    Ok((span_index, symbol_kinds, saw_done))
+    Ok((span_index, symbol_kinds, normalized_sources, saw_done))
 }

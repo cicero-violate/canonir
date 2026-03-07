@@ -55,6 +55,14 @@ impl ProjectEditor {
         }
         self.changesets.clear();
 
+        self.last_applied_sources.clear();
+        for path in &touched_files {
+            if let Some(source) = self.registry.sources.get(path) {
+                self.last_applied_sources
+                    .insert(path.clone(), source.clone());
+            }
+        }
+
         self.rewrite_sources_for(&touched_files)?;
         self.rebuild_registry()?;
 
@@ -183,6 +191,15 @@ impl ProjectEditor {
             let source = match self.registry.sources.get(path) {
                 Some(content) => content.clone(),
                 None => continue,
+            };
+            // Use the rustc-normalized source so span byte offsets align correctly.
+            let source = if let Some(session) = &self.session {
+                match session.normalized_source(path) {
+                    Some(s) => s.clone(),
+                    None => source,
+                }
+            } else {
+                source
             };
             let updated = syn_patcher::patch_file(&source, spans, new_name)?;
             if updated != source {

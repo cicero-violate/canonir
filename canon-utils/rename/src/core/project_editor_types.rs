@@ -31,6 +31,7 @@ pub struct ProjectEditor {
     pub changesets: HashMap<PathBuf, Vec<QueuedOp>>,
     pub oracle: Box<dyn StructuralEditOracleApi>,
     pub original_sources: HashMap<PathBuf, String>,
+    pub last_applied_sources: HashMap<PathBuf, String>,
     pub project_root: PathBuf,
     pub source_root: PathBuf,
     pub pending_module_renames: Vec<ModuleRename>,
