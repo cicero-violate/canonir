@@ -1,7 +1,8 @@
-use super::layout::{is_completed, is_ready_candidate, GpuGraph};
-
+use super::layout::{
+    gpu_scheduler_layout_is_completed, gpu_scheduler_layout_is_ready_candidate,
+    GpuScheduleGraph,
+};
 use algorithms::graph::csr::Csr;
-
 #[cfg(feature = "cuda")]
 use algorithms::graph::scheduler_gpu;
 #[cfg(feature = "cuda")]
@@ -10,16 +11,18 @@ use algorithms::graph::{depth_gpu, reachability, scc_gpu, topological_sort_gpu};
 use algorithms::graph::{scc, topological_sort};
 #[cfg(feature = "cuda")]
 use algorithms::sorting::gpu as sorting_gpu;
-
 #[cfg(feature = "cuda")]
-pub fn compute_ready(graph: &GpuGraph) -> Vec<u8> {
+pub fn graph_cpu_kernels_compute_ready(graph: &GpuScheduleGraph) -> Vec<u8> {
     let status = graph.status.clone();
     let deps_offset = graph.deps_offset.iter().map(|&v| v as i32).collect::<Vec<_>>();
     let deps_flat = graph.deps_flat.iter().map(|&v| v as i32).collect::<Vec<_>>();
-    let (ready, _ready_count, _completed) = scheduler_gpu::ready_mask_gpu(&status, &deps_offset, &deps_flat);
+    let (ready, _ready_count, _completed) = scheduler_gpu::ready_mask_gpu(
+        &status,
+        &deps_offset,
+        &deps_flat,
+    );
     ready
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn compute_ready(graph: &GpuGraph) -> Vec<u8> {
     let mut ready = vec![0u8; graph.node_count as usize];
@@ -43,9 +46,11 @@ pub fn compute_ready(graph: &GpuGraph) -> Vec<u8> {
     }
     ready
 }
-
 #[cfg(feature = "cuda")]
-pub fn priority_sort(ready_mask: &[u8], priority: &[u16]) -> Vec<usize> {
+pub fn graph_cpu_kernels_priority_sort(
+    ready_mask: &[u8],
+    priority: &[u16],
+) -> Vec<usize> {
     let mut keys = scheduler_gpu::pack_ready_priority(ready_mask, priority);
     sorting_gpu::bitonic_sort_gpu(&mut keys);
     let mut indices = Vec::new();
@@ -58,22 +63,29 @@ pub fn priority_sort(ready_mask: &[u8], priority: &[u16]) -> Vec<usize> {
     }
     indices
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn priority_sort(ready_mask: &[u8], priority: &[u16]) -> Vec<usize> {
-    let mut indices: Vec<usize> = ready_mask.iter().enumerate().filter_map(|(i, &r)| if r == 1 { Some(i) } else { None }).collect();
-    indices.sort_by(|a, b| {
-        let pa = priority.get(*a).copied().unwrap_or(0);
-        let pb = priority.get(*b).copied().unwrap_or(0);
-        pb.cmp(&pa).then_with(|| a.cmp(b))
-    });
+    let mut indices: Vec<usize> = ready_mask
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &r)| if r == 1 { Some(i) } else { None })
+        .collect();
+    indices
+        .sort_by(|a, b| {
+            let pa = priority.get(*a).copied().unwrap_or(0);
+            let pb = priority.get(*b).copied().unwrap_or(0);
+            pb.cmp(&pa).then_with(|| a.cmp(b))
+        });
     indices
 }
-
-pub fn deadlock_check(graph: &GpuGraph) -> bool {
+pub fn graph_cpu_kernels_deadlock_check(graph: &GpuScheduleGraph) -> bool {
     #[cfg(feature = "cuda")]
     {
-        let deps_offset = graph.deps_offset.iter().map(|&v| v as i32).collect::<Vec<_>>();
+        let deps_offset = graph
+            .deps_offset
+            .iter()
+            .map(|&v| v as i32)
+            .collect::<Vec<_>>();
         let deps_flat = graph.deps_flat.iter().map(|&v| v as i32).collect::<Vec<_>>();
         return scheduler_gpu::deadlock_gpu(&graph.status, &deps_offset, &deps_flat);
     }
@@ -85,8 +97,7 @@ pub fn deadlock_check(graph: &GpuGraph) -> bool {
         ready_sum == 0 && completed < graph.status.len()
     }
 }
-
-pub fn compute_topo_order(adj: &[Vec<usize>]) -> Vec<usize> {
+pub fn graph_cpu_kernels_compute_topo_order(adj: &[Vec<usize>]) -> Vec<usize> {
     #[cfg(feature = "cuda")]
     {
         let csr = Csr::from_adj(adj);
@@ -97,13 +108,16 @@ pub fn compute_topo_order(adj: &[Vec<usize>]) -> Vec<usize> {
         return topological_sort::topological_sort(adj);
     }
 }
-
-pub fn compute_roots(adj: &[Vec<usize>]) -> Vec<usize> {
+pub fn graph_cpu_kernels_compute_roots(adj: &[Vec<usize>]) -> Vec<usize> {
     #[cfg(feature = "cuda")]
     {
         let csr = Csr::from_adj(adj);
         let indegree = topological_sort_gpu::indegree_gpu(&csr);
-        return indegree.iter().enumerate().filter_map(|(i, &d)| (d == 0).then_some(i)).collect();
+        return indegree
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &d)| (d == 0).then_some(i))
+            .collect();
     }
     #[cfg(not(feature = "cuda"))]
     {
@@ -115,11 +129,14 @@ pub fn compute_roots(adj: &[Vec<usize>]) -> Vec<usize> {
                 }
             }
         }
-        return indegree.iter().enumerate().filter_map(|(i, &d)| (d == 0).then_some(i)).collect();
+        return indegree
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &d)| (d == 0).then_some(i))
+            .collect();
     }
 }
-
-pub fn compute_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
+pub fn graph_cpu_kernels_compute_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
     #[cfg(feature = "cuda")]
     {
         let csr = Csr::from_adj(adj);
@@ -130,8 +147,10 @@ pub fn compute_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
         return scc::kosaraju_scc(adj);
     }
 }
-
-pub fn compute_reachability(adj: &[Vec<usize>], roots: &[usize]) -> Vec<bool> {
+pub fn graph_cpu_kernels_compute_reachability(
+    adj: &[Vec<usize>],
+    roots: &[usize],
+) -> Vec<bool> {
     #[cfg(feature = "cuda")]
     {
         let csr = Csr::from_adj(adj);
@@ -160,8 +179,7 @@ pub fn compute_reachability(adj: &[Vec<usize>], roots: &[usize]) -> Vec<bool> {
         return visited;
     }
 }
-
-pub fn compute_depth(adj: &[Vec<usize>]) -> Vec<i32> {
+pub fn graph_cpu_kernels_compute_depth(adj: &[Vec<usize>]) -> Vec<i32> {
     #[cfg(feature = "cuda")]
     {
         let csr = Csr::from_adj(adj);

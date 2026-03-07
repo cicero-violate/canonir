@@ -1,5 +1,4 @@
-use super::capability::CapabilityClass;
-
+use super::capability::CapabilityMode;
 const RESET: &str = "\x1b[0m";
 const GRAY: &str = "\x1b[90m";
 const GREEN: &str = "\x1b[32m";
@@ -8,49 +7,39 @@ const RED: &str = "\x1b[31m";
 const BLUE: &str = "\x1b[34m";
 const MAGENTA: &str = "\x1b[35m";
 const CYAN: &str = "\x1b[36m";
-
-pub fn tag(label: &str, color: &str) -> String {
+pub fn console_ui_tag(label: &str, color: &str) -> String {
     format!("{}[{}]{}", color, label, RESET)
 }
-
-pub fn info(label: &str, msg: &str) -> String {
-    format!("{} {}", tag(label, BLUE), msg)
+pub fn console_ui_info(label: &str, msg: &str) -> String {
+    format!("{} {}", console_ui_tag(label, BLUE), msg)
 }
-
-pub fn warn(label: &str, msg: &str) -> String {
-    format!("{} {}", tag(label, YELLOW), msg)
+pub fn console_ui_warn(label: &str, msg: &str) -> String {
+    format!("{} {}", console_ui_tag(label, YELLOW), msg)
 }
-
-pub fn err(label: &str, msg: &str) -> String {
-    format!("{} {}", tag(label, RED), msg)
+pub fn console_ui_err(label: &str, msg: &str) -> String {
+    format!("{} {}", console_ui_tag(label, RED), msg)
 }
-
-pub fn phase(label: &str, msg: &str) -> String {
-    format!("{} {}", tag(label, MAGENTA), msg)
+pub fn console_ui_phase(label: &str, msg: &str) -> String {
+    format!("{} {}", console_ui_tag(label, MAGENTA), msg)
 }
-
-pub fn llm(msg: &str) -> String {
-    format!("{} {}", tag("llm", CYAN), msg)
+pub fn console_ui_llm(msg: &str) -> String {
+    format!("{} {}", console_ui_tag("llm", CYAN), msg)
 }
-
-pub fn mode_label(class: CapabilityClass) -> (&'static str, &'static str) {
+pub fn console_ui_mode_label(class: CapabilityMode) -> (&'static str, &'static str) {
     match class {
-        CapabilityClass::Observe => ("Observe", GREEN),
-        CapabilityClass::Verify => ("Verify", YELLOW),
-        CapabilityClass::Mutate => ("Mutate", RED),
+        CapabilityMode::Observe => ("Observe", GREEN),
+        CapabilityMode::Verify => ("Verify", YELLOW),
+        CapabilityMode::Mutate => ("Mutate", RED),
     }
 }
-
-pub fn mode_tag(class: CapabilityClass) -> String {
-    let (label, color) = mode_label(class);
-    tag(label, color)
+pub fn console_ui_mode_tag(class: CapabilityMode) -> String {
+    let (label, color) = console_ui_mode_label(class);
+    console_ui_tag(label, color)
 }
-
-pub fn dim(msg: &str) -> String {
+pub fn console_ui_dim(msg: &str) -> String {
     format!("{}{}{}", GRAY, msg, RESET)
 }
-
-pub fn truncate(s: &str, max: usize) -> String {
+pub fn console_ui_truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
     }

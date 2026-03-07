@@ -1,9 +1,8 @@
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PolicyWeights {
+pub struct ExecutionPolicyWeights {
     #[serde(default)]
     pub planner_bias: Vec<f64>,
     #[serde(default)]
@@ -21,57 +20,58 @@ pub struct PolicyWeights {
     #[serde(default)]
     pub unblock_head: Vec<f64>,
 }
-
 #[derive(Debug, Clone)]
-pub struct PolicyModel {
-    pub(crate) weights: PolicyWeights,
+pub struct ExecutionPolicyModel {
+    pub(crate) weights: ExecutionPolicyWeights,
 }
-
 #[derive(Debug, Clone)]
-pub struct PolicyBias {
+pub struct PolicyModelPolicyBias {
     pub planner_bias: f64,
     pub node_add_bias: f64,
     pub edge_add_bias: f64,
     pub rewrite_bias: f64,
 }
-
 #[derive(Debug, Clone)]
-pub struct PolicyDecision {
+pub struct ExecutionPolicyDecision {
     pub run_planner: bool,
     pub expansion_scale: f64,
     pub prioritize_unblock: bool,
     pub execution_preference: f64,
 }
-
-impl PolicyModel {
+impl ExecutionPolicyModel {
     pub fn load_default() -> Self {
-        let path = Path::new("/workspace/ai_sandbox/canon/agent_logs/policy_weights.json");
-        Self::load(path)
+        let path = Path::new(
+            "/workspace/ai_sandbox/canon/agent_logs/policy_weights.json",
+        );
+        Self::snapshot_store_load(path)
     }
-
-    pub fn load(path: &Path) -> Self {
-        let weights = std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str::<PolicyWeights>(&s).ok()).unwrap_or_else(default_weights);
+    pub fn snapshot_store_load(path: &Path) -> Self {
+        let weights = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<ExecutionPolicyWeights>(&s).ok())
+            .unwrap_or_else(policy_model_default_weights);
         Self { weights }
     }
-
-    pub fn save(&self, path: &Path) -> Result<(), std::io::Error> {
+    pub fn snapshot_store_save(&self, path: &Path) -> Result<(), std::io::Error> {
         let json = serde_json::to_string_pretty(&self.weights).unwrap_or_default();
         std::fs::write(path, json)
     }
-
-    pub fn predict(&self, features: &[f64]) -> PolicyBias {
+    pub fn predict(&self, features: &[f64]) -> PolicyModelPolicyBias {
         let fv = features;
-        let dot = |w: &Vec<f64>| -> f64 { w.iter().zip(fv.iter()).map(|(a, b)| a * b).sum() };
-        PolicyBias {
+        let dot = |w: &Vec<f64>| -> f64 {
+            w.iter().zip(fv.iter()).map(|(a, b)| a * b).sum()
+        };
+        PolicyModelPolicyBias {
             planner_bias: dot(&self.weights.planner_bias),
             node_add_bias: dot(&self.weights.node_add_bias),
             edge_add_bias: dot(&self.weights.edge_add_bias),
             rewrite_bias: dot(&self.weights.rewrite_bias),
         }
     }
-
-    pub fn decide(&self, features: &[f64]) -> PolicyDecision {
-        let dot = |w: &Vec<f64>| -> f64 { w.iter().zip(features.iter()).map(|(a, b)| a * b).sum() };
+    pub fn decide(&self, features: &[f64]) -> ExecutionPolicyDecision {
+        let dot = |w: &Vec<f64>| -> f64 {
+            w.iter().zip(features.iter()).map(|(a, b)| a * b).sum()
+        };
         let raw_run = dot(&self.weights.run_planner_head);
         let raw_expand = dot(&self.weights.expansion_head);
         let raw_exec = dot(&self.weights.execution_head);
@@ -80,9 +80,13 @@ impl PolicyModel {
         let expansion_scale = (1.0 + raw_expand).clamp(0.5, 2.0);
         let execution_preference = raw_exec.clamp(-1.0, 1.0);
         let prioritize_unblock = raw_unblock > 0.0;
-        PolicyDecision { run_planner, expansion_scale, prioritize_unblock, execution_preference }
+        ExecutionPolicyDecision {
+            run_planner,
+            expansion_scale,
+            prioritize_unblock,
+            execution_preference,
+        }
     }
-
     pub fn weight_norm(&self) -> f64 {
         let all = self
             .weights
@@ -98,23 +102,22 @@ impl PolicyModel {
         all.map(|v| v * v).sum::<f64>().sqrt()
     }
 }
-
-fn default_weights() -> PolicyWeights {
-    PolicyWeights {
+fn policy_model_default_weights() -> ExecutionPolicyWeights {
+    ExecutionPolicyWeights {
         planner_bias: vec![0.2, 0.0, 0.0, 0.0],
         node_add_bias: vec![0.2, 0.0, 0.0, 0.0],
         edge_add_bias: vec![0.1, 0.0, 0.0, 0.0],
         rewrite_bias: vec![0.1, 0.0, 0.0, 0.0],
         run_planner_head: vec![0.3, 0.0, 0.0, 0.0],
         expansion_head: vec![0.2, 0.0, 0.0, 0.0],
-        // Bias toward execution by default when no weights are present.
         execution_head: vec![0.8, 0.0, 0.0, 0.0],
         unblock_head: vec![0.2, 0.0, 0.0, 0.0],
     }
 }
-
-pub fn format_bias(bias: &PolicyBias) -> String {
-    if bias.planner_bias == 0.0 && bias.node_add_bias == 0.0 && bias.edge_add_bias == 0.0 && bias.rewrite_bias == 0.0 {
+pub fn policy_model_format_bias(bias: &PolicyModelPolicyBias) -> String {
+    if bias.planner_bias == 0.0 && bias.node_add_bias == 0.0 && bias.edge_add_bias == 0.0
+        && bias.rewrite_bias == 0.0
+    {
         return String::new();
     }
     format!(
@@ -123,10 +126,12 @@ Prefer actions with positive bias and avoid strongly negative bias.\n",
         bias.planner_bias, bias.node_add_bias, bias.edge_add_bias, bias.rewrite_bias
     )
 }
-
-pub fn smooth_bias(prev: Option<&PolicyBias>, next: PolicyBias) -> PolicyBias {
+pub fn policy_model_smooth_bias(
+    prev: Option<&PolicyModelPolicyBias>,
+    next: PolicyModelPolicyBias,
+) -> PolicyModelPolicyBias {
     if let Some(p) = prev {
-        PolicyBias {
+        PolicyModelPolicyBias {
             planner_bias: 0.8 * p.planner_bias + 0.2 * next.planner_bias,
             node_add_bias: 0.8 * p.node_add_bias + 0.2 * next.node_add_bias,
             edge_add_bias: 0.8 * p.edge_add_bias + 0.2 * next.edge_add_bias,
@@ -136,8 +141,10 @@ pub fn smooth_bias(prev: Option<&PolicyBias>, next: PolicyBias) -> PolicyBias {
         next
     }
 }
-
-pub fn maybe_explore(mut bias: PolicyBias, epsilon: f64) -> PolicyBias {
+pub fn policy_model_maybe_explore(
+    mut bias: PolicyModelPolicyBias,
+    epsilon: f64,
+) -> PolicyModelPolicyBias {
     let mut rng = rand::thread_rng();
     if rng.r#gen::<f64>() < epsilon {
         bias.planner_bias = 0.0;

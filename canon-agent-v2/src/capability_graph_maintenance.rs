@@ -1,13 +1,13 @@
 use std::path::Path;
-
 use anyhow::Result;
-
 use super::dag;
-use super::graph_algo::{emit_planned_graph, node_utility, run_graph_algorithms};
-use super::graph_runtime::{enforce_semantic_validations, prune_unlinked_nodes};
-
-pub struct MaintenanceCtx<'a> {
-    pub graph: &'a mut dag::TaskGraph,
+use super::graph_algo::{
+    graph_analysis_emit_planned_graph, score_node_utility,
+    graph_analysis_run_graph_algorithms,
+};
+use super::graph_runtime::{validate_graph_semantics, prune_unreachable_nodes};
+pub struct GraphRepairMaintenanceCtx<'a> {
+    pub graph: &'a mut dag::ExecutionGraph,
     pub log_dir: &'a Path,
     pub iter: u64,
     pub features_retry_rate: f64,
@@ -20,8 +20,13 @@ pub struct MaintenanceCtx<'a> {
     pub recovery_retry_rate_threshold: f64,
     pub recovery_failed_fraction_threshold: f64,
 }
-
-pub(crate) fn prune_low_value_nodes(graph: &mut dag::TaskGraph, iter: u64, auto_prune: bool, prune_min_age: u64, prune_threshold: f64) {
+pub(crate) fn prune_low_utility_nodes(
+    graph: &mut dag::ExecutionGraph,
+    iter: u64,
+    auto_prune: bool,
+    prune_min_age: u64,
+    prune_threshold: f64,
+) {
     if !auto_prune {
         return;
     }
@@ -33,7 +38,7 @@ pub(crate) fn prune_low_value_nodes(graph: &mut dag::TaskGraph, iter: u64, auto_
     }
     let mut pruned = Vec::new();
     for node in &graph.nodes {
-        if node.status != dag::Status::Completed {
+        if node.status != dag::NodeStatus::Completed {
             continue;
         }
         if node.deps.is_empty() {
@@ -46,7 +51,7 @@ pub(crate) fn prune_low_value_nodes(graph: &mut dag::TaskGraph, iter: u64, auto_
         if age < prune_min_age {
             continue;
         }
-        let util = node_utility(graph, &node.id, iter);
+        let util = score_node_utility(graph, &node.id, iter);
         if util < prune_threshold {
             pruned.push(node.id.clone());
         }
@@ -60,11 +65,10 @@ pub(crate) fn prune_low_value_nodes(graph: &mut dag::TaskGraph, iter: u64, auto_
     }
     graph.rebuild_index();
 }
-
-pub(crate) fn apply_recovery(graph: &mut dag::TaskGraph) {
+pub(crate) fn recover_from_failures(graph: &mut dag::ExecutionGraph) {
     for node in &mut graph.nodes {
-        if node.status == dag::Status::Failed {
-            node.status = dag::Status::Pending;
+        if node.status == dag::NodeStatus::Failed {
+            node.status = dag::NodeStatus::Pending;
             node.readonly_fail_count = 0;
             node.error = None;
             node.result = None;
@@ -72,27 +76,39 @@ pub(crate) fn apply_recovery(graph: &mut dag::TaskGraph) {
     }
     graph.rebuild_index();
 }
-
-pub fn maintain_graph(ctx: MaintenanceCtx<'_>) -> Result<()> {
-    super::ensure_unique_node_ids(&mut ctx.graph.nodes);
+pub fn repair_graph(ctx: GraphRepairMaintenanceCtx<'_>) -> Result<()> {
+    super::capability_pipeline_ensure_unique_node_ids(&mut ctx.graph.nodes);
     let iter_u32 = u32::try_from(ctx.iter).unwrap_or(u32::MAX);
-    emit_planned_graph(ctx.graph, ctx.log_dir, iter_u32);
-    run_graph_algorithms(ctx.graph, ctx.log_dir, iter_u32);
-
+    graph_analysis_emit_planned_graph(ctx.graph, ctx.log_dir, iter_u32);
+    graph_analysis_run_graph_algorithms(ctx.graph, ctx.log_dir, iter_u32);
     if ctx.prune_unlinked {
-        prune_unlinked_nodes(ctx.graph);
+        prune_unreachable_nodes(ctx.graph);
     }
-    enforce_semantic_validations(ctx.graph)?;
-    prune_low_value_nodes(ctx.graph, ctx.iter, ctx.auto_prune, ctx.prune_min_age, ctx.prune_threshold);
-    let risk = risk_score(ctx.features_retry_rate, ctx.features_failed_fraction, ctx.features_branching_factor);
-    let threshold = (ctx.recovery_retry_rate_threshold + ctx.recovery_failed_fraction_threshold) / 2.0;
+    validate_graph_semantics(ctx.graph)?;
+    prune_low_utility_nodes(
+        ctx.graph,
+        ctx.iter,
+        ctx.auto_prune,
+        ctx.prune_min_age,
+        ctx.prune_threshold,
+    );
+    let risk = graph_repair_risk_score(
+        ctx.features_retry_rate,
+        ctx.features_failed_fraction,
+        ctx.features_branching_factor,
+    );
+    let threshold = (ctx.recovery_retry_rate_threshold
+        + ctx.recovery_failed_fraction_threshold) / 2.0;
     if risk > threshold {
-        apply_recovery(ctx.graph);
+        recover_from_failures(ctx.graph);
     }
     Ok(())
 }
-
-fn risk_score(retry_rate: f64, failed_fraction: f64, branching_factor: f64) -> f64 {
+fn graph_repair_risk_score(
+    retry_rate: f64,
+    failed_fraction: f64,
+    branching_factor: f64,
+) -> f64 {
     let w1 = 0.5;
     let w2 = 0.4;
     let w3 = 0.1;

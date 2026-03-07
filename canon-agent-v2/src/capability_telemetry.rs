@@ -1,11 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-
-use super::dag::TaskGraph;
-
+use super::dag::ExecutionGraph;
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
-pub struct PlannerMetrics {
+pub struct PlannerTelemetry {
     pub planner_calls: u64,
     pub planner_retries: u64,
     pub planner_failures: u64,
@@ -13,9 +11,8 @@ pub struct PlannerMetrics {
     pub edges_added: u64,
     pub iterations: u64,
 }
-
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
-pub struct ExecMetrics {
+pub struct ExecutionTelemetry {
     pub nodes_executed: u64,
     pub nodes_failed: u64,
     pub avg_latency_ms: u64,
@@ -24,9 +21,8 @@ pub struct ExecMetrics {
     pub last_repair_kind: Option<String>,
     pub last_snapshot_written: bool,
 }
-
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
-pub struct RuntimeMetrics {
+pub struct RuntimeTelemetry {
     pub queue_depth: u64,
     pub retry_rate: f64,
     pub progress_fraction: f64,
@@ -64,73 +60,91 @@ pub struct RuntimeMetrics {
     pub template_reuse_by_embedding: bool,
     pub embedding_cache_hits: u64,
 }
-
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
-pub struct TelemetrySnapshot {
-    pub planner: PlannerMetrics,
-    pub exec: ExecMetrics,
-    pub runtime: RuntimeMetrics,
+pub struct TelemetryFrame {
+    pub planner: PlannerTelemetry,
+    pub exec: ExecutionTelemetry,
+    pub runtime: RuntimeTelemetry,
     pub reward: f64,
     pub template_hash: Option<String>,
     pub goal: Option<String>,
 }
-
-pub fn record_snapshot(path: &Path, snapshot: &TelemetrySnapshot) {
+pub fn telemetry_record_snapshot(path: &Path, snapshot: &TelemetryFrame) {
     if let Ok(pretty) = serde_json::to_string_pretty(snapshot) {
         let _ = std::fs::write(path, pretty);
     }
 }
-
-pub fn record_all_snapshots(snapshot: &TelemetrySnapshot, log_root: &str, template_root: &str, template_hash: &str) {
-    record_snapshot(&Path::new(log_root).join("planner_logs/metrics.json"), snapshot);
-    record_snapshot(&Path::new(log_root).join("metrics.json"), snapshot);
-    record_snapshot(&Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"), snapshot);
+pub fn telemetry_record_all_snapshots(
+    snapshot: &TelemetryFrame,
+    log_root: &str,
+    template_root: &str,
+    template_hash: &str,
+) {
+    telemetry_record_snapshot(
+        &Path::new(log_root).join("planner_logs/metrics.json"),
+        snapshot,
+    );
+    telemetry_record_snapshot(&Path::new(log_root).join("metrics.json"), snapshot);
+    telemetry_record_snapshot(
+        &Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"),
+        snapshot,
+    );
     let _ = std::fs::create_dir_all(Path::new(template_root));
-    record_snapshot(&Path::new(template_root).join(format!("metrics_{}.json", template_hash)), snapshot);
+    telemetry_record_snapshot(
+        &Path::new(template_root).join(format!("metrics_{}.json", template_hash)),
+        snapshot,
+    );
 }
-
-pub fn update_avg_u64(current: u64, next: u64) -> u64 {
+pub fn telemetry_update_avg_u64(current: u64, next: u64) -> u64 {
     current.checked_add(next).map(|s| s / 2).unwrap_or(next)
 }
-
-pub fn progress_fraction(graph: &TaskGraph) -> f64 {
+pub fn telemetry_progress_fraction(graph: &ExecutionGraph) -> f64 {
     if graph.nodes.is_empty() {
         return 0.0;
     }
-    let completed = graph.nodes.iter().filter(|n| n.status == super::dag::Status::Completed).count();
+    let completed = graph
+        .nodes
+        .iter()
+        .filter(|n| n.status == super::dag::NodeStatus::Completed)
+        .count();
     completed as f64 / graph.nodes.len() as f64
 }
-
-pub fn compute_reward(graph: &TaskGraph, iterations_used: u64, max_iterations: u64) -> f64 {
+pub fn telemetry_compute_reward(
+    graph: &ExecutionGraph,
+    iterations_used: u64,
+    max_iterations: u64,
+) -> f64 {
     let n_total = graph.nodes.len() as f64;
     if n_total == 0.0 {
         return 0.0;
     }
-    let n_completed = graph.nodes.iter().filter(|n| n.status == super::dag::Status::Completed).count() as f64;
-    let n_failed = graph.nodes.iter().filter(|n| n.status == super::dag::Status::Failed).count() as f64;
+    let n_completed = graph
+        .nodes
+        .iter()
+        .filter(|n| n.status == super::dag::NodeStatus::Completed)
+        .count() as f64;
+    let n_failed = graph
+        .nodes
+        .iter()
+        .filter(|n| n.status == super::dag::NodeStatus::Failed)
+        .count() as f64;
     let iter_ratio = iterations_used as f64 / max_iterations.max(1) as f64;
     (n_completed / n_total) - 0.2 * iter_ratio - 0.3 * (n_failed / n_total)
 }
-
 pub static PENDING_REQUESTS: AtomicU64 = AtomicU64::new(0);
 pub static RESUME_ITERATION: AtomicU64 = AtomicU64::new(0);
-
-pub fn pending_requests() -> u64 {
+pub fn telemetry_pending_requests() -> u64 {
     PENDING_REQUESTS.load(Ordering::Relaxed)
 }
-
-pub fn set_resume_iteration(iter: u64) {
+pub fn telemetry_set_resume_iteration(iter: u64) {
     RESUME_ITERATION.store(iter, Ordering::Relaxed);
 }
-
-pub fn resume_iteration() -> u64 {
+pub fn telemetry_resume_iteration() -> u64 {
     RESUME_ITERATION.load(Ordering::Relaxed)
 }
-
-pub fn inc_pending() {
+pub fn telemetry_inc_pending() {
     PENDING_REQUESTS.fetch_add(1, Ordering::Relaxed);
 }
-
-pub fn dec_pending() {
+pub fn telemetry_dec_pending() {
     PENDING_REQUESTS.fetch_sub(1, Ordering::Relaxed);
 }

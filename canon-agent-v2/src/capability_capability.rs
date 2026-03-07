@@ -1,17 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum CapabilityClass {
+pub enum CapabilityMode {
     Observe = 0,
     Verify = 1,
     Mutate = 2,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Capability {
+pub enum PipelineCapability {
     #[serde(alias = "CreateNode")]
     CreateNode,
     #[serde(alias = "AddEdge")]
@@ -69,54 +67,59 @@ pub enum Capability {
     #[serde(other)]
     Unknown,
 }
-
-impl Capability {
-    pub fn class(self) -> CapabilityClass {
+impl PipelineCapability {
+    pub fn class(self) -> CapabilityMode {
         match self {
-            Capability::FileRead => CapabilityClass::Observe,
-            Capability::ReadDag => CapabilityClass::Observe,
-            Capability::ReadStructuralSurface => CapabilityClass::Observe,
-            Capability::StdoutCapture => CapabilityClass::Observe,
-            Capability::StatelessInvoke => CapabilityClass::Observe,
-            Capability::RadiusBudgetEval => CapabilityClass::Observe,
-            Capability::ComputeDelta => CapabilityClass::Observe,
-            Capability::RewardSignalCompute => CapabilityClass::Observe,
-            Capability::PromptContractEnforce => CapabilityClass::Observe,
-            Capability::GoalToSubgoals => CapabilityClass::Observe,
-            Capability::ScheduleReady => CapabilityClass::Observe,
-            Capability::ConstraintAttach => CapabilityClass::Observe,
-
-            Capability::StatusUpdateOnly => CapabilityClass::Verify,
-            Capability::UpdateStatus => CapabilityClass::Verify,
-            Capability::ParseOrchestrationReport => CapabilityClass::Verify,
-            Capability::DetectFailures => CapabilityClass::Verify,
-            Capability::InvariantCheck => CapabilityClass::Verify,
-            Capability::BoundaryGuard => CapabilityClass::Verify,
-
-            Capability::ApplyPatch => CapabilityClass::Mutate,
-            Capability::FileWrite => CapabilityClass::Mutate,
-            Capability::Bash => CapabilityClass::Mutate,
-            Capability::CargoBuild => CapabilityClass::Mutate,
-            Capability::CargoCheck => CapabilityClass::Mutate,
-            Capability::CreateNode => CapabilityClass::Mutate,
-            Capability::AddEdge => CapabilityClass::Mutate,
-            Capability::RefineNode => CapabilityClass::Mutate,
-            Capability::DependencyRewrite => CapabilityClass::Mutate,
-
-            Capability::Unknown => CapabilityClass::Observe,
+            PipelineCapability::FileRead => CapabilityMode::Observe,
+            PipelineCapability::ReadDag => CapabilityMode::Observe,
+            PipelineCapability::ReadStructuralSurface => CapabilityMode::Observe,
+            PipelineCapability::StdoutCapture => CapabilityMode::Observe,
+            PipelineCapability::StatelessInvoke => CapabilityMode::Observe,
+            PipelineCapability::RadiusBudgetEval => CapabilityMode::Observe,
+            PipelineCapability::ComputeDelta => CapabilityMode::Observe,
+            PipelineCapability::RewardSignalCompute => CapabilityMode::Observe,
+            PipelineCapability::PromptContractEnforce => CapabilityMode::Observe,
+            PipelineCapability::GoalToSubgoals => CapabilityMode::Observe,
+            PipelineCapability::ScheduleReady => CapabilityMode::Observe,
+            PipelineCapability::ConstraintAttach => CapabilityMode::Observe,
+            PipelineCapability::StatusUpdateOnly => CapabilityMode::Verify,
+            PipelineCapability::UpdateStatus => CapabilityMode::Verify,
+            PipelineCapability::ParseOrchestrationReport => CapabilityMode::Verify,
+            PipelineCapability::DetectFailures => CapabilityMode::Verify,
+            PipelineCapability::InvariantCheck => CapabilityMode::Verify,
+            PipelineCapability::BoundaryGuard => CapabilityMode::Verify,
+            PipelineCapability::ApplyPatch => CapabilityMode::Mutate,
+            PipelineCapability::FileWrite => CapabilityMode::Mutate,
+            PipelineCapability::Bash => CapabilityMode::Mutate,
+            PipelineCapability::CargoBuild => CapabilityMode::Mutate,
+            PipelineCapability::CargoCheck => CapabilityMode::Mutate,
+            PipelineCapability::CreateNode => CapabilityMode::Mutate,
+            PipelineCapability::AddEdge => CapabilityMode::Mutate,
+            PipelineCapability::RefineNode => CapabilityMode::Mutate,
+            PipelineCapability::DependencyRewrite => CapabilityMode::Mutate,
+            PipelineCapability::Unknown => CapabilityMode::Observe,
         }
     }
 }
-
-pub fn dominant_class(caps: &[Capability]) -> CapabilityClass {
-    caps.iter().map(|c| c.class()).max_by_key(|&c| c as u8).unwrap_or(CapabilityClass::Observe)
+pub fn capability_model_dominant_class(caps: &[PipelineCapability]) -> CapabilityMode {
+    caps.iter()
+        .map(|c| c.class())
+        .max_by_key(|&c| c as u8)
+        .unwrap_or(CapabilityMode::Observe)
 }
-
-pub fn assert_class_disjoint(caps: &HashSet<Capability>) -> Result<(), String> {
-    let has_mutate = caps.iter().any(|c| c.class() == CapabilityClass::Mutate);
-    let has_verify = caps.iter().any(|c| c.class() == CapabilityClass::Verify);
+pub fn capability_model_assert_class_disjoint(
+    caps: &HashSet<PipelineCapability>,
+) -> Result<(), String> {
+    let has_mutate = caps.iter().any(|c| c.class() == CapabilityMode::Mutate);
+    let has_verify = caps.iter().any(|c| c.class() == CapabilityMode::Verify);
     if has_mutate && has_verify {
-        return Err(format!("capability class violation: node mixes Mutate and Verify capabilities: {:?}", caps.iter().filter(|c| c.class() != CapabilityClass::Observe).collect::<Vec<_>>()));
+        return Err(
+            format!(
+                "capability class violation: node mixes Mutate and Verify capabilities: {:?}",
+                caps.iter().filter(| c | c.class() != CapabilityMode::Observe).collect::<
+                Vec < _ >> ()
+            ),
+        );
     }
     Ok(())
 }

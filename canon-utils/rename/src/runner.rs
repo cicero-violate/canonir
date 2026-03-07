@@ -36,8 +36,8 @@ pub struct RenameSelfConfig {
 
 impl RenameSelfConfig {
     pub fn from_env() -> Self {
-        let project = PathBuf::from("/workspace/ai_sandbox/canon/canon-agent");
-        let renames_md = PathBuf::from("/workspace/ai_sandbox/canon/canon-agent/src/pipelines/capability/RENAMES.md");
+        let project = PathBuf::from("/workspace/ai_sandbox/canon/canon-agent-v2");
+        let renames_md = PathBuf::from("/workspace/ai_sandbox/canon/canon-agent-v2/RENAMES.md");
         let report_dir = PathBuf::from("/workspace/ai_sandbox/canon/canon-utils/rename");
         let offset = std::env::var("RENAME_OFFSET").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
         let limit = std::env::var("RENAME_LIMIT").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(usize::MAX);

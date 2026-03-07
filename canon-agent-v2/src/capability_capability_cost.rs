@@ -1,38 +1,43 @@
 use std::collections::HashMap;
 use std::path::Path;
-
 use serde::{Deserialize, Serialize};
-
-use super::capability::Capability;
-use super::dag::TaskNode;
-
+use super::capability::PipelineCapability;
+use super::dag::ExecutionNode;
 const COST_PATH: &str = "/workspace/ai_sandbox/canon/agent_logs/capability_costs.json";
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CapabilityCost {
     pub latency_avg: f64,
     pub failure_rate: f64,
     pub samples: u64,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CapabilityCostTable {
-    pub costs: HashMap<Capability, CapabilityCost>,
+pub struct CapabilityCostCapabilityCostTable {
+    pub costs: HashMap<PipelineCapability, CapabilityCost>,
 }
-
-impl CapabilityCostTable {
-    pub fn load() -> Self {
-        std::fs::read_to_string(COST_PATH).ok().and_then(|s| serde_json::from_str::<CapabilityCostTable>(&s).ok()).unwrap_or_default()
+impl CapabilityCostCapabilityCostTable {
+    pub fn snapshot_store_load() -> Self {
+        std::fs::read_to_string(COST_PATH)
+            .ok()
+            .and_then(|s| {
+                serde_json::from_str::<CapabilityCostCapabilityCostTable>(&s).ok()
+            })
+            .unwrap_or_default()
     }
-
-    pub fn save(&self) {
+    pub fn snapshot_store_save(&self) {
         if let Ok(pretty) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::create_dir_all(Path::new(COST_PATH).parent().unwrap_or(Path::new(".")));
+            let _ = std::fs::create_dir_all(
+                Path::new(COST_PATH).parent().unwrap_or(Path::new(".")),
+            );
             let _ = std::fs::write(COST_PATH, pretty);
         }
     }
-
-    pub fn update(&mut self, cap: Capability, latency_ms: f64, success: bool, decay: f64) {
+    pub fn update(
+        &mut self,
+        cap: PipelineCapability,
+        latency_ms: f64,
+        success: bool,
+        decay: f64,
+    ) {
         let decay = decay.clamp(0.0, 1.0);
         let entry = self.costs.entry(cap).or_default();
         let failure = if success { 0.0 } else { 1.0 };
@@ -45,11 +50,18 @@ impl CapabilityCostTable {
         }
         entry.samples = entry.samples.saturating_add(1);
     }
-
-    pub fn node_cost(&self, caps: &[Capability], latency_weight: f64, failure_weight: f64) -> f64 {
-        caps.iter().map(|c| self.costs.get(c)).flatten().map(|c| latency_weight * c.latency_avg + failure_weight * c.failure_rate).sum()
+    pub fn node_cost(
+        &self,
+        caps: &[PipelineCapability],
+        latency_weight: f64,
+        failure_weight: f64,
+    ) -> f64 {
+        caps.iter()
+            .map(|c| self.costs.get(c))
+            .flatten()
+            .map(|c| latency_weight * c.latency_avg + failure_weight * c.failure_rate)
+            .sum()
     }
-
     pub fn avg_latency(&self) -> f64 {
         let mut total = 0.0;
         let mut count = 0u64;
@@ -59,13 +71,8 @@ impl CapabilityCostTable {
                 count += 1;
             }
         }
-        if count == 0 {
-            0.0
-        } else {
-            total / count as f64
-        }
+        if count == 0 { 0.0 } else { total / count as f64 }
     }
-
     pub fn avg_failure(&self) -> f64 {
         let mut total = 0.0;
         let mut count = 0u64;
@@ -75,33 +82,48 @@ impl CapabilityCostTable {
                 count += 1;
             }
         }
-        if count == 0 {
-            0.0
-        } else {
-            total / count as f64
-        }
+        if count == 0 { 0.0 } else { total / count as f64 }
     }
-
-    pub fn summary(&self, max_entries: usize, latency_weight: f64, failure_weight: f64) -> String {
-        let mut entries: Vec<(Capability, f64, f64, f64)> = self
+    pub fn summary(
+        &self,
+        max_entries: usize,
+        latency_weight: f64,
+        failure_weight: f64,
+    ) -> String {
+        let mut entries: Vec<(PipelineCapability, f64, f64, f64)> = self
             .costs
             .iter()
             .map(|(cap, cost)| {
-                let score = latency_weight * cost.latency_avg + failure_weight * cost.failure_rate;
+                let score = latency_weight * cost.latency_avg
+                    + failure_weight * cost.failure_rate;
                 (*cap, cost.latency_avg, cost.failure_rate, score)
             })
             .collect();
-        entries.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+        entries
+            .sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
         entries.truncate(max_entries);
         let mut lines = Vec::new();
         for (cap, lat, fail, score) in entries {
-            lines.push(format!("{:?}: latency_ms={:.1} fail_rate={:.2} cost={:.2}", cap, lat, fail, score));
+            lines
+                .push(
+                    format!(
+                        "{:?}: latency_ms={:.1} fail_rate={:.2} cost={:.2}", cap, lat,
+                        fail, score
+                    ),
+                );
         }
         lines.join("\n")
     }
 }
-
-pub fn apply_node_cost_update(table: &mut CapabilityCostTable, node: &TaskNode, latency_ms: f64, success: bool, decay: f64, latency_weight: f64, failure_weight: f64) -> f64 {
+pub fn capability_cost_apply_node_cost_update(
+    table: &mut CapabilityCostCapabilityCostTable,
+    node: &ExecutionNode,
+    latency_ms: f64,
+    success: bool,
+    decay: f64,
+    latency_weight: f64,
+    failure_weight: f64,
+) -> f64 {
     for cap in &node.required_capabilities {
         table.update(*cap, latency_ms, success, decay);
     }

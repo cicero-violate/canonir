@@ -1,21 +1,19 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExecStep {
+pub enum ExecutionStep {
     CollectReady,
     Dispatch,
     ApplyResults,
     MaintainGraph,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExecEvent {
+pub enum ExecutionEvent {
     Continue,
     Blocked,
     Completed,
 }
-
-pub const EXEC_TRANSITIONS: [[ExecStep; 3]; 4] = {
-    use ExecEvent::*;
-    use ExecStep::*;
+pub const EXEC_TRANSITIONS: [[ExecutionStep; 3]; 4] = {
+    use ExecutionEvent::*;
+    use ExecutionStep::*;
     let mut t = [[CollectReady; 3]; 4];
     t[CollectReady as usize][Continue as usize] = Dispatch;
     t[CollectReady as usize][Blocked as usize] = MaintainGraph;
