@@ -36,7 +36,7 @@ pub(crate) fn cargo_rustc_args(
     source_root: &Path,
     crate_name: &str,
 ) -> Result<Vec<Vec<String>>> {
-    let mut gctx = GlobalContext::default()?;
+    let gctx = GlobalContext::default()?;
     gctx.shell().set_verbosity(Verbosity::Quiet);
     let manifest_path = project_root.join("Cargo.toml");
     let ws = Workspace::new(&manifest_path, &gctx)?;

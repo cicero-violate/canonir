@@ -61,14 +61,15 @@ fn check_function_errors(
         return (false, BTreeMap::new());
     }
 
+    let solver = session.solver();
+    solver.push();
+    encoded.assert_all(&solver);
     for err_id in error_nodes {
         let err = match encoded.err.get(&err_id) {
             Some(e) => e.clone(),
             None => continue,
         };
-        let solver = session.solver();
         solver.push();
-        encoded.assert_all(&solver);
         solver.assert(&entry_block);
         solver.assert(&err);
         let result = solver.check();
@@ -84,6 +85,7 @@ fn check_function_errors(
                     }
                 }
                 solver.pop(1);
+                solver.pop(1);
                 return (true, path);
             }
             SatResult::Unsat | SatResult::Unknown => {
@@ -91,6 +93,7 @@ fn check_function_errors(
             }
         }
     }
+    solver.pop(1);
     (false, BTreeMap::new())
 }
 

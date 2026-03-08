@@ -3,7 +3,7 @@ use crate::core::rustc_session::RustcSession;
 use crate::core::symbol_id::normalize_symbol_id;
 use crate::structured::FieldMutation;
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -552,11 +552,6 @@ pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box
         )?;
     }
     Ok(RenameSelfResult { report_path, status })
-}
-
-struct OutputCapture {
-    stdout: String,
-    stderr: String,
 }
 
 struct CargoCheckJson {
@@ -1174,9 +1169,9 @@ fn run_cmd(project: &Path, cmd: &str, args: &[&str]) -> bool {
     Command::new(cmd).args(args).current_dir(project).status().map(|s| s.success()).unwrap_or(false)
 }
 
-fn run_capture(project: &Path, cmd: &str, args: &[&str]) -> Result<OutputCapture, Box<dyn std::error::Error>> {
+fn run_capture(project: &Path, cmd: &str, args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
     let output = Command::new(cmd).args(args).current_dir(project).output()?;
-    Ok(OutputCapture { stdout: String::from_utf8_lossy(&output.stdout).to_string(), stderr: String::from_utf8_lossy(&output.stderr).to_string() })
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 fn run_cargo_check_json(project: &Path) -> Result<CargoCheckJson, Box<dyn std::error::Error>> {
@@ -1380,7 +1375,7 @@ fn sum_counts_i64(counts: &BTreeMap<String, i64>) -> i64 {
 
 fn git_head_commit(project: &Path) -> Result<String, Box<dyn std::error::Error>> {
     let out = run_capture(project, "git", &["rev-parse", "HEAD"])?;
-    Ok(out.stdout.trim().to_string())
+    Ok(out.trim().to_string())
 }
 
 fn append_report_line(path: &str, payload: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
@@ -1403,18 +1398,6 @@ fn now_iso_utc() -> String {
 fn now_compact_utc() -> String {
     let now = chrono::Utc::now();
     now.format("%Y%m%dT%H%M%SZ").to_string()
-}
-
-fn round3(value: f64) -> f64 {
-    (value * 1000.0).round() / 1000.0
-}
-
-fn tail_text(value: &str, max_chars: usize) -> Option<String> {
-    if value.len() <= max_chars {
-        Some(value.to_string())
-    } else {
-        Some(value.chars().rev().take(max_chars).collect::<String>().chars().rev().collect())
-    }
 }
 
 #[derive(Default)]

@@ -448,24 +448,23 @@ impl<'sm, 'cb, 'v> PathVisitor<'sm, 'cb, 'v> {
             return Some(symbol_id);
         }
         let path = self.tcx.def_path_str(def_id);
-        let mut local_path = None;
-        if def_id.is_local() {
-            local_path = Some(path.as_str());
+        let local_path = if def_id.is_local() {
+            Some(path.as_str())
         } else {
             let crate_name = self.sink.crate_name.as_str();
             let normalized = crate_name.replace('-', "_");
             let prefix = format!("{crate_name}::");
             let prefix_norm = format!("{normalized}::");
             if path == crate_name || path == normalized {
-                local_path = Some("crate");
+                Some("crate")
             } else if path.starts_with(&prefix) {
-                local_path = Some(&path[prefix.len()..]);
+                Some(&path[prefix.len()..])
             } else if path.starts_with(&prefix_norm) {
-                local_path = Some(&path[prefix_norm.len()..]);
+                Some(&path[prefix_norm.len()..])
             } else {
-                return None;
+                None
             }
-        }
+        };
         let Some(local_path) = local_path else { return None };
         let symbol_id = if local_path == "crate" {
             "crate".to_string()

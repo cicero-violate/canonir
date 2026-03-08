@@ -23,7 +23,7 @@ impl EncodedGraph {
                 NodeKind::BasicBlock => {
                     bb.insert(node.id, Bool::new_const(format!("bb_{}", node.id)));
                 }
-                NodeKind::Variable => {
+                NodeKind::Variable | NodeKind::Param => {
                     var.insert(node.id, BV::new_const(format!("val_{}", node.id), 32));
                 }
                 NodeKind::Error => {

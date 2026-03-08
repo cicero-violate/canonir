@@ -2,7 +2,6 @@ use super::project_editor_helpers::{
     build_full_path, canonicalize_relative, join_module_path, module_path_for_dir,
     split_module_path,
 };
-use crate::core::rustc_session::SpanRange;
 use crate::core::syn_patcher;
 use crate::core::syn_patcher::SpanReplacement;
 use crate::structured::{NodeOp, SymbolHandle, SymbolKind};
@@ -10,16 +9,16 @@ use anyhow::{anyhow, Result};
 use proc_macro2::Span;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use syn::{Item, ItemConst, ItemEnum, ItemFn, ItemMod, ItemStatic, ItemStruct, ItemTrait, ItemType};
+use syn::Item;
 
 use super::project_editor_helpers::module_path_from_file;
-use super::project_editor_rewrite::{file_has_use_of_any, rewrite_string_attrs_in_file, IdentRewriter, PathRewriter};
+use super::project_editor_rewrite::{rewrite_string_attrs_in_file, PathRewriter};
 use super::project_editor_types::{ChangeReport, EditConflict, ProjectEditor, QueuedOp};
 
 impl ProjectEditor {
     pub fn apply(&mut self) -> Result<ChangeReport> {
         let mut touched_files = HashSet::new();
-        let mut conflicts = Vec::new();
+        let conflicts = Vec::new();
         let mut file_moves = Vec::new();
 
         let mut queued_renames: Vec<(String, String)> = Vec::new();
@@ -101,18 +100,19 @@ impl ProjectEditor {
         for (_file, ops) in &self.changesets {
             for queued in ops {
                 match &queued.op {
-                    NodeOp::MutateField { handle, mutation } => {
-                        if let crate::structured::FieldMutation::RenameIdent(new_name) = mutation {
-                            let module = &handle.module_path;
-                            let candidate = format!("{module}::{new_name}");
-                            if self.registry.handles.contains_key(&candidate) {
-                                conflicts.push(EditConflict {
-                                    symbol_id: queued.symbol_id.clone(),
-                                    reason: format!(
-                                        "rename would conflict with existing symbol {candidate}"
-                                    ),
-                                });
-                            }
+                    NodeOp::MutateField {
+                        handle,
+                        mutation: crate::structured::FieldMutation::RenameIdent(new_name),
+                    } => {
+                        let module = &handle.module_path;
+                        let candidate = format!("{module}::{new_name}");
+                        if self.registry.handles.contains_key(&candidate) {
+                            conflicts.push(EditConflict {
+                                symbol_id: queued.symbol_id.clone(),
+                                reason: format!(
+                                    "rename would conflict with existing symbol {candidate}"
+                                ),
+                            });
                         }
                     }
                     NodeOp::MoveSymbol { handle, new_module_path, .. } => {
@@ -183,65 +183,6 @@ impl ProjectEditor {
         Ok(written)
     }
 
-    fn apply_symbol_rename(
-        &mut self,
-        symbol_id: &str,
-        new_name: &str,
-    ) -> Result<HashSet<PathBuf>> {
-        if let Some(session) = &self.session {
-            let norm = crate::core::symbol_id::normalize_symbol_id(symbol_id);
-            let occurrences = session
-                .spans_for(&norm)
-                .ok_or_else(|| anyhow!("symbol not found via rustc: {symbol_id}"))?
-                .clone();
-            let touched =
-                self.apply_symbol_rename_with_occurrences(&occurrences, new_name)?;
-            return Ok(touched);
-        }
-        Err(anyhow!(
-            "rustc session not initialized; use ProjectEditor::load_with_rustc"
-        ))
-    }
-
-    fn apply_symbol_rename_with_occurrences(
-        &mut self,
-        occurrences: &std::collections::HashMap<PathBuf, Vec<SpanRange>>,
-        new_name: &str,
-    ) -> Result<HashSet<PathBuf>> {
-        let mut touched = HashSet::new();
-        for (path, spans) in occurrences {
-            let source = match self.registry.sources.get(path) {
-                Some(content) => content.clone(),
-                None => continue,
-            };
-            // Use the rustc-normalized source so span byte offsets align correctly.
-            let source = if let Some(session) = &self.session {
-                match session.normalized_source(path) {
-                    Some(s) => s.clone(),
-                    None => source,
-                }
-            } else {
-                source
-            };
-            let replacements: Vec<SpanReplacement> = spans
-                .iter()
-                .cloned()
-                .map(|span| SpanReplacement {
-                    span,
-                    replacement: new_name.to_string(),
-                })
-                .collect();
-            let updated = syn_patcher::patch_file(&source, &replacements)?;
-            if updated != source {
-                self.registry.sources.insert(path.to_path_buf(), updated.clone());
-                if let Ok(ast) = syn::parse_file(&updated) {
-                    self.registry.asts.insert(path.to_path_buf(), ast);
-                }
-                touched.insert(path.to_path_buf());
-            }
-        }
-        Ok(touched)
-    }
 
     fn apply_symbol_renames_bulk(
         &mut self,
@@ -417,7 +358,6 @@ impl ProjectEditor {
         let old_name = old_segments.last().unwrap().to_string();
         let mut new_segments = parent_segments.to_vec();
         new_segments.push(new_name.to_string());
-        let new_module_path = join_module_path(&new_segments);
         if let Some(parent_file) = self
             .registry
             .module_files

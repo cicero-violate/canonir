@@ -57,10 +57,8 @@ fn main() -> Result<()> {
             );
             let dup_report = dup_res?;
             let refactoring = analyze_refactoring(&graph, &dup_report);
-            let mut cfg = z3::Config::new();
-            cfg.set_timeout_msec(5000);
-            let (reachability, inv_value, mut ref_value) = z3::with_z3_config(&cfg, || {
-                let session = SmtSession::new();
+            let session = SmtSession::new(5000);
+            let (reachability, inv_value, mut ref_value) = session.run(|| {
                 let encoded = EncodedGraph::build(&graph);
                 let reachability = check_repair_surface(&session, &graph, &encoded, &graph.repair_surface);
                 let inv_value = {
@@ -68,7 +66,7 @@ fn main() -> Result<()> {
                     prove_invariants(&session, &encoded, &inv_value)
                 };
                 let mut ref_value = serde_json::to_value(&refactoring).unwrap_or(serde_json::Value::Null);
-                let eq = check_equivalence(&session, &encoded, &ref_value);
+                let eq = check_equivalence(&session, &graph, &encoded, &ref_value);
                 if let Some(obj) = ref_value.as_object_mut() {
                     obj.insert("smt_equivalence".to_string(), serde_json::to_value(eq).unwrap_or(serde_json::Value::Null));
                 }

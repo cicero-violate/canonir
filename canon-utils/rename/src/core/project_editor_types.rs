@@ -48,13 +48,13 @@ pub(crate) struct QueuedOp {
 }
 
 #[derive(Clone)]
-pub(crate) struct ModuleRename {
+pub struct ModuleRename {
     pub old_module_path: String,
     pub new_name: String,
 }
 
 #[derive(Clone)]
-pub(crate) struct DirRename {
+pub struct DirRename {
     pub old_dir: PathBuf,
     pub new_dir: PathBuf,
 }
