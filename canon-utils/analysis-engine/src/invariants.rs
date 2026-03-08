@@ -36,11 +36,17 @@ pub fn analyze_invariants(graph: &AnalysisGraph) -> InvariantReport {
     }
 }
 
+fn map_id(graph: &AnalysisGraph, id: u32) -> Option<usize> {
+    graph.id_to_index.get(&id).copied()
+}
+
 fn build_kind_csr(graph: &AnalysisGraph, kind: EdgeKind) -> Csr {
     let mut adj = vec![Vec::new(); graph.nodes.len()];
     for e in &graph.edges {
         if e.kind == kind {
-            adj[e.src as usize].push(e.dst as usize);
+            if let (Some(src), Some(dst)) = (map_id(graph, e.src), map_id(graph, e.dst)) {
+                adj[src].push(dst);
+            }
         }
     }
     Csr::from_adj(&adj)

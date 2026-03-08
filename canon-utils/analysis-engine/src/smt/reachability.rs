@@ -141,7 +141,7 @@ fn entry_block_for_function(graph: &AnalysisGraph, fn_id: u32) -> Option<u32> {
         .edges
         .iter()
         .filter(|e| e.kind == EdgeKind::HasBlock && e.src == fn_id)
-        .filter_map(|e| graph.nodes.get(e.dst as usize))
+        .filter_map(|e| graph.id_to_index.get(&e.dst).and_then(|&i| graph.nodes.get(i)))
         .filter(|n| n.kind == NodeKind::BasicBlock)
         .collect();
     if blocks.is_empty() {
@@ -156,7 +156,7 @@ fn reachable_blocks_for_function(graph: &AnalysisGraph, fn_id: u32) -> BTreeMap<
         .edges
         .iter()
         .filter(|e| e.kind == EdgeKind::HasBlock && e.src == fn_id)
-        .filter_map(|e| graph.nodes.get(e.dst as usize))
+        .filter_map(|e| graph.id_to_index.get(&e.dst).and_then(|&i| graph.nodes.get(i)))
         .filter(|n| n.kind == NodeKind::BasicBlock)
         .map(|n| n.id)
         .collect();

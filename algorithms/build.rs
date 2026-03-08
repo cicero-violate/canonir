@@ -14,6 +14,7 @@ const CUDA_SOURCES: &[(&str, &str)] = &[
     ("src/graph/feature.cu", "graph_feature"),
     ("src/graph/reachability.cu", "graph_reachability"),
     ("src/graph/reachability_batched.cu", "graph_reachability_batched"),
+    ("src/graph/reachability_tc.cu", "graph_reachability_tc"),
     ("src/graph/model_checking.cu", "graph_model_checking"),
     ("src/graph/csr_unified.cu", "graph_csr_unified"),
     ("src/constraints/constraints.cu", "constraints_kernels"),

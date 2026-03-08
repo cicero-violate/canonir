@@ -87,7 +87,7 @@ impl<'ctx> EncodedGraph<'ctx> {
         let mut block_set = std::collections::HashSet::new();
         for e in &graph.edges {
             if e.kind == EdgeKind::HasBlock && e.src == fn_id {
-                if let Some(node) = graph.nodes.get(e.dst as usize) {
+                if let Some(node) = graph.id_to_index.get(&e.dst).and_then(|&i| graph.nodes.get(i)) {
                     if node.kind == NodeKind::BasicBlock {
                         block_ids.push(node.id);
                         block_set.insert(node.id);

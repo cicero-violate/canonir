@@ -58,6 +58,18 @@ pub fn reachability_batched_gpu(csr: &Csr, roots: &[usize]) -> Vec<Vec<bool>> {
     if r == 0 || v == 0 {
         return vec![vec![false; v]; r];
     }
+    let out = reachability_batched_flat_gpu(csr, roots);
+    out.chunks(v).map(|row| row.iter().map(|&x| x != 0).collect()).collect()
+}
+
+/// GPU batched reachability — returns flat R×V row-major i32 matrix.
+#[cfg(feature = "cuda")]
+pub fn reachability_batched_flat_gpu(csr: &Csr, roots: &[usize]) -> Vec<i32> {
+    let r = roots.len();
+    let v = csr.vertex_count();
+    if r == 0 || v == 0 {
+        return Vec::new();
+    }
     let roots_i32: Vec<i32> = roots.iter().map(|&x| x as i32).collect();
     let mut out = vec![0i32; r * v];
     unsafe {
@@ -71,5 +83,5 @@ pub fn reachability_batched_gpu(csr: &Csr, roots: &[usize]) -> Vec<Vec<bool>> {
             out.as_mut_ptr(),
         );
     }
-    out.chunks(v).map(|row| row.iter().map(|&x| x != 0).collect()).collect()
+    out
 }

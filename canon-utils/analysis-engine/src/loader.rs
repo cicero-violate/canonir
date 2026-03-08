@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -81,6 +82,7 @@ pub struct AnalysisGraph {
     pub metadata: Metadata,
     pub node_kinds: Vec<NodeKind>,
     pub edge_kinds: Vec<EdgeKind>,
+    pub id_to_index: HashMap<u32, usize>,
 }
 
 pub fn load_dir(dir: &Path) -> Result<AnalysisGraph> {
@@ -94,6 +96,7 @@ pub fn load_dir(dir: &Path) -> Result<AnalysisGraph> {
     let node_kinds = read_node_kinds(dir.join("node_kinds.txt"))?;
     let edge_kinds = read_edge_kinds(dir.join("edge_kinds.txt"))?;
 
+    let id_to_index: HashMap<u32, usize> = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
     Ok(AnalysisGraph {
         nodes,
         edges,
@@ -104,6 +107,7 @@ pub fn load_dir(dir: &Path) -> Result<AnalysisGraph> {
         metadata,
         node_kinds,
         edge_kinds,
+        id_to_index,
     })
 }
 

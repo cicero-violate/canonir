@@ -3018,7 +3018,5 @@ node_id,node_kind,symbol,file,line,column
 3016,BASIC_BLOCK,verify::verify::bb9,canon-mutation/src/verify.rs,9,1
 3017,FUNCTION,verify::verify::fn,canon-mutation/src/verify.rs,4,1
 3018,PARAM,verify::verify::param0,canon-mutation/src/verify.rs,4,15
-tation/src/verify.rs,7,5
-3020,BASIC_BLOCK,verify::verify::bb9,canon-mutation/src/verify.rs,9,1
-3021,FUNCTION,verify::verify::fn,canon-mutation/src/verify.rs,4,1
-3022,PARAM,verify::verify::param0,canon-mutation/src/verify.rs,4,15
+3019,ERROR,error::unused_imports::0,canon-mutation/src/apply.rs,6,21
+3020,ERROR,error::unknown::1,unknown,0,0

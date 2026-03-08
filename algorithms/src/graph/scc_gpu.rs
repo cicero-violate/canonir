@@ -2,7 +2,7 @@
 //! Uses GPU reachability kernel for each node (O(V*(V+E))).
 
 use super::csr::Csr;
-use super::reachability::reachability_gpu;
+use super::reachability::reachability_batched_flat_gpu;
 
 #[cfg(feature = "cuda")]
 pub fn scc_gpu(csr: &Csr) -> Vec<Vec<usize>> {
@@ -21,15 +21,17 @@ pub fn scc_gpu(csr: &Csr) -> Vec<Vec<usize>> {
     let rev = Csr::from_adj(&rev_adj);
     let mut assigned = vec![false; v];
     let mut sccs = Vec::new();
+    let roots: Vec<usize> = (0..v).collect();
+    let fwd_flat = reachability_batched_flat_gpu(csr, &roots);
+    let rev_flat = reachability_batched_flat_gpu(&rev, &roots);
     for i in 0..v {
         if assigned[i] {
             continue;
         }
-        let fwd = reachability_gpu(csr, &[i]);
-        let rev = reachability_gpu(&rev, &[i]);
+        let base = i * v;
         let mut comp = Vec::new();
         for j in 0..v {
-            if !assigned[j] && fwd[j] && rev[j] {
+            if !assigned[j] && fwd_flat[base + j] != 0 && rev_flat[base + j] != 0 {
                 assigned[j] = true;
                 comp.push(j);
             }

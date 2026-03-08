@@ -157,7 +157,7 @@ fn function_blocks(graph: &AnalysisGraph, fn_id: u32) -> Vec<u32> {
     let mut blocks = Vec::new();
     for e in &graph.edges {
         if e.kind == EdgeKind::HasBlock && e.src == fn_id {
-            if let Some(node) = graph.nodes.get(e.dst as usize) {
+            if let Some(node) = graph.id_to_index.get(&e.dst).and_then(|&i| graph.nodes.get(i)) {
                 if node.kind == NodeKind::BasicBlock {
                     blocks.push(node.id);
                 }

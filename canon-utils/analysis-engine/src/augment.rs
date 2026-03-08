@@ -116,6 +116,7 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path) -> Result<()> 
         edge_count: col_idx.len() as u32,
         generated_by: "UPG extractor".to_string(),
     };
+    let id_to_index = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
     let graph = crate::loader::AnalysisGraph {
         nodes,
         edges,
@@ -126,6 +127,7 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path) -> Result<()> 
         metadata,
         node_kinds: Vec::new(),
         edge_kinds: Vec::new(),
+        id_to_index,
     };
     write_outputs(&graph, output_dir)?;
 

@@ -51,11 +51,17 @@ pub fn analyze_anomalies(graph: &AnalysisGraph) -> AnomalyReport {
     }
 }
 
+fn map_id(graph: &AnalysisGraph, id: u32) -> Option<usize> {
+    graph.id_to_index.get(&id).copied()
+}
+
 fn build_kind_csr(graph: &AnalysisGraph, kind: EdgeKind) -> Csr {
     let mut adj = vec![Vec::new(); graph.nodes.len()];
     for e in &graph.edges {
         if e.kind == kind {
-            adj[e.src as usize].push(e.dst as usize);
+            if let (Some(src), Some(dst)) = (map_id(graph, e.src), map_id(graph, e.dst)) {
+                adj[src].push(dst);
+            }
         }
     }
     Csr::from_adj(&adj)
@@ -95,7 +101,9 @@ fn edge_list_with_weights(graph: &AnalysisGraph, kind: EdgeKind) -> Vec<(usize, 
     for e in &graph.edges {
         if e.kind == kind {
             let w = rank.get(&e.dst).copied().unwrap_or(1);
-            edges.push((e.src as usize, e.dst as usize, w));
+            if let (Some(src), Some(dst)) = (map_id(graph, e.src), map_id(graph, e.dst)) {
+                edges.push((src, dst, w));
+            }
         }
     }
     edges
