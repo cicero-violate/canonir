@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 //
+// use crate::ir::PipelineStage;
 use crate::ir::PipelineStage;
 
 /// Unique identifier for a single agent call invocation.
