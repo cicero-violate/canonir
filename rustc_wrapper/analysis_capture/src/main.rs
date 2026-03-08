@@ -194,6 +194,9 @@ fn main() {
                 if let Ok(_lock) = OpenOptions::new().write(true).create_new(true).open(&lock_path) {
                     let _child = Command::new(bin)
                         .args(["--dir", output_dir.to_string_lossy().as_ref(), "--phase", "all"])
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
                         .spawn();
                 }
             }

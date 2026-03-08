@@ -13,6 +13,7 @@ const CUDA_SOURCES: &[(&str, &str)] = &[
     ("src/graph/depth.cu", "graph_depth"),
     ("src/graph/feature.cu", "graph_feature"),
     ("src/graph/reachability.cu", "graph_reachability"),
+    ("src/graph/reachability_batched.cu", "graph_reachability_batched"),
     ("src/graph/model_checking.cu", "graph_model_checking"),
     ("src/graph/csr_unified.cu", "graph_csr_unified"),
     ("src/constraints/constraints.cu", "constraints_kernels"),
@@ -24,6 +25,7 @@ const CUDA_SOURCES: &[(&str, &str)] = &[
     ("src/searching/linear_search.cu", "searching_linear_search"),
     ("src/numerical/matrix_multiply.cu", "numerical_matrix_multiply"),
     ("src/numerical/sieve.cu", "numerical_sieve"),
+    ("src/numerical/cosine_distance.cu", "numerical_cosine_distance"),
     ("src/string_algorithms/rabin_karp.cu", "string_rabin_karp"),
     ("src/optimization/genetic_algorithm.cu", "optimization_genetic_algorithm"),
 ];

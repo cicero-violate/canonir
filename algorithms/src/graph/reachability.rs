@@ -14,6 +14,7 @@ compile_error!("graph::reachability requires feature \"cuda\" (GPU-only module)"
 #[cfg(feature = "cuda")]
 unsafe extern "C" {
     fn gpu_reachability(row_ptr: *const i32, col_idx: *const i32, v: i32, e: i32, roots: *const i32, root_count: i32, visited_out: *mut i32);
+    fn gpu_reachability_batched(row_ptr: *const i32, col_idx: *const i32, v: i32, e: i32, roots: *const i32, r: i32, out: *mut i32);
 }
 
 /// GPU reachability from a set of roots. Returns visited mask.
@@ -46,4 +47,29 @@ pub fn reachability_bounded(csr: &Csr, roots: &[usize], max_depth: usize) -> Vec
         }
     }
     visited
+}
+
+/// GPU batched reachability — one BFS per root in parallel.
+/// Returns flat R×V row-major matrix: out[r*V + v] = true if v reachable from roots[r].
+#[cfg(feature = "cuda")]
+pub fn reachability_batched_gpu(csr: &Csr, roots: &[usize]) -> Vec<Vec<bool>> {
+    let r = roots.len();
+    let v = csr.vertex_count();
+    if r == 0 || v == 0 {
+        return vec![vec![false; v]; r];
+    }
+    let roots_i32: Vec<i32> = roots.iter().map(|&x| x as i32).collect();
+    let mut out = vec![0i32; r * v];
+    unsafe {
+        gpu_reachability_batched(
+            csr.row_ptr.as_ptr(),
+            csr.col_idx.as_ptr(),
+            v as i32,
+            csr.edge_count() as i32,
+            roots_i32.as_ptr(),
+            r as i32,
+            out.as_mut_ptr(),
+        );
+    }
+    out.chunks(v).map(|row| row.iter().map(|&x| x != 0).collect()).collect()
 }

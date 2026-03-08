@@ -19,6 +19,7 @@
 unsafe extern "C" {
     pub fn gpu_matrix_multiply(a: *const i64, b: *const i64, c: *mut i64, n: i32);
     pub fn gpu_sieve(n: i32, primes_out: *mut i32, count_out: *mut i32);
+    pub fn gpu_cosine_distance(a: *const f32, out: *mut f32, m: i32, k: i32);
 }
 
 /// Safe wrapper for tiled GPU matrix multiply.
@@ -42,4 +43,16 @@ pub fn sieve_gpu(n: usize) -> Vec<i32> {
     }
     primes.truncate(count as usize);
     primes
+}
+
+/// GPU pairwise cosine distance for M vectors of dimension K.
+/// Returns flat M×M row-major matrix of f32 distances.
+#[cfg(feature = "cuda")]
+pub fn cosine_distance_gpu(phi: &[f32], m: usize, k: usize) -> Vec<f32> {
+    assert_eq!(phi.len(), m * k);
+    let mut out = vec![0.0f32; m * m];
+    unsafe {
+        gpu_cosine_distance(phi.as_ptr(), out.as_mut_ptr(), m as i32, k as i32);
+    }
+    out
 }

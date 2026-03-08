@@ -1,9 +1,14 @@
 use crate::loader::{AnalysisGraph, EdgeKind, NodeKind};
 use anyhow::{anyhow, Result};
+use algorithms::graph::reachability::reachability_batched_gpu;
 use algorithms::graph::csr::Csr;
 use algorithms::graph::feature_gpu::edge_kind_histogram_gpu;
-use algorithms::graph::reachability::reachability_gpu;
+#[cfg(feature = "cuda")]
+use algorithms::numerical::gpu::cosine_distance_gpu;
 use serde::Serialize;
+
+#[cfg(not(feature = "cuda"))]
+compile_error!("analysis-engine duplicates requires feature \"cuda\"");
 
 #[derive(Debug, Serialize)]
 pub struct DuplicatePair {
@@ -26,18 +31,9 @@ pub fn find_duplicates(graph: &AnalysisGraph, epsilon: f32) -> Result<DuplicateR
     }
     let (csr, edge_kinds) = build_csr_with_kinds(graph)?;
     let counts = edge_kind_histogram_gpu(&csr, &edge_kinds, kind_count);
-    let mut phi: Vec<Vec<f32>> = Vec::with_capacity(graph.nodes.len());
-    for idx in 0..graph.nodes.len() {
-        let denom = (csr.row_ptr[idx + 1] - csr.row_ptr[idx]) as f32 + 1.0;
-        let mut v = vec![0.0f32; kind_count];
-        let base = idx * kind_count;
-        for k in 0..kind_count {
-            v[k] = counts[base + k] as f32 / denom;
-        }
-        phi.push(v);
-    }
 
     let call_csr = build_kind_csr(graph, EdgeKind::Call);
+    let rev_csr = reverse_csr(&call_csr);
     let candidates: Vec<usize> = graph
         .nodes
         .iter()
@@ -46,14 +42,28 @@ pub fn find_duplicates(graph: &AnalysisGraph, epsilon: f32) -> Result<DuplicateR
         .map(|(i, _)| i)
         .collect();
 
+    let m = candidates.len();
+    let mut phi_flat = vec![0.0f32; m * kind_count];
+    for (ci, &node_idx) in candidates.iter().enumerate() {
+        let denom = (csr.row_ptr[node_idx + 1] - csr.row_ptr[node_idx]) as f32 + 1.0;
+        let base = node_idx * kind_count;
+        for k in 0..kind_count {
+            phi_flat[ci * kind_count + k] = counts[base + k] as f32 / denom;
+        }
+    }
+
+    let dist_matrix = cosine_distance_gpu(&phi_flat, m, kind_count);
+
+    let ancestors = reachability_batched_gpu(&rev_csr, &candidates);
+
     let mut pairs = Vec::new();
     for i in 0..candidates.len() {
         for j in (i + 1)..candidates.len() {
-            let a = candidates[i];
-            let b = candidates[j];
-            let dist = cosine_distance(&phi[a], &phi[b]);
+            let dist = dist_matrix[i * m + j];
             if dist < epsilon {
-                let reachable = share_common_ancestor(&call_csr, a, b);
+                let a = candidates[i];
+                let b = candidates[j];
+                let reachable = ancestors[i].iter().zip(ancestors[j].iter()).any(|(x, y)| *x && *y);
                 pairs.push(DuplicatePair {
                     left: graph.nodes[a].id,
                     right: graph.nodes[b].id,
@@ -67,28 +77,41 @@ pub fn find_duplicates(graph: &AnalysisGraph, epsilon: f32) -> Result<DuplicateR
     Ok(DuplicateReport { epsilon, pairs })
 }
 
-fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
-    let mut dot = 0.0;
-    let mut na = 0.0;
-    let mut nb = 0.0;
-    for i in 0..a.len() {
-        dot += a[i] * b[i];
-        na += a[i] * a[i];
-        nb += b[i] * b[i];
-    }
-    let denom = (na.sqrt() * nb.sqrt()).max(1e-6);
-    1.0 - dot / denom
-}
-
 fn edge_kind_index(graph: &AnalysisGraph, kind: EdgeKind) -> Option<usize> {
     graph.edge_kinds.iter().position(|k| *k == kind)
 }
 
+fn build_id_index(graph: &AnalysisGraph) -> Result<Vec<usize>> {
+    let max_id = graph.nodes.iter().map(|n| n.id as usize).max().unwrap_or(0);
+    let mut id_to_index = vec![usize::MAX; max_id + 1];
+    for (idx, node) in graph.nodes.iter().enumerate() {
+        let slot = &mut id_to_index[node.id as usize];
+        if *slot != usize::MAX {
+            return Err(anyhow!("duplicate node id {}", node.id));
+        }
+        *slot = idx;
+    }
+    Ok(id_to_index)
+}
+
+fn map_id(id_to_index: &[usize], id: u32) -> Option<usize> {
+    let idx = id as usize;
+    if idx >= id_to_index.len() || id_to_index[idx] == usize::MAX {
+        return None;
+    }
+    Some(id_to_index[idx])
+}
+
 fn build_csr_with_kinds(graph: &AnalysisGraph) -> Result<(Csr, Vec<u8>)> {
+    let id_to_index = build_id_index(graph)?;
     let mut adj: Vec<Vec<(usize, u8)>> = vec![Vec::new(); graph.nodes.len()];
     for e in &graph.edges {
         let idx = edge_kind_index(graph, e.kind).ok_or_else(|| anyhow!("missing edge kind index"))?;
-        adj[e.src as usize].push((e.dst as usize, idx as u8));
+        let src = map_id(&id_to_index, e.src);
+        let dst = map_id(&id_to_index, e.dst);
+        if let (Some(src), Some(dst)) = (src, dst) {
+            adj[src].push((dst, idx as u8));
+        }
     }
     let mut row_ptr = Vec::with_capacity(adj.len() + 1);
     let mut col_idx = Vec::new();
@@ -105,10 +128,15 @@ fn build_csr_with_kinds(graph: &AnalysisGraph) -> Result<(Csr, Vec<u8>)> {
 }
 
 fn build_kind_csr(graph: &AnalysisGraph, kind: EdgeKind) -> Csr {
+    let id_to_index = build_id_index(graph).expect("invalid node ids");
     let mut adj = vec![Vec::new(); graph.nodes.len()];
     for e in &graph.edges {
         if e.kind == kind {
-            adj[e.src as usize].push(e.dst as usize);
+            let src = map_id(&id_to_index, e.src);
+            let dst = map_id(&id_to_index, e.dst);
+            if let (Some(src), Some(dst)) = (src, dst) {
+                adj[src].push(dst);
+            }
         }
     }
     Csr::from_adj(&adj)
@@ -122,16 +150,4 @@ fn reverse_csr(csr: &Csr) -> Csr {
         }
     }
     Csr::from_adj(&adj)
-}
-
-fn share_common_ancestor(call_csr: &Csr, a: usize, b: usize) -> bool {
-    let rev = reverse_csr(call_csr);
-    let ancestors_a = reachability_gpu(&rev, &[a]);
-    let ancestors_b = reachability_gpu(&rev, &[b]);
-    for idx in 0..ancestors_a.len() {
-        if ancestors_a[idx] && ancestors_b[idx] {
-            return true;
-        }
-    }
-    false
 }
