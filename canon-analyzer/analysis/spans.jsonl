@@ -753,4 +753,4 @@
 {"file":"/workspace/ai_sandbox/canon/canon-analyzer/src/graph/value_graph.rs","hi":1336,"kind":"fn","lo":1323,"symbol_id":"crate::graph::value_graph::ValueGraphBuilder::add_const_dep"}
 {"file":"/workspace/ai_sandbox/canon/canon-analyzer/src/graph/value_graph.rs","hi":1418,"kind":"fn","lo":1413,"symbol_id":"crate::graph::value_graph::ValueGraphBuilder::edges"}
 {"file":"/workspace/ai_sandbox/canon/canon-analyzer/src/graph/value_graph.rs","hi":1498,"kind":"fn","lo":1493,"symbol_id":"crate::graph::value_graph::ValueGraphBuilder::build"}
-{"span_count":714,"symbol_count":508,"type":"done"}
+{"span_count":714,"symbol_count":506,"type":"done"}

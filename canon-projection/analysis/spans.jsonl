@@ -417,4 +417,4 @@
 {"file":"/workspace/ai_sandbox/canon/canon-projection/src/lib.rs","hi":427,"kind":"struct","lo":423,"symbol_id":"crate::layout::Plan"}
 {"file":"/workspace/ai_sandbox/canon/canon-projection/src/lib.rs","hi":489,"kind":"module","lo":485,"symbol_id":"crate::emit"}
 {"file":"/workspace/ai_sandbox/canon/canon-projection/src/emit/helpers.rs","hi":28,"kind":"fn","lo":24,"symbol_id":"crate::emit::helpers::Emit::emit"}
-{"span_count":400,"symbol_count":205,"type":"done"}
+{"span_count":400,"symbol_count":203,"type":"done"}

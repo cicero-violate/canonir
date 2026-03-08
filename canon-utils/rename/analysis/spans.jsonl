@@ -824,4 +824,4 @@
 {"file":"/workspace/ai_sandbox/canon/canon-utils/rename/src/runner.rs","hi":2034,"kind":"fn","lo":2026,"symbol_id":"crate::runner::SuggestConfig::from_env"}
 {"file":"/workspace/ai_sandbox/canon/canon-utils/rename/src/runner.rs","hi":2086,"kind":"fn","lo":2069,"symbol_id":"crate::runner::project_from_args"}
 {"file":"/workspace/ai_sandbox/canon/canon-utils/rename/src/lib.rs","hi":418,"kind":"fn","lo":412,"symbol_id":"crate::RenameRunReport::status"}
-{"span_count":811,"symbol_count":368,"type":"done"}
+{"span_count":811,"symbol_count":366,"type":"done"}

@@ -102,4 +102,4 @@
 {"file":"/workspace/ai_sandbox/canon/canon-agent/src/main.rs","hi":9797,"kind":"struct","lo":9782,"symbol_id":"crate::ir::VersionContract"}
 {"file":"/workspace/ai_sandbox/canon/canon-agent/src/main.rs","hi":9803,"kind":"unknown","lo":9799,"symbol_id":"crate::{use#24}"}
 {"file":"/workspace/ai_sandbox/canon/canon-agent/src/main.rs","hi":9803,"kind":"struct","lo":9799,"symbol_id":"crate::ir::Word"}
-{"span_count":103,"symbol_count":65,"type":"done"}
+{"span_count":103,"symbol_count":64,"type":"done"}

@@ -60,4 +60,4 @@
 {"file":"/workspace/ai_sandbox/canon/orchestration/src/main.rs","hi":25969,"kind":"const","lo":25960,"symbol_id":"crate::TEST_ROOT"}
 {"file":"/workspace/ai_sandbox/canon/orchestration/src/main.rs","hi":26051,"kind":"const","lo":26042,"symbol_id":"crate::TEST_ROOT"}
 {"file":"/workspace/ai_sandbox/canon/orchestration/src/main.rs","hi":26144,"kind":"fn","lo":26132,"symbol_id":"crate::run_pipeline"}
-{"span_count":61,"symbol_count":43,"type":"done"}
+{"span_count":61,"symbol_count":42,"type":"done"}

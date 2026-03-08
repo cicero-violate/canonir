@@ -155,4 +155,4 @@
 {"file":"/workspace/ai_sandbox/canon/canon-mutation/src/diff.rs","hi":1097,"kind":"struct","lo":1088,"symbol_id":"crate::GraphEdge"}
 {"file":"/workspace/ai_sandbox/canon/canon-mutation/src/diff.rs","hi":1124,"kind":"struct","lo":1117,"symbol_id":"crate::diff::EdgeKey"}
 {"file":"/workspace/ai_sandbox/canon/canon-mutation/src/lib.rs","hi":941,"kind":"fn","lo":933,"symbol_id":"crate::ChangeSet::is_empty"}
-{"span_count":153,"symbol_count":142,"type":"done"}
+{"span_count":153,"symbol_count":140,"type":"done"}

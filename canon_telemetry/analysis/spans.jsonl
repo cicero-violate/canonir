@@ -129,4 +129,4 @@
 {"file":"/workspace/ai_sandbox/canon/canon_telemetry/src/type_authority.rs","hi":1716,"kind":"fn","lo":1704,"symbol_id":"crate::type_authority::TypeAuthorityReport::print_report"}
 {"file":"/workspace/ai_sandbox/canon/canon_telemetry/src/lib.rs","hi":2746,"kind":"fn","lo":2734,"symbol_id":"crate::StructuralSurface::print_report"}
 {"file":"/workspace/ai_sandbox/canon/canon_telemetry/src/lib.rs","hi":9312,"kind":"fn","lo":9300,"symbol_id":"crate::BuildReport::print_report"}
-{"span_count":128,"symbol_count":206,"type":"done"}
+{"span_count":128,"symbol_count":204,"type":"done"}

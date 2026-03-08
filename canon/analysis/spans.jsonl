@@ -614,4 +614,4 @@
 {"file":"/workspace/ai_sandbox/canon/canon/src/ir.rs","hi":12515,"kind":"fn","lo":12503,"symbol_id":"crate::ir::validate_csr"}
 {"file":"/workspace/ai_sandbox/canon/canon/src/ir.rs","hi":16265,"kind":"fn","lo":16258,"symbol_id":"crate::<ir::CanonIR as std::default::Default>::default"}
 {"file":"/workspace/ai_sandbox/canon/canon/src/ir.rs","hi":16295,"kind":"fn","lo":16292,"symbol_id":"crate::ir::CanonIR::new"}
-{"span_count":609,"symbol_count":640,"type":"done"}
+{"span_count":609,"symbol_count":638,"type":"done"}
