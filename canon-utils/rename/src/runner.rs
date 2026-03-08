@@ -135,10 +135,6 @@ pub fn run_rename_self(config: RenameSelfConfig) -> Result<RenameSelfResult, Box
     let baseline_error_total = sum_counts(&baseline_error_counts);
 
     let session = Arc::new(RustcSession::build(&project)?);
-    if std::env::var("RENAME_GENERATE_SYMBOLS").ok().as_deref() == Some("1") {
-        write_symbols_json(&symbols_json, &session)?;
-        return Ok(RenameSelfResult { report_path: report_path.clone(), status: "generated".to_string() });
-    }
     let ordered = parse_symbols_json(symbols_json)?;
     let bounded: Vec<(String, String)> = ordered.into_iter().skip(config.offset).take(config.limit).collect();
     let (selected_pairs, skipped_groups) = if matches!(config.mode, RenameSelfMode::Bulk) {
@@ -774,50 +770,8 @@ fn parse_symbols_json(path: String) -> Result<Vec<(String, String)>, Box<dyn std
     Ok(pairs)
 }
 
-fn write_symbols_json(path: &str, session: &RustcSession) -> Result<(), Box<dyn std::error::Error>> {
-    let mut entries = Vec::new();
-    for (symbol_id, kind) in session.symbol_catalog() {
-        let new_name = symbol_id.rsplit("::").next().unwrap_or(symbol_id.as_str());
-        let safety = classify_rename_safety(&symbol_id, &kind);
-        entries.push(serde_json::json!({
-            "symbol_id": symbol_id,
-            "new_name": new_name,
-            "kind": kind,
-            "rename_safe": safety == "safe",
-            "rename_skip_reason": if safety == "safe" { "" } else { safety }
-        }));
-    }
-    entries.sort_by(|a, b| {
-        let sa = a.get("rename_safe").and_then(|v| v.as_bool()).unwrap_or(false);
-        let sb = b.get("rename_safe").and_then(|v| v.as_bool()).unwrap_or(false);
-        sb.cmp(&sa).then_with(|| {
-            a.get("symbol_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .cmp(b.get("symbol_id").and_then(|v| v.as_str()).unwrap_or(""))
-        })
-    });
-    let content = serde_json::to_string_pretty(&entries)?;
-    std::fs::write(path, format!("{content}\n"))?;
-    Ok(())
-}
-
 fn load_symbol_ids(session: &RustcSession) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
     Ok(session.symbol_catalog())
-}
-
-fn classify_rename_safety(symbol_id: &str, _kind: &str) -> &'static str {
-    if symbol_id.contains(" as ") {
-        if let Some(trait_part) = extract_trait_from_impl_symbol(symbol_id) {
-            if !trait_part.starts_with("crate::") {
-                return "external_trait_impl";
-            }
-        }
-    }
-    if is_known_external_trait_method(symbol_id) {
-        return "external_trait_impl";
-    }
-    "safe"
 }
 
 fn extract_trait_from_impl_symbol(symbol_id: &str) -> Option<&str> {

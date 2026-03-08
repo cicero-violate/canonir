@@ -1,5 +1,3 @@
-#![feature(rustc_private)]
-
 pub mod core;
 pub mod fs;
 pub mod structured;

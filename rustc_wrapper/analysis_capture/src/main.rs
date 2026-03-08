@@ -21,6 +21,7 @@ use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
+use std::io::ErrorKind;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -28,6 +29,7 @@ use std::time::{Duration, SystemTime};
 
 struct MirCaptureCallbacks {
     output_dir: PathBuf,
+    crate_name: Option<String>,
 }
 
 impl Callbacks for MirCaptureCallbacks {
@@ -50,6 +52,16 @@ impl Callbacks for MirCaptureCallbacks {
         };
         if let Err(err) = extract_and_write(tcx, &config) {
             eprintln!("analysis_capture: extraction failed: {err:?}");
+        }
+        if is_primary_package(self.crate_name.as_deref()) {
+            let crate_name = self.crate_name.as_deref().unwrap_or("crate");
+            if let Err(err) = canon_capture::collect_spans_and_symbols(
+                tcx,
+                &self.output_dir,
+                crate_name,
+            ) {
+                eprintln!("analysis_capture: span/symbol collection failed: {err:?}");
+            }
         }
         rustc_driver::Compilation::Continue
     }
@@ -89,9 +101,8 @@ fn main() {
         .join("analysis");
 
     if let Err(err) = fs::create_dir_all(&output_dir) {
-        let is_registry = output_dir.components().any(|c| c.as_os_str() == "registry" || c.as_os_str() == "git")
-            && output_dir.components().any(|c| c.as_os_str() == ".cargo");
-        if !is_registry {
+        let is_registry = is_cargo_registry_path(&output_dir);
+        if !is_registry || err.kind() != ErrorKind::PermissionDenied {
             eprintln!("analysis_capture: failed to create output dir {output_dir:?}: {err}");
         }
         exec_real_rustc(&real_rustc, &argv[2..], "output_dir");
@@ -103,6 +114,7 @@ fn main() {
 
     let mut callbacks = MirCaptureCallbacks {
         output_dir: output_dir.clone(),
+        crate_name: crate_name.clone(),
     };
 
     let _diag = EarlyDiagCtxt::new(rustc_session::config::ErrorOutputType::default());
@@ -356,6 +368,18 @@ fn is_primary_package(_crate_name: Option<&str>) -> bool {
         Ok(primary) => primary == "1",
         Err(_) => false,
     }
+}
+
+fn is_cargo_registry_path(path: &Path) -> bool {
+    if path
+        .components()
+        .any(|c| c.as_os_str() == "registry" || c.as_os_str() == "git")
+        && path.components().any(|c| c.as_os_str() == ".cargo")
+    {
+        return true;
+    }
+    let raw = path.to_string_lossy();
+    raw.contains("/.cargo/registry/") || raw.contains("/.cargo/git/")
 }
 
 fn should_run_analysis_engine(crate_name: Option<&str>, crate_types: &[String], output_dir: &Path) -> bool {

@@ -17,6 +17,7 @@ pub mod canon_assemble;
 pub mod capture;
 pub mod index;
 pub mod norm;
+pub mod spans;
 pub mod types;
 
 /// Per-def capture output: nodes + edge hints (local to one DefId).
@@ -30,3 +31,5 @@ pub struct Partial {
 pub fn capture(tcx: TyCtxt<'_>) -> Result<CanonIR> {
     capture::pipeline::capture(tcx)
 }
+
+pub use spans::collect_spans_and_symbols;

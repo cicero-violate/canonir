@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 upg_analysis = { path = "../../canon-utils/analysis" }
+canon-capture = { path = "../../canon-capture" }
 anyhow = "1"
 serde_json = "1"
 libc = "0.2"

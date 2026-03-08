@@ -11,10 +11,7 @@ syn = { version = "2", features = ["full", "visit-mut", "visit"] }
 walkdir = "2.5"
 regex = "1"
 serde_json = "1"
-num_cpus = "1"
 chrono = "0.4"
 canon = { path = "../../canon" }
 canon-analyzer = { path = "../../canon-analyzer" }
 canon-capture = { path = "../../canon-capture" }
-cargo = { path = "/workspace/git_repos/cargo" }
-cargo-util = { path = "/workspace/git_repos/cargo/crates/cargo-util" }
