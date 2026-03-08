@@ -24,6 +24,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, SystemTime};
 
 struct MirCaptureCallbacks {
     output_dir: PathBuf,
@@ -177,6 +178,15 @@ fn main() {
         if should_run_analysis_engine(crate_name.as_deref(), &crate_types, &output_dir) {
             if let Some(bin) = analysis_engine_bin(&output_dir) {
                 let lock_path = output_dir.join(".analysis_engine.lock");
+                if let Ok(meta) = fs::metadata(&lock_path) {
+                    if let Ok(modified) = meta.modified() {
+                        if let Ok(age) = SystemTime::now().duration_since(modified) {
+                            if age > Duration::from_secs(60) {
+                                let _ = fs::remove_file(&lock_path);
+                            }
+                        }
+                    }
+                }
                 if let Ok(_lock) = OpenOptions::new().write(true).create_new(true).open(&lock_path) {
                     let status = Command::new(bin)
                         .args(["--dir", output_dir.to_string_lossy().as_ref(), "--phase", "all"])
@@ -335,9 +345,15 @@ fn project_root_from_target_path(out_dir: &Path) -> Option<PathBuf> {
 }
 
 fn should_run_analysis_engine(crate_name: Option<&str>, crate_types: &[String], output_dir: &Path) -> bool {
-    let pkg = std::env::var("CARGO_PKG_NAME").ok();
-    if pkg.as_deref() != crate_name {
-        return false;
+    if let Ok(primary) = std::env::var("CARGO_PRIMARY_PACKAGE") {
+        if primary != "1" {
+            return false;
+        }
+    } else {
+        let pkg = std::env::var("CARGO_PKG_NAME").ok();
+        if pkg.as_deref() != crate_name {
+            return false;
+        }
     }
     if !output_dir.join("nodes.csv").exists() {
         return false;

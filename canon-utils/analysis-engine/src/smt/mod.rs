@@ -1,22 +1,33 @@
-use z3::{Config, Solver};
+use crate::smt::cache::ProofCache;
+use std::sync::Mutex;
+use z3::{Config, Context, Solver};
 
 pub struct SmtSession {
-    timeout_ms: u64,
+    ctx: Context,
+    cache: Mutex<ProofCache>,
 }
 
 impl SmtSession {
-    pub fn new(timeout_ms: u64) -> Self {
-        Self { timeout_ms }
-    }
-
-    pub fn solver(&self) -> Solver {
-        Solver::new()
-    }
-
-    pub fn run<T: Send + Sync, F: FnOnce() -> T + Send + Sync>(&self, f: F) -> T {
+    pub fn new(timeout_ms: u64, cache_path: std::path::PathBuf, clear_cache: bool) -> Self {
         let mut cfg = Config::new();
-        cfg.set_timeout_msec(self.timeout_ms);
-        z3::with_z3_config(&cfg, f)
+        cfg.set_timeout_msec(timeout_ms);
+        let ctx = Context::new(&cfg);
+        Self {
+            ctx,
+            cache: Mutex::new(ProofCache::new(cache_path, clear_cache)),
+        }
+    }
+
+    pub fn solver(&self) -> Solver<'_> {
+        Solver::new(&self.ctx)
+    }
+
+    pub fn ctx(&self) -> &Context {
+        &self.ctx
+    }
+
+    pub fn cache(&self) -> &Mutex<ProofCache> {
+        &self.cache
     }
 }
 
@@ -25,3 +36,4 @@ pub mod equivalence;
 pub mod invariants;
 pub mod reachability;
 pub mod repair;
+pub mod cache;

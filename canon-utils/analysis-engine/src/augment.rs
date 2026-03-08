@@ -1,11 +1,10 @@
-use crate::csr::build_csr;
-use crate::emit::write_outputs;
-use crate::types::{Edge, EdgeKind, Metadata, Node, NodeKind};
+use crate::loader::{Edge, EdgeKind, Metadata, Node, NodeKind};
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize)]
@@ -110,19 +109,80 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path) -> Result<()> 
     }
     edges.extend(edges_added);
 
-    let csr = build_csr(nodes.len() as u32, &edges);
+    let (row_ptr, col_idx) = build_csr(nodes.len() as u32, &edges);
     let metadata = Metadata {
         project: output_dir.parent().map(|p| p.display().to_string()).unwrap_or_else(|| output_dir.display().to_string()),
         node_count: nodes.len() as u32,
-        edge_count: csr.col_idx.len() as u32,
+        edge_count: col_idx.len() as u32,
         generated_by: "UPG extractor".to_string(),
     };
-    let graph = crate::extract::UpgGraph { nodes, edges, csr, metadata };
+    let graph = crate::loader::AnalysisGraph {
+        nodes,
+        edges,
+        row_ptr,
+        col_idx,
+        repair_surface: Value::Null,
+        errors: Value::Null,
+        metadata,
+        node_kinds: Vec::new(),
+        edge_kinds: Vec::new(),
+    };
     write_outputs(&graph, output_dir)?;
 
     let surface = compute_repair_surface(&graph);
     write_repair_surface(output_dir, &surface)?;
 
+    Ok(())
+}
+
+fn write_outputs(graph: &crate::loader::AnalysisGraph, output_dir: &Path) -> Result<()> {
+    fs::create_dir_all(output_dir)?;
+    write_nodes_csv(output_dir, &graph.nodes)?;
+    write_edges_csv(output_dir, &graph.edges)?;
+    write_kinds(output_dir)?;
+    write_bin_u32(output_dir.join("csr_row_ptr.bin"), &graph.row_ptr)?;
+    write_bin_u32(output_dir.join("csr_col_idx.bin"), &graph.col_idx)?;
+    let metadata_path = output_dir.join("metadata.json");
+    let file = fs::File::create(metadata_path)?;
+    serde_json::to_writer_pretty(file, &graph.metadata)
+        .map_err(|err| anyhow!("failed to write metadata.json: {err}"))?;
+    Ok(())
+}
+
+fn write_nodes_csv(output_dir: &Path, nodes: &[Node]) -> Result<()> {
+    let path = output_dir.join("nodes.csv");
+    let mut file = fs::File::create(path)?;
+    writeln!(file, "node_id,node_kind,symbol,file,line,column")?;
+    for node in nodes {
+        writeln!(
+            file,
+            "{},{},{},{},{},{}",
+            node.id,
+            node_kind_str(node.kind),
+            sanitize_csv_field(&node.symbol),
+            sanitize_csv_field(&node.file),
+            node.line,
+            node.column
+        )?;
+    }
+    Ok(())
+}
+
+fn write_edges_csv(output_dir: &Path, edges: &[Edge]) -> Result<()> {
+    let path = output_dir.join("edges.csv");
+    let mut file = fs::File::create(path)?;
+    writeln!(file, "src_id,dst_id,edge_kind")?;
+    for edge in edges {
+        writeln!(file, "{},{},{}", edge.src, edge.dst, edge_kind_str(edge.kind))?;
+    }
+    Ok(())
+}
+
+fn write_bin_u32(path: PathBuf, data: &[u32]) -> Result<()> {
+    let mut file = fs::File::create(path)?;
+    for &v in data {
+        file.write_all(&v.to_le_bytes())?;
+    }
     Ok(())
 }
 
@@ -136,7 +196,7 @@ pub fn write_repair_surface(output_dir: &Path, surface: &[RepairSurfaceEntry]) -
     Ok(())
 }
 
-fn compute_repair_surface(graph: &crate::extract::UpgGraph) -> Vec<RepairSurfaceEntry> {
+fn compute_repair_surface(graph: &crate::loader::AnalysisGraph) -> Vec<RepairSurfaceEntry> {
     let mut error_to_fn: BTreeMap<u32, u32> = BTreeMap::new();
     for e in &graph.edges {
         if matches!(e.kind, EdgeKind::ErrorToFunction) {
@@ -223,20 +283,20 @@ fn files_match(node_file: &str, span_file: &str) -> bool {
     node_file.ends_with(span_file) || span_file.ends_with(node_file)
 }
 
-fn normalize_file(raw: &str) -> String {
-    if let Some(idx) = raw.find("embeddable_name: \"") {
+fn normalize_file(file: &str) -> String {
+    if let Some(idx) = file.find("embeddable_name: \"") {
         let start = idx + "embeddable_name: \"".len();
-        if let Some(end) = raw[start..].find('"') {
-            return raw[start..start + end].to_string();
+        if let Some(end) = file[start..].find('"') {
+            return file[start..start + end].to_string();
         }
     }
-    if let Some(idx) = raw.find("name: \"") {
+    if let Some(idx) = file.find("name: \"") {
         let start = idx + "name: \"".len();
-        if let Some(end) = raw[start..].find('"') {
-            return raw[start..start + end].to_string();
+        if let Some(end) = file[start..].find('"') {
+            return file[start..start + end].to_string();
         }
     }
-    raw.to_string()
+    file.to_string()
 }
 
 fn read_nodes_csv(path: PathBuf) -> Result<Vec<Node>> {
@@ -256,7 +316,14 @@ fn read_nodes_csv(path: PathBuf) -> Result<Vec<Node>> {
         let col = parts[parts.len() - 1].parse::<u32>()?;
         let file = parts[parts.len() - 3].to_string();
         let symbol = parts[2..parts.len() - 3].join(",");
-        nodes.push(Node { id, kind, symbol, file, line: line_no, column: col });
+        nodes.push(Node {
+            id,
+            kind,
+            symbol,
+            file,
+            line: line_no,
+            column: col,
+        });
     }
     Ok(nodes)
 }
@@ -278,6 +345,67 @@ fn read_edges_csv(path: PathBuf) -> Result<Vec<Edge>> {
         edges.push(Edge { src, dst, kind });
     }
     Ok(edges)
+}
+
+fn build_csr(node_count: u32, edges: &[Edge]) -> (Vec<u32>, Vec<u32>) {
+    let mut adj: Vec<Vec<u32>> = vec![Vec::new(); node_count as usize];
+    for e in edges {
+        if (e.src as usize) < adj.len() {
+            adj[e.src as usize].push(e.dst);
+        }
+    }
+    let mut row_ptr = Vec::with_capacity(adj.len() + 1);
+    let mut col_idx = Vec::new();
+    row_ptr.push(0u32);
+    for neighbors in adj {
+        for v in neighbors {
+            col_idx.push(v);
+        }
+        row_ptr.push(col_idx.len() as u32);
+    }
+    (row_ptr, col_idx)
+}
+
+fn node_kind_str(kind: NodeKind) -> &'static str {
+    match kind {
+        NodeKind::Function => "FUNCTION",
+        NodeKind::Method => "METHOD",
+        NodeKind::Struct => "STRUCT",
+        NodeKind::Enum => "ENUM",
+        NodeKind::Trait => "TRAIT",
+        NodeKind::Impl => "IMPL",
+        NodeKind::Field => "FIELD",
+        NodeKind::Param => "PARAM",
+        NodeKind::Variable => "VARIABLE",
+        NodeKind::Module => "MODULE",
+        NodeKind::Type => "TYPE",
+        NodeKind::BasicBlock => "BASIC_BLOCK",
+        NodeKind::CallSite => "CALL_SITE",
+        NodeKind::Error => "ERROR",
+    }
+}
+
+fn edge_kind_str(kind: EdgeKind) -> &'static str {
+    match kind {
+        EdgeKind::HasField => "HAS_FIELD",
+        EdgeKind::HasMethod => "HAS_METHOD",
+        EdgeKind::HasBlock => "HAS_BLOCK",
+        EdgeKind::HasParam => "HAS_PARAM",
+        EdgeKind::Imports => "IMPORTS",
+        EdgeKind::Flow => "FLOW",
+        EdgeKind::Call => "CALL",
+        EdgeKind::Return => "RETURN",
+        EdgeKind::Unwind => "UNWIND",
+        EdgeKind::Implements => "IMPLEMENTS",
+        EdgeKind::UsesType => "USES_TYPE",
+        EdgeKind::Bounds => "BOUNDS",
+        EdgeKind::Assign => "ASSIGN",
+        EdgeKind::Propagates => "PROPAGATES",
+        EdgeKind::ArgToParam => "ARG_TO_PARAM",
+        EdgeKind::Returns => "RETURNS",
+        EdgeKind::ErrorToFunction => "ERROR_TO_FUNCTION",
+        EdgeKind::ErrorToBlock => "ERROR_TO_BLOCK",
+    }
 }
 
 fn parse_node_kind(raw: &str) -> Result<NodeKind> {
@@ -322,4 +450,54 @@ fn parse_edge_kind(raw: &str) -> Result<EdgeKind> {
         "ERROR_TO_BLOCK" => Ok(EdgeKind::ErrorToBlock),
         _ => Err(anyhow!("unknown edge kind")),
     }
+}
+
+fn sanitize_csv_field(raw: &str) -> String {
+    let mut out = raw.replace('\n', " ").replace('\r', " ");
+    if out.contains(',') {
+        out = out.replace(',', ";");
+    }
+    out
+}
+
+fn write_kinds(output_dir: &Path) -> Result<()> {
+    let node_kinds = [
+        "FUNCTION",
+        "METHOD",
+        "STRUCT",
+        "ENUM",
+        "TRAIT",
+        "IMPL",
+        "FIELD",
+        "PARAM",
+        "VARIABLE",
+        "MODULE",
+        "TYPE",
+        "BASIC_BLOCK",
+        "CALL_SITE",
+        "ERROR",
+    ];
+    let edge_kinds = [
+        "HAS_FIELD",
+        "HAS_METHOD",
+        "HAS_BLOCK",
+        "HAS_PARAM",
+        "IMPORTS",
+        "FLOW",
+        "CALL",
+        "RETURN",
+        "UNWIND",
+        "IMPLEMENTS",
+        "USES_TYPE",
+        "BOUNDS",
+        "ASSIGN",
+        "PROPAGATES",
+        "ARG_TO_PARAM",
+        "RETURNS",
+        "ERROR_TO_FUNCTION",
+        "ERROR_TO_BLOCK",
+    ];
+    fs::write(output_dir.join("node_kinds.txt"), node_kinds.join("\n"))?;
+    fs::write(output_dir.join("edge_kinds.txt"), edge_kinds.join("\n"))?;
+    Ok(())
 }

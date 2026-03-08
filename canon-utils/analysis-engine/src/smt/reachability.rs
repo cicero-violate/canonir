@@ -1,5 +1,8 @@
 use crate::loader::{AnalysisGraph, EdgeKind, NodeKind};
 use crate::smt::encoder::EncodedGraph;
+use crate::smt::cache::{reachability_key, function_graph_hash, CacheEntry, now_ts};
+use algorithms::graph::csr::Csr;
+use algorithms::graph::reachability::reachability_gpu;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -15,7 +18,6 @@ pub struct SmtReachabilityEntry {
 pub fn check_repair_surface(
     session: &crate::smt::SmtSession,
     graph: &AnalysisGraph,
-    encoded: &EncodedGraph,
     repair_surface: &Value,
 ) -> Vec<SmtReachabilityEntry> {
     let mut out = Vec::new();
@@ -29,7 +31,7 @@ pub fn check_repair_surface(
         if node_id == 0 {
             continue;
         }
-        let (reachable, path) = check_function_errors(session, graph, encoded, node_id);
+        let (reachable, path) = check_function_errors(session, graph, node_id);
         out.push(SmtReachabilityEntry {
             node_id,
             smt_reachable: reachable,
@@ -42,9 +44,9 @@ pub fn check_repair_surface(
 fn check_function_errors(
     session: &crate::smt::SmtSession,
     graph: &AnalysisGraph,
-    encoded: &EncodedGraph,
     fn_id: u32,
 ) -> (bool, BTreeMap<String, bool>) {
+    let encoded = EncodedGraph::build_scoped(graph, session.ctx(), fn_id);
     let entry_block = entry_block_for_function(graph, fn_id);
     let entry_block = match entry_block.and_then(|id| encoded.bb.get(&id)) {
         Some(bb) => bb.clone(),
@@ -61,16 +63,35 @@ fn check_function_errors(
         return (false, BTreeMap::new());
     }
 
+    let reachable_blocks = reachable_blocks_for_function(graph, fn_id);
+
+    let graph_hash = function_graph_hash(graph, fn_id);
     let solver = session.solver();
     solver.push();
     encoded.assert_all(&solver);
+    solver.assert(&entry_block);
     for err_id in error_nodes {
+        if !error_structurally_reachable(graph, err_id, &reachable_blocks) {
+            continue;
+        }
+        let key = reachability_key(fn_id, err_id, &graph_hash);
+        if let Ok(cache) = session.cache().lock() {
+            if let Some(entry) = cache.get(&key, &graph_hash) {
+                if entry.result == "sat" {
+                    let path = entry.model.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+                    solver.pop(1);
+                    return (true, path);
+                }
+                if entry.result == "unsat" || entry.result == "unknown" {
+                    continue;
+                }
+            }
+        }
         let err = match encoded.err.get(&err_id) {
             Some(e) => e.clone(),
             None => continue,
         };
         solver.push();
-        solver.assert(&entry_block);
         solver.assert(&err);
         let result = solver.check();
         match result {
@@ -84,11 +105,29 @@ fn check_function_errors(
                         }
                     }
                 }
+                if let Ok(mut cache) = session.cache().lock() {
+                    let entry = CacheEntry {
+                        result: "sat".to_string(),
+                        model: serde_json::to_value(&path).ok(),
+                        graph_hash: graph_hash.clone(),
+                        timestamp: now_ts(),
+                    };
+                    cache.insert(key, entry);
+                }
                 solver.pop(1);
                 solver.pop(1);
                 return (true, path);
             }
             SatResult::Unsat | SatResult::Unknown => {
+                if let Ok(mut cache) = session.cache().lock() {
+                    let entry = CacheEntry {
+                        result: if matches!(result, SatResult::Unsat) { "unsat".to_string() } else { "unknown".to_string() },
+                        model: None,
+                        graph_hash: graph_hash.clone(),
+                        timestamp: now_ts(),
+                    };
+                    cache.insert(key, entry);
+                }
                 solver.pop(1);
             }
         }
@@ -110,4 +149,65 @@ fn entry_block_for_function(graph: &AnalysisGraph, fn_id: u32) -> Option<u32> {
     }
     blocks.sort_by_key(|n| n.symbol.clone());
     blocks.first().map(|n| n.id)
+}
+
+fn reachable_blocks_for_function(graph: &AnalysisGraph, fn_id: u32) -> BTreeMap<u32, bool> {
+    let mut blocks: Vec<u32> = graph
+        .edges
+        .iter()
+        .filter(|e| e.kind == EdgeKind::HasBlock && e.src == fn_id)
+        .filter_map(|e| graph.nodes.get(e.dst as usize))
+        .filter(|n| n.kind == NodeKind::BasicBlock)
+        .map(|n| n.id)
+        .collect();
+    blocks.sort();
+    if blocks.is_empty() {
+        return BTreeMap::new();
+    }
+
+    let mut index: BTreeMap<u32, usize> = BTreeMap::new();
+    for (i, id) in blocks.iter().enumerate() {
+        index.insert(*id, i);
+    }
+
+    let mut adj = vec![Vec::new(); blocks.len()];
+    for e in &graph.edges {
+        if e.kind == EdgeKind::Flow {
+            if let (Some(&u), Some(&v)) = (index.get(&e.src), index.get(&e.dst)) {
+                adj[u].push(v);
+            }
+        }
+    }
+    let csr = Csr::from_adj(&adj);
+
+    let entry_block = entry_block_for_function(graph, fn_id);
+    let entry_idx = entry_block.and_then(|id| index.get(&id).copied());
+    let mut reachable = BTreeMap::new();
+    if let Some(root) = entry_idx {
+        let mask = reachability_gpu(&csr, &[root]);
+        for (i, id) in blocks.iter().enumerate() {
+            reachable.insert(*id, mask.get(i).copied().unwrap_or(false));
+        }
+    } else {
+        for id in blocks {
+            reachable.insert(id, false);
+        }
+    }
+    reachable
+}
+
+fn error_structurally_reachable(graph: &AnalysisGraph, err_id: u32, reachable_blocks: &BTreeMap<u32, bool>) -> bool {
+    let mut has_block_edge = false;
+    for e in &graph.edges {
+        if e.kind == EdgeKind::ErrorToBlock && e.src == err_id {
+            has_block_edge = true;
+            if reachable_blocks.get(&e.dst).copied().unwrap_or(false) {
+                return true;
+            }
+        }
+    }
+    if !has_block_edge {
+        return true;
+    }
+    false
 }

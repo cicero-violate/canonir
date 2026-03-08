@@ -5,3 +5,4 @@ pub mod invariants;
 pub mod loader;
 pub mod refactoring;
 pub mod smt;
+pub mod augment;

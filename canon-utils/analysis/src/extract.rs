@@ -32,6 +32,7 @@ pub fn extract_and_write(tcx: TyCtxt<'_>, config: &OutputConfig) -> Result<UpgGr
     let graph = extract_upg(tcx, &config.output_dir)?;
     let merged = merge_with_existing(&config.output_dir, graph)?;
     crate::emit::write_outputs(&merged, &config.output_dir)?;
+    crate::errors::augment_with_errors(&config.output_dir, &config.output_dir.join("errors.json"))?;
     Ok(merged)
 }
 

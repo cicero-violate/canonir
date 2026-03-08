@@ -1,6 +1,10 @@
+use crate::loader::AnalysisGraph;
+use crate::smt::cache::{invariant_graph_hash, invariant_key, CacheEntry, now_ts};
+use crate::smt::encoder::EncodedGraph;
 use serde::Serialize;
 use serde_json::{json, Value};
 use z3::SatResult;
+use z3::ast::Ast;
 
 #[derive(Debug, Serialize)]
 pub struct InvariantSmtResult {
@@ -11,11 +15,13 @@ pub struct InvariantSmtResult {
 
 pub fn prove_invariants(
     session: &crate::smt::SmtSession,
-    encoded: &crate::smt::encoder::EncodedGraph,
+    graph: &AnalysisGraph,
     invariants: &Value,
 ) -> Value {
+    let encoded = EncodedGraph::build(graph, session.ctx());
     let mut out = invariants.clone();
     let mut results: Vec<InvariantSmtResult> = Vec::new();
+    let candidate_graph = graph;
 
     let candidate_list = invariants
         .get("candidates")
@@ -36,6 +42,18 @@ pub fn prove_invariants(
 
     for cand in candidate_list {
         let pred = cand.get("predicate").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let graph_hash = invariant_graph_hash(candidate_graph, &cand);
+        let key = invariant_key(pred, &graph_hash);
+        if let Ok(cache) = session.cache().lock() {
+            if let Some(entry) = cache.get(&key, &graph_hash) {
+                results.push(InvariantSmtResult {
+                    predicate: pred.to_string(),
+                    smt_verdict: entry.result,
+                    counterexample: entry.model,
+                });
+                continue;
+            }
+        }
         solver.push();
         let mut asserted = false;
         if let Some(kind) = cand.get("kind").and_then(|v| v.as_str()) {
@@ -60,7 +78,7 @@ pub fn prove_invariants(
                     let lhs = cand.get("lhs").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                     let rhs = cand.get("rhs").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                     if let (Some(l), Some(r)) = (encoded.var.get(&lhs), encoded.var.get(&rhs)) {
-                        solver.assert(&l.eq(r).not());
+                        solver.assert(&l._eq(r).not());
                         asserted = true;
                     }
                 }
@@ -68,7 +86,7 @@ pub fn prove_invariants(
             }
         }
         if !asserted {
-            let neg = z3::ast::Bool::new_const(format!("neg_{}", pred));
+            let neg = z3::ast::Bool::new_const(encoded.ctx(), format!("neg_{}", pred));
             solver.assert(&neg);
         }
         let verdict = match solver.check() {
@@ -77,6 +95,15 @@ pub fn prove_invariants(
             SatResult::Unknown => "unverified",
         };
         let counterexample = if verdict == "violated" { Some(json!({})) } else { None };
+        if let Ok(mut cache) = session.cache().lock() {
+            let entry = CacheEntry {
+                result: verdict.to_string(),
+                model: counterexample.clone(),
+                graph_hash,
+                timestamp: now_ts(),
+            };
+            cache.insert(key, entry);
+        }
         solver.pop(1);
         results.push(InvariantSmtResult {
             predicate: pred.to_string(),

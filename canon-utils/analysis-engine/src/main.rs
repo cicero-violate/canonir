@@ -8,7 +8,7 @@ use analysis_engine::emit::write_json;
 use analysis_engine::invariants::analyze_invariants;
 use analysis_engine::loader::load_dir;
 use analysis_engine::refactoring::analyze_refactoring;
-use analysis_engine::smt::encoder::EncodedGraph;
+use analysis_engine::augment::augment_with_errors;
 use analysis_engine::smt::equivalence::check_equivalence;
 use analysis_engine::smt::invariants::prove_invariants;
 use analysis_engine::smt::reachability::check_repair_surface;
@@ -20,12 +20,14 @@ struct Args {
     dir: PathBuf,
     phase: String,
     epsilon: f32,
+    clear_cache: bool,
 }
 
 fn parse_args() -> Result<Args> {
     let mut dir = PathBuf::from("analysis");
     let mut phase = String::from("all");
     let mut epsilon = 0.1f32;
+    let mut clear_cache = false;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -40,14 +42,21 @@ fn parse_args() -> Result<Args> {
                 let raw = args.next().ok_or_else(|| anyhow!("--epsilon requires a value"))?;
                 epsilon = raw.parse::<f32>()?;
             }
+            "--clear-cache" => {
+                clear_cache = true;
+            }
             _ => return Err(anyhow!("unknown argument: {}", arg)),
         }
     }
-    Ok(Args { dir, phase, epsilon })
+    Ok(Args { dir, phase, epsilon, clear_cache })
 }
 
 fn main() -> Result<()> {
     let args = parse_args()?;
+    let errors_json = args.dir.join("errors.json");
+    if errors_json.exists() {
+        augment_with_errors(&args.dir, &errors_json)?;
+    }
     let graph = load_dir(&args.dir)?;
     match args.phase.as_str() {
         "all" => {
@@ -57,25 +66,31 @@ fn main() -> Result<()> {
             );
             let dup_report = dup_res?;
             let refactoring = analyze_refactoring(&graph, &dup_report);
-            let session = SmtSession::new(5000);
-            let (reachability, inv_value, mut ref_value) = session.run(|| {
-                let encoded = EncodedGraph::build(&graph);
-                let reachability = check_repair_surface(&session, &graph, &encoded, &graph.repair_surface);
-                let inv_value = {
-                    let inv_value = serde_json::to_value(&inv_report).unwrap_or(serde_json::Value::Null);
-                    prove_invariants(&session, &encoded, &inv_value)
-                };
-                let mut ref_value = serde_json::to_value(&refactoring).unwrap_or(serde_json::Value::Null);
-                let eq = check_equivalence(&session, &graph, &encoded, &ref_value);
-                if let Some(obj) = ref_value.as_object_mut() {
-                    obj.insert("smt_equivalence".to_string(), serde_json::to_value(eq).unwrap_or(serde_json::Value::Null));
-                }
-                (reachability, inv_value, ref_value)
-            });
+            let cache_path = args.dir.join("smt_cache.json");
+            let session = SmtSession::new(5000, cache_path, args.clear_cache);
+            let reachability = check_repair_surface(&session, &graph, &graph.repair_surface);
+            let inv_value = {
+                let inv_value = serde_json::to_value(&inv_report).unwrap_or(serde_json::Value::Null);
+                prove_invariants(&session, &graph, &inv_value)
+            };
+            let mut ref_value = serde_json::to_value(&refactoring).unwrap_or(serde_json::Value::Null);
+            let eq = check_equivalence(&session, &graph, &ref_value);
+            if let Some(obj) = ref_value.as_object_mut() {
+                obj.insert("smt_equivalence".to_string(), serde_json::to_value(eq).unwrap_or(serde_json::Value::Null));
+            }
             write_json(&args.dir, "semantic_duplicates.json", &dup_report)?;
             write_json(&args.dir, "invariants.json", &inv_value)?;
             write_json(&args.dir, "anomalies.json", &anom_report)?;
             write_json(&args.dir, "refactoring_candidates.json", &ref_value)?;
+            if !graph.repair_surface.is_null() {
+                let smt_surface = build_repair_surface_smt(&graph.repair_surface, &reachability);
+                write_json(&args.dir, "repair_surface_smt.json", &smt_surface)?;
+            }
+        }
+        "reachability" => {
+            let cache_path = args.dir.join("smt_cache.json");
+            let session = SmtSession::new(5000, cache_path, args.clear_cache);
+            let reachability = check_repair_surface(&session, &graph, &graph.repair_surface);
             if !graph.repair_surface.is_null() {
                 let smt_surface = build_repair_surface_smt(&graph.repair_surface, &reachability);
                 write_json(&args.dir, "repair_surface_smt.json", &smt_surface)?;
