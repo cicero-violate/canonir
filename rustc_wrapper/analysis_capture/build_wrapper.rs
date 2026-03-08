@@ -17,6 +17,18 @@ fn main() {
         std::process::exit(1);
     }
 
+    let status = Command::new("cargo")
+        .args(["build", "-p", "analysis-engine"])
+        .env("RUSTC_WRAPPER", "")
+        .env("CARGO_BUILD_RUSTC_WRAPPER", "")
+        .current_dir(".")
+        .status()
+        .expect("failed to build analysis-engine");
+    if !status.success() {
+        eprintln!("cargo build analysis-engine failed");
+        std::process::exit(1);
+    }
+
     let _target_dir = PathBuf::from("../../target/debug");
 
     let status = Command::new("cargo")

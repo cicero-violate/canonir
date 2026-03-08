@@ -130,10 +130,22 @@ fn read_nodes_csv(path: std::path::PathBuf) -> Result<Vec<Node>> {
         if parts.len() < 6 {
             continue;
         }
-        let id = parts[0].parse::<u32>()?;
-        let kind = parse_node_kind(parts[1])?;
-        let line_no = parts[parts.len() - 2].parse::<u32>()?;
-        let col = parts[parts.len() - 1].parse::<u32>()?;
+        let id = match parts[0].parse::<u32>() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let kind = match parse_node_kind(parts[1]) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let line_no = match parts[parts.len() - 2].parse::<u32>() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let col = match parts[parts.len() - 1].parse::<u32>() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
         let file = parts[parts.len() - 3].to_string();
         let symbol = parts[2..parts.len() - 3].join(",");
         nodes.push(Node {
@@ -159,9 +171,18 @@ fn read_edges_csv(path: std::path::PathBuf) -> Result<Vec<Edge>> {
         if parts.len() < 3 {
             continue;
         }
-        let src = parts[0].parse::<u32>()?;
-        let dst = parts[1].parse::<u32>()?;
-        let kind = parse_edge_kind(parts[2])?;
+        let src = match parts[0].parse::<u32>() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let dst = match parts[1].parse::<u32>() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let kind = match parse_edge_kind(parts[2]) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
         edges.push(Edge { src, dst, kind });
     }
     Ok(edges)
@@ -484,7 +505,21 @@ fn build_edges(
 fn span_info(tcx: TyCtxt<'_>, span: rustc_span::Span) -> (String, u32, u32) {
     let sm = tcx.sess.source_map();
     let loc = sm.lookup_char_pos(span.lo());
-    let file = format!("{:?}", loc.file.name);
+    let mut file = format!("{:?}", loc.file.name);
+    if file.contains("name: \"") {
+        if let Some(start) = file.find("name: \"") {
+            let rest = &file[start + 7..];
+            if let Some(end) = rest.find('"') {
+                file = rest[..end].to_string();
+            }
+        }
+    }
+    if file.contains('\n') || file.contains('\r') {
+        file = file.replace('\n', " ").replace('\r', " ");
+    }
+    if file.contains(',') {
+        file = file.replace(',', ";");
+    }
     let line = loc.line as u32;
     let col = loc.col.to_usize() as u32 + 1;
     (file, line, col)

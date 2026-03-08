@@ -28,13 +28,15 @@ fn write_nodes_csv(output_dir: &Path, nodes: &[Node]) -> Result<()> {
     let mut file = fs::File::create(path)?;
     writeln!(file, "node_id,node_kind,symbol,file,line,column")?;
     for node in nodes {
+        let symbol = sanitize_csv_field(&node.symbol);
+        let file_field = sanitize_csv_field(&node.file);
         writeln!(
             file,
             "{},{},{},{},{},{}",
             node.id,
             node_kind_str(node.kind),
-            node.symbol,
-            node.file,
+            symbol,
+            file_field,
             node.line,
             node.column
         )?;
@@ -98,6 +100,14 @@ fn edge_kind_str(kind: crate::types::EdgeKind) -> &'static str {
         crate::types::EdgeKind::ErrorToFunction => "ERROR_TO_FUNCTION",
         crate::types::EdgeKind::ErrorToBlock => "ERROR_TO_BLOCK",
     }
+}
+
+fn sanitize_csv_field(raw: &str) -> String {
+    let mut out = raw.replace('\n', " ").replace('\r', " ");
+    if out.contains(',') {
+        out = out.replace(',', ";");
+    }
+    out
 }
 
 fn write_kinds(output_dir: &Path) -> Result<()> {

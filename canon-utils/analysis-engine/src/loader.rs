@@ -119,10 +119,22 @@ fn read_nodes_csv(path: PathBuf) -> Result<Vec<Node>> {
         if parts.len() < 6 {
             return Err(anyhow!("invalid nodes.csv line"));
         }
-        let id = parts[0].parse::<u32>()?;
-        let kind = parse_node_kind(parts[1])?;
-        let line_no = parts[parts.len() - 2].parse::<u32>()?;
-        let col = parts[parts.len() - 1].parse::<u32>()?;
+        let id = match parts[0].parse::<u32>() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let kind = match parse_node_kind(parts[1]) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let line_no = match parts[parts.len() - 2].parse::<u32>() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let col = match parts[parts.len() - 1].parse::<u32>() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
         let file = parts[parts.len() - 3].to_string();
         let symbol = parts[2..parts.len() - 3].join(",");
         nodes.push(Node {
@@ -148,9 +160,18 @@ fn read_edges_csv(path: PathBuf) -> Result<Vec<Edge>> {
         if parts.len() < 3 {
             return Err(anyhow!("invalid edges.csv line"));
         }
-        let src = parts[0].parse::<u32>()?;
-        let dst = parts[1].parse::<u32>()?;
-        let kind = parse_edge_kind(parts[2])?;
+        let src = match parts[0].parse::<u32>() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let dst = match parts[1].parse::<u32>() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let kind = match parse_edge_kind(parts[2]) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
         edges.push(Edge { src, dst, kind });
     }
     Ok(edges)

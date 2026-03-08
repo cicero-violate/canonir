@@ -4,3 +4,4 @@ pub mod emit;
 pub mod invariants;
 pub mod loader;
 pub mod refactoring;
+pub mod smt;

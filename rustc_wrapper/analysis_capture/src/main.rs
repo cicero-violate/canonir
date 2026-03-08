@@ -176,10 +176,12 @@ fn main() {
         }
         if should_run_analysis_engine(crate_name.as_deref(), &crate_types, &output_dir) {
             if let Some(bin) = analysis_engine_bin(&output_dir) {
-                if let Ok(_lock) = OpenOptions::new().write(true).create_new(true).open(output_dir.join(".analysis_engine.lock")) {
+                let lock_path = output_dir.join(".analysis_engine.lock");
+                if let Ok(_lock) = OpenOptions::new().write(true).create_new(true).open(&lock_path) {
                     let status = Command::new(bin)
                         .args(["--dir", output_dir.to_string_lossy().as_ref(), "--phase", "all"])
                         .status();
+                    let _ = fs::remove_file(&lock_path);
                     if let Ok(status) = status {
                         if !status.success() {
                             eprintln!("analysis_capture: analysis-engine failed with status {:?}", status.code());
@@ -188,8 +190,6 @@ fn main() {
                         eprintln!("analysis_capture: failed to execute analysis-engine");
                     }
                 }
-            } else {
-                eprintln!("analysis_capture: analysis-engine binary not found; skipping");
             }
         }
     } else {
@@ -349,8 +349,19 @@ fn should_run_analysis_engine(crate_name: Option<&str>, crate_types: &[String], 
 }
 
 fn analysis_engine_bin(output_dir: &Path) -> Option<PathBuf> {
-    let project_root = output_dir.parent()?;
-    let target_dir = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|| project_root.join("target"));
-    let bin = target_dir.join("debug").join("analysis-engine");
-    if bin.exists() { Some(bin) } else { None }
+    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from) {
+        let bin = target_dir.join("debug").join("analysis-engine");
+        if bin.exists() {
+            return Some(bin);
+        }
+    }
+    let mut cursor = output_dir.parent();
+    while let Some(dir) = cursor {
+        let bin = dir.join("target").join("debug").join("analysis-engine");
+        if bin.exists() {
+            return Some(bin);
+        }
+        cursor = dir.parent();
+    }
+    None
 }
