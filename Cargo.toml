@@ -12,6 +12,8 @@ members = [
   "canon-agent",
   "canon-agent-v2",
   "canon-utils/rename",
+  "canon-utils/mir_analysis",
+  "rustc_wrapper/mir_capture",
   "gpjson-rs",
 ]
 exclude = [
