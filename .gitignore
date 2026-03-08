@@ -126,3 +126,7 @@ chrome-dev-profile/
 **/analysis/*.csv
 **/analysis/*.bin
 **/analysis/*.json
+**/analysis/*.jsonl
+**/analysis/*.lock
+**/analysis/*.txt
+
