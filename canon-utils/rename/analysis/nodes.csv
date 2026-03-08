@@ -11340,3 +11340,7 @@ node_id,node_kind,symbol,file,line,column
 11338,FIELD,structured::SymbolHandle::module_path,canon-utils/rename/src/structured.rs,27,1
 11339,FIELD,structured::SymbolHandle::name,canon-utils/rename/src/structured.rs,27,1
 11340,ENUM,structured::SymbolKind,canon-utils/rename/src/structured.rs,15,1
+11341,ERROR,error::unreachable_patterns::0,canon-utils/rename/src/core/rustc_session.rs,534,13
+11342,ERROR,error::private_interfaces::1,canon-utils/rename/src/core/project_editor_types.rs,30,5
+11343,ERROR,error::private_interfaces::2,canon-utils/rename/src/core/project_editor_types.rs,31,5
+11344,ERROR,error::unknown::3,unknown,0,0

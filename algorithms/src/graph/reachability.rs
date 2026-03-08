@@ -15,6 +15,7 @@ compile_error!("graph::reachability requires feature \"cuda\" (GPU-only module)"
 unsafe extern "C" {
     fn gpu_reachability(row_ptr: *const i32, col_idx: *const i32, v: i32, e: i32, roots: *const i32, root_count: i32, visited_out: *mut i32);
     fn gpu_reachability_batched(row_ptr: *const i32, col_idx: *const i32, v: i32, e: i32, roots: *const i32, r: i32, out: *mut i32);
+    fn gpu_reachability_tc(row_ptr: *const i32, col_idx: *const i32, v: i32, e: i32, w: i32, max_iters: i32, out: *mut u64);
 }
 
 /// GPU reachability from a set of roots. Returns visited mask.
@@ -80,6 +81,30 @@ pub fn reachability_batched_flat_gpu(csr: &Csr, roots: &[usize]) -> Vec<i32> {
             csr.edge_count() as i32,
             roots_i32.as_ptr(),
             r as i32,
+            out.as_mut_ptr(),
+        );
+    }
+    out
+}
+
+/// GPU transitive closure using bitset propagation.
+/// Returns flat V×W row-major bitset matrix where W = ceil(V/64).
+#[cfg(feature = "cuda")]
+pub fn reachability_tc_gpu(csr: &Csr, max_iters: usize) -> Vec<u64> {
+    let v = csr.vertex_count();
+    if v == 0 {
+        return Vec::new();
+    }
+    let w = (v + 63) / 64;
+    let mut out = vec![0u64; v * w];
+    unsafe {
+        gpu_reachability_tc(
+            csr.row_ptr.as_ptr(),
+            csr.col_idx.as_ptr(),
+            v as i32,
+            csr.edge_count() as i32,
+            w as i32,
+            max_iters as i32,
             out.as_mut_ptr(),
         );
     }

@@ -2,7 +2,7 @@
 //! Uses GPU reachability kernel for each node (O(V*(V+E))).
 
 use super::csr::Csr;
-use super::reachability::reachability_batched_flat_gpu;
+use super::reachability::reachability_tc_gpu;
 
 #[cfg(feature = "cuda")]
 pub fn scc_gpu(csr: &Csr) -> Vec<Vec<usize>> {
@@ -19,21 +19,29 @@ pub fn scc_gpu(csr: &Csr) -> Vec<Vec<usize>> {
         }
     }
     let rev = Csr::from_adj(&rev_adj);
-    let mut assigned = vec![false; v];
+    let w = (v + 63) / 64;
+    let to = reachability_tc_gpu(csr, v);
+    let from = reachability_tc_gpu(&rev, v);
+    let mut assigned_words = vec![0u64; w];
     let mut sccs = Vec::new();
-    let roots: Vec<usize> = (0..v).collect();
-    let fwd_flat = reachability_batched_flat_gpu(csr, &roots);
-    let rev_flat = reachability_batched_flat_gpu(&rev, &roots);
     for i in 0..v {
-        if assigned[i] {
+        let word = i >> 6;
+        let bit = i & 63;
+        if (assigned_words[word] >> bit) & 1 != 0 {
             continue;
         }
-        let base = i * v;
+        let base = i * w;
         let mut comp = Vec::new();
-        for j in 0..v {
-            if !assigned[j] && fwd_flat[base + j] != 0 && rev_flat[base + j] != 0 {
-                assigned[j] = true;
-                comp.push(j);
+        for wi in 0..w {
+            let mut bits = to[base + wi] & from[base + wi] & !assigned_words[wi];
+            while bits != 0 {
+                let tz = bits.trailing_zeros() as usize;
+                let j = wi * 64 + tz;
+                if j < v {
+                    assigned_words[wi] |= 1u64 << tz;
+                    comp.push(j);
+                }
+                bits &= bits - 1;
             }
         }
         if !comp.is_empty() {
