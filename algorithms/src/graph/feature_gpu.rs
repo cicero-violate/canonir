@@ -29,6 +29,8 @@ unsafe extern "C" {
         status: *const u8, indegree: *const i32, outdegree: *const i32, priority: *const u16, budget: *const u32, retry: *const u32, has_verify: *const u8, has_mutate: *const u8,
         has_observe: *const u8, node_type: *const u8, v: i32, out: *mut FeatureStats,
     );
+
+    fn gpu_edge_kind_histogram(row_ptr: *const i32, edge_kind: *const u8, v: i32, e: i32, kind_count: i32, out: *mut u32);
 }
 
 #[cfg(feature = "cuda")]
@@ -70,4 +72,26 @@ pub fn indegree_outdegree(csr: &Csr) -> (Vec<i32>, Vec<i32>) {
         }
     }
     (indegree, outdegree)
+}
+
+#[cfg(feature = "cuda")]
+pub fn edge_kind_histogram_gpu(csr: &Csr, edge_kind: &[u8], kind_count: usize) -> Vec<u32> {
+    if csr.vertex_count() == 0 || kind_count == 0 {
+        return Vec::new();
+    }
+    assert!(csr.vertex_count() <= i32::MAX as usize);
+    assert!(csr.edge_count() <= i32::MAX as usize);
+    assert_eq!(edge_kind.len(), csr.edge_count());
+    let mut out = vec![0u32; csr.vertex_count() * kind_count];
+    unsafe {
+        gpu_edge_kind_histogram(
+            csr.row_ptr.as_ptr(),
+            edge_kind.as_ptr(),
+            csr.vertex_count() as i32,
+            csr.edge_count() as i32,
+            kind_count as i32,
+            out.as_mut_ptr(),
+        );
+    }
+    out
 }

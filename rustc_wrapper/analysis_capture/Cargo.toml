@@ -1,0 +1,14 @@
+[package]
+name = "analysis_capture"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+upg_analysis = { path = "../../canon-utils/analysis" }
+anyhow = "1"
+serde_json = "1"
+libc = "0.2"
+
+[[bin]]
+name = "analysis_capture"
+path = "src/main.rs"

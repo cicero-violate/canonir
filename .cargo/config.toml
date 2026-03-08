@@ -1,0 +1,2 @@
+[build]
+rustc-wrapper = "/workspace/ai_sandbox/canon/target/debug/analysis_capture"

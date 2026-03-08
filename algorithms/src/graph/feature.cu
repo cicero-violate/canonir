@@ -20,6 +20,30 @@ struct FeatureStats {
     unsigned long long outdegree_sum;
 };
 
+// One thread per vertex; each thread writes only to its own row in `out`.
+// If this kernel is ever parallelized over edges instead of vertices, atomic
+// increments would be required to avoid lost updates.
+__global__ void edge_kind_histogram_kernel(
+    const int* row_ptr,
+    const uint8_t* edge_kind,
+    int v,
+    int kind_count,
+    uint32_t* out
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= v) return;
+
+    int start = row_ptr[i];
+    int end = row_ptr[i + 1];
+    uint32_t* base = out + (i * kind_count);
+    for (int e = start; e < end; ++e) {
+        uint8_t k = edge_kind[e];
+    if (k < kind_count) {
+        base[k] += 1;
+    }
+}
+}
+
 __global__ void feature_kernel(
     const uint8_t* status,
     const int* indegree,
@@ -135,4 +159,41 @@ extern "C" void gpu_feature_stats(
     cudaFree(d_has_mutate);
     cudaFree(d_has_observe);
     cudaFree(d_node_type);
+}
+
+extern "C" void gpu_edge_kind_histogram(
+    const int* row_ptr,
+    const uint8_t* edge_kind,
+    int v,
+    int e,
+    int kind_count,
+    uint32_t* out
+) {
+#define CUDA_CHECK(call) do { cudaError_t err__ = (call); if (err__ != cudaSuccess) { goto cleanup; } } while (0)
+
+    int* d_row = nullptr;
+    uint8_t* d_kind = nullptr;
+    uint32_t* d_out = nullptr;
+    int threads = 256;
+    int blocks = (v + threads - 1) / threads;
+
+    CUDA_CHECK(cudaMalloc(&d_row, (v + 1) * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_kind, e * sizeof(uint8_t)));
+    CUDA_CHECK(cudaMalloc(&d_out, (size_t)v * (size_t)kind_count * sizeof(uint32_t)));
+
+    CUDA_CHECK(cudaMemcpy(d_row, row_ptr, (v + 1) * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_kind, edge_kind, e * sizeof(uint8_t), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemset(d_out, 0, (size_t)v * (size_t)kind_count * sizeof(uint32_t)));
+
+    edge_kind_histogram_kernel<<<blocks, threads>>>(d_row, d_kind, v, kind_count, d_out);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    CUDA_CHECK(cudaMemcpy(out, d_out, (size_t)v * (size_t)kind_count * sizeof(uint32_t), cudaMemcpyDeviceToHost));
+
+cleanup:
+    if (d_row) cudaFree(d_row);
+    if (d_kind) cudaFree(d_kind);
+    if (d_out) cudaFree(d_out);
+#undef CUDA_CHECK
 }
