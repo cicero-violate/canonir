@@ -169,9 +169,13 @@ fn main() {
             }
             let nodes_csv = output_dir.join("nodes.csv");
             if nodes_csv.exists() {
-                if let Err(err) = upg_analysis::augment_with_errors(&output_dir, &errors_json) {
-                    eprintln!("analysis_capture: failed to augment UPG with errors: {err}");
-                }
+                let output_dir2 = output_dir.clone();
+                let errors_json2 = errors_json.clone();
+                std::thread::spawn(move || {
+                    if let Err(err) = upg_analysis::augment_with_errors(&output_dir2, &errors_json2) {
+                        eprintln!("analysis_capture: failed to augment UPG with errors: {err}");
+                    }
+                });
             }
             std::process::exit(1);
         }
@@ -188,17 +192,9 @@ fn main() {
                     }
                 }
                 if let Ok(_lock) = OpenOptions::new().write(true).create_new(true).open(&lock_path) {
-                    let status = Command::new(bin)
+                    let _child = Command::new(bin)
                         .args(["--dir", output_dir.to_string_lossy().as_ref(), "--phase", "all"])
-                        .status();
-                    let _ = fs::remove_file(&lock_path);
-                    if let Ok(status) = status {
-                        if !status.success() {
-                            eprintln!("analysis_capture: analysis-engine failed with status {:?}", status.code());
-                        }
-                    } else {
-                        eprintln!("analysis_capture: failed to execute analysis-engine");
-                    }
+                        .spawn();
                 }
             }
         }
