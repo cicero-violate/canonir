@@ -1,6 +1,6 @@
 // use anyhow::Result;
-use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
+// use std::path::{Path, PathBuf};
+// use walkdir::WalkDir;
 
 pub fn collect_rs_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
