@@ -5079,358 +5079,350 @@ node_id,node_kind,symbol,file,line,column
 5077,BASIC_BLOCK,extract::unwind_target::bb7,canon-utils/analysis/src/extract.rs,612,2
 5078,FUNCTION,extract::unwind_target::fn,canon-utils/analysis/src/extract.rs,604,1
 5079,PARAM,extract::unwind_target::param0,canon-utils/analysis/src/extract.rs,604,18
-5080,MODULE,types,canon-utils/analysis/src/lib.rs,11,1
-5081,STRUCT,types::Edge,canon-utils/analysis/src/types.rs,54,1
-5082,FIELD,types::Edge::dst,canon-utils/analysis/src/types.rs,54,1
-5083,FIELD,types::Edge::kind,canon-utils/analysis/src/types.rs,54,1
-5084,FIELD,types::Edge::src,canon-utils/analysis/src/types.rs,54,1
-5085,ENUM,types::EdgeKind,canon-utils/analysis/src/types.rs,22,1
-5086,STRUCT,types::Metadata,canon-utils/analysis/src/types.rs,61,1
-5087,FIELD,types::Metadata::edge_count,canon-utils/analysis/src/types.rs,61,1
-5088,FIELD,types::Metadata::generated_by,canon-utils/analysis/src/types.rs,61,1
-5089,FIELD,types::Metadata::node_count,canon-utils/analysis/src/types.rs,61,1
-5090,FIELD,types::Metadata::project,canon-utils/analysis/src/types.rs,61,1
-5091,STRUCT,types::Node,canon-utils/analysis/src/types.rs,44,1
-5092,FIELD,types::Node::column,canon-utils/analysis/src/types.rs,44,1
-5093,FIELD,types::Node::file,canon-utils/analysis/src/types.rs,44,1
-5094,FIELD,types::Node::id,canon-utils/analysis/src/types.rs,44,1
-5095,FIELD,types::Node::kind,canon-utils/analysis/src/types.rs,44,1
-5096,FIELD,types::Node::line,canon-utils/analysis/src/types.rs,44,1
-5097,FIELD,types::Node::symbol,canon-utils/analysis/src/types.rs,44,1
-5098,ENUM,types::NodeKind,canon-utils/analysis/src/types.rs,4,1
-5099,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::FIELDS::bb0,canon-utils/analysis/src/types.rs,53,35
-5100,ENUM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::__Field,canon-utils/analysis/src/types.rs,53,35
-5101,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::__FieldVisitor,canon-utils/analysis/src/types.rs,53,35
-5102,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::__Visitor,canon-utils/analysis/src/types.rs,53,35
-5103,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::__Visitor::lifetime,canon-utils/analysis/src/types.rs,53,35
-5104,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::__Visitor::marker,canon-utils/analysis/src/types.rs,53,35
-5105,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::bb0,canon-utils/analysis/src/types.rs,53,35
-5106,CALL_SITE,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::bb0::call0,canon-utils/analysis/src/types.rs,53,35
-5107,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::bb1,canon-utils/analysis/src/types.rs,53,46
-5108,METHOD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::fn,canon-utils/analysis/src/types.rs,53,35
-5109,PARAM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::param0,canon-utils/analysis/src/types.rs,53,35
-5110,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::VARIANTS::bb0,canon-utils/analysis/src/types.rs,21,41
-5111,ENUM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::__Field,canon-utils/analysis/src/types.rs,21,41
-5112,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::__FieldVisitor,canon-utils/analysis/src/types.rs,21,41
-5113,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::__Visitor,canon-utils/analysis/src/types.rs,21,41
-5114,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::__Visitor::lifetime,canon-utils/analysis/src/types.rs,21,41
-5115,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::__Visitor::marker,canon-utils/analysis/src/types.rs,21,41
-5116,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::bb0,canon-utils/analysis/src/types.rs,21,41
-5117,CALL_SITE,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::bb0::call0,canon-utils/analysis/src/types.rs,21,41
-5118,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::bb1,canon-utils/analysis/src/types.rs,21,52
-5119,METHOD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::fn,canon-utils/analysis/src/types.rs,21,41
-5120,PARAM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::param0,canon-utils/analysis/src/types.rs,21,41
-5121,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::FIELDS::bb0,canon-utils/analysis/src/types.rs,60,35
-5122,ENUM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::__Field,canon-utils/analysis/src/types.rs,60,35
-5123,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::__FieldVisitor,canon-utils/analysis/src/types.rs,60,35
-5124,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::__Visitor,canon-utils/analysis/src/types.rs,60,35
-5125,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::__Visitor::lifetime,canon-utils/analysis/src/types.rs,60,35
-5126,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::__Visitor::marker,canon-utils/analysis/src/types.rs,60,35
-5127,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::bb0,canon-utils/analysis/src/types.rs,60,35
-5128,CALL_SITE,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::bb0::call0,canon-utils/analysis/src/types.rs,60,35
-5129,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::bb1,canon-utils/analysis/src/types.rs,60,46
-5130,METHOD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::fn,canon-utils/analysis/src/types.rs,60,35
-5131,PARAM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::param0,canon-utils/analysis/src/types.rs,60,35
-5132,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::FIELDS::bb0,canon-utils/analysis/src/types.rs,43,35
-5133,ENUM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::__Field,canon-utils/analysis/src/types.rs,43,35
-5134,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::__FieldVisitor,canon-utils/analysis/src/types.rs,43,35
-5135,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::__Visitor,canon-utils/analysis/src/types.rs,43,35
-5136,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::__Visitor::lifetime,canon-utils/analysis/src/types.rs,43,35
-5137,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::__Visitor::marker,canon-utils/analysis/src/types.rs,43,35
-5138,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::bb0,canon-utils/analysis/src/types.rs,43,35
-5139,CALL_SITE,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::bb0::call0,canon-utils/analysis/src/types.rs,43,35
-5140,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::bb1,canon-utils/analysis/src/types.rs,43,46
-5141,METHOD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::fn,canon-utils/analysis/src/types.rs,43,35
-5142,PARAM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::param0,canon-utils/analysis/src/types.rs,43,35
-5143,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::VARIANTS::bb0,canon-utils/analysis/src/types.rs,3,41
-5144,ENUM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::__Field,canon-utils/analysis/src/types.rs,3,41
-5145,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::__FieldVisitor,canon-utils/analysis/src/types.rs,3,41
-5146,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::__Visitor,canon-utils/analysis/src/types.rs,3,41
-5147,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::__Visitor::lifetime,canon-utils/analysis/src/types.rs,3,41
-5148,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::__Visitor::marker,canon-utils/analysis/src/types.rs,3,41
-5149,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::bb0,canon-utils/analysis/src/types.rs,3,41
-5150,CALL_SITE,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::bb0::call0,canon-utils/analysis/src/types.rs,3,41
-5151,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::bb1,canon-utils/analysis/src/types.rs,3,52
-5152,METHOD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::fn,canon-utils/analysis/src/types.rs,3,41
-5153,PARAM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::param0,canon-utils/analysis/src/types.rs,3,41
-5154,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb0,canon-utils/analysis/src/types.rs,53,24
-5155,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb1,canon-utils/analysis/src/types.rs,53,24
-5156,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb10,canon-utils/analysis/src/types.rs,53,24
-5157,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb11,canon-utils/analysis/src/types.rs,53,24
-5158,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb11::call5,canon-utils/analysis/src/types.rs,53,24
-5159,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb12,canon-utils/analysis/src/types.rs,53,24
-5160,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb12::call6,canon-utils/analysis/src/types.rs,53,24
-5161,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb13,canon-utils/analysis/src/types.rs,53,24
-5162,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb13::call7,canon-utils/analysis/src/types.rs,53,24
-5163,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb14,canon-utils/analysis/src/types.rs,53,24
-5164,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb15,canon-utils/analysis/src/types.rs,53,24
-5165,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb15::call8,canon-utils/analysis/src/types.rs,53,24
-5166,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb16,canon-utils/analysis/src/types.rs,53,24
-5167,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb16::call9,canon-utils/analysis/src/types.rs,53,24
-5168,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb17,canon-utils/analysis/src/types.rs,53,24
-5169,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb17::call10,canon-utils/analysis/src/types.rs,53,24
-5170,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb18,canon-utils/analysis/src/types.rs,53,24
-5171,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb19,canon-utils/analysis/src/types.rs,53,24
-5172,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb19::call11,canon-utils/analysis/src/types.rs,53,24
-5173,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb2,canon-utils/analysis/src/types.rs,53,24
-5174,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb20,canon-utils/analysis/src/types.rs,53,24
-5175,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb20::call12,canon-utils/analysis/src/types.rs,53,24
-5176,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb21,canon-utils/analysis/src/types.rs,53,32
-5177,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb22,canon-utils/analysis/src/types.rs,53,32
-5178,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb23,canon-utils/analysis/src/types.rs,53,32
-5179,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb24,canon-utils/analysis/src/types.rs,53,33
-5180,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb25,canon-utils/analysis/src/types.rs,53,24
-5181,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb26,canon-utils/analysis/src/types.rs,53,32
-5182,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb27,canon-utils/analysis/src/types.rs,53,32
-5183,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb28,canon-utils/analysis/src/types.rs,53,32
-5184,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb29,canon-utils/analysis/src/types.rs,53,32
-5185,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb3,canon-utils/analysis/src/types.rs,53,24
-5186,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb30,canon-utils/analysis/src/types.rs,53,24
-5187,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb31,canon-utils/analysis/src/types.rs,53,24
-5188,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb32,canon-utils/analysis/src/types.rs,53,24
-5189,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb3::call0,canon-utils/analysis/src/types.rs,53,24
-5190,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb4,canon-utils/analysis/src/types.rs,53,24
-5191,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb4::call1,canon-utils/analysis/src/types.rs,53,24
-5192,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb5,canon-utils/analysis/src/types.rs,53,24
-5193,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb6,canon-utils/analysis/src/lib.rs,1,1
-5194,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb7,canon-utils/analysis/src/types.rs,53,24
-5195,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb7::call2,canon-utils/analysis/src/types.rs,53,24
-5196,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb8,canon-utils/analysis/src/types.rs,53,24
-5197,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb8::call3,canon-utils/analysis/src/types.rs,53,24
-5198,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb9,canon-utils/analysis/src/types.rs,53,24
-5199,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb9::call4,canon-utils/analysis/src/types.rs,53,24
-5200,METHOD,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::fn,canon-utils/analysis/src/types.rs,53,24
-5201,PARAM,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::param0,canon-utils/analysis/src/types.rs,53,24
-5202,PARAM,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::param1,canon-utils/analysis/src/types.rs,53,24
-5203,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb0,canon-utils/analysis/src/types.rs,21,30
-5204,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb1,canon-utils/analysis/src/types.rs,21,30
-5205,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb10,canon-utils/analysis/src/types.rs,21,30
-5206,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb10::call8,canon-utils/analysis/src/types.rs,21,30
-5207,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb11,canon-utils/analysis/src/types.rs,21,30
-5208,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb11::call9,canon-utils/analysis/src/types.rs,21,30
-5209,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb12,canon-utils/analysis/src/types.rs,21,30
-5210,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb12::call10,canon-utils/analysis/src/types.rs,21,30
-5211,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb13,canon-utils/analysis/src/types.rs,21,30
-5212,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb13::call11,canon-utils/analysis/src/types.rs,21,30
-5213,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb14,canon-utils/analysis/src/types.rs,21,30
-5214,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb14::call12,canon-utils/analysis/src/types.rs,21,30
-5215,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb15,canon-utils/analysis/src/types.rs,21,30
-5216,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb15::call13,canon-utils/analysis/src/types.rs,21,30
-5217,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb16,canon-utils/analysis/src/types.rs,21,30
-5218,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb16::call14,canon-utils/analysis/src/types.rs,21,30
-5219,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb17,canon-utils/analysis/src/types.rs,21,30
-5220,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb17::call15,canon-utils/analysis/src/types.rs,21,30
-5221,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb18,canon-utils/analysis/src/types.rs,21,30
-5222,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb18::call16,canon-utils/analysis/src/types.rs,21,30
-5223,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb19,canon-utils/analysis/src/types.rs,21,30
-5224,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb19::call17,canon-utils/analysis/src/types.rs,21,30
-5225,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb2,canon-utils/analysis/src/types.rs,21,30
-5226,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb20,canon-utils/analysis/src/types.rs,21,39
-5227,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb2::call0,canon-utils/analysis/src/types.rs,21,30
-5228,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb3,canon-utils/analysis/src/types.rs,21,30
-5229,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb3::call1,canon-utils/analysis/src/types.rs,21,30
-5230,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb4,canon-utils/analysis/src/types.rs,21,30
-5231,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb4::call2,canon-utils/analysis/src/types.rs,21,30
-5232,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb5,canon-utils/analysis/src/types.rs,21,30
-5233,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb5::call3,canon-utils/analysis/src/types.rs,21,30
-5234,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb6,canon-utils/analysis/src/types.rs,21,30
-5235,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb6::call4,canon-utils/analysis/src/types.rs,21,30
-5236,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb7,canon-utils/analysis/src/types.rs,21,30
-5237,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb7::call5,canon-utils/analysis/src/types.rs,21,30
-5238,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb8,canon-utils/analysis/src/types.rs,21,30
-5239,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb8::call6,canon-utils/analysis/src/types.rs,21,30
-5240,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb9,canon-utils/analysis/src/types.rs,21,30
-5241,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb9::call7,canon-utils/analysis/src/types.rs,21,30
-5242,METHOD,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::fn,canon-utils/analysis/src/types.rs,21,30
-5243,PARAM,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::param0,canon-utils/analysis/src/types.rs,21,30
-5244,PARAM,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::param1,canon-utils/analysis/src/types.rs,21,30
-5245,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb0,canon-utils/analysis/src/types.rs,60,24
-5246,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb1,canon-utils/analysis/src/types.rs,60,24
-5247,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb10,canon-utils/analysis/src/types.rs,60,24
-5248,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb10::call4,canon-utils/analysis/src/types.rs,60,24
-5249,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb11,canon-utils/analysis/src/types.rs,60,24
-5250,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb12,canon-utils/analysis/src/types.rs,60,24
-5251,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb12::call5,canon-utils/analysis/src/types.rs,60,24
-5252,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb13,canon-utils/analysis/src/types.rs,60,24
-5253,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb13::call6,canon-utils/analysis/src/types.rs,60,24
-5254,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb14,canon-utils/analysis/src/types.rs,60,24
-5255,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb14::call7,canon-utils/analysis/src/types.rs,60,24
-5256,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb15,canon-utils/analysis/src/types.rs,60,24
-5257,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb16,canon-utils/analysis/src/types.rs,60,24
-5258,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb16::call8,canon-utils/analysis/src/types.rs,60,24
-5259,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb17,canon-utils/analysis/src/types.rs,60,24
-5260,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb17::call9,canon-utils/analysis/src/types.rs,60,24
-5261,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb18,canon-utils/analysis/src/types.rs,60,24
-5262,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb18::call10,canon-utils/analysis/src/types.rs,60,24
-5263,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb19,canon-utils/analysis/src/types.rs,60,24
-5264,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb2,canon-utils/analysis/src/types.rs,60,24
-5265,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb20,canon-utils/analysis/src/types.rs,60,24
-5266,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb20::call11,canon-utils/analysis/src/types.rs,60,24
-5267,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb21,canon-utils/analysis/src/types.rs,60,24
-5268,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb21::call12,canon-utils/analysis/src/types.rs,60,24
-5269,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb22,canon-utils/analysis/src/types.rs,60,24
-5270,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb22::call13,canon-utils/analysis/src/types.rs,60,24
-5271,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb23,canon-utils/analysis/src/types.rs,60,24
-5272,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb24,canon-utils/analysis/src/types.rs,60,24
-5273,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb24::call14,canon-utils/analysis/src/types.rs,60,24
-5274,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb25,canon-utils/analysis/src/types.rs,60,24
-5275,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb25::call15,canon-utils/analysis/src/types.rs,60,24
-5276,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb26,canon-utils/analysis/src/types.rs,60,32
-5277,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb27,canon-utils/analysis/src/types.rs,60,32
-5278,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb28,canon-utils/analysis/src/types.rs,60,32
-5279,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb29,canon-utils/analysis/src/types.rs,60,33
-5280,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb3,canon-utils/analysis/src/types.rs,60,24
-5281,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb30,canon-utils/analysis/src/types.rs,60,24
-5282,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb31,canon-utils/analysis/src/types.rs,60,32
-5283,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb32,canon-utils/analysis/src/types.rs,60,32
-5284,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb33,canon-utils/analysis/src/types.rs,60,32
-5285,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb34,canon-utils/analysis/src/types.rs,60,32
-5286,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb35,canon-utils/analysis/src/types.rs,60,24
-5287,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb36,canon-utils/analysis/src/types.rs,60,24
-5288,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb37,canon-utils/analysis/src/types.rs,60,24
-5289,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb38,canon-utils/analysis/src/types.rs,60,24
-5290,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb4,canon-utils/analysis/src/types.rs,60,24
-5291,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb4::call0,canon-utils/analysis/src/types.rs,60,24
-5292,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb5,canon-utils/analysis/src/types.rs,60,24
-5293,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb5::call1,canon-utils/analysis/src/types.rs,60,24
-5294,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb6,canon-utils/analysis/src/types.rs,60,24
-5295,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb7,canon-utils/analysis/src/lib.rs,1,1
-5296,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb8,canon-utils/analysis/src/types.rs,60,24
-5297,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb8::call2,canon-utils/analysis/src/types.rs,60,24
-5298,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb9,canon-utils/analysis/src/types.rs,60,24
-5299,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb9::call3,canon-utils/analysis/src/types.rs,60,24
-5300,METHOD,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::fn,canon-utils/analysis/src/types.rs,60,24
-5301,PARAM,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::param0,canon-utils/analysis/src/types.rs,60,24
-5302,PARAM,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::param1,canon-utils/analysis/src/types.rs,60,24
-5303,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb0,canon-utils/analysis/src/types.rs,43,24
-5304,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb1,canon-utils/analysis/src/types.rs,43,24
-5305,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb10,canon-utils/analysis/src/types.rs,43,24
-5306,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb10::call2,canon-utils/analysis/src/types.rs,43,24
-5307,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb11,canon-utils/analysis/src/types.rs,43,24
-5308,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb11::call3,canon-utils/analysis/src/types.rs,43,24
-5309,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb12,canon-utils/analysis/src/types.rs,43,24
-5310,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb12::call4,canon-utils/analysis/src/types.rs,43,24
-5311,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb13,canon-utils/analysis/src/types.rs,43,24
-5312,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb14,canon-utils/analysis/src/types.rs,43,24
-5313,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb14::call5,canon-utils/analysis/src/types.rs,43,24
-5314,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb15,canon-utils/analysis/src/types.rs,43,24
-5315,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb15::call6,canon-utils/analysis/src/types.rs,43,24
-5316,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb16,canon-utils/analysis/src/types.rs,43,24
-5317,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb16::call7,canon-utils/analysis/src/types.rs,43,24
-5318,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb17,canon-utils/analysis/src/types.rs,43,24
-5319,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb18,canon-utils/analysis/src/types.rs,43,24
-5320,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb18::call8,canon-utils/analysis/src/types.rs,43,24
-5321,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb19,canon-utils/analysis/src/types.rs,43,24
-5322,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb19::call9,canon-utils/analysis/src/types.rs,43,24
-5323,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb2,canon-utils/analysis/src/types.rs,43,24
-5324,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb20,canon-utils/analysis/src/types.rs,43,24
-5325,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb20::call10,canon-utils/analysis/src/types.rs,43,24
-5326,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb21,canon-utils/analysis/src/types.rs,43,24
-5327,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb22,canon-utils/analysis/src/types.rs,43,24
-5328,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb22::call11,canon-utils/analysis/src/types.rs,43,24
-5329,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb23,canon-utils/analysis/src/types.rs,43,24
-5330,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb23::call12,canon-utils/analysis/src/types.rs,43,24
-5331,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb24,canon-utils/analysis/src/types.rs,43,24
-5332,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb24::call13,canon-utils/analysis/src/types.rs,43,24
-5333,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb25,canon-utils/analysis/src/types.rs,43,24
-5334,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb26,canon-utils/analysis/src/types.rs,43,24
-5335,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb26::call14,canon-utils/analysis/src/types.rs,43,24
-5336,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb27,canon-utils/analysis/src/types.rs,43,24
-5337,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb27::call15,canon-utils/analysis/src/types.rs,43,24
-5338,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb28,canon-utils/analysis/src/types.rs,43,24
-5339,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb28::call16,canon-utils/analysis/src/types.rs,43,24
-5340,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb29,canon-utils/analysis/src/types.rs,43,24
-5341,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb3,canon-utils/analysis/src/types.rs,43,24
-5342,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb30,canon-utils/analysis/src/types.rs,43,24
-5343,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb30::call17,canon-utils/analysis/src/types.rs,43,24
-5344,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb31,canon-utils/analysis/src/types.rs,43,24
-5345,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb31::call18,canon-utils/analysis/src/types.rs,43,24
-5346,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb32,canon-utils/analysis/src/types.rs,43,24
-5347,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb32::call19,canon-utils/analysis/src/types.rs,43,24
-5348,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb33,canon-utils/analysis/src/types.rs,43,24
-5349,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb34,canon-utils/analysis/src/types.rs,43,24
-5350,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb34::call20,canon-utils/analysis/src/types.rs,43,24
-5351,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb35,canon-utils/analysis/src/types.rs,43,24
-5352,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb35::call21,canon-utils/analysis/src/types.rs,43,24
-5353,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb36,canon-utils/analysis/src/types.rs,43,32
-5354,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb37,canon-utils/analysis/src/types.rs,43,32
-5355,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb38,canon-utils/analysis/src/types.rs,43,32
-5356,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb39,canon-utils/analysis/src/types.rs,43,33
-5357,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb4,canon-utils/analysis/src/types.rs,43,24
-5358,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb40,canon-utils/analysis/src/types.rs,43,24
-5359,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb41,canon-utils/analysis/src/types.rs,43,32
-5360,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb42,canon-utils/analysis/src/types.rs,43,32
-5361,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb43,canon-utils/analysis/src/types.rs,43,32
-5362,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb44,canon-utils/analysis/src/types.rs,43,32
-5363,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb45,canon-utils/analysis/src/types.rs,43,24
-5364,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb46,canon-utils/analysis/src/types.rs,43,24
-5365,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb47,canon-utils/analysis/src/types.rs,43,24
-5366,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb48,canon-utils/analysis/src/types.rs,43,24
-5367,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb49,canon-utils/analysis/src/types.rs,43,24
-5368,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb5,canon-utils/analysis/src/types.rs,43,24
-5369,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb50,canon-utils/analysis/src/types.rs,43,24
-5370,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb6,canon-utils/analysis/src/types.rs,43,24
-5371,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb6::call0,canon-utils/analysis/src/types.rs,43,24
-5372,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb7,canon-utils/analysis/src/types.rs,43,24
-5373,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb7::call1,canon-utils/analysis/src/types.rs,43,24
-5374,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb8,canon-utils/analysis/src/types.rs,43,24
-5375,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb9,canon-utils/analysis/src/lib.rs,1,1
-5376,METHOD,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::fn,canon-utils/analysis/src/types.rs,43,24
-5377,PARAM,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::param0,canon-utils/analysis/src/types.rs,43,24
-5378,PARAM,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::param1,canon-utils/analysis/src/types.rs,43,24
-5379,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb0,canon-utils/analysis/src/types.rs,3,30
-5380,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb1,canon-utils/analysis/src/types.rs,3,30
-5381,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb10,canon-utils/analysis/src/types.rs,3,30
-5382,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb10::call8,canon-utils/analysis/src/types.rs,3,30
-5383,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb11,canon-utils/analysis/src/types.rs,3,30
-5384,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb11::call9,canon-utils/analysis/src/types.rs,3,30
-5385,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb12,canon-utils/analysis/src/types.rs,3,30
-5386,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb12::call10,canon-utils/analysis/src/types.rs,3,30
-5387,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb13,canon-utils/analysis/src/types.rs,3,30
-5388,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb13::call11,canon-utils/analysis/src/types.rs,3,30
-5389,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb14,canon-utils/analysis/src/types.rs,3,30
-5390,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb14::call12,canon-utils/analysis/src/types.rs,3,30
-5391,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb15,canon-utils/analysis/src/types.rs,3,30
-5392,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb15::call13,canon-utils/analysis/src/types.rs,3,30
-5393,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb16,canon-utils/analysis/src/types.rs,3,39
-5394,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb2,canon-utils/analysis/src/types.rs,3,30
-5395,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb2::call0,canon-utils/analysis/src/types.rs,3,30
-5396,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb3,canon-utils/analysis/src/types.rs,3,30
-5397,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb3::call1,canon-utils/analysis/src/types.rs,3,30
-5398,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb4,canon-utils/analysis/src/types.rs,3,30
-5399,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb4::call2,canon-utils/analysis/src/types.rs,3,30
-5400,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb5,canon-utils/analysis/src/types.rs,3,30
-5401,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb5::call3,canon-utils/analysis/src/types.rs,3,30
-5402,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb6,canon-utils/analysis/src/types.rs,3,30
-5403,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb6::call4,canon-utils/analysis/src/types.rs,3,30
-5404,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb7,canon-utils/analysis/src/types.rs,3,30
-5405,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb7::call5,canon-utils/analysis/src/types.rs,3,30
-5406,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb8,canon-utils/analysis/src/types.rs,3,30
-5407,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb8::call6,canon-utils/analysis/src/types.rs,3,30
-5408,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb9,canon-utils/analysis/src/types.rs,3,30
-5409,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb9::call7,canon-utils/analysis/src/types.rs,3,30
-5410,METHOD,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::fn,canon-utils/analysis/src/types.rs,3,30
-5411,PARAM,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::param0,canon-utils/analysis/src/types.rs,3,30
-5412,PARAM,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::param1,canon-utils/analysis/src/types.rs,3,30
-5413,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,3,30
-5414,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,3,41
-5415,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,21,30
-5416,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,21,41
-5417,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,43,24
-5418,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,43,35
-5419,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,53,24
-5420,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,53,35
-5421,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,60,24
-5422,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,60,35
-5423,ERROR,error::dead_code::0,canon-utils/analysis/src/extract.rs,86,4
-5424,ERROR,error::dead_code::1,canon-utils/analysis/src/extract.rs,121,4
-5425,ERROR,error::dead_code::2,canon-utils/analysis/src/extract.rs,162,4
-5426,ERROR,error::dead_code::3,canon-utils/analysis/src/extract.rs,190,4
-5427,ERROR,error::dead_code::4,canon-utils/analysis/src/extract.rs,210,4
-5428,ERROR,error::unknown::5,unknown,0,0
-5429,ERROR,error::dead_code::0,canon-utils/analysis/src/extract.rs,86,4
-5430,ERROR,error::dead_code::1,canon-utils/analysis/src/extract.rs,121,4
-5431,ERROR,error::dead_code::2,canon-utils/analysis/src/extract.rs,162,4
-5432,ERROR,error::dead_code::3,canon-utils/analysis/src/extract.rs,190,4
-5433,ERROR,error::dead_code::4,canon-utils/analysis/src/extract.rs,210,4
-5434,ERROR,error::unknown::5,unknown,0,0
+5080,BASIC_BLOCK,main::bb0,canon-utils/analysis/src/lib.rs,1,1
+5081,CALL_SITE,main::bb0::call0,canon-utils/analysis/src/lib.rs,1,1
+5082,BASIC_BLOCK,main::bb1,canon-utils/analysis/src/lib.rs,1,1
+5083,FUNCTION,main::fn,canon-utils/analysis/src/lib.rs,1,1
+5084,MODULE,types,canon-utils/analysis/src/lib.rs,11,1
+5085,STRUCT,types::Edge,canon-utils/analysis/src/types.rs,54,1
+5086,FIELD,types::Edge::dst,canon-utils/analysis/src/types.rs,54,1
+5087,FIELD,types::Edge::kind,canon-utils/analysis/src/types.rs,54,1
+5088,FIELD,types::Edge::src,canon-utils/analysis/src/types.rs,54,1
+5089,ENUM,types::EdgeKind,canon-utils/analysis/src/types.rs,22,1
+5090,STRUCT,types::Metadata,canon-utils/analysis/src/types.rs,61,1
+5091,FIELD,types::Metadata::edge_count,canon-utils/analysis/src/types.rs,61,1
+5092,FIELD,types::Metadata::generated_by,canon-utils/analysis/src/types.rs,61,1
+5093,FIELD,types::Metadata::node_count,canon-utils/analysis/src/types.rs,61,1
+5094,FIELD,types::Metadata::project,canon-utils/analysis/src/types.rs,61,1
+5095,STRUCT,types::Node,canon-utils/analysis/src/types.rs,44,1
+5096,FIELD,types::Node::column,canon-utils/analysis/src/types.rs,44,1
+5097,FIELD,types::Node::file,canon-utils/analysis/src/types.rs,44,1
+5098,FIELD,types::Node::id,canon-utils/analysis/src/types.rs,44,1
+5099,FIELD,types::Node::kind,canon-utils/analysis/src/types.rs,44,1
+5100,FIELD,types::Node::line,canon-utils/analysis/src/types.rs,44,1
+5101,FIELD,types::Node::symbol,canon-utils/analysis/src/types.rs,44,1
+5102,ENUM,types::NodeKind,canon-utils/analysis/src/types.rs,4,1
+5103,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::FIELDS::bb0,canon-utils/analysis/src/types.rs,53,35
+5104,ENUM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::__Field,canon-utils/analysis/src/types.rs,53,35
+5105,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::__FieldVisitor,canon-utils/analysis/src/types.rs,53,35
+5106,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::__Visitor,canon-utils/analysis/src/types.rs,53,35
+5107,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::__Visitor::lifetime,canon-utils/analysis/src/types.rs,53,35
+5108,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::__Visitor::marker,canon-utils/analysis/src/types.rs,53,35
+5109,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::bb0,canon-utils/analysis/src/types.rs,53,35
+5110,CALL_SITE,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::bb0::call0,canon-utils/analysis/src/types.rs,53,35
+5111,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::bb1,canon-utils/analysis/src/types.rs,53,46
+5112,METHOD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::fn,canon-utils/analysis/src/types.rs,53,35
+5113,PARAM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Edge>::deserialize::param0,canon-utils/analysis/src/types.rs,53,35
+5114,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::VARIANTS::bb0,canon-utils/analysis/src/types.rs,21,41
+5115,ENUM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::__Field,canon-utils/analysis/src/types.rs,21,41
+5116,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::__FieldVisitor,canon-utils/analysis/src/types.rs,21,41
+5117,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::__Visitor,canon-utils/analysis/src/types.rs,21,41
+5118,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::__Visitor::lifetime,canon-utils/analysis/src/types.rs,21,41
+5119,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::__Visitor::marker,canon-utils/analysis/src/types.rs,21,41
+5120,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::bb0,canon-utils/analysis/src/types.rs,21,41
+5121,CALL_SITE,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::bb0::call0,canon-utils/analysis/src/types.rs,21,41
+5122,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::bb1,canon-utils/analysis/src/types.rs,21,52
+5123,METHOD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::fn,canon-utils/analysis/src/types.rs,21,41
+5124,PARAM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::EdgeKind>::deserialize::param0,canon-utils/analysis/src/types.rs,21,41
+5125,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::FIELDS::bb0,canon-utils/analysis/src/types.rs,60,35
+5126,ENUM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::__Field,canon-utils/analysis/src/types.rs,60,35
+5127,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::__FieldVisitor,canon-utils/analysis/src/types.rs,60,35
+5128,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::__Visitor,canon-utils/analysis/src/types.rs,60,35
+5129,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::__Visitor::lifetime,canon-utils/analysis/src/types.rs,60,35
+5130,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::__Visitor::marker,canon-utils/analysis/src/types.rs,60,35
+5131,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::bb0,canon-utils/analysis/src/types.rs,60,35
+5132,CALL_SITE,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::bb0::call0,canon-utils/analysis/src/types.rs,60,35
+5133,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::bb1,canon-utils/analysis/src/types.rs,60,46
+5134,METHOD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::fn,canon-utils/analysis/src/types.rs,60,35
+5135,PARAM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Metadata>::deserialize::param0,canon-utils/analysis/src/types.rs,60,35
+5136,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::FIELDS::bb0,canon-utils/analysis/src/types.rs,43,35
+5137,ENUM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::__Field,canon-utils/analysis/src/types.rs,43,35
+5138,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::__FieldVisitor,canon-utils/analysis/src/types.rs,43,35
+5139,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::__Visitor,canon-utils/analysis/src/types.rs,43,35
+5140,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::__Visitor::lifetime,canon-utils/analysis/src/types.rs,43,35
+5141,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::__Visitor::marker,canon-utils/analysis/src/types.rs,43,35
+5142,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::bb0,canon-utils/analysis/src/types.rs,43,35
+5143,CALL_SITE,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::bb0::call0,canon-utils/analysis/src/types.rs,43,35
+5144,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::bb1,canon-utils/analysis/src/types.rs,43,46
+5145,METHOD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::fn,canon-utils/analysis/src/types.rs,43,35
+5146,PARAM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::Node>::deserialize::param0,canon-utils/analysis/src/types.rs,43,35
+5147,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::VARIANTS::bb0,canon-utils/analysis/src/types.rs,3,41
+5148,ENUM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::__Field,canon-utils/analysis/src/types.rs,3,41
+5149,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::__FieldVisitor,canon-utils/analysis/src/types.rs,3,41
+5150,STRUCT,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::__Visitor,canon-utils/analysis/src/types.rs,3,41
+5151,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::__Visitor::lifetime,canon-utils/analysis/src/types.rs,3,41
+5152,FIELD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::__Visitor::marker,canon-utils/analysis/src/types.rs,3,41
+5153,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::bb0,canon-utils/analysis/src/types.rs,3,41
+5154,CALL_SITE,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::bb0::call0,canon-utils/analysis/src/types.rs,3,41
+5155,BASIC_BLOCK,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::bb1,canon-utils/analysis/src/types.rs,3,52
+5156,METHOD,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::fn,canon-utils/analysis/src/types.rs,3,41
+5157,PARAM,types::_::<impl errors::_::_serde::Deserialize<'de> for types::NodeKind>::deserialize::param0,canon-utils/analysis/src/types.rs,3,41
+5158,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb0,canon-utils/analysis/src/types.rs,53,24
+5159,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb1,canon-utils/analysis/src/types.rs,53,24
+5160,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb10,canon-utils/analysis/src/types.rs,53,24
+5161,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb11,canon-utils/analysis/src/types.rs,53,24
+5162,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb11::call5,canon-utils/analysis/src/types.rs,53,24
+5163,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb12,canon-utils/analysis/src/types.rs,53,24
+5164,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb12::call6,canon-utils/analysis/src/types.rs,53,24
+5165,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb13,canon-utils/analysis/src/types.rs,53,24
+5166,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb13::call7,canon-utils/analysis/src/types.rs,53,24
+5167,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb14,canon-utils/analysis/src/types.rs,53,24
+5168,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb15,canon-utils/analysis/src/types.rs,53,24
+5169,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb15::call8,canon-utils/analysis/src/types.rs,53,24
+5170,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb16,canon-utils/analysis/src/types.rs,53,24
+5171,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb16::call9,canon-utils/analysis/src/types.rs,53,24
+5172,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb17,canon-utils/analysis/src/types.rs,53,24
+5173,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb17::call10,canon-utils/analysis/src/types.rs,53,24
+5174,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb18,canon-utils/analysis/src/types.rs,53,24
+5175,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb19,canon-utils/analysis/src/types.rs,53,24
+5176,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb19::call11,canon-utils/analysis/src/types.rs,53,24
+5177,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb2,canon-utils/analysis/src/types.rs,53,24
+5178,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb20,canon-utils/analysis/src/types.rs,53,24
+5179,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb20::call12,canon-utils/analysis/src/types.rs,53,24
+5180,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb21,canon-utils/analysis/src/types.rs,53,32
+5181,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb22,canon-utils/analysis/src/types.rs,53,32
+5182,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb23,canon-utils/analysis/src/types.rs,53,32
+5183,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb24,canon-utils/analysis/src/types.rs,53,33
+5184,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb25,canon-utils/analysis/src/types.rs,53,24
+5185,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb26,canon-utils/analysis/src/types.rs,53,32
+5186,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb27,canon-utils/analysis/src/types.rs,53,32
+5187,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb28,canon-utils/analysis/src/types.rs,53,32
+5188,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb29,canon-utils/analysis/src/types.rs,53,32
+5189,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb3,canon-utils/analysis/src/types.rs,53,24
+5190,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb30,canon-utils/analysis/src/types.rs,53,24
+5191,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb31,canon-utils/analysis/src/types.rs,53,24
+5192,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb32,canon-utils/analysis/src/types.rs,53,24
+5193,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb3::call0,canon-utils/analysis/src/types.rs,53,24
+5194,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb4,canon-utils/analysis/src/types.rs,53,24
+5195,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb4::call1,canon-utils/analysis/src/types.rs,53,24
+5196,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb5,canon-utils/analysis/src/types.rs,53,24
+5197,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb6,canon-utils/analysis/src/lib.rs,1,1
+5198,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb7,canon-utils/analysis/src/types.rs,53,24
+5199,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb7::call2,canon-utils/analysis/src/types.rs,53,24
+5200,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb8,canon-utils/analysis/src/types.rs,53,24
+5201,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb8::call3,canon-utils/analysis/src/types.rs,53,24
+5202,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb9,canon-utils/analysis/src/types.rs,53,24
+5203,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::bb9::call4,canon-utils/analysis/src/types.rs,53,24
+5204,METHOD,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::fn,canon-utils/analysis/src/types.rs,53,24
+5205,PARAM,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::param0,canon-utils/analysis/src/types.rs,53,24
+5206,PARAM,types::_::<impl errors::_::_serde::Serialize for types::Edge>::serialize::param1,canon-utils/analysis/src/types.rs,53,24
+5207,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb0,canon-utils/analysis/src/types.rs,21,30
+5208,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb1,canon-utils/analysis/src/types.rs,21,30
+5209,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb10,canon-utils/analysis/src/types.rs,21,30
+5210,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb10::call8,canon-utils/analysis/src/types.rs,21,30
+5211,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb11,canon-utils/analysis/src/types.rs,21,30
+5212,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb11::call9,canon-utils/analysis/src/types.rs,21,30
+5213,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb12,canon-utils/analysis/src/types.rs,21,30
+5214,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb12::call10,canon-utils/analysis/src/types.rs,21,30
+5215,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb13,canon-utils/analysis/src/types.rs,21,30
+5216,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb13::call11,canon-utils/analysis/src/types.rs,21,30
+5217,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb14,canon-utils/analysis/src/types.rs,21,30
+5218,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb14::call12,canon-utils/analysis/src/types.rs,21,30
+5219,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb15,canon-utils/analysis/src/types.rs,21,30
+5220,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb15::call13,canon-utils/analysis/src/types.rs,21,30
+5221,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb16,canon-utils/analysis/src/types.rs,21,30
+5222,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb16::call14,canon-utils/analysis/src/types.rs,21,30
+5223,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb17,canon-utils/analysis/src/types.rs,21,30
+5224,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb17::call15,canon-utils/analysis/src/types.rs,21,30
+5225,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb18,canon-utils/analysis/src/types.rs,21,30
+5226,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb18::call16,canon-utils/analysis/src/types.rs,21,30
+5227,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb19,canon-utils/analysis/src/types.rs,21,30
+5228,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb19::call17,canon-utils/analysis/src/types.rs,21,30
+5229,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb2,canon-utils/analysis/src/types.rs,21,30
+5230,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb20,canon-utils/analysis/src/types.rs,21,39
+5231,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb2::call0,canon-utils/analysis/src/types.rs,21,30
+5232,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb3,canon-utils/analysis/src/types.rs,21,30
+5233,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb3::call1,canon-utils/analysis/src/types.rs,21,30
+5234,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb4,canon-utils/analysis/src/types.rs,21,30
+5235,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb4::call2,canon-utils/analysis/src/types.rs,21,30
+5236,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb5,canon-utils/analysis/src/types.rs,21,30
+5237,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb5::call3,canon-utils/analysis/src/types.rs,21,30
+5238,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb6,canon-utils/analysis/src/types.rs,21,30
+5239,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb6::call4,canon-utils/analysis/src/types.rs,21,30
+5240,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb7,canon-utils/analysis/src/types.rs,21,30
+5241,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb7::call5,canon-utils/analysis/src/types.rs,21,30
+5242,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb8,canon-utils/analysis/src/types.rs,21,30
+5243,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb8::call6,canon-utils/analysis/src/types.rs,21,30
+5244,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb9,canon-utils/analysis/src/types.rs,21,30
+5245,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::bb9::call7,canon-utils/analysis/src/types.rs,21,30
+5246,METHOD,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::fn,canon-utils/analysis/src/types.rs,21,30
+5247,PARAM,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::param0,canon-utils/analysis/src/types.rs,21,30
+5248,PARAM,types::_::<impl errors::_::_serde::Serialize for types::EdgeKind>::serialize::param1,canon-utils/analysis/src/types.rs,21,30
+5249,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb0,canon-utils/analysis/src/types.rs,60,24
+5250,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb1,canon-utils/analysis/src/types.rs,60,24
+5251,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb10,canon-utils/analysis/src/types.rs,60,24
+5252,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb10::call4,canon-utils/analysis/src/types.rs,60,24
+5253,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb11,canon-utils/analysis/src/types.rs,60,24
+5254,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb12,canon-utils/analysis/src/types.rs,60,24
+5255,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb12::call5,canon-utils/analysis/src/types.rs,60,24
+5256,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb13,canon-utils/analysis/src/types.rs,60,24
+5257,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb13::call6,canon-utils/analysis/src/types.rs,60,24
+5258,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb14,canon-utils/analysis/src/types.rs,60,24
+5259,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb14::call7,canon-utils/analysis/src/types.rs,60,24
+5260,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb15,canon-utils/analysis/src/types.rs,60,24
+5261,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb16,canon-utils/analysis/src/types.rs,60,24
+5262,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb16::call8,canon-utils/analysis/src/types.rs,60,24
+5263,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb17,canon-utils/analysis/src/types.rs,60,24
+5264,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb17::call9,canon-utils/analysis/src/types.rs,60,24
+5265,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb18,canon-utils/analysis/src/types.rs,60,24
+5266,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb18::call10,canon-utils/analysis/src/types.rs,60,24
+5267,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb19,canon-utils/analysis/src/types.rs,60,24
+5268,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb2,canon-utils/analysis/src/types.rs,60,24
+5269,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb20,canon-utils/analysis/src/types.rs,60,24
+5270,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb20::call11,canon-utils/analysis/src/types.rs,60,24
+5271,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb21,canon-utils/analysis/src/types.rs,60,24
+5272,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb21::call12,canon-utils/analysis/src/types.rs,60,24
+5273,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb22,canon-utils/analysis/src/types.rs,60,24
+5274,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb22::call13,canon-utils/analysis/src/types.rs,60,24
+5275,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb23,canon-utils/analysis/src/types.rs,60,24
+5276,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb24,canon-utils/analysis/src/types.rs,60,24
+5277,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb24::call14,canon-utils/analysis/src/types.rs,60,24
+5278,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb25,canon-utils/analysis/src/types.rs,60,24
+5279,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb25::call15,canon-utils/analysis/src/types.rs,60,24
+5280,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb26,canon-utils/analysis/src/types.rs,60,32
+5281,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb27,canon-utils/analysis/src/types.rs,60,32
+5282,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb28,canon-utils/analysis/src/types.rs,60,32
+5283,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb29,canon-utils/analysis/src/types.rs,60,33
+5284,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb3,canon-utils/analysis/src/types.rs,60,24
+5285,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb30,canon-utils/analysis/src/types.rs,60,24
+5286,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb31,canon-utils/analysis/src/types.rs,60,32
+5287,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb32,canon-utils/analysis/src/types.rs,60,32
+5288,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb33,canon-utils/analysis/src/types.rs,60,32
+5289,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb34,canon-utils/analysis/src/types.rs,60,32
+5290,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb35,canon-utils/analysis/src/types.rs,60,24
+5291,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb36,canon-utils/analysis/src/types.rs,60,24
+5292,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb37,canon-utils/analysis/src/types.rs,60,24
+5293,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb38,canon-utils/analysis/src/types.rs,60,24
+5294,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb4,canon-utils/analysis/src/types.rs,60,24
+5295,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb4::call0,canon-utils/analysis/src/types.rs,60,24
+5296,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb5,canon-utils/analysis/src/types.rs,60,24
+5297,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb5::call1,canon-utils/analysis/src/types.rs,60,24
+5298,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb6,canon-utils/analysis/src/types.rs,60,24
+5299,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb7,canon-utils/analysis/src/lib.rs,1,1
+5300,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb8,canon-utils/analysis/src/types.rs,60,24
+5301,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb8::call2,canon-utils/analysis/src/types.rs,60,24
+5302,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb9,canon-utils/analysis/src/types.rs,60,24
+5303,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::bb9::call3,canon-utils/analysis/src/types.rs,60,24
+5304,METHOD,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::fn,canon-utils/analysis/src/types.rs,60,24
+5305,PARAM,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::param0,canon-utils/analysis/src/types.rs,60,24
+5306,PARAM,types::_::<impl errors::_::_serde::Serialize for types::Metadata>::serialize::param1,canon-utils/analysis/src/types.rs,60,24
+5307,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb0,canon-utils/analysis/src/types.rs,43,24
+5308,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb1,canon-utils/analysis/src/types.rs,43,24
+5309,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb10,canon-utils/analysis/src/types.rs,43,24
+5310,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb10::call2,canon-utils/analysis/src/types.rs,43,24
+5311,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb11,canon-utils/analysis/src/types.rs,43,24
+5312,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb11::call3,canon-utils/analysis/src/types.rs,43,24
+5313,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb12,canon-utils/analysis/src/types.rs,43,24
+5314,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb12::call4,canon-utils/analysis/src/types.rs,43,24
+5315,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb13,canon-utils/analysis/src/types.rs,43,24
+5316,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb14,canon-utils/analysis/src/types.rs,43,24
+5317,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb14::call5,canon-utils/analysis/src/types.rs,43,24
+5318,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb15,canon-utils/analysis/src/types.rs,43,24
+5319,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb15::call6,canon-utils/analysis/src/types.rs,43,24
+5320,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb16,canon-utils/analysis/src/types.rs,43,24
+5321,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb16::call7,canon-utils/analysis/src/types.rs,43,24
+5322,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb17,canon-utils/analysis/src/types.rs,43,24
+5323,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb18,canon-utils/analysis/src/types.rs,43,24
+5324,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb18::call8,canon-utils/analysis/src/types.rs,43,24
+5325,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb19,canon-utils/analysis/src/types.rs,43,24
+5326,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb19::call9,canon-utils/analysis/src/types.rs,43,24
+5327,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb2,canon-utils/analysis/src/types.rs,43,24
+5328,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb20,canon-utils/analysis/src/types.rs,43,24
+5329,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb20::call10,canon-utils/analysis/src/types.rs,43,24
+5330,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb21,canon-utils/analysis/src/types.rs,43,24
+5331,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb22,canon-utils/analysis/src/types.rs,43,24
+5332,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb22::call11,canon-utils/analysis/src/types.rs,43,24
+5333,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb23,canon-utils/analysis/src/types.rs,43,24
+5334,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb23::call12,canon-utils/analysis/src/types.rs,43,24
+5335,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb24,canon-utils/analysis/src/types.rs,43,24
+5336,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb24::call13,canon-utils/analysis/src/types.rs,43,24
+5337,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb25,canon-utils/analysis/src/types.rs,43,24
+5338,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb26,canon-utils/analysis/src/types.rs,43,24
+5339,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb26::call14,canon-utils/analysis/src/types.rs,43,24
+5340,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb27,canon-utils/analysis/src/types.rs,43,24
+5341,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb27::call15,canon-utils/analysis/src/types.rs,43,24
+5342,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb28,canon-utils/analysis/src/types.rs,43,24
+5343,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb28::call16,canon-utils/analysis/src/types.rs,43,24
+5344,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb29,canon-utils/analysis/src/types.rs,43,24
+5345,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb3,canon-utils/analysis/src/types.rs,43,24
+5346,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb30,canon-utils/analysis/src/types.rs,43,24
+5347,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb30::call17,canon-utils/analysis/src/types.rs,43,24
+5348,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb31,canon-utils/analysis/src/types.rs,43,24
+5349,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb31::call18,canon-utils/analysis/src/types.rs,43,24
+5350,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb32,canon-utils/analysis/src/types.rs,43,24
+5351,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb32::call19,canon-utils/analysis/src/types.rs,43,24
+5352,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb33,canon-utils/analysis/src/types.rs,43,24
+5353,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb34,canon-utils/analysis/src/types.rs,43,24
+5354,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb34::call20,canon-utils/analysis/src/types.rs,43,24
+5355,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb35,canon-utils/analysis/src/types.rs,43,24
+5356,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb35::call21,canon-utils/analysis/src/types.rs,43,24
+5357,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb36,canon-utils/analysis/src/types.rs,43,32
+5358,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb37,canon-utils/analysis/src/types.rs,43,32
+5359,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb38,canon-utils/analysis/src/types.rs,43,32
+5360,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb39,canon-utils/analysis/src/types.rs,43,33
+5361,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb4,canon-utils/analysis/src/types.rs,43,24
+5362,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb40,canon-utils/analysis/src/types.rs,43,24
+5363,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb41,canon-utils/analysis/src/types.rs,43,32
+5364,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb42,canon-utils/analysis/src/types.rs,43,32
+5365,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb43,canon-utils/analysis/src/types.rs,43,32
+5366,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb44,canon-utils/analysis/src/types.rs,43,32
+5367,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb45,canon-utils/analysis/src/types.rs,43,24
+5368,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb46,canon-utils/analysis/src/types.rs,43,24
+5369,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb47,canon-utils/analysis/src/types.rs,43,24
+5370,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb48,canon-utils/analysis/src/types.rs,43,24
+5371,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb49,canon-utils/analysis/src/types.rs,43,24
+5372,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb5,canon-utils/analysis/src/types.rs,43,24
+5373,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb50,canon-utils/analysis/src/types.rs,43,24
+5374,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb6,canon-utils/analysis/src/types.rs,43,24
+5375,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb6::call0,canon-utils/analysis/src/types.rs,43,24
+5376,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb7,canon-utils/analysis/src/types.rs,43,24
+5377,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb7::call1,canon-utils/analysis/src/types.rs,43,24
+5378,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb8,canon-utils/analysis/src/types.rs,43,24
+5379,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::bb9,canon-utils/analysis/src/lib.rs,1,1
+5380,METHOD,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::fn,canon-utils/analysis/src/types.rs,43,24
+5381,PARAM,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::param0,canon-utils/analysis/src/types.rs,43,24
+5382,PARAM,types::_::<impl errors::_::_serde::Serialize for types::Node>::serialize::param1,canon-utils/analysis/src/types.rs,43,24
+5383,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb0,canon-utils/analysis/src/types.rs,3,30
+5384,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb1,canon-utils/analysis/src/types.rs,3,30
+5385,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb10,canon-utils/analysis/src/types.rs,3,30
+5386,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb10::call8,canon-utils/analysis/src/types.rs,3,30
+5387,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb11,canon-utils/analysis/src/types.rs,3,30
+5388,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb11::call9,canon-utils/analysis/src/types.rs,3,30
+5389,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb12,canon-utils/analysis/src/types.rs,3,30
+5390,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb12::call10,canon-utils/analysis/src/types.rs,3,30
+5391,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb13,canon-utils/analysis/src/types.rs,3,30
+5392,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb13::call11,canon-utils/analysis/src/types.rs,3,30
+5393,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb14,canon-utils/analysis/src/types.rs,3,30
+5394,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb14::call12,canon-utils/analysis/src/types.rs,3,30
+5395,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb15,canon-utils/analysis/src/types.rs,3,30
+5396,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb15::call13,canon-utils/analysis/src/types.rs,3,30
+5397,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb16,canon-utils/analysis/src/types.rs,3,39
+5398,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb2,canon-utils/analysis/src/types.rs,3,30
+5399,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb2::call0,canon-utils/analysis/src/types.rs,3,30
+5400,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb3,canon-utils/analysis/src/types.rs,3,30
+5401,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb3::call1,canon-utils/analysis/src/types.rs,3,30
+5402,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb4,canon-utils/analysis/src/types.rs,3,30
+5403,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb4::call2,canon-utils/analysis/src/types.rs,3,30
+5404,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb5,canon-utils/analysis/src/types.rs,3,30
+5405,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb5::call3,canon-utils/analysis/src/types.rs,3,30
+5406,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb6,canon-utils/analysis/src/types.rs,3,30
+5407,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb6::call4,canon-utils/analysis/src/types.rs,3,30
+5408,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb7,canon-utils/analysis/src/types.rs,3,30
+5409,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb7::call5,canon-utils/analysis/src/types.rs,3,30
+5410,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb8,canon-utils/analysis/src/types.rs,3,30
+5411,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb8::call6,canon-utils/analysis/src/types.rs,3,30
+5412,BASIC_BLOCK,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb9,canon-utils/analysis/src/types.rs,3,30
+5413,CALL_SITE,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::bb9::call7,canon-utils/analysis/src/types.rs,3,30
+5414,METHOD,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::fn,canon-utils/analysis/src/types.rs,3,30
+5415,PARAM,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::param0,canon-utils/analysis/src/types.rs,3,30
+5416,PARAM,types::_::<impl errors::_::_serde::Serialize for types::NodeKind>::serialize::param1,canon-utils/analysis/src/types.rs,3,30
+5417,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,3,30
+5418,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,3,41
+5419,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,21,30
+5420,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,21,41
+5421,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,43,24
+5422,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,43,35
+5423,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,53,24
+5424,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,53,35
+5425,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,60,24
+5426,BASIC_BLOCK,types::_::bb0,canon-utils/analysis/src/types.rs,60,35

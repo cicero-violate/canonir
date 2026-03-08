@@ -44,7 +44,7 @@ fn project_from_args() -> PathBuf {
 impl RenameSelfConfig {
     pub fn from_env() -> Self {
         let project = project_from_args();
-        let symbols_json = project.join("symbols.json");
+        let symbols_json = project.join("analysis").join("symbols.json");
         let report_dir = PathBuf::from("/workspace/ai_sandbox/canon/canon-utils/rename");
         let offset = std::env::var("RENAME_OFFSET").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
         let limit = std::env::var("RENAME_LIMIT").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(usize::MAX);
@@ -68,7 +68,7 @@ pub struct SuggestConfig {
 impl SuggestConfig {
     pub fn from_env() -> Self {
         let project = project_from_args();
-        let symbols_json = project.join("symbols.json");
+        let symbols_json = project.join("analysis").join("symbols.json");
         let model = std::env::var("RENAME_MODEL").unwrap_or_else(|_| "claude-opus-4-5".to_string());
         let batch_size = std::env::var("RENAME_BATCH_SIZE")
             .ok()

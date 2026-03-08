@@ -79,13 +79,21 @@ fn main() {
         exec_real_rustc(&real_rustc, &argv[2..], "probe");
     }
 
+    if !is_primary_package(crate_name.as_deref()) {
+        exec_real_rustc(&real_rustc, &argv[2..], "non-primary");
+    }
+
     let output_dir = project_root_from_env()
         .or_else(|| project_root_from_out_dir(&argv))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
         .join("analysis");
 
     if let Err(err) = fs::create_dir_all(&output_dir) {
-        eprintln!("analysis_capture: failed to create output dir {output_dir:?}: {err}");
+        let is_registry = output_dir.components().any(|c| c.as_os_str() == "registry" || c.as_os_str() == "git")
+            && output_dir.components().any(|c| c.as_os_str() == ".cargo");
+        if !is_registry {
+            eprintln!("analysis_capture: failed to create output dir {output_dir:?}: {err}");
+        }
         exec_real_rustc(&real_rustc, &argv[2..], "output_dir");
     }
 
@@ -341,6 +349,13 @@ fn project_root_from_target_path(out_dir: &Path) -> Option<PathBuf> {
         cursor = path.parent();
     }
     None
+}
+
+fn is_primary_package(_crate_name: Option<&str>) -> bool {
+    match std::env::var("CARGO_PRIMARY_PACKAGE") {
+        Ok(primary) => primary == "1",
+        Err(_) => false,
+    }
 }
 
 fn should_run_analysis_engine(crate_name: Option<&str>, crate_types: &[String], output_dir: &Path) -> bool {

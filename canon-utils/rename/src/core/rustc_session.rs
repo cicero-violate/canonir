@@ -48,7 +48,7 @@ impl RustcSession {
             }
         }
 
-        let out_path = span_output_path()?;
+        let out_path = span_output_path(project_root)?;
         // Truncate any previous output before appending per-target spans.
         let _ = File::create(&out_path)?;
         let mut status = Ok(());
@@ -536,8 +536,8 @@ impl<'sm, 'cb, 'v> PathVisitor<'sm, 'cb, 'v> {
     }
 }
 
-fn span_output_path() -> Result<PathBuf> {
-    let dir = PathBuf::from("/workspace/ai_sandbox/canon/canon-utils/rename/span_file");
+fn span_output_path(project_root: &Path) -> Result<PathBuf> {
+    let dir = project_root.join("analysis");
     std::fs::create_dir_all(&dir)?;
     Ok(dir.join("spans.jsonl"))
 }
