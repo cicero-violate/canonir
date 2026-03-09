@@ -129,7 +129,7 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
         def_paths: Vec::new(),
         file_paths: Vec::new(),
     };
-    write_outputs(&graph, output_dir)?;
+    write_outputs(&graph, output_dir).map(|_| ())?;
 
     let surface = compute_repair_surface(&graph);
     write_repair_surface(out_dir, &surface)?;

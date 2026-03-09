@@ -35,7 +35,8 @@ pub fn write_outputs(graph: &crate::extract::UpgGraph, output_dir: &Path) -> Res
     if !report.ok {
         return Err(anyhow!("analysis invariants failed: {}", report.summary()));
     }
-    print_schema(output_dir, &graph.metadata);
+    let schema = format_schema(output_dir, &graph.metadata);
+    fs::write(output_dir.join("schema.txt"), &schema)?;
     Ok(())
 }
 
@@ -1022,8 +1023,8 @@ fn write_kinds(output_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn print_schema(output_dir: &Path, metadata: &crate::types::Metadata) {
-    eprintln!(
+fn format_schema(output_dir: &Path, metadata: &crate::types::Metadata) -> String {
+    format!(
         "\
 analysis_capture: schema v{schema_version} written to {dir}
   metadata.json  : {{project, node_count, edge_count, def_count, schema_version, generated_by}}
@@ -1047,7 +1048,7 @@ analysis_capture: schema v{schema_version} written to {dir}
         node_count = metadata.node_count,
         edge_count = metadata.edge_count,
         def_count = metadata.def_count,
-    );
+    )
 }
 
 fn write_bin_u32(path: PathBuf, values: &[u32]) -> Result<()> {
