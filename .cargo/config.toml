@@ -3,4 +3,8 @@ rustc-wrapper = "scripts/analysis_capture_wrapper.sh"
 
 [env]
 # Set to "1" when you want to force-rebuild analysis_capture on the next rustc invocation.
-ANALYSIS_CAPTURE_FORCE_REFRESH = "1"
+# ANALYSIS_CAPTURE_FORCE_REFRESH = "1"
+ANALYSIS_CAPTURE_FORCE_REFRESH="1" #forces a rebuild of analysis_capture on the next rustc call.
+
+# ANALYSIS_CAPTURE_BUILDING=1 #it just delegates to the real rustc from argv.
+
