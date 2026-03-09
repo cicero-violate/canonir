@@ -1,9 +1,9 @@
 [workspace]
 members = [
   "algorithms",
-  "canon-capture",
+  # "canon-capture",
   "canon-mutation",
-  "orchestration",
+  # "orchestration",
   "canon_telemetry",
   "rustc_wrapper/rustc_capture",
   "canon",
