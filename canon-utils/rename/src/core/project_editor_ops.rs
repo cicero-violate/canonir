@@ -289,64 +289,19 @@ impl ProjectEditor {
         let mut new_segments = parent_segments.to_vec();
         new_segments.push(new_name.to_string());
         if let Some(parent_file) = self.registry.module_files.get(&parent_module_path).cloned() {
-            if let Some(ast) = self.registry.asts.get_mut(&parent_file) {
-                let changed = rename_mod_decl(ast, &old_name, new_name);
-                if changed {
-                    touched.insert(parent_file);
-                }
+            if self.update_parent_mod_decl(&parent_file, &old_name, Some(new_name), None) {
+                touched.insert(parent_file);
             }
         }
-        let mut module_move: Option<(PathBuf, PathBuf)> = None;
-        let mut module_file = self.registry.module_files.get(old_module_path).cloned();
-        if module_file.is_none() {
-            let suffix = format!("::{old_name}");
-            if let Some((_, path)) = self
-                .registry
-                .module_files
-                .iter()
-                .find(|(k, _)| k.ends_with(&suffix))
-            {
-                module_file = Some(path.clone());
-            } else if let Some(parent_file) = self.registry.module_files.get(&parent_module_path).cloned() {
-                module_file = resolve_module_file_from_parent(&self.registry.asts, &parent_file, &old_name);
-            }
-        }
-        if let Some(module_file) = module_file {
-            if module_file.file_name().and_then(|n| n.to_str()) == Some("mod.rs") {
-                if let Some(parent) = module_file.parent() {
-                    if let Some(grand) = parent.parent() {
-                        let new_dir = grand.join(new_name);
-                        let move_pair = (parent.to_path_buf(), new_dir);
-                        file_moves.push(move_pair.clone());
-                        module_move = Some(move_pair);
-                    }
-                }
-            } else {
-                let new_file_name = format!("{new_name}.rs");
-                let new_file = module_file.with_file_name(new_file_name);
-                let move_pair = (module_file, new_file);
-                file_moves.push(move_pair.clone());
-                module_move = Some(move_pair);
-            }
-        } else {
-            return Err(anyhow!("no file for module path {old_module_path}"));
-        }
+        let module_file = self.resolve_module_file(old_module_path, &parent_module_path, &old_name)?;
+        let module_move = self.compute_module_move(&module_file, new_name)?;
+        file_moves.push(module_move.clone());
         if let Some(parent_file) = self.registry.module_files.get(&parent_module_path).cloned() {
-            if let Some((_, new_file)) = &module_move {
-                let base_dir = parent_file.parent().unwrap_or_else(|| Path::new(""));
-                let rel = new_file.strip_prefix(base_dir).unwrap_or(new_file);
-                let rel = rel.to_string_lossy().replace('\\', "/");
-                if let Some(ast) = self.registry.asts.get_mut(&parent_file) {
-                    let mut changed = update_mod_path_attr(ast, &old_name, &rel);
-                    if !changed {
-                        if strip_mod_path_attr(ast, &old_name) {
-                            changed = true;
-                        }
-                    }
-                    if changed {
-                        touched.insert(parent_file);
-                    }
-                }
+            let base_dir = parent_file.parent().unwrap_or_else(|| Path::new(""));
+            let rel = module_move.1.strip_prefix(base_dir).unwrap_or(&module_move.1);
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            if self.update_parent_mod_decl(&parent_file, &old_name, None, Some(rel.as_str())) {
+                touched.insert(parent_file);
             }
         }
         for (path, ast) in self.registry.asts.iter_mut() {
@@ -356,6 +311,62 @@ impl ProjectEditor {
             }
         }
         Ok((touched, file_moves))
+    }
+
+    fn resolve_module_file(
+        &self,
+        old_module_path: &str,
+        parent_module_path: &str,
+        old_name: &str,
+    ) -> Result<PathBuf> {
+        if let Some(path) = self.registry.module_files.get(old_module_path) {
+            return Ok(path.clone());
+        }
+        if let Some(parent_file) = self.registry.module_files.get(parent_module_path) {
+            if let Some(path) = resolve_module_file_from_parent(&self.registry.asts, parent_file, old_name) {
+                return Ok(path);
+            }
+        }
+        Err(anyhow!("no file for module path {old_module_path}"))
+    }
+
+    fn compute_module_move(&self, module_file: &Path, new_name: &str) -> Result<(PathBuf, PathBuf)> {
+        let file_name = module_file.file_name().and_then(|n| n.to_str());
+        if file_name == Some("mod.rs") {
+            let parent = module_file.parent().ok_or_else(|| anyhow!("mod.rs missing parent dir"))?;
+            let grand = parent.parent().ok_or_else(|| anyhow!("mod.rs missing grandparent dir"))?;
+            return Ok((parent.to_path_buf(), grand.join(new_name)));
+        }
+        let new_file_name = format!("{new_name}.rs");
+        Ok((module_file.to_path_buf(), module_file.with_file_name(new_file_name)))
+    }
+
+    fn update_parent_mod_decl(
+        &mut self,
+        parent_file: &Path,
+        old_name: &str,
+        new_name: Option<&str>,
+        new_path: Option<&str>,
+    ) -> bool {
+        let Some(ast) = self.registry.asts.get_mut(parent_file) else {
+            return false;
+        };
+        let mut changed = false;
+        if let Some(new_name) = new_name {
+            if rename_mod_decl(ast, old_name, new_name) {
+                changed = true;
+            }
+        }
+        if let Some(new_path) = new_path {
+            if update_mod_path_attr(ast, old_name, new_path) {
+                changed = true;
+            } else if strip_mod_path_attr(ast, old_name) {
+                changed = true;
+            }
+        } else if strip_mod_path_attr(ast, old_name) {
+            changed = true;
+        }
+        changed
     }
 
     fn apply_dir_rename(&mut self, old_dir: &Path, new_dir: &Path) -> Result<(HashSet<PathBuf>, Vec<(PathBuf, PathBuf)>)> {
@@ -373,14 +384,8 @@ impl ProjectEditor {
         let parent_segments = &old_segments[..old_segments.len() - 1];
         let parent_module_path = join_module_path(parent_segments);
         if let Some(parent_file) = self.registry.module_files.get(&parent_module_path).cloned() {
-            if let Some(ast) = self.registry.asts.get_mut(&parent_file) {
-                let mut changed = rename_mod_decl(ast, &old_name, &new_name);
-                if strip_mod_path_attr(ast, &old_name) {
-                    changed = true;
-                }
-                if changed {
-                    touched.insert(parent_file);
-                }
+            if self.update_parent_mod_decl(&parent_file, &old_name, Some(&new_name), None) {
+                touched.insert(parent_file);
             }
         }
         for (path, ast) in self.registry.asts.iter_mut() {

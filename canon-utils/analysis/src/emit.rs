@@ -103,7 +103,10 @@ fn edge_kind_str(kind: crate::types::EdgeKind) -> &'static str {
 }
 
 fn sanitize_csv_field(raw: &str) -> String {
-    let mut out = raw.replace('\n', " ").replace('\r', " ");
+    let mut out = raw
+        .replace('\n', " ")
+        .replace('\r', " ")
+        .replace('\0', "");
     if out.contains(',') {
         out = out.replace(',', ";");
     }
