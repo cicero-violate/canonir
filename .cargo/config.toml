@@ -4,3 +4,4 @@ rustc-wrapper = "scripts/analysis_capture_wrapper.sh"
 [env]
 # Set to "1" when you want to force-rebuild analysis_capture on the next cargo invocation.
 ANALYSIS_CAPTURE_FORCE_REFRESH = "1"
+ANALYSIS_ENGINE_DISABLE = "1"
