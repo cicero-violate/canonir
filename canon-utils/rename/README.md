@@ -22,7 +22,6 @@ cd /workspace/ai_sandbox/canon/canon-utils/rename
 cat <<'JSON' | cargo run --bin rename_stdin
 {
   "project": "/path/to/your/project",
-  "/workspace/ai_sandbox/canon/canon-agent-v2",
   "verify": true,
   "check": true,
   "ops": [
