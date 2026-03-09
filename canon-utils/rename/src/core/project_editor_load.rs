@@ -108,7 +108,9 @@ impl ProjectEditor {
     pub fn queue(&mut self, symbol_id: &str, op: NodeOp) -> Result<()> {
         let norm = normalize_symbol_id(symbol_id);
         let handle = match &op {
-            NodeOp::MutateField { handle, .. } | NodeOp::MoveSymbol { handle, .. } => Some(handle),
+            NodeOp::MutateField { handle, .. }
+            | NodeOp::MoveSymbol { handle, .. }
+            | NodeOp::DeleteSymbol { handle, .. } => Some(handle),
         };
         if let Some(handle) = handle {
             if !self.registry.handles.contains_key(&norm) {
@@ -116,7 +118,9 @@ impl ProjectEditor {
             }
         }
         let file = match &op {
-            NodeOp::MutateField { handle, .. } | NodeOp::MoveSymbol { handle, .. } => handle.file.clone(),
+            NodeOp::MutateField { handle, .. }
+            | NodeOp::MoveSymbol { handle, .. }
+            | NodeOp::DeleteSymbol { handle, .. } => handle.file.clone(),
         };
         self.changesets.entry(file).or_default().push(QueuedOp { symbol_id: norm, op });
         Ok(())

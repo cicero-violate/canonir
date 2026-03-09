@@ -136,6 +136,9 @@ fn main() {
     if let Ok(result) = result {
         let parse_result = parse_errors_jsonl(&errors_jsonl, &errors_json);
         let parse_ok = parse_result.is_ok();
+        if let Err(err) = emit_jsonl_to_stdout(&errors_jsonl) {
+            eprintln!("analysis_capture: failed to emit json diagnostics: {err}");
+        }
         let _ = fs::remove_file(&errors_jsonl);
         if result.is_err() {
             if let Ok(summary) = parse_result {
@@ -257,6 +260,25 @@ where
         libc::close(saved);
         Ok(result)
     }
+}
+
+fn emit_jsonl_to_stdout(path: &Path) -> std::io::Result<()> {
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    let reader = BufReader::new(file);
+    let mut out = std::io::stdout();
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        out.write_all(line.as_bytes())?;
+        out.write_all(b"\n")?;
+    }
+    Ok(())
 }
 
 fn parse_errors_jsonl(src: &Path, dst: &Path) -> std::io::Result<ErrorSummary> {

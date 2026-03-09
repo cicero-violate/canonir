@@ -64,6 +64,10 @@ impl ProjectEditor {
                         let touched = self.apply_move_symbol(handle, new_module_path)?;
                         touched_files.extend(touched);
                     }
+                    NodeOp::DeleteSymbol { handle, symbol_id } => {
+                        let touched = self.apply_delete_symbol(handle, symbol_id)?;
+                        touched_files.extend(touched);
+                    }
                     NodeOp::MutateField { .. } => {}
                 }
             }
@@ -103,6 +107,7 @@ impl ProjectEditor {
                             conflicts.push(EditConflict { symbol_id: queued.symbol_id.clone(), reason: format!("move would conflict with existing symbol {candidate}") });
                         }
                     }
+                    NodeOp::DeleteSymbol { .. } => {}
                 }
             }
         }
@@ -223,6 +228,23 @@ impl ProjectEditor {
         }
 
         Ok(touched)
+    }
+
+    fn apply_delete_symbol(&mut self, handle: &SymbolHandle, symbol_id: &str) -> Result<HashSet<PathBuf>> {
+        let mut touched = HashSet::new();
+        let file = handle.file.clone();
+        let ast = self
+            .registry
+            .asts
+            .get_mut(&file)
+            .ok_or_else(|| anyhow!("missing AST for {}", file.display()))?;
+        let removed = remove_top_level_item(ast, &handle.name, &handle.kind);
+        if removed.is_some() {
+            touched.insert(file);
+            Ok(touched)
+        } else {
+            Err(anyhow!("symbol not found in AST: {symbol_id}"))
+        }
     }
 
     fn apply_move_symbol(&mut self, handle: &SymbolHandle, new_module_path: &str) -> Result<HashSet<PathBuf>> {
