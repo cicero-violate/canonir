@@ -192,6 +192,19 @@ fn main() {
             } else {
                 eprintln!("analysis_capture: rustc failed; errors at {}", errors_json.display());
             }
+            eprintln!(
+                "analysis_capture: inspect errors with:\n  python3 -c \"\
+import json; \
+data = json.load(open('{path}')); \
+errors = data.get('errors', []); \
+[print(\
+f\\\"{{e.get('level','?'):>7}} \
+{{(e.get('code') or {{}}).get('code','?'):<10}} \
+{{e.get('message','?')}}\\n\
+          {{next((s['file_name'] + ':' + str(s['line_start']) for s in e.get('spans',[]) if s.get('is_primary')), '')}}\\\"\
+) for e in errors]\"",
+                path = errors_json.display(),
+            );
             if !parse_ok {
                 eprintln!("analysis_capture: failed to parse errors jsonl");
             }

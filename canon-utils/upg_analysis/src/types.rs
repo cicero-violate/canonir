@@ -73,5 +73,8 @@ pub struct Metadata {
     pub node_count: u32,
     pub edge_count: u32,
     pub def_count: u32,
+    pub schema_version: u32,
     pub generated_by: String,
 }
+
+pub const SCHEMA_VERSION: u32 = 1;

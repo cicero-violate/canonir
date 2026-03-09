@@ -74,8 +74,11 @@ pub struct Metadata {
     pub project: String,
     pub node_count: u32,
     pub edge_count: u32,
+    pub schema_version: u32,
     pub generated_by: String,
 }
+
+pub const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone)]
 pub struct AnalysisGraph {
@@ -241,7 +244,16 @@ fn read_json(path: PathBuf) -> Value {
 
 fn read_metadata(path: PathBuf) -> Result<Metadata> {
     let content = fs::read_to_string(path)?;
-    Ok(serde_json::from_str(&content)?)
+    let meta: Metadata = serde_json::from_str(&content)
+        .map_err(|e| anyhow!("metadata.json parse error: {e}"))?;
+    if meta.schema_version != SCHEMA_VERSION {
+        return Err(anyhow!(
+            "schema version mismatch: expected {}, found {} — re-run the UPG extractor",
+            SCHEMA_VERSION,
+            meta.schema_version
+        ));
+    }
+    Ok(meta)
 }
 
 fn read_node_kinds(path: PathBuf) -> Result<Vec<NodeKind>> {
@@ -264,7 +276,7 @@ fn read_edge_kinds(path: PathBuf) -> Result<Vec<EdgeKind>> {
     Ok(out)
 }
 
-fn parse_node_kind(raw: &str) -> Result<NodeKind> {
+pub fn parse_node_kind(raw: &str) -> Result<NodeKind> {
     match raw {
         "FUNCTION" => Ok(NodeKind::Function),
         "METHOD" => Ok(NodeKind::Method),
@@ -284,7 +296,7 @@ fn parse_node_kind(raw: &str) -> Result<NodeKind> {
     }
 }
 
-fn parse_edge_kind(raw: &str) -> Result<EdgeKind> {
+pub fn parse_edge_kind(raw: &str) -> Result<EdgeKind> {
     match raw {
         "HAS_FIELD" => Ok(EdgeKind::HasField),
         "HAS_METHOD" => Ok(EdgeKind::HasMethod),
@@ -309,5 +321,51 @@ fn parse_edge_kind(raw: &str) -> Result<EdgeKind> {
         "FOR_TYPE" => Ok(EdgeKind::ForType),
         "PUBLIC_USE" => Ok(EdgeKind::PublicUse),
         _ => Err(anyhow!("unknown edge kind: {:?}", raw)),
+    }
+}
+
+pub fn node_kind_str(kind: NodeKind) -> &'static str {
+    match kind {
+        NodeKind::Function => "FUNCTION",
+        NodeKind::Method => "METHOD",
+        NodeKind::Struct => "STRUCT",
+        NodeKind::Enum => "ENUM",
+        NodeKind::Trait => "TRAIT",
+        NodeKind::Impl => "IMPL",
+        NodeKind::Field => "FIELD",
+        NodeKind::Param => "PARAM",
+        NodeKind::Variable => "VARIABLE",
+        NodeKind::Module => "MODULE",
+        NodeKind::Type => "TYPE",
+        NodeKind::BasicBlock => "BASIC_BLOCK",
+        NodeKind::CallSite => "CALL_SITE",
+        NodeKind::Error => "ERROR",
+    }
+}
+
+pub fn edge_kind_str(kind: EdgeKind) -> &'static str {
+    match kind {
+        EdgeKind::HasField => "HAS_FIELD",
+        EdgeKind::HasMethod => "HAS_METHOD",
+        EdgeKind::HasBlock => "HAS_BLOCK",
+        EdgeKind::HasParam => "HAS_PARAM",
+        EdgeKind::Imports => "IMPORTS",
+        EdgeKind::Flow => "FLOW",
+        EdgeKind::Call => "CALL",
+        EdgeKind::Return => "RETURN",
+        EdgeKind::Unwind => "UNWIND",
+        EdgeKind::Implements => "IMPLEMENTS",
+        EdgeKind::UsesType => "USES_TYPE",
+        EdgeKind::Bounds => "BOUNDS",
+        EdgeKind::Assign => "ASSIGN",
+        EdgeKind::Propagates => "PROPAGATES",
+        EdgeKind::ArgToParam => "ARG_TO_PARAM",
+        EdgeKind::Returns => "RETURNS",
+        EdgeKind::ErrorToFunction => "ERROR_TO_FUNCTION",
+        EdgeKind::ErrorToBlock => "ERROR_TO_BLOCK",
+        EdgeKind::Contains => "CONTAINS",
+        EdgeKind::Export => "EXPORT",
+        EdgeKind::ForType => "FOR_TYPE",
+        EdgeKind::PublicUse => "PUBLIC_USE",
     }
 }

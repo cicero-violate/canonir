@@ -1,4 +1,7 @@
-use crate::loader::{Edge, EdgeKind, Metadata, Node, NodeKind};
+use crate::loader::{
+    edge_kind_str, node_kind_str, parse_edge_kind, parse_node_kind, Edge, EdgeKind, Metadata,
+    Node, NodeKind, SCHEMA_VERSION,
+};
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use serde_json::Value;
@@ -130,6 +133,7 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
         project: output_dir.parent().map(|p| p.display().to_string()).unwrap_or_else(|| output_dir.display().to_string()),
         node_count: nodes.len() as u32,
         edge_count: col_idx.len() as u32,
+        schema_version: SCHEMA_VERSION,
         generated_by: "UPG extractor".to_string(),
     };
     let id_to_index = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
@@ -434,100 +438,6 @@ fn build_csr(node_count: u32, edges: &[Edge]) -> (Vec<u32>, Vec<u32>) {
     (row_ptr, col_idx)
 }
 
-fn node_kind_str(kind: NodeKind) -> &'static str {
-    match kind {
-        NodeKind::Function => "FUNCTION",
-        NodeKind::Method => "METHOD",
-        NodeKind::Struct => "STRUCT",
-        NodeKind::Enum => "ENUM",
-        NodeKind::Trait => "TRAIT",
-        NodeKind::Impl => "IMPL",
-        NodeKind::Field => "FIELD",
-        NodeKind::Param => "PARAM",
-        NodeKind::Variable => "VARIABLE",
-        NodeKind::Module => "MODULE",
-        NodeKind::Type => "TYPE",
-        NodeKind::BasicBlock => "BASIC_BLOCK",
-        NodeKind::CallSite => "CALL_SITE",
-        NodeKind::Error => "ERROR",
-    }
-}
-
-fn edge_kind_str(kind: EdgeKind) -> &'static str {
-    match kind {
-        EdgeKind::HasField => "HAS_FIELD",
-        EdgeKind::HasMethod => "HAS_METHOD",
-        EdgeKind::HasBlock => "HAS_BLOCK",
-        EdgeKind::HasParam => "HAS_PARAM",
-        EdgeKind::Imports => "IMPORTS",
-        EdgeKind::Flow => "FLOW",
-        EdgeKind::Call => "CALL",
-        EdgeKind::Return => "RETURN",
-        EdgeKind::Unwind => "UNWIND",
-        EdgeKind::Implements => "IMPLEMENTS",
-        EdgeKind::UsesType => "USES_TYPE",
-        EdgeKind::Bounds => "BOUNDS",
-        EdgeKind::Assign => "ASSIGN",
-        EdgeKind::Propagates => "PROPAGATES",
-        EdgeKind::ArgToParam => "ARG_TO_PARAM",
-        EdgeKind::Returns => "RETURNS",
-        EdgeKind::ErrorToFunction => "ERROR_TO_FUNCTION",
-        EdgeKind::ErrorToBlock => "ERROR_TO_BLOCK",
-        EdgeKind::Contains => "CONTAINS",
-        EdgeKind::Export => "EXPORT",
-        EdgeKind::ForType => "FOR_TYPE",
-        EdgeKind::PublicUse => "PUBLIC_USE",
-    }
-}
-
-fn parse_node_kind(raw: &str) -> Result<NodeKind> {
-    match raw {
-        "FUNCTION" => Ok(NodeKind::Function),
-        "METHOD" => Ok(NodeKind::Method),
-        "STRUCT" => Ok(NodeKind::Struct),
-        "ENUM" => Ok(NodeKind::Enum),
-        "TRAIT" => Ok(NodeKind::Trait),
-        "IMPL" => Ok(NodeKind::Impl),
-        "FIELD" => Ok(NodeKind::Field),
-        "PARAM" => Ok(NodeKind::Param),
-        "VARIABLE" => Ok(NodeKind::Variable),
-        "MODULE" => Ok(NodeKind::Module),
-        "TYPE" => Ok(NodeKind::Type),
-        "BASIC_BLOCK" => Ok(NodeKind::BasicBlock),
-        "CALL_SITE" => Ok(NodeKind::CallSite),
-        "ERROR" => Ok(NodeKind::Error),
-        _ => Err(anyhow!("unknown node kind")),
-    }
-}
-
-fn parse_edge_kind(raw: &str) -> Result<EdgeKind> {
-    match raw {
-        "HAS_FIELD" => Ok(EdgeKind::HasField),
-        "HAS_METHOD" => Ok(EdgeKind::HasMethod),
-        "HAS_BLOCK" => Ok(EdgeKind::HasBlock),
-        "HAS_PARAM" => Ok(EdgeKind::HasParam),
-        "IMPORTS" => Ok(EdgeKind::Imports),
-        "FLOW" => Ok(EdgeKind::Flow),
-        "CALL" => Ok(EdgeKind::Call),
-        "RETURN" => Ok(EdgeKind::Return),
-        "UNWIND" => Ok(EdgeKind::Unwind),
-        "IMPLEMENTS" => Ok(EdgeKind::Implements),
-        "USES_TYPE" => Ok(EdgeKind::UsesType),
-        "BOUNDS" => Ok(EdgeKind::Bounds),
-        "ASSIGN" => Ok(EdgeKind::Assign),
-        "PROPAGATES" => Ok(EdgeKind::Propagates),
-        "ARG_TO_PARAM" => Ok(EdgeKind::ArgToParam),
-        "RETURNS" => Ok(EdgeKind::Returns),
-        "ERROR_TO_FUNCTION" => Ok(EdgeKind::ErrorToFunction),
-        "ERROR_TO_BLOCK" => Ok(EdgeKind::ErrorToBlock),
-        "CONTAINS" => Ok(EdgeKind::Contains),
-        "EXPORT" => Ok(EdgeKind::Export),
-        "FOR_TYPE" => Ok(EdgeKind::ForType),
-        "PUBLIC_USE" => Ok(EdgeKind::PublicUse),
-        _ => Err(anyhow!("unknown edge kind in augment: {:?}", raw)),
-    }
-}
-
 fn sanitize_csv_field(raw: &str) -> String {
     let mut out = raw.replace('\n', " ").replace('\r', " ");
     if out.contains(',') {
@@ -572,6 +482,10 @@ fn write_kinds(output_dir: &Path) -> Result<()> {
         "RETURNS",
         "ERROR_TO_FUNCTION",
         "ERROR_TO_BLOCK",
+        "CONTAINS",
+        "EXPORT",
+        "FOR_TYPE",
+        "PUBLIC_USE",
     ];
     fs::write(output_dir.join("node_kinds.txt"), node_kinds.join("\n"))?;
     fs::write(output_dir.join("edge_kinds.txt"), edge_kinds.join("\n"))?;

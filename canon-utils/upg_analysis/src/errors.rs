@@ -116,6 +116,7 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
         node_count: nodes.len() as u32,
         edge_count: csr.col_idx.len() as u32,
         def_count: 0,
+        schema_version: crate::types::SCHEMA_VERSION,
         generated_by: "UPG extractor".to_string(),
     };
     let spans_primary = vec![crate::types::SpanRange { lo: 0, hi: 0 }; nodes.len()];

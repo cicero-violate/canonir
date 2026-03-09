@@ -20,6 +20,7 @@ pub struct UpgGraph {
     pub metadata: Metadata,
     pub spans_primary: Vec<SpanRange>,
     pub def_paths: Vec<String>,
+    pub file_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +50,10 @@ pub fn extract_upg(tcx: TyCtxt<'_>, output_dir: &Path) -> Result<UpgGraph> {
         .parent()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| output_dir.display().to_string());
+    let project_root = std::env::var("CARGO_MANIFEST_DIR")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| output_dir.parent().map(PathBuf::from));
 
     let mut node_specs: Vec<NodeSpec> = Vec::new();
     let mut def_paths: Vec<(DefId, String)> = Vec::new();
@@ -127,8 +132,11 @@ pub fn extract_upg(tcx: TyCtxt<'_>, output_dir: &Path) -> Result<UpgGraph> {
         node_count: nodes.len() as u32,
         edge_count: csr.col_idx.len() as u32,
         def_count: def_paths_out.len() as u32,
+        schema_version: crate::types::SCHEMA_VERSION,
         generated_by: "UPG extractor".to_string(),
     };
+
+    let file_paths = collect_source_files(tcx, project_root.as_deref());
 
     Ok(UpgGraph {
         nodes,
@@ -137,7 +145,48 @@ pub fn extract_upg(tcx: TyCtxt<'_>, output_dir: &Path) -> Result<UpgGraph> {
         metadata,
         spans_primary,
         def_paths: def_paths_out,
+        file_paths,
     })
+}
+
+fn collect_source_files(tcx: TyCtxt<'_>, project_root: Option<&Path>) -> Vec<String> {
+    let mut out: BTreeMap<String, ()> = BTreeMap::new();
+    let root = project_root.map(PathBuf::from);
+    let files = tcx.sess.source_map().files();
+    for file in files.iter() {
+        let raw = file_name_to_string(&file.name);
+        if raw.is_empty() {
+            continue;
+        }
+        let Some(resolved) = resolve_source_path(&raw) else {
+            continue;
+        };
+        let mut path = PathBuf::from(resolved);
+        if let Some(root) = root.as_ref() {
+            if !path.is_absolute() {
+                path = root.join(&path);
+            }
+            if !path.starts_with(root) {
+                continue;
+            }
+        } else if !path.is_absolute() {
+            if let Ok(cwd) = std::env::current_dir() {
+                path = cwd.join(&path);
+            }
+        }
+        if path.exists() && path.is_file() {
+            out.insert(path.to_string_lossy().to_string(), ());
+        }
+    }
+    if let Some(root) = root.as_ref() {
+        for rel in ["src/main.rs", "src/lib.rs"] {
+            let path = root.join(rel);
+            if path.exists() && path.is_file() {
+                out.insert(path.to_string_lossy().to_string(), ());
+            }
+        }
+    }
+    out.keys().cloned().collect()
 }
 
 fn merge_with_existing(output_dir: &Path, graph: UpgGraph) -> Result<UpgGraph> {
@@ -1100,6 +1149,7 @@ fn ensure_fn_nodes_for_bb(
 ) -> (Vec<Node>, Vec<SpanRange>, BTreeMap<String, u32>) {
     let mut next_id = nodes.len() as u32;
     let mut pending: Vec<(String, usize)> = Vec::new();
+    let mut missing: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (idx, node) in nodes.iter().enumerate() {
         if node.kind != NodeKind::BasicBlock {
             continue;
@@ -1108,7 +1158,7 @@ fn ensure_fn_nodes_for_bb(
             continue;
         };
         let fn_symbol = format!("{base}::fn");
-        if !symbol_to_id.contains_key(&fn_symbol) {
+        if !symbol_to_id.contains_key(&fn_symbol) && missing.insert(fn_symbol.clone()) {
             pending.push((fn_symbol, idx));
         }
     }
