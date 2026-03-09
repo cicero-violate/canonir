@@ -3,6 +3,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::project_editor_helpers::split_module_segments;
+
 #[derive(Clone, Debug)]
 pub struct SpanRange {
     pub lo: usize,
@@ -66,7 +68,10 @@ impl RustcSession {
     }
 
     pub fn symbol_ids(&self) -> Vec<String> {
-        self.symbol_catalog.iter().map(|(id, _)| id.clone()).collect()
+        self.symbol_catalog
+            .iter()
+            .map(|(id, _)| split_module_segments(id).join("::"))
+            .collect()
     }
 
     pub fn symbol_kind(&self, symbol_id: &str) -> Option<&str> {

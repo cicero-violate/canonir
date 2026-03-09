@@ -59,8 +59,12 @@ pub(crate) fn canonicalize_relative(path: &Path, root: &Path) -> Result<PathBuf>
     }
 }
 
+pub(crate) fn split_module_segments(path: &str) -> Vec<&str> {
+    path.split("::").filter(|s| !s.is_empty()).collect()
+}
+
 pub(crate) fn split_module_path(path: &str) -> Vec<String> {
-    path.split("::").filter(|s| !s.is_empty()).map(|s| s.to_string()).collect()
+    split_module_segments(path).into_iter().map(|s| s.to_string()).collect()
 }
 
 pub(crate) fn join_module_path(segments: &[String]) -> String {

@@ -29,9 +29,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let orchestration_bin = cwd_root.join("target/debug/orchestration");
             let max_ticks: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
             let addr = "127.0.0.1:9100".parse()?;
-            let cap_config = canon_agent_v2::pipelines_core::capability::config::CapabilityConfig::snapshot_store_load()?;
+            let cap_config = canon_agent_v2::pipelines_core_4::capability::config::CapabilityConfig::snapshot_store_load()?;
             let bridge = ws_server::spawn(addr, cap_config.response_timeout_secs);
-            let pipeline = canon_agent_v2::pipelines_core::capability::CapabilityPipeline::new(
+            let pipeline = canon_agent_v2::pipelines_core_4::capability::CapabilityPipeline::new(
                 bridge,
             );
             let mut ir = canon_agent_v2::ir::SystemState::new(
@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
             );
             let mut layout = FileTopology::default();
-            let ctx = canon_agent_v2::pipelines_core::PipelineContext {
+            let ctx = canon_agent_v2::pipelines_core_4::PipelineContext {
                 cwd: cwd.clone(),
                 capture_dir: capture_dir.clone(),
                 emit_dir: emit_dir.clone(),

@@ -42,7 +42,7 @@ pub use crate::capability_types::{
 };
 use crate::ir::SystemState;
 use crate::layout::FileTopology;
-use crate::pipelines_core::{Pipeline, PipelineContext, PipelineOutcome};
+use crate::pipelines_core_4::{Pipeline, PipelineContext, PipelineOutcome};
 use crate::ws_server::WsBridge;
 use anyhow::Result;
 use config::{CapabilityConfig, CapabilityConfigGoalSpec};
@@ -517,8 +517,7 @@ impl CapabilityPipeline {
                     let node_summaries = seed_graph
                         .as_ref()
                         .map(|g| {
-                            g
-                                .nodes
+                            g.nodes
                                 .iter()
                                 .map(|n| format!("{}: {}", n.id, n.description))
                                 .collect::<Vec<_>>()
@@ -571,8 +570,7 @@ impl CapabilityPipeline {
 fn capability_pipeline_list_workspace_entries(root: &Path, limit: usize) -> String {
     let mut entries: Vec<String> = std::fs::read_dir(root)
         .map(|rd| {
-            rd
-                .filter_map(|e| e.ok())
+            rd.filter_map(|e| e.ok())
                 .map(|e| e.file_name().to_string_lossy().to_string())
                 .collect::<Vec<_>>()
         })

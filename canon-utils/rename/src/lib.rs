@@ -5,6 +5,7 @@ pub mod api;
 pub mod check;
 pub mod git;
 pub mod verify;
+pub mod analysis;
 
 use std::path::Path;
 use std::sync::Arc;

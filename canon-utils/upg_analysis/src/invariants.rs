@@ -35,6 +35,8 @@ pub struct InvariantReport {
     pub span_file_inconsistent: usize,
     pub function_cfg_disconnected: usize,
     pub orphan_files: usize,
+    pub missing_entry_roots: usize,
+    pub files_outside_project_root: usize,
     pub must_have_contiguous_node_ids: bool,
     pub must_have_valid_edge_sources: bool,
     pub must_have_valid_edge_destinations: bool,
@@ -50,16 +52,19 @@ pub struct InvariantReport {
     pub must_have_unique_symbol_kind: bool,
     pub must_have_unique_symbol_kind_per_module: bool,
     pub must_have_module_owner: bool,
+    pub must_have_module_file_mapping: bool,
     pub must_have_ordered_spans: bool,
     pub must_have_consistent_span_file: bool,
     pub must_have_connected_function_cfg: bool,
     pub must_not_have_orphan_files: bool,
+    pub must_have_entry_roots_in_files: bool,
+    pub must_have_files_within_project_root: bool,
 }
 
 impl InvariantReport {
     pub fn summary(&self) -> String {
         format!(
-            "nodes={} spans={} defs={} missing_defs={} missing_edges(src={}, dst={}) invalid_kinds(node={}, edge={}) edge_kind_mismatch={} bad_file_id={} bb_no_block={} call_no_block={} callsite_no_incoming={} isolated={} module_root_like={} export_src_not_module={} dup_symbol_kind={} dup_symbol_kind_module={} missing_module_owner={} span_order_violations={} span_file_mismatch={} span_file_inconsistent={} function_cfg_disconnected={} orphan_files={}",
+            "nodes={} spans={} defs={} missing_defs={} missing_edges(src={}, dst={}) invalid_kinds(node={}, edge={}) edge_kind_mismatch={} bad_file_id={} bb_no_block={} call_no_block={} callsite_no_incoming={} isolated={} module_root_like={} export_src_not_module={} dup_symbol_kind={} dup_symbol_kind_module={} missing_module_owner={} span_order_violations={} span_file_mismatch={} span_file_inconsistent={} function_cfg_disconnected={} orphan_files={} missing_entry_roots={} files_outside_project_root={}",
             self.node_count,
             self.spans_count,
             self.defs_count,
@@ -83,7 +88,9 @@ impl InvariantReport {
             self.span_file_mismatch,
             self.span_file_inconsistent,
             self.function_cfg_disconnected,
-            self.orphan_files
+            self.orphan_files,
+            self.missing_entry_roots,
+            self.files_outside_project_root
         )
     }
 }
@@ -208,6 +215,14 @@ pub fn must_have_module_owner(report: &InvariantReport) -> Result<(), InvariantE
     }
 }
 
+pub fn must_have_module_file_mapping(report: &InvariantReport) -> Result<(), InvariantError> {
+    if report.must_have_module_file_mapping {
+        Ok(())
+    } else {
+        Err(InvariantError::must_have_module_file_mapping)
+    }
+}
+
 pub fn must_have_ordered_spans(report: &InvariantReport) -> Result<(), InvariantError> {
     if report.must_have_ordered_spans {
         Ok(())
@@ -240,6 +255,22 @@ pub fn must_not_have_orphan_files(report: &InvariantReport) -> Result<(), Invari
     }
 }
 
+pub fn must_have_entry_roots_in_files(report: &InvariantReport) -> Result<(), InvariantError> {
+    if report.must_have_entry_roots_in_files {
+        Ok(())
+    } else {
+        Err(InvariantError::must_have_entry_roots_in_files)
+    }
+}
+
+pub fn must_have_files_within_project_root(report: &InvariantReport) -> Result<(), InvariantError> {
+    if report.must_have_files_within_project_root {
+        Ok(())
+    } else {
+        Err(InvariantError::must_have_files_within_project_root)
+    }
+}
+
 pub const INVARIANTS: &[InvariantFn] = &[
     must_have_contiguous_node_ids,
     must_have_valid_edge_sources,
@@ -256,8 +287,11 @@ pub const INVARIANTS: &[InvariantFn] = &[
     must_have_unique_symbol_kind,
     must_have_unique_symbol_kind_per_module,
     must_have_module_owner,
+    must_have_module_file_mapping,
     must_have_ordered_spans,
     must_have_consistent_span_file,
     must_have_connected_function_cfg,
     must_not_have_orphan_files,
+    must_have_entry_roots_in_files,
+    must_have_files_within_project_root,
 ];

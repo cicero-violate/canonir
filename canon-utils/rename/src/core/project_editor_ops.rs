@@ -9,7 +9,6 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use syn::Item;
 
-use super::project_editor_helpers::module_path_from_file;
 use super::project_editor_rewrite::{rewrite_string_attrs_in_file, PathRewriter};
 use super::project_editor_types::{ChangeReport, EditConflict, ProjectEditor, QueuedOp};
 
@@ -82,7 +81,8 @@ impl ProjectEditor {
                 self.last_applied_sources.insert(path.clone(), source.clone());
             }
         }
-        self.rebuild_registry()?;
+        // Analysis-first: registry rebuilding should come from analysis, not source scans.
+        // Leave the current registry in place; callers should re-run analysis for new targets.
 
         self.pending_file_moves.extend(file_moves.clone());
         self.last_touched_files = touched_files.clone();
@@ -473,14 +473,21 @@ impl ProjectEditor {
                 },
                 touched,
             );
-        } else if let Some(crate_name) = crate::core::project_editor_helpers::infer_crate_name(&self.project_root) {
-            if old_segments.first().map(|s| s.as_str()) == Some("crate") {
-                let mut old_prefixed = Vec::with_capacity(old_segments.len());
+        }
+
+        if let Some(crate_name) = crate::core::project_editor_helpers::infer_crate_name(&self.project_root) {
+            let (old_tail, new_tail) = if old_segments.first().map(|s| s.as_str()) == Some("crate") {
+                (&old_segments[1..], &new_segments[1..])
+            } else {
+                (old_segments, new_segments)
+            };
+            if old_tail.first().map(|s| s.as_str()) != Some(crate_name.as_str()) {
+                let mut old_prefixed = Vec::with_capacity(old_tail.len() + 1);
                 old_prefixed.push(crate_name.clone());
-                old_prefixed.extend_from_slice(&old_segments[1..]);
-                let mut new_prefixed = Vec::with_capacity(new_segments.len());
+                old_prefixed.extend_from_slice(old_tail);
+                let mut new_prefixed = Vec::with_capacity(new_tail.len() + 1);
                 new_prefixed.push(crate_name);
-                new_prefixed.extend_from_slice(&new_segments[1..]);
+                new_prefixed.extend_from_slice(new_tail);
                 self.rewrite_paths(
                     RewriteMode::Prefix {
                         old_segments: old_prefixed,
@@ -521,13 +528,6 @@ impl ProjectEditor {
     }
 
     fn rebuild_registry(&mut self) -> Result<()> {
-        self.registry.handles.clear();
-        self.registry.module_files.clear();
-        for (file, ast) in &self.registry.asts {
-            let module_path = module_path_from_file(&self.source_root, file)?;
-            self.registry.module_files.insert(module_path.clone(), file.clone());
-            super::project_editor_load::index_file_symbols(ast, file, &module_path, &mut self.registry.handles);
-        }
         Ok(())
     }
 }

@@ -70,6 +70,17 @@ UPG Analysis First
 - Only open source files when analysis data is insufficient or inconsistent, and document why.
 - If analysis invariants fail, fix analysis first; do not proceed to source-driven decisions.
 
+UPG Query Patterns (use these exact patterns)
+- files.txt is a CSV with header `file_id,path`: `{r['file_id']: r['path'] for r in csv.DictReader(open('analysis/files.txt'))}`
+- node lookup: `[n for n in nodes if 'target_symbol' in n['symbol'] and n['node_kind'] == 'FUNCTION']`
+- callers of F: edges where `edge_kind == 'CALL' and dst_id in target_ids` — src_id is a BASIC_BLOCK, walk up via HAS_BLOCK to find owning FUNCTION
+- callees of F: find src FUNCTION → get its BASIC_BLOCKs via HAS_BLOCK → get CALL edges from those blocks → dst_id is callee FUNCTION
+- call graph is intra-crate only: external/stdlib callees will not appear as nodes
+- derived outputs live in `analysis/post_analysis/` — reports, invariants, anomalies, duplicates, repair_surface
+- `analysis/` is read-only source of truth — never write into it; all agent outputs go to `analysis/post_analysis/`
+- verify graph health before reasoning: `upg_invariants.json` must have `"ok": true` and zero violation counts
+- symbols.json is a list not a dict: `syms = json.load(f); syms[0].keys()` → `kind, symbol_id, rename_safe, rename_skip_reason`
+
 awk
 - Use for line-oriented processing.
 - Use for column/field extraction and structured slicing.

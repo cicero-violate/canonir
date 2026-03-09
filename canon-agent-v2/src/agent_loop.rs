@@ -1,8 +1,8 @@
 use crate::ir::SystemState;
 use crate::layout::FileTopology;
-use crate::pipelines_core::capability::telemetry::TelemetryFrame;
-use crate::pipelines_core::capability::CapabilityPipeline;
-use crate::pipelines_core::{Pipeline, PipelineContext};
+use crate::pipelines_core_4::capability::telemetry::TelemetryFrame;
+use crate::pipelines_core_4::capability::CapabilityPipeline;
+use crate::pipelines_core_4::{Pipeline, PipelineContext};
 use anyhow::Result;
 use std::path::Path;
 use std::time::Duration;

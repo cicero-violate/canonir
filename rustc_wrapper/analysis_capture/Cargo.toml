@@ -2,6 +2,7 @@
 name = "analysis_capture"
 version = "0.1.0"
 edition = "2024"
+build = "build.rs"
 
 [dependencies]
 upg_analysis = { path = "../../canon-utils/upg_analysis" }
