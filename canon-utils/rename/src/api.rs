@@ -44,23 +44,35 @@ pub struct ApiResult {
 
 pub fn dispatch(editor: &mut ProjectEditor, op: &ApiOp) -> ApiResult {
     match op {
-        ApiOp::RenameSymbol { old, new } => match editor.queue(
-            old,
-            NodeOp::MutateField {
-                handle: match editor.synthetic_handle_from_symbol_id(old) {
-                    Ok(handle) => handle,
-                    Err(e) => {
-                        return ApiResult {
-                            op: "RenameSymbol".into(),
-                            status: "error".into(),
-                            detail: Some(e.to_string()),
-                            data: None,
-                        }
+        ApiOp::RenameSymbol { old, new } => {
+            let new_ident = match normalize_new_ident(new) {
+                Ok(v) => v,
+                Err(e) => {
+                    return ApiResult {
+                        op: "RenameSymbol".into(),
+                        status: "error".into(),
+                        detail: Some(e),
+                        data: None,
                     }
+                }
+            };
+            match editor.queue(
+                old,
+                NodeOp::MutateField {
+                    handle: match editor.synthetic_handle_from_symbol_id(old) {
+                        Ok(handle) => handle,
+                        Err(e) => {
+                            return ApiResult {
+                                op: "RenameSymbol".into(),
+                                status: "error".into(),
+                                detail: Some(e.to_string()),
+                                data: None,
+                            }
+                        }
+                    },
+                    mutation: FieldMutation::RenameIdent(new_ident),
                 },
-                mutation: FieldMutation::RenameIdent(new.clone()),
-            },
-        ) {
+            ) {
             Ok(_) => ApiResult {
                 op: "RenameSymbol".into(),
                 status: "queued".into(),
@@ -73,7 +85,8 @@ pub fn dispatch(editor: &mut ProjectEditor, op: &ApiOp) -> ApiResult {
                 detail: Some(e.to_string()),
                 data: None,
             },
-        },
+            }
+        }
         ApiOp::MoveSymbol {
             symbol_id,
             new_module_path,
@@ -269,6 +282,13 @@ pub fn dispatch(editor: &mut ProjectEditor, op: &ApiOp) -> ApiResult {
         ApiOp::ApplySuggestions { suggestions } => {
             let mut failures = Vec::new();
             for (old, new) in suggestions {
+                let new_ident = match normalize_new_ident(new) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        failures.push(format!("{old}: {e}"));
+                        continue;
+                    }
+                };
                 let handle = match editor.synthetic_handle_from_symbol_id(old) {
                     Ok(handle) => handle,
                     Err(e) => {
@@ -278,7 +298,7 @@ pub fn dispatch(editor: &mut ProjectEditor, op: &ApiOp) -> ApiResult {
                 };
                 let op = NodeOp::MutateField {
                     handle,
-                    mutation: FieldMutation::RenameIdent(new.clone()),
+                    mutation: FieldMutation::RenameIdent(new_ident),
                 };
                 if let Err(e) = editor.queue(old, op) {
                     failures.push(format!("{old}: {e}"));
@@ -301,4 +321,15 @@ pub fn dispatch(editor: &mut ProjectEditor, op: &ApiOp) -> ApiResult {
             }
         }
     }
+}
+
+fn normalize_new_ident(new_name: &str) -> Result<String, String> {
+    if !new_name.contains("::") {
+        return Err("new name must be a full path like crate::module::Type".to_string());
+    }
+    Ok(new_name
+        .rsplit("::")
+        .next()
+        .unwrap_or(new_name)
+        .to_string())
 }

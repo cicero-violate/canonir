@@ -6,8 +6,8 @@ use rustc_span::source_map::SourceMap;
 use rustc_span::{FileName, Span};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -18,9 +18,10 @@ pub fn collect_spans_and_symbols(
 ) -> Result<()> {
     std::fs::create_dir_all(output_dir)?;
     let spans_path = output_dir.join("spans.jsonl");
-    let file = File::create(&spans_path)?;
+    let emitted = load_emitted_source_files(&spans_path);
+    let file = OpenOptions::new().create(true).append(true).open(&spans_path)?;
     let writer = BufWriter::new(file);
-    let mut collector = SpanCollector::new(writer, crate_name.to_string());
+    let mut collector = SpanCollector::new(writer, crate_name.to_string(), emitted);
     collector.collect(tcx)?;
     collector.finalize()?;
     let symbols_path = output_dir.join("symbols.json");
@@ -38,13 +39,13 @@ struct SpanCollector {
 }
 
 impl SpanCollector {
-    fn new(out: BufWriter<File>, crate_name: String) -> Self {
+    fn new(out: BufWriter<File>, crate_name: String, emitted_source_files: HashSet<PathBuf>) -> Self {
         Self {
             def_id_to_symbol: HashMap::new(),
             symbol_kinds: HashMap::new(),
             out,
             span_count: 0,
-            emitted_source_files: HashSet::new(),
+            emitted_source_files,
             crate_name,
         }
     }
@@ -74,6 +75,17 @@ impl SpanCollector {
             tcx,
         };
         tcx.hir_visit_all_item_likes_in_crate(&mut visitor);
+
+        // Always include definition spans so renames touch the defining item.
+        let def_items: Vec<_> = self
+            .def_id_to_symbol
+            .iter()
+            .map(|(def_id, symbol_id)| (*def_id, symbol_id.clone()))
+            .collect();
+        for (def_id, symbol_id) in def_items {
+            let span = tcx.def_span(def_id);
+            self.emit_def_span(&symbol_id, source_map, span);
+        }
         Ok(())
     }
 
@@ -93,6 +105,50 @@ impl SpanCollector {
         if span.from_expansion() {
             return;
         }
+        let lo = source_map.lookup_byte_offset(span.lo());
+        let hi = source_map.lookup_byte_offset(span.hi());
+        if !Arc::ptr_eq(&lo.sf, &hi.sf) {
+            return;
+        }
+        let filename = &lo.sf.name;
+        let FileName::Real(real_path) = filename else { return };
+        let Some(path) = real_path.local_path().map(|p| p.to_path_buf()) else { return };
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        let kind = self
+            .symbol_kinds
+            .get(symbol_id)
+            .cloned()
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let lo_pos = lo.pos.0 as usize;
+        let hi_pos = hi.pos.0 as usize;
+
+        if self.emitted_source_files.insert(path.clone()) {
+            if let Some(src) = lo.sf.src.as_deref() {
+                let src_line = json!({
+                    "type": "source",
+                    "file": path.display().to_string(),
+                    "src": src
+                })
+                .to_string();
+                let _ = writeln!(self.out, "{src_line}");
+            }
+        }
+
+        let line = json!({
+            "symbol_id": symbol_id,
+            "kind": kind,
+            "file": path.display().to_string(),
+            "lo": lo_pos,
+            "hi": hi_pos
+        })
+        .to_string();
+        if writeln!(self.out, "{line}").is_ok() {
+            self.span_count += 1;
+        }
+    }
+
+    fn emit_def_span(&mut self, symbol_id: &str, source_map: &SourceMap, span: Span) {
         let lo = source_map.lookup_byte_offset(span.lo());
         let hi = source_map.lookup_byte_offset(span.hi());
         if !Arc::ptr_eq(&lo.sf, &hi.sf) {
@@ -170,7 +226,7 @@ struct PathVisitor<'sm, 'cb, 'v> {
 }
 
 impl<'sm, 'cb, 'v> Visitor<'v> for PathVisitor<'sm, 'cb, 'v> {
-    type NestedFilter = rustc_middle::hir::nested_filter::OnlyBodies;
+    type NestedFilter = rustc_middle::hir::nested_filter::All;
 
     fn maybe_tcx(&mut self) -> Self::MaybeTyCtxt {
         self.tcx
@@ -421,8 +477,12 @@ impl<'sm, 'cb, 'v> PathVisitor<'sm, 'cb, 'v> {
 }
 
 fn write_symbols_json(path: &Path, symbol_kinds: &HashMap<String, String>) -> Result<()> {
-    let mut entries = Vec::new();
+    let mut merged: HashMap<String, String> = load_existing_symbol_kinds(path);
     for (symbol_id, kind) in symbol_kinds {
+        merged.entry(symbol_id.clone()).or_insert_with(|| kind.clone());
+    }
+    let mut entries = Vec::new();
+    for (symbol_id, kind) in &merged {
         let new_name = symbol_id.rsplit("::").next().unwrap_or(symbol_id.as_str());
         let safety = classify_rename_safety(symbol_id, kind);
         entries.push(json!({
@@ -450,6 +510,48 @@ fn write_symbols_json(path: &Path, symbol_kinds: &HashMap<String, String>) -> Re
     let content = serde_json::to_string_pretty(&entries)?;
     std::fs::write(path, format!("{content}\n"))?;
     Ok(())
+}
+
+fn load_emitted_source_files(spans_path: &Path) -> HashSet<PathBuf> {
+    let mut out = HashSet::new();
+    let file = match File::open(spans_path) {
+        Ok(f) => f,
+        Err(_) => return out,
+    };
+    let reader = BufReader::new(file);
+    for line in reader.lines().flatten() {
+        if !line.contains("\"type\":\"source\"") {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+            if value.get("type").and_then(|v| v.as_str()) != Some("source") {
+                continue;
+            }
+            if let Some(file) = value.get("file").and_then(|v| v.as_str()) {
+                out.insert(PathBuf::from(file));
+            }
+        }
+    }
+    out
+}
+
+fn load_existing_symbol_kinds(path: &Path) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return out,
+    };
+    let parsed = match serde_json::from_str::<serde_json::Value>(&content) {
+        Ok(v) => v,
+        Err(_) => return out,
+    };
+    let Some(arr) = parsed.as_array() else { return out };
+    for item in arr {
+        let Some(symbol_id) = item.get("symbol_id").and_then(|v| v.as_str()) else { continue };
+        let Some(kind) = item.get("kind").and_then(|v| v.as_str()) else { continue };
+        out.insert(symbol_id.to_string(), kind.to_string());
+    }
+    out
 }
 
 fn classify_rename_safety(symbol_id: &str, _kind: &str) -> &'static str {

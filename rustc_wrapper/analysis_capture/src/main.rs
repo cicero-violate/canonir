@@ -30,6 +30,7 @@ use std::time::{Duration, SystemTime};
 struct MirCaptureCallbacks {
     output_dir: PathBuf,
     crate_name: Option<String>,
+    crate_types: Vec<String>,
 }
 
 impl Callbacks for MirCaptureCallbacks {
@@ -53,14 +54,16 @@ impl Callbacks for MirCaptureCallbacks {
         if let Err(err) = extract_and_write(tcx, &config) {
             eprintln!("analysis_capture: extraction failed: {err:?}");
         }
-        if is_primary_package(self.crate_name.as_deref()) {
+        if should_analyze_crate(self.crate_name.as_deref(), &self.crate_types) {
             let crate_name = self.crate_name.as_deref().unwrap_or("crate");
-            if let Err(err) = canon_capture::collect_spans_and_symbols(
-                tcx,
-                &self.output_dir,
-                crate_name,
-            ) {
-                eprintln!("analysis_capture: span/symbol collection failed: {err:?}");
+            if should_emit_spans(&self.output_dir, &self.crate_types) {
+                if let Err(err) = canon_capture::collect_spans_and_symbols(
+                    tcx,
+                    &self.output_dir,
+                    crate_name,
+                ) {
+                    eprintln!("analysis_capture: span/symbol collection failed: {err:?}");
+                }
             }
         }
         rustc_driver::Compilation::Continue
@@ -101,10 +104,6 @@ fn main() {
         exec_real_rustc(&real_rustc, &argv[2..], "registry");
     }
 
-    if !is_primary_package(crate_name.as_deref()) {
-        exec_real_rustc(&real_rustc, &argv[2..], "non-primary");
-    }
-
     let output_dir = project_root_from_env()
         .or_else(|| project_root_from_out_dir(&argv))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
@@ -122,6 +121,7 @@ fn main() {
     let mut callbacks = MirCaptureCallbacks {
         output_dir: output_dir.clone(),
         crate_name: crate_name.clone(),
+        crate_types: crate_types.clone(),
     };
 
     let _diag = EarlyDiagCtxt::new(rustc_session::config::ErrorOutputType::default());
@@ -392,11 +392,34 @@ fn project_root_from_target_path(out_dir: &Path) -> Option<PathBuf> {
     None
 }
 
-fn is_primary_package(_crate_name: Option<&str>) -> bool {
-    match std::env::var("CARGO_PRIMARY_PACKAGE") {
-        Ok(primary) => primary == "1",
-        Err(_) => false,
+fn is_primary_package(crate_name: Option<&str>) -> bool {
+    if let Ok(primary) = std::env::var("CARGO_PRIMARY_PACKAGE") {
+        if primary == "1" {
+            return true;
+        }
     }
+    package_name_matches(crate_name)
+}
+
+fn should_analyze_crate(crate_name: Option<&str>, crate_types: &[String]) -> bool {
+    if is_primary_package(crate_name) {
+        return true;
+    }
+    if crate_types.iter().any(|t| t == "lib" || t == "rlib") && package_name_matches(crate_name) {
+        return true;
+    }
+    false
+}
+
+fn package_name_matches(crate_name: Option<&str>) -> bool {
+    let Some(crate_name) = crate_name else { return false };
+    let pkg = std::env::var("CARGO_PKG_NAME").ok();
+    let normalized_crate = crate_name.replace('-', "_");
+    let normalized_pkg = pkg.as_deref().map(|p| p.replace('-', "_"));
+    pkg.as_deref() == Some(crate_name)
+        || pkg.as_deref() == Some(normalized_crate.as_str())
+        || normalized_pkg.as_deref() == Some(crate_name)
+        || normalized_pkg.as_deref() == Some(normalized_crate.as_str())
 }
 
 fn is_cargo_registry_path(path: &Path) -> bool {
@@ -429,6 +452,10 @@ fn should_run_analysis_engine(crate_name: Option<&str>, crate_types: &[String], 
         return true;
     }
     crate_types.iter().any(|t| t == "lib" || t == "rlib")
+}
+
+fn should_emit_spans(output_dir: &Path, crate_types: &[String]) -> bool {
+    crate_types.iter().any(|t| t == "lib" || t == "rlib" || t == "bin")
 }
 
 fn analysis_engine_bin(output_dir: &Path) -> Option<PathBuf> {

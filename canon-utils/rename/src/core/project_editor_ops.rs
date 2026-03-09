@@ -181,6 +181,7 @@ impl ProjectEditor {
         for (path, mut replacements) in per_file {
             replacements.sort_by(|a, b| a.span.lo.cmp(&b.span.lo).then_with(|| a.span.hi.cmp(&b.span.hi)).then_with(|| a.replacement.cmp(&b.replacement)));
             replacements.dedup_by(|a, b| a.span.lo == b.span.lo && a.span.hi == b.span.hi && a.replacement == b.replacement);
+            remove_nested_spans(&mut replacements);
 
             for window in replacements.windows(2) {
                 let a = &window[0];
@@ -289,30 +290,64 @@ impl ProjectEditor {
         new_segments.push(new_name.to_string());
         if let Some(parent_file) = self.registry.module_files.get(&parent_module_path).cloned() {
             if let Some(ast) = self.registry.asts.get_mut(&parent_file) {
-                let mut changed = rename_mod_decl(ast, &old_name, new_name);
-                if strip_mod_path_attr(ast, &old_name) {
-                    changed = true;
-                }
+                let changed = rename_mod_decl(ast, &old_name, new_name);
                 if changed {
                     touched.insert(parent_file);
                 }
             }
         }
-        if let Some(module_file) = self.registry.module_files.get(old_module_path).cloned() {
+        let mut module_move: Option<(PathBuf, PathBuf)> = None;
+        let mut module_file = self.registry.module_files.get(old_module_path).cloned();
+        if module_file.is_none() {
+            let suffix = format!("::{old_name}");
+            if let Some((_, path)) = self
+                .registry
+                .module_files
+                .iter()
+                .find(|(k, _)| k.ends_with(&suffix))
+            {
+                module_file = Some(path.clone());
+            } else if let Some(parent_file) = self.registry.module_files.get(&parent_module_path).cloned() {
+                module_file = resolve_module_file_from_parent(&self.registry.asts, &parent_file, &old_name);
+            }
+        }
+        if let Some(module_file) = module_file {
             if module_file.file_name().and_then(|n| n.to_str()) == Some("mod.rs") {
                 if let Some(parent) = module_file.parent() {
                     if let Some(grand) = parent.parent() {
                         let new_dir = grand.join(new_name);
-                        file_moves.push((parent.to_path_buf(), new_dir));
+                        let move_pair = (parent.to_path_buf(), new_dir);
+                        file_moves.push(move_pair.clone());
+                        module_move = Some(move_pair);
                     }
                 }
             } else {
                 let new_file_name = format!("{new_name}.rs");
                 let new_file = module_file.with_file_name(new_file_name);
-                file_moves.push((module_file, new_file));
+                let move_pair = (module_file, new_file);
+                file_moves.push(move_pair.clone());
+                module_move = Some(move_pair);
             }
         } else {
             return Err(anyhow!("no file for module path {old_module_path}"));
+        }
+        if let Some(parent_file) = self.registry.module_files.get(&parent_module_path).cloned() {
+            if let Some((_, new_file)) = &module_move {
+                let base_dir = parent_file.parent().unwrap_or_else(|| Path::new(""));
+                let rel = new_file.strip_prefix(base_dir).unwrap_or(new_file);
+                let rel = rel.to_string_lossy().replace('\\', "/");
+                if let Some(ast) = self.registry.asts.get_mut(&parent_file) {
+                    let mut changed = update_mod_path_attr(ast, &old_name, &rel);
+                    if !changed {
+                        if strip_mod_path_attr(ast, &old_name) {
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        touched.insert(parent_file);
+                    }
+                }
+            }
         }
         for (path, ast) in self.registry.asts.iter_mut() {
             let mut rewriter = PathRewriter::replace_prefix(&old_segments, &new_segments);
@@ -380,6 +415,35 @@ impl ProjectEditor {
     }
 }
 
+fn remove_nested_spans(replacements: &mut Vec<SpanReplacement>) {
+    if replacements.len() < 2 {
+        return;
+    }
+    let mut keep = vec![true; replacements.len()];
+    for i in 0..replacements.len() {
+        for j in 0..replacements.len() {
+            if i == j {
+                continue;
+            }
+            let a = &replacements[i];
+            let b = &replacements[j];
+            let a_lo = a.span.lo;
+            let a_hi = a.span.hi;
+            let b_lo = b.span.lo;
+            let b_hi = b.span.hi;
+            if a_lo <= b_lo && b_hi <= a_hi && (a_lo < b_lo || b_hi < a_hi) {
+                keep[i] = false;
+            }
+        }
+    }
+    let mut idx = 0usize;
+    replacements.retain(|_| {
+        let k = keep[idx];
+        idx += 1;
+        k
+    });
+}
+
 fn remove_top_level_item(ast: &mut syn::File, name: &str, kind: &SymbolKind) -> Option<Item> {
     let mut idx = None;
     for (i, item) in ast.items.iter().enumerate() {
@@ -429,4 +493,68 @@ fn strip_mod_path_attr(ast: &mut syn::File, old_name: &str) -> bool {
         }
     }
     changed
+}
+
+fn update_mod_path_attr(ast: &mut syn::File, old_name: &str, new_path: &str) -> bool {
+    let mut changed = false;
+    for item in &mut ast.items {
+        let syn::Item::Mod(item_mod) = item else { continue };
+        if item_mod.ident == old_name {
+            for attr in &mut item_mod.attrs {
+                if !attr.path().is_ident("path") {
+                    continue;
+                }
+                if let syn::Meta::NameValue(name_value) = &mut attr.meta {
+                    let lit = syn::LitStr::new(new_path, proc_macro2::Span::call_site());
+                    name_value.value = syn::Expr::Lit(syn::ExprLit { attrs: Vec::new(), lit: syn::Lit::Str(lit) });
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
+}
+
+fn resolve_module_file_from_parent(asts: &std::collections::HashMap<PathBuf, syn::File>, parent_file: &Path, old_name: &str) -> Option<PathBuf> {
+    let base_dir = parent_file.parent().unwrap_or_else(|| Path::new(""));
+    if let Some(ast) = asts.get(parent_file) {
+        for item in &ast.items {
+            let syn::Item::Mod(item_mod) = item else { continue };
+            if item_mod.ident != old_name {
+                continue;
+            }
+            if let Some(path_lit) = module_path_attr_value(item_mod) {
+                let path = if Path::new(&path_lit).is_absolute() {
+                    PathBuf::from(&path_lit)
+                } else {
+                    base_dir.join(&path_lit)
+                };
+                if path.exists() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    let direct = base_dir.join(format!("{old_name}.rs"));
+    if direct.is_file() {
+        return Some(direct);
+    }
+    let nested = base_dir.join(old_name).join("mod.rs");
+    if nested.is_file() {
+        return Some(nested);
+    }
+    None
+}
+
+fn module_path_attr_value(item_mod: &syn::ItemMod) -> Option<String> {
+    for attr in &item_mod.attrs {
+        if !attr.path().is_ident("path") {
+            continue;
+        }
+        let syn::Meta::NameValue(name_value) = &attr.meta else { continue };
+        let syn::Expr::Lit(expr_lit) = &name_value.value else { continue };
+        let syn::Lit::Str(lit) = &expr_lit.lit else { continue };
+        return Some(lit.value());
+    }
+    None
 }

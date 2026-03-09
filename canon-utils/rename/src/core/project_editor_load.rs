@@ -56,9 +56,25 @@ impl ProjectEditor {
         for _ in 0..8 {
             let mut updated = module_files.clone();
             for (file, ast) in &parsed_files {
-                let module_path = module_path_for_file(&module_files, &source_root, file)?;
+                let candidates = module_paths_for_file(&module_files, file);
+                let module_path = if candidates.is_empty() {
+                    module_path_from_file(&source_root, file)?
+                } else {
+                    select_best_module_path(&candidates)
+                };
                 updated.insert(module_path.clone(), file.clone());
-                index_module_files(ast, file, &module_path, &mut updated);
+                for alt in &candidates {
+                    if alt != &module_path {
+                        updated.entry(alt.clone()).or_insert_with(|| file.clone());
+                    }
+                }
+                let mut module_paths = candidates;
+                if module_paths.is_empty() {
+                    module_paths.push(module_path.clone());
+                }
+                for path in module_paths {
+                    index_module_files(ast, file, &path, &mut updated);
+                }
             }
             if updated == module_files {
                 break;
@@ -70,7 +86,12 @@ impl ProjectEditor {
         registry.handles.clear();
         registry.module_files.clear();
         for (file, ast) in &parsed_files {
-            let module_path = module_path_for_file(&module_files, &source_root, file)?;
+            let candidates = module_paths_for_file(&module_files, file);
+            let module_path = if candidates.is_empty() {
+                module_path_from_file(&source_root, file)?
+            } else {
+                select_best_module_path(&candidates)
+            };
             registry.module_files.insert(module_path.clone(), file.clone());
             if ast.items.is_empty() {
                 if let Some(content) = registry.sources.get(file) {
@@ -79,7 +100,13 @@ impl ProjectEditor {
             } else {
                 index_file_symbols(ast, file, &module_path, &mut registry.handles);
             }
-            index_module_files(ast, file, &module_path, &mut registry.module_files);
+            let mut module_paths = candidates;
+            if module_paths.is_empty() {
+                module_paths.push(module_path.clone());
+            }
+            for path in module_paths {
+                index_module_files(ast, file, &path, &mut registry.module_files);
+            }
         }
         if std::env::var("RENAME_DEBUG_MODULES").ok().as_deref() == Some("1") {
             let mut interesting: Vec<(String, PathBuf)> = registry.module_files.iter().filter(|(module_path, _)| module_path.contains("gpu_scheduler")).map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -285,6 +312,13 @@ fn index_module_files(ast: &syn::File, file: &Path, module_path: &str, module_fi
             continue;
         }
 
+        // "{mod_name}_mod.rs" acts as module root (equivalent to mod.rs in a subdir)
+        let prefix_mod_file = base_dir.join(format!("{mod_name}_mod.rs"));
+        if prefix_mod_file.is_file() {
+            module_files.insert(mod_path, prefix_mod_file);
+            continue;
+        }
+
         // Legacy fallback: match files like capability_<mod>.rs
         let mut candidates = Vec::new();
         if let Ok(entries) = std::fs::read_dir(base_dir) {
@@ -321,16 +355,42 @@ fn module_path_attr_value(item_mod: &ItemMod) -> Option<String> {
 }
 
 fn module_path_for_file(module_files: &HashMap<String, PathBuf>, source_root: &Path, file: &Path) -> Result<String> {
-    let mut candidates: Vec<String> = module_files.iter().filter_map(|(module_path, path)| if path == file { Some(module_path.clone()) } else { None }).collect();
+    let candidates = module_paths_for_file(module_files, file);
     if candidates.is_empty() {
         return module_path_from_file(source_root, file);
     }
-    candidates.sort_by(|a, b| {
+    Ok(select_best_module_path(&candidates))
+}
+
+fn module_paths_for_file(module_files: &HashMap<String, PathBuf>, file: &Path) -> Vec<String> {
+    let file_canon = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+    module_files
+        .iter()
+        .filter_map(|(module_path, path)| {
+            if path == file {
+                return Some(module_path.clone());
+            }
+            let path_canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            if path_canon == file_canon {
+                Some(module_path.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn select_best_module_path(candidates: &[String]) -> String {
+    let mut sorted = candidates.to_vec();
+    sorted.sort_by(|a, b| {
         let score_a = module_path_score(a);
         let score_b = module_path_score(b);
-        score_b.cmp(&score_a).then_with(|| b.len().cmp(&a.len())).then_with(|| a.cmp(b))
+        score_b
+            .cmp(&score_a)
+            .then_with(|| b.len().cmp(&a.len()))
+            .then_with(|| a.cmp(b))
     });
-    Ok(candidates[0].clone())
+    sorted[0].clone()
 }
 
 fn module_path_score(path: &str) -> i32 {
