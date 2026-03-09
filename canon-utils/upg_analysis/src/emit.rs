@@ -2,10 +2,10 @@ use crate::invariants::InvariantReport;
 use crate::types::{Edge, Node, SpanRange};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputConfig {
@@ -29,23 +29,18 @@ pub fn write_outputs(graph: &crate::extract::UpgGraph, output_dir: &Path) -> Res
     write_bin_u32(output_dir.join("csr_col_idx.bin"), &graph.csr.col_idx)?;
     let metadata_path = output_dir.join("metadata.json");
     let file = fs::File::create(metadata_path)?;
-    serde_json::to_writer_pretty(file, &graph.metadata)
-        .map_err(|err| anyhow!("failed to write metadata.json: {err}"))?;
+    serde_json::to_writer_pretty(file, &graph.metadata).map_err(|err| anyhow!("failed to write metadata.json: {err}"))?;
     let report = verify_outputs(output_dir)?;
     write_invariants(output_dir, &report)?;
     if !report.ok {
         return Err(anyhow!("analysis invariants failed: {}", report.summary()));
     }
+    print_schema(output_dir, &graph.metadata);
     Ok(())
 }
 
 fn prune_legacy_outputs(output_dir: &Path) {
-    for name in [
-        "files.csv",
-        "spans_primary.bin",
-        "spans_extra.bin",
-        "spans_extra.idx",
-    ] {
+    for name in ["files.csv", "spans_primary.bin", "spans_extra.bin", "spans_extra.idx"] {
         let path = output_dir.join(name);
         let _ = fs::remove_file(path);
     }
@@ -68,23 +63,10 @@ fn write_nodes_csv(output_dir: &Path, nodes: &[Node], files: &[String]) -> Resul
     let symbol_to_id = collect_symbol_ids(nodes);
     let node_file_ids = compute_node_file_ids(output_dir, nodes, &symbol_to_id, &file_ids);
     for node in nodes {
-        let file_id = node_file_ids
-            .get(node.id as usize)
-            .copied()
-            .unwrap_or(u32::MAX);
+        let file_id = node_file_ids.get(node.id as usize).copied().unwrap_or(u32::MAX);
         let parent = compute_parent_id(node, &symbol_to_id);
         let symbol = sanitize_csv_field(&node.symbol);
-        writeln!(
-            file,
-            "{},{},{},{},{},{},{}",
-            node.id,
-            node_kind_str(node.kind),
-            symbol,
-            file_id,
-            node.line,
-            node.column,
-            parent
-        )?;
+        writeln!(file, "{},{},{},{},{},{},{}", node.id, node_kind_str(node.kind), symbol, file_id, node.line, node.column, parent)?;
     }
     Ok(())
 }
@@ -94,13 +76,7 @@ fn write_edges_csv(output_dir: &Path, edges: &[Edge]) -> Result<()> {
     let mut file = fs::File::create(path)?;
     writeln!(file, "src_id,dst_id,edge_kind")?;
     for edge in edges {
-        writeln!(
-            file,
-            "{},{},{}",
-            edge.src,
-            edge.dst,
-            edge_kind_str(edge.kind)
-        )?;
+        writeln!(file, "{},{},{}", edge.src, edge.dst, edge_kind_str(edge.kind))?;
     }
     Ok(())
 }
@@ -116,16 +92,8 @@ fn write_cfg_csv(output_dir: &Path, nodes: &[Node], edges: &[Edge]) -> Result<()
         }
         let src_kind = id_to_kind.get(&edge.src);
         let dst_kind = id_to_kind.get(&edge.dst);
-        if src_kind == Some(&crate::types::NodeKind::BasicBlock)
-            && dst_kind == Some(&crate::types::NodeKind::BasicBlock)
-        {
-            writeln!(
-                file,
-                "{},{},{}",
-                edge.src,
-                edge.dst,
-                edge_kind_str(edge.kind)
-            )?;
+        if src_kind == Some(&crate::types::NodeKind::BasicBlock) && dst_kind == Some(&crate::types::NodeKind::BasicBlock) {
+            writeln!(file, "{},{},{}", edge.src, edge.dst, edge_kind_str(edge.kind))?;
         }
     }
     Ok(())
@@ -146,13 +114,9 @@ fn write_callgraph_csv(output_dir: &Path, nodes: &[Node], edges: &[Edge]) -> Res
         }
         let src_kind = id_to_kind.get(&edge.src);
         let dst_kind = id_to_kind.get(&edge.dst);
-        if src_kind == Some(&crate::types::NodeKind::BasicBlock)
-            && dst_kind == Some(&crate::types::NodeKind::CallSite)
-        {
+        if src_kind == Some(&crate::types::NodeKind::BasicBlock) && dst_kind == Some(&crate::types::NodeKind::CallSite) {
             callsite_to_block.entry(edge.dst).or_default().insert(edge.src);
-        } else if matches!(src_kind, Some(crate::types::NodeKind::Function | crate::types::NodeKind::Method))
-            && dst_kind == Some(&crate::types::NodeKind::BasicBlock)
-        {
+        } else if matches!(src_kind, Some(crate::types::NodeKind::Function | crate::types::NodeKind::Method)) && dst_kind == Some(&crate::types::NodeKind::BasicBlock) {
             block_to_fn.entry(edge.dst).or_default().insert(edge.src);
         }
     }
@@ -208,10 +172,7 @@ fn write_modulegraph_csv(output_dir: &Path, nodes: &[Node], _edges: &[Edge]) -> 
             Some((parent, _child)) => parent,
             None => "",
         };
-        let parent_id = symbol_to_id
-            .get(parent_symbol)
-            .copied()
-            .or(root_id);
+        let parent_id = symbol_to_id.get(parent_symbol).copied().or(root_id);
         if let Some(pid) = parent_id {
             if seen.insert((pid, node.id)) {
                 writeln!(file, "{},{}", pid, node.id)?;
@@ -241,26 +202,10 @@ fn write_typegraph_csv(output_dir: &Path, nodes: &[Node], edges: &[Edge]) -> Res
         }
         let src_kind = id_to_kind.get(&edge.src);
         let dst_kind = id_to_kind.get(&edge.dst);
-        let src_ok = matches!(
-            src_kind,
-            Some(
-                crate::types::NodeKind::Struct
-                    | crate::types::NodeKind::Enum
-                    | crate::types::NodeKind::Trait
-                    | crate::types::NodeKind::Impl
-                    | crate::types::NodeKind::Type
-            )
-        );
-        let dst_ok = matches!(
-            dst_kind,
-            Some(
-                crate::types::NodeKind::Struct
-                    | crate::types::NodeKind::Enum
-                    | crate::types::NodeKind::Trait
-                    | crate::types::NodeKind::Impl
-                    | crate::types::NodeKind::Type
-            )
-        );
+        let src_ok =
+            matches!(src_kind, Some(crate::types::NodeKind::Struct | crate::types::NodeKind::Enum | crate::types::NodeKind::Trait | crate::types::NodeKind::Impl | crate::types::NodeKind::Type));
+        let dst_ok =
+            matches!(dst_kind, Some(crate::types::NodeKind::Struct | crate::types::NodeKind::Enum | crate::types::NodeKind::Trait | crate::types::NodeKind::Impl | crate::types::NodeKind::Type));
         if src_ok && dst_ok {
             let relation = edge_kind_str(edge.kind);
             if seen.insert((edge.src, edge.dst, relation)) {
@@ -290,10 +235,7 @@ fn write_spans_bin(output_dir: &Path, nodes: &[Node], spans: &[SpanRange], files
     let node_file_ids = compute_node_file_ids(output_dir, nodes, &symbol_to_id, &file_ids);
     for (idx, node) in nodes.iter().enumerate() {
         let span = spans.get(idx).copied().unwrap_or(SpanRange { lo: 0, hi: 0 });
-        let file_id = node_file_ids
-            .get(node.id as usize)
-            .copied()
-            .unwrap_or(u32::MAX);
+        let file_id = node_file_ids.get(node.id as usize).copied().unwrap_or(u32::MAX);
         file.write_all(&node.id.to_le_bytes())?;
         file.write_all(&file_id.to_le_bytes())?;
         file.write_all(&span.lo.to_le_bytes())?;
@@ -310,19 +252,14 @@ fn build_id_to_kind(nodes: &[Node]) -> BTreeMap<u32, crate::types::NodeKind> {
     map
 }
 
-
 fn write_invariants(output_dir: &Path, report: &InvariantReport) -> Result<()> {
     let path = output_dir.join("upg_invariants.json");
     let file = fs::File::create(path)?;
-    serde_json::to_writer_pretty(file, report)
-        .map_err(|err| anyhow!("failed to write upg_invariants.json: {err}"))
+    serde_json::to_writer_pretty(file, report).map_err(|err| anyhow!("failed to write upg_invariants.json: {err}"))
 }
 
 fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
-    let generated_at_epoch_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
+    let generated_at_epoch_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let nodes_path = output_dir.join("nodes.csv");
     let edges_path = output_dir.join("edges.csv");
     let files_path = output_dir.join("files.txt");
@@ -331,21 +268,11 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
     let node_kinds_path = output_dir.join("node_kinds.txt");
     let edge_kinds_path = output_dir.join("edge_kinds.txt");
 
-    let node_kinds: std::collections::HashSet<String> =
-        fs::read_to_string(node_kinds_path)?.lines().map(|s| s.to_string()).collect();
-    let edge_kinds: std::collections::HashSet<String> =
-        fs::read_to_string(edge_kinds_path)?.lines().map(|s| s.to_string()).collect();
+    let node_kinds: std::collections::HashSet<String> = fs::read_to_string(node_kinds_path)?.lines().map(|s| s.to_string()).collect();
+    let edge_kinds: std::collections::HashSet<String> = fs::read_to_string(edge_kinds_path)?.lines().map(|s| s.to_string()).collect();
     let files = read_files_txt(files_path)?;
 
-    let defs: Vec<String> = if defs_path.exists() {
-        fs::read_to_string(defs_path)?
-            .lines()
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| s.to_string())
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let defs: Vec<String> = if defs_path.exists() { fs::read_to_string(defs_path)?.lines().filter(|s| !s.trim().is_empty()).map(|s| s.to_string()).collect() } else { Vec::new() };
     let defs_count = defs.len();
 
     let nodes = read_nodes_csv_with_file_id(&nodes_path)?;
@@ -357,22 +284,16 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
     let mut module_count = 0usize;
     let mut module_missing_file = 0usize;
     let mut module_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
-    let mut id_to_kind: std::collections::HashMap<u32, crate::types::NodeKind> =
-        std::collections::HashMap::new();
-    let mut id_to_parent: std::collections::HashMap<u32, u32> =
-        std::collections::HashMap::new();
-    let mut symbol_kinds: std::collections::HashMap<String, std::collections::HashSet<crate::types::NodeKind>> =
-        std::collections::HashMap::new();
+    let mut id_to_kind: std::collections::HashMap<u32, crate::types::NodeKind> = std::collections::HashMap::new();
+    let mut id_to_parent: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    let mut symbol_kinds: std::collections::HashMap<String, std::collections::HashSet<crate::types::NodeKind>> = std::collections::HashMap::new();
     let mut node_symbols: std::collections::HashSet<String> = std::collections::HashSet::new();
     for node in &nodes {
         ids.insert(node.id);
         id_to_kind.insert(node.id, node.kind);
         id_to_parent.insert(node.id, node.parent);
         if !node.symbol.is_empty() {
-            symbol_kinds
-                .entry(node.symbol.clone())
-                .or_default()
-                .insert(node.kind);
+            symbol_kinds.entry(node.symbol.clone()).or_default().insert(node.kind);
             node_symbols.insert(node.symbol.clone());
         }
         if !node_kinds.contains(node.kind_str()) {
@@ -401,14 +322,10 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
     let mut has_block_in: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut imports_dst: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut export_src_not_module = 0usize;
-    let mut has_block_from_fn_or_method: std::collections::HashSet<u32> =
-        std::collections::HashSet::new();
-    let mut callsite_incoming: std::collections::HashMap<u32, usize> =
-        std::collections::HashMap::new();
-    let mut fn_block_edges: std::collections::HashMap<u32, Vec<u32>> =
-        std::collections::HashMap::new();
-    let mut block_edges: std::collections::HashMap<u32, Vec<u32>> =
-        std::collections::HashMap::new();
+    let mut has_block_from_fn_or_method: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut callsite_incoming: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    let mut fn_block_edges: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
+    let mut block_edges: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
     for edge in &edges {
         if !ids.contains(&edge.src) {
             edges_with_missing_src += 1;
@@ -426,10 +343,7 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
         edge_dst.insert(edge.dst);
         if edge.kind == "HAS_BLOCK" {
             has_block_in.insert(edge.dst);
-            if matches!(
-                id_to_kind.get(&edge.src),
-                Some(crate::types::NodeKind::Function | crate::types::NodeKind::Method)
-            ) {
+            if matches!(id_to_kind.get(&edge.src), Some(crate::types::NodeKind::Function | crate::types::NodeKind::Method)) {
                 has_block_from_fn_or_method.insert(edge.dst);
                 fn_block_edges.entry(edge.src).or_default().push(edge.dst);
             }
@@ -442,10 +356,7 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
                 export_src_not_module += 1;
             }
         }
-        callsite_incoming
-            .entry(edge.dst)
-            .and_modify(|v| *v += 1)
-            .or_insert(1);
+        callsite_incoming.entry(edge.dst).and_modify(|v| *v += 1).or_insert(1);
         if edge.kind == "FLOW" || edge.kind == "UNWIND" {
             block_edges.entry(edge.src).or_default().push(edge.dst);
             block_edges.entry(edge.dst).or_default().push(edge.src);
@@ -471,10 +382,7 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
         }
     }
 
-    let module_root_like = module_ids
-        .iter()
-        .filter(|id| !imports_dst.contains(id))
-        .count();
+    let module_root_like = module_ids.iter().filter(|id| !imports_dst.contains(id)).count();
 
     let span_bytes = fs::read(spans_path)?;
     if span_bytes.len() % 16 != 0 {
@@ -486,8 +394,7 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
     let mut span_order_violations = 0usize;
     let mut span_file_mismatch = 0usize;
     let mut span_file_inconsistent = 0usize;
-    let mut span_file_by_range: std::collections::HashMap<(u32, u32, u32), u32> =
-        std::collections::HashMap::new();
+    let mut span_file_by_range: std::collections::HashMap<(u32, u32, u32), u32> = std::collections::HashMap::new();
     for chunk in span_bytes.chunks_exact(16) {
         let node_id = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         let file_id = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
@@ -542,8 +449,7 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
     }
 
     let mut duplicate_symbol_kind_module = 0usize;
-    let mut symbol_kind_module_seen: std::collections::HashSet<(String, crate::types::NodeKind, u32)> =
-        std::collections::HashSet::new();
+    let mut symbol_kind_module_seen: std::collections::HashSet<(String, crate::types::NodeKind, u32)> = std::collections::HashSet::new();
     for node in &nodes {
         if node.symbol.is_empty() {
             continue;
@@ -559,8 +465,7 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
 
     let mut function_cfg_disconnected = 0usize;
     for (_fn_id, blocks) in fn_block_edges.iter() {
-        let block_set: std::collections::HashSet<u32> =
-            blocks.iter().copied().collect();
+        let block_set: std::collections::HashSet<u32> = blocks.iter().copied().collect();
         if block_set.len() <= 1 {
             continue;
         }
@@ -587,8 +492,7 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
     for node in &nodes {
         file_ids_seen.insert(node.file_id);
     }
-    let mut allowed_orphan_files: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut allowed_orphan_files: std::collections::HashSet<String> = std::collections::HashSet::new();
     if let Some(project_root) = output_dir.parent() {
         for rel in ["src/main.rs", "src/lib.rs"] {
             let path = project_root.join(rel);
@@ -598,15 +502,7 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
         }
     }
 
-    let orphan_files = files
-        .iter()
-        .enumerate()
-        .filter(|(id, path)| {
-            !path.is_empty()
-                && !file_ids_seen.contains(&(*id as u32))
-                && !allowed_orphan_files.contains(*path)
-        })
-        .count();
+    let orphan_files = files.iter().enumerate().filter(|(id, path)| !path.is_empty() && !file_ids_seen.contains(&(*id as u32)) && !allowed_orphan_files.contains(*path)).count();
 
     let mut missing_entry_roots = 0usize;
     let mut files_outside_project_root = 0usize;
@@ -737,10 +633,7 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
     })
 }
 
-fn edge_kind_compatible(
-    id_to_kind: &std::collections::HashMap<u32, crate::types::NodeKind>,
-    edge: &EdgeRow,
-) -> bool {
+fn edge_kind_compatible(id_to_kind: &std::collections::HashMap<u32, crate::types::NodeKind>, edge: &EdgeRow) -> bool {
     let src = match id_to_kind.get(&edge.src) {
         Some(k) => *k,
         None => return false,
@@ -751,12 +644,10 @@ fn edge_kind_compatible(
     };
     use crate::types::NodeKind::*;
     match edge.kind.as_str() {
-        "CONTAINS" => matches!(src, Module | Function | Method | Impl | Struct | Enum | Trait)
-            && !matches!(dst, Error),
+        "CONTAINS" => matches!(src, Module | Function | Method | Impl | Struct | Enum | Trait) && !matches!(dst, Error),
         "HAS_FIELD" => matches!(src, Struct | Enum) && matches!(dst, Field),
         "HAS_METHOD" => matches!(src, Struct | Enum | Trait | Impl) && matches!(dst, Method),
-        "HAS_BLOCK" => (matches!(src, Function | Method) && matches!(dst, BasicBlock))
-            || (matches!(src, BasicBlock) && matches!(dst, CallSite)),
+        "HAS_BLOCK" => (matches!(src, Function | Method) && matches!(dst, BasicBlock)) || (matches!(src, BasicBlock) && matches!(dst, CallSite)),
         "HAS_PARAM" => matches!(src, Function | Method) && matches!(dst, Param),
         "IMPORTS" => matches!(src, Module) && matches!(dst, Module),
         "EXPORT" => matches!(src, Module),
@@ -817,13 +708,7 @@ fn read_nodes_csv_with_file_id(path: &Path) -> Result<Vec<NodeRow>> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        nodes.push(NodeRow {
-            id,
-            kind,
-            symbol,
-            file_id,
-            parent,
-        });
+        nodes.push(NodeRow { id, kind, symbol, file_id, parent });
     }
     Ok(nodes)
 }
@@ -916,10 +801,7 @@ fn collect_file_ids(output_dir: &Path, files: &[String]) -> BTreeMap<String, u32
 }
 
 fn normalize_file_path(output_dir: &Path, raw: &str) -> Option<String> {
-    let project_root = output_dir
-        .parent()
-        .map(PathBuf::from)
-        .or_else(|| std::env::var("CARGO_MANIFEST_DIR").ok().map(PathBuf::from))?;
+    let project_root = output_dir.parent().map(PathBuf::from).or_else(|| std::env::var("CARGO_MANIFEST_DIR").ok().map(PathBuf::from))?;
     let mut cleaned = raw.trim().to_string();
     if cleaned.is_empty() || cleaned == "." {
         return None;
@@ -968,12 +850,7 @@ fn collect_symbol_ids(nodes: &[Node]) -> BTreeMap<String, u32> {
     out
 }
 
-fn compute_node_file_ids(
-    output_dir: &Path,
-    nodes: &[Node],
-    symbol_to_id: &BTreeMap<String, u32>,
-    file_ids: &BTreeMap<String, u32>,
-) -> Vec<u32> {
+fn compute_node_file_ids(output_dir: &Path, nodes: &[Node], symbol_to_id: &BTreeMap<String, u32>, file_ids: &BTreeMap<String, u32>) -> Vec<u32> {
     let mut node_file_ids: Vec<u32> = vec![u32::MAX; nodes.len()];
     for node in nodes {
         if let Some(key) = normalize_file_path(output_dir, &node.file) {
@@ -1031,9 +908,7 @@ fn compute_parent_id_opt(node: &Node, symbol_to_id: &BTreeMap<String, u32>) -> O
                 Some(String::new())
             }
         }
-        crate::types::NodeKind::Param => {
-            node.symbol.rsplitn(2, "::").nth(1).map(str::to_string)
-        }
+        crate::types::NodeKind::Param => node.symbol.rsplitn(2, "::").nth(1).map(str::to_string),
         crate::types::NodeKind::BasicBlock => {
             if let Some(base) = node.symbol.split("::bb").next() {
                 Some(format!("{base}::fn"))
@@ -1041,18 +916,14 @@ fn compute_parent_id_opt(node: &Node, symbol_to_id: &BTreeMap<String, u32>) -> O
                 None
             }
         }
-        crate::types::NodeKind::CallSite => {
-            node.symbol.rsplitn(2, "::").nth(1).map(str::to_string)
-        }
+        crate::types::NodeKind::CallSite => node.symbol.rsplitn(2, "::").nth(1).map(str::to_string),
         crate::types::NodeKind::Field
         | crate::types::NodeKind::Struct
         | crate::types::NodeKind::Enum
         | crate::types::NodeKind::Trait
         | crate::types::NodeKind::Impl
         | crate::types::NodeKind::Type
-        | crate::types::NodeKind::Variable => {
-            node.symbol.rsplitn(2, "::").nth(1).map(str::to_string)
-        }
+        | crate::types::NodeKind::Variable => node.symbol.rsplitn(2, "::").nth(1).map(str::to_string),
         _ => None,
     };
 
@@ -1108,10 +979,7 @@ fn edge_kind_str(kind: crate::types::EdgeKind) -> &'static str {
 fn sanitize_csv_field(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for ch in raw.chars() {
-        let clean = if ch.is_control()
-            || ch == '\u{2028}'
-            || ch == '\u{2029}'
-            || ch == '\u{0085}' {
+        let clean = if ch.is_control() || ch == '\u{2028}' || ch == '\u{2029}' || ch == '\u{0085}' {
             ' '
         } else if ch == ',' {
             ';'
@@ -1124,22 +992,7 @@ fn sanitize_csv_field(raw: &str) -> String {
 }
 
 fn write_kinds(output_dir: &Path) -> Result<()> {
-    let node_kinds = [
-        "FUNCTION",
-        "METHOD",
-        "STRUCT",
-        "ENUM",
-        "TRAIT",
-        "IMPL",
-        "FIELD",
-        "PARAM",
-        "VARIABLE",
-        "MODULE",
-        "TYPE",
-        "BASIC_BLOCK",
-        "CALL_SITE",
-        "ERROR",
-    ];
+    let node_kinds = ["FUNCTION", "METHOD", "STRUCT", "ENUM", "TRAIT", "IMPL", "FIELD", "PARAM", "VARIABLE", "MODULE", "TYPE", "BASIC_BLOCK", "CALL_SITE", "ERROR"];
     let edge_kinds = [
         "CONTAINS",
         "HAS_FIELD",
@@ -1167,6 +1020,34 @@ fn write_kinds(output_dir: &Path) -> Result<()> {
     fs::write(output_dir.join("node_kinds.txt"), node_kinds.join("\n"))?;
     fs::write(output_dir.join("edge_kinds.txt"), edge_kinds.join("\n"))?;
     Ok(())
+}
+
+fn print_schema(output_dir: &Path, metadata: &crate::types::Metadata) {
+    eprintln!(
+        "\
+analysis_capture: schema v{schema_version} written to {dir}
+  metadata.json  : {{project, node_count, edge_count, def_count, schema_version, generated_by}}
+                     node_count={node_count}  edge_count={edge_count}  def_count={def_count}
+  nodes.csv      : node_id(u32), node_kind, symbol, file_id(u32), line(u32), column(u32), parent(u32)
+  edges.csv      : src_id(u32), dst_id(u32), edge_kind
+  files.txt      : file_id(u32), path
+  spans.bin      : [node_id(u32), file_id(u32), lo(u32), hi(u32)] x node_count  (16 bytes/node)
+  csr_row_ptr.bin: u32[] length=node_count+1  (CSR row pointers)
+  csr_col_idx.bin: u32[] length=edge_count    (CSR column indices)
+  node_kinds.txt : FUNCTION METHOD STRUCT ENUM TRAIT IMPL FIELD PARAM VARIABLE MODULE TYPE BASIC_BLOCK CALL_SITE ERROR
+  edge_kinds.txt : CONTAINS HAS_FIELD HAS_METHOD HAS_BLOCK HAS_PARAM IMPORTS EXPORT PUBLIC_USE FLOW CALL RETURN UNWIND IMPLEMENTS FOR_TYPE USES_TYPE BOUNDS ASSIGN PROPAGATES ARG_TO_PARAM RETURNS ERROR_TO_FUNCTION ERROR_TO_BLOCK
+  cfg.csv        : src_block(u32), dst_block(u32), edge_kind  (FLOW|UNWIND between BasicBlocks)
+  callgraph.csv  : caller_node(u32), callee_node(u32)
+  modulegraph.csv: parent_module(u32), child_module(u32)
+  typegraph.csv  : type_a(u32), type_b(u32), relation(edge_kind)
+  defs.txt       : one symbol path per line (def entry points)
+  upg_invariants.json: invariant check report",
+        schema_version = metadata.schema_version,
+        dir = output_dir.display(),
+        node_count = metadata.node_count,
+        edge_count = metadata.edge_count,
+        def_count = metadata.def_count,
+    );
 }
 
 fn write_bin_u32(path: PathBuf, values: &[u32]) -> Result<()> {
