@@ -7,7 +7,7 @@ members = [
   "canon_telemetry",
   "rustc_wrapper/rustc_capture",
   "canon",
-  "canon-analyzer",
+  # "canon-analyzer", 
   "canon-projection",
   "canon-agent",
   "canon-agent-v2",
