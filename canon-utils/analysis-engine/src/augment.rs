@@ -33,6 +33,8 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path) -> Result<()> 
 
     let mut nodes = read_nodes_csv(output_dir.join("nodes.csv"))?;
     let mut edges = read_edges_csv(output_dir.join("edges.csv"))?;
+    let mut file_ids = collect_file_ids(&nodes);
+    let mut next_file_id = file_ids.values().copied().max().unwrap_or(0).saturating_add(1);
 
     let mut next_id = nodes.iter().map(|n| n.id).max().unwrap_or(0).saturating_add(1);
     let mut added_errors: Vec<(u32, ErrorSpan)> = Vec::new();
@@ -48,13 +50,20 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path) -> Result<()> 
         let symbol = format!("error::{code}::{idx}");
         let node_id = next_id;
         next_id = next_id.saturating_add(1);
+        let file_id = *file_ids.entry(file.clone()).or_insert_with(|| {
+            let id = next_file_id;
+            next_file_id = next_file_id.saturating_add(1);
+            id
+        });
         nodes.push(Node {
             id: node_id,
             kind: NodeKind::Error,
             symbol,
+            file_id,
             file,
             line,
             column,
+            parent: 0,
         });
         if let Some(span) = span {
             added_errors.push((node_id, span));
@@ -77,13 +86,20 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path) -> Result<()> 
                 let module_id = *synthetic_modules.entry(file_key.clone()).or_insert_with(|| {
                     let id = next_id;
                     next_id = next_id.saturating_add(1);
+                    let file_id = *file_ids.entry(file_key.clone()).or_insert_with(|| {
+                        let id = next_file_id;
+                        next_file_id = next_file_id.saturating_add(1);
+                        id
+                    });
                     nodes.push(Node {
                         id,
                         kind: NodeKind::Module,
                         symbol: format!("file::{}", file_key),
+                        file_id,
                         file: file_key.clone(),
                         line: 0,
                         column: 0,
+                        parent: 0,
                     });
                     id
                 });
@@ -141,6 +157,7 @@ fn write_outputs(graph: &crate::loader::AnalysisGraph, output_dir: &Path) -> Res
     fs::create_dir_all(output_dir)?;
     write_nodes_csv(output_dir, &graph.nodes)?;
     write_edges_csv(output_dir, &graph.edges)?;
+    write_files_txt(output_dir, &graph.nodes)?;
     write_kinds(output_dir)?;
     write_bin_u32(output_dir.join("csr_row_ptr.bin"), &graph.row_ptr)?;
     write_bin_u32(output_dir.join("csr_col_idx.bin"), &graph.col_idx)?;
@@ -154,17 +171,18 @@ fn write_outputs(graph: &crate::loader::AnalysisGraph, output_dir: &Path) -> Res
 fn write_nodes_csv(output_dir: &Path, nodes: &[Node]) -> Result<()> {
     let path = output_dir.join("nodes.csv");
     let mut file = fs::File::create(path)?;
-    writeln!(file, "node_id,node_kind,symbol,file,line,column")?;
+    writeln!(file, "node_id,node_kind,symbol,file_id,line,column,parent")?;
     for node in nodes {
         writeln!(
             file,
-            "{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{}",
             node.id,
             node_kind_str(node.kind),
             sanitize_csv_field(&node.symbol),
-            sanitize_csv_field(&node.file),
+            node.file_id,
             node.line,
-            node.column
+            node.column,
+            node.parent
         )?;
     }
     Ok(())
@@ -176,6 +194,22 @@ fn write_edges_csv(output_dir: &Path, edges: &[Edge]) -> Result<()> {
     writeln!(file, "src_id,dst_id,edge_kind")?;
     for edge in edges {
         writeln!(file, "{},{},{}", edge.src, edge.dst, edge_kind_str(edge.kind))?;
+    }
+    Ok(())
+}
+
+fn write_files_txt(output_dir: &Path, nodes: &[Node]) -> Result<()> {
+    let path = output_dir.join("files.txt");
+    let mut file = fs::File::create(path)?;
+    writeln!(file, "file_id,path")?;
+    let mut entries: Vec<(u32, String)> = nodes
+        .iter()
+        .map(|n| (n.file_id, n.file.clone()))
+        .collect();
+    entries.sort_by_key(|(id, _)| *id);
+    entries.dedup_by_key(|(id, _)| *id);
+    for (id, path_str) in entries {
+        writeln!(file, "{},{}", id, sanitize_csv_field(&path_str))?;
     }
     Ok(())
 }
@@ -302,32 +336,66 @@ fn normalize_file(file: &str) -> String {
 }
 
 fn read_nodes_csv(path: PathBuf) -> Result<Vec<Node>> {
-    let content = fs::read_to_string(path)?;
+    let content = fs::read_to_string(path.clone())?;
+    let files = read_files_txt(path.parent().unwrap_or_else(|| Path::new(".")).join("files.txt"))?;
     let mut nodes = Vec::new();
     for (idx, line) in content.lines().enumerate() {
         if idx == 0 || line.trim().is_empty() {
             continue;
         }
         let parts: Vec<&str> = line.split(',').collect();
-        if parts.len() < 6 {
+        if parts.len() < 7 {
             return Err(anyhow!("invalid nodes.csv line"));
         }
         let id = parts[0].parse::<u32>()?;
         let kind = parse_node_kind(parts[1])?;
-        let line_no = parts[parts.len() - 2].parse::<u32>()?;
-        let col = parts[parts.len() - 1].parse::<u32>()?;
-        let file = parts[parts.len() - 3].to_string();
-        let symbol = parts[2..parts.len() - 3].join(",");
+        let line_no = parts[parts.len() - 3].parse::<u32>()?;
+        let col = parts[parts.len() - 2].parse::<u32>()?;
+        let file_id = parts[parts.len() - 4].parse::<u32>()?;
+        let parent = parts[parts.len() - 1].parse::<u32>().unwrap_or(0);
+        let file = files.get(file_id as usize).cloned().unwrap_or_default();
+        let symbol = parts[2..parts.len() - 4].join(",");
         nodes.push(Node {
             id,
             kind,
             symbol,
+            file_id,
             file,
             line: line_no,
             column: col,
+            parent,
         });
     }
     Ok(nodes)
+}
+
+fn read_files_txt(path: PathBuf) -> Result<Vec<String>> {
+    let content = fs::read_to_string(path)?;
+    let mut files = Vec::new();
+    for (idx, line) in content.lines().enumerate() {
+        if idx == 0 || line.trim().is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let id = parts[0].parse::<usize>()?;
+        let path = parts[1..].join(",");
+        if files.len() <= id {
+            files.resize(id + 1, String::new());
+        }
+        files[id] = path;
+    }
+    Ok(files)
+}
+
+fn collect_file_ids(nodes: &[Node]) -> BTreeMap<String, u32> {
+    let mut out = BTreeMap::new();
+    for node in nodes {
+        out.entry(node.file.clone()).or_insert(node.file_id);
+    }
+    out
 }
 
 fn read_edges_csv(path: PathBuf) -> Result<Vec<Edge>> {

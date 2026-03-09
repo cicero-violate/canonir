@@ -51,9 +51,11 @@ pub struct Node {
     pub id: u32,
     pub kind: NodeKind,
     pub symbol: String,
+    pub file_id: u32,
     pub file: String,
     pub line: u32,
     pub column: u32,
+    pub parent: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,14 +114,15 @@ pub fn load_dir(dir: &Path) -> Result<AnalysisGraph> {
 }
 
 fn read_nodes_csv(path: PathBuf) -> Result<Vec<Node>> {
-    let content = fs::read_to_string(path)?;
+    let content = fs::read_to_string(&path)?;
+    let files = read_files_txt(path.parent().unwrap_or_else(|| Path::new(".")).join("files.txt"))?;
     let mut nodes = Vec::new();
     for (idx, line) in content.lines().enumerate() {
         if idx == 0 || line.trim().is_empty() {
             continue;
         }
         let parts: Vec<&str> = line.split(',').collect();
-        if parts.len() < 6 {
+        if parts.len() < 7 {
             return Err(anyhow!("invalid nodes.csv line"));
         }
         let id = match parts[0].parse::<u32>() {
@@ -130,26 +133,60 @@ fn read_nodes_csv(path: PathBuf) -> Result<Vec<Node>> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let line_no = match parts[parts.len() - 2].parse::<u32>() {
+        let line_no = match parts[parts.len() - 3].parse::<u32>() {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let col = match parts[parts.len() - 1].parse::<u32>() {
+        let col = match parts[parts.len() - 2].parse::<u32>() {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let file = parts[parts.len() - 3].to_string();
-        let symbol = parts[2..parts.len() - 3].join(",");
+        let file_id = match parts[parts.len() - 4].parse::<u32>() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let parent = match parts[parts.len() - 1].parse::<u32>() {
+            Ok(v) => v,
+            Err(_) => 0,
+        };
+        let file = files.get(file_id as usize).cloned().unwrap_or_default();
+        let symbol = parts[2..parts.len() - 4].join(",");
         nodes.push(Node {
             id,
             kind,
             symbol,
+            file_id,
             file,
             line: line_no,
             column: col,
+            parent,
         });
     }
     Ok(nodes)
+}
+
+fn read_files_txt(path: PathBuf) -> Result<Vec<String>> {
+    let content = fs::read_to_string(path)?;
+    let mut files = Vec::new();
+    for (idx, line) in content.lines().enumerate() {
+        if idx == 0 || line.trim().is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let id = match parts[0].parse::<usize>() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let path = parts[1..].join(",");
+        if files.len() <= id {
+            files.resize(id + 1, String::new());
+        }
+        files[id] = path;
+    }
+    Ok(files)
 }
 
 fn read_edges_csv(path: PathBuf) -> Result<Vec<Edge>> {

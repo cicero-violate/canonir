@@ -331,7 +331,7 @@ impl ProjectEditor {
         let old_name = old_segments.last().unwrap().to_string();
         let mut new_segments = parent_segments.to_vec();
         new_segments.push(new_name.to_string());
-        let module_file = self.resolve_module_file(old_module_path, &parent_module_path, &old_name)?;
+        let module_file = self.resolve_module_file(old_module_path)?;
         let module_move = self.compute_module_move(&module_file, new_name)?;
         let plan = ModuleRenamePlan {
             old_segments,
@@ -344,19 +344,9 @@ impl ProjectEditor {
         self.apply_module_path_rename(plan)
     }
 
-fn resolve_module_file(
-        &self,
-        old_module_path: &str,
-        parent_module_path: &str,
-        old_name: &str,
-    ) -> Result<PathBuf> {
+    fn resolve_module_file(&self, old_module_path: &str) -> Result<PathBuf> {
         if let Some(path) = self.registry.module_files.get(old_module_path) {
             return Ok(path.clone());
-        }
-        if let Some(parent_file) = self.registry.module_files.get(parent_module_path) {
-            if let Some(path) = resolve_module_file_from_parent(&self.registry.asts, parent_file, old_name) {
-                return Ok(path);
-            }
         }
         Err(anyhow!("no file for module path {old_module_path}"))
     }
@@ -422,17 +412,22 @@ fn resolve_module_file(
         let mut touched = HashSet::new();
         let mut file_moves = Vec::new();
 
-        if let Some(parent_file) = self.registry.module_files.get(&plan.parent_module_path).cloned() {
-            if self.update_parent_mod_decl(&parent_file, &plan.old_name, Some(&plan.new_name), None) {
-                touched.insert(parent_file.clone());
-            }
-            if let Some((_, new_file)) = &plan.module_move {
-                let base_dir = parent_file.parent().unwrap_or_else(|| Path::new(""));
-                let rel = new_file.strip_prefix(base_dir).unwrap_or(new_file);
-                let rel = rel.to_string_lossy().replace('\\', "/");
-                if self.update_parent_mod_decl(&parent_file, &plan.old_name, None, Some(rel.as_str())) {
-                    touched.insert(parent_file);
-                }
+        let parent_file = self
+            .registry
+            .module_files
+            .get(&plan.parent_module_path)
+            .cloned()
+            .ok_or_else(|| anyhow!("no file for parent module path {}", plan.parent_module_path))?;
+
+        if self.update_parent_mod_decl(&parent_file, &plan.old_name, Some(&plan.new_name), None) {
+            touched.insert(parent_file.clone());
+        }
+        if let Some((_, new_file)) = &plan.module_move {
+            let base_dir = parent_file.parent().unwrap_or_else(|| Path::new(""));
+            let rel = new_file.strip_prefix(base_dir).unwrap_or(new_file);
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            if self.update_parent_mod_decl(&parent_file, &plan.old_name, None, Some(rel.as_str())) {
+                touched.insert(parent_file);
             }
         }
 
@@ -621,48 +616,4 @@ fn update_mod_path_attr(ast: &mut syn::File, old_name: &str, new_path: &str) -> 
         }
     }
     changed
-}
-
-fn resolve_module_file_from_parent(asts: &std::collections::HashMap<PathBuf, syn::File>, parent_file: &Path, old_name: &str) -> Option<PathBuf> {
-    let base_dir = parent_file.parent().unwrap_or_else(|| Path::new(""));
-    if let Some(ast) = asts.get(parent_file) {
-        for item in &ast.items {
-            let syn::Item::Mod(item_mod) = item else { continue };
-            if item_mod.ident != old_name {
-                continue;
-            }
-            if let Some(path_lit) = module_path_attr_value(item_mod) {
-                let path = if Path::new(&path_lit).is_absolute() {
-                    PathBuf::from(&path_lit)
-                } else {
-                    base_dir.join(&path_lit)
-                };
-                if path.exists() {
-                    return Some(path);
-                }
-            }
-        }
-    }
-    let direct = base_dir.join(format!("{old_name}.rs"));
-    if direct.is_file() {
-        return Some(direct);
-    }
-    let nested = base_dir.join(old_name).join("mod.rs");
-    if nested.is_file() {
-        return Some(nested);
-    }
-    None
-}
-
-fn module_path_attr_value(item_mod: &syn::ItemMod) -> Option<String> {
-    for attr in &item_mod.attrs {
-        if !attr.path().is_ident("path") {
-            continue;
-        }
-        let syn::Meta::NameValue(name_value) = &attr.meta else { continue };
-        let syn::Expr::Lit(expr_lit) = &name_value.value else { continue };
-        let syn::Lit::Str(lit) = &expr_lit.lit else { continue };
-        return Some(lit.value());
-    }
-    None
 }

@@ -14,6 +14,12 @@ rg (ripgrep)
 - Use to identify symbols, functions, flags, or heuristic surfaces.
 - Always prefer over grep.
 
+UPG Analysis First
+- Prefer reading `analysis/` (UPG outputs) before source files for understanding.
+- Use `nodes.csv`, `edges.csv`, `files.txt`, `spans.bin`, `upg_invariants.json`.
+- Use Python for parsing analysis outputs; avoid full-file reads for large CSVs.
+- Only open source files when analysis data is insufficient or inconsistent.
+
 awk
 - Use for line-oriented processing.
 - Use for column/field extraction and structured slicing.

@@ -13,7 +13,7 @@ members = [
   "canon-agent-v2",
   "canon-utils/rename",
   "rustc_wrapper/analysis_capture",
-  "canon-utils/analysis",
+  "canon-utils/upg_analysis",
   "canon-utils/analysis-engine",
   "gpjson-rs",
 ]

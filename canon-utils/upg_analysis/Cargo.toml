@@ -10,3 +10,6 @@ serde_json = "1"
 
 [lib]
 path = "src/lib.rs"
+
+[features]
+canon_capture_compat = []

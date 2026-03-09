@@ -10,6 +10,8 @@ pub mod errors;
 pub mod emit;
 pub mod extract;
 pub mod types;
+#[cfg(feature = "canon_capture_compat")]
+pub mod compat;
 
 pub use csr::{build_csr, find_path, load_csr, CsrGraph};
 pub use errors::{augment_with_errors, write_repair_surface};

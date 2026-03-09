@@ -117,7 +117,8 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path) -> Result<()> 
         edge_count: csr.col_idx.len() as u32,
         generated_by: "UPG extractor".to_string(),
     };
-    let graph = crate::extract::UpgGraph { nodes, edges, csr, metadata };
+    let spans_primary = vec![crate::types::SpanRange { lo: 0, hi: 0 }; nodes.len()];
+    let graph = crate::extract::UpgGraph { nodes, edges, csr, metadata, spans_primary };
     write_outputs(&graph, output_dir)?;
 
     let surface = compute_repair_surface(&graph);
@@ -240,25 +241,48 @@ fn normalize_file(raw: &str) -> String {
 }
 
 fn read_nodes_csv(path: PathBuf) -> Result<Vec<Node>> {
-    let content = fs::read_to_string(path)?;
+    let content = fs::read_to_string(path.clone())?;
+    let files = read_files_txt(path.parent().unwrap_or_else(|| Path::new(".")).join("files.txt"))?;
     let mut nodes = Vec::new();
     for (idx, line) in content.lines().enumerate() {
         if idx == 0 || line.trim().is_empty() {
             continue;
         }
         let parts: Vec<&str> = line.split(',').collect();
-        if parts.len() < 6 {
+        if parts.len() < 7 {
             return Err(anyhow!("invalid nodes.csv line"));
         }
         let id = parts[0].parse::<u32>()?;
         let kind = parse_node_kind(parts[1])?;
-        let line_no = parts[parts.len() - 2].parse::<u32>()?;
-        let col = parts[parts.len() - 1].parse::<u32>()?;
-        let file = parts[parts.len() - 3].to_string();
-        let symbol = parts[2..parts.len() - 3].join(",");
+        let line_no = parts[parts.len() - 3].parse::<u32>()?;
+        let col = parts[parts.len() - 2].parse::<u32>()?;
+        let file_id = parts[parts.len() - 4].parse::<usize>()?;
+        let file = files.get(file_id).cloned().unwrap_or_default();
+        let symbol = parts[2..parts.len() - 4].join(",");
         nodes.push(Node { id, kind, symbol, file, line: line_no, column: col });
     }
     Ok(nodes)
+}
+
+fn read_files_txt(path: PathBuf) -> Result<Vec<String>> {
+    let content = fs::read_to_string(path)?;
+    let mut files = Vec::new();
+    for (idx, line) in content.lines().enumerate() {
+        if idx == 0 || line.trim().is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let id = parts[0].parse::<usize>()?;
+        let path = parts[1..].join(",");
+        if files.len() <= id {
+            files.resize(id + 1, String::new());
+        }
+        files[id] = path;
+    }
+    Ok(files)
 }
 
 fn read_edges_csv(path: PathBuf) -> Result<Vec<Edge>> {
@@ -302,16 +326,19 @@ fn parse_node_kind(raw: &str) -> Result<NodeKind> {
 
 fn parse_edge_kind(raw: &str) -> Result<EdgeKind> {
     match raw {
+        "CONTAINS" => Ok(EdgeKind::Contains),
         "HAS_FIELD" => Ok(EdgeKind::HasField),
         "HAS_METHOD" => Ok(EdgeKind::HasMethod),
         "HAS_BLOCK" => Ok(EdgeKind::HasBlock),
         "HAS_PARAM" => Ok(EdgeKind::HasParam),
         "IMPORTS" => Ok(EdgeKind::Imports),
+        "EXPORT" => Ok(EdgeKind::Export),
         "FLOW" => Ok(EdgeKind::Flow),
         "CALL" => Ok(EdgeKind::Call),
         "RETURN" => Ok(EdgeKind::Return),
         "UNWIND" => Ok(EdgeKind::Unwind),
         "IMPLEMENTS" => Ok(EdgeKind::Implements),
+        "FOR_TYPE" => Ok(EdgeKind::ForType),
         "USES_TYPE" => Ok(EdgeKind::UsesType),
         "BOUNDS" => Ok(EdgeKind::Bounds),
         "ASSIGN" => Ok(EdgeKind::Assign),

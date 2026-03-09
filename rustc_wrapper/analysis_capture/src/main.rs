@@ -48,11 +48,13 @@ impl Callbacks for MirCaptureCallbacks {
         _compiler: &rustc_interface::interface::Compiler,
         tcx: rustc_middle::ty::TyCtxt<'tcx>,
     ) -> rustc_driver::Compilation {
-        let config = OutputConfig {
-            output_dir: self.output_dir.clone(),
-        };
-        if let Err(err) = extract_and_write(tcx, &config) {
-            eprintln!("analysis_capture: extraction failed: {err:?}");
+        if should_capture_crate(self.crate_name.as_deref(), &self.crate_types) {
+            let config = OutputConfig {
+                output_dir: self.output_dir.clone(),
+            };
+            if let Err(err) = extract_and_write(tcx, &config) {
+                eprintln!("analysis_capture: extraction failed: {err:?}");
+            }
         }
         if should_analyze_crate(self.crate_name.as_deref(), &self.crate_types) {
             let crate_name = self.crate_name.as_deref().unwrap_or("crate");
@@ -76,6 +78,24 @@ fn exec_real_rustc(real_rustc: &str, args: &[String], reason: &str) -> ! {
         .status()
         .unwrap_or_else(|err| panic!("failed to exec real rustc ({reason}): {err:?}"));
     std::process::exit(status.code().unwrap_or(0));
+}
+
+fn should_capture_crate(crate_name: Option<&str>, crate_types: &[String]) -> bool {
+    if !should_analyze_crate(crate_name, crate_types) {
+        return false;
+    }
+    if crate_types.iter().any(|t| t == "bin") {
+        if std::env::var("CARGO_LIB_NAME").is_ok() {
+            return false;
+        }
+        if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+            let lib_rs = PathBuf::from(manifest_dir).join("src").join("lib.rs");
+            if lib_rs.exists() {
+                return false;
+            }
+        }
+    }
+    package_name_matches(crate_name)
 }
 
 fn main() {
@@ -435,6 +455,9 @@ fn is_cargo_registry_path(path: &Path) -> bool {
 }
 
 fn should_run_analysis_engine(crate_name: Option<&str>, crate_types: &[String], output_dir: &Path) -> bool {
+    if std::env::var("ANALYSIS_ENGINE").ok().as_deref() != Some("1") {
+        return false;
+    }
     if let Ok(primary) = std::env::var("CARGO_PRIMARY_PACKAGE") {
         if primary != "1" {
             return false;

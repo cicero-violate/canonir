@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum NodeKind {
     Function,
     Method,
@@ -20,16 +20,20 @@ pub enum NodeKind {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EdgeKind {
+    Contains,
     HasField,
     HasMethod,
     HasBlock,
     HasParam,
     Imports,
+    Export,
+    PublicUse,
     Flow,
     Call,
     Return,
     Unwind,
     Implements,
+    ForType,
     UsesType,
     Bounds,
     Assign,
@@ -48,6 +52,12 @@ pub struct Node {
     pub file: String,
     pub line: u32,
     pub column: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SpanRange {
+    pub lo: u32,
+    pub hi: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
