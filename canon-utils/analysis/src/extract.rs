@@ -464,6 +464,9 @@ fn build_edges(
                 }
             }
             rustc_hir::def::DefKind::Mod => {
+                if path.is_empty() {
+                    continue;
+                }
                 if let Some(child_id) = symbol_to_id.get(path).copied() {
                     let parent_path = path
                         .rsplitn(2, "::")
@@ -473,6 +476,9 @@ fn build_edges(
                     if let Some(parent_id) =
                         resolve_parent_module_id(tcx, &parent_path, symbol_to_id)
                     {
+                        if parent_id == child_id {
+                            continue;
+                        }
                         edges.push(Edge {
                             src: parent_id,
                             dst: child_id,

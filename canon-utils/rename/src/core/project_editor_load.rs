@@ -35,14 +35,15 @@ impl ProjectEditor {
         for file in files {
             let file_path = file.clone();
             let content = std::fs::read_to_string(&file_path)?;
-            let ast = match syn::parse_file(&content) {
-                Ok(ast) => ast,
-                Err(_) => syn::File { shebang: None, attrs: Vec::new(), items: Vec::new() },
-            };
+            let ast = parse_file_lossy(&content);
             registry.asts.insert(file_path.clone(), ast);
             registry.sources.insert(file_path.clone(), content.clone());
             original_sources.insert(file_path.clone(), content);
-            let stored_ast = registry.asts.get(&file_path).cloned().unwrap_or_else(|| syn::File { shebang: None, attrs: Vec::new(), items: Vec::new() });
+            let stored_ast = registry
+                .asts
+                .get(&file_path)
+                .cloned()
+                .unwrap_or_else(|| syn::File { shebang: None, attrs: Vec::new(), items: Vec::new() });
             parsed_files.push((file_path.clone(), stored_ast));
         }
 
@@ -218,6 +219,14 @@ impl ProjectEditor {
     pub fn queue_directory_rename(&mut self, old_dir: &Path, new_dir: &Path) {
         self.pending_dir_renames.push(DirRename { old_dir: old_dir.to_path_buf(), new_dir: new_dir.to_path_buf() });
     }
+}
+
+fn parse_file_lossy(content: &str) -> syn::File {
+    syn::parse_file(content).unwrap_or_else(|_| syn::File {
+        shebang: None,
+        attrs: Vec::new(),
+        items: Vec::new(),
+    })
 }
 
 pub(crate) fn index_file_symbols(ast: &syn::File, file: &Path, module_path: &str, handles: &mut HashMap<String, SymbolHandle>) {

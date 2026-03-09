@@ -54,3 +54,40 @@
 {"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":474,"kind":"unknown","lo":425,"symbol_id":"crate::<CaptureCallbacks as rustc_driver::Callbacks>"}
 {"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":179,"kind":"unknown","lo":176,"symbol_id":"crate::{use#4}"}
 {"span_count":36,"symbol_count":18,"type":"done"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":53,"kind":"unknown","lo":41,"symbol_id":"crate::rustc_driver"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":83,"kind":"unknown","lo":68,"symbol_id":"crate::rustc_interface"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":110,"kind":"unknown","lo":98,"symbol_id":"crate::rustc_middle"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":131,"kind":"unknown","lo":124,"symbol_id":"crate::{use#1}"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":158,"kind":"unknown","lo":151,"symbol_id":"crate::{use#2}"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":179,"kind":"unknown","lo":176,"symbol_id":"crate::{use#4}"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":186,"kind":"unknown","lo":181,"symbol_id":"crate::{use#5}"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":219,"kind":"unknown","lo":208,"symbol_id":"crate::{use#6}"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":261,"kind":"unknown","lo":253,"symbol_id":"crate::{use#7}"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":342,"kind":"type","lo":336,"symbol_id":"crate::IrSlot"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":398,"kind":"struct","lo":382,"symbol_id":"crate::CaptureCallbacks"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":420,"kind":"type","lo":414,"symbol_id":"crate::IrSlot"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":474,"kind":"struct","lo":458,"symbol_id":"crate::CaptureCallbacks"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":498,"kind":"fn","lo":484,"symbol_id":"crate::<CaptureCallbacks as rustc_driver::Callbacks>::after_analysis"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":954,"kind":"fn","lo":950,"symbol_id":"crate::main"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":2877,"kind":"type","lo":2871,"symbol_id":"crate::IrSlot"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":2948,"kind":"struct","lo":2932,"symbol_id":"crate::CaptureCallbacks"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":498,"kind":"fn","lo":484,"symbol_id":"crate::<CaptureCallbacks as rustc_driver::Callbacks>::after_analysis"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":398,"kind":"struct","lo":375,"symbol_id":"crate::CaptureCallbacks"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":186,"kind":"unknown","lo":181,"symbol_id":"crate::{use#5}"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":0,"kind":"unknown","lo":0,"symbol_id":"crate::{use#0}"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":474,"kind":"unknown","lo":425,"symbol_id":"crate::<CaptureCallbacks as rustc_driver::Callbacks>"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":158,"kind":"unknown","lo":137,"symbol_id":"crate::{use#2}"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":4111,"kind":"module","lo":0,"symbol_id":"crate::"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":83,"kind":"unknown","lo":55,"symbol_id":"crate::rustc_interface"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":187,"kind":"unknown","lo":164,"symbol_id":"crate::{use#3}"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":261,"kind":"unknown","lo":225,"symbol_id":"crate::{use#7}"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":0,"kind":"unknown","lo":0,"symbol_id":"crate::std"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":342,"kind":"type","lo":331,"symbol_id":"crate::IrSlot"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":110,"kind":"unknown","lo":85,"symbol_id":"crate::rustc_middle"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":53,"kind":"unknown","lo":28,"symbol_id":"crate::rustc_driver"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":956,"kind":"fn","lo":947,"symbol_id":"crate::main"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":219,"kind":"unknown","lo":194,"symbol_id":"crate::{use#6}"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":589,"kind":"fn","lo":481,"symbol_id":"crate::<CaptureCallbacks as rustc_driver::Callbacks>::after_analysis"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":179,"kind":"unknown","lo":176,"symbol_id":"crate::{use#4}"}
+{"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":131,"kind":"unknown","lo":117,"symbol_id":"crate::{use#1}"}
+{"span_count":36,"symbol_count":18,"type":"done"}

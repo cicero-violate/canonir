@@ -1,4 +1,5 @@
 use super::project_editor_helpers::{build_full_path, canonicalize_relative, join_module_path, module_path_for_dir, split_module_path};
+use super::rustc_session::RustcSession;
 use crate::core::syn_patcher;
 use crate::core::syn_patcher::SpanReplacement;
 use crate::structured::{NodeOp, SymbolHandle, SymbolKind};
@@ -157,78 +158,121 @@ impl ProjectEditor {
     }
 
     fn apply_symbol_renames_bulk(&mut self, renames: &[(String, String)]) -> Result<HashSet<PathBuf>> {
-        let Some(session) = &self.session else {
+        let Some(session) = self.session.as_ref().cloned() else {
             return Err(anyhow!("rustc session not initialized; use ProjectEditor::load_with_rustc"));
         };
+        let (per_file, per_file_attr_pairs) = self.collect_symbol_replacements(&session, renames)?;
+        let mut touched = HashSet::new();
+        for (path, mut replacements) in per_file {
+            let attr_pairs = per_file_attr_pairs.get(&path).cloned().unwrap_or_default();
+            self.apply_replacements_for_file(&session, &path, &mut replacements, &attr_pairs, &mut touched)?;
+        }
+        Ok(touched)
+    }
 
+    fn collect_symbol_replacements(
+        &self,
+        session: &RustcSession,
+        renames: &[(String, String)],
+    ) -> Result<(
+        std::collections::HashMap<PathBuf, Vec<SpanReplacement>>,
+        std::collections::HashMap<PathBuf, Vec<(String, String)>>,
+    )> {
         let mut per_file: std::collections::HashMap<PathBuf, Vec<SpanReplacement>> = std::collections::HashMap::new();
         let mut per_file_attr_pairs: std::collections::HashMap<PathBuf, Vec<(String, String)>> = std::collections::HashMap::new();
-
         for (symbol_id, new_name) in renames {
-            let old_ident = symbol_id.rsplit_once("::").map(|(_, s)| s).unwrap_or(symbol_id.as_str()).to_string();
+            let old_ident = symbol_id
+                .rsplit_once("::")
+                .map(|(_, s)| s)
+                .unwrap_or(symbol_id.as_str())
+                .to_string();
             let norm = crate::core::symbol_id::normalize_symbol_id(symbol_id);
-            let occurrences = session.spans_for(&norm).ok_or_else(|| anyhow!("symbol not found via rustc: {symbol_id}"))?;
+            let occurrences = session
+                .spans_for(&norm)
+                .ok_or_else(|| anyhow!("symbol not found via rustc: {symbol_id}"))?;
             for (path, spans) in occurrences {
                 let entry = per_file.entry(path.clone()).or_default();
                 for span in spans {
-                    entry.push(SpanReplacement { span: span.clone(), replacement: new_name.clone() });
+                    entry.push(SpanReplacement {
+                        span: span.clone(),
+                        replacement: new_name.clone(),
+                    });
                 }
-                per_file_attr_pairs.entry(path.clone()).or_default().push((old_ident.clone(), new_name.clone()));
+                per_file_attr_pairs
+                    .entry(path.clone())
+                    .or_default()
+                    .push((old_ident.clone(), new_name.clone()));
             }
         }
+        Ok((per_file, per_file_attr_pairs))
+    }
 
-        let mut touched = HashSet::new();
-        for (path, mut replacements) in per_file {
-            replacements.sort_by(|a, b| a.span.lo.cmp(&b.span.lo).then_with(|| a.span.hi.cmp(&b.span.hi)).then_with(|| a.replacement.cmp(&b.replacement)));
-            replacements.dedup_by(|a, b| a.span.lo == b.span.lo && a.span.hi == b.span.hi && a.replacement == b.replacement);
-            remove_nested_spans(&mut replacements);
-
-            for window in replacements.windows(2) {
-                let a = &window[0];
-                let b = &window[1];
-                if a.span.lo == b.span.lo && a.span.hi == b.span.hi && a.replacement != b.replacement {
-                    return Err(anyhow!("conflicting replacements at {}..{} in {}", a.span.lo, a.span.hi, path.display()));
+    fn apply_replacements_for_file(
+        &mut self,
+        session: &RustcSession,
+        path: &PathBuf,
+        replacements: &mut Vec<SpanReplacement>,
+        attr_pairs: &[(String, String)],
+        touched: &mut HashSet<PathBuf>,
+    ) -> Result<()> {
+        replacements.sort_by(|a, b| {
+            a.span
+                .lo
+                .cmp(&b.span.lo)
+                .then_with(|| a.span.hi.cmp(&b.span.hi))
+                .then_with(|| a.replacement.cmp(&b.replacement))
+        });
+        replacements.dedup_by(|a, b| {
+            a.span.lo == b.span.lo && a.span.hi == b.span.hi && a.replacement == b.replacement
+        });
+        remove_nested_spans(replacements);
+        for window in replacements.windows(2) {
+            let a = &window[0];
+            let b = &window[1];
+            if a.span.lo == b.span.lo && a.span.hi == b.span.hi && a.replacement != b.replacement {
+                return Err(anyhow!(
+                    "conflicting replacements at {}..{} in {}",
+                    a.span.lo,
+                    a.span.hi,
+                    path.display()
+                ));
+            }
+        }
+        let Some(source) = self.registry.sources.get(path).cloned() else {
+            return Ok(());
+        };
+        let source = session
+            .normalized_source(path)
+            .cloned()
+            .unwrap_or(source);
+        let mut updated = syn_patcher::patch_file(&source, replacements)?;
+        let mut changed = updated != source;
+        if let Ok(ast) = syn::parse_file(&updated) {
+            let mut ast = ast;
+            let mut pairs = attr_pairs.to_vec();
+            pairs.sort();
+            pairs.dedup();
+            let mut attr_changed = false;
+            for (old_name, new_name) in &pairs {
+                if rewrite_string_attrs_in_file(&mut ast, old_name, new_name) {
+                    attr_changed = true;
                 }
             }
-
-            let source = match self.registry.sources.get(&path) {
-                Some(content) => content.clone(),
-                None => continue,
-            };
-            let source = match session.normalized_source(&path) {
-                Some(s) => s.clone(),
-                None => source,
-            };
-            let mut updated = syn_patcher::patch_file(&source, &replacements)?;
-            let mut changed = updated != source;
-            if let Ok(ast) = syn::parse_file(&updated) {
-                let mut ast = ast;
-                let mut attr_pairs = per_file_attr_pairs.get(&path).cloned().unwrap_or_default();
-                attr_pairs.sort();
-                attr_pairs.dedup();
-                let mut attr_changed = false;
-                for (old_name, new_name) in &attr_pairs {
-                    if rewrite_string_attrs_in_file(&mut ast, old_name, new_name) {
-                        attr_changed = true;
-                    }
-                }
-                if attr_changed {
-                    updated = prettyplease::unparse(&ast);
-                    changed = true;
-                }
-                if changed {
-                    self.registry.sources.insert(path.to_path_buf(), updated.clone());
-                    self.registry.asts.insert(path.to_path_buf(), ast);
-                }
-            } else if changed {
-                self.registry.sources.insert(path.to_path_buf(), updated.clone());
+            if attr_changed {
+                updated = prettyplease::unparse(&ast);
+                changed = true;
             }
             if changed {
-                touched.insert(path);
+                self.registry.sources.insert(path.to_path_buf(), updated.clone());
+                self.registry.asts.insert(path.to_path_buf(), ast);
             }
+        } else if changed {
+            self.registry.sources.insert(path.to_path_buf(), updated.clone());
         }
-
-        Ok(touched)
+        if changed {
+            touched.insert(path.to_path_buf());
+        }
+        Ok(())
     }
 
     fn apply_delete_symbol(&mut self, handle: &SymbolHandle, symbol_id: &str) -> Result<HashSet<PathBuf>> {
@@ -267,18 +311,17 @@ impl ProjectEditor {
         }
         let old_full = build_full_path(&old_module_path, &symbol_name);
         let new_full = build_full_path(new_module_path, &symbol_name);
-        for (path, ast) in self.registry.asts.iter_mut() {
-            let mut rewriter = PathRewriter::replace_full(&old_full, &new_full);
-            if rewriter.visit_file(ast) {
-                touched.insert(path.clone());
-            }
-        }
+        self.rewrite_paths(
+            RewriteMode::Full {
+                old_full,
+                new_full,
+            },
+            &mut touched,
+        );
         Ok(touched)
     }
 
     fn apply_module_rename(&mut self, old_module_path: &str, new_name: &str) -> Result<(HashSet<PathBuf>, Vec<(PathBuf, PathBuf)>)> {
-        let mut touched = HashSet::new();
-        let mut file_moves = Vec::new();
         let old_segments = split_module_path(old_module_path);
         if old_segments.len() < 2 {
             return Err(anyhow!("module path must include crate and name"));
@@ -288,32 +331,20 @@ impl ProjectEditor {
         let old_name = old_segments.last().unwrap().to_string();
         let mut new_segments = parent_segments.to_vec();
         new_segments.push(new_name.to_string());
-        if let Some(parent_file) = self.registry.module_files.get(&parent_module_path).cloned() {
-            if self.update_parent_mod_decl(&parent_file, &old_name, Some(new_name), None) {
-                touched.insert(parent_file);
-            }
-        }
         let module_file = self.resolve_module_file(old_module_path, &parent_module_path, &old_name)?;
         let module_move = self.compute_module_move(&module_file, new_name)?;
-        file_moves.push(module_move.clone());
-        if let Some(parent_file) = self.registry.module_files.get(&parent_module_path).cloned() {
-            let base_dir = parent_file.parent().unwrap_or_else(|| Path::new(""));
-            let rel = module_move.1.strip_prefix(base_dir).unwrap_or(&module_move.1);
-            let rel = rel.to_string_lossy().replace('\\', "/");
-            if self.update_parent_mod_decl(&parent_file, &old_name, None, Some(rel.as_str())) {
-                touched.insert(parent_file);
-            }
-        }
-        for (path, ast) in self.registry.asts.iter_mut() {
-            let mut rewriter = PathRewriter::replace_prefix(&old_segments, &new_segments);
-            if rewriter.visit_file(ast) {
-                touched.insert(path.clone());
-            }
-        }
-        Ok((touched, file_moves))
+        let plan = ModuleRenamePlan {
+            old_segments,
+            new_segments,
+            parent_module_path,
+            old_name,
+            new_name: new_name.to_string(),
+            module_move: Some(module_move),
+        };
+        self.apply_module_path_rename(plan)
     }
 
-    fn resolve_module_file(
+fn resolve_module_file(
         &self,
         old_module_path: &str,
         parent_module_path: &str,
@@ -360,8 +391,6 @@ impl ProjectEditor {
         if let Some(new_path) = new_path {
             if update_mod_path_attr(ast, old_name, new_path) {
                 changed = true;
-            } else if strip_mod_path_attr(ast, old_name) {
-                changed = true;
             }
         } else if strip_mod_path_attr(ast, old_name) {
             changed = true;
@@ -369,33 +398,83 @@ impl ProjectEditor {
         changed
     }
 
-    fn apply_dir_rename(&mut self, old_dir: &Path, new_dir: &Path) -> Result<(HashSet<PathBuf>, Vec<(PathBuf, PathBuf)>)> {
-        let mut touched = HashSet::new();
-        let mut file_moves = Vec::new();
-        let old_dir = canonicalize_relative(old_dir, &self.source_root)?;
-        let new_dir = canonicalize_relative(new_dir, &self.source_root)?;
-        let old_segments = module_path_for_dir(&self.source_root, &old_dir)?;
-        let new_segments = module_path_for_dir(&self.source_root, &new_dir)?;
-        if old_segments.len() < 2 || new_segments.len() < 2 {
-            return Err(anyhow!("directory rename must be under source root"));
-        }
-        let old_name = old_segments.last().unwrap().to_string();
-        let new_name = new_segments.last().unwrap().to_string();
-        let parent_segments = &old_segments[..old_segments.len() - 1];
-        let parent_module_path = join_module_path(parent_segments);
-        if let Some(parent_file) = self.registry.module_files.get(&parent_module_path).cloned() {
-            if self.update_parent_mod_decl(&parent_file, &old_name, Some(&new_name), None) {
-                touched.insert(parent_file);
-            }
-        }
+    fn rewrite_paths(
+        &mut self,
+        mode: RewriteMode,
+        touched: &mut HashSet<PathBuf>,
+    ) {
         for (path, ast) in self.registry.asts.iter_mut() {
-            let mut rewriter = PathRewriter::replace_prefix(&old_segments, &new_segments);
+            let mut rewriter = match &mode {
+                RewriteMode::Prefix { old_segments, new_segments } => {
+                    PathRewriter::replace_prefix(old_segments, new_segments)
+                }
+                RewriteMode::Full { old_full, new_full } => {
+                    PathRewriter::replace_full(old_full, new_full)
+                }
+            };
             if rewriter.visit_file(ast) {
                 touched.insert(path.clone());
             }
         }
-        file_moves.push((old_dir, new_dir));
+    }
+
+    fn apply_module_path_rename(&mut self, plan: ModuleRenamePlan) -> Result<(HashSet<PathBuf>, Vec<(PathBuf, PathBuf)>)> {
+        let mut touched = HashSet::new();
+        let mut file_moves = Vec::new();
+
+        if let Some(parent_file) = self.registry.module_files.get(&plan.parent_module_path).cloned() {
+            if self.update_parent_mod_decl(&parent_file, &plan.old_name, Some(&plan.new_name), None) {
+                touched.insert(parent_file.clone());
+            }
+            if let Some((_, new_file)) = &plan.module_move {
+                let base_dir = parent_file.parent().unwrap_or_else(|| Path::new(""));
+                let rel = new_file.strip_prefix(base_dir).unwrap_or(new_file);
+                let rel = rel.to_string_lossy().replace('\\', "/");
+                if self.update_parent_mod_decl(&parent_file, &plan.old_name, None, Some(rel.as_str())) {
+                    touched.insert(parent_file);
+                }
+            }
+        }
+
+        self.rewrite_paths_and_collect(&plan.old_segments, &plan.new_segments, &mut touched);
+
+        if let Some(mv) = plan.module_move {
+            file_moves.push(mv);
+        }
         Ok((touched, file_moves))
+    }
+
+    fn rewrite_paths_and_collect(
+        &mut self,
+        old_segments: &[String],
+        new_segments: &[String],
+        touched: &mut HashSet<PathBuf>,
+    ) {
+        self.rewrite_paths(
+            RewriteMode::Prefix {
+                old_segments: old_segments.to_vec(),
+                new_segments: new_segments.to_vec(),
+            },
+            touched,
+        );
+    }
+
+    fn apply_dir_rename(&mut self, old_dir: &Path, new_dir: &Path) -> Result<(HashSet<PathBuf>, Vec<(PathBuf, PathBuf)>)> {
+        let old_segments = dir_to_module_segments(&self.source_root, old_dir)?;
+        let new_segments = dir_to_module_segments(&self.source_root, new_dir)?;
+        let old_name = old_segments.last().unwrap().to_string();
+        let new_name = new_segments.last().unwrap().to_string();
+        let parent_segments = &old_segments[..old_segments.len() - 1];
+        let parent_module_path = join_module_path(parent_segments);
+        let plan = ModuleRenamePlan {
+            old_segments,
+            new_segments,
+            parent_module_path,
+            old_name,
+            new_name,
+            module_move: Some((old_dir.to_path_buf(), new_dir.to_path_buf())),
+        };
+        self.apply_module_path_rename(plan)
     }
 
     fn rewrite_sources_for(&mut self, touched: &HashSet<PathBuf>) -> Result<()> {
@@ -419,6 +498,30 @@ impl ProjectEditor {
         Ok(())
     }
 }
+
+fn dir_to_module_segments(source_root: &Path, dir: &Path) -> Result<Vec<String>> {
+    let dir = canonicalize_relative(dir, source_root)?;
+    let segments = module_path_for_dir(source_root, &dir)?;
+    if segments.len() < 2 {
+        return Err(anyhow!("directory rename must be under source root"));
+    }
+    Ok(segments)
+}
+
+struct ModuleRenamePlan {
+    old_segments: Vec<String>,
+    new_segments: Vec<String>,
+    parent_module_path: String,
+    old_name: String,
+    new_name: String,
+    module_move: Option<(PathBuf, PathBuf)>,
+}
+
+enum RewriteMode {
+    Prefix { old_segments: Vec<String>, new_segments: Vec<String> },
+    Full { old_full: Vec<String>, new_full: Vec<String> },
+}
+
 
 fn remove_nested_spans(replacements: &mut Vec<SpanReplacement>) {
     if replacements.len() < 2 {
