@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-//
+
 #[derive(Debug, Clone)]
 pub struct CsrGraph {
     pub row_ptr: Vec<u32>,
