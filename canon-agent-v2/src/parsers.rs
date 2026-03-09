@@ -44,11 +44,7 @@ pub struct FrameAssembler {
 }
 impl FrameAssembler {
     pub fn new(site: SiteType) -> Self {
-        Self {
-            site,
-            deltas: Vec::new(),
-            raw: String::new(),
-        }
+        Self { site, deltas: Vec::new(), raw: String::new() }
     }
     pub fn set_site(&mut self, site: SiteType) {
         self.site = site;
@@ -59,50 +55,46 @@ impl FrameAssembler {
     }
     pub fn push(&mut self, payload: &str) -> Option<String> {
         match self.site {
-            SiteType::Gemini => {
-                match classify_frame(self.site, payload) {
-                    FrameResult::Snapshot(text) => {
-                        self.raw.clear();
-                        self.raw.push_str(&text);
-                        if let Some(fenced) = try_extract_complete_fenced_json(
-                            &self.raw,
-                        ) {
-                            self.reset();
-                            return Some(fenced);
-                        }
-                        None
-                    }
-                    FrameResult::ExecutionDelta(text) => {
-                        self.raw.push_str(&text);
-                        if let Some(fenced) = try_extract_complete_fenced_json(
-                            &self.raw,
-                        ) {
-                            self.reset();
-                            return Some(fenced);
-                        }
-                        None
-                    }
-                    _ => None,
-                }
-            }
-            _ => {
-                match classify_frame(self.site, payload) {
-                    FrameResult::ExecutionDelta(text) => {
-                        self.deltas.push(text);
-                        None
-                    }
-                    FrameResult::Snapshot(text) => {
+            SiteType::Gemini => match classify_frame(self.site, payload) {
+                FrameResult::Snapshot(text) => {
+                    self.raw.clear();
+                    self.raw.push_str(&text);
+                    if let Some(fenced) = try_extract_complete_fenced_json(&self.raw) {
                         self.reset();
-                        Some(text)
+                        return Some(fenced);
                     }
-                    FrameResult::Done => {
-                        let assembled = self.deltas.join("");
-                        self.reset();
-                        if assembled.is_empty() { None } else { Some(assembled) }
-                    }
-                    FrameResult::Ignore => None,
+                    None
                 }
-            }
+                FrameResult::ExecutionDelta(text) => {
+                    self.raw.push_str(&text);
+                    if let Some(fenced) = try_extract_complete_fenced_json(&self.raw) {
+                        self.reset();
+                        return Some(fenced);
+                    }
+                    None
+                }
+                _ => None,
+            },
+            _ => match classify_frame(self.site, payload) {
+                FrameResult::ExecutionDelta(text) => {
+                    self.deltas.push(text);
+                    None
+                }
+                FrameResult::Snapshot(text) => {
+                    self.reset();
+                    Some(text)
+                }
+                FrameResult::Done => {
+                    let assembled = self.deltas.join("");
+                    self.reset();
+                    if assembled.is_empty() {
+                        None
+                    } else {
+                        Some(assembled)
+                    }
+                }
+                FrameResult::Ignore => None,
+            },
         }
     }
 }
@@ -134,25 +126,13 @@ fn classify_chatgpt_private(raw: &str) -> FrameResult {
         return FrameResult::Done;
     }
     if obj.get("type").and_then(|t| t.as_str()) == Some("message") {
-        let text = obj
-            .get("content")
-            .and_then(|c| c.get("parts"))
-            .and_then(|p| p.as_array())
-            .and_then(|a| a.first())
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let text = obj.get("content").and_then(|c| c.get("parts")).and_then(|p| p.as_array()).and_then(|a| a.first()).and_then(|v| v.as_str()).unwrap_or("");
         if !text.is_empty() {
             return FrameResult::Snapshot(text.to_string());
         }
     }
     if obj.get("object").and_then(|v| v.as_str()) == Some("chat.completion.chunk") {
-        let content = obj
-            .get("choices")
-            .and_then(|c| c.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|c| c.get("delta"))
-            .and_then(|d| d.get("content"))
-            .and_then(|v| v.as_str());
+        let content = obj.get("choices").and_then(|c| c.as_array()).and_then(|arr| arr.first()).and_then(|c| c.get("delta")).and_then(|d| d.get("content")).and_then(|v| v.as_str());
         return match content {
             Some(s) if !s.is_empty() => FrameResult::ExecutionDelta(s.to_string()),
             _ => FrameResult::Ignore,
@@ -326,11 +306,7 @@ fn classify_calpico_array(arr: &[Value]) -> FrameResult {
             None => continue,
         };
         for raw_msg in raw_messages {
-            let author_role = raw_msg
-                .get("author")
-                .and_then(|a| a.get("role"))
-                .and_then(|r| r.as_str())
-                .unwrap_or("");
+            let author_role = raw_msg.get("author").and_then(|a| a.get("role")).and_then(|r| r.as_str()).unwrap_or("");
             if author_role != "assistant" {
                 continue;
             }
@@ -338,13 +314,7 @@ fn classify_calpico_array(arr: &[Value]) -> FrameResult {
             if channel != "final" {
                 continue;
             }
-            let text = raw_msg
-                .get("content")
-                .and_then(|c| c.get("parts"))
-                .and_then(|p| p.as_array())
-                .and_then(|a| a.first())
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let text = raw_msg.get("content").and_then(|c| c.get("parts")).and_then(|p| p.as_array()).and_then(|a| a.first()).and_then(|v| v.as_str()).unwrap_or("");
             if !text.is_empty() {
                 return FrameResult::Snapshot(text.to_string());
             }

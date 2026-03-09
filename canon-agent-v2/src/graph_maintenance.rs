@@ -1,11 +1,8 @@
-use std::path::Path;
-use anyhow::Result;
 use super::dag;
-use super::graph_algo::{
-    graph_analysis_emit_planned_graph, score_node_utility,
-    graph_analysis_run_graph_algorithms,
-};
-use super::graph_runtime::{validate_graph_semantics, prune_unreachable_nodes};
+use super::graph_algo::{graph_analysis_emit_planned_graph, graph_analysis_run_graph_algorithms, score_node_utility};
+use super::graph_runtime::{prune_unreachable_nodes, validate_graph_semantics};
+use anyhow::Result;
+use std::path::Path;
 pub struct GraphRepairMaintenanceCtx<'a> {
     pub graph: &'a mut dag::ExecutionGraph,
     pub log_dir: &'a Path,
@@ -20,13 +17,7 @@ pub struct GraphRepairMaintenanceCtx<'a> {
     pub recovery_retry_rate_threshold: f64,
     pub recovery_failed_fraction_threshold: f64,
 }
-pub(crate) fn prune_low_utility_nodes(
-    graph: &mut dag::ExecutionGraph,
-    iter: u64,
-    auto_prune: bool,
-    prune_min_age: u64,
-    prune_threshold: f64,
-) {
+pub(crate) fn prune_low_utility_nodes(graph: &mut dag::ExecutionGraph, iter: u64, auto_prune: bool, prune_min_age: u64, prune_threshold: f64) {
     if !auto_prune {
         return;
     }
@@ -85,30 +76,15 @@ pub fn repair_graph(ctx: GraphRepairMaintenanceCtx<'_>) -> Result<()> {
         prune_unreachable_nodes(ctx.graph);
     }
     validate_graph_semantics(ctx.graph)?;
-    prune_low_utility_nodes(
-        ctx.graph,
-        ctx.iter,
-        ctx.auto_prune,
-        ctx.prune_min_age,
-        ctx.prune_threshold,
-    );
-    let risk = graph_repair_risk_score(
-        ctx.features_retry_rate,
-        ctx.features_failed_fraction,
-        ctx.features_branching_factor,
-    );
-    let threshold = (ctx.recovery_retry_rate_threshold
-        + ctx.recovery_failed_fraction_threshold) / 2.0;
+    prune_low_utility_nodes(ctx.graph, ctx.iter, ctx.auto_prune, ctx.prune_min_age, ctx.prune_threshold);
+    let risk = graph_repair_risk_score(ctx.features_retry_rate, ctx.features_failed_fraction, ctx.features_branching_factor);
+    let threshold = (ctx.recovery_retry_rate_threshold + ctx.recovery_failed_fraction_threshold) / 2.0;
     if risk > threshold {
         recover_from_failures(ctx.graph);
     }
     Ok(())
 }
-fn graph_repair_risk_score(
-    retry_rate: f64,
-    failed_fraction: f64,
-    branching_factor: f64,
-) -> f64 {
+fn graph_repair_risk_score(retry_rate: f64, failed_fraction: f64, branching_factor: f64) -> f64 {
     let w1 = 0.5;
     let w2 = 0.4;
     let w3 = 0.1;

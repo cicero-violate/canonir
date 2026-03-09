@@ -102,24 +102,13 @@ impl PipelineCapability {
     }
 }
 pub fn capability_model_dominant_class(caps: &[PipelineCapability]) -> CapabilityMode {
-    caps.iter()
-        .map(|c| c.class())
-        .max_by_key(|&c| c as u8)
-        .unwrap_or(CapabilityMode::Observe)
+    caps.iter().map(|c| c.class()).max_by_key(|&c| c as u8).unwrap_or(CapabilityMode::Observe)
 }
-pub fn capability_model_assert_class_disjoint(
-    caps: &HashSet<PipelineCapability>,
-) -> Result<(), String> {
+pub fn capability_model_assert_class_disjoint(caps: &HashSet<PipelineCapability>) -> Result<(), String> {
     let has_mutate = caps.iter().any(|c| c.class() == CapabilityMode::Mutate);
     let has_verify = caps.iter().any(|c| c.class() == CapabilityMode::Verify);
     if has_mutate && has_verify {
-        return Err(
-            format!(
-                "capability class violation: node mixes Mutate and Verify capabilities: {:?}",
-                caps.iter().filter(| c | c.class() != CapabilityMode::Observe).collect::<
-                Vec < _ >> ()
-            ),
-        );
+        return Err(format!("capability class violation: node mixes Mutate and Verify capabilities: {:?}", caps.iter().filter(|c| c.class() != CapabilityMode::Observe).collect::<Vec<_>>()));
     }
     Ok(())
 }

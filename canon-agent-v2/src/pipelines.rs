@@ -1,6 +1,5 @@
 //! Pluggable pipeline trait for the canon-agent runner.
-#[path = "capability_mod.rs"]
-pub mod capability;
+pub use crate::capability;
 use crate::ir::SystemState;
 use crate::layout::FileTopology;
 use std::path::PathBuf;
@@ -31,10 +30,5 @@ pub struct PipelineOutcome {
 #[async_trait::async_trait]
 pub trait Pipeline: Send + Sync {
     fn name(&self) -> &str;
-    async fn capability_pipeline_pipeline_run_tick(
-        &self,
-        ctx: &PipelineContext,
-        ir: &mut SystemState,
-        layout: &mut FileTopology,
-    ) -> anyhow::Result<PipelineOutcome>;
+    async fn capability_pipeline_pipeline_run_tick(&self, ctx: &PipelineContext, ir: &mut SystemState, layout: &mut FileTopology) -> anyhow::Result<PipelineOutcome>;
 }

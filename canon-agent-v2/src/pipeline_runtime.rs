@@ -1,6 +1,5 @@
 //! Pluggable pipeline trait for the canon-agent runner.
-#[path = "capability_mod.rs"]
-pub mod capability;
+pub use crate::capability;
 use crate::ir::SystemState;
 use crate::layout::FileTopology;
 use std::path::PathBuf;
