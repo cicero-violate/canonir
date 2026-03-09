@@ -1,3 +1,4 @@
+//
 use crate::loader::{AnalysisGraph, EdgeKind};
 use algorithms::graph::bellman_ford_gpu::bellman_ford_gpu;
 use algorithms::graph::csr::Csr;
@@ -44,11 +45,7 @@ pub fn analyze_anomalies(graph: &AnalysisGraph) -> AnomalyReport {
     let error_edges = edge_list_with_weights(graph, EdgeKind::ErrorToFunction);
     let bellman_dist = bellman_ford_gpu(graph.nodes.len(), &error_edges, 0).unwrap_or_default();
 
-    AnomalyReport {
-        depth_outliers,
-        topo_missing,
-        bellman_dist,
-    }
+    AnomalyReport { depth_outliers, topo_missing, bellman_dist }
 }
 
 fn map_id(graph: &AnalysisGraph, id: u32) -> Option<usize> {
