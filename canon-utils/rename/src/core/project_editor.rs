@@ -11,10 +11,10 @@
 
 // pub use project_editor_types::{ChangeReport, EditConflict, ProjectEditor};
 
-mod project_editor_helpers;
-mod project_editor_load;
-mod project_editor_ops;
-mod project_editor_rewrite;
-mod project_editor_types;
+use crate::core::project_editor_helpers::*;
+use crate::core::project_editor_load::*;
+use crate::core::project_editor_ops::*;
+use crate::core::project_editor_rewrite::*;
+use crate::core::project_editor_types::*;
 
 pub use project_editor_types::{ChangeReport, EditConflict, ProjectEditor};
