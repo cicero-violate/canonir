@@ -2,13 +2,14 @@ use crate::core::ProjectEditor;
 use crate::core::rustc_session::RustcSession;
 use crate::core::symbol_id::normalize_symbol_id;
 
-pub(crate) struct VerifySummary {
-    pub(crate) applied: bool,
-    pub(crate) pairs_checked: usize,
-    pub(crate) pairs_changed: usize,
+#[derive(serde::Serialize)]
+pub struct VerifySummary {
+    pub applied: bool,
+    pub pairs_checked: usize,
+    pub pairs_changed: usize,
 }
 
-pub(crate) fn verify_renames_applied(
+pub fn verify_renames_applied(
     session: &RustcSession,
     editor: &ProjectEditor,
     renames: &[(String, String)],

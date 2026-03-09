@@ -135,7 +135,7 @@ impl ProjectEditor {
         self.queue(&norm, op)
     }
 
-    fn synthetic_handle_from_symbol_id(&self, symbol_id: &str) -> Result<SymbolHandle> {
+    pub fn synthetic_handle_from_symbol_id(&self, symbol_id: &str) -> Result<SymbolHandle> {
         let (module_path, name) = symbol_id.rsplit_once("::").ok_or_else(|| anyhow!("invalid symbol id: {symbol_id}"))?;
         let kind = self.session.as_ref().and_then(|session| session.symbol_kind(symbol_id)).map(symbol_kind_from_str).unwrap_or(SymbolKind::Fn);
         let file = self.registry.module_files.get(module_path).cloned().unwrap_or_else(PathBuf::new);

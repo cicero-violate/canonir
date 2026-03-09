@@ -10,6 +10,11 @@ proc-macro2 = "1"
 syn = { version = "2", features = ["full", "visit-mut", "visit"] }
 walkdir = "2.5"
 regex = "1"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
 canon = { path = "../../canon" }
+
+[[bin]]
+name = "rename_stdin"
+path = "src/bin/rename_stdin.rs"

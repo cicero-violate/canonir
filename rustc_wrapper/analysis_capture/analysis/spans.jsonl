@@ -79,4 +79,4 @@
 {"file":"/workspace/ai_sandbox/canon/rustc_wrapper/analysis_capture/src/main.rs","hi":934,"kind":"fn","lo":928,"symbol_id":"crate::<MirCaptureCallbacks as rustc_driver::Callbacks>::config"}
 {"file":"/workspace/ai_sandbox/canon/rustc_wrapper/analysis_capture/src/main.rs","hi":1269,"kind":"fn","lo":1255,"symbol_id":"crate::<MirCaptureCallbacks as rustc_driver::Callbacks>::after_analysis"}
 {"file":"/workspace/ai_sandbox/canon/rustc_wrapper/analysis_capture/src/main.rs","hi":1702,"kind":"fn","lo":1684,"symbol_id":"crate::is_primary_package"}
-{"span_count":80,"symbol_count":61,"type":"done"}
+{"span_count":80,"symbol_count":62,"type":"done"}

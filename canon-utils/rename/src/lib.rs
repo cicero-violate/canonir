@@ -1,16 +1,18 @@
 pub mod core;
 pub mod fs;
 pub mod structured;
-pub mod runner;
+pub mod api;
+pub mod check;
+pub mod verify;
 
 use std::path::Path;
 use std::sync::Arc;
 
 use core::ProjectEditor;
 use core::rustc_session::RustcSession;
-use structured::FieldMutation;
+use structured::{FieldMutation, NodeOp};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct RenameRunReport {
     pub rustc_args: Vec<String>,
     pub def_paths: Vec<String>,
@@ -54,14 +56,16 @@ pub fn rename_symbol_pairs_with_session(
     };
 
     for (old_symbol, new_symbol) in renames {
-        if !editor.has_symbol(old_symbol) {
+        let Some(handle) = editor.registry.handles.get(old_symbol).cloned() else {
             report.error = Some(format!("symbol not found in registry: {old_symbol}"));
             return report;
-        }
+        };
         let new_ident = new_symbol.rsplit("::").next().unwrap_or(new_symbol.as_str());
-        if let Err(err) =
-            editor.queue_by_id(old_symbol, FieldMutation::RenameIdent(new_ident.to_string()))
-        {
+        let op = NodeOp::MutateField {
+            handle,
+            mutation: FieldMutation::RenameIdent(new_ident.to_string()),
+        };
+        if let Err(err) = editor.queue(old_symbol, op) {
             report.error = Some(format!("{err:?}"));
             return report;
         }
@@ -99,5 +103,3 @@ pub fn rename_symbol_pairs_with_session(
 
     report
 }
-
-pub use runner::{run_rename_self, run_rename_self_from_env, RenameSelfConfig, RenameSelfMode, RenameSelfResult};

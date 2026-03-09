@@ -15,20 +15,31 @@ cargo check
 
 - Otherwise, run the build with the wrapper configured for your project (see your repo’s build docs).
 
-2. Send a rename request to `rename_stdin` (JSON on stdin, JSON report on stdout):
+2. Send an op envelope to `rename_stdin` (JSON on stdin, JSON report on stdout):
 
 ```bash
 cd /workspace/ai_sandbox/canon/canon-utils/rename
 cat <<'JSON' | cargo run --bin rename_stdin
 {
   "project": "/path/to/your/project",
-  "renames": [
-    ["crate::old_name", "crate::new_name"],
-    ["crate::mod::Foo", "crate::mod::Bar"]
+  "ops": [
+    { "op": "RenameSymbol", "args": { "old": "crate::old_name", "new": "crate::new_name" } },
+    { "op": "MoveSymbol",   "args": { "symbol_id": "crate::mod::Foo", "new_module_path": "crate::mod2" } },
+    { "op": "RenameModule", "args": { "old_module_path": "crate::old_mod", "new_name": "new_mod" } },
+    { "op": "RenameDir",    "args": { "old_dir": "src/old_dir", "new_dir": "src/new_dir" } }
   ]
 }
 JSON
 ```
+
+### Op Envelope Schema
+
+Each operation is one of:
+
+- `RenameSymbol`: `{ "op": "RenameSymbol", "args": { "old": "...", "new": "..." } }`
+- `MoveSymbol`: `{ "op": "MoveSymbol", "args": { "symbol_id": "...", "new_module_path": "..." } }`
+- `RenameModule`: `{ "op": "RenameModule", "args": { "old_module_path": "...", "new_name": "..." } }`
+- `RenameDir`: `{ "op": "RenameDir", "args": { "old_dir": "...", "new_dir": "..." } }`
 
 ## Notes
 

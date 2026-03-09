@@ -5,13 +5,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct EditConflict {
     pub symbol_id: String,
     pub reason: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ChangeReport {
     pub touched_files: Vec<PathBuf>,
     pub conflicts: Vec<EditConflict>,
