@@ -72,5 +72,6 @@ pub struct Metadata {
     pub project: String,
     pub node_count: u32,
     pub edge_count: u32,
+    pub def_count: u32,
     pub generated_by: String,
 }

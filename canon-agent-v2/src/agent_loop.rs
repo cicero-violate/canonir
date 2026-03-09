@@ -1,8 +1,8 @@
 use crate::ir::SystemState;
 use crate::layout::FileTopology;
-use crate::pipelines::capability::telemetry::TelemetryFrame;
-use crate::pipelines::capability::CapabilityPipeline;
-use crate::pipelines::{Pipeline, PipelineContext};
+use crate::pipelines_core::capability::telemetry::TelemetryFrame;
+use crate::pipelines_core::capability::CapabilityPipeline;
+use crate::pipelines_core::{Pipeline, PipelineContext};
 use anyhow::Result;
 use std::path::Path;
 use std::time::Duration;
@@ -16,19 +16,40 @@ pub struct AgentLoopConfig {
 }
 impl Default for AgentLoopConfig {
     fn default() -> Self {
-        Self { max_ticks: 0, backoff_ms: 200, stagnation_window: 3, retry_threshold: 0.4, deadlock_threshold: 0.2 }
+        Self {
+            max_ticks: 0,
+            backoff_ms: 200,
+            stagnation_window: 3,
+            retry_threshold: 0.4,
+            deadlock_threshold: 0.2,
+        }
     }
 }
-pub async fn run_agent_loop(pipeline: &CapabilityPipeline, base_ctx: &PipelineContext, ir: &mut SystemState, layout: &mut FileTopology, config: AgentLoopConfig) -> Result<()> {
+pub async fn run_agent_loop(
+    pipeline: &CapabilityPipeline,
+    base_ctx: &PipelineContext,
+    ir: &mut SystemState,
+    layout: &mut FileTopology,
+    config: AgentLoopConfig,
+) -> Result<()> {
     let mut stagnation = 0u64;
     let mut tick = 0u64;
     loop {
         tick += 1;
-        let ctx = PipelineContext { tick, ..base_ctx.clone() };
-        let outcome = match pipeline.capability_pipeline_pipeline_run_tick(&ctx, ir, layout).await {
+        let ctx = PipelineContext {
+            tick,
+            ..base_ctx.clone()
+        };
+        let outcome = match pipeline
+            .capability_pipeline_pipeline_run_tick(&ctx, ir, layout)
+            .await
+        {
             Ok(outcome) => {
                 eprintln!("[agent-loop] tick {} done — {}", tick, outcome.summary);
-                eprintln!("[agent-loop] reward={:.4} advanced={}", outcome.reward, outcome.advanced);
+                eprintln!(
+                    "[agent-loop] reward={:.4} advanced={}", outcome.reward, outcome
+                    .advanced
+                );
                 Some(outcome)
             }
             Err(e) => {

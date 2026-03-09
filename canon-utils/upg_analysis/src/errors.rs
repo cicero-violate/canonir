@@ -115,10 +115,11 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path) -> Result<()> 
         project: output_dir.parent().map(|p| p.display().to_string()).unwrap_or_else(|| output_dir.display().to_string()),
         node_count: nodes.len() as u32,
         edge_count: csr.col_idx.len() as u32,
+        def_count: 0,
         generated_by: "UPG extractor".to_string(),
     };
     let spans_primary = vec![crate::types::SpanRange { lo: 0, hi: 0 }; nodes.len()];
-    let graph = crate::extract::UpgGraph { nodes, edges, csr, metadata, spans_primary };
+    let graph = crate::extract::UpgGraph { nodes, edges, csr, metadata, spans_primary, def_paths: Vec::new() };
     write_outputs(&graph, output_dir)?;
 
     let surface = compute_repair_surface(&graph);
@@ -333,6 +334,7 @@ fn parse_edge_kind(raw: &str) -> Result<EdgeKind> {
         "HAS_PARAM" => Ok(EdgeKind::HasParam),
         "IMPORTS" => Ok(EdgeKind::Imports),
         "EXPORT" => Ok(EdgeKind::Export),
+        "PUBLIC_USE" => Ok(EdgeKind::PublicUse),
         "FLOW" => Ok(EdgeKind::Flow),
         "CALL" => Ok(EdgeKind::Call),
         "RETURN" => Ok(EdgeKind::Return),

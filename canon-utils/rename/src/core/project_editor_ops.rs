@@ -322,16 +322,18 @@ impl ProjectEditor {
     }
 
     fn apply_module_rename(&mut self, old_module_path: &str, new_name: &str) -> Result<(HashSet<PathBuf>, Vec<(PathBuf, PathBuf)>)> {
-        let old_segments = split_module_path(old_module_path);
-        if old_segments.len() < 2 {
-            return Err(anyhow!("module path must include crate and name"));
+        let uses_crate_prefix = self.registry.module_files.keys().any(|k| k.starts_with("crate::"));
+        let normalized = crate::core::project_editor_helpers::normalize_module_path(old_module_path, uses_crate_prefix);
+        let old_segments = split_module_path(&normalized);
+        if old_segments.is_empty() {
+            return Err(anyhow!("module path must include name"));
         }
         let parent_segments = &old_segments[..old_segments.len() - 1];
         let parent_module_path = join_module_path(parent_segments);
         let old_name = old_segments.last().unwrap().to_string();
         let mut new_segments = parent_segments.to_vec();
         new_segments.push(new_name.to_string());
-        let module_file = self.resolve_module_file(old_module_path)?;
+        let module_file = self.resolve_module_file(&normalized)?;
         let module_move = self.compute_module_move(&module_file, new_name)?;
         let plan = ModuleRenamePlan {
             old_segments,
@@ -452,6 +454,42 @@ impl ProjectEditor {
             },
             touched,
         );
+        let uses_crate_prefix = self
+            .registry
+            .module_files
+            .keys()
+            .any(|k| k.starts_with("crate::"));
+        if !uses_crate_prefix {
+            let mut old_prefixed = Vec::with_capacity(old_segments.len() + 1);
+            old_prefixed.push("crate".to_string());
+            old_prefixed.extend_from_slice(old_segments);
+            let mut new_prefixed = Vec::with_capacity(new_segments.len() + 1);
+            new_prefixed.push("crate".to_string());
+            new_prefixed.extend_from_slice(new_segments);
+            self.rewrite_paths(
+                RewriteMode::Prefix {
+                    old_segments: old_prefixed,
+                    new_segments: new_prefixed,
+                },
+                touched,
+            );
+        } else if let Some(crate_name) = crate::core::project_editor_helpers::infer_crate_name(&self.project_root) {
+            if old_segments.first().map(|s| s.as_str()) == Some("crate") {
+                let mut old_prefixed = Vec::with_capacity(old_segments.len());
+                old_prefixed.push(crate_name.clone());
+                old_prefixed.extend_from_slice(&old_segments[1..]);
+                let mut new_prefixed = Vec::with_capacity(new_segments.len());
+                new_prefixed.push(crate_name);
+                new_prefixed.extend_from_slice(&new_segments[1..]);
+                self.rewrite_paths(
+                    RewriteMode::Prefix {
+                        old_segments: old_prefixed,
+                        new_segments: new_prefixed,
+                    },
+                    touched,
+                );
+            }
+        }
     }
 
     fn apply_dir_rename(&mut self, old_dir: &Path, new_dir: &Path) -> Result<(HashSet<PathBuf>, Vec<(PathBuf, PathBuf)>)> {

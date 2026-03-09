@@ -19,6 +19,7 @@ struct ApiResponse {
     check: Option<serde_json::Value>,
     apply_error: Option<String>,
     commit_error: Option<String>,
+    invariant_error: Option<String>,
     restore_error: Option<String>,
 }
 
@@ -46,8 +47,11 @@ fn main() -> anyhow::Result<()> {
     let mut apply_error = None;
     let mut commit_error = None;
     let mut restore_error = None;
+    let mut invariant_error = None;
+    let mut moved_files: Vec<std::path::PathBuf> = Vec::new();
     let report = match editor.apply() {
         Ok(r) => {
+            moved_files = r.file_moves.iter().map(|(_, dst)| dst.clone()).collect();
             if let Err(e) = editor.commit() {
                 commit_error = Some(e.to_string());
             }
@@ -58,6 +62,16 @@ fn main() -> anyhow::Result<()> {
             None
         }
     };
+
+    if apply_error.is_none() && commit_error.is_none() {
+        let validate = std::env::var("RENAME_VALIDATE_UPG").ok().as_deref() == Some("1");
+        if validate {
+            let output_dir = project.join("analysis");
+            if let Err(err) = validate_upg_invariants(&output_dir) {
+                invariant_error = Some(err);
+            }
+        }
+    }
 
     let rename_pairs: Vec<(String, String)> = req
         .ops
@@ -78,7 +92,7 @@ fn main() -> anyhow::Result<()> {
         None
     };
 
-    let check_result = if req.check && apply_error.is_none() && commit_error.is_none() {
+    let check_result = if req.check && apply_error.is_none() && commit_error.is_none() && invariant_error.is_none() {
         let baseline_success = baseline.as_ref().map(|c| c.success).unwrap_or(false);
         let baseline_res = baseline
             .as_ref()
@@ -120,6 +134,15 @@ fn main() -> anyhow::Result<()> {
         if delta_total != 0 && !skip_restore {
             if let Err(err) = restore_project_src(project) {
                 restore_error = Some(err.to_string());
+            } else {
+                for moved in &moved_files {
+                    if moved.exists() {
+                        if let Err(err) = std::fs::remove_file(moved) {
+                            restore_error = Some(err.to_string());
+                            break;
+                        }
+                    }
+                }
             }
         }
         Some(serde_json::json!({
@@ -142,9 +165,28 @@ fn main() -> anyhow::Result<()> {
         check: check_result,
         apply_error,
         commit_error,
+        invariant_error,
         restore_error,
     };
     println!("{}", serde_json::to_string_pretty(&response)?);
 
+    Ok(())
+}
+
+fn validate_upg_invariants(output_dir: &Path) -> Result<(), String> {
+    let path = output_dir.join("upg_invariants.json");
+    let payload = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let value: serde_json::Value = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+    let obj = value.as_object().ok_or_else(|| "upg_invariants.json is not an object".to_string())?;
+    for (key, val) in obj {
+        if !key.starts_with("must_") {
+            continue;
+        }
+        match val.as_bool() {
+            Some(true) => {}
+            Some(false) => return Err(key.clone()),
+            None => return Err(format!("{key} not boolean")),
+        }
+    }
     Ok(())
 }

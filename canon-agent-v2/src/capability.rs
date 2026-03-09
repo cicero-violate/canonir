@@ -37,14 +37,12 @@ pub use crate::template_mutation;
 pub use crate::templates;
 pub use crate::tab_management;
 pub use crate::capability_types::{
-    capability_model_assert_class_disjoint,
-    capability_model_dominant_class,
-    CapabilityMode,
-    PipelineCapability,
+    capability_model_assert_class_disjoint, capability_model_dominant_class,
+    CapabilityMode, PipelineCapability,
 };
 use crate::ir::SystemState;
 use crate::layout::FileTopology;
-use crate::pipelines::{Pipeline, PipelineContext, PipelineOutcome};
+use crate::pipelines_core::{Pipeline, PipelineContext, PipelineOutcome};
 use crate::ws_server::WsBridge;
 use anyhow::Result;
 use config::{CapabilityConfig, CapabilityConfigGoalSpec};
@@ -75,21 +73,40 @@ pub struct CapabilityPipeline {
 }
 impl CapabilityPipeline {
     pub fn new(bridge: WsBridge) -> Self {
-        let config = CapabilityConfig::snapshot_store_load().expect("failed to load capability config");
-        Self { bridge, config, tabs: engine::llm_worker_new_tabs(), role_rr: tokio::sync::Mutex::new(HashMap::new()) }
+        let config = CapabilityConfig::snapshot_store_load()
+            .expect("failed to load capability config");
+        Self {
+            bridge,
+            config,
+            tabs: engine::llm_worker_new_tabs(),
+            role_rr: tokio::sync::Mutex::new(HashMap::new()),
+        }
     }
     fn ensure_log_dir() {
         let _ = std::fs::create_dir_all(LOG_ROOT);
         let _ = std::fs::create_dir_all("/workspace/ai_sandbox/canon/agent_logs");
-        let _ = std::fs::create_dir_all("/workspace/ai_sandbox/canon/agent_logs/templates");
+        let _ = std::fs::create_dir_all(
+            "/workspace/ai_sandbox/canon/agent_logs/templates",
+        );
         Self::ensure_agent_log_files();
     }
     fn ensure_agent_log_files() {
-        Self::ensure_file("/workspace/ai_sandbox/canon/agent_logs/policy_dataset.jsonl", "");
-        Self::ensure_file("/workspace/ai_sandbox/canon/agent_logs/goal_embeddings.json", "{}");
+        Self::ensure_file(
+            "/workspace/ai_sandbox/canon/agent_logs/policy_dataset.jsonl",
+            "",
+        );
+        Self::ensure_file(
+            "/workspace/ai_sandbox/canon/agent_logs/goal_embeddings.json",
+            "{}",
+        );
         Self::ensure_file("/workspace/ai_sandbox/canon/agent_logs/metrics.json", "{}");
-        Self::ensure_file("/workspace/ai_sandbox/canon/agent_logs/capability_costs.json", "{}");
-        let weights_path = Path::new("/workspace/ai_sandbox/canon/agent_logs/policy_weights.json");
+        Self::ensure_file(
+            "/workspace/ai_sandbox/canon/agent_logs/capability_costs.json",
+            "{}",
+        );
+        let weights_path = Path::new(
+            "/workspace/ai_sandbox/canon/agent_logs/policy_weights.json",
+        );
         if !weights_path.exists() {
             let model = ExecutionPolicyModel::load_default();
             let _ = model.snapshot_store_save(weights_path);
@@ -117,90 +134,140 @@ impl CapabilityPipeline {
         if let Ok(pretty) = serde_json::to_string_pretty(&goal) {
             let _ = std::fs::write(Self::log_path("goal_spec.json"), pretty);
         }
-        let endpoint = self.config.llm_endpoints.iter().find(|e| e.role.as_deref() != Some("planner")).unwrap_or(&self.config.llm_endpoints[0]);
+        let endpoint = self
+            .config
+            .llm_endpoints
+            .iter()
+            .find(|e| e.role.as_deref() != Some("planner"))
+            .unwrap_or(&self.config.llm_endpoints[0]);
         let retry_count = self.config.llm_retry_count;
         let retry_delay = self.config.llm_retry_delay_secs;
         let max_output_lines = self.config.max_output_lines;
-        let workspace_listing = capability_pipeline_list_workspace_entries(&ctx.cwd[0], 50);
-        let policy = config::CapabilityConfigCapabilityPolicy::snapshot_store_load(&ctx.cwd[0])?;
-        let policy = config::CapabilityConfigCapabilityPolicy { max_node_retries: self.config.max_node_retries, ..policy };
-        let mut store = GraphTemplateStore::new(Path::new(TEMPLATE_ROOT).to_path_buf(), self.config.embedding_dim);
+        let workspace_listing = capability_pipeline_list_workspace_entries(
+            &ctx.cwd[0],
+            50,
+        );
+        let policy = config::CapabilityConfigCapabilityPolicy::snapshot_store_load(
+            &ctx.cwd[0],
+        )?;
+        let policy = config::CapabilityConfigCapabilityPolicy {
+            max_node_retries: self.config.max_node_retries,
+            ..policy
+        };
+        let mut store = GraphTemplateStore::new(
+            Path::new(TEMPLATE_ROOT).to_path_buf(),
+            self.config.embedding_dim,
+        );
         let template_name = goal.raw.clone();
         let mut planner_generate = || async {
-            let request = decompose::build_goal_decompose_request(&goal.raw, &ctx.cwd[0], &workspace_listing, Path::new(LOG_ROOT));
+            let request = decompose::build_goal_decompose_request(
+                &goal.raw,
+                &ctx.cwd[0],
+                &workspace_listing,
+                Path::new(LOG_ROOT),
+            );
             let mut payload = engine::module_call_llm_json_with_retry_allow_mismatch(
-                &self.bridge,
-                &endpoint.id,
-                &endpoint.url,
-                endpoint.stateful,
-                &request.prompt,
-                "",
-                request.phase,
-                None,
-                &self.tabs,
-                endpoint.max_tabs,
-                self.config.tab_cooldown_ms,
-                self.config.llm_retry_count,
-                self.config.llm_retry_delay_secs,
-            )
-            .await?;
+                    &self.bridge,
+                    &endpoint.id,
+                    &endpoint.url,
+                    endpoint.stateful,
+                    &request.prompt,
+                    "",
+                    request.phase,
+                    None,
+                    &self.tabs,
+                    endpoint.max_tabs,
+                    self.config.tab_cooldown_ms,
+                    self.config.llm_retry_count,
+                    self.config.llm_retry_delay_secs,
+                )
+                .await?;
             let mut extra_retries = 2u32;
             let decomp = loop {
                 match decompose::validate_decompose_payload(payload.clone(), &request) {
                     Ok(output) => {
-                        decompose::decompose_write_payload_log(&request.log_path, &payload);
+                        decompose::decompose_write_payload_log(
+                            &request.log_path,
+                            &payload,
+                        );
                         break output;
                     }
                     Err(decompose::DecomposeDecomposeRetry::Retry { prompt }) => {
                         if extra_retries == 0 {
-                            return Err(anyhow::anyhow!("decompose_goal retries exhausted"));
+                            return Err(
+                                anyhow::anyhow!("decompose_goal retries exhausted"),
+                            );
                         }
                         extra_retries = extra_retries.saturating_sub(1);
                         payload = engine::module_call_llm_json_with_retry_allow_mismatch(
-                            &self.bridge,
-                            &endpoint.id,
-                            &endpoint.url,
-                            endpoint.stateful,
-                            &prompt,
-                            "",
-                            request.phase,
-                            None,
-                            &self.tabs,
-                            endpoint.max_tabs,
-                            self.config.tab_cooldown_ms,
-                            1,
-                            self.config.llm_retry_delay_secs,
-                        )
-                        .await?;
+                                &self.bridge,
+                                &endpoint.id,
+                                &endpoint.url,
+                                endpoint.stateful,
+                                &prompt,
+                                "",
+                                request.phase,
+                                None,
+                                &self.tabs,
+                                endpoint.max_tabs,
+                                self.config.tab_cooldown_ms,
+                                1,
+                                self.config.llm_retry_delay_secs,
+                            )
+                            .await?;
                     }
-                    Err(decompose::DecomposeDecomposeRetry::EnsureRender { prompt, original }) => {
+                    Err(
+                        decompose::DecomposeDecomposeRetry::EnsureRender {
+                            prompt,
+                            original,
+                        },
+                    ) => {
                         if extra_retries == 0 {
-                            return Err(anyhow::anyhow!("decompose_goal retries exhausted"));
+                            return Err(
+                                anyhow::anyhow!("decompose_goal retries exhausted"),
+                            );
                         }
                         extra_retries = extra_retries.saturating_sub(1);
                         let retry_payload = engine::module_call_llm_json_with_retry_allow_mismatch(
-                            &self.bridge,
-                            &endpoint.id,
-                            &endpoint.url,
-                            endpoint.stateful,
-                            &prompt,
-                            "",
-                            request.phase,
-                            None,
-                            &self.tabs,
-                            endpoint.max_tabs,
-                            self.config.tab_cooldown_ms,
-                            1,
-                            self.config.llm_retry_delay_secs,
-                        )
-                        .await?;
-                        let retry_output = decompose::parse_decompose_payload(retry_payload.clone())?;
-                        let merged = decompose::decompose_merge_outputs(original, retry_output);
-                        let has_render = merged.tasks.iter().any(|t| t.node_type == decompose::DecomposeNodeType::Render);
+                                &self.bridge,
+                                &endpoint.id,
+                                &endpoint.url,
+                                endpoint.stateful,
+                                &prompt,
+                                "",
+                                request.phase,
+                                None,
+                                &self.tabs,
+                                endpoint.max_tabs,
+                                self.config.tab_cooldown_ms,
+                                1,
+                                self.config.llm_retry_delay_secs,
+                            )
+                            .await?;
+                        let retry_output = decompose::parse_decompose_payload(
+                            retry_payload.clone(),
+                        )?;
+                        let merged = decompose::decompose_merge_outputs(
+                            original,
+                            retry_output,
+                        );
+                        let has_render = merged
+                            .tasks
+                            .iter()
+                            .any(|t| {
+                                t.node_type == decompose::DecomposeNodeType::Render
+                            });
                         if !has_render {
-                            return Err(anyhow::anyhow!("decompose_goal retry still missing render node"));
+                            return Err(
+                                anyhow::anyhow!(
+                                    "decompose_goal retry still missing render node"
+                                ),
+                            );
                         }
-                        decompose::decompose_write_payload_log(&request.log_path, &retry_payload);
+                        decompose::decompose_write_payload_log(
+                            &request.log_path,
+                            &retry_payload,
+                        );
                         break merged;
                     }
                 }
@@ -228,11 +295,19 @@ impl CapabilityPipeline {
                 .collect();
             capability_pipeline_ensure_unique_node_ids(&mut nodes);
             capability_pipeline_ensure_unique_node_ids(&mut nodes);
-            Ok::<dag::ExecutionGraph, anyhow::Error>(dag::ExecutionGraph { nodes, id_index: HashMap::new() })
+            Ok::<
+                dag::ExecutionGraph,
+                anyhow::Error,
+            >(dag::ExecutionGraph {
+                nodes,
+                id_index: HashMap::new(),
+            })
         };
         let mut cache_hit = false;
         let mut graph = if self.config.enable_resume {
-            let snap = state_snapshot::snapshot_store_load(Path::new(&self.config.snapshot_file));
+            let snap = state_snapshot::snapshot_store_load(
+                Path::new(&self.config.snapshot_file),
+            );
             if let Some(snapshot) = snap {
                 telemetry::telemetry_set_resume_iteration(snapshot.iteration);
                 let mut g = snapshot.graph;
@@ -268,38 +343,49 @@ impl CapabilityPipeline {
         if cache_hit && !self.config.planner_refine_on_cache {
             let mut exec_metrics = Default::default();
             let template_hash = store.hash_for(&template_name);
-            let mut failure_store = failure_store::FailureStore::snapshot_store_load(&template_hash);
+            let mut failure_store = failure_store::FailureStore::snapshot_store_load(
+                &template_hash,
+            );
             let mut cost_table = capability_cost::CapabilityCostCapabilityCostTable::snapshot_store_load();
             let (iterations_used, exec_failures) = scheduler::run_execution_loop(
-                &mut graph,
-                &self.bridge,
-                &self.config,
-                &self.role_rr,
-                &self.tabs,
-                &ctx.cwd,
-                &workspace_listing,
-                endpoint,
-                "exec",
-                &policy,
-                self.config.context_radius,
-                self.config.max_concurrency,
-                self.config.max_iterations,
-                self.config.tab_cooldown_ms,
-                retry_count,
-                retry_delay,
-                max_output_lines,
-                0.0,
-                &mut cost_table,
-                &mut exec_metrics,
-            )
-            .await?;
+                    &mut graph,
+                    &self.bridge,
+                    &self.config,
+                    &self.role_rr,
+                    &self.tabs,
+                    &ctx.cwd,
+                    &workspace_listing,
+                    endpoint,
+                    "exec",
+                    &policy,
+                    self.config.context_radius,
+                    self.config.max_concurrency,
+                    self.config.max_iterations,
+                    self.config.tab_cooldown_ms,
+                    retry_count,
+                    retry_delay,
+                    max_output_lines,
+                    0.0,
+                    &mut cost_table,
+                    &mut exec_metrics,
+                )
+                .await?;
             for failure in exec_failures {
                 failure_store.record_graph(failure.kind, &graph, failure.iter);
                 store.record_failure(&template_hash);
             }
-            let features = graph_algo::compute_graph_features(&graph).with_failure_stats(&failure_store.stats());
-            let policy_outcome = policy_engine::evaluate_policy(&features, self.config.max_nodes, self.config.max_nodes.saturating_mul(4));
-            let reward = telemetry::telemetry_compute_reward(&graph, iterations_used, self.config.max_iterations);
+            let features = graph_algo::compute_graph_features(&graph)
+                .with_failure_stats(&failure_store.stats());
+            let policy_outcome = policy_engine::evaluate_policy(
+                &features,
+                self.config.max_nodes,
+                self.config.max_nodes.saturating_mul(4),
+            );
+            let reward = telemetry::telemetry_compute_reward(
+                &graph,
+                iterations_used,
+                self.config.max_iterations,
+            );
             let entry = PolicyTrainingPolicyDatasetEntry {
                 features: serde_json::json!(
                     { "nodes" : features.nodes, "edges" : features.edges, "depth" :
@@ -333,7 +419,11 @@ impl CapabilityPipeline {
                 reward,
             };
             policy_train::policy_training_append_policy_dataset(&entry);
-            policy_train::policy_training_update_online(&entry, self.config.max_nodes, self.config.max_nodes.saturating_mul(4));
+            policy_train::policy_training_update_online(
+                &entry,
+                self.config.max_nodes,
+                self.config.max_nodes.saturating_mul(4),
+            );
             store.record_reward(&template_name, reward);
             let runtime = telemetry::RuntimeTelemetry {
                 queue_depth: telemetry::telemetry_pending_requests(),
@@ -381,30 +471,69 @@ impl CapabilityPipeline {
                 template_hash: Some(store.hash_for(&template_name)),
                 goal: Some(template_name.clone()),
             };
-            telemetry::telemetry_record_snapshot(&Path::new(LOG_ROOT).join("metrics.json"), &snapshot);
-            telemetry::telemetry_record_snapshot(&Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"), &snapshot);
+            telemetry::telemetry_record_snapshot(
+                &Path::new(LOG_ROOT).join("metrics.json"),
+                &snapshot,
+            );
+            telemetry::telemetry_record_snapshot(
+                &Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"),
+                &snapshot,
+            );
             let _ = std::fs::create_dir_all(Path::new(TEMPLATE_ROOT));
-            telemetry::telemetry_record_snapshot(&Path::new(TEMPLATE_ROOT).join(format!("metrics_{}.json", template_hash)), &snapshot);
+            telemetry::telemetry_record_snapshot(
+                &Path::new(TEMPLATE_ROOT)
+                    .join(format!("metrics_{}.json", template_hash)),
+                &snapshot,
+            );
             Ok(reward)
         } else {
             let planner_endpoint = self.config.planner_endpoint()?;
-            let mut planner_session = planner_session::PlannerController::new(planner_endpoint, goal.raw.clone());
+            let mut planner_session = planner_session::PlannerController::new(
+                planner_endpoint,
+                goal.raw.clone(),
+            );
             let recent = store.recent_rewards(&template_name, 4);
-            let plateaued = store.is_plateaued(&template_name, self.config.planner_plateau_window, self.config.planner_plateau_threshold);
-            let similar = store.find_similar(&goal.raw, &graph, 1, self.config.goal_similarity_weight, self.config.structural_similarity_weight, self.config.embedding_dim);
-            let bootstrap_seed = similar.templates.into_iter().next().map(|s| {
-                let seed_graph = store.snapshot_store_load(&s.entry.goal).ok();
-                let node_summaries = seed_graph.as_ref().map(|g| g.nodes.iter().map(|n| format!("{}: {}", n.id, n.description)).collect::<Vec<_>>()).unwrap_or_default();
-                planner_session::PlannerControllerBootstrapSeed {
-                    goal: s.entry.goal.clone(),
-                    similarity_score: s.score,
-                    reward: s.entry.reward,
-                    node_summaries,
-                    capability_set: s.entry.capability_set.clone(),
-                    node_count: s.entry.node_count,
-                    edge_count: s.entry.edge_count,
-                }
-            });
+            let plateaued = store
+                .is_plateaued(
+                    &template_name,
+                    self.config.planner_plateau_window,
+                    self.config.planner_plateau_threshold,
+                );
+            let similar = store
+                .find_similar(
+                    &goal.raw,
+                    &graph,
+                    1,
+                    self.config.goal_similarity_weight,
+                    self.config.structural_similarity_weight,
+                    self.config.embedding_dim,
+                );
+            let bootstrap_seed = similar
+                .templates
+                .into_iter()
+                .next()
+                .map(|s| {
+                    let seed_graph = store.snapshot_store_load(&s.entry.goal).ok();
+                    let node_summaries = seed_graph
+                        .as_ref()
+                        .map(|g| {
+                            g
+                                .nodes
+                                .iter()
+                                .map(|n| format!("{}: {}", n.id, n.description))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    planner_session::PlannerControllerBootstrapSeed {
+                        goal: s.entry.goal.clone(),
+                        similarity_score: s.score,
+                        reward: s.entry.reward,
+                        node_summaries,
+                        capability_set: s.entry.capability_set.clone(),
+                        node_count: s.entry.node_count,
+                        edge_count: s.entry.edge_count,
+                    }
+                });
             let reward_ctx = planner_session::PlannerControllerRewardContext {
                 recent_rewards: recent,
                 plateaued,
@@ -414,43 +543,52 @@ impl CapabilityPipeline {
             };
             planner_session.set_reward_context(reward_ctx);
             scheduler::run_planner_loop(
-                &mut planner_session,
-                &mut graph,
-                &self.bridge,
-                &self.config,
-                &self.role_rr,
-                &self.tabs,
-                &ctx.cwd,
-                &workspace_listing,
-                endpoint,
-                "exec",
-                &policy,
-                self.config.context_radius,
-                self.config.max_concurrency,
-                self.config.max_iterations,
-                self.config.tab_cooldown_ms,
-                retry_count,
-                retry_delay,
-                max_output_lines,
-                &mut store,
-                &template_name,
-            )
-            .await
+                    &mut planner_session,
+                    &mut graph,
+                    &self.bridge,
+                    &self.config,
+                    &self.role_rr,
+                    &self.tabs,
+                    &ctx.cwd,
+                    &workspace_listing,
+                    endpoint,
+                    "exec",
+                    &policy,
+                    self.config.context_radius,
+                    self.config.max_concurrency,
+                    self.config.max_iterations,
+                    self.config.tab_cooldown_ms,
+                    retry_count,
+                    retry_delay,
+                    max_output_lines,
+                    &mut store,
+                    &template_name,
+                )
+                .await
         }
     }
 }
 fn capability_pipeline_list_workspace_entries(root: &Path, limit: usize) -> String {
-    let mut entries: Vec<String> = std::fs::read_dir(root).map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect::<Vec<_>>()).unwrap_or_default();
+    let mut entries: Vec<String> = std::fs::read_dir(root)
+        .map(|rd| {
+            rd
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     entries.sort();
     entries.truncate(limit);
     entries.join(", ")
 }
-pub(crate) fn capability_pipeline_ensure_unique_node_ids(nodes: &mut Vec<dag::ExecutionNode>) {
+pub(crate) fn capability_pipeline_ensure_unique_node_ids(
+    nodes: &mut Vec<dag::ExecutionNode>,
+) {
     let mut counts: HashMap<String, usize> = HashMap::new();
     for n in nodes.iter_mut() {
         let count = counts.entry(n.id.clone()).or_insert(0);
         if *count > 0 {
-            let new_id = format!("{}__{}", n.id, *count);
+            let new_id = format!("{}__{}", n.id, * count);
             n.id = new_id;
         }
         *count += 1;
@@ -461,10 +599,27 @@ impl Pipeline for CapabilityPipeline {
     fn name(&self) -> &str {
         "capability"
     }
-    async fn capability_pipeline_pipeline_run_tick(&self, ctx: &PipelineContext, _ir: &mut SystemState, _layout: &mut FileTopology) -> Result<PipelineOutcome> {
+    async fn capability_pipeline_pipeline_run_tick(
+        &self,
+        ctx: &PipelineContext,
+        _ir: &mut SystemState,
+        _layout: &mut FileTopology,
+    ) -> Result<PipelineOutcome> {
         match self.run_capability_loop(ctx).await {
-            Ok(reward) => Ok(PipelineOutcome { reward, summary: "capability completed".into(), advanced: true }),
-            Err(e) => Ok(PipelineOutcome { reward: -1.0, summary: format!("capability error: {e}"), advanced: false }),
+            Ok(reward) => {
+                Ok(PipelineOutcome {
+                    reward,
+                    summary: "capability completed".into(),
+                    advanced: true,
+                })
+            }
+            Err(e) => {
+                Ok(PipelineOutcome {
+                    reward: -1.0,
+                    summary: format!("capability error: {e}"),
+                    advanced: false,
+                })
+            }
         }
     }
 }

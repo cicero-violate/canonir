@@ -1,6 +1,52 @@
 RULES TO FOLLOW
 If you are tempted to create a heuristic, it means there is a structural gap.The new solution lacks invariants. Therefore abort the job, and notify the user.
 
+## FORMAL PROCEDURE — HEURISTIC ELIMINATION
+
+All problem solving must follow the invariant-first procedure.
+
+1. Detect Heuristic
+- If a proposed solution relies on pattern guessing, fuzzy matching, or conditional guesswork, it is a heuristic.
+
+2. Abort Execution
+- Immediately stop the operation.
+- Do not attempt to implement the heuristic.
+
+3. Identify Structural Gap
+- Determine which structural property is missing.
+- Locate the layer where the invariant should exist:
+  - graph
+  - symbol table
+  - module structure
+  - edge semantics
+  - span/file mapping
+
+4. Extract Implied Invariants
+For the identified structural gap, generate explicit invariants:
+- mathematical rule
+- logical condition
+- Rust validation function
+
+5. Extend Invariant Set
+- Add the invariant to the system specification.
+- Update invariant validation checks.
+- Ensure the invariant can be verified automatically.
+
+6. Re-run Validation
+- Execute UPG invariant validation.
+- If invariants fail → abort and report.
+- If invariants hold → proceed.
+
+7. Only Structural Fixes Allowed
+- Code modifications must enforce invariants.
+- Heuristic-based fixes are forbidden.
+
+Formal rule:
+
+Heuristic → Structural Gap → New Invariant → Enforced Check
+
+Never skip steps.
+
 USEFUL INFORMATION
 rustc compiler source code can be found in here, it is very useful
 /workspace/ai_sandbox/canon/test_projects/rust_compiler_info/compiler
@@ -18,10 +64,11 @@ rg (ripgrep)
 - Always prefer over grep.
 
 UPG Analysis First
-- Prefer reading `analysis/` (UPG outputs) before source files for understanding.
-- Use `nodes.csv`, `edges.csv`, `files.txt`, `spans.bin`, `upg_invariants.json`.
+- MUST use `analysis/` (UPG outputs) as the primary source of truth before any source reads.
+- Use `nodes.csv`, `edges.csv`, `files.txt`, `spans.bin`, `upg_invariants.json` for reasoning.
 - Use Python for parsing analysis outputs; avoid full-file reads for large CSVs.
-- Only open source files when analysis data is insufficient or inconsistent.
+- Only open source files when analysis data is insufficient or inconsistent, and document why.
+- If analysis invariants fail, fix analysis first; do not proceed to source-driven decisions.
 
 awk
 - Use for line-oriented processing.
@@ -98,11 +145,38 @@ rustc compiler source code can be found in here
 ~/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/
 /workspace/git_repos/cargo
 
-When I describe a system, algorithm, or goal, extract all invariants implied. 
-An invariant is a rule that must always remain true. 
-Output only structured invariants. 
-For each invariant provide: 1. Math rule 2. Logical condition 3. Rust function fn must_<property>() -> bool Prefer correctness, safety, bounds, and structural rules. 
+When I describe a system, algorithm, or goal, extract all invariants implied.
+An invariant is a rule that must always remain true.
+Output only structured invariants.
+For each invariant provide: 1. Math rule 2. Logical condition 3. Rust function fn must_<property>() -> bool Prefer correctness, safety, bounds, and structural rules.
 List every invariant explicitly
+
+## INVARIANT VALIDATION PROTOCOL
+
+All invariant checks must satisfy:
+
+1. Deterministic
+Validation results must not depend on runtime ordering or nondeterministic state.
+
+2. Total
+Every node, edge, span, file, and symbol must participate in validation.
+
+3. Composable
+Each invariant must be independently checkable.
+
+4. Fail Fast
+Invariant violations terminate execution immediately.
+
+5. Structural
+Validation must operate on UPG structures:
+
+- nodes.csv
+- edges.csv
+- files.txt
+- spans.bin
+- upg_invariants.json
+
+Heuristic recovery logic is forbidden.
 
 
 ## CODING STYLE

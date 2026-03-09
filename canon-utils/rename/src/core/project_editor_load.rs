@@ -47,53 +47,82 @@ impl ProjectEditor {
             parsed_files.push((file_path.clone(), stored_ast));
         }
 
-        // Build module_files via iterative refinement so #[path] chains resolve.
-        let mut module_files: HashMap<String, PathBuf> = HashMap::new();
-        for (file, ast) in &parsed_files {
-            let module_path = module_path_from_file(&source_root, file)?;
-            module_files.insert(module_path.clone(), file.clone());
-            index_module_files(ast, file, &module_path, &mut module_files);
+        let (mut analysis_module_files, mut analysis_file_modules, analysis_files) =
+            load_module_files_from_analysis(project)?;
+        let analysis_usable = !analysis_module_files.is_empty()
+            && analysis_files.len() * 2 >= parsed_files.len().max(1);
+        if !analysis_usable {
+            analysis_module_files.clear();
+            analysis_file_modules.clear();
         }
-        for _ in 0..8 {
-            let mut updated = module_files.clone();
+
+        // Build module_files via analysis when available; otherwise refine from source.
+        let mut module_files: HashMap<String, PathBuf> = if analysis_usable {
+            analysis_module_files.clone()
+        } else {
+            let mut module_files: HashMap<String, PathBuf> = HashMap::new();
             for (file, ast) in &parsed_files {
-                let candidates = module_paths_for_file(&module_files, file);
-                let module_path = if candidates.is_empty() {
-                    module_path_from_file(&source_root, file)?
-                } else {
-                    select_best_module_path(&candidates)
-                };
-                updated.insert(module_path.clone(), file.clone());
-                for alt in &candidates {
-                    if alt != &module_path {
-                        updated.entry(alt.clone()).or_insert_with(|| file.clone());
+                let module_path = module_path_from_file(&source_root, file)?;
+                module_files.insert(module_path.clone(), file.clone());
+                index_module_files(ast, file, &module_path, &mut module_files);
+            }
+            for _ in 0..8 {
+                let mut updated = module_files.clone();
+                for (file, ast) in &parsed_files {
+                    let candidates = module_paths_for_file(&module_files, file);
+                    let module_path = if candidates.is_empty() {
+                        module_path_from_file(&source_root, file)?
+                    } else {
+                        select_best_module_path(&candidates)
+                    };
+                    updated.insert(module_path.clone(), file.clone());
+                    for alt in &candidates {
+                        if alt != &module_path {
+                            updated.entry(alt.clone()).or_insert_with(|| file.clone());
+                        }
+                    }
+                    let mut module_paths = candidates;
+                    if module_paths.is_empty() {
+                        module_paths.push(module_path.clone());
+                    }
+                    for path in module_paths {
+                        index_module_files(ast, file, &path, &mut updated);
                     }
                 }
-                let mut module_paths = candidates;
-                if module_paths.is_empty() {
-                    module_paths.push(module_path.clone());
+                if updated == module_files {
+                    break;
                 }
-                for path in module_paths {
-                    index_module_files(ast, file, &path, &mut updated);
-                }
+                module_files = updated;
             }
-            if updated == module_files {
-                break;
-            }
-            module_files = updated;
-        }
+            module_files
+        };
 
         // Rebuild handles + module_files using best module path per file.
         registry.handles.clear();
         registry.module_files.clear();
+        if analysis_usable {
+            registry.module_files = analysis_module_files;
+        }
         for (file, ast) in &parsed_files {
-            let candidates = module_paths_for_file(&module_files, file);
+            let candidates = if analysis_usable {
+                analysis_file_modules
+                    .get(file)
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                module_paths_for_file(&module_files, file)
+            };
             let module_path = if candidates.is_empty() {
+                if analysis_usable {
+                    continue;
+                }
                 module_path_from_file(&source_root, file)?
             } else {
                 select_best_module_path(&candidates)
             };
-            registry.module_files.insert(module_path.clone(), file.clone());
+            if !analysis_usable {
+                registry.module_files.insert(module_path.clone(), file.clone());
+            }
             if ast.items.is_empty() {
                 if let Some(content) = registry.sources.get(file) {
                     index_file_symbols_by_text(content, file, &module_path, &mut registry.handles);
@@ -101,12 +130,14 @@ impl ProjectEditor {
             } else {
                 index_file_symbols(ast, file, &module_path, &mut registry.handles);
             }
-            let mut module_paths = candidates;
-            if module_paths.is_empty() {
-                module_paths.push(module_path.clone());
-            }
-            for path in module_paths {
-                index_module_files(ast, file, &path, &mut registry.module_files);
+            if !analysis_usable {
+                let mut module_paths = candidates;
+                if module_paths.is_empty() {
+                    module_paths.push(module_path.clone());
+                }
+                for path in module_paths {
+                    index_module_files(ast, file, &path, &mut registry.module_files);
+                }
             }
         }
         if std::env::var("RENAME_DEBUG_MODULES").ok().as_deref() == Some("1") {
@@ -213,7 +244,9 @@ impl ProjectEditor {
     }
 
     pub fn queue_module_rename(&mut self, old_module_path: &str, new_name: &str) {
-        self.pending_module_renames.push(ModuleRename { old_module_path: old_module_path.to_string(), new_name: new_name.to_string() });
+        let uses_crate_prefix = self.registry.module_files.keys().any(|k| k.starts_with("crate::"));
+        let norm = super::project_editor_helpers::normalize_module_path(old_module_path, uses_crate_prefix);
+        self.pending_module_renames.push(ModuleRename { old_module_path: norm, new_name: new_name.to_string() });
     }
 
     pub fn queue_directory_rename(&mut self, old_dir: &Path, new_dir: &Path) {
@@ -387,6 +420,68 @@ fn module_paths_for_file(module_files: &HashMap<String, PathBuf>, file: &Path) -
             }
         })
         .collect()
+}
+
+fn load_module_files_from_analysis(project_root: &Path) -> Result<(HashMap<String, PathBuf>, HashMap<PathBuf, Vec<String>>, HashSet<PathBuf>)> {
+    let analysis_dir = project_root.join("analysis");
+    let nodes_path = analysis_dir.join("nodes.csv");
+    let files_path = analysis_dir.join("files.txt");
+    if !nodes_path.exists() || !files_path.exists() {
+        return Ok((HashMap::new(), HashMap::new(), HashSet::new()));
+    }
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut file_set: HashSet<PathBuf> = HashSet::new();
+    let files_content = std::fs::read_to_string(files_path)?;
+    for (idx, line) in files_content.lines().enumerate() {
+        if idx == 0 {
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(2, ',');
+        let _id = parts.next();
+        let Some(path) = parts.next() else {
+            continue;
+        };
+        let pb = PathBuf::from(path);
+        file_set.insert(pb.clone());
+        files.push(pb);
+    }
+    let nodes_content = std::fs::read_to_string(nodes_path)?;
+    let mut module_files: HashMap<String, PathBuf> = HashMap::new();
+    let mut file_modules: HashMap<PathBuf, Vec<String>> = HashMap::new();
+    for (idx, line) in nodes_content.lines().enumerate() {
+        if idx == 0 {
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(7, ',');
+        let _node_id = parts.next();
+        let kind = parts.next().unwrap_or_default();
+        let symbol = parts.next().unwrap_or_default();
+        let file_id_raw = parts.next().unwrap_or_default();
+        if kind != "MODULE" {
+            continue;
+        }
+        let file_id: usize = match file_id_raw.parse() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let Some(file_path) = files.get(file_id) else {
+            continue;
+        };
+        if symbol.is_empty() {
+            module_files.entry(String::new()).or_insert_with(|| file_path.clone());
+            file_modules.entry(file_path.clone()).or_default().push(String::new());
+            continue;
+        }
+        module_files.insert(symbol.to_string(), file_path.clone());
+        file_modules.entry(file_path.clone()).or_default().push(symbol.to_string());
+    }
+    Ok((module_files, file_modules, file_set))
 }
 
 fn select_best_module_path(candidates: &[String]) -> String {

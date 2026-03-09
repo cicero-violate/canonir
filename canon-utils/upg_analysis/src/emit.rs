@@ -1,3 +1,4 @@
+use crate::invariants::InvariantReport;
 use crate::types::{Edge, Node, SpanRange};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,7 @@ pub fn write_outputs(graph: &crate::extract::UpgGraph, output_dir: &Path) -> Res
     write_edges_csv(output_dir, &graph.edges)?;
     write_files_txt(output_dir, &graph.nodes)?;
     write_spans_bin(output_dir, &graph.nodes, &graph.spans_primary)?;
+    write_defs_txt(output_dir, &graph.def_paths)?;
     prune_legacy_outputs(output_dir);
     write_kinds(output_dir)?;
     write_bin_u32(output_dir.join("csr_row_ptr.bin"), &graph.csr.row_ptr)?;
@@ -43,6 +45,15 @@ fn prune_legacy_outputs(output_dir: &Path) {
         let path = output_dir.join(name);
         let _ = fs::remove_file(path);
     }
+}
+
+fn write_defs_txt(output_dir: &Path, def_paths: &[String]) -> Result<()> {
+    let path = output_dir.join("defs.txt");
+    let mut file = fs::File::create(path)?;
+    for def in def_paths {
+        writeln!(file, "{}", sanitize_csv_field(def))?;
+    }
+    Ok(())
 }
 
 fn write_nodes_csv(output_dir: &Path, nodes: &[Node]) -> Result<()> {
@@ -122,45 +133,6 @@ fn write_spans_bin(output_dir: &Path, nodes: &[Node], spans: &[SpanRange]) -> Re
     Ok(())
 }
 
-#[derive(Debug, Serialize)]
-struct InvariantReport {
-    ok: bool,
-    node_id_contiguous: bool,
-    node_count: usize,
-    spans_count: usize,
-    spans_match_nodes: bool,
-    span_ids_match_nodes: bool,
-    edges_with_missing_src: usize,
-    edges_with_missing_dst: usize,
-    invalid_node_kinds: usize,
-    invalid_edge_kinds: usize,
-    bad_file_id_nodes: usize,
-    bb_without_has_block: usize,
-    call_without_has_block: usize,
-    isolated_nodes: usize,
-    module_count: usize,
-    module_root_like: usize,
-}
-
-impl InvariantReport {
-    fn summary(&self) -> String {
-        format!(
-            "nodes={}/spans={} contiguous={} missing_edges(src={}, dst={}) invalid_kinds(node={}, edge={}) bad_file_id={} bb_no_block={} call_no_block={} isolated={} module_root_like={}",
-            self.node_count,
-            self.spans_count,
-            self.node_id_contiguous,
-            self.edges_with_missing_src,
-            self.edges_with_missing_dst,
-            self.invalid_node_kinds,
-            self.invalid_edge_kinds,
-            self.bad_file_id_nodes,
-            self.bb_without_has_block,
-            self.call_without_has_block,
-            self.isolated_nodes,
-            self.module_root_like
-        )
-    }
-}
 
 fn write_invariants(output_dir: &Path, report: &InvariantReport) -> Result<()> {
     let path = output_dir.join("upg_invariants.json");
@@ -170,10 +142,15 @@ fn write_invariants(output_dir: &Path, report: &InvariantReport) -> Result<()> {
 }
 
 fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
+    let generated_at_epoch_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
     let nodes_path = output_dir.join("nodes.csv");
     let edges_path = output_dir.join("edges.csv");
     let files_path = output_dir.join("files.txt");
     let spans_path = output_dir.join("spans.bin");
+    let defs_path = output_dir.join("defs.txt");
     let node_kinds_path = output_dir.join("node_kinds.txt");
     let edge_kinds_path = output_dir.join("edge_kinds.txt");
 
@@ -183,6 +160,17 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
         fs::read_to_string(edge_kinds_path)?.lines().map(|s| s.to_string()).collect();
     let files = read_files_txt(files_path)?;
 
+    let defs: Vec<String> = if defs_path.exists() {
+        fs::read_to_string(defs_path)?
+            .lines()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let defs_count = defs.len();
+
     let nodes = read_nodes_csv_with_file_id(&nodes_path)?;
     let node_count = nodes.len();
     let max_id = nodes.iter().map(|n| n.id).max().unwrap_or(0);
@@ -191,8 +179,24 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
     let mut bad_file_id_nodes = 0usize;
     let mut module_count = 0usize;
     let mut module_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut id_to_kind: std::collections::HashMap<u32, crate::types::NodeKind> =
+        std::collections::HashMap::new();
+    let mut id_to_parent: std::collections::HashMap<u32, u32> =
+        std::collections::HashMap::new();
+    let mut symbol_kinds: std::collections::HashMap<String, std::collections::HashSet<crate::types::NodeKind>> =
+        std::collections::HashMap::new();
+    let mut node_symbols: std::collections::HashSet<String> = std::collections::HashSet::new();
     for node in &nodes {
         ids.insert(node.id);
+        id_to_kind.insert(node.id, node.kind);
+        id_to_parent.insert(node.id, node.parent);
+        if !node.symbol.is_empty() {
+            symbol_kinds
+                .entry(node.symbol.clone())
+                .or_default()
+                .insert(node.kind);
+            node_symbols.insert(node.symbol.clone());
+        }
         if !node_kinds.contains(node.kind_str()) {
             invalid_node_kinds += 1;
         }
@@ -210,10 +214,20 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
     let mut edges_with_missing_src = 0usize;
     let mut edges_with_missing_dst = 0usize;
     let mut invalid_edge_kinds = 0usize;
+    let mut edge_kind_mismatch = 0usize;
     let mut edge_src: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut edge_dst: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut has_block_in: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut imports_dst: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut export_src_not_module = 0usize;
+    let mut has_block_from_fn_or_method: std::collections::HashSet<u32> =
+        std::collections::HashSet::new();
+    let mut callsite_incoming: std::collections::HashMap<u32, usize> =
+        std::collections::HashMap::new();
+    let mut fn_block_edges: std::collections::HashMap<u32, Vec<u32>> =
+        std::collections::HashMap::new();
+    let mut block_edges: std::collections::HashMap<u32, Vec<u32>> =
+        std::collections::HashMap::new();
     for edge in &edges {
         if !ids.contains(&edge.src) {
             edges_with_missing_src += 1;
@@ -224,25 +238,52 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
         if !edge_kinds.contains(&edge.kind) {
             invalid_edge_kinds += 1;
         }
+        if !edge_kind_compatible(&id_to_kind, edge) {
+            edge_kind_mismatch += 1;
+        }
         edge_src.insert(edge.src);
         edge_dst.insert(edge.dst);
         if edge.kind == "HAS_BLOCK" {
             has_block_in.insert(edge.dst);
+            if matches!(
+                id_to_kind.get(&edge.src),
+                Some(crate::types::NodeKind::Function | crate::types::NodeKind::Method)
+            ) {
+                has_block_from_fn_or_method.insert(edge.dst);
+                fn_block_edges.entry(edge.src).or_default().push(edge.dst);
+            }
         }
         if edge.kind == "IMPORTS" {
             imports_dst.insert(edge.dst);
+        }
+        if edge.kind == "EXPORT" {
+            if id_to_kind.get(&edge.src) != Some(&crate::types::NodeKind::Module) {
+                export_src_not_module += 1;
+            }
+        }
+        callsite_incoming
+            .entry(edge.dst)
+            .and_modify(|v| *v += 1)
+            .or_insert(1);
+        if edge.kind == "FLOW" || edge.kind == "UNWIND" {
+            block_edges.entry(edge.src).or_default().push(edge.dst);
+            block_edges.entry(edge.dst).or_default().push(edge.src);
         }
     }
 
     let mut bb_without_has_block = 0usize;
     let mut call_without_has_block = 0usize;
+    let mut callsite_no_incoming = 0usize;
     let mut isolated_nodes = 0usize;
     for node in &nodes {
-        if node.kind == crate::types::NodeKind::BasicBlock && !has_block_in.contains(&node.id) {
+        if node.kind == crate::types::NodeKind::BasicBlock && !has_block_from_fn_or_method.contains(&node.id) {
             bb_without_has_block += 1;
         }
         if node.kind == crate::types::NodeKind::CallSite && !has_block_in.contains(&node.id) {
             call_without_has_block += 1;
+        }
+        if node.kind == crate::types::NodeKind::CallSite && callsite_incoming.get(&node.id).copied().unwrap_or(0) == 0 {
+            callsite_no_incoming += 1;
         }
         if !edge_src.contains(&node.id) && !edge_dst.contains(&node.id) {
             isolated_nodes += 1;
@@ -261,50 +302,252 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
     let spans_count = span_bytes.len() / 16;
     let spans_match_nodes = spans_count == node_count;
     let mut span_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut span_order_violations = 0usize;
+    let mut span_file_mismatch = 0usize;
+    let mut span_file_inconsistent = 0usize;
+    let mut span_file_by_range: std::collections::HashMap<(u32, u32, u32), u32> =
+        std::collections::HashMap::new();
     for chunk in span_bytes.chunks_exact(16) {
         let node_id = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        let file_id = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+        let lo = u32::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11]]);
+        let hi = u32::from_le_bytes([chunk[12], chunk[13], chunk[14], chunk[15]]);
         span_ids.insert(node_id);
+        if lo > hi {
+            span_order_violations += 1;
+        }
+        if let Some(node) = nodes.iter().find(|n| n.id == node_id) {
+            if node.file_id != file_id {
+                span_file_mismatch += 1;
+            }
+        }
+        let key = (file_id, lo, hi);
+        if let Some(prev_file) = span_file_by_range.get(&key) {
+            if *prev_file != file_id {
+                span_file_inconsistent += 1;
+            }
+        } else {
+            span_file_by_range.insert(key, file_id);
+        }
     }
     let span_ids_match_nodes = span_ids.len() == node_count && span_ids.iter().max().copied() == Some(max_id);
 
-    let ok = node_id_contiguous
-        && spans_match_nodes
-        && span_ids_match_nodes
-        && edges_with_missing_src == 0
-        && edges_with_missing_dst == 0
-        && invalid_node_kinds == 0
-        && invalid_edge_kinds == 0
-        && bad_file_id_nodes == 0
-        && bb_without_has_block == 0
-        && call_without_has_block == 0
-        && isolated_nodes == 0
-        && module_root_like == 1;
+    let duplicate_symbol_kind = symbol_kinds.values().filter(|kinds| kinds.len() > 1).count();
+    let missing_def_nodes = defs.iter().filter(|d| !node_symbols.contains(*d)).count();
+
+    let mut missing_module_owner = 0usize;
+    let mut module_owner: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    for node in &nodes {
+        let mut cur = node.id;
+        let mut found = None;
+        loop {
+            if id_to_kind.get(&cur) == Some(&crate::types::NodeKind::Module) {
+                found = Some(cur);
+                break;
+            }
+            let Some(parent) = id_to_parent.get(&cur).copied() else {
+                break;
+            };
+            if parent == cur {
+                break;
+            }
+            cur = parent;
+        }
+        if let Some(owner) = found {
+            module_owner.insert(node.id, owner);
+        } else {
+            missing_module_owner += 1;
+        }
+    }
+
+    let mut duplicate_symbol_kind_module = 0usize;
+    let mut symbol_kind_module_seen: std::collections::HashSet<(String, crate::types::NodeKind, u32)> =
+        std::collections::HashSet::new();
+    for node in &nodes {
+        if node.symbol.is_empty() {
+            continue;
+        }
+        let Some(owner) = module_owner.get(&node.id).copied() else {
+            continue;
+        };
+        let key = (node.symbol.clone(), node.kind, owner);
+        if !symbol_kind_module_seen.insert(key) {
+            duplicate_symbol_kind_module += 1;
+        }
+    }
+
+    let mut function_cfg_disconnected = 0usize;
+    for (_fn_id, blocks) in fn_block_edges.iter() {
+        let block_set: std::collections::HashSet<u32> =
+            blocks.iter().copied().collect();
+        if block_set.len() <= 1 {
+            continue;
+        }
+        let mut visited: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut stack = vec![*block_set.iter().next().unwrap()];
+        while let Some(node_id) = stack.pop() {
+            if !visited.insert(node_id) {
+                continue;
+            }
+            if let Some(neigh) = block_edges.get(&node_id) {
+                for &n in neigh {
+                    if block_set.contains(&n) {
+                        stack.push(n);
+                    }
+                }
+            }
+        }
+        if visited.len() != block_set.len() {
+            function_cfg_disconnected += 1;
+        }
+    }
+
+    let mut file_ids_seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for node in &nodes {
+        file_ids_seen.insert(node.file_id);
+    }
+    let orphan_files = files
+        .iter()
+        .enumerate()
+        .filter(|(id, path)| !path.is_empty() && !file_ids_seen.contains(&(*id as u32)))
+        .count();
+
+    let must_have_contiguous_node_ids = node_id_contiguous;
+    let must_have_valid_edge_sources = edges_with_missing_src == 0;
+    let must_have_valid_edge_destinations = edges_with_missing_dst == 0;
+    let must_have_valid_node_kinds = invalid_node_kinds == 0;
+    let must_have_valid_edge_kinds = invalid_edge_kinds == 0;
+    let must_have_valid_file_ids = bad_file_id_nodes == 0;
+    let must_have_basic_blocks_with_owner = bb_without_has_block == 0;
+    let must_have_callsites_with_owner = call_without_has_block == 0;
+    let must_have_callsites_with_incoming_edges = callsite_no_incoming == 0;
+    let must_not_have_isolated_nodes = isolated_nodes == 0;
+    let must_have_single_module_root = module_root_like == 1;
+    let must_have_module_exports_from_modules = export_src_not_module == 0;
+    let must_have_unique_symbol_kind = duplicate_symbol_kind == 0;
+    let must_have_unique_symbol_kind_per_module = duplicate_symbol_kind_module == 0;
+    let must_have_module_owner = missing_module_owner == 0;
+    let must_have_ordered_spans = span_order_violations == 0;
+    let must_have_consistent_span_file = span_file_mismatch == 0 && span_file_inconsistent == 0;
+    let must_have_connected_function_cfg = function_cfg_disconnected == 0;
+    let must_not_have_orphan_files = orphan_files == 0;
+
+    let ok = must_have_contiguous_node_ids
+        && must_have_valid_edge_sources
+        && must_have_valid_edge_destinations
+        && must_have_valid_node_kinds
+        && must_have_valid_edge_kinds
+        && must_have_valid_file_ids
+        && must_have_basic_blocks_with_owner
+        && must_have_callsites_with_owner
+        && must_have_callsites_with_incoming_edges
+        && must_not_have_isolated_nodes
+        && must_have_single_module_root
+        && must_have_module_exports_from_modules
+        && must_have_unique_symbol_kind
+        && must_have_unique_symbol_kind_per_module
+        && must_have_module_owner
+        && must_have_ordered_spans
+        && must_have_consistent_span_file
+        && must_have_connected_function_cfg
+        && must_not_have_orphan_files;
 
     Ok(InvariantReport {
+        generated_at_epoch_ms,
         ok,
-        node_id_contiguous,
         node_count,
         spans_count,
+        defs_count,
+        missing_def_nodes,
         spans_match_nodes,
         span_ids_match_nodes,
         edges_with_missing_src,
         edges_with_missing_dst,
         invalid_node_kinds,
         invalid_edge_kinds,
+        edge_kind_mismatch,
         bad_file_id_nodes,
         bb_without_has_block,
         call_without_has_block,
+        callsite_no_incoming,
         isolated_nodes,
         module_count,
         module_root_like,
+        export_src_not_module,
+        duplicate_symbol_kind,
+        duplicate_symbol_kind_module,
+        missing_module_owner,
+        span_order_violations,
+        span_file_mismatch,
+        span_file_inconsistent,
+        function_cfg_disconnected,
+        orphan_files,
+        must_have_contiguous_node_ids,
+        must_have_valid_edge_sources,
+        must_have_valid_edge_destinations,
+        must_have_valid_node_kinds,
+        must_have_valid_edge_kinds,
+        must_have_valid_file_ids,
+        must_have_basic_blocks_with_owner,
+        must_have_callsites_with_owner,
+        must_have_callsites_with_incoming_edges,
+        must_not_have_isolated_nodes,
+        must_have_single_module_root,
+        must_have_module_exports_from_modules,
+        must_have_unique_symbol_kind,
+        must_have_unique_symbol_kind_per_module,
+        must_have_module_owner,
+        must_have_ordered_spans,
+        must_have_consistent_span_file,
+        must_have_connected_function_cfg,
+        must_not_have_orphan_files,
     })
+}
+
+fn edge_kind_compatible(
+    id_to_kind: &std::collections::HashMap<u32, crate::types::NodeKind>,
+    edge: &EdgeRow,
+) -> bool {
+    let src = match id_to_kind.get(&edge.src) {
+        Some(k) => *k,
+        None => return false,
+    };
+    let dst = match id_to_kind.get(&edge.dst) {
+        Some(k) => *k,
+        None => return false,
+    };
+    use crate::types::NodeKind::*;
+    match edge.kind.as_str() {
+        "CONTAINS" => matches!(src, Module | Function | Method | Impl | Struct | Enum | Trait)
+            && !matches!(dst, Error),
+        "HAS_FIELD" => matches!(src, Struct | Enum) && matches!(dst, Field),
+        "HAS_METHOD" => matches!(src, Struct | Enum | Trait | Impl) && matches!(dst, Method),
+        "HAS_BLOCK" => (matches!(src, Function | Method) && matches!(dst, BasicBlock))
+            || (matches!(src, BasicBlock) && matches!(dst, CallSite)),
+        "HAS_PARAM" => matches!(src, Function | Method) && matches!(dst, Param),
+        "IMPORTS" => matches!(src, Module) && matches!(dst, Module),
+        "EXPORT" => matches!(src, Module),
+        "PUBLIC_USE" => matches!(src, Module),
+        "FLOW" => matches!(src, BasicBlock) && matches!(dst, BasicBlock),
+        "UNWIND" => matches!(src, BasicBlock) && matches!(dst, BasicBlock),
+        "CALL" => matches!(src, CallSite) && matches!(dst, Function | Method),
+        "RETURN" => matches!(src, BasicBlock) && matches!(dst, Function | Method),
+        "IMPLEMENTS" => matches!(src, Impl) && matches!(dst, Trait),
+        "FOR_TYPE" => matches!(src, Impl) && matches!(dst, Struct | Enum | Trait | Type),
+        "USES_TYPE" | "BOUNDS" | "ASSIGN" | "PROPAGATES" | "ARG_TO_PARAM" | "RETURNS" => true,
+        "ERROR_TO_FUNCTION" => matches!(src, Error) && matches!(dst, Function),
+        "ERROR_TO_BLOCK" => matches!(src, Error) && matches!(dst, BasicBlock),
+        _ => true,
+    }
 }
 
 #[derive(Debug)]
 struct NodeRow {
     id: u32,
     kind: crate::types::NodeKind,
+    symbol: String,
     file_id: u32,
+    parent: u32,
 }
 
 impl NodeRow {
@@ -332,11 +575,22 @@ fn read_nodes_csv_with_file_id(path: &Path) -> Result<Vec<NodeRow>> {
             Ok(v) => v,
             Err(_) => continue,
         };
+        let symbol = parts[2].to_string();
         let file_id = match parts[3].parse::<u32>() {
             Ok(v) => v,
             Err(_) => continue,
         };
-        nodes.push(NodeRow { id, kind, file_id });
+        let parent = match parts[6].parse::<u32>() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        nodes.push(NodeRow {
+            id,
+            kind,
+            symbol,
+            file_id,
+            parent,
+        });
     }
     Ok(nodes)
 }

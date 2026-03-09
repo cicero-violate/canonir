@@ -9,6 +9,9 @@ pub mod csr;
 pub mod errors;
 pub mod emit;
 pub mod extract;
+pub mod invariant_errors;
+pub mod invariants;
+pub mod validator;
 pub mod types;
 #[cfg(feature = "canon_capture_compat")]
 pub mod compat;

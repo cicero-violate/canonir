@@ -5,11 +5,12 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
+    let workspace_root = PathBuf::from("../..");
     let status = Command::new("cargo")
         .args(["build", "-p", "upg_analysis"])
         .env("RUSTC_WRAPPER", "")
         .env("CARGO_BUILD_RUSTC_WRAPPER", "")
-        .current_dir(".")
+        .current_dir(&workspace_root)
         .status()
         .expect("failed to build upg_analysis");
     if !status.success() {
@@ -21,7 +22,7 @@ fn main() {
         .args(["build", "-p", "analysis-engine"])
         .env("RUSTC_WRAPPER", "")
         .env("CARGO_BUILD_RUSTC_WRAPPER", "")
-        .current_dir(".")
+        .current_dir(&workspace_root)
         .status()
         .expect("failed to build analysis-engine");
     if !status.success() {
@@ -35,7 +36,7 @@ fn main() {
         .args(["build", "-p", "analysis_capture"])
         .env("RUSTC_WRAPPER", "")
         .env("CARGO_BUILD_RUSTC_WRAPPER", "")
-        .current_dir(".")
+        .current_dir(&workspace_root)
         .status()
         .expect("failed to build analysis_capture");
 

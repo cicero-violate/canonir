@@ -19,6 +19,7 @@ pub struct UpgGraph {
     pub csr: crate::csr::CsrGraph,
     pub metadata: Metadata,
     pub spans_primary: Vec<SpanRange>,
+    pub def_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,17 +90,43 @@ pub fn extract_upg(tcx: TyCtxt<'_>, output_dir: &Path) -> Result<UpgGraph> {
         ensure_fn_nodes_for_bb(nodes, spans_primary, symbol_to_id);
 
     let mut edges = build_edges(tcx, &def_paths, &symbol_to_id)?;
+    let id_to_kind: HashMap<u32, NodeKind> = nodes
+        .iter()
+        .map(|n| (n.id, n.kind))
+        .collect();
     add_call_edges_from_mir(tcx, &def_paths, &symbol_to_id, &mut edges);
     add_callsite_block_edges(&nodes, &symbol_to_id, &mut edges);
     add_module_contains_edges_from_nodes(tcx, &nodes, &symbol_to_id, &mut edges);
     add_module_import_edges(tcx, &nodes, &symbol_to_id, &mut edges);
-    add_export_edges(tcx, &def_paths, &symbol_to_id, &mut edges);
+    add_export_edges(tcx, &def_paths, &symbol_to_id, &id_to_kind, &mut edges);
+    add_public_use_edges(tcx, &symbol_to_id, &id_to_kind, &mut edges);
     add_contains_for_isolated_types(tcx, &nodes, &symbol_to_id, &mut edges);
     let csr = build_csr(nodes.len() as u32, &edges);
+    let def_paths_out: Vec<String> = def_paths
+        .iter()
+        .filter_map(|(def_id, path)| {
+            let (def_file, _, _, _, _) = span_info(tcx, tcx.def_span(*def_id));
+            if !is_project_file(output_dir, &def_file) {
+                return None;
+            }
+            match tcx.def_kind(*def_id) {
+                rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn => {
+                    Some(format!("{path}::fn"))
+                }
+                rustc_hir::def::DefKind::Struct
+                | rustc_hir::def::DefKind::Enum
+                | rustc_hir::def::DefKind::Trait
+                | rustc_hir::def::DefKind::Mod => Some(path.clone()),
+                rustc_hir::def::DefKind::Impl { .. } => Some(impl_symbol(path)),
+                _ => None,
+            }
+        })
+        .collect();
     let metadata = Metadata {
         project,
         node_count: nodes.len() as u32,
         edge_count: csr.col_idx.len() as u32,
+        def_count: def_paths_out.len() as u32,
         generated_by: "UPG extractor".to_string(),
     };
 
@@ -109,6 +136,7 @@ pub fn extract_upg(tcx: TyCtxt<'_>, output_dir: &Path) -> Result<UpgGraph> {
         csr,
         metadata,
         spans_primary,
+        def_paths: def_paths_out,
     })
 }
 
@@ -123,9 +151,14 @@ fn merge_with_existing(output_dir: &Path, graph: UpgGraph) -> Result<UpgGraph> {
 }
 
 fn dedup_nodes(
-    nodes: Vec<Node>,
+    mut nodes: Vec<Node>,
     spans: Vec<SpanRange>,
 ) -> (Vec<Node>, Vec<SpanRange>, BTreeMap<String, u32>) {
+    for node in &mut nodes {
+        if node.kind == NodeKind::Impl && !node.symbol.ends_with("::impl") {
+            node.symbol = impl_symbol(&node.symbol);
+        }
+    }
     let mut seen: std::collections::HashSet<(NodeKind, String)> = std::collections::HashSet::new();
     let mut keep_indices: Vec<usize> = Vec::new();
     for (idx, node) in nodes.iter().enumerate() {
@@ -395,7 +428,7 @@ fn structure_nodes_for_def(tcx: TyCtxt<'_>, def_id: DefId, path: &str) -> Vec<No
             nodes.push(NodeSpec {
                 kind: NodeKind::Impl,
                 kind_id: 6,
-                symbol: path.to_string(),
+                symbol: impl_symbol(path),
                 file,
                 line,
                 column,
@@ -554,7 +587,7 @@ fn build_edges(
                 }
             }
             rustc_hir::def::DefKind::Impl { of_trait } => {
-                let impl_id = symbol_to_id.get(path).copied();
+                let impl_id = symbol_to_id.get(&impl_symbol(path)).copied();
                 if let Some(impl_id) = impl_id {
                     add_contains(path, impl_id, &mut edges);
                     if of_trait {
@@ -962,6 +995,10 @@ fn param_symbols(tcx: TyCtxt<'_>, def_id: DefId, path: &str) -> Vec<String> {
         .collect()
 }
 
+fn impl_symbol(path: &str) -> String {
+    format!("{path}::impl")
+}
+
 fn resolve_parent_module_id(
     tcx: TyCtxt<'_>,
     parent_path: &str,
@@ -992,6 +1029,29 @@ fn resolve_parent_module_id(
         }
     }
     None
+}
+
+fn resolve_parent_module_id_module(
+    tcx: TyCtxt<'_>,
+    parent_path: &str,
+    symbol_to_id: &BTreeMap<String, u32>,
+    id_to_kind: &HashMap<u32, NodeKind>,
+) -> Option<u32> {
+    let mut path = parent_path.to_string();
+    loop {
+        if let Some(id) = resolve_parent_module_id(tcx, &path, symbol_to_id) {
+            if id_to_kind.get(&id) == Some(&NodeKind::Module) {
+                return Some(id);
+            }
+        }
+        if let Some((head, _)) = path.rsplit_once("::") {
+            path = head.to_string();
+            continue;
+        }
+        break;
+    }
+    resolve_parent_module_id(tcx, "crate", symbol_to_id)
+        .filter(|id| id_to_kind.get(id) == Some(&NodeKind::Module))
 }
 
 fn add_module_import_edges(
@@ -1231,6 +1291,7 @@ fn add_export_edges(
     tcx: TyCtxt<'_>,
     def_paths: &[(DefId, String)],
     symbol_to_id: &BTreeMap<String, u32>,
+    id_to_kind: &HashMap<u32, NodeKind>,
     edges: &mut Vec<Edge>,
 ) {
     for (def_id, path) in def_paths {
@@ -1243,7 +1304,6 @@ fn add_export_edges(
             rustc_hir::def::DefKind::Struct
                 | rustc_hir::def::DefKind::Enum
                 | rustc_hir::def::DefKind::Trait
-                | rustc_hir::def::DefKind::Impl { .. }
                 | rustc_hir::def::DefKind::Fn
                 | rustc_hir::def::DefKind::AssocFn
                 | rustc_hir::def::DefKind::Mod
@@ -1263,7 +1323,9 @@ fn add_export_edges(
                 .nth(1)
                 .map(str::to_string)
                 .unwrap_or_else(|| "crate".to_string());
-            if let Some(parent_id) = resolve_parent_module_id(tcx, &parent_path, symbol_to_id) {
+            if let Some(parent_id) =
+                resolve_parent_module_id_module(tcx, &parent_path, symbol_to_id, id_to_kind)
+            {
                 edges.push(Edge {
                     src: parent_id,
                     dst: item_id,
@@ -1274,13 +1336,89 @@ fn add_export_edges(
     }
 }
 
+fn add_public_use_edges(
+    tcx: TyCtxt<'_>,
+    symbol_to_id: &BTreeMap<String, u32>,
+    id_to_kind: &HashMap<u32, NodeKind>,
+    edges: &mut Vec<Edge>,
+) {
+    use rustc_hir::def::Res;
+    use rustc_hir::intravisit::{self, Visitor};
+    use rustc_middle::ty::Visibility;
+
+    struct PublicUseVisitor<'a, 'tcx> {
+        tcx: TyCtxt<'tcx>,
+        parent_id: u32,
+        symbol_to_id: &'a BTreeMap<String, u32>,
+        edges: &'a mut Vec<Edge>,
+    }
+
+    impl<'a, 'tcx> Visitor<'tcx> for PublicUseVisitor<'a, 'tcx> {
+        fn visit_path(&mut self, path: &rustc_hir::Path<'tcx>, _id: rustc_hir::HirId) {
+            if let Res::Def(_, def_id) = path.res {
+                let def_kind = self.tcx.def_kind(def_id);
+                let symbol = match def_kind {
+                    rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn => {
+                        format!("{}::fn", self.tcx.def_path_str(def_id))
+                    }
+                    _ => self.tcx.def_path_str(def_id),
+                };
+                if let Some(item_id) = self.symbol_to_id.get(&symbol).copied() {
+                    self.edges.push(Edge {
+                        src: self.parent_id,
+                        dst: item_id,
+                        kind: EdgeKind::PublicUse,
+                    });
+                }
+            }
+            intravisit::walk_path(self, path);
+        }
+    }
+
+    let crate_items = tcx.hir_crate_items(());
+    for def_id in crate_items
+        .definitions()
+        .map(|id| id.to_def_id())
+        .filter(|def_id| !tcx.is_automatically_derived(*def_id))
+        .filter(|def_id| !tcx.is_synthetic_mir(*def_id))
+    {
+        let Some(local) = def_id.as_local() else {
+            continue;
+        };
+        let rustc_hir::Node::Item(item) = tcx.hir_node_by_def_id(local) else {
+            continue;
+        };
+        if !matches!(item.kind, rustc_hir::ItemKind::Use(_, _)) {
+            continue;
+        }
+        if !matches!(tcx.visibility(def_id), Visibility::Public | Visibility::Restricted(_)) {
+            continue;
+        }
+        let Some(parent_def_id) = tcx.opt_parent(def_id) else {
+            continue;
+        };
+        let parent_path = tcx.def_path_str(parent_def_id);
+        let Some(parent_id) =
+            resolve_parent_module_id_module(tcx, &parent_path, symbol_to_id, id_to_kind)
+        else {
+            continue;
+        };
+        let mut visitor = PublicUseVisitor {
+            tcx,
+            parent_id,
+            symbol_to_id,
+            edges,
+        };
+        visitor.visit_item(item);
+    }
+}
+
 fn is_exported_item(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     use rustc_middle::ty::Visibility;
-    match tcx.visibility(def_id) {
-        Visibility::Public => true,
-        Visibility::Restricted(_) => true,
-        _ => false,
-    }
+    matches!(
+        tcx.visibility(def_id),
+        Visibility::Public | Visibility::Restricted(_)
+    )
 }
 
 fn field_nodes(tcx: TyCtxt<'_>, def_id: DefId, path: &str) -> Vec<NodeSpec> {

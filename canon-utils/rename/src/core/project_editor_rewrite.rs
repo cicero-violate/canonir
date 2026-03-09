@@ -119,21 +119,34 @@ impl VisitMut for PathRewriter {
         }
         if let Some((prefix, group)) = use_tree_group_prefix(tree) {
             let mut local_changed = false;
+            let mut updated_prefix: Option<Vec<String>> = None;
             for item in group.items.iter_mut() {
                 if let Some((segments, tail)) = flatten_use_tree(item) {
                     let mut candidate = prefix.clone();
                     candidate.extend_from_slice(&segments);
                     let mut rewritten = candidate.clone();
                     if self.rewrite_segments(&mut rewritten) {
-                        if rewritten.starts_with(&prefix) {
-                            let rewritten_tail = &rewritten[prefix.len()..];
-                            *item = build_use_tree(rewritten_tail, tail);
-                            local_changed = true;
+                        let new_prefix = rewritten[..prefix.len()].to_vec();
+                        let rewritten_tail = &rewritten[prefix.len()..];
+                        *item = build_use_tree(rewritten_tail, tail);
+                        if new_prefix != prefix {
+                            if let Some(existing) = &updated_prefix {
+                                if existing != &new_prefix {
+                                    continue;
+                                }
+                            } else {
+                                updated_prefix = Some(new_prefix);
+                            }
                         }
+                        local_changed = true;
                     }
                 }
             }
             if local_changed {
+                if let Some(new_prefix) = updated_prefix {
+                    let items = std::mem::take(&mut group.items);
+                    *tree = build_use_group_tree(&new_prefix, items);
+                }
                 self.changed = true;
                 return;
             }
@@ -192,4 +205,17 @@ fn use_tree_group_prefix(tree: &mut syn::UseTree) -> Option<(Vec<String>, &mut s
             _ => return None,
         }
     }
+}
+
+fn build_use_group_tree(
+    prefix: &[String],
+    items: syn::punctuated::Punctuated<syn::UseTree, syn::token::Comma>,
+) -> syn::UseTree {
+    let group = syn::UseGroup { brace_token: Default::default(), items };
+    let mut tree = syn::UseTree::Group(group);
+    for seg in prefix.iter().rev() {
+        let ident = syn::Ident::new(seg, Span::call_site());
+        tree = syn::UseTree::Path(syn::UsePath { ident, colon2_token: Default::default(), tree: Box::new(tree) });
+    }
+    tree
 }

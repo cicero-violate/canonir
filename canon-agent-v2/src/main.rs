@@ -22,21 +22,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let cwd_root = PathBuf::from(&args[2]);
             let cwd: Vec<PathBuf> = vec![cwd_root.clone()];
-            let capture_dir = cwd_root.join("test_projects/test_rust_projects/capture/repomap");
-            let emit_dir = cwd_root.join("test_projects/test_rust_projects/emit/repomap");
+            let capture_dir = cwd_root
+                .join("test_projects/test_rust_projects/capture/repomap");
+            let emit_dir = cwd_root
+                .join("test_projects/test_rust_projects/emit/repomap");
             let orchestration_bin = cwd_root.join("target/debug/orchestration");
             let max_ticks: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
             let addr = "127.0.0.1:9100".parse()?;
-            let cap_config = canon_agent_v2::pipelines::capability::config::CapabilityConfig::snapshot_store_load()?;
+            let cap_config = canon_agent_v2::pipelines_core::capability::config::CapabilityConfig::snapshot_store_load()?;
             let bridge = ws_server::spawn(addr, cap_config.response_timeout_secs);
-            let pipeline = canon_agent_v2::pipelines::capability::CapabilityPipeline::new(bridge);
+            let pipeline = canon_agent_v2::pipelines_core::capability::CapabilityPipeline::new(
+                bridge,
+            );
             let mut ir = canon_agent_v2::ir::SystemState::new(
-                CanonicalMeta { version: "0.1.0".into(), law_revision: Word::new("genesis").expect("valid word"), description: "capability pipeline stub".into() },
-                VersionContract { current: "0.1.0".into(), compatible_with: vec![], migration_proofs: vec![] },
-                Project { name: Word::new("canon_agent").expect("valid word"), version: "0.1.0".into(), language: Language::Rust },
+                CanonicalMeta {
+                    version: "0.1.0".into(),
+                    law_revision: Word::new("genesis").expect("valid word"),
+                    description: "capability pipeline stub".into(),
+                },
+                VersionContract {
+                    current: "0.1.0".into(),
+                    compatible_with: vec![],
+                    migration_proofs: vec![],
+                },
+                Project {
+                    name: Word::new("canon_agent").expect("valid word"),
+                    version: "0.1.0".into(),
+                    language: Language::Rust,
+                },
             );
             let mut layout = FileTopology::default();
-            let ctx = canon_agent_v2::pipelines::PipelineContext {
+            let ctx = canon_agent_v2::pipelines_core::PipelineContext {
                 cwd: cwd.clone(),
                 capture_dir: capture_dir.clone(),
                 emit_dir: emit_dir.clone(),
@@ -44,8 +60,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 workspace: cwd[0].clone(),
                 tick: 0,
             };
-            let loop_config = canon_agent_v2::runtime::agent_loop::AgentLoopConfig { max_ticks, ..Default::default() };
-            canon_agent_v2::runtime::agent_loop::run_agent_loop(&pipeline, &ctx, &mut ir, &mut layout, loop_config).await?;
+            let loop_config = canon_agent_v2::runtime::agent_loop::AgentLoopConfig {
+                max_ticks,
+                ..Default::default()
+            };
+            canon_agent_v2::runtime::agent_loop::run_agent_loop(
+                    &pipeline,
+                    &ctx,
+                    &mut ir,
+                    &mut layout,
+                    loop_config,
+                )
+                .await?;
         }
         _ => {
             usage();
