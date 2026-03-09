@@ -1,31 +1,31 @@
 #![feature(rustc_private)]
-
+//
+extern crate libc;
 extern crate rustc_driver;
 extern crate rustc_errors;
 extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_session;
-extern crate upg_analysis;
 extern crate serde_json;
-extern crate libc;
+extern crate upg_analysis;
 
-use upg_analysis::{extract_and_write, OutputConfig};
 use rustc_driver::Callbacks;
-use rustc_session::EarlyDiagCtxt;
-use rustc_errors::ColorConfig;
 use rustc_errors::emitter::HumanReadableErrorType;
+use rustc_errors::ColorConfig;
 use rustc_session::config::ErrorOutputType;
+use rustc_session::EarlyDiagCtxt;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Write};
 use std::io::ErrorKind;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
+use upg_analysis::{extract_and_write, OutputConfig};
 
 struct MirCaptureCallbacks {
     output_dir: PathBuf,
@@ -36,22 +36,12 @@ struct MirCaptureCallbacks {
 impl Callbacks for MirCaptureCallbacks {
     fn config(&mut self, config: &mut rustc_interface::Config) {
         let json_rendered = HumanReadableErrorType { short: false, unicode: false };
-        config.opts.error_format = ErrorOutputType::Json {
-            pretty: false,
-            json_rendered,
-            color_config: ColorConfig::Never,
-        };
+        config.opts.error_format = ErrorOutputType::Json { pretty: false, json_rendered, color_config: ColorConfig::Never };
     }
 
-    fn after_analysis<'tcx>(
-        &mut self,
-        _compiler: &rustc_interface::interface::Compiler,
-        tcx: rustc_middle::ty::TyCtxt<'tcx>,
-    ) -> rustc_driver::Compilation {
+    fn after_analysis<'tcx>(&mut self, _compiler: &rustc_interface::interface::Compiler, tcx: rustc_middle::ty::TyCtxt<'tcx>) -> rustc_driver::Compilation {
         if should_capture_crate(self.crate_name.as_deref(), &self.crate_types) {
-            let config = OutputConfig {
-                output_dir: self.output_dir.clone(),
-            };
+            let config = OutputConfig { output_dir: self.output_dir.clone() };
             if let Err(err) = extract_and_write(tcx, &config) {
                 eprintln!("analysis_capture: extraction failed: {err:?}");
             }
@@ -59,11 +49,7 @@ impl Callbacks for MirCaptureCallbacks {
         if should_analyze_crate(self.crate_name.as_deref(), &self.crate_types) {
             let crate_name = self.crate_name.as_deref().unwrap_or("crate");
             if should_emit_spans(&self.output_dir, &self.crate_types) {
-                if let Err(err) = canon_capture::collect_spans_and_symbols(
-                    tcx,
-                    &self.output_dir,
-                    crate_name,
-                ) {
+                if let Err(err) = canon_capture::collect_spans_and_symbols(tcx, &self.output_dir, crate_name) {
                     eprintln!("analysis_capture: span/symbol collection failed: {err:?}");
                 }
             }
@@ -73,10 +59,7 @@ impl Callbacks for MirCaptureCallbacks {
 }
 
 fn exec_real_rustc(real_rustc: &str, args: &[String], reason: &str) -> ! {
-    let status = std::process::Command::new(real_rustc)
-        .args(args)
-        .status()
-        .unwrap_or_else(|err| panic!("failed to exec real rustc ({reason}): {err:?}"));
+    let status = std::process::Command::new(real_rustc).args(args).status().unwrap_or_else(|err| panic!("failed to exec real rustc ({reason}): {err:?}"));
     std::process::exit(status.code().unwrap_or(0));
 }
 
@@ -105,9 +88,7 @@ fn main() {
     let crate_types = find_flag_values(&argv, "--crate-type");
     let is_probe = argv.iter().any(|a| a.starts_with("--print="))
         || argv.iter().any(|a| a == "-")
-        || argv
-            .windows(2)
-            .any(|w| w[0] == "--crate-name" && w[1] == "___")
+        || argv.windows(2).any(|w| w[0] == "--crate-name" && w[1] == "___")
         || argv.iter().any(|a| a == "-vV" || a == "--version");
 
     if is_probe {
@@ -116,33 +97,21 @@ fn main() {
 
     // Exit silently for registry and git dependency crates — we have no
     // write access to .cargo/registry and have nothing to analyse there.
-    let tentative_output_dir = project_root_from_env()
-        .or_else(|| project_root_from_out_dir(&argv))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-        .join("analysis");
+    let tentative_output_dir = project_root_from_env().or_else(|| project_root_from_out_dir(&argv)).unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))).join("analysis");
     if is_cargo_registry_path(&tentative_output_dir) {
         exec_real_rustc(&real_rustc, &argv[2..], "registry");
     }
 
-    let output_dir = project_root_from_env()
-        .or_else(|| project_root_from_out_dir(&argv))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-        .join("analysis");
+    let output_dir = project_root_from_env().or_else(|| project_root_from_out_dir(&argv)).unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))).join("analysis");
 
     if let Err(err) = fs::create_dir_all(&output_dir) {
         eprintln!("analysis_capture: failed to create output dir {output_dir:?}: {err}");
         exec_real_rustc(&real_rustc, &argv[2..], "output_dir");
     }
 
-    let args: Vec<String> = std::iter::once(argv[0].clone())
-        .chain(argv.iter().skip(2).cloned())
-        .collect();
+    let args: Vec<String> = std::iter::once(argv[0].clone()).chain(argv.iter().skip(2).cloned()).collect();
 
-    let mut callbacks = MirCaptureCallbacks {
-        output_dir: output_dir.clone(),
-        crate_name: crate_name.clone(),
-        crate_types: crate_types.clone(),
-    };
+    let mut callbacks = MirCaptureCallbacks { output_dir: output_dir.clone(), crate_name: crate_name.clone(), crate_types: crate_types.clone() };
 
     let _diag = EarlyDiagCtxt::new(rustc_session::config::ErrorOutputType::default());
     let errors_jsonl = output_dir.join("errors.jsonl");
@@ -162,11 +131,7 @@ fn main() {
         let _ = fs::remove_file(&errors_jsonl);
         if result.is_err() {
             if let Ok(summary) = parse_result {
-                eprintln!(
-                    "analysis_capture: rustc failed; {} errors at {}",
-                    summary.count,
-                    errors_json.display()
-                );
+                eprintln!("analysis_capture: rustc failed; {} errors at {}", summary.count, errors_json.display());
                 if !summary.by_code.is_empty() {
                     eprintln!("analysis_capture: error categories");
                     let mut items: Vec<_> = summary.by_code.into_iter().collect();
@@ -260,9 +225,7 @@ fn main() {
 }
 
 fn with_stderr_redirect<F, T>(path: &Path, f: F) -> std::io::Result<T>
-where
-    F: FnOnce() -> T,
-{
+where F: FnOnce() -> T {
     let file = File::create(path)?;
     let err_fd = file.as_raw_fd();
     unsafe {
@@ -311,11 +274,7 @@ fn parse_errors_jsonl(src: &Path, dst: &Path) -> std::io::Result<ErrorSummary> {
             continue;
         }
         if let Ok(value) = serde_json::from_str::<Value>(&line) {
-            let is_diag = value
-                .get("$message_type")
-                .and_then(|v| v.as_str())
-                .map(|s| s == "diagnostic")
-                .unwrap_or(false);
+            let is_diag = value.get("$message_type").and_then(|v| v.as_str()).map(|s| s == "diagnostic").unwrap_or(false);
             if is_diag {
                 diagnostics.push(value);
             }
@@ -344,26 +303,10 @@ fn summarize_errors(payload: &Value) -> ErrorSummary {
     let mut by_code: BTreeMap<String, ErrorCategory> = BTreeMap::new();
     let errors = payload.get("errors").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     for err in &errors {
-        let code = err
-            .get("code")
-            .and_then(|c| c.get("code"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        let message = err
-            .get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let level = err
-            .get("level")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let entry = by_code.entry(code.to_string()).or_insert_with(|| ErrorCategory {
-            count: 0,
-            message: message.clone(),
-            level: level.clone(),
-        });
+        let code = err.get("code").and_then(|c| c.get("code")).and_then(|v| v.as_str()).unwrap_or("unknown");
+        let message = err.get("message").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let level = err.get("level").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+        let entry = by_code.entry(code.to_string()).or_insert_with(|| ErrorCategory { count: 0, message: message.clone(), level: level.clone() });
         entry.count += 1;
         if entry.message.is_empty() && !message.is_empty() {
             entry.message = message;
@@ -372,10 +315,7 @@ fn summarize_errors(payload: &Value) -> ErrorSummary {
             entry.level = "error".to_string();
         }
     }
-    ErrorSummary {
-        count: errors.len(),
-        by_code,
-    }
+    ErrorSummary { count: errors.len(), by_code }
 }
 
 fn find_flag_value(args: &[String], flag: &str) -> Option<String> {
@@ -383,17 +323,11 @@ fn find_flag_value(args: &[String], flag: &str) -> Option<String> {
 }
 
 fn find_flag_values(args: &[String], flag: &str) -> Vec<String> {
-    args.windows(2)
-        .filter(|w| w[0] == flag)
-        .map(|w| w[1].clone())
-        .collect()
+    args.windows(2).filter(|w| w[0] == flag).map(|w| w[1].clone()).collect()
 }
 
 fn project_root_from_out_dir(args: &[String]) -> Option<PathBuf> {
-    let out_dir = args
-        .windows(2)
-        .find(|w| w[0] == "--out-dir")
-        .map(|w| PathBuf::from(&w[1]))?;
+    let out_dir = args.windows(2).find(|w| w[0] == "--out-dir").map(|w| PathBuf::from(&w[1]))?;
     project_root_from_target_path(&out_dir)
 }
 
@@ -443,11 +377,7 @@ fn package_name_matches(crate_name: Option<&str>) -> bool {
 }
 
 fn is_cargo_registry_path(path: &Path) -> bool {
-    if path
-        .components()
-        .any(|c| c.as_os_str() == "registry" || c.as_os_str() == "git")
-        && path.components().any(|c| c.as_os_str() == ".cargo")
-    {
+    if path.components().any(|c| c.as_os_str() == "registry" || c.as_os_str() == "git") && path.components().any(|c| c.as_os_str() == ".cargo") {
         return true;
     }
     let raw = path.to_string_lossy();
