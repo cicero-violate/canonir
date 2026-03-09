@@ -193,33 +193,3 @@ fn normalize_new_ident(new_name: &str) -> Result<String, String> {
     }
     Ok(new_name.rsplit("::").next().unwrap_or(new_name).to_string())
 }
-  A      P¶ ^ÅW  ÀS^aÅW                  a.k.a. "adjust") the font size of all faces by INCREMENT.
-
-Interactively, INCREMENT is the prefix numeric argument, and defaults
-to 1.  Positive values of INCREMENT increase the font size, negative
-values decrease it.
-
-When you invoke this command, it performs the initial change of the
-font size, and after that allows further changes by typing one of the
-following keys immediately after invoking the command:
-
-   +, =   Globally increase the height of the default face
-   -      Globally decrease the height of the default face
-   0      Globally reset the height of the default face
-
-(The change of the font size produced by these keys depends on the
-final component of the key sequence, with all modifiers removed.)
-
-Buffer-local face adjustments have higher priority than global
-face adjustments.
-
-The variable â€˜global-text-scale-adjust-resizes-framesâ€™ controls
-whether the frames are resized to keep the same number of lines
-and characters per line when the font size is adjusted.
-
-See also the related command â€˜text-scale-adjustâ€™.  Unlike that
-command, which scales the font size with a factor,
-â€˜global-text-scale-adjustâ€™ scales the font size with an
-increment.
-
-(fn INCREMENT)   à      @       €œÆaÅW  ˆ¹‘!ÅW   c^aÅW  ÀwaÅW  ¸‡aÅW         ÿÿÿÿÿÿÿÿ!       °œÆaÅW  à@Ğ`ÅW  @             ĞÅYaÅW                          ğG^ÅW                         5       ÿÿÿÿÿÿÿÿ        °»ïaÅW   ğG^ÅW                         6       ÿÿÿÿÿÿÿÿ        p}aÅW  `ğG^ÅW                          ğG^ÅW                                ÿÿÿÿÿÿÿÿ        »ïaÅW  ÀğG^ÅW                          ñG^ÅW                          ñG^ÅW                                ÿÿÿÿÿÿÿÿ        p»ïaÅW  @ñG^ÅW                         €ñG^ÅW                          ñG^ÅW                         5       ÿÿÿÿÿÿÿÿ        0»ïaÅW  ÀñG^ÅW                          òG^ÅW                          òG^ÅW                                ÿÿÿÿÿÿÿÿ        »ïaÅW  @òG^ÅW                         €òG^ÅW                         @       ÿÿÿÿÿÿÿÿ        °}aÅW   òG^ÅW  	                              ÿÿÿÿÿÿÿÿ        àºïaÅW  àòG^ÅW                          óG^ÅW                         @óG^ÅW                                ÿÿÿÿÿÿÿÿ        ¸ºïaÅW  `óG^ÅW                          óG^ÅW                         ÂYaÅW  ØèS'z                     ÿÿÿÿÿÿÿÿÿÿÿÿ   ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ
