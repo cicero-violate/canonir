@@ -30,8 +30,9 @@ struct NodeSpec {
 
 pub fn extract_and_write(tcx: TyCtxt<'_>, config: &OutputConfig) -> Result<UpgGraph> {
     let graph = extract_upg(tcx, &config.output_dir)?;
-    crate::emit::write_outputs(&graph, &config.output_dir)?;
-    Ok(graph)
+    let merged = merge_with_existing(&config.output_dir, graph)?;
+    crate::emit::write_outputs(&merged, &config.output_dir)?;
+    Ok(merged)
 }
 
 pub fn extract_upg(tcx: TyCtxt<'_>, output_dir: &Path) -> Result<UpgGraph> {
