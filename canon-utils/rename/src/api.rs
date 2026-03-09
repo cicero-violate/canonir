@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+// use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::core::ProjectEditor;
@@ -42,49 +42,79 @@ pub struct ApiResult {
     pub data: Option<serde_json::Value>,
 }
 
+fn api_result(op: &str, status: &str, detail: Option<String>, data: Option<serde_json::Value>) -> ApiResult {
+    ApiResult { op: op.into(), status: status.into(), detail, data }
+}
+
+fn api_error(op: &str, err: impl ToString) -> ApiResult {
+    api_result(op, "error", Some(err.to_string()), None)
+}
+
+fn api_ok(op: &str, data: Option<serde_json::Value>) -> ApiResult {
+    api_result(op, "ok", None, data)
+}
+
+fn api_queued(op: &str) -> ApiResult {
+    api_result(op, "queued", None, None)
+}
+
+fn api_unsupported(op: &str, detail: &str) -> ApiResult {
+    api_result(op, "unsupported", Some(detail.to_string()), None)
+}
+
+fn queue_result(op: &str, res: Result<(), anyhow::Error>) -> ApiResult {
+    match res {
+        Ok(_) => api_queued(op),
+        Err(e) => api_error(op, e),
+    }
+}
+
+fn result_or_error<T, E: ToString>(op: &str, res: Result<T, E>) -> Result<T, ApiResult> {
+    res.map_err(|e| api_error(op, e))
+}
+
+fn handle_rename_symbol(editor: &mut ProjectEditor, old: &str, new: &str) -> ApiResult {
+    let new_ident = match result_or_error("RenameSymbol", normalize_new_ident(new)) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let handle = match result_or_error("RenameSymbol", editor.synthetic_handle_from_symbol_id(old)) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let op = NodeOp::MutateField { handle, mutation: FieldMutation::RenameIdent(new_ident) };
+    queue_result("RenameSymbol", editor.queue(old, op))
+}
+
+fn handle_move_symbol(editor: &mut ProjectEditor, symbol_id: &str, new_module_path: &str) -> ApiResult {
+    let handle = match result_or_error("MoveSymbol", editor.synthetic_handle_from_symbol_id(symbol_id)) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let op = NodeOp::MoveSymbol { handle, symbol_id: symbol_id.to_string(), new_module_path: new_module_path.to_string(), new_crate: None };
+    queue_result("MoveSymbol", editor.queue(symbol_id, op))
+}
+
+fn handle_delete_symbol(editor: &mut ProjectEditor, symbol_id: &str) -> ApiResult {
+    let handle = match result_or_error("DeleteSymbol", editor.synthetic_handle_from_symbol_id(symbol_id)) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let op = NodeOp::DeleteSymbol { handle, symbol_id: symbol_id.to_string() };
+    queue_result("DeleteSymbol", editor.queue(symbol_id, op))
+}
+
 pub fn dispatch(editor: &mut ProjectEditor, op: &ApiOp) -> ApiResult {
     match op {
-        ApiOp::RenameSymbol { old, new } => {
-            let new_ident = match normalize_new_ident(new) {
-                Ok(v) => v,
-                Err(e) => return ApiResult { op: "RenameSymbol".into(), status: "error".into(), detail: Some(e), data: None },
-            };
-            match editor.queue(
-                old,
-                NodeOp::MutateField {
-                    handle: match editor.synthetic_handle_from_symbol_id(old) {
-                        Ok(handle) => handle,
-                        Err(e) => return ApiResult { op: "RenameSymbol".into(), status: "error".into(), detail: Some(e.to_string()), data: None },
-                    },
-                    mutation: FieldMutation::RenameIdent(new_ident),
-                },
-            ) {
-                Ok(_) => ApiResult { op: "RenameSymbol".into(), status: "queued".into(), detail: None, data: None },
-                Err(e) => ApiResult { op: "RenameSymbol".into(), status: "error".into(), detail: Some(e.to_string()), data: None },
-            }
-        }
-        ApiOp::MoveSymbol { symbol_id, new_module_path } => match editor.queue(
-            symbol_id,
-            NodeOp::MoveSymbol {
-                handle: match editor.synthetic_handle_from_symbol_id(symbol_id) {
-                    Ok(handle) => handle,
-                    Err(e) => return ApiResult { op: "MoveSymbol".into(), status: "error".into(), detail: Some(e.to_string()), data: None },
-                },
-                symbol_id: symbol_id.clone(),
-                new_module_path: new_module_path.clone(),
-                new_crate: None,
-            },
-        ) {
-            Ok(_) => ApiResult { op: "MoveSymbol".into(), status: "queued".into(), detail: None, data: None },
-            Err(e) => ApiResult { op: "MoveSymbol".into(), status: "error".into(), detail: Some(e.to_string()), data: None },
-        },
+        ApiOp::RenameSymbol { old, new } => handle_rename_symbol(editor, old, new),
+        ApiOp::MoveSymbol { symbol_id, new_module_path } => handle_move_symbol(editor, symbol_id, new_module_path),
         ApiOp::RenameModule { old_module_path, new_name } => {
             editor.queue_module_rename(old_module_path, new_name);
-            ApiResult { op: "RenameModule".into(), status: "queued".into(), detail: None, data: None }
+            api_queued("RenameModule")
         }
         ApiOp::RenameDir { old_dir, new_dir } => {
             editor.queue_directory_rename(&PathBuf::from(old_dir), &PathBuf::from(new_dir));
-            ApiResult { op: "RenameDir".into(), status: "queued".into(), detail: None, data: None }
+            api_queued("RenameDir")
         }
         ApiOp::Help | ApiOp::ListOps => {
             let ops = vec![
@@ -108,53 +138,40 @@ pub fn dispatch(editor: &mut ProjectEditor, op: &ApiOp) -> ApiResult {
                 "verify": "bool (default false)",
                 "check": "bool (default false)"
             });
-            ApiResult {
-                op: match op {
-                    ApiOp::Help => "Help",
-                    _ => "ListOps",
-                }
-                .into(),
-                status: "ok".into(),
-                detail: None,
-                data: Some(serde_json::json!({ "ops": ops, "flags": flags })),
-            }
+            let name = match op {
+                ApiOp::Help => "Help",
+                _ => "ListOps",
+            };
+            api_ok(name, Some(serde_json::json!({ "ops": ops, "flags": flags })))
         }
         ApiOp::ListSymbols => {
             let data = editor.symbol_catalog().into_iter().map(|(id, kind)| serde_json::json!({ "symbol_id": id, "kind": kind })).collect::<Vec<_>>();
-            ApiResult { op: "ListSymbols".into(), status: "ok".into(), detail: None, data: Some(serde_json::Value::Array(data)) }
+            api_ok("ListSymbols", Some(serde_json::Value::Array(data)))
         }
-        ApiOp::GetSymbol { symbol_id } => match editor.synthetic_handle_from_symbol_id(symbol_id) {
-            Ok(handle) => ApiResult {
-                op: "GetSymbol".into(),
-                status: "ok".into(),
-                detail: None,
-                data: Some(serde_json::json!({
+        ApiOp::GetSymbol { symbol_id } => {
+            let handle = match result_or_error("GetSymbol", editor.synthetic_handle_from_symbol_id(symbol_id)) {
+                Ok(v) => v,
+                Err(e) => return e,
+            };
+            api_ok(
+                "GetSymbol",
+                Some(serde_json::json!({
                     "file": handle.file,
                     "module_path": handle.module_path,
                     "name": handle.name,
                     "kind": format!("{:?}", handle.kind),
                 })),
-            },
-            Err(e) => ApiResult { op: "GetSymbol".into(), status: "error".into(), detail: Some(e.to_string()), data: None },
-        },
-        ApiOp::PreviewRename => match editor.preview() {
-            Ok(diff) => ApiResult { op: "PreviewRename".into(), status: "ok".into(), detail: None, data: Some(serde_json::Value::String(diff)) },
-            Err(e) => ApiResult { op: "PreviewRename".into(), status: "error".into(), detail: Some(e.to_string()), data: None },
-        },
-        ApiOp::CheckErrors => ApiResult { op: "CheckErrors".into(), status: "unsupported".into(), detail: Some("CheckErrors is handled at the request level; use check=true".into()), data: None },
-        ApiOp::DeleteSymbol { symbol_id } => {
-            let handle = match editor.synthetic_handle_from_symbol_id(symbol_id) {
-                Ok(handle) => handle,
-                Err(e) => return ApiResult { op: "DeleteSymbol".into(), status: "error".into(), detail: Some(e.to_string()), data: None },
-            };
-            match editor.queue(symbol_id, NodeOp::DeleteSymbol { handle, symbol_id: symbol_id.clone() }) {
-                Ok(_) => ApiResult { op: "DeleteSymbol".into(), status: "queued".into(), detail: None, data: None },
-                Err(e) => ApiResult { op: "DeleteSymbol".into(), status: "error".into(), detail: Some(e.to_string()), data: None },
-            }
+            )
         }
-        ApiOp::InlineModule { .. } => ApiResult { op: "InlineModule".into(), status: "unsupported".into(), detail: Some("InlineModule not implemented".into()), data: None },
-        ApiOp::ExtractModule { .. } => ApiResult { op: "ExtractModule".into(), status: "unsupported".into(), detail: Some("ExtractModule not implemented".into()), data: None },
-        ApiOp::SuggestRenames { .. } => ApiResult { op: "SuggestRenames".into(), status: "unsupported".into(), detail: Some("SuggestRenames pipeline removed; not implemented".into()), data: None },
+        ApiOp::PreviewRename => match editor.preview() {
+            Ok(diff) => api_ok("PreviewRename", Some(serde_json::Value::String(diff))),
+            Err(e) => api_error("PreviewRename", e),
+        },
+        ApiOp::CheckErrors => api_unsupported("CheckErrors", "CheckErrors is handled at the request level; use check=true"),
+        ApiOp::DeleteSymbol { symbol_id } => handle_delete_symbol(editor, symbol_id),
+        ApiOp::InlineModule { .. } => api_unsupported("InlineModule", "InlineModule not implemented"),
+        ApiOp::ExtractModule { .. } => api_unsupported("ExtractModule", "ExtractModule not implemented"),
+        ApiOp::SuggestRenames { .. } => api_unsupported("SuggestRenames", "SuggestRenames pipeline removed; not implemented"),
         ApiOp::ApplySuggestions { suggestions } => {
             let mut failures = Vec::new();
             for (old, new) in suggestions {
@@ -178,9 +195,9 @@ pub fn dispatch(editor: &mut ProjectEditor, op: &ApiOp) -> ApiResult {
                 }
             }
             if failures.is_empty() {
-                ApiResult { op: "ApplySuggestions".into(), status: "queued".into(), detail: None, data: None }
+                api_queued("ApplySuggestions")
             } else {
-                ApiResult { op: "ApplySuggestions".into(), status: "partial".into(), detail: Some(failures.join("; ")), data: None }
+                api_result("ApplySuggestions", "partial", Some(failures.join("; ")), None)
             }
         }
     }
