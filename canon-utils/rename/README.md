@@ -2,37 +2,32 @@
 
 This tool renames Rust symbols in a target project using rustc symbol IDs.
 
-## Quick Start
+## Quick Start (Canonical API)
 
-1. Run `cargo check` (or `cargo build`) in the target project to populate `analysis/`:
+1. Generate `analysis/` for the target project (must include `spans.jsonl` and `symbols.json`):
+
+- If you already use the `analysis_capture` rustc wrapper in your build, just run:
 
 ```bash
 cd /path/to/your/project
 cargo check
 ```
 
-2. Edit `analysis/symbols.json` (set `new_name` for the symbols you want to rename).
+- Otherwise, run the build with the wrapper configured for your project (see your repo’s build docs).
 
-3. Apply renames in bulk:
-
-```bash
-RENAME_MODE=bulk cargo run --example rename_self
-```
-
-## Stdin Suggestions + Apply
-
-Pipe JSON suggestions and immediately apply:
+2. Send a rename request to `rename_stdin` (JSON on stdin, JSON report on stdout):
 
 ```bash
-printf "[%s]" symbol_id:crate::path::to::fn | \
-  RENAME_SUGGEST_NAMES=1 RENAME_SUGGEST_STDIN=1 cargo run --example rename_self
-```
-
-## List Symbols
-
-```bash
-RENAME_LIST_SYMBOLS=1 RENAME_LIST_FILTER=graph_runtime RENAME_LIST_LIMIT=20 \
-  cargo run --example rename_self
+cd /workspace/ai_sandbox/canon/canon-utils/rename
+cat <<'JSON' | cargo run --bin rename_stdin
+{
+  "project": "/path/to/your/project",
+  "renames": [
+    ["crate::old_name", "crate::new_name"],
+    ["crate::mod::Foo", "crate::mod::Bar"]
+  ]
+}xsxc
+JSON
 ```
 
 ## Notes

@@ -91,6 +91,16 @@ fn main() {
         exec_real_rustc(&real_rustc, &argv[2..], "probe");
     }
 
+    // Exit silently for registry and git dependency crates — we have no
+    // write access to .cargo/registry and have nothing to analyse there.
+    let tentative_output_dir = project_root_from_env()
+        .or_else(|| project_root_from_out_dir(&argv))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .join("analysis");
+    if is_cargo_registry_path(&tentative_output_dir) {
+        exec_real_rustc(&real_rustc, &argv[2..], "registry");
+    }
+
     if !is_primary_package(crate_name.as_deref()) {
         exec_real_rustc(&real_rustc, &argv[2..], "non-primary");
     }
@@ -101,10 +111,7 @@ fn main() {
         .join("analysis");
 
     if let Err(err) = fs::create_dir_all(&output_dir) {
-        let is_registry = is_cargo_registry_path(&output_dir);
-        if !is_registry || err.kind() != ErrorKind::PermissionDenied {
-            eprintln!("analysis_capture: failed to create output dir {output_dir:?}: {err}");
-        }
+        eprintln!("analysis_capture: failed to create output dir {output_dir:?}: {err}");
         exec_real_rustc(&real_rustc, &argv[2..], "output_dir");
     }
 
