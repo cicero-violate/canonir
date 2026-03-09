@@ -19,13 +19,28 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::ErrorKind;
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 use upg_analysis::{extract_and_write, OutputConfig};
+
+/// Simple deterministic FNV-1a 64-bit hasher — no randomized seed.
+struct FnvHasher(u64);
+impl FnvHasher {
+    fn new() -> Self { FnvHasher(0xcbf29ce484222325) }
+}
+impl std::hash::Hasher for FnvHasher {
+    fn finish(&self) -> u64 { self.0 }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 ^= b as u64;
+            self.0 = self.0.wrapping_mul(0x100000001b3);
+        }
+    }
+}
 
 struct MirCaptureCallbacks {
     output_dir: PathBuf,
@@ -82,6 +97,7 @@ fn should_capture_crate(crate_name: Option<&str>, crate_types: &[String]) -> boo
 }
 
 fn main() {
+    ensure_fresh_wrapper();
     let argv: Vec<String> = std::env::args().collect();
     let real_rustc = argv.get(1).cloned().expect("missing real rustc path");
     let crate_name = find_flag_value(&argv, "--crate-name");
@@ -125,9 +141,6 @@ fn main() {
     if let Ok(result) = result {
         let parse_result = parse_errors_jsonl(&errors_jsonl, &errors_json);
         let parse_ok = parse_result.is_ok();
-        if let Err(err) = emit_jsonl_to_stdout(&errors_jsonl) {
-            eprintln!("analysis_capture: failed to emit json diagnostics: {err}");
-        }
         let _ = fs::remove_file(&errors_jsonl);
         if result.is_err() {
             if let Ok(summary) = parse_result {
@@ -194,7 +207,9 @@ fn main() {
             }
             std::process::exit(1);
         }
-        if should_run_analysis_engine(crate_name.as_deref(), &crate_types, &output_dir) {
+        if should_run_analysis_engine(crate_name.as_deref(), &crate_types, &output_dir)
+            && std::env::var("ANALYSIS_ENGINE_DISABLE").ok().as_deref() != Some("1")
+        {
             if let Some(bin) = analysis_engine_bin(&output_dir) {
                 let lock_path = output_dir.join(".analysis_engine.lock");
                 if let Ok(meta) = fs::metadata(&lock_path) {
@@ -207,8 +222,9 @@ fn main() {
                     }
                 }
                 if let Ok(_lock) = OpenOptions::new().write(true).create_new(true).open(&lock_path) {
+                    let phase = std::env::var("ANALYSIS_ENGINE_PHASE").unwrap_or_else(|_| "all".to_string());
                     let _child = Command::new(bin)
-                        .args(["--dir", output_dir.to_string_lossy().as_ref(), "--phase", "all"])
+                        .args(["--dir", output_dir.to_string_lossy().as_ref(), "--phase", phase.as_str()])
                         .stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
@@ -222,6 +238,107 @@ fn main() {
     }
 
     std::process::exit(0);
+}
+
+fn ensure_fresh_wrapper() {
+    if std::env::var("ANALYSIS_CAPTURE_SELF_UPDATE").ok().as_deref() == Some("1") {
+        return;
+    }
+    // If we are already inside a cargo build session (cargo sets CARGO_MAKEFLAGS
+    // or CARGO; the shell wrapper sets ANALYSIS_CAPTURE_BUILDING), skip the
+    // self-update entirely — spawning another `cargo build` while one is running
+    // causes file-lock deadlocks.
+    if std::env::var("ANALYSIS_CAPTURE_BUILDING").ok().as_deref() == Some("1") {
+        return;
+    }
+    // Cargo sets CARGO_PKG_NAME for every crate compilation — its presence
+    // means we are running as a rustc wrapper inside an active cargo session.
+    // Spawning another `cargo build` here would deadlock on the artifact lock.
+    if std::env::var("CARGO_PKG_NAME").is_ok() {
+        return;
+    }
+    let expected = option_env!("ANALYSIS_CAPTURE_SRC_HASH").unwrap_or("");
+    if expected.is_empty() {
+        return;
+    }
+    let current = compute_source_hash();
+    if current.is_empty() || current == expected {
+        return;
+    }
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .ancestors()
+        .nth(2)
+        .unwrap_or(manifest_dir)
+        .to_path_buf();
+    let status = Command::new("cargo")
+        .arg("build")
+        .arg("-p")
+        .arg("analysis_capture")
+        .env("ANALYSIS_CAPTURE_SELF_UPDATE", "1")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .current_dir(&workspace_root)
+        .status();
+    if let Ok(status) = status {
+        if status.success() {
+            if let Ok(exe) = std::env::current_exe() {
+                let mut args: Vec<String> = std::env::args().collect();
+                if !args.is_empty() {
+                    args.remove(0);
+                }
+                let _ = Command::new(exe)
+                    .args(args)
+                    .env("ANALYSIS_CAPTURE_SELF_UPDATE", "1")
+                    .env_remove("RUSTC_WRAPPER")
+                    .env_remove("RUSTC_WORKSPACE_WRAPPER")
+                    .status();
+                std::process::exit(0);
+            }
+        }
+    }
+}
+
+fn compute_source_hash() -> String {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .ancestors()
+        .nth(2)
+        .unwrap_or(manifest_dir);
+    let analysis_src = manifest_dir.join("src");
+    let analysis_manifest = manifest_dir.join("Cargo.toml");
+    let upg_src = workspace_root.join("canon-utils").join("upg_analysis").join("src");
+    let upg_manifest = workspace_root.join("canon-utils").join("upg_analysis").join("Cargo.toml");
+
+    let mut hasher = FnvHasher::new();
+    hash_dir(&analysis_src, &mut hasher);
+    hash_file(&analysis_manifest, &mut hasher);
+    hash_dir(&upg_src, &mut hasher);
+    hash_file(&upg_manifest, &mut hasher);
+    hasher.finish().to_string()
+}
+
+fn hash_dir(dir: &Path, hasher: &mut FnvHasher) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|e| e.path());
+        for entry in entries {
+            let path = entry.path();
+            if path.is_dir() {
+                hash_dir(&path, hasher);
+            } else {
+                hash_file(&path, hasher);
+            }
+        }
+    }
+}
+
+fn hash_file(path: &Path, hasher: &mut FnvHasher) {
+    if let Ok(data) = fs::read(path) {
+        path.to_string_lossy().hash(hasher);
+        data.hash(hasher);
+    }
 }
 
 fn with_stderr_redirect<F, T>(path: &Path, f: F) -> std::io::Result<T>
@@ -243,25 +360,6 @@ where F: FnOnce() -> T {
         libc::close(saved);
         Ok(result)
     }
-}
-
-fn emit_jsonl_to_stdout(path: &Path) -> std::io::Result<()> {
-    let file = match File::open(path) {
-        Ok(f) => f,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err),
-    };
-    let reader = BufReader::new(file);
-    let mut out = std::io::stdout();
-    for line in reader.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        out.write_all(line.as_bytes())?;
-        out.write_all(b"\n")?;
-    }
-    Ok(())
 }
 
 fn parse_errors_jsonl(src: &Path, dst: &Path) -> std::io::Result<ErrorSummary> {
