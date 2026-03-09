@@ -6,7 +6,7 @@ pub mod runner;
 use std::path::Path;
 use std::sync::Arc;
 
-use core::project_editor::ProjectEditor;
+use core::ProjectEditor;
 use core::rustc_session::RustcSession;
 use structured::FieldMutation;
 

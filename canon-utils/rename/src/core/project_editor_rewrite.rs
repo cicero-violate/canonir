@@ -7,11 +7,7 @@ enum UseTail {
     Rename(syn::Ident),
 }
 
-pub(crate) fn rewrite_string_attrs_in_file(
-    ast: &mut syn::File,
-    old_name: &str,
-    new_name: &str,
-) -> bool {
+pub(crate) fn rewrite_string_attrs_in_file(ast: &mut syn::File, old_name: &str, new_name: &str) -> bool {
     struct AttrStringRewriter<'a> {
         old: &'a str,
         new: &'a str,
@@ -31,9 +27,7 @@ pub(crate) fn rewrite_string_attrs_in_file(
                             let s = lit.to_string();
                             if s == format!("\"{}\"", self.old) {
                                 let new_lit = proc_macro2::Literal::string(self.new);
-                                new_tokens.extend(std::iter::once(
-                                    proc_macro2::TokenTree::Literal(new_lit),
-                                ));
+                                new_tokens.extend(std::iter::once(proc_macro2::TokenTree::Literal(new_lit)));
                                 local_changed = true;
                                 continue;
                             }
@@ -51,11 +45,7 @@ pub(crate) fn rewrite_string_attrs_in_file(
         }
     }
 
-    let mut rewriter = AttrStringRewriter {
-        old: old_name,
-        new: new_name,
-        changed: false,
-    };
+    let mut rewriter = AttrStringRewriter { old: old_name, new: new_name, changed: false };
     rewriter.visit_file_mut(ast);
     rewriter.changed
 }
@@ -70,22 +60,10 @@ pub(crate) struct PathRewriter {
 
 impl PathRewriter {
     pub(crate) fn replace_full(old_full: &[String], new_full: &[String]) -> Self {
-        Self {
-            old_full: Some(old_full.to_vec()),
-            new_full: Some(new_full.to_vec()),
-            old_prefix: None,
-            new_prefix: None,
-            changed: false,
-        }
+        Self { old_full: Some(old_full.to_vec()), new_full: Some(new_full.to_vec()), old_prefix: None, new_prefix: None, changed: false }
     }
     pub(crate) fn replace_prefix(old_prefix: &[String], new_prefix: &[String]) -> Self {
-        Self {
-            old_full: None,
-            new_full: None,
-            old_prefix: Some(old_prefix.to_vec()),
-            new_prefix: Some(new_prefix.to_vec()),
-            changed: false,
-        }
+        Self { old_full: None, new_full: None, old_prefix: Some(old_prefix.to_vec()), new_prefix: Some(new_prefix.to_vec()), changed: false }
     }
     pub(crate) fn visit_file(&mut self, file: &mut syn::File) -> bool {
         self.changed = false;
@@ -103,10 +81,7 @@ impl PathRewriter {
                 *segments = replaced;
             }
         }
-        if let (Some(old_prefix), Some(new_prefix)) = (
-            &self.old_prefix,
-            &self.new_prefix,
-        ) {
+        if let (Some(old_prefix), Some(new_prefix)) = (&self.old_prefix, &self.new_prefix) {
             if segments.starts_with(old_prefix) {
                 let mut replaced = new_prefix.clone();
                 replaced.extend_from_slice(&segments[old_prefix.len()..]);
@@ -119,20 +94,12 @@ impl PathRewriter {
 
 impl VisitMut for PathRewriter {
     fn visit_path_mut(&mut self, path: &mut syn::Path) {
-        let mut segments: Vec<String> = path
-            .segments
-            .iter()
-            .map(|s| s.ident.to_string())
-            .collect();
+        let mut segments: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
         let local_changed = self.rewrite_segments(&mut segments);
         if local_changed {
             path.segments.clear();
             for seg in segments {
-                path.segments
-                    .push(syn::PathSegment {
-                        ident: syn::Ident::new(&seg, Span::call_site()),
-                        arguments: syn::PathArguments::None,
-                    });
+                path.segments.push(syn::PathSegment { ident: syn::Ident::new(&seg, Span::call_site()), arguments: syn::PathArguments::None });
             }
             self.changed = true;
         }
@@ -175,32 +142,19 @@ impl VisitMut for PathRewriter {
     }
 }
 
-
 fn build_use_tree(segments: &[String], tail: UseTail) -> syn::UseTree {
     if segments.is_empty() {
-        return syn::UseTree::Glob(syn::UseGlob {
-            star_token: syn::token::Star::default(),
-        });
+        return syn::UseTree::Glob(syn::UseGlob { star_token: syn::token::Star::default() });
     }
     if segments.len() == 1 {
         let ident = syn::Ident::new(&segments[0], Span::call_site());
         return match tail {
             UseTail::Name => syn::UseTree::Name(syn::UseName { ident }),
-            UseTail::Rename(rename) => {
-                syn::UseTree::Rename(syn::UseRename {
-                    ident,
-                    rename,
-                    as_token: Default::default(),
-                })
-            }
+            UseTail::Rename(rename) => syn::UseTree::Rename(syn::UseRename { ident, rename, as_token: Default::default() }),
         };
     }
     let ident = syn::Ident::new(&segments[0], Span::call_site());
-    syn::UseTree::Path(syn::UsePath {
-        ident,
-        colon2_token: Default::default(),
-        tree: Box::new(build_use_tree(&segments[1..], tail)),
-    })
+    syn::UseTree::Path(syn::UsePath { ident, colon2_token: Default::default(), tree: Box::new(build_use_tree(&segments[1..], tail)) })
 }
 
 fn flatten_use_tree(tree: &syn::UseTree) -> Option<(Vec<String>, UseTail)> {
@@ -225,9 +179,7 @@ fn flatten_use_tree(tree: &syn::UseTree) -> Option<(Vec<String>, UseTail)> {
     }
 }
 
-fn use_tree_group_prefix(
-    tree: &mut syn::UseTree,
-) -> Option<(Vec<String>, &mut syn::UseGroup)> {
+fn use_tree_group_prefix(tree: &mut syn::UseTree) -> Option<(Vec<String>, &mut syn::UseGroup)> {
     let mut prefix = Vec::new();
     let mut current = tree;
     loop {

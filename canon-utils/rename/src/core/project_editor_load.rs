@@ -1,8 +1,6 @@
+use super::project_editor_helpers::{determine_source_root, module_path_from_file, symbol_kind_from_str};
 use crate::core::oracle::StructuralEditOracle;
 use crate::core::oracle::StructuralEditOracleApi;
-use super::project_editor_helpers::{
-    determine_source_root, module_path_from_file, symbol_kind_from_str,
-};
 use crate::core::rustc_session::RustcSession;
 use crate::core::symbol_id::normalize_symbol_id;
 use crate::fs::collect_rs_files;
@@ -28,11 +26,7 @@ impl ProjectEditor {
         Self::load_with_session_inner(project, oracle, session)
     }
 
-    fn load_with_session_inner(
-        project: &Path,
-        oracle: Box<dyn StructuralEditOracleApi>,
-        session: Arc<RustcSession>,
-    ) -> Result<Self> {
+    fn load_with_session_inner(project: &Path, oracle: Box<dyn StructuralEditOracleApi>, session: Arc<RustcSession>) -> Result<Self> {
         let source_root = determine_source_root(project);
         let files = collect_rs_files(&source_root)?;
         let mut registry = NodeRegistry::default();
@@ -42,25 +36,13 @@ impl ProjectEditor {
             let file_path = file.clone();
             let content = std::fs::read_to_string(&file_path)?;
             let ast = match syn::parse_file(&content) {
-                Ok(ast) => {
-                    ast
-                }
-                Err(_) => {
-                    syn::File {
-                        shebang: None,
-                        attrs: Vec::new(),
-                        items: Vec::new(),
-                    }
-                }
+                Ok(ast) => ast,
+                Err(_) => syn::File { shebang: None, attrs: Vec::new(), items: Vec::new() },
             };
             registry.asts.insert(file_path.clone(), ast);
             registry.sources.insert(file_path.clone(), content.clone());
             original_sources.insert(file_path.clone(), content);
-            let stored_ast = registry
-                .asts
-                .get(&file_path)
-                .cloned()
-                .unwrap_or_else(|| syn::File { shebang: None, attrs: Vec::new(), items: Vec::new() });
+            let stored_ast = registry.asts.get(&file_path).cloned().unwrap_or_else(|| syn::File { shebang: None, attrs: Vec::new(), items: Vec::new() });
             parsed_files.push((file_path.clone(), stored_ast));
         }
 
@@ -89,17 +71,10 @@ impl ProjectEditor {
         registry.module_files.clear();
         for (file, ast) in &parsed_files {
             let module_path = module_path_for_file(&module_files, &source_root, file)?;
-            registry
-                .module_files
-                .insert(module_path.clone(), file.clone());
+            registry.module_files.insert(module_path.clone(), file.clone());
             if ast.items.is_empty() {
                 if let Some(content) = registry.sources.get(file) {
-                    index_file_symbols_by_text(
-                        content,
-                        file,
-                        &module_path,
-                        &mut registry.handles,
-                    );
+                    index_file_symbols_by_text(content, file, &module_path, &mut registry.handles);
                 }
             } else {
                 index_file_symbols(ast, file, &module_path, &mut registry.handles);
@@ -107,12 +82,7 @@ impl ProjectEditor {
             index_module_files(ast, file, &module_path, &mut registry.module_files);
         }
         if std::env::var("RENAME_DEBUG_MODULES").ok().as_deref() == Some("1") {
-            let mut interesting: Vec<(String, PathBuf)> = registry
-                .module_files
-                .iter()
-                .filter(|(module_path, _)| module_path.contains("gpu_scheduler"))
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
+            let mut interesting: Vec<(String, PathBuf)> = registry.module_files.iter().filter(|(module_path, _)| module_path.contains("gpu_scheduler")).map(|(k, v)| (k.clone(), v.clone())).collect();
             interesting.sort_by(|a, b| a.0.cmp(&b.0));
             eprintln!("debug module_files gpu_scheduler:");
             for (module_path, path) in interesting {
@@ -138,9 +108,7 @@ impl ProjectEditor {
     pub fn queue(&mut self, symbol_id: &str, op: NodeOp) -> Result<()> {
         let norm = normalize_symbol_id(symbol_id);
         let handle = match &op {
-            NodeOp::MutateField { handle, .. } | NodeOp::MoveSymbol { handle, .. } => {
-                Some(handle)
-            }
+            NodeOp::MutateField { handle, .. } | NodeOp::MoveSymbol { handle, .. } => Some(handle),
         };
         if let Some(handle) = handle {
             if !self.registry.handles.contains_key(&norm) {
@@ -148,19 +116,13 @@ impl ProjectEditor {
             }
         }
         let file = match &op {
-            NodeOp::MutateField { handle, .. } | NodeOp::MoveSymbol { handle, .. } => {
-                handle.file.clone()
-            }
+            NodeOp::MutateField { handle, .. } | NodeOp::MoveSymbol { handle, .. } => handle.file.clone(),
         };
         self.changesets.entry(file).or_default().push(QueuedOp { symbol_id: norm, op });
         Ok(())
     }
 
-    pub fn queue_by_id(
-        &mut self,
-        symbol_id: &str,
-        mutation: FieldMutation,
-    ) -> Result<()> {
+    pub fn queue_by_id(&mut self, symbol_id: &str, mutation: FieldMutation) -> Result<()> {
         let norm = normalize_symbol_id(symbol_id);
         let handle = if let Some(handle) = self.registry.handles.get(&norm).cloned() {
             handle
@@ -169,35 +131,15 @@ impl ProjectEditor {
         } else {
             return Err(anyhow!("no handle found for {symbol_id}"));
         };
-        let op = NodeOp::MutateField {
-            handle,
-            mutation,
-        };
+        let op = NodeOp::MutateField { handle, mutation };
         self.queue(&norm, op)
     }
 
     fn synthetic_handle_from_symbol_id(&self, symbol_id: &str) -> Result<SymbolHandle> {
-        let (module_path, name) = symbol_id
-            .rsplit_once("::")
-            .ok_or_else(|| anyhow!("invalid symbol id: {symbol_id}"))?;
-        let kind = self
-            .session
-            .as_ref()
-            .and_then(|session| session.symbol_kind(symbol_id))
-            .map(symbol_kind_from_str)
-            .unwrap_or(SymbolKind::Fn);
-        let file = self
-            .registry
-            .module_files
-            .get(module_path)
-            .cloned()
-            .unwrap_or_else(PathBuf::new);
-        Ok(SymbolHandle {
-            file,
-            module_path: module_path.to_string(),
-            name: name.to_string(),
-            kind,
-        })
+        let (module_path, name) = symbol_id.rsplit_once("::").ok_or_else(|| anyhow!("invalid symbol id: {symbol_id}"))?;
+        let kind = self.session.as_ref().and_then(|session| session.symbol_kind(symbol_id)).map(symbol_kind_from_str).unwrap_or(SymbolKind::Fn);
+        let file = self.registry.module_files.get(module_path).cloned().unwrap_or_else(PathBuf::new);
+        Ok(SymbolHandle { file, module_path: module_path.to_string(), name: name.to_string(), kind })
     }
 
     pub fn has_symbol(&self, symbol_id: &str) -> bool {
@@ -239,39 +181,20 @@ impl ProjectEditor {
     }
 
     pub fn queue_module_rename(&mut self, old_module_path: &str, new_name: &str) {
-        self.pending_module_renames.push(ModuleRename {
-            old_module_path: old_module_path.to_string(),
-            new_name: new_name.to_string(),
-        });
+        self.pending_module_renames.push(ModuleRename { old_module_path: old_module_path.to_string(), new_name: new_name.to_string() });
     }
 
     pub fn queue_directory_rename(&mut self, old_dir: &Path, new_dir: &Path) {
-        self.pending_dir_renames.push(DirRename {
-            old_dir: old_dir.to_path_buf(),
-            new_dir: new_dir.to_path_buf(),
-        });
+        self.pending_dir_renames.push(DirRename { old_dir: old_dir.to_path_buf(), new_dir: new_dir.to_path_buf() });
     }
 }
 
-pub(crate) fn index_file_symbols(
-    ast: &syn::File,
-    file: &Path,
-    module_path: &str,
-    handles: &mut HashMap<String, SymbolHandle>,
-) {
+pub(crate) fn index_file_symbols(ast: &syn::File, file: &Path, module_path: &str, handles: &mut HashMap<String, SymbolHandle>) {
     index_items(&ast.items, file, module_path, handles);
 }
 
-pub(crate) fn index_file_symbols_by_text(
-    content: &str,
-    file: &Path,
-    module_path: &str,
-    handles: &mut HashMap<String, SymbolHandle>,
-) {
-    let re = regex::Regex::new(
-            r"(?m)^\\s*(pub\\s+)?(fn|struct|enum|const|static|type|trait|mod)\\s+([A-Za-z_][A-Za-z0-9_]*)",
-        )
-        .ok();
+pub(crate) fn index_file_symbols_by_text(content: &str, file: &Path, module_path: &str, handles: &mut HashMap<String, SymbolHandle>) {
+    let re = regex::Regex::new(r"(?m)^\\s*(pub\\s+)?(fn|struct|enum|const|static|type|trait|mod)\\s+([A-Za-z_][A-Za-z0-9_]*)").ok();
     let Some(re) = re else {
         return;
     };
@@ -293,12 +216,7 @@ pub(crate) fn index_file_symbols_by_text(
     }
 }
 
-pub(crate) fn index_items(
-    items: &[Item],
-    file: &Path,
-    module_path: &str,
-    handles: &mut HashMap<String, SymbolHandle>,
-) {
+pub(crate) fn index_items(items: &[Item], file: &Path, module_path: &str, handles: &mut HashMap<String, SymbolHandle>) {
     for item in items {
         match item {
             Item::Fn(ItemFn { sig, .. }) => {
@@ -334,46 +252,19 @@ pub(crate) fn index_items(
     }
 }
 
-pub(crate) fn insert_handle(
-    file: &Path,
-    module_path: &str,
-    ident: &syn::Ident,
-    kind: SymbolKind,
-    handles: &mut HashMap<String, SymbolHandle>,
-) {
+pub(crate) fn insert_handle(file: &Path, module_path: &str, ident: &syn::Ident, kind: SymbolKind, handles: &mut HashMap<String, SymbolHandle>) {
     let symbol_id = format!("{module_path}::{ident}");
-    handles.insert(
-        symbol_id,
-        SymbolHandle {
-            file: file.to_path_buf(),
-            module_path: module_path.to_string(),
-            name: ident.to_string(),
-            kind,
-        },
-    );
+    handles.insert(symbol_id, SymbolHandle { file: file.to_path_buf(), module_path: module_path.to_string(), name: ident.to_string(), kind });
 }
 
-fn index_module_files(
-    ast: &syn::File,
-    file: &Path,
-    module_path: &str,
-    module_files: &mut HashMap<String, PathBuf>,
-) {
+fn index_module_files(ast: &syn::File, file: &Path, module_path: &str, module_files: &mut HashMap<String, PathBuf>) {
     let base_dir = file.parent().unwrap_or_else(|| Path::new(""));
     for item in &ast.items {
         let Item::Mod(item_mod) = item else { continue };
         let mod_name = item_mod.ident.to_string();
-        let mod_path = if module_path == "crate" {
-            format!("crate::{mod_name}")
-        } else {
-            format!("{module_path}::{mod_name}")
-        };
+        let mod_path = if module_path == "crate" { format!("crate::{mod_name}") } else { format!("{module_path}::{mod_name}") };
         if let Some(path_lit) = module_path_attr_value(item_mod) {
-            let path = if Path::new(&path_lit).is_absolute() {
-                PathBuf::from(&path_lit)
-            } else {
-                base_dir.join(&path_lit)
-            };
+            let path = if Path::new(&path_lit).is_absolute() { PathBuf::from(&path_lit) } else { base_dir.join(&path_lit) };
             module_files.insert(mod_path, path);
             continue;
         }
@@ -399,9 +290,7 @@ fn index_module_files(
                     continue;
                 }
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if name == format!("{mod_name}.rs")
-                    || name.ends_with(&format!("_{mod_name}.rs"))
-                {
+                if name == format!("{mod_name}.rs") || name.ends_with(&format!("_{mod_name}.rs")) {
                     candidates.push(path);
                 }
             }
@@ -427,31 +316,15 @@ fn module_path_attr_value(item_mod: &ItemMod) -> Option<String> {
     None
 }
 
-fn module_path_for_file(
-    module_files: &HashMap<String, PathBuf>,
-    source_root: &Path,
-    file: &Path,
-) -> Result<String> {
-    let mut candidates: Vec<String> = module_files
-        .iter()
-        .filter_map(|(module_path, path)| {
-            if path == file {
-                Some(module_path.clone())
-            } else {
-                None
-            }
-        })
-        .collect();
+fn module_path_for_file(module_files: &HashMap<String, PathBuf>, source_root: &Path, file: &Path) -> Result<String> {
+    let mut candidates: Vec<String> = module_files.iter().filter_map(|(module_path, path)| if path == file { Some(module_path.clone()) } else { None }).collect();
     if candidates.is_empty() {
         return module_path_from_file(source_root, file);
     }
     candidates.sort_by(|a, b| {
         let score_a = module_path_score(a);
         let score_b = module_path_score(b);
-        score_b
-            .cmp(&score_a)
-            .then_with(|| b.len().cmp(&a.len()))
-            .then_with(|| a.cmp(b))
+        score_b.cmp(&score_a).then_with(|| b.len().cmp(&a.len())).then_with(|| a.cmp(b))
     });
     Ok(candidates[0].clone())
 }

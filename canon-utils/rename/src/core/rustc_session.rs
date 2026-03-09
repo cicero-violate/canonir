@@ -22,14 +22,10 @@ impl RustcSession {
     pub fn build(project_root: &Path) -> Result<Self> {
         let spans_path = project_root.join("analysis").join("spans.jsonl");
         if !spans_path.exists() {
-            return Err(anyhow!(
-                "missing spans.jsonl at {}; run cargo check to generate analysis/",
-                spans_path.display()
-            ));
+            return Err(anyhow!("missing spans.jsonl at {}; run cargo check to generate analysis/", spans_path.display()));
         }
 
-        let (mut span_index, symbol_kinds, normalized_sources, saw_done) =
-            load_spans_from_file(&spans_path)?;
+        let (mut span_index, symbol_kinds, normalized_sources, saw_done) = load_spans_from_file(&spans_path)?;
         if symbol_kinds.is_empty() {
             return Err(anyhow!("span collector produced no output"));
         }
@@ -38,10 +34,7 @@ impl RustcSession {
             return Err(anyhow!("span collector did not finish writing spans"));
         }
 
-        let mut symbol_catalog: Vec<(String, String)> = symbol_kinds
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let mut symbol_catalog: Vec<(String, String)> = symbol_kinds.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         symbol_catalog.sort_by(|a, b| a.0.cmp(&b.0));
 
         for per_file in span_index.values_mut() {
@@ -51,12 +44,7 @@ impl RustcSession {
             }
         }
 
-        Ok(Self {
-            span_index,
-            symbol_kinds,
-            symbol_catalog,
-            normalized_sources,
-        })
+        Ok(Self { span_index, symbol_kinds, symbol_catalog, normalized_sources })
     }
 
     pub fn spans_for(&self, symbol_id: &str) -> Option<&HashMap<PathBuf, Vec<SpanRange>>> {
@@ -72,27 +60,15 @@ impl RustcSession {
     }
 
     pub fn symbol_ids(&self) -> Vec<String> {
-        self.symbol_catalog
-            .iter()
-            .map(|(id, _)| id.clone())
-            .collect()
+        self.symbol_catalog.iter().map(|(id, _)| id.clone()).collect()
     }
 
     pub fn symbol_kind(&self, symbol_id: &str) -> Option<&str> {
-        self.symbol_kinds
-            .get(symbol_id)
-            .map(|value| value.as_str())
+        self.symbol_kinds.get(symbol_id).map(|value| value.as_str())
     }
 }
 
-fn load_spans_from_file(
-    path: &Path,
-) -> Result<(
-    HashMap<String, HashMap<PathBuf, Vec<SpanRange>>>,
-    HashMap<String, String>,
-    HashMap<PathBuf, String>,
-    bool,
-)> {
+fn load_spans_from_file(path: &Path) -> Result<(HashMap<String, HashMap<PathBuf, Vec<SpanRange>>>, HashMap<String, String>, HashMap<PathBuf, String>, bool)> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut line = String::new();
@@ -118,10 +94,7 @@ fn load_spans_from_file(
             if kind == "done" {
                 saw_done = true;
             } else if kind == "source" {
-                if let (Some(file), Some(src)) = (
-                    value.get("file").and_then(|v| v.as_str()),
-                    value.get("src").and_then(|v| v.as_str()),
-                ) {
+                if let (Some(file), Some(src)) = (value.get("file").and_then(|v| v.as_str()), value.get("src").and_then(|v| v.as_str())) {
                     normalized_sources.insert(PathBuf::from(file), src.to_string());
                 }
             }
@@ -135,10 +108,7 @@ fn load_spans_from_file(
                 continue;
             }
         };
-        let kind = value
-            .get("kind")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
+        let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("unknown");
         let file = match value.get("file").and_then(|v| v.as_str()) {
             Some(value) => value,
             None => {
@@ -149,18 +119,8 @@ fn load_spans_from_file(
         let lo = value.get("lo").and_then(|v| v.as_u64()).unwrap_or(0);
         let hi = value.get("hi").and_then(|v| v.as_u64()).unwrap_or(0);
 
-        symbol_kinds
-            .entry(symbol_id.to_string())
-            .or_insert_with(|| kind.to_string());
-        span_index
-            .entry(symbol_id.to_string())
-            .or_default()
-            .entry(PathBuf::from(file))
-            .or_default()
-            .push(SpanRange {
-                lo: lo as usize,
-                hi: hi as usize,
-            });
+        symbol_kinds.entry(symbol_id.to_string()).or_insert_with(|| kind.to_string());
+        span_index.entry(symbol_id.to_string()).or_default().entry(PathBuf::from(file)).or_default().push(SpanRange { lo: lo as usize, hi: hi as usize });
 
         line.clear();
     }

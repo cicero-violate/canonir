@@ -4,15 +4,16 @@ use std::path::{Path, PathBuf};
 
 pub(crate) fn determine_source_root(project: &Path) -> PathBuf {
     let src = project.join("src");
-    if src.is_dir() { src } else { project.to_path_buf() }
+    if src.is_dir() {
+        src
+    } else {
+        project.to_path_buf()
+    }
 }
 
 pub(crate) fn module_path_from_file(root: &Path, file: &Path) -> Result<String> {
     let rel = file.strip_prefix(root).unwrap_or(file);
-    let mut components: Vec<String> = rel
-        .components()
-        .filter_map(|c| c.as_os_str().to_str().map(|s| s.to_string()))
-        .collect();
+    let mut components: Vec<String> = rel.components().filter_map(|c| c.as_os_str().to_str().map(|s| s.to_string())).collect();
     if components.is_empty() {
         return Err(anyhow!("cannot derive module path for {}", file.display()));
     }
@@ -38,11 +39,7 @@ pub(crate) fn module_path_from_file(root: &Path, file: &Path) -> Result<String> 
 }
 
 pub(crate) fn module_path_for_dir(root: &Path, dir: &Path) -> Result<Vec<String>> {
-    let rel = dir
-        .strip_prefix(root)
-        .with_context(|| {
-            format!("directory {} is not under {}", dir.display(), root.display())
-        })?;
+    let rel = dir.strip_prefix(root).with_context(|| format!("directory {} is not under {}", dir.display(), root.display()))?;
     let mut segments: Vec<String> = vec!["crate".to_string()];
     for component in rel.components() {
         if let Some(s) = component.as_os_str().to_str() {
@@ -55,7 +52,11 @@ pub(crate) fn module_path_for_dir(root: &Path, dir: &Path) -> Result<Vec<String>
 }
 
 pub(crate) fn canonicalize_relative(path: &Path, root: &Path) -> Result<PathBuf> {
-    if path.is_absolute() { Ok(path.to_path_buf()) } else { Ok(root.join(path)) }
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(root.join(path))
+    }
 }
 
 pub(crate) fn split_module_path(path: &str) -> Vec<String> {
