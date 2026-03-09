@@ -129,4 +129,4 @@ chrome-dev-profile/
 **/analysis/*.jsonl
 **/analysis/*.lock
 **/analysis/*.txt
-
+*.jsonl
