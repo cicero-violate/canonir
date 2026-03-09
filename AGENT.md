@@ -5,6 +5,9 @@ USEFUL INFORMATION
 rustc compiler source code can be found in here, it is very useful
 /workspace/ai_sandbox/canon/test_projects/rust_compiler_info/compiler
 
+READ THIS AND USE IT (It will save you time)
+/workspace/ai_sandbox/canon/canon-utils/upg_analysis/README.md
+
 Shell Text Processing Rules
 
 General Tooling Rules
