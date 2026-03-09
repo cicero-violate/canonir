@@ -36,7 +36,7 @@ bat -n canon-agent-prompts/AGENT_VERIFY.md
 bat -n canon-agent-prompts/agent_config.toml
 
 bat -n canon-utils/upg_analysis/src/types.rs #` — Metadata struct definition (extractor side)
-bat -n canon-utils/upg_analysis/src/emit.rs #` — writes metadata.json
+# bat -n canon-utils/upg_analysis/src/emit.rs #` — writes metadata.json
 bat -n canon-utils/analysis-engine/src/loader.rs #` — reads metadata.json, parse_edge_kind #1
 bat -n canon-utils/analysis-engine/src/augment.rs #` — parse_edge_kind #2, edge_kind_str
 bat -n canon-utils/analysis-engine/src/main.rs #` — engine entry point, schema validation goes here
