@@ -22,7 +22,7 @@ pub struct RepairSurfaceEntry {
     pub error_count: usize,
 }
 
-pub fn augment_with_errors(output_dir: &Path, errors_json: &Path) -> Result<()> {
+pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path) -> Result<()> {
     if !errors_json.exists() {
         return Ok(());
     }
@@ -119,17 +119,25 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path) -> Result<()> 
         generated_by: "UPG extractor".to_string(),
     };
     let spans_primary = vec![crate::types::SpanRange { lo: 0, hi: 0 }; nodes.len()];
-    let graph = crate::extract::UpgGraph { nodes, edges, csr, metadata, spans_primary, def_paths: Vec::new() };
+    let graph = crate::extract::UpgGraph {
+        nodes,
+        edges,
+        csr,
+        metadata,
+        spans_primary,
+        def_paths: Vec::new(),
+        file_paths: Vec::new(),
+    };
     write_outputs(&graph, output_dir)?;
 
     let surface = compute_repair_surface(&graph);
-    write_repair_surface(output_dir, &surface)?;
+    write_repair_surface(out_dir, &surface)?;
 
     Ok(())
 }
 
-pub fn write_repair_surface(output_dir: &Path, surface: &[RepairSurfaceEntry]) -> Result<()> {
-    let path = output_dir.join("repair_surface.json");
+pub fn write_repair_surface(out_dir: &Path, surface: &[RepairSurfaceEntry]) -> Result<()> {
+    let path = out_dir.join("repair_surface.json");
     let payload = serde_json::json!({
         "top_k": surface,
         "count": surface.len(),

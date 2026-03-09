@@ -200,7 +200,9 @@ fn main() {
                 let output_dir2 = output_dir.clone();
                 let errors_json2 = errors_json.clone();
                 std::thread::spawn(move || {
-                    if let Err(err) = upg_analysis::augment_with_errors(&output_dir2, &errors_json2) {
+                    let post_dir = output_dir2.join("post_analysis");
+                    let _ = std::fs::create_dir_all(&post_dir);
+                    if let Err(err) = upg_analysis::augment_with_errors(&output_dir2, &errors_json2, &post_dir) {
                         eprintln!("analysis_capture: failed to augment UPG with errors: {err}");
                     }
                 });

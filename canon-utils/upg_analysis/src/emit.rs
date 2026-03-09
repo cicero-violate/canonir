@@ -14,10 +14,14 @@ pub struct OutputConfig {
 
 pub fn write_outputs(graph: &crate::extract::UpgGraph, output_dir: &Path) -> Result<()> {
     fs::create_dir_all(output_dir)?;
-    write_nodes_csv(output_dir, &graph.nodes)?;
+    write_nodes_csv(output_dir, &graph.nodes, &graph.file_paths)?;
     write_edges_csv(output_dir, &graph.edges)?;
-    write_files_txt(output_dir, &graph.nodes)?;
-    write_spans_bin(output_dir, &graph.nodes, &graph.spans_primary)?;
+    write_cfg_csv(output_dir, &graph.nodes, &graph.edges)?;
+    write_callgraph_csv(output_dir, &graph.nodes, &graph.edges)?;
+    write_modulegraph_csv(output_dir, &graph.nodes, &graph.edges)?;
+    write_typegraph_csv(output_dir, &graph.nodes, &graph.edges)?;
+    write_files_txt(output_dir, &graph.file_paths)?;
+    write_spans_bin(output_dir, &graph.nodes, &graph.spans_primary, &graph.file_paths)?;
     write_defs_txt(output_dir, &graph.def_paths)?;
     prune_legacy_outputs(output_dir);
     write_kinds(output_dir)?;
@@ -56,11 +60,11 @@ fn write_defs_txt(output_dir: &Path, def_paths: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn write_nodes_csv(output_dir: &Path, nodes: &[Node]) -> Result<()> {
+fn write_nodes_csv(output_dir: &Path, nodes: &[Node], files: &[String]) -> Result<()> {
     let path = output_dir.join("nodes.csv");
     let mut file = fs::File::create(path)?;
     writeln!(file, "node_id,node_kind,symbol,file_id,line,column,parent")?;
-    let file_ids = collect_file_ids(output_dir, nodes);
+    let file_ids = collect_file_ids(output_dir, files);
     let symbol_to_id = collect_symbol_ids(nodes);
     let node_file_ids = compute_node_file_ids(output_dir, nodes, &symbol_to_id, &file_ids);
     for node in nodes {
@@ -101,11 +105,176 @@ fn write_edges_csv(output_dir: &Path, edges: &[Edge]) -> Result<()> {
     Ok(())
 }
 
-fn write_files_txt(output_dir: &Path, nodes: &[Node]) -> Result<()> {
+fn write_cfg_csv(output_dir: &Path, nodes: &[Node], edges: &[Edge]) -> Result<()> {
+    let path = output_dir.join("cfg.csv");
+    let mut file = fs::File::create(path)?;
+    writeln!(file, "src_block,dst_block,edge_kind")?;
+    let id_to_kind = build_id_to_kind(nodes);
+    for edge in edges {
+        if edge.kind != crate::types::EdgeKind::Flow && edge.kind != crate::types::EdgeKind::Unwind {
+            continue;
+        }
+        let src_kind = id_to_kind.get(&edge.src);
+        let dst_kind = id_to_kind.get(&edge.dst);
+        if src_kind == Some(&crate::types::NodeKind::BasicBlock)
+            && dst_kind == Some(&crate::types::NodeKind::BasicBlock)
+        {
+            writeln!(
+                file,
+                "{},{},{}",
+                edge.src,
+                edge.dst,
+                edge_kind_str(edge.kind)
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn write_callgraph_csv(output_dir: &Path, nodes: &[Node], edges: &[Edge]) -> Result<()> {
+    let path = output_dir.join("callgraph.csv");
+    let mut file = fs::File::create(path)?;
+    writeln!(file, "caller_node,callee_node")?;
+    let id_to_kind = build_id_to_kind(nodes);
+    let mut seen: BTreeSet<(u32, u32)> = BTreeSet::new();
+    let mut callsite_to_block: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
+    let mut block_to_fn: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
+
+    for edge in edges {
+        if edge.kind != crate::types::EdgeKind::HasBlock {
+            continue;
+        }
+        let src_kind = id_to_kind.get(&edge.src);
+        let dst_kind = id_to_kind.get(&edge.dst);
+        if src_kind == Some(&crate::types::NodeKind::BasicBlock)
+            && dst_kind == Some(&crate::types::NodeKind::CallSite)
+        {
+            callsite_to_block.entry(edge.dst).or_default().insert(edge.src);
+        } else if matches!(src_kind, Some(crate::types::NodeKind::Function | crate::types::NodeKind::Method))
+            && dst_kind == Some(&crate::types::NodeKind::BasicBlock)
+        {
+            block_to_fn.entry(edge.dst).or_default().insert(edge.src);
+        }
+    }
+
+    for edge in edges {
+        if edge.kind != crate::types::EdgeKind::Call {
+            continue;
+        }
+        let callee_kind = id_to_kind.get(&edge.dst);
+        if !matches!(callee_kind, Some(crate::types::NodeKind::Function | crate::types::NodeKind::Method)) {
+            continue;
+        }
+        if let Some(blocks) = callsite_to_block.get(&edge.src) {
+            for block in blocks {
+                if let Some(callers) = block_to_fn.get(block) {
+                    for caller in callers {
+                        if seen.insert((*caller, edge.dst)) {
+                            writeln!(file, "{},{}", caller, edge.dst)?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_modulegraph_csv(output_dir: &Path, nodes: &[Node], _edges: &[Edge]) -> Result<()> {
+    let path = output_dir.join("modulegraph.csv");
+    let mut file = fs::File::create(path)?;
+    writeln!(file, "parent_module,child_module")?;
+    let mut seen: BTreeSet<(u32, u32)> = BTreeSet::new();
+    let mut symbol_to_id: BTreeMap<&str, u32> = BTreeMap::new();
+    let mut root_id: Option<u32> = None;
+    for node in nodes {
+        if node.kind != crate::types::NodeKind::Module {
+            continue;
+        }
+        if node.symbol.is_empty() {
+            root_id = Some(node.id);
+        }
+        symbol_to_id.insert(node.symbol.as_str(), node.id);
+    }
+
+    for node in nodes {
+        if node.kind != crate::types::NodeKind::Module {
+            continue;
+        }
+        if node.symbol.is_empty() {
+            continue;
+        }
+        let parent_symbol = match node.symbol.rsplit_once("::") {
+            Some((parent, _child)) => parent,
+            None => "",
+        };
+        let parent_id = symbol_to_id
+            .get(parent_symbol)
+            .copied()
+            .or(root_id);
+        if let Some(pid) = parent_id {
+            if seen.insert((pid, node.id)) {
+                writeln!(file, "{},{}", pid, node.id)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_typegraph_csv(output_dir: &Path, nodes: &[Node], edges: &[Edge]) -> Result<()> {
+    let path = output_dir.join("typegraph.csv");
+    let mut file = fs::File::create(path)?;
+    writeln!(file, "type_a,type_b,relation")?;
+    let id_to_kind = build_id_to_kind(nodes);
+    let mut seen: BTreeSet<(u32, u32, &'static str)> = BTreeSet::new();
+    for edge in edges {
+        if !matches!(
+            edge.kind,
+            crate::types::EdgeKind::HasField
+                | crate::types::EdgeKind::HasMethod
+                | crate::types::EdgeKind::Implements
+                | crate::types::EdgeKind::ForType
+                | crate::types::EdgeKind::UsesType
+                | crate::types::EdgeKind::Bounds
+        ) {
+            continue;
+        }
+        let src_kind = id_to_kind.get(&edge.src);
+        let dst_kind = id_to_kind.get(&edge.dst);
+        let src_ok = matches!(
+            src_kind,
+            Some(
+                crate::types::NodeKind::Struct
+                    | crate::types::NodeKind::Enum
+                    | crate::types::NodeKind::Trait
+                    | crate::types::NodeKind::Impl
+                    | crate::types::NodeKind::Type
+            )
+        );
+        let dst_ok = matches!(
+            dst_kind,
+            Some(
+                crate::types::NodeKind::Struct
+                    | crate::types::NodeKind::Enum
+                    | crate::types::NodeKind::Trait
+                    | crate::types::NodeKind::Impl
+                    | crate::types::NodeKind::Type
+            )
+        );
+        if src_ok && dst_ok {
+            let relation = edge_kind_str(edge.kind);
+            if seen.insert((edge.src, edge.dst, relation)) {
+                writeln!(file, "{},{},{}", edge.src, edge.dst, relation)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_files_txt(output_dir: &Path, files: &[String]) -> Result<()> {
     let path = output_dir.join("files.txt");
     let mut file = fs::File::create(path)?;
     writeln!(file, "file_id,path")?;
-    let files = collect_files(output_dir, nodes);
     for (id, path_str) in files.iter().enumerate() {
         let field = sanitize_csv_field(path_str);
         writeln!(file, "{},{}", id, field)?;
@@ -113,10 +282,10 @@ fn write_files_txt(output_dir: &Path, nodes: &[Node]) -> Result<()> {
     Ok(())
 }
 
-fn write_spans_bin(output_dir: &Path, nodes: &[Node], spans: &[SpanRange]) -> Result<()> {
+fn write_spans_bin(output_dir: &Path, nodes: &[Node], spans: &[SpanRange], files: &[String]) -> Result<()> {
     let path = output_dir.join("spans.bin");
     let mut file = fs::File::create(path)?;
-    let file_ids = collect_file_ids(output_dir, nodes);
+    let file_ids = collect_file_ids(output_dir, files);
     let symbol_to_id = collect_symbol_ids(nodes);
     let node_file_ids = compute_node_file_ids(output_dir, nodes, &symbol_to_id, &file_ids);
     for (idx, node) in nodes.iter().enumerate() {
@@ -131,6 +300,14 @@ fn write_spans_bin(output_dir: &Path, nodes: &[Node], spans: &[SpanRange]) -> Re
         file.write_all(&span.hi.to_le_bytes())?;
     }
     Ok(())
+}
+
+fn build_id_to_kind(nodes: &[Node]) -> BTreeMap<u32, crate::types::NodeKind> {
+    let mut map = BTreeMap::new();
+    for node in nodes {
+        map.insert(node.id, node.kind);
+    }
+    map
 }
 
 
@@ -178,6 +355,7 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
     let mut invalid_node_kinds = 0usize;
     let mut bad_file_id_nodes = 0usize;
     let mut module_count = 0usize;
+    let mut module_missing_file = 0usize;
     let mut module_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut id_to_kind: std::collections::HashMap<u32, crate::types::NodeKind> =
         std::collections::HashMap::new();
@@ -206,6 +384,9 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
         if node.kind == crate::types::NodeKind::Module {
             module_count += 1;
             module_ids.insert(node.id);
+            if node.file_id as usize >= files.len() || files[node.file_id as usize].is_empty() {
+                module_missing_file += 1;
+            }
         }
     }
     let node_id_contiguous = ids.len() == (max_id as usize + 1);
@@ -406,11 +587,52 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
     for node in &nodes {
         file_ids_seen.insert(node.file_id);
     }
+    let mut allowed_orphan_files: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    if let Some(project_root) = output_dir.parent() {
+        for rel in ["src/main.rs", "src/lib.rs"] {
+            let path = project_root.join(rel);
+            if path.exists() && path.is_file() {
+                allowed_orphan_files.insert(path.to_string_lossy().to_string());
+            }
+        }
+    }
+
     let orphan_files = files
         .iter()
         .enumerate()
-        .filter(|(id, path)| !path.is_empty() && !file_ids_seen.contains(&(*id as u32)))
+        .filter(|(id, path)| {
+            !path.is_empty()
+                && !file_ids_seen.contains(&(*id as u32))
+                && !allowed_orphan_files.contains(*path)
+        })
         .count();
+
+    let mut missing_entry_roots = 0usize;
+    let mut files_outside_project_root = 0usize;
+    if let Some(project_root) = output_dir.parent() {
+        let mut entry_roots: Vec<PathBuf> = Vec::new();
+        for rel in ["src/main.rs", "src/lib.rs"] {
+            let path = project_root.join(rel);
+            if path.exists() && path.is_file() {
+                entry_roots.push(path);
+            }
+        }
+        for entry in entry_roots {
+            let entry_str = entry.to_string_lossy().to_string();
+            if !files.iter().any(|p| p == &entry_str) {
+                missing_entry_roots += 1;
+            }
+        }
+        for path in &files {
+            if path.is_empty() {
+                continue;
+            }
+            if !Path::new(path).starts_with(project_root) {
+                files_outside_project_root += 1;
+            }
+        }
+    }
 
     let must_have_contiguous_node_ids = node_id_contiguous;
     let must_have_valid_edge_sources = edges_with_missing_src == 0;
@@ -427,10 +649,13 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
     let must_have_unique_symbol_kind = duplicate_symbol_kind == 0;
     let must_have_unique_symbol_kind_per_module = duplicate_symbol_kind_module == 0;
     let must_have_module_owner = missing_module_owner == 0;
+    let must_have_module_file_mapping = module_missing_file == 0;
     let must_have_ordered_spans = span_order_violations == 0;
     let must_have_consistent_span_file = span_file_mismatch == 0 && span_file_inconsistent == 0;
     let must_have_connected_function_cfg = function_cfg_disconnected == 0;
     let must_not_have_orphan_files = orphan_files == 0;
+    let must_have_entry_roots_in_files = missing_entry_roots == 0;
+    let must_have_files_within_project_root = files_outside_project_root == 0;
 
     let ok = must_have_contiguous_node_ids
         && must_have_valid_edge_sources
@@ -447,10 +672,13 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
         && must_have_unique_symbol_kind
         && must_have_unique_symbol_kind_per_module
         && must_have_module_owner
+        && must_have_module_file_mapping
         && must_have_ordered_spans
         && must_have_consistent_span_file
         && must_have_connected_function_cfg
-        && must_not_have_orphan_files;
+        && must_not_have_orphan_files
+        && must_have_entry_roots_in_files
+        && must_have_files_within_project_root;
 
     Ok(InvariantReport {
         generated_at_epoch_ms,
@@ -482,6 +710,8 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
         span_file_inconsistent,
         function_cfg_disconnected,
         orphan_files,
+        missing_entry_roots,
+        files_outside_project_root,
         must_have_contiguous_node_ids,
         must_have_valid_edge_sources,
         must_have_valid_edge_destinations,
@@ -497,10 +727,13 @@ fn verify_outputs(output_dir: &Path) -> Result<InvariantReport> {
         must_have_unique_symbol_kind,
         must_have_unique_symbol_kind_per_module,
         must_have_module_owner,
+        must_have_module_file_mapping,
         must_have_ordered_spans,
         must_have_consistent_span_file,
         must_have_connected_function_cfg,
         must_not_have_orphan_files,
+        must_have_entry_roots_in_files,
+        must_have_files_within_project_root,
     })
 }
 
@@ -667,18 +900,14 @@ fn parse_node_kind(raw: &str) -> Result<crate::types::NodeKind> {
     }
 }
 
-fn collect_files(output_dir: &Path, nodes: &[Node]) -> Vec<String> {
+fn collect_file_ids(output_dir: &Path, files: &[String]) -> BTreeMap<String, u32> {
     let mut set = BTreeSet::new();
-    for node in nodes {
-        if let Some(path) = normalize_file_path(output_dir, &node.file) {
+    for path in files {
+        if let Some(path) = normalize_file_path(output_dir, path) {
             set.insert(path);
         }
     }
-    set.into_iter().collect()
-}
-
-fn collect_file_ids(output_dir: &Path, nodes: &[Node]) -> BTreeMap<String, u32> {
-    let files = collect_files(output_dir, nodes);
+    let files: Vec<String> = set.into_iter().collect();
     let mut out = BTreeMap::new();
     for (idx, path) in files.into_iter().enumerate() {
         out.insert(path, idx as u32);
@@ -687,7 +916,10 @@ fn collect_file_ids(output_dir: &Path, nodes: &[Node]) -> BTreeMap<String, u32> 
 }
 
 fn normalize_file_path(output_dir: &Path, raw: &str) -> Option<String> {
-    let project_root = output_dir.parent()?;
+    let project_root = output_dir
+        .parent()
+        .map(PathBuf::from)
+        .or_else(|| std::env::var("CARGO_MANIFEST_DIR").ok().map(PathBuf::from))?;
     let mut cleaned = raw.trim().to_string();
     if cleaned.is_empty() || cleaned == "." {
         return None;
@@ -701,6 +933,18 @@ fn normalize_file_path(output_dir: &Path, raw: &str) -> Option<String> {
         if candidate.exists() {
             path = candidate;
         } else {
+            let comps: Vec<_> = path.components().collect();
+            for i in 0..comps.len() {
+                let mut suffix = PathBuf::new();
+                for c in &comps[i..] {
+                    suffix.push(c.as_os_str());
+                }
+                let candidate = project_root.join(&suffix);
+                if candidate.exists() {
+                    path = candidate;
+                    break;
+                }
+            }
             for ancestor in project_root.ancestors().skip(1).take(4) {
                 let candidate = ancestor.join(&path);
                 if candidate.exists() {
@@ -709,12 +953,6 @@ fn normalize_file_path(output_dir: &Path, raw: &str) -> Option<String> {
                 }
             }
         }
-    }
-    if !path.exists() {
-        return None;
-    }
-    if path.is_dir() {
-        return None;
     }
     if !path.starts_with(project_root) {
         return None;

@@ -13,6 +13,7 @@ pub mod invariant_errors;
 pub mod invariants;
 pub mod validator;
 pub mod types;
+pub mod reports;
 #[cfg(feature = "canon_capture_compat")]
 pub mod compat;
 

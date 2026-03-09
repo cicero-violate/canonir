@@ -44,6 +44,10 @@ pub enum EdgeKind {
     Returns,
     ErrorToFunction,
     ErrorToBlock,
+    Contains,
+    Export,
+    ForType,
+    PublicUse,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -300,6 +304,10 @@ fn parse_edge_kind(raw: &str) -> Result<EdgeKind> {
         "RETURNS" => Ok(EdgeKind::Returns),
         "ERROR_TO_FUNCTION" => Ok(EdgeKind::ErrorToFunction),
         "ERROR_TO_BLOCK" => Ok(EdgeKind::ErrorToBlock),
-        _ => Err(anyhow!("unknown edge kind")),
+        "CONTAINS" => Ok(EdgeKind::Contains),
+        "EXPORT" => Ok(EdgeKind::Export),
+        "FOR_TYPE" => Ok(EdgeKind::ForType),
+        "PUBLIC_USE" => Ok(EdgeKind::PublicUse),
+        _ => Err(anyhow!("unknown edge kind: {:?}", raw)),
     }
 }

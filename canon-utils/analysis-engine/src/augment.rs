@@ -21,7 +21,7 @@ pub struct RepairSurfaceEntry {
     pub error_count: usize,
 }
 
-pub fn augment_with_errors(output_dir: &Path, errors_json: &Path) -> Result<()> {
+pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path) -> Result<()> {
     if !errors_json.exists() {
         return Ok(());
     }
@@ -145,10 +145,8 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path) -> Result<()> 
         edge_kinds: Vec::new(),
         id_to_index,
     };
-    write_outputs(&graph, output_dir)?;
-
     let surface = compute_repair_surface(&graph);
-    write_repair_surface(output_dir, &surface)?;
+    write_repair_surface(out_dir, &surface)?;
 
     Ok(())
 }
@@ -475,6 +473,10 @@ fn edge_kind_str(kind: EdgeKind) -> &'static str {
         EdgeKind::Returns => "RETURNS",
         EdgeKind::ErrorToFunction => "ERROR_TO_FUNCTION",
         EdgeKind::ErrorToBlock => "ERROR_TO_BLOCK",
+        EdgeKind::Contains => "CONTAINS",
+        EdgeKind::Export => "EXPORT",
+        EdgeKind::ForType => "FOR_TYPE",
+        EdgeKind::PublicUse => "PUBLIC_USE",
     }
 }
 
@@ -518,7 +520,11 @@ fn parse_edge_kind(raw: &str) -> Result<EdgeKind> {
         "RETURNS" => Ok(EdgeKind::Returns),
         "ERROR_TO_FUNCTION" => Ok(EdgeKind::ErrorToFunction),
         "ERROR_TO_BLOCK" => Ok(EdgeKind::ErrorToBlock),
-        _ => Err(anyhow!("unknown edge kind")),
+        "CONTAINS" => Ok(EdgeKind::Contains),
+        "EXPORT" => Ok(EdgeKind::Export),
+        "FOR_TYPE" => Ok(EdgeKind::ForType),
+        "PUBLIC_USE" => Ok(EdgeKind::PublicUse),
+        _ => Err(anyhow!("unknown edge kind in augment: {:?}", raw)),
     }
 }
 
