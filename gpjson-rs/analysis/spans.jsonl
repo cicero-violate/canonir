@@ -498,4 +498,4 @@
 {"file":"/workspace/ai_sandbox/canon/gpjson-rs/src/lib.rs","hi":2304,"kind":"fn","lo":2299,"symbol_id":"crate::GpjsonQueryResult::value"}
 {"file":"/workspace/ai_sandbox/canon/gpjson-rs/src/lib.rs","hi":3039,"kind":"fn","lo":3028,"symbol_id":"crate::GpjsonQueryResult::line_values"}
 {"file":"/workspace/ai_sandbox/canon/gpjson-rs/src/lib.rs","hi":3231,"kind":"fn","lo":3226,"symbol_id":"crate::GpjsonQueryResult::value"}
-{"span_count":497,"symbol_count":169,"type":"done"}
+{"span_count":497,"symbol_count":171,"type":"done"}

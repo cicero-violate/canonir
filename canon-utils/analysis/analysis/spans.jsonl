@@ -604,4 +604,4 @@
 {"file":"/workspace/ai_sandbox/canon/canon-utils/analysis/src/lib.rs","hi":451,"kind":"struct","lo":447,"symbol_id":"crate::types::Node"}
 {"file":"/workspace/ai_sandbox/canon/canon-utils/analysis/src/lib.rs","hi":461,"kind":"unknown","lo":453,"symbol_id":"crate::{use#21}"}
 {"file":"/workspace/ai_sandbox/canon/canon-utils/analysis/src/lib.rs","hi":461,"kind":"enum","lo":453,"symbol_id":"crate::types::NodeKind"}
-{"span_count":600,"symbol_count":322,"type":"done"}
+{"span_count":600,"symbol_count":324,"type":"done"}

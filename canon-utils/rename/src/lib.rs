@@ -3,6 +3,7 @@ pub mod fs;
 pub mod structured;
 pub mod api;
 pub mod check;
+pub mod git;
 pub mod verify;
 
 use std::path::Path;

@@ -16,4 +16,4 @@
 {"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":2877,"kind":"type","lo":2871,"symbol_id":"crate::IrSlot"}
 {"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":2948,"kind":"struct","lo":2932,"symbol_id":"crate::CaptureCallbacks"}
 {"file":"/workspace/ai_sandbox/canon/rustc_wrapper/rustc_capture/src/main.rs","hi":498,"kind":"fn","lo":484,"symbol_id":"crate::<CaptureCallbacks as rustc_driver::Callbacks>::after_analysis"}
-{"span_count":17,"symbol_count":18,"type":"done"}
+{"span_count":17,"symbol_count":19,"type":"done"}

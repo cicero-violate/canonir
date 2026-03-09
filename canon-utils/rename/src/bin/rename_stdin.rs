@@ -8,6 +8,7 @@ use rename::api::{dispatch, ApiOp, ApiRequest, ApiResult};
 use rename::check::{accumulate_error_counts_json, compute_delta_error_counts, run_cargo_check_json, summarize_error_categories};
 use rename::core::ProjectEditor;
 use rename::core::rustc_session::RustcSession;
+use rename::git::restore_project_src;
 use rename::verify::verify_renames_applied;
 
 #[derive(Serialize)]
@@ -18,6 +19,7 @@ struct ApiResponse {
     check: Option<serde_json::Value>,
     apply_error: Option<String>,
     commit_error: Option<String>,
+    restore_error: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -43,6 +45,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut apply_error = None;
     let mut commit_error = None;
+    let mut restore_error = None;
     let report = match editor.apply() {
         Ok(r) => {
             if let Err(e) = editor.commit() {
@@ -96,6 +99,7 @@ fn main() -> anyhow::Result<()> {
             after_counts.insert("unknown".to_string(), 1);
         }
         let delta = compute_delta_error_counts(&base_counts, &after_counts);
+        let delta_total: i64 = delta.values().copied().sum();
         let mut baseline_errors = summarize_error_categories(&baseline_res);
         if !baseline_success && baseline_errors.is_empty() {
             baseline_errors.push(serde_json::json!({
@@ -111,6 +115,12 @@ fn main() -> anyhow::Result<()> {
                 "description": "cargo check failed without JSON diagnostics",
                 "count": 1
             }));
+        }
+        let skip_restore = std::env::var("RENAME_SKIP_RESTORE").ok().as_deref() == Some("1");
+        if delta_total != 0 && !skip_restore {
+            if let Err(err) = restore_project_src(project) {
+                restore_error = Some(err.to_string());
+            }
         }
         Some(serde_json::json!({
             "baseline_success": baseline_success,
@@ -132,6 +142,7 @@ fn main() -> anyhow::Result<()> {
         check: check_result,
         apply_error,
         commit_error,
+        restore_error,
     };
     println!("{}", serde_json::to_string_pretty(&response)?);
 
