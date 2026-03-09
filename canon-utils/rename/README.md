@@ -26,7 +26,7 @@ cat <<'JSON' | cargo run --bin rename_stdin
     ["crate::old_name", "crate::new_name"],
     ["crate::mod::Foo", "crate::mod::Bar"]
   ]
-}xsxc
+}
 JSON
 ```
 
