@@ -1,6 +1,6 @@
 # Agent Goal
 
-Fix the `orchestration` pipeline so `cargo run --bin orchestration -- --all` completes with zero build errors in emitted files.
+Fix the `orchestration` pipeline so `cargo run --bin orchestration -- --all` completes with zero build errors in emitted files. Try again
 
 ## Constraints
 - You may modify code under `/workspace/ai_sandbox/canon/canon-capture`, `/workspace/ai_sandbox/canon/canon-projection`, `/workspace/ai_sandbox/canon/canon`
