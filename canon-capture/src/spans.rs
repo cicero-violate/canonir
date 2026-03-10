@@ -199,7 +199,7 @@ fn def_kind_to_symbol_kind(kind: DefKind) -> &'static str {
         DefKind::Fn | DefKind::AssocFn => "fn",
         DefKind::Struct => "struct",
         DefKind::Enum => "enum",
-        DefKind::Const | DefKind::AssocConst => "const",
+        DefKind::Const { .. } | DefKind::AssocConst { .. } => "const",
         DefKind::Static { .. } => "static",
         DefKind::TyAlias | DefKind::AssocTy => "type",
         DefKind::Trait => "trait",

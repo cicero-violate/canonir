@@ -17,7 +17,9 @@ enum RelationTemplate {
 fn relation_templates(def_kind: DefKind) -> &'static [RelationTemplate] {
     match def_kind {
         DefKind::Impl { .. } => &[RelationTemplate::ParentContains, RelationTemplate::ImplFor, RelationTemplate::ImplRef],
-        DefKind::AssocFn | DefKind::AssocTy | DefKind::AssocConst => &[RelationTemplate::ParentContains, RelationTemplate::ParentAssocItem],
+        DefKind::AssocFn | DefKind::AssocTy | DefKind::AssocConst { .. } { .. } => {
+            &[RelationTemplate::ParentContains, RelationTemplate::ParentAssocItem]
+        }
         _ => &[RelationTemplate::ParentContains],
     }
 }
@@ -34,7 +36,10 @@ fn maybe_push_parent_assoc_item(edges: &mut Vec<EdgeHint>, tcx: TyCtxt<'_>, def_
     let Some(parent) = tcx.opt_parent(def_id) else {
         return;
     };
-    if !matches!(tcx.def_kind(def_id), DefKind::AssocFn | DefKind::AssocTy | DefKind::AssocConst) {
+    if !matches!(
+        tcx.def_kind(def_id),
+        DefKind::AssocFn | DefKind::AssocTy | DefKind::AssocConst { .. } { .. }
+    ) {
         return;
     }
     if !matches!(tcx.def_kind(parent), DefKind::Trait | DefKind::Impl { .. }) {

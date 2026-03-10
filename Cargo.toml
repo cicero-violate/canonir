@@ -14,6 +14,7 @@ members = [
   "canon-utils/rename",
   # "canon-utils/smt-analysis-engine",
   "canon-utils/gpjson-rs",
+  "canon-utils/graph",
 ]
 exclude = [
   "test_projects",

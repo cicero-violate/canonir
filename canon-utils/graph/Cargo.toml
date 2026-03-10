@@ -1,0 +1,8 @@
+[package]
+name = "canon_graph"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+canon_kernel = { path = "../../../canon_kernel" }

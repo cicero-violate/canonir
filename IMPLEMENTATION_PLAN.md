@@ -76,7 +76,7 @@ Writes `spans.jsonl` and `symbols.json` into `output_dir`.
 
 ### Step 2 — Call collect_spans_and_symbols from analysis_capture
 
-In `rustc_wrapper/analysis_capture/src/main.rs`, inside `MirCaptureCallbacks::after_analysis`,
+In `rustc_wrapper/driver/src/main.rs`, inside `MirCaptureCallbacks::after_analysis`,
 after the existing `extract_and_write(tcx, &config)` call, add:
 
 ```rust

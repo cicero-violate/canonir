@@ -62,8 +62,8 @@ impl RulePred {
                 RuleDefKind::Fn => matches!(meta.def_kind, DefKind::Fn),
                 RuleDefKind::AssocFn => matches!(meta.def_kind, DefKind::AssocFn),
                 RuleDefKind::AssocTy => matches!(meta.def_kind, DefKind::AssocTy),
-                RuleDefKind::AssocConst => matches!(meta.def_kind, DefKind::AssocConst),
-                RuleDefKind::Const => matches!(meta.def_kind, DefKind::Const),
+                RuleDefKind::AssocConst { .. } => matches!(meta.def_kind, DefKind::AssocConst { .. } { .. }),
+                RuleDefKind::Const { .. } => matches!(meta.def_kind, DefKind::Const { .. } { .. }),
                 RuleDefKind::StaticAny => matches!(meta.def_kind, DefKind::Static { .. }),
                 RuleDefKind::TyAlias => matches!(meta.def_kind, DefKind::TyAlias),
                 RuleDefKind::Use => matches!(meta.def_kind, DefKind::Use),
@@ -151,7 +151,7 @@ pub static RULES: &[RuleSpec] = &[
     },
     RuleSpec {
         name: "assoc_const_item",
-        pred: RulePred { def_kind: Some(RuleDefKind::AssocConst), has_body: None, is_trait_item: None, is_assoc_item: None },
+        pred: RulePred { def_kind: Some(RuleDefKind::AssocConst { .. }), has_body: None, is_trait_item: None, is_assoc_item: None },
         emit: RuleEmit::Template("assoc_const_item"),
         edges: &[],
     },
@@ -164,7 +164,7 @@ pub static RULES: &[RuleSpec] = &[
     },
     RuleSpec {
         name: "const_item",
-        pred: RulePred { def_kind: Some(RuleDefKind::Const), has_body: None, is_trait_item: None, is_assoc_item: None },
+        pred: RulePred { def_kind: Some(RuleDefKind::Const { .. }), has_body: None, is_trait_item: None, is_assoc_item: None },
         emit: RuleEmit::Template("const_item"),
         edges: &[],
     },

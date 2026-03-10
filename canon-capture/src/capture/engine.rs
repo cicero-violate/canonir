@@ -16,8 +16,11 @@ use super::rules::{DefMeta, RuleEdge, RuleSpec, RULES};
 pub fn analyze_def(tcx: TyCtxt<'_>, def_id: DefId) -> DefMeta {
     let def_kind = tcx.def_kind(def_id);
     let has_body = tcx.hir_maybe_body_owned_by(def_id.expect_local()).is_some();
-    let is_trait_item = matches!(def_kind, DefKind::AssocFn | DefKind::AssocConst | DefKind::AssocTy) && tcx.opt_parent(def_id).is_some_and(|p| matches!(tcx.def_kind(p), DefKind::Trait));
-    let is_assoc_item = matches!(def_kind, DefKind::AssocFn | DefKind::AssocConst | DefKind::AssocTy);
+    let is_trait_item = matches!(
+        def_kind,
+        DefKind::AssocFn | DefKind::AssocConst { .. } { .. } | DefKind::AssocTy
+    ) && tcx.opt_parent(def_id).is_some_and(|p| matches!(tcx.def_kind(p), DefKind::Trait));
+    let is_assoc_item = matches!(def_kind, DefKind::AssocFn | DefKind::AssocConst { .. } { .. } | DefKind::AssocTy);
 
     DefMeta { def_id, def_kind, has_body, is_trait_item, is_assoc_item }
 }

@@ -12,6 +12,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 ANALYSIS_CAPTURE_BIN="$WORKSPACE_ROOT/target/debug/analysis_capture"
+ANALYSIS_CAPTURE_SRC="$WORKSPACE_ROOT/canon-utils/rustc_wrapper/driver/src"
+ANALYSIS_CAPTURE_MANIFEST="$WORKSPACE_ROOT/canon-utils/rustc_wrapper/driver/Cargo.toml"
+UPG_ANALYSIS_SRC="$WORKSPACE_ROOT/canon-utils/upg_analysis/src"
+UPG_ANALYSIS_MANIFEST="$WORKSPACE_ROOT/canon-utils/upg_analysis/Cargo.toml"
 
 # If we are inside an active cargo session, cargo already holds the artifact
 # lock. Never call `cargo build` here — it will deadlock. Delegate directly.
@@ -32,7 +36,18 @@ for arg in "${@:2}"; do
   esac
 done
 
+NEED_BUILD=0
 if [[ "${ANALYSIS_CAPTURE_FORCE_REFRESH:-}" == "1" || ! -x "$ANALYSIS_CAPTURE_BIN" ]]; then
+  NEED_BUILD=1
+else
+  if find "$ANALYSIS_CAPTURE_SRC" "$UPG_ANALYSIS_SRC" \
+    "$ANALYSIS_CAPTURE_MANIFEST" "$UPG_ANALYSIS_MANIFEST" \
+    -type f -newer "$ANALYSIS_CAPTURE_BIN" -print -quit 2>/dev/null | grep -q .; then
+    NEED_BUILD=1
+  fi
+fi
+
+if [[ "$NEED_BUILD" == "1" ]]; then
   export ANALYSIS_CAPTURE_BUILDING=1
   (cd "$WORKSPACE_ROOT" && \
     RUSTC_WRAPPER= \
@@ -43,9 +58,13 @@ if [[ "${ANALYSIS_CAPTURE_FORCE_REFRESH:-}" == "1" || ! -x "$ANALYSIS_CAPTURE_BI
 fi
 
 # Ensure rustc private libs are visible to analysis_capture.
-if [[ -n "${1:-}" && -x "${1:-}" ]]; then
-  SYSROOT="$("$1" --print=sysroot 2>/dev/null || true)"
-  HOST="$("$1" -vV 2>/dev/null | awk '/^host:/{print $2; exit}')"
+RUSTC_BIN="${1:-}"
+if [[ -z "$RUSTC_BIN" ]]; then
+  RUSTC_BIN="$(command -v rustc 2>/dev/null || true)"
+fi
+if [[ -n "$RUSTC_BIN" && -x "$RUSTC_BIN" ]]; then
+  SYSROOT="$("$RUSTC_BIN" --print=sysroot 2>/dev/null || true)"
+  HOST="$("$RUSTC_BIN" -vV 2>/dev/null | awk '/^host:/{print $2; exit}')"
   if [[ -n "$SYSROOT" ]]; then
     LIB1="$SYSROOT/lib"
     if [[ -n "$HOST" ]]; then
