@@ -1,6 +1,11 @@
 [build]
-rustc-wrapper = "/workspace/ai_sandbox/canon_kernel/target/debug/canon_kernel"
+rustc-wrapper = "/workspace/ai_sandbox/canon/scripts/canon_rustc_wrapper.sh"
 rustflags = ["-Awarnings"]
+
+[env]
+CANON_REPORTS_TLOG = "/workspace/ai_sandbox/canon/kernel/logs/graph.tlog"
+CANON_REPORTS_OUT = "/workspace/ai_sandbox/canon/kernel/graph"
+CANON_KERNEL_TYPEGEN= "/path/to/canon_kernel_typegen"
 
 # [build]
 # rustc-wrapper = "scripts/analysis_capture_wrapper.sh"
