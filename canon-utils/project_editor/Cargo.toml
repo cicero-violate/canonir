@@ -1,0 +1,21 @@
+[package]
+name = "project_editor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+canon_query = { path = "../canon-query" }
+prettyplease = "0.2"
+proc-macro2 = "1"
+syn = { version = "2", features = ["full", "visit-mut", "visit"] }
+walkdir = "2.5"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+canon = { path = "../../canon" }
+
+[[bin]]
+name = "project_editor"
+path = "src/bin/project_editor.rs"

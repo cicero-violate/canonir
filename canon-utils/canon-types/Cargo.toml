@@ -1,10 +1,7 @@
 [package]
-name = "canon_graph"
+name = "canon_types"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-canon_types = { path = "../canon-types" }

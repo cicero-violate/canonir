@@ -62,11 +62,11 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
             id: node_id,
             kind: NodeKind::Error,
             symbol,
-            file_id,
             file,
             line,
             column,
-            parent: 0,
+            file_id: Some(file_id),
+            parent: Some(0),
         });
         if let Some(span) = span {
             added_errors.push((node_id, span));
@@ -98,11 +98,11 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
                         id,
                         kind: NodeKind::Module,
                         symbol: format!("file::{}", file_key),
-                        file_id,
                         file: file_key.clone(),
                         line: 0,
                         column: 0,
-                        parent: 0,
+                        file_id: Some(file_id),
+                        parent: Some(0),
                     });
                     id
                 });
@@ -181,10 +181,10 @@ fn write_nodes_csv(output_dir: &Path, nodes: &[Node]) -> Result<()> {
             node.id,
             node_kind_str(node.kind),
             sanitize_csv_field(&node.symbol),
-            node.file_id,
+            node.file_id.unwrap_or(0),
             node.line,
             node.column,
-            node.parent
+            node.parent.unwrap_or(0)
         )?;
     }
     Ok(())
@@ -206,7 +206,7 @@ fn write_files_txt(output_dir: &Path, nodes: &[Node]) -> Result<()> {
     writeln!(file, "file_id,path")?;
     let mut entries: Vec<(u32, String)> = nodes
         .iter()
-        .map(|n| (n.file_id, n.file.clone()))
+        .map(|n| (n.file_id.unwrap_or(0), n.file.clone()))
         .collect();
     entries.sort_by_key(|(id, _)| *id);
     entries.dedup_by_key(|(id, _)| *id);
@@ -361,11 +361,11 @@ fn read_nodes_csv(path: PathBuf) -> Result<Vec<Node>> {
             id,
             kind,
             symbol,
-            file_id,
             file,
             line: line_no,
             column: col,
-            parent,
+            file_id: Some(file_id),
+            parent: Some(parent),
         });
     }
     Ok(nodes)
@@ -395,7 +395,7 @@ fn read_files_txt(path: PathBuf) -> Result<Vec<String>> {
 fn collect_file_ids(nodes: &[Node]) -> BTreeMap<String, u32> {
     let mut out = BTreeMap::new();
     for node in nodes {
-        out.entry(node.file.clone()).or_insert(node.file_id);
+        out.entry(node.file.clone()).or_insert(node.file_id.unwrap_or(0));
     }
     out
 }

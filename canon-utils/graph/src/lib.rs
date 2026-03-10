@@ -1,3 +1,6 @@
+pub mod builder;
 pub mod csr;
 
-pub use csr::{build_csr, find_path, load_csr, CsrGraph};
+pub use canon_types::{Node, Edge, NodeKind, EdgeKind, SpanRange};
+pub use builder::{KernelGraph, build_from_tlog};
+pub use csr::{CsrGraph, build_csr, find_path, load_csr};

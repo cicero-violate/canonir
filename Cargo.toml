@@ -11,9 +11,10 @@ members = [
   # "canon-projection",
   # "canon-agent",
   "canon-agent-v2",
-  "canon-utils/rename",
+  "canon-utils/project_editor",
   # "canon-utils/smt-analysis-engine",
-  "canon-utils/gpjson-rs",
+  "canon-utils/canon-query",
+  "canon-utils/canon-types",
   "canon-utils/graph",
 ]
 exclude = [

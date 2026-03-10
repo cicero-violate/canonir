@@ -1,4 +1,4 @@
-use canon_kernel::types::{Edge, EdgeKind, Node, NodeKind};
+use canon_types::{parse_edge_kind, parse_node_kind, Edge, EdgeKind, Node, NodeKind};
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use serde_json::Value;
@@ -54,6 +54,8 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
             file,
             line,
             column,
+            file_id: None,
+            parent: None,
         });
         if let Some(span) = span {
             added_errors.push((node_id, span));
@@ -83,6 +85,8 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
                         file: file_key.clone(),
                         line: 0,
                         column: 0,
+                        file_id: None,
+                        parent: None,
                     });
                     id
                 });
@@ -247,13 +251,22 @@ fn read_nodes_csv(path: PathBuf) -> Result<Vec<Node>> {
             return Err(anyhow!("invalid nodes.csv line"));
         }
         let id = parts[0].parse::<u32>()?;
-        let kind = parse_node_kind(parts[1])?;
+        let kind = parse_node_kind(parts[1]).map_err(|e| anyhow!(e))?;
         let line_no = parts[parts.len() - 3].parse::<u32>()?;
         let col = parts[parts.len() - 2].parse::<u32>()?;
         let file_id = parts[parts.len() - 4].parse::<usize>()?;
         let file = files.get(file_id).cloned().unwrap_or_default();
         let symbol = parts[2..parts.len() - 4].join(",");
-        nodes.push(Node { id, kind, symbol, file, line: line_no, column: col });
+        nodes.push(Node {
+            id,
+            kind,
+            symbol,
+            file,
+            line: line_no,
+            column: col,
+            file_id: None,
+            parent: None,
+        });
     }
     Ok(nodes)
 }
@@ -292,56 +305,8 @@ fn read_edges_csv(path: PathBuf) -> Result<Vec<Edge>> {
         }
         let src = parts[0].parse::<u32>()?;
         let dst = parts[1].parse::<u32>()?;
-        let kind = parse_edge_kind(parts[2])?;
+        let kind = parse_edge_kind(parts[2]).map_err(|e| anyhow!(e))?;
         edges.push(Edge { src, dst, kind });
     }
     Ok(edges)
-}
-
-fn parse_node_kind(raw: &str) -> Result<NodeKind> {
-    match raw {
-        "FUNCTION" => Ok(NodeKind::Function),
-        "METHOD" => Ok(NodeKind::Method),
-        "STRUCT" => Ok(NodeKind::Struct),
-        "ENUM" => Ok(NodeKind::Enum),
-        "TRAIT" => Ok(NodeKind::Trait),
-        "IMPL" => Ok(NodeKind::Impl),
-        "FIELD" => Ok(NodeKind::Field),
-        "PARAM" => Ok(NodeKind::Param),
-        "VARIABLE" => Ok(NodeKind::Variable),
-        "MODULE" => Ok(NodeKind::Module),
-        "TYPE" => Ok(NodeKind::Type),
-        "BASIC_BLOCK" => Ok(NodeKind::BasicBlock),
-        "CALL_SITE" => Ok(NodeKind::CallSite),
-        "ERROR" => Ok(NodeKind::Error),
-        _ => Err(anyhow!("unknown node kind")),
-    }
-}
-
-fn parse_edge_kind(raw: &str) -> Result<EdgeKind> {
-    match raw {
-        "CONTAINS" => Ok(EdgeKind::Contains),
-        "HAS_FIELD" => Ok(EdgeKind::HasField),
-        "HAS_METHOD" => Ok(EdgeKind::HasMethod),
-        "HAS_BLOCK" => Ok(EdgeKind::HasBlock),
-        "HAS_PARAM" => Ok(EdgeKind::HasParam),
-        "IMPORTS" => Ok(EdgeKind::Imports),
-        "EXPORT" => Ok(EdgeKind::Export),
-        "PUBLIC_USE" => Ok(EdgeKind::PublicUse),
-        "FLOW" => Ok(EdgeKind::Flow),
-        "CALL" => Ok(EdgeKind::Call),
-        "RETURN" => Ok(EdgeKind::Return),
-        "UNWIND" => Ok(EdgeKind::Unwind),
-        "IMPLEMENTS" => Ok(EdgeKind::Implements),
-        "FOR_TYPE" => Ok(EdgeKind::ForType),
-        "USES_TYPE" => Ok(EdgeKind::UsesType),
-        "BOUNDS" => Ok(EdgeKind::Bounds),
-        "ASSIGN" => Ok(EdgeKind::Assign),
-        "PROPAGATES" => Ok(EdgeKind::Propagates),
-        "ARG_TO_PARAM" => Ok(EdgeKind::ArgToParam),
-        "RETURNS" => Ok(EdgeKind::Returns),
-        "ERROR_TO_FUNCTION" => Ok(EdgeKind::ErrorToFunction),
-        "ERROR_TO_BLOCK" => Ok(EdgeKind::ErrorToBlock),
-        _ => Err(anyhow!("unknown edge kind")),
-    }
 }

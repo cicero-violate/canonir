@@ -49,7 +49,7 @@ to `analysis/`.
 
 ### Step 1 — Extract span and symbol collection into a shared crate
 
-**Crate:** `canon-utils/rename` already contains `BulkCollectorCallbacks` and all HIR visitor
+**Crate:** `canon-utils/project_editor` already contains `BulkCollectorCallbacks` and all HIR visitor
 logic in `src/core/rustc_session.rs`. Extract the pure collection logic into a new file or
 expose it as a callable function so `analysis_capture` can call it without depending on the
 full `rename` crate.
@@ -129,7 +129,7 @@ in-process pass for span collection. The spans and symbols will already be prese
 
 ### Step 5 — Remove span_file directory
 
-`canon-utils/rename/span_file/` is now dead. Delete it and remove any `.gitignore` entries.
+`canon-utils/project_editor/span_file/` is now dead. Delete it and remove any `.gitignore` entries.
 
 ---
 

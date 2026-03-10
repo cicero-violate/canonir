@@ -1,4 +1,4 @@
-use canon_kernel::types::Edge;
+use canon_types::Edge;
 use anyhow::{anyhow, Result};
 use std::collections::BTreeSet;
 use std::fs;
