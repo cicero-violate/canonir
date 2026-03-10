@@ -7,6 +7,7 @@ extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_session;
 extern crate serde_json;
+extern crate struct_harvester;
 extern crate upg_analysis;
 
 use rustc_driver::Callbacks;
@@ -30,10 +31,14 @@ use upg_analysis::{extract_and_write, OutputConfig};
 /// Simple deterministic FNV-1a 64-bit hasher — no randomized seed.
 struct FnvHasher(u64);
 impl FnvHasher {
-    fn new() -> Self { FnvHasher(0xcbf29ce484222325) }
+    fn new() -> Self {
+        FnvHasher(0xcbf29ce484222325)
+    }
 }
 impl std::hash::Hasher for FnvHasher {
-    fn finish(&self) -> u64 { self.0 }
+    fn finish(&self) -> u64 {
+        self.0
+    }
     fn write(&mut self, bytes: &[u8]) {
         for &b in bytes {
             self.0 ^= b as u64;
@@ -59,6 +64,20 @@ impl Callbacks for MirCaptureCallbacks {
             let config = OutputConfig { output_dir: self.output_dir.clone() };
             if let Err(err) = extract_and_write(tcx, &config) {
                 eprintln!("analysis_capture: extraction failed: {err:?}");
+            }
+            let structs_dir = self.output_dir.join("structs");
+            if let Err(err) = fs::create_dir_all(&structs_dir) {
+                eprintln!("analysis_capture: failed to create structs dir {structs_dir:?}: {err}");
+            } else {
+                let crate_name = self.crate_name.as_deref().unwrap_or("unknown");
+                let structs_out = structs_dir.join(format!("{crate_name}.ndjson"));
+                if let Err(err) = struct_harvester::run_extraction(tcx, &structs_out) {
+                    eprintln!("analysis_capture: struct harvesting failed: {err:?}");
+                }
+            }
+            let structs_out = self.output_dir.join("structs.ndjson");
+            if let Err(err) = struct_harvester::run_extraction(tcx, &structs_out) {
+                eprintln!("analysis_capture: struct harvesting failed: {err:?}");
             }
         }
         if should_analyze_crate(self.crate_name.as_deref(), &self.crate_types) {
@@ -222,9 +241,7 @@ f\\\"{{e.get('level','?'):>7}} \
             }
             std::process::exit(1);
         }
-        if should_run_analysis_engine(crate_name.as_deref(), &crate_types, &output_dir)
-            && std::env::var("ANALYSIS_ENGINE_DISABLE").ok().as_deref() != Some("1")
-        {
+        if should_run_analysis_engine(crate_name.as_deref(), &crate_types, &output_dir) && std::env::var("ANALYSIS_ENGINE_DISABLE").ok().as_deref() != Some("1") {
             if let Some(bin) = analysis_engine_bin(&output_dir) {
                 let lock_path = output_dir.join(".analysis_engine.lock");
                 if let Ok(meta) = fs::metadata(&lock_path) {
@@ -282,11 +299,7 @@ fn ensure_fresh_wrapper() {
     }
 
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest_dir
-        .ancestors()
-        .nth(2)
-        .unwrap_or(manifest_dir)
-        .to_path_buf();
+    let workspace_root = manifest_dir.ancestors().nth(2).unwrap_or(manifest_dir).to_path_buf();
     let status = Command::new("cargo")
         .arg("build")
         .arg("-p")
@@ -303,12 +316,7 @@ fn ensure_fresh_wrapper() {
                 if !args.is_empty() {
                     args.remove(0);
                 }
-                let _ = Command::new(exe)
-                    .args(args)
-                    .env("ANALYSIS_CAPTURE_SELF_UPDATE", "1")
-                    .env_remove("RUSTC_WRAPPER")
-                    .env_remove("RUSTC_WORKSPACE_WRAPPER")
-                    .status();
+                let _ = Command::new(exe).args(args).env("ANALYSIS_CAPTURE_SELF_UPDATE", "1").env_remove("RUSTC_WRAPPER").env_remove("RUSTC_WORKSPACE_WRAPPER").status();
                 std::process::exit(0);
             }
         }
@@ -317,10 +325,7 @@ fn ensure_fresh_wrapper() {
 
 fn compute_source_hash() -> String {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest_dir
-        .ancestors()
-        .nth(2)
-        .unwrap_or(manifest_dir);
+    let workspace_root = manifest_dir.ancestors().nth(2).unwrap_or(manifest_dir);
     let analysis_src = manifest_dir.join("src");
     let analysis_manifest = manifest_dir.join("Cargo.toml");
     let upg_src = workspace_root.join("canon-utils").join("upg_analysis").join("src");
