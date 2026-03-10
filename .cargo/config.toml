@@ -1,5 +1,6 @@
 [build]
 rustc-wrapper = "scripts/analysis_capture_wrapper.sh"
+rustflags = ["-Awarnings"]
 
 [env]
 # Set to "1" when you want to force-rebuild analysis_capture on the next cargo invocation.
