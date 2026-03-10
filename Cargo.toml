@@ -15,7 +15,7 @@ members = [
   "rustc_wrapper/analysis_capture",
   "canon-utils/upg_analysis",
   "canon-utils/analysis-engine",
-  "gpjson-rs",
+  "canon-utils/gpjson-rs",
   "canon-utils/struct_harvester",
 ]
 exclude = [
