@@ -11,7 +11,7 @@ members = [
   "canon-agent",
   "canon-agent-v2",
   "canon-utils/rename",
-  "canon-utils/smt-analysis-engine",
+  # "canon-utils/smt-analysis-engine",
   "canon-utils/gpjson-rs",
 ]
 exclude = [
