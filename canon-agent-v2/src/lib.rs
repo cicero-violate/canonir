@@ -41,6 +41,7 @@ pub mod template_mutation;
 pub mod templates;
 pub mod agent_loop;
 pub mod ir;
+pub mod invariants;
 pub mod llm_domains;
 pub mod llm_provider;
 pub mod parsers;

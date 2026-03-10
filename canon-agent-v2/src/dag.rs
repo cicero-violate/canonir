@@ -19,6 +19,7 @@ const TRANSITION_TABLE: [[bool; 6]; 6] = {
     t[0][1] = true;
     t[0][5] = true;
     t[1][2] = true;
+    t[1][4] = true;
     t[2][1] = true;
     t[2][3] = true;
     t[2][4] = true;

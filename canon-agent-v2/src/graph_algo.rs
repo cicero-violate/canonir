@@ -87,9 +87,8 @@ impl GraphAnalysis {
         let to_ids = |idxs: &[usize]| idxs.iter().filter_map(|i| index_to_id.get(*i)).cloned().collect::<Vec<_>>();
         let scc_ids = self.sccs.iter().map(|comp| to_ids(comp)).collect::<Vec<_>>();
         serde_json::json!(
-            { "roots" : to_ids(& self.roots), "topo_order" : to_ids(& self.topo_order),
-            "sccs" : scc_ids, "unreachable" : to_ids(& self.unreachable), "has_cycle" :
-            self.has_cycle }
+            { "roots" : to_ids(& self.roots), "sccs" : scc_ids, "unreachable" :
+            to_ids(& self.unreachable), "has_cycle" : self.has_cycle }
         )
     }
 }

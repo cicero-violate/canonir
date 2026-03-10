@@ -41,7 +41,7 @@ pub struct PlannerController {
     stateful: bool,
     reward_context: Option<PlannerControllerRewardContext>,
 }
-const MAX_HISTORY: usize = 5;
+const MAX_HISTORY: usize = 2;
 impl PlannerController {
     pub fn new(endpoint: &CapabilityConfigLlmEndpoint, goal: String) -> Self {
         Self { endpoint_id: endpoint.id.clone(), url: endpoint.url.clone(), role_schema: endpoint.role_markdown.clone(), goal, history: Vec::new(), stateful: endpoint.stateful, reward_context: None }
@@ -71,11 +71,11 @@ impl PlannerController {
                     "status" : n.status, "node_type" : n.node_type,
                     "required_capabilities" : n.required_capabilities, "priority" : n
                     .priority, "budget" : n.budget, "reasoning_trace" : n
-                    .reasoning_trace, "result" : n.result, }
+                    .reasoning_trace, "error" : n.error, }
                 )
             })
             .collect();
-        let history_tail = self.history.iter().rev().take(6).cloned().collect::<Vec<_>>();
+        let history_tail = self.history.iter().rev().take(2).cloned().collect::<Vec<_>>();
         let reward_section = match &self.reward_context {
             None => String::new(),
             Some(r) => {
@@ -88,7 +88,6 @@ impl PlannerController {
 Prior goal: {}\n\
 Prior graph had {} nodes, {} edges.\n\
 Capabilities used: {}\n\
-Node summaries:\n{}\n\
 Consider reusing this structure as a starting point, adapting it to the current goal.\n",
                             seed.similarity_score,
                             seed.reward,
@@ -96,7 +95,6 @@ Consider reusing this structure as a starting point, adapting it to the current 
                             seed.node_count,
                             seed.edge_count,
                             seed.capability_set.join(", "),
-                            seed.node_summaries.join("\n"),
                         )
                     }
                 };
@@ -274,7 +272,7 @@ pub(crate) fn planner_controller_validate_planner_update(
     })?;
     update.rewrite_nodes.iter().try_for_each(|spec| {
         let status = status_by_id.get(&spec.id).copied().ok_or_else(|| anyhow::anyhow!("rewrite references unknown node"))?;
-        planner_controller_ensure(matches!(status, NodeStatus::Pending), "rewrite node must be pending")?;
+        planner_controller_ensure(matches!(status, NodeStatus::Pending | NodeStatus::Failed), "rewrite node must be pending or failed")?;
         planner_controller_ensure(!spec.new_capabilities.iter().any(|c| matches!(c, PipelineCapability::Unknown)), "rewrite node has unknown capability")?;
         let caps: std::collections::HashSet<_> = spec.new_capabilities.iter().copied().collect();
         capability_model_assert_class_disjoint(&caps).map_err(|e| anyhow::anyhow!(e))

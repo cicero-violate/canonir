@@ -92,7 +92,7 @@ impl PipelineCapability {
             PipelineCapability::FileWrite => CapabilityMode::Mutate,
             PipelineCapability::Bash => CapabilityMode::Mutate,
             PipelineCapability::CargoBuild => CapabilityMode::Mutate,
-            PipelineCapability::CargoCheck => CapabilityMode::Mutate,
+            PipelineCapability::CargoCheck => CapabilityMode::Observe,
             PipelineCapability::CreateNode => CapabilityMode::Mutate,
             PipelineCapability::AddEdge => CapabilityMode::Mutate,
             PipelineCapability::RefineNode => CapabilityMode::Mutate,

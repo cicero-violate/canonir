@@ -63,6 +63,7 @@ pub(crate) fn collect_execution_context(graph: &dag::ExecutionGraph, node_id: &s
         .collect::<Vec<_>>()
         .join("\n");
     let failure_summary = if failure_summary.is_empty() { None } else { Some(failure_summary) };
+    let mut seen_causal: std::collections::HashSet<String> = std::collections::HashSet::new();
     graph
         .nodes
         .iter()
@@ -74,7 +75,23 @@ pub(crate) fn collect_execution_context(graph: &dag::ExecutionGraph, node_id: &s
                 .iter()
                 .filter_map(|dep_id| by_id.get(dep_id.as_str()))
                 .filter(|dep| dep.status == dag::NodeStatus::Completed)
-                .filter_map(|dep| dep.result.as_deref())
+                .filter_map(|dep| {
+                    if seen_causal.insert(dep.id.clone()) {
+                        dep.result.as_deref()
+                    } else {
+                        None
+                    }
+                })
+                .map(|r| {
+                    let is_raw_io = r.starts_with("[read_file") || r.starts_with("[read_command") || r.starts_with("list_dir");
+                    if is_raw_io {
+                        r.lines().next().unwrap_or(r)
+                    } else if r.len() > 600 {
+                        &r[..600]
+                    } else {
+                        r
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join("\n---\n");
             let causal_summary = if causal_summary.is_empty() { None } else { Some(causal_summary) };
@@ -85,10 +102,14 @@ pub(crate) fn collect_execution_context(graph: &dag::ExecutionGraph, node_id: &s
                 deps: n.deps.clone(),
                 required_capabilities: n.required_capabilities.clone(),
                 status: n.status,
-                result: n.result.clone(),
+                result: n.result.as_deref().map(|r| {
+                    let is_raw_io = r.starts_with("[read_file") || r.starts_with("[read_command") || r.starts_with("list_dir");
+                    let cap = if is_raw_io { 400 } else { 800 };
+                    if r.len() > cap { format!("{}…", &r[..cap]) } else { r.to_string() }
+                }),
                 error: n.error.clone(),
                 causal_summary,
-                failure_summary: failure_summary.clone(),
+                failure_summary: failure_summary.as_deref().map(|s| if s.len() > 400 { format!("{}…", &s[..400]) } else { s.to_string() }),
             }
         })
         .collect()

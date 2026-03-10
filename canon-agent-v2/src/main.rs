@@ -28,6 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .join("test_projects/test_rust_projects/emit/repomap");
             let orchestration_bin = cwd_root.join("target/debug/orchestration");
             let max_ticks: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let resume = args.iter().any(|arg| arg == "--resume");
             let addr = "127.0.0.1:9100".parse()?;
             let cap_config = canon_agent_v2::pipelines_core_4::capability::config::CapabilityConfig::snapshot_store_load()?;
             let bridge = ws_server::spawn(addr, cap_config.response_timeout_secs);
@@ -62,6 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let loop_config = canon_agent_v2::runtime::agent_loop::AgentLoopConfig {
                 max_ticks,
+                resume,
                 ..Default::default()
             };
             canon_agent_v2::runtime::agent_loop::run_agent_loop(

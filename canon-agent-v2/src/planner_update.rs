@@ -45,11 +45,16 @@ pub fn apply_graph_patch(graph: &mut ExecutionGraph, update: GraphPatch) -> Resu
     }
     for spec in update.rewrite_nodes {
         if let Some(node) = graph.get_node_mut(&spec.id) {
-            if node.status == NodeStatus::Pending {
+            if matches!(node.status, NodeStatus::Pending | NodeStatus::Failed) {
                 let caps: HashSet<_> = spec.new_capabilities.iter().copied().collect();
                 capability_model_assert_class_disjoint(&caps).map_err(|e| anyhow::anyhow!(e))?;
                 node.description = spec.new_description;
                 node.required_capabilities = spec.new_capabilities;
+                node.status = NodeStatus::Pending;
+                node.error = None;
+                node.result = None;
+                node.readonly_fail_count = 0;
+                node.repair_attempts = 0;
             }
         }
     }

@@ -54,9 +54,9 @@ pub fn summarize_execution_deltas(deltas: &[ExecutionDelta]) -> Vec<serde_json::
             ExecutionDelta::ListDir { path } => {
                 serde_json::json!({ "type" : "list_dir", "path" : path })
             }
-            ExecutionDelta::ReadCommand { command, args } => {
+            ExecutionDelta::ReadCommand { command, args, path } => {
                 serde_json::json!(
-                    { "type" : "read_command", "command" : command, "args" : args }
+                    { "type" : "read_command", "command" : command, "args" : args, "path" : path }
                 )
             }
             ExecutionDelta::WriteFile { path, .. } => {
@@ -124,7 +124,7 @@ fn format_delta_label(delta: &ExecutionDelta) -> String {
     match delta {
         ExecutionDelta::ReadFile { path } => format!("read_file {}", path),
         ExecutionDelta::ListDir { path } => format!("list_dir {}", path),
-        ExecutionDelta::ReadCommand { command, args } => {
+        ExecutionDelta::ReadCommand { command, args, .. } => {
             format!("read_command {} {}", command, args.join(" "))
         }
         ExecutionDelta::WriteFile { path, .. } => format!("write_file {}", path),

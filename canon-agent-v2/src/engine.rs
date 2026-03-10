@@ -4,6 +4,7 @@ use super::config::CapabilityConfigCapabilityPolicy;
 use super::console;
 use super::dag::NodeAuthority;
 use super::dag::{ContextSnapshotNode, ExecutionGraph, ExecutionNode, NodeStatus};
+use super::invariants;
 pub use super::endpoint_worker::{llm_worker_new_tabs, TabManagerHandle};
 use super::llm::{llm_client_call_agent_json_with_retry_allow_mismatch, llm_client_call_agent_raw_with_retry_allow_mismatch};
 use super::ExecutionDelta;
@@ -84,9 +85,9 @@ enum ModuleDispatchMode {
     Verify,
     Readonly,
 }
-const MUTATE_SCHEMA: &str = "Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"results\": [\n    { \"id\": \"t1\", \"deltas\": [ { \"type\": \"write_file\", \"path\": \"x\", \"content\": \"...\" } ], \"rationale\": \"string\" }\n  ]\n}\nAllowed delta types:\n- read_file { path }\n- list_dir { path }\n- read_command { command, args }\n- write_file { path, content }\n- replace_text { path, find, replace }\n- delete_file { path }\n";
+const MUTATE_SCHEMA: &str = "You are an executor, not a planner. Do NOT return create_nodes, add_edges, or any planner schema. Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"results\": [\n    { \"id\": \"t1\", \"deltas\": [ { \"type\": \"write_file\", \"path\": \"x\", \"content\": \"...\" } ], \"rationale\": \"string\" }\n  ]\n}\nAllowed delta types:\n- read_file { path }\n- list_dir { path }\n- read_command { command, args, path } -- path is the working directory for the command\n- write_file { path, content }\n- replace_text { path, find, replace }\n- delete_file { path }\n";
 const VERIFY_SCHEMA: &str = "Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"updates\": [\n    { \"id\": \"t1\", \"status\": \"completed\", \"error\": null }\n  ]\n}\nAllowed status values: pending, ready, running, completed, failed, blocked.\n";
-const READONLY_SCHEMA: &str = "Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"results\": [\n    { \"id\": \"t1\", \"deltas\": [ { \"type\": \"read_file\", \"path\": \"x\" } ], \"rationale\": \"string\" }\n  ]\n}\nAllowed delta types: read_file, list_dir, read_command.\n";
+const READONLY_SCHEMA: &str = "You are an executor, not a planner. Do NOT return create_nodes, add_edges, or any planner schema. Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"results\": [\n    { \"id\": \"t1\", \"deltas\": [ { \"type\": \"read_file\", \"path\": \"x\" } ], \"rationale\": \"string\" }\n  ]\n}\nAllowed delta types: read_file { path }, list_dir { path }, read_command { command, args, path } -- path is the working directory for the command.\n";
 struct ModuleModeConfig {
     phase: &'static str,
     schema: &'static str,
@@ -111,9 +112,11 @@ const PARSE_FNS: [ModuleParseFn; 3] = [module_parse_mutate, module_parse_verify,
 pub(crate) fn module_repair_node(graph: &mut ExecutionGraph, node_id: &str, policy: &CapabilityConfigCapabilityPolicy, repair_radius: usize, max_repairs: u32) -> Option<String> {
     let node = graph.get_node_mut(node_id)?;
     if node.repair_attempts >= max_repairs {
+        eprintln!("[logs] repair node={} attempts={} max_repairs={} action=exhausted", node_id, node.repair_attempts, max_repairs);
         return None;
     }
     node.repair_attempts += 1;
+    eprintln!("[logs] repair node={} attempt={} max_repairs={}", node_id, node.repair_attempts, max_repairs);
     drop(node);
     let rules: &[fn(&mut ExecutionGraph, &str, &CapabilityConfigCapabilityPolicy, usize) -> Option<&'static str>] =
         &[module_rule_retry, module_rule_capability_downgrade, module_rule_dependency_rewire, module_rule_node_split];
@@ -122,18 +125,33 @@ pub(crate) fn module_repair_node(graph: &mut ExecutionGraph, node_id: &str, poli
             return Some(kind.to_string());
         }
     }
+    // I13: d >= f && delta == 0 => Failed
+    invariants::must_fail_node_if_repair_exhausted(graph, node_id, max_repairs);
     None
 }
 pub(crate) fn module_process_call_result(
     node_id: String, call_result: Result<ModuleNodeCallResult>, graph: &mut ExecutionGraph, cwd: &[PathBuf], max_output_lines: usize, log_root: &Path, iter: u64,
     policy: &CapabilityConfigCapabilityPolicy, repair_radius: usize, max_repairs: u32,
 ) -> Result<ModuleNodeProcessReport> {
+    // I5: terminal nodes cannot execute again
+    if invariants::must_terminal_lock(graph, &node_id) {
+        return Ok(ModuleNodeProcessReport { node_id, had_error: false, repair_kind: None, repair_succeeded: false });
+    }
     let outcome = call_result.and_then(|r| module_apply_node_result(r, graph, cwd, max_output_lines, log_root, iter, policy));
     if let Err(e) = outcome {
+        eprintln!("[node_error] iter={} node={} error={}", iter, node_id, e);
+        // I4/I3: parse failure increments readonly count; exhaust => fail
+        let (observe_only, exhausted) =
+            invariants::must_increment_readonly_fail_on_parse(graph, &node_id, policy.max_node_retries);
+        if observe_only && exhausted {
+            invariants::must_fail_node_with_error(graph, &node_id, &e.to_string());
+            return Ok(ModuleNodeProcessReport { node_id, had_error: true, repair_kind: Some("readonly_budget_exhausted".to_string()), repair_succeeded: false });
+        }
         if let Some(kind) = module_repair_node(graph, &node_id, policy, repair_radius, max_repairs) {
             return Ok(ModuleNodeProcessReport { node_id, had_error: true, repair_kind: Some(kind), repair_succeeded: true });
         }
         let _ = graph.update_status(&node_id, NodeStatus::Failed);
+        invariants::must_terminal_nonzero(graph);
         if let Some(n) = graph.get_node_mut(&node_id) {
             n.error = Some(e.to_string());
         }
@@ -329,7 +347,17 @@ async fn module_call_mode(
         let _ = std::fs::write(log_dir.join((config.log_name)(iter)), pretty);
     }
     let parse_fn = PARSE_FNS[mode as usize];
-    parse_fn(payload, node, iter)
+    let result = parse_fn(payload.clone(), node, iter);
+    if result.is_err() {
+        eprintln!(
+            "[parse_error] iter={} node={} mode={} payload={}",
+            iter,
+            node.id,
+            config.phase,
+            serde_json::to_string(&payload).unwrap_or_default().chars().take(400).collect::<String>()
+        );
+    }
+    result
 }
 async fn module_llm_call_with_retry(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, schema: &str, input: &Value, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle,
@@ -343,9 +371,26 @@ fn module_apply_mutate_output(
     node_id: String, output: ModuleExecOutput, graph: &mut ExecutionGraph, roots: &[PathBuf], max_output_lines: usize, _log_dir: &Path, iter: u64, policy: &CapabilityConfigCapabilityPolicy,
 ) -> Result<()> {
     if module_mutate_is_blocked(&node_id, graph, policy) {
-        eprintln!(r#"[capability] {{"iter":{},"phase":"executor","event":"render_blocked","node":"{}"}}"#, iter, node_id);
-        let _ = graph.update_status(&node_id, NodeStatus::Ready);
+        let failed = invariants::must_render_blocked_fail_or_ready(
+            graph,
+            &node_id,
+            policy.max_node_retries,
+            "render blocked: repair budget exhausted",
+        );
+        if failed {
+            eprintln!(r#"[capability] {{"iter":{},"phase":"executor","event":"render_blocked_failed","node":"{}"}}"#, iter, node_id);
+        } else {
+            eprintln!(r#"[capability] {{"iter":{},"phase":"executor","event":"render_blocked","node":"{}"}}"#, iter, node_id);
+        }
         return Ok(());
+    }
+    // increment repair_attempts on every blocked pass so budget exhaustion is reachable
+    if let Some(n) = graph.get_node_mut(&node_id) {
+        n.repair_attempts = n.repair_attempts.saturating_add(1);
+        eprintln!(
+            "[node_blocked] iter={} node={} repair_attempts={} budget={:?}",
+            iter, node_id, n.repair_attempts, n.budget
+        );
     }
     for mut result in output.results {
         module_coerce_id(&mut result.id, &node_id);
@@ -476,21 +521,68 @@ fn module_apply_readonly_result(result: ModuleExecNodeResult, node_id: &str, gra
                 NodeStatus::Ready
             }
         })
-        .unwrap_or(NodeStatus::Completed);
+        .unwrap_or_else(|| {
+            let repair_exhausted = graph
+                .nodes
+                .iter()
+                .find(|n| n.id == node_id)
+                .map(|n| n.repair_attempts >= n.budget.unwrap_or(max_node_retries))
+                .unwrap_or(false);
+            if repair_exhausted {
+                if let Some(n) = graph.get_node_mut(node_id) {
+                    if n.error.is_some() {
+                        return NodeStatus::Failed;
+                    }
+                }
+            }
+            NodeStatus::Completed
+        });
     let _ = graph.update_status(node_id, next_status);
     if next_status == NodeStatus::Completed {
         if let Some(n) = graph.get_node_mut(node_id) {
             n.completed_iter = Some(iter);
         }
     }
+    eprintln!(
+        "[node_result] iter={} node={} status={:?} error={} result_len={}",
+        iter,
+        node_id,
+        next_status,
+        graph.nodes.iter().find(|n| n.id == node_id).and_then(|n| n.error.as_deref()).unwrap_or("none"),
+        graph.nodes.iter().find(|n| n.id == node_id).and_then(|n| n.result.as_deref()).map(|r| r.len()).unwrap_or(0),
+    );
 }
 fn module_coerce_id(result_id: &mut String, canonical: &str) {
     result_id.clear();
     result_id.push_str(canonical);
 }
 fn module_parse_exec_output(payload: &Value, default_id: &str) -> Result<ModuleExecOutput> {
+    // Reject planner-shaped responses before any deserialization attempt.
+    if payload.get("create_nodes").is_some() || payload.get("add_edges").is_some() {
+        return Err(anyhow::anyhow!(
+            "executor output did not match schema: received planner response (create_nodes/add_edges)"
+        ));
+    }
     if let Ok(v) = serde_json::from_value::<ModuleExecOutput>(payload.clone()) {
         return Ok(v);
+    }
+    if let Some(raw) = payload.as_str() {
+        if let Some(json_text) = extract_json_from_text(raw) {
+            if let Ok(val) = serde_json::from_str::<Value>(&json_text) {
+                if let Ok(v) = serde_json::from_value::<ModuleExecOutput>(val.clone()) {
+                    return Ok(v);
+                }
+                if let Some(deltas) = val.get("deltas") {
+                    let deltas: Vec<ExecutionDelta> =
+                        serde_json::from_value(deltas.clone()).context("executor deltas field invalid")?;
+                    let rationale = val.get("rationale").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let id = val.get("id").and_then(|v| v.as_str()).unwrap_or(default_id).to_string();
+                    return Ok(ModuleExecOutput {
+                        results: vec![ModuleExecNodeResult { id, deltas, rationale }],
+                    });
+                }
+            }
+        }
     }
     if let Some(deltas) = payload.get("deltas") {
         let deltas: Vec<ExecutionDelta> = serde_json::from_value(deltas.clone()).context("executor deltas field invalid")?;
@@ -499,4 +591,25 @@ fn module_parse_exec_output(payload: &Value, default_id: &str) -> Result<ModuleE
         return Ok(ModuleExecOutput { results: vec![ModuleExecNodeResult { id, deltas, rationale }] });
     }
     Err(anyhow::anyhow!("executor output did not match schema"))
+}
+
+fn extract_json_from_text(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let mut body = trimmed;
+    if trimmed.starts_with("```") {
+        // strip the first fence line and trailing fence
+        if let Some(rest) = trimmed.splitn(2, '\n').nth(1) {
+            body = rest;
+            if let Some(end) = body.rfind("```") {
+                body = &body[..end];
+            }
+        }
+    }
+    let body = body.trim();
+    if let (Some(start), Some(end)) = (body.find('{'), body.rfind('}')) {
+        if end > start {
+            return Some(body[start..=end].to_string());
+        }
+    }
+    None
 }

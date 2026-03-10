@@ -40,8 +40,9 @@ pub use crate::capability_types::{
     capability_model_assert_class_disjoint, capability_model_dominant_class,
     CapabilityMode, PipelineCapability,
 };
-use crate::ir::SystemState;
+use crate::ir::{IntentStatePersist, SystemState};
 use crate::layout::FileTopology;
+use crate::planner_state::{PlannerStage, PlannerStagePersist};
 use crate::pipelines_core_4::{Pipeline, PipelineContext, PipelineOutcome};
 use crate::ws_server::WsBridge;
 use anyhow::Result;
@@ -60,7 +61,7 @@ pub const TEMPLATE_ROOT: &str = "/workspace/ai_sandbox/canon/agent_logs/template
 pub enum ExecutionDelta {
     ReadFile { path: String },
     ListDir { path: String },
-    ReadCommand { command: String, args: Vec<String> },
+    ReadCommand { command: String, args: Vec<String>, #[serde(default)] path: Option<String> },
     WriteFile { path: String, content: String },
     ReplaceText { path: String, find: String, replace: String },
     DeleteFile { path: String },
@@ -130,7 +131,27 @@ impl CapabilityPipeline {
             anyhow::bail!("capability config has no llm endpoints");
         }
         engine::module_init_io_workers(&self.bridge, &self.config, &self.tabs).await;
-        let goal = CapabilityConfigGoalSpec::from_file(&self.config.goal_file)?;
+        let mut goal = CapabilityConfigGoalSpec::from_file(&self.config.goal_file)?;
+        let intent_path = Path::new("/workspace/ai_sandbox/canon/kernel/state/intent_state.json");
+        if let Some(intent) = IntentStatePersist::load(intent_path) {
+            if !intent.goal.trim().is_empty() {
+                goal.raw = intent.goal;
+            } else if !goal.raw.trim().is_empty() {
+                let updated = IntentStatePersist {
+                    goal: goal.raw.clone(),
+                    intent_radius: intent.intent_radius,
+                    execution_budget: intent.execution_budget,
+                };
+                updated.save(intent_path);
+            }
+        } else if !goal.raw.trim().is_empty() {
+            let updated = IntentStatePersist {
+                goal: goal.raw.clone(),
+                intent_radius: 0,
+                execution_budget: 0,
+            };
+            updated.save(intent_path);
+        }
         if let Ok(pretty) = serde_json::to_string_pretty(&goal) {
             let _ = std::fs::write(Self::log_path("goal_spec.json"), pretty);
         }
@@ -304,16 +325,23 @@ impl CapabilityPipeline {
             })
         };
         let mut cache_hit = false;
+        let mut resume_loaded = false;
         let mut graph = if self.config.enable_resume {
             let snap = state_snapshot::snapshot_store_load(
                 Path::new(&self.config.snapshot_file),
             );
-            if let Some(snapshot) = snap {
-                telemetry::telemetry_set_resume_iteration(snapshot.iteration);
-                let mut g = snapshot.graph;
-                g.reset_for_execution();
-                dag::task_graph_resolve_ready(&mut g);
-                g
+           if let Some(snapshot) = snap {
+               telemetry::telemetry_set_resume_iteration(snapshot.iteration);
+               let mut g = snapshot.graph;
+               g.rebuild_index();
+               dag::task_graph_resolve_ready(&mut g);
+               resume_loaded = true;
+               for node in &mut g.nodes {
+                   if node.status != dag::NodeStatus::Completed {
+                       node.completed_iter = None;
+                   }
+               }
+              g
             } else {
                 planner_generate().await?
             }
@@ -340,6 +368,10 @@ impl CapabilityPipeline {
         };
         graph_analysis_emit_planned_graph(&graph, Path::new(LOG_ROOT), 0);
         graph_analysis_run_graph_algorithms(&graph, Path::new(LOG_ROOT), 0);
+        let _ = std::fs::read_to_string(Path::new(LOG_ROOT).join("graph_algorithms.json"));
+        if !self.config.enable_resume || !resume_loaded {
+            let _ = std::fs::remove_file(Path::new(LOG_ROOT).join("planner_stage.json"));
+        }
         if cache_hit && !self.config.planner_refine_on_cache {
             let mut exec_metrics = Default::default();
             let template_hash = store.hash_for(&template_name);
@@ -485,6 +517,9 @@ impl CapabilityPipeline {
                     .join(format!("metrics_{}.json", template_hash)),
                 &snapshot,
             );
+            if let Ok(text) = std::fs::read_to_string(Path::new(LOG_ROOT).join("metrics.json")) {
+                eprintln!("[logs] capability_metrics {}", text.trim());
+            }
             Ok(reward)
         } else {
             let planner_endpoint = self.config.planner_endpoint()?;
@@ -519,7 +554,14 @@ impl CapabilityPipeline {
                         .map(|g| {
                             g.nodes
                                 .iter()
-                                .map(|n| format!("{}: {}", n.id, n.description))
+                                .map(|n| {
+                                    let desc = if n.description.len() > 60 {
+                                        format!("{}…", &n.description[..60])
+                                    } else {
+                                        n.description.clone()
+                                    };
+                                    format!("{}: {}", n.id, desc)
+                                })
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
@@ -541,7 +583,12 @@ impl CapabilityPipeline {
                 bootstrap_seed,
             };
             planner_session.set_reward_context(reward_ctx);
-            scheduler::run_planner_loop(
+            let planner_stage_path = Path::new(LOG_ROOT).join("planner_stage.json");
+            let start_stage = PlannerStagePersist::load(&planner_stage_path)
+                .map(|persist| persist.stage)
+                .unwrap_or(PlannerStage::ReuseTemplate);
+            let prev_reward = store.stored_reward(&template_name);
+            let reward = scheduler::run_planner_loop(
                     &mut planner_session,
                     &mut graph,
                     &self.bridge,
@@ -562,8 +609,39 @@ impl CapabilityPipeline {
                     max_output_lines,
                     &mut store,
                     &template_name,
+                    start_stage,
+                    Some(planner_stage_path.as_path()),
+                    ctx.tick,
                 )
-                .await
+                .await?;
+            let completion_velocity = if reward > prev_reward { 1.0 } else { 0.0 };
+            let runtime = telemetry::RuntimeTelemetry {
+                queue_depth: telemetry::telemetry_pending_requests(),
+                progress_fraction: telemetry::telemetry_progress_fraction(&graph),
+                completion_velocity,
+                policy_run_planner: true,
+                ..Default::default()
+            };
+            let snapshot = telemetry::TelemetryFrame {
+                planner: Default::default(),
+                exec: Default::default(),
+                runtime,
+                reward,
+                template_hash: Some(store.hash_for(&template_name)),
+                goal: Some(template_name.clone()),
+            };
+            telemetry::telemetry_record_snapshot(
+                &Path::new(LOG_ROOT).join("metrics.json"),
+                &snapshot,
+            );
+            telemetry::telemetry_record_snapshot(
+                &Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"),
+                &snapshot,
+            );
+            if let Ok(text) = std::fs::read_to_string(Path::new(LOG_ROOT).join("metrics.json")) {
+                eprintln!("[logs] capability_metrics {}", text.trim());
+            }
+            Ok(reward)
         }
     }
 }
@@ -609,6 +687,7 @@ impl Pipeline for CapabilityPipeline {
                     reward,
                     summary: "capability completed".into(),
                     advanced: true,
+                    stage: crate::ir::PipelineStage::Act,
                 })
             }
             Err(e) => {
@@ -616,6 +695,7 @@ impl Pipeline for CapabilityPipeline {
                     reward: -1.0,
                     summary: format!("capability error: {e}"),
                     advanced: false,
+                    stage: crate::ir::PipelineStage::Observe,
                 })
             }
         }

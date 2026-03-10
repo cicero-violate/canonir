@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Word(String);
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,4 +64,58 @@ pub enum PipelineStage {
     Decide,
     Plan,
     Act,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KernelStatePersist {
+    pub tick: u64,
+    pub phase: String,
+    pub last_event_id: u64,
+    pub invariant_hash: String,
+    pub graph_version: u64,
+}
+
+impl KernelStatePersist {
+    pub fn load(path: &Path) -> Option<Self> {
+        let text = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    pub fn save(&self, path: &Path) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let tmp = path.with_extension("tmp");
+        if let Ok(payload) = serde_json::to_string_pretty(self) {
+            if std::fs::write(&tmp, payload).is_ok() {
+                let _ = std::fs::rename(&tmp, path);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntentStatePersist {
+    pub goal: String,
+    pub intent_radius: u64,
+    pub execution_budget: u64,
+}
+
+impl IntentStatePersist {
+    pub fn load(path: &Path) -> Option<Self> {
+        let text = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    pub fn save(&self, path: &Path) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let tmp = path.with_extension("tmp");
+        if let Ok(payload) = serde_json::to_string_pretty(self) {
+            if std::fs::write(&tmp, payload).is_ok() {
+                let _ = std::fs::rename(&tmp, path);
+            }
+        }
+    }
 }

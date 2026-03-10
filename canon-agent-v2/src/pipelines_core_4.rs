@@ -1,6 +1,6 @@
 //! Pluggable pipeline trait for the canon-agent runner.
 pub use crate::capability;
-use crate::ir::SystemState;
+use crate::ir::{PipelineStage, SystemState};
 use crate::layout::FileTopology;
 use std::path::PathBuf;
 /// Everything a pipeline tick needs to read and act on the world.
@@ -25,6 +25,7 @@ pub struct PipelineOutcome {
     pub reward: f64,
     pub summary: String,
     pub advanced: bool,
+    pub stage: PipelineStage,
 }
 /// A stateless, async pipeline that runs one agent tick.
 #[async_trait::async_trait]

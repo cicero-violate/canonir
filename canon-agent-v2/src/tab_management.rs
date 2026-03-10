@@ -96,5 +96,5 @@ pub fn tab_manager_now_ms() -> u128 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
 }
 pub fn tab_manager_log_llm(message: String) {
-    eprintln!("{}", console::console_ui_llm(&format!("{} {}", tab_manager_now_ms(), message)));
+    let _ = message;
 }

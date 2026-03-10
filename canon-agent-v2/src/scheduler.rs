@@ -14,8 +14,9 @@ use super::gpu_scheduler::driver::GpuScheduler;
 use super::graph_algo::{compute_graph_features, graph_analysis_compute_graph_signals, graph_analysis_edge_count, graph_analysis_normalize_features, hash_graph_structure, score_node_utility};
 use super::graph_maintenance::{self, GraphRepairMaintenanceCtx};
 use super::graph_runtime::collect_execution_context;
+use super::invariants;
 use super::planner_session::{planner_controller_auto_repair_planner_update, planner_controller_validate_planner_update, PlannerController};
-use super::planner_state::{PlannerStage, PlannerTransition, PLANNER_TRANSITIONS};
+use super::planner_state::{PlannerStage, PlannerStagePersist, PlannerTransition, PLANNER_TRANSITIONS};
 use super::planner_update::{apply_graph_patch, GraphPatch, PlannerUpdateEdgeSpec};
 use super::policy;
 use super::policy_engine;
@@ -78,6 +79,20 @@ pub(crate) async fn run_execution_loop(
     let mut failures = Vec::new();
     let mut repair_stats = RepairAttemptStats::default();
     for iter in 1..=max_iterations {
+        let progress_before = graph
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.status, dag::NodeStatus::Completed | dag::NodeStatus::Failed))
+            .count();
+        let completed_count = graph.nodes.iter().filter(|n| n.status == dag::NodeStatus::Completed).count();
+        let failed_count = graph.nodes.iter().filter(|n| n.status == dag::NodeStatus::Failed).count();
+        eprintln!(
+            "[logs] execution iter={} completed={} failed={} total={}",
+            iter,
+            completed_count,
+            failed_count,
+            graph.nodes.len()
+        );
         exec_metrics.last_snapshot_written = false;
         repair_stats = RepairAttemptStats::default();
         let mut ready_ids: Vec<String> = Vec::new();
@@ -114,7 +129,6 @@ pub(crate) async fn run_execution_loop(
                     );
                     let status_path = Path::new(LOG_ROOT).join(format!("iter_{:03}_status.json", iter));
                     let _ = std::fs::write(status_path, serde_json::to_string_pretty(&summary).unwrap_or_default());
-                    eprintln!("{}", console::console_ui_info("capability", &summary.to_string()));
                     let completed_count = graph.nodes.iter().filter(|n| n.status == dag::NodeStatus::Completed).count();
                     let failed_count = graph.nodes.iter().filter(|n| n.status == dag::NodeStatus::Failed).count();
                     eprintln!("{}", console::console_ui_phase("tick", &format!("iter={} ready={} completed={}/{} failed={}", iter, ready_ids.len(), completed_count, graph.nodes.len(), failed_count)));
@@ -125,6 +139,10 @@ pub(crate) async fn run_execution_loop(
                     } else {
                         SchedulerEvent::Retry
                     };
+                    if matches!(event, SchedulerEvent::Blocked) {
+                        // I9: scheduler only blocks when no runnable nodes exist
+                        invariants::must_blocked_has_no_ready(graph);
+                    }
                     state = PIPELINE_TRANSITIONS[state as usize][event as usize];
                     match (state, event) {
                         (SchedulerState::Stop, _) => return Ok((iter, failures)),
@@ -151,6 +169,11 @@ pub(crate) async fn run_execution_loop(
                     next_event = ExecutionEvent::Continue;
                 }
                 ExecutionStep::Dispatch => {
+                    eprintln!(
+                        "[logs] dispatch iter={} ready={}",
+                        iter,
+                        ready_ids.len()
+                    );
                     let mut scored = scheduler_scoring::scheduler_scoring_score_ready_nodes(&ready_ids, graph, &features, cost_table, execution_preference, config);
                     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
                     ready_ids = scored.into_iter().map(|(id, _)| id).collect();
@@ -219,8 +242,24 @@ pub(crate) async fn run_execution_loop(
                         let avg = (total_ms / count as u128) as u64;
                         exec_metrics.avg_latency_ms = telemetry::telemetry_update_avg_u64(exec_metrics.avg_latency_ms, avg);
                     }
+                    eprintln!(
+                        "[logs] apply_results iter={} applied={} avg_latency_ms={}",
+                        iter,
+                        count,
+                        exec_metrics.avg_latency_ms
+                    );
                 }
                 ExecutionStep::MaintainGraph => {
+                    let prev_terminal_count = graph
+                        .nodes
+                        .iter()
+                        .filter(|n| matches!(n.status, dag::NodeStatus::Completed | dag::NodeStatus::Failed))
+                        .count();
+                    eprintln!(
+                        "[logs] graph_maintenance iter={} terminal_before={}",
+                        iter,
+                        prev_terminal_count
+                    );
                     graph_maintenance::repair_graph(GraphRepairMaintenanceCtx {
                         graph,
                         log_dir: Path::new(LOG_ROOT),
@@ -235,6 +274,29 @@ pub(crate) async fn run_execution_loop(
                         recovery_retry_rate_threshold: config.recovery_retry_rate_threshold,
                         recovery_failed_fraction_threshold: config.recovery_failed_fraction_threshold,
                     })?;
+                    let next_terminal_count = graph
+                        .nodes
+                        .iter()
+                        .filter(|n| matches!(n.status, dag::NodeStatus::Completed | dag::NodeStatus::Failed))
+                        .count();
+                    eprintln!(
+                        "[logs] graph_maintenance iter={} terminal_after={}",
+                        iter,
+                        next_terminal_count
+                    );
+                    // I10: retry only if something changed
+                    next_event = if invariants::must_retry_only_if_terminal_progress(prev_terminal_count, next_terminal_count) {
+                        ExecutionEvent::Continue
+                    } else {
+                        ExecutionEvent::Blocked
+                    };
+                    // I15: progress_{t+1} >= progress_t
+                    let progress_after = graph
+                        .nodes
+                        .iter()
+                        .filter(|n| matches!(n.status, dag::NodeStatus::Completed | dag::NodeStatus::Failed))
+                        .count();
+                    invariants::must_progress_monotonic(progress_before, progress_after);
                     if config.enable_resume && config.snapshot_interval_iters > 0 && iter % config.snapshot_interval_iters == 0 {
                         let snapshot = state_snapshot::PipelineSnapshot { graph: graph.clone(), iteration: iter };
                         state_snapshot::snapshot_store_save(Path::new(&config.snapshot_file), &snapshot);
@@ -254,9 +316,29 @@ pub(crate) async fn run_execution_loop(
     anyhow::bail!("iteration limit exceeded")
 }
 pub(crate) async fn run_planner_loop(
-    planner: &mut PlannerController, graph: &mut dag::ExecutionGraph, bridge: &WsBridge, config: &CapabilityConfig, role_rr: &tokio::sync::Mutex<HashMap<String, usize>>, tabs: &TabManagerHandle,
-    cwd: &[PathBuf], workspace_listing: &str, endpoint: &config::CapabilityConfigLlmEndpoint, exec_role: &str, policy: &config::CapabilityConfigCapabilityPolicy, context_radius: usize,
-    max_concurrency: usize, max_iterations: u64, tab_cooldown_ms: u64, retry_count: u32, retry_delay: u64, max_output_lines: usize, store: &mut GraphTemplateStore, template_name: &str,
+    planner: &mut PlannerController,
+    graph: &mut dag::ExecutionGraph,
+    bridge: &WsBridge,
+    config: &CapabilityConfig,
+    role_rr: &tokio::sync::Mutex<HashMap<String, usize>>,
+    tabs: &TabManagerHandle,
+    cwd: &[PathBuf],
+    workspace_listing: &str,
+    endpoint: &config::CapabilityConfigLlmEndpoint,
+    exec_role: &str,
+    policy: &config::CapabilityConfigCapabilityPolicy,
+    context_radius: usize,
+    max_concurrency: usize,
+    max_iterations: u64,
+    tab_cooldown_ms: u64,
+    retry_count: u32,
+    retry_delay: u64,
+    max_output_lines: usize,
+    store: &mut GraphTemplateStore,
+    template_name: &str,
+    start_stage: PlannerStage,
+    planner_stage_path: Option<&Path>,
+    tick: u64,
 ) -> Result<f64> {
     let template_hash = store.hash_for(template_name);
     let mut failure_store = FailureStore::snapshot_store_load(&template_hash);
@@ -279,8 +361,13 @@ pub(crate) async fn run_planner_loop(
     let mut last_signal_sig = String::new();
     let mut last_completed = 0usize;
     let mut stagnant_iters = 0u64;
+    let mut phase = start_stage;
+    if let Some(path) = planner_stage_path {
+        PlannerStagePersist::save(path, phase, tick);
+    }
     while !graph.all_completed() && iter < max_iterations {
         eprintln!("{}", console::console_ui_phase("planner", &format!("iter={} nodes={}", iter, graph.nodes.len())));
+        eprintln!("[planner] iter={} nodes={} stage={:?}", iter, graph.nodes.len(), phase);
         let iter_start = std::time::Instant::now();
         let completed_now = graph.nodes.iter().filter(|n| n.status == dag::NodeStatus::Completed).count();
         if completed_now <= last_completed {
@@ -313,7 +400,6 @@ pub(crate) async fn run_planner_loop(
             expansion_scale = 1.0;
         }
         let rewrite_requests = graph.nodes.iter().filter_map(|n| n.reasoning_trace.as_ref().and_then(|trace| trace.starts_with("REWRITE_REQUESTED").then(|| n.id.clone()))).collect::<Vec<_>>();
-        let mut phase = PlannerStage::ReuseTemplate;
         let mut reuse_decision = false;
         let mut reuse_score = 0.0;
         let mut reuse_goal: Option<String> = None;
@@ -352,6 +438,9 @@ pub(crate) async fn run_planner_loop(
                 run_planner = true;
             }
             phase = PLANNER_TRANSITIONS[phase as usize][PlannerTransition::ReuseDone as usize];
+            if let Some(path) = planner_stage_path {
+                PlannerStagePersist::save(path, phase, tick);
+            }
         }
         let recovery_reason = engine::module_take_recovery_signal(Path::new(LOG_ROOT));
         let mut rewrite_requests = rewrite_requests;
@@ -441,6 +530,9 @@ pub(crate) async fn run_planner_loop(
         }
         if matches!(phase, PlannerStage::MutateTemplate) {
             phase = PLANNER_TRANSITIONS[phase as usize][PlannerTransition::MutationDone as usize];
+            if let Some(path) = planner_stage_path {
+                PlannerStagePersist::save(path, phase, tick);
+            }
         }
         if matches!(phase, PlannerStage::GraphPatch) && run_planner_now {
             for attempt in 1..=attempts {
@@ -655,8 +747,17 @@ pub(crate) async fn run_planner_loop(
         }
         if matches!(phase, PlannerStage::GraphPatch) {
             phase = PLANNER_TRANSITIONS[phase as usize][PlannerTransition::PlannerDone as usize];
+            if let Some(path) = planner_stage_path {
+                PlannerStagePersist::save(path, phase, tick);
+            }
         }
         let (exec_iters, exec_failures) = if matches!(phase, PlannerStage::Execute) {
+            eprintln!("[planner] execute_start iter={} nodes={}", iter, graph.nodes.len());
+            let completed_before = graph
+                .nodes
+                .iter()
+                .filter(|n| n.status == dag::NodeStatus::Completed)
+                .count();
             let res = run_execution_loop(
                 graph,
                 bridge,
@@ -680,13 +781,40 @@ pub(crate) async fn run_planner_loop(
                 &mut exec_metrics,
             )
             .await?;
-            phase = PLANNER_TRANSITIONS[phase as usize][PlannerTransition::ExecuteDone as usize];
+            let completed_after = graph
+                .nodes
+                .iter()
+                .filter(|n| n.status == dag::NodeStatus::Completed)
+                .count();
+            if completed_after == completed_before {
+                phase = PlannerStage::ReuseTemplate;
+            } else {
+                phase = PLANNER_TRANSITIONS[phase as usize][PlannerTransition::ExecuteDone as usize];
+            }
+            eprintln!(
+                "[planner] execute_end iter={} completed_before={} completed_after={} next_stage={:?}",
+                iter,
+                completed_before,
+                completed_after,
+                phase
+            );
+            if let Some(path) = planner_stage_path {
+                PlannerStagePersist::save(path, phase, tick);
+            }
             res
         } else {
             (0, Vec::new())
         };
+        // I14: if graph is fully stalled, replan
+        let all_stalled = invariants::must_replan_if_all_stalled(graph, planner_stage_path, tick);
+        if all_stalled {
+            phase = PlannerStage::ReuseTemplate;
+        }
         if matches!(phase, PlannerStage::Evaluate) {
             phase = PlannerStage::ReuseTemplate;
+            if let Some(path) = planner_stage_path {
+                PlannerStagePersist::save(path, phase, tick);
+            }
         }
         for failure in exec_failures {
             failure_store.record_graph(failure.kind, graph, failure.iter);

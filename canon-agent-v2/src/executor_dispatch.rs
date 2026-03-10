@@ -30,7 +30,7 @@ static WRITE_EXECUTORS: Lazy<HashMap<ExecutionDeltaType, DeltaExecutorWriteHandl
     map.insert(ExecutionDeltaType::DeleteFile, apply_delete_file as DeltaExecutorWriteHandler);
     map
 });
-const READONLY_COMMANDS: &[&str] = &["rg", "cat", "ls", "find", "head", "tail", "wc", "stat", "sed", "awk", "pwd", "tree"];
+const READONLY_COMMANDS: &[&str] = &["rg", "cat", "ls", "find", "head", "tail", "wc", "stat", "sed", "awk", "pwd", "tree", "cargo", "bash"];
 pub fn execute_read_delta(delta: &ExecutionDelta, roots: &[PathBuf], max_output_lines: usize) -> Result<(String, String), String> {
     let kind = delta_executor_delta_type(delta);
     let handler = READ_EXECUTORS.get(&kind).ok_or_else(|| "read_only delta type not allowed in this phase".to_string())?;
@@ -75,7 +75,7 @@ fn apply_list_dir(delta: &ExecutionDelta, roots: &[PathBuf], max_output_lines: u
     Ok((format!("list_dir {}", path.display()), delta_apply_truncate_lines(&out, max_output_lines)))
 }
 fn apply_read_command(delta: &ExecutionDelta, roots: &[PathBuf], max_output_lines: usize) -> Result<(String, String), String> {
-    let ExecutionDelta::ReadCommand { command, args } = delta else {
+    let ExecutionDelta::ReadCommand { command, args, path } = delta else {
         return Err("read_command handler received wrong delta".into());
     };
     if !READONLY_COMMANDS.iter().any(|c| c == command) {
@@ -84,7 +84,21 @@ fn apply_read_command(delta: &ExecutionDelta, roots: &[PathBuf], max_output_line
     if delta_apply_has_parent_dir_component(args) {
         return Err("read_command args contain '..'".into());
     }
-    let output = Command::new(command).args(args).current_dir(&roots[0]).output().map_err(|e| format!("read_command failed to spawn: {e}"))?;
+    if command == "bash" {
+        let joined = args.join(" ");
+        for banned in &["rm ", "dd ", "mkfs", ">(", "sudo", "curl", "wget", "chmod", "chown"] {
+            if joined.contains(banned) {
+                return Err(format!("read_command bash rejected: forbidden pattern in args"));
+            }
+        }
+    }
+    let working_dir = path
+        .as_deref()
+        .map(std::path::Path::new)
+        .filter(|p| p.is_dir())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| roots[0].clone());
+    let output = Command::new(command).args(args).current_dir(&working_dir).output().map_err(|e| format!("read_command failed to spawn: {e}"))?;
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !stderr.trim().is_empty() {

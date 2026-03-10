@@ -11,6 +11,7 @@ members = [
   # "canon-projection",
   # "canon-agent",
   "canon-agent-v2",
+  "canon-supervisor",
   "canon-utils/project_editor",
   "canon-utils/smt-analysis-engine",
   "canon-utils/canon-query",

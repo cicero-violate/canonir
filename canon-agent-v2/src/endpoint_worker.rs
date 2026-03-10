@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{mpsc, oneshot, Mutex};
-static WORKERS: Lazy<Mutex<HashMap<String, mpsc::Sender<LlmWorkItem>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static WORKERS: Lazy<Mutex<HashMap<(String, bool), mpsc::Sender<LlmWorkItem>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static NEXT_REQ_ID: AtomicU64 = AtomicU64::new(1);
 pub fn llm_worker_new_tabs() -> TabManagerHandle {
     std::sync::Arc::new(tokio::sync::Mutex::new(super::tab_management::TabSlotTable::new()))
@@ -52,23 +52,16 @@ impl LlmWorker {
         let full_prompt = if req.role_schema.trim().is_empty() { req.prompt } else { format!("{}\n\n{}", req.role_schema.trim_end(), req.prompt) };
         let full_prompt = format!("[REQ_ID:{}]\n{}", req.req_id, full_prompt);
         let prompt_chars = full_prompt.len();
-        let full_prompt = if prompt_chars > 32_000 {
-            let truncated = &full_prompt[..32_000];
-            let cut = truncated.rfind('\n').unwrap_or(32_000);
+        let full_prompt = if prompt_chars > 120_000 {
+            let truncated = &full_prompt[..120_000];
+            let cut = truncated.rfind('\n').unwrap_or(120_000);
             let mut s = full_prompt[..cut].to_string();
             s.push_str("\n... [prompt truncated]\n");
             s
         } else {
             full_prompt
         };
-        eprintln!(
-            "[capability] req_id={} node={} phase={} prompt_chars={}{}",
-            req.req_id,
-            req.node_id.as_deref().unwrap_or("?"),
-            req.phase,
-            prompt_chars,
-            if prompt_chars > 32_000 { " (truncated)" } else { "" }
-        );
+        let _ = prompt_chars;
         if let Some(node_id) = req.node_id.as_deref() {
             response_router::response_router_register(req.req_id, node_id).await;
         }
@@ -153,7 +146,8 @@ pub async fn llm_worker_send_request(
     let req_id = NEXT_REQ_ID.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = oneshot::channel();
     let mut workers = WORKERS.lock().await;
-    let sender = if let Some(sender) = workers.get(endpoint_id) {
+    let worker_key = (endpoint_id.to_string(), stateful);
+    let sender = if let Some(sender) = workers.get(&worker_key) {
         sender.clone()
     } else {
         let (tx_worker, rx_worker) = mpsc::channel(64);
@@ -169,7 +163,7 @@ pub async fn llm_worker_send_request(
             cache: HashMap::new(),
         };
         tokio::spawn(llm_worker_run_worker(worker, rx_worker));
-        workers.insert(endpoint_id.to_string(), tx_worker.clone());
+        workers.insert(worker_key, tx_worker.clone());
         tx_worker
     };
     let req = LlmWorkItem {
@@ -188,7 +182,8 @@ pub async fn llm_worker_send_request(
 pub async fn llm_worker_init_workers(bridge: &WsBridge, config: &CapabilityConfig, tabs: &TabManagerHandle) {
     let mut workers = WORKERS.lock().await;
     for endpoint in &config.llm_endpoints {
-        if workers.contains_key(&endpoint.id) {
+        let worker_key = (endpoint.id.clone(), endpoint.stateful);
+        if workers.contains_key(&worker_key) {
             continue;
         }
         let (tx_worker, rx_worker) = mpsc::channel(64);
@@ -204,7 +199,7 @@ pub async fn llm_worker_init_workers(bridge: &WsBridge, config: &CapabilityConfi
             cache: HashMap::new(),
         };
         tokio::spawn(llm_worker_run_worker(worker, rx_worker));
-        workers.insert(endpoint.id.clone(), tx_worker);
+        workers.insert(worker_key, tx_worker);
     }
 }
 async fn llm_worker_run_worker(mut worker: LlmWorker, mut rx: mpsc::Receiver<LlmWorkItem>) {

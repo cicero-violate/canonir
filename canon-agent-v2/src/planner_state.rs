@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PlannerStage {
     ReuseTemplate,
     MutateTemplate,
@@ -23,3 +23,29 @@ pub const PLANNER_TRANSITIONS: [[PlannerStage; 4]; 5] = {
     t[Execute as usize][ExecuteDone as usize] = Evaluate;
     t
 };
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PlannerStagePersist {
+    pub stage: PlannerStage,
+    pub tick: u64,
+}
+
+impl PlannerStagePersist {
+    pub fn load(path: &std::path::Path) -> Option<Self> {
+        let text = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    pub fn save(path: &std::path::Path, stage: PlannerStage, tick: u64) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let payload = PlannerStagePersist { stage, tick };
+        let tmp = path.with_extension("tmp");
+        if let Ok(text) = serde_json::to_string_pretty(&payload) {
+            if std::fs::write(&tmp, text).is_ok() {
+                let _ = std::fs::rename(&tmp, path);
+            }
+        }
+    }
+}
