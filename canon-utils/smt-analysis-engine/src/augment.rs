@@ -133,6 +133,7 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
         project: output_dir.parent().map(|p| p.display().to_string()).unwrap_or_else(|| output_dir.display().to_string()),
         node_count: nodes.len() as u32,
         edge_count: col_idx.len() as u32,
+        def_count: 0,
         schema_version: SCHEMA_VERSION,
         generated_by: "UPG extractor".to_string(),
     };
@@ -350,7 +351,7 @@ fn read_nodes_csv(path: PathBuf) -> Result<Vec<Node>> {
             return Err(anyhow!("invalid nodes.csv line"));
         }
         let id = parts[0].parse::<u32>()?;
-        let kind = parse_node_kind(parts[1])?;
+        let kind = parse_node_kind(parts[1]).map_err(|e| anyhow!(e))?;
         let line_no = parts[parts.len() - 3].parse::<u32>()?;
         let col = parts[parts.len() - 2].parse::<u32>()?;
         let file_id = parts[parts.len() - 4].parse::<u32>()?;
@@ -413,7 +414,7 @@ fn read_edges_csv(path: PathBuf) -> Result<Vec<Edge>> {
         }
         let src = parts[0].parse::<u32>()?;
         let dst = parts[1].parse::<u32>()?;
-        let kind = parse_edge_kind(parts[2])?;
+        let kind = parse_edge_kind(parts[2]).map_err(|e| anyhow!(e))?;
         edges.push(Edge { src, dst, kind });
     }
     Ok(edges)

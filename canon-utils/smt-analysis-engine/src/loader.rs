@@ -198,7 +198,7 @@ fn read_node_kinds(path: PathBuf) -> Result<Vec<NodeKind>> {
     let content = fs::read_to_string(path)?;
     let mut out = Vec::new();
     for line in content.lines() {
-        let kind = parse_node_kind(line)?;
+        let kind = parse_node_kind(line).map_err(|e| anyhow!(e))?;
         out.push(kind);
     }
     Ok(out)
@@ -208,7 +208,7 @@ fn read_edge_kinds(path: PathBuf) -> Result<Vec<EdgeKind>> {
     let content = fs::read_to_string(path)?;
     let mut out = Vec::new();
     for line in content.lines() {
-        let kind = parse_edge_kind(line)?;
+        let kind = parse_edge_kind(line).map_err(|e| anyhow!(e))?;
         out.push(kind);
     }
     Ok(out)

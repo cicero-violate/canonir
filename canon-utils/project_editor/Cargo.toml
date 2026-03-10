@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 canon_query = { path = "../canon-query" }
+canon_types = { path = "../canon-types" }
 prettyplease = "0.2"
 proc-macro2 = "1"
 syn = { version = "2", features = ["full", "visit-mut", "visit"] }

@@ -1,4 +1,5 @@
 use crate::{query_file, QueryError, QueryOptions, TlogQueryResult};
+use canon_types::{parse_edge_kind, parse_node_kind, EdgeKind, NodeKind};
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -6,14 +7,14 @@ pub enum TlogRecord {
     Session { ts: u64, project: String },
     Node {
         sym: String,
-        kind: String,
+        kind: NodeKind,
         file: String,
         line: u32,
         col: u32,
         lo: u32,
         hi: u32,
     },
-    Edge { src: String, dst: String, kind: String },
+    Edge { src: String, dst: String, kind: EdgeKind },
     File { path: String },
 }
 
@@ -25,20 +26,28 @@ impl TlogRecord {
                 ts: v["ts"].as_u64().unwrap_or(0),
                 project: v["project"].as_str().unwrap_or("").to_string(),
             }),
-            "N" => Some(TlogRecord::Node {
-                sym: v["sym"].as_str()?.to_string(),
-                kind: v["kind"].as_str().unwrap_or("").to_string(),
+            "N" => {
+                let kind_raw = v["kind"].as_str().unwrap_or("");
+                let kind = parse_node_kind(kind_raw).ok()?;
+                Some(TlogRecord::Node {
+                    sym: v["sym"].as_str()?.to_string(),
+                    kind,
                 file: v["file"].as_str().unwrap_or("").to_string(),
                 line: v["line"].as_u64().unwrap_or(0) as u32,
                 col: v["col"].as_u64().unwrap_or(0) as u32,
                 lo: v["lo"].as_u64().unwrap_or(0) as u32,
                 hi: v["hi"].as_u64().unwrap_or(0) as u32,
-            }),
-            "E" => Some(TlogRecord::Edge {
-                src: v["src"].as_str()?.to_string(),
-                dst: v["dst"].as_str()?.to_string(),
-                kind: v["kind"].as_str().unwrap_or("").to_string(),
-            }),
+                })
+            }
+            "E" => {
+                let kind_raw = v["kind"].as_str().unwrap_or("");
+                let kind = parse_edge_kind(kind_raw).ok()?;
+                Some(TlogRecord::Edge {
+                    src: v["src"].as_str()?.to_string(),
+                    dst: v["dst"].as_str()?.to_string(),
+                    kind,
+                })
+            }
             "F" => Some(TlogRecord::File {
                 path: v["path"].as_str()?.to_string(),
             }),
@@ -83,7 +92,7 @@ impl TlogReader {
         let all = Self::collect_from_result(path, &results[0])?;
         Ok(all
             .into_iter()
-            .filter(|r| matches!(r, TlogRecord::Edge { kind, .. } if kind == "CALL"))
+            .filter(|r| matches!(r, TlogRecord::Edge { kind, .. } if *kind == EdgeKind::Call))
             .collect())
     }
 

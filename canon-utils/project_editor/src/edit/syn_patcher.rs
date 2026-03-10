@@ -1,4 +1,4 @@
-use crate::symbol_index::SpanRange;
+use canon_types::SpanRange;
 use anyhow::{anyhow, Result};
 
 #[derive(Clone, Debug)]

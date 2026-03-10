@@ -1,15 +1,10 @@
 use anyhow::{anyhow, Result};
 use serde_json::Value;
+use canon_types::SpanRange;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-
-#[derive(Clone, Copy, Debug)]
-pub struct SpanRange {
-    pub lo: u32,
-    pub hi: u32,
-}
 
 pub struct SymbolIndex {
     span_index: HashMap<String, HashMap<PathBuf, Vec<SpanRange>>>,
