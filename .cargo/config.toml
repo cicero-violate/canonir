@@ -2,7 +2,6 @@
 rustc-wrapper = "/workspace/ai_sandbox/canon_kernel/target/debug/canon_kernel"
 rustflags = ["-Awarnings"]
 
-
 # [build]
 # rustc-wrapper = "scripts/analysis_capture_wrapper.sh"
 # rustflags = ["-Awarnings"]
