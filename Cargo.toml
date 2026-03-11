@@ -1,8 +1,9 @@
 [workspace]
 members = [
   "canon-utils/reports",
-  "algorithms",
   # "algorithms",
+
+  "algorithms",
   # "canon-capture",
   # "canon-mutation",
   # "orchestration",
