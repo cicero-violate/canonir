@@ -73,7 +73,7 @@ impl GraphTemplateIndex {
             entry.failure_count = entry.failure_count.saturating_add(1);
         }
     }
-    pub fn find_similar(&self, goal: &GoalSpec, graph: &ExecutionGraph, top_k: usize, goal_w: f64, struct_w: f64) -> TemplateSearchResult {
+    pub fn find_similar(&self, goal: &GoalSpec, graph: &ExecutionGraph, top_k: usize, goal_w: f64, struct_w: f64, failure_hard_ban: usize) -> TemplateSearchResult {
         if self.entries.is_empty() {
             return TemplateSearchResult { templates: Vec::new(), cache_hits: 0 };
         }
@@ -83,7 +83,10 @@ impl GraphTemplateIndex {
         let target_entry = template_index_entry_from_graph("target", &goal.raw, graph, 0.0);
         let target_vec = template_index_structural_features(&target_entry, max_nodes, max_edges, max_depth);
         let mut scored: Vec<TemplateMatch> =
-            template_index_batch_similarity(&self.entries, &goal.raw, &g_embed, &target_vec, max_nodes, max_edges, max_depth, goal_w, struct_w).into_iter().filter(|s| s.score >= 0.2).collect();
+            template_index_batch_similarity(&self.entries, &goal.raw, &g_embed, &target_vec, max_nodes, max_edges, max_depth, goal_w, struct_w, failure_hard_ban)
+                .into_iter()
+                .filter(|s| s.score >= 0.2)
+                .collect();
         scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_k);
         TemplateSearchResult { templates: scored, cache_hits }
@@ -173,11 +176,12 @@ fn template_index_cosine(a: &[f64; 5], b: &[f64; 5]) -> f64 {
     }
 }
 fn template_index_batch_similarity(
-    entries: &[GraphTemplateEntry], goal: &str, goal_embed: &[f32], target_vec: &[f64; 5], max_nodes: f64, max_edges: f64, max_depth: f64, goal_w: f64, struct_w: f64,
+    entries: &[GraphTemplateEntry], goal: &str, goal_embed: &[f32], target_vec: &[f64; 5], max_nodes: f64, max_edges: f64, max_depth: f64, goal_w: f64, struct_w: f64, failure_hard_ban: usize,
 ) -> Vec<TemplateMatch> {
     entries
         .iter()
         .filter(|e| e.reward > 0.0)
+        .filter(|e| failure_hard_ban == 0 || e.failure_count < failure_hard_ban)
         .map(|entry| {
             let (goal_sim, used_embedding) = if !entry.goal_embedding.is_empty() && entry.goal_embedding.len() == goal_embed.len() {
                 (goal_embedding::goal_embedding_cosine_similarity(goal_embed, &entry.goal_embedding), true)

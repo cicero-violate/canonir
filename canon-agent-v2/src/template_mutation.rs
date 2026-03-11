@@ -1,6 +1,6 @@
 use super::capability::PipelineCapability;
 use super::dag::ExecutionGraph;
-use super::graph_algo::{compute_graph_features, graph_analysis_compute_graph_signals, score_node_utility, GraphAnalysis, GraphFeatureVector};
+use super::graph_algo::{compute_graph_features_parallel, graph_analysis_compute_graph_signals, score_node_utility, GraphAnalysis, GraphFeatureVector};
 use std::collections::{HashMap, HashSet};
 pub struct GraphMutationCandidateScore {
     pub graph: ExecutionGraph,
@@ -19,7 +19,7 @@ pub fn generate_mutation_candidates(
     if count == 0 {
         return out;
     }
-    let features = compute_graph_features(graph);
+    let features = compute_graph_features_parallel(graph);
     let target_nodes = mutation_target_filter(graph, targets);
     let target_scope = expand_targets_to_radius(graph, &target_nodes);
     for i in 0..count {
@@ -44,7 +44,7 @@ pub fn score_mutation_candidates(
     candidates
         .into_par_iter()
         .map(|g| {
-            let features = compute_graph_features(&g);
+            let features = compute_graph_features_parallel(&g);
             let node_utility_avg = compute_node_utility_avg(&g, iter);
             let score = compute_mutation_score(&features, node_utility_avg);
             GraphMutationCandidateScore { graph: g, features, score }
@@ -72,7 +72,7 @@ fn mutate_graph_with_mode(
     target_scope: &[String],
 ) -> ExecutionGraph {
     let base_signals = graph_analysis_compute_graph_signals(graph);
-    let base_features = compute_graph_features(graph);
+    let base_features = compute_graph_features_parallel(graph);
     let mut g = graph.clone();
     if mutation_rate <= 0.0 || mutation_budget == 0 {
         return g;
@@ -180,7 +180,7 @@ fn mutation_degrades_graph(
     candidate: &ExecutionGraph,
 ) -> bool {
     let next = graph_analysis_compute_graph_signals(candidate);
-    let next_features = compute_graph_features(candidate);
+    let next_features = compute_graph_features_parallel(candidate);
     let base_cycles = count_cycles(base);
     let next_cycles = count_cycles(&next);
     if next_cycles > base_cycles {

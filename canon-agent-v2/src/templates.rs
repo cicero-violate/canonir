@@ -159,8 +159,8 @@ impl GraphTemplateStore {
         self.index.remove(&hash);
         self.index.snapshot_store_save();
     }
-    pub fn find_similar(&self, goal: &GoalSpec, graph: &ExecutionGraph, top_k: usize, goal_w: f64, struct_w: f64) -> template_index::TemplateSearchResult {
-        self.index.find_similar(goal, graph, top_k, goal_w, struct_w)
+    pub fn find_similar(&self, goal: &GoalSpec, graph: &ExecutionGraph, top_k: usize, goal_w: f64, struct_w: f64, failure_hard_ban: usize) -> template_index::TemplateSearchResult {
+        self.index.find_similar(goal, graph, top_k, goal_w, struct_w, failure_hard_ban)
     }
     pub fn record_failure(&mut self, template_hash: &str) {
         self.index.bump_failure_count(template_hash);

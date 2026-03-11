@@ -289,7 +289,7 @@ fn select_goal_type(score: &ObjectiveScore) -> GoalType {
 
 fn snapshot_features() -> Option<graph_algo::GraphFeatureVector> {
     let snapshot = state_snapshot::snapshot_store_load(Path::new(SNAPSHOT_PATH))?;
-    Some(graph_algo::compute_graph_features(&snapshot.graph))
+    Some(graph_algo::compute_graph_features_parallel(&snapshot.graph))
 }
 
 fn feature_objective_candidates(weights: &ObjectiveWeights) -> Vec<ObjectiveSelection> {

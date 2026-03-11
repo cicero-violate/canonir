@@ -205,7 +205,7 @@ impl GraphFeatureVector {
         self
     }
 }
-pub fn compute_graph_features(graph: &dag::ExecutionGraph) -> GraphFeatureVector {
+pub fn compute_graph_features_parallel(graph: &dag::ExecutionGraph) -> GraphFeatureVector {
     let signals = graph_analysis_compute_graph_signals(graph);
     let nodes = graph.nodes.len();
     let edges = graph.nodes.iter().map(|n| n.deps.len()).sum();
@@ -436,7 +436,7 @@ pub fn compute_graph_features(graph: &dag::ExecutionGraph) -> GraphFeatureVector
             retry_rate,
         )
     };
-    GraphFeatureVector {
+    let mut features = GraphFeatureVector {
         nodes,
         edges,
         depth,
@@ -461,11 +461,7 @@ pub fn compute_graph_features(graph: &dag::ExecutionGraph) -> GraphFeatureVector
         failure_pattern_rate: 0.0,
         cycle_frequency: 0.0,
         deadlock_rate: 0.0,
-    }
-}
-
-pub fn compute_graph_features_parallel(graph: &dag::ExecutionGraph) -> GraphFeatureVector {
-    let mut features = compute_graph_features(graph);
+    };
     if !graph.nodes.is_empty() {
         let total: f64 = graph
             .nodes
@@ -478,7 +474,7 @@ pub fn compute_graph_features_parallel(graph: &dag::ExecutionGraph) -> GraphFeat
 }
 
 pub fn graph_embedding(graph: &dag::ExecutionGraph, dim: usize) -> Vec<f32> {
-    let feats = compute_graph_features(graph).to_vec();
+    let feats = compute_graph_features_parallel(graph).to_vec();
     let dim = dim.max(1).max(feats.len());
     let mut out = vec![0.0f32; dim];
     for (i, v) in feats.iter().enumerate() {

@@ -11,7 +11,7 @@ use super::engine::TabManagerHandle;
 use super::execution_result::{self, RepairAttemptStats};
 use super::failure_store::{FailureStore, FailureStoreConstraint, FailureStoreConstraintRule};
 use super::gpu_scheduler::driver::GpuScheduler;
-use super::graph_algo::{compute_graph_features, graph_analysis_compute_graph_signals, graph_analysis_edge_count, graph_analysis_normalize_features, graph_analysis_planner_signals_for_graph, hash_graph_structure, score_node_utility, GraphFeatureVector};
+use super::graph_algo::{compute_graph_features_parallel, graph_analysis_compute_graph_signals, graph_analysis_edge_count, graph_analysis_normalize_features, graph_analysis_planner_signals_for_graph, hash_graph_structure, score_node_utility, GraphFeatureVector};
 use super::graph_maintenance::{self, GraphRepairMaintenanceCtx};
 use super::graph_runtime::collect_execution_context;
 use super::invariants;
@@ -161,7 +161,7 @@ pub(crate) async fn run_execution_loop(
         exec_metrics.last_snapshot_written = false;
         repair_stats = RepairAttemptStats::default();
         let mut ready_ids: Vec<String> = Vec::new();
-        let mut features = compute_graph_features(graph);
+        let mut features = compute_graph_features_parallel(graph);
         let mut step = ExecutionStep::CollectReady;
         let mut next_event = ExecutionEvent::Continue;
         let mut results: Vec<Result<(String, Result<engine::ModuleNodeCallResult>, std::time::Duration)>> = Vec::new();
@@ -176,7 +176,7 @@ pub(crate) async fn run_execution_loop(
                             iter, cleared
                         );
                     }
-                    features = compute_graph_features(graph);
+                    features = compute_graph_features_parallel(graph);
                     if GpuScheduler::detect_deadlock(graph) {
                         failures.push(ExecutionSchedulerExecFailure { kind: "deadlock", iter });
                         let payload = serde_json::json!(
@@ -485,7 +485,7 @@ pub(crate) async fn run_planner_loop(
         }
         last_completed = completed_now;
         let failure_stats = failure_store.stats();
-        let features = compute_graph_features(graph).with_failure_stats(&failure_stats);
+        let features = compute_graph_features_parallel(graph).with_failure_stats(&failure_stats);
         let normalized = graph_analysis_normalize_features(&features, config.max_nodes, config.max_nodes.saturating_mul(4));
         let policy_outcome = policy_engine::evaluate_policy_normalized(normalized);
         let mut policy_bias = policy_outcome.bias.clone();
@@ -524,7 +524,14 @@ pub(crate) async fn run_planner_loop(
         last_embedding_cache_hits = 0;
         if matches!(phase, PlannerStage::ReuseTemplate) {
             if !run_planner {
-                let search = store.find_similar(planner.goal_spec(), graph, config.template_top_k, config.goal_similarity_weight, config.structural_similarity_weight);
+                let search = store.find_similar(
+                    planner.goal_spec(),
+                    graph,
+                    config.template_top_k,
+                    config.goal_similarity_weight,
+                    config.structural_similarity_weight,
+                    config.template_failure_hard_ban,
+                );
                 last_embedding_cache_hits = search.cache_hits;
                 if let Some(best) = search.templates.into_iter().max_by(|a, b| {
                     let a_score = a.score * a.entry.reward;
@@ -597,7 +604,14 @@ pub(crate) async fn run_planner_loop(
             let base_reward = store.stored_reward(template_name);
             let target_symbols = planner.goal_spec().artifact.as_ref().map(|a| a.target_symbols.clone()).unwrap_or_default();
             let mut base_graph = graph.clone();
-            let seed = store.find_similar(planner.goal_spec(), graph, 1, config.goal_similarity_weight, config.structural_similarity_weight);
+            let seed = store.find_similar(
+                planner.goal_spec(),
+                graph,
+                1,
+                config.goal_similarity_weight,
+                config.structural_similarity_weight,
+                config.template_failure_hard_ban,
+            );
             if let Some(best) = seed.templates.into_iter().max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal)) {
                 if let Ok(mut loaded) = store.snapshot_store_load(&best.entry.goal) {
                     loaded.reset_for_execution();
@@ -1082,7 +1096,7 @@ pub(crate) async fn run_planner_loop(
         resume_iteration = iter;
     }
     let reward = telemetry::telemetry_compute_reward(graph, iter, max_iterations, planner.goal_spec());
-    let final_features = compute_graph_features(graph).with_failure_stats(&failure_store.stats());
+        let final_features = compute_graph_features_parallel(graph).with_failure_stats(&failure_store.stats());
     let final_entry = PolicyTrainingPolicyDatasetEntry {
         features: serde_json::json!(
             { "nodes" : final_features.nodes, "edges" : final_features.edges,

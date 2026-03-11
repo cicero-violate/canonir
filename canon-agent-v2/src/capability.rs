@@ -439,7 +439,7 @@ impl CapabilityPipeline {
                 failure_store.record_graph(failure.kind, &graph, failure.iter);
                 store.record_failure(&template_hash);
             }
-            let features = graph_algo::compute_graph_features(&graph)
+            let features = graph_algo::compute_graph_features_parallel(&graph)
                 .with_failure_stats(&failure_store.stats());
             let normalized = graph_algo::graph_analysis_normalize_features(
                 &features,
@@ -578,6 +578,7 @@ impl CapabilityPipeline {
                     1,
                     self.config.goal_similarity_weight,
                     self.config.structural_similarity_weight,
+                    self.config.template_failure_hard_ban,
                 );
             let bootstrap_seed = similar
                 .templates

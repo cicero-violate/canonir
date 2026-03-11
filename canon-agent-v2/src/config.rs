@@ -81,6 +81,8 @@ struct CapabilityConfigRawSystem {
     pub mutation_candidates: usize,
     #[serde(default = "capability_config_default_template_population_size")]
     pub template_population_size: usize,
+    #[serde(default = "capability_config_default_template_failure_hard_ban")]
+    pub template_failure_hard_ban: usize,
     #[serde(default = "capability_config_default_failure_constraint_threshold")]
     pub failure_constraint_threshold: usize,
     #[serde(default = "capability_config_default_max_constraints")]
@@ -228,6 +230,9 @@ fn capability_config_default_mutation_candidates() -> usize {
 fn capability_config_default_template_population_size() -> usize {
     5
 }
+fn capability_config_default_template_failure_hard_ban() -> usize {
+    6
+}
 fn capability_config_default_failure_constraint_threshold() -> usize {
     2
 }
@@ -325,6 +330,7 @@ pub struct CapabilityConfig {
     pub mutation_budget: usize,
     pub mutation_candidates: usize,
     pub template_population_size: usize,
+    pub template_failure_hard_ban: usize,
     pub failure_constraint_threshold: usize,
     pub max_constraints: usize,
     pub enable_resume: bool,
@@ -406,6 +412,7 @@ impl CapabilityConfig {
             mutation_budget: raw.system.mutation_budget,
             mutation_candidates: raw.system.mutation_candidates,
             template_population_size: raw.system.template_population_size,
+            template_failure_hard_ban: raw.system.template_failure_hard_ban,
             failure_constraint_threshold: raw.system.failure_constraint_threshold,
             max_constraints: raw.system.max_constraints,
             enable_resume: raw.system.enable_resume,
