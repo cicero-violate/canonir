@@ -1,4 +1,7 @@
 use super::dag::ExecutionGraph;
+use super::goal::GoalSpec;
+use super::graph_algo;
+use super::goal_embedding;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -57,6 +60,8 @@ pub struct RuntimeTelemetry {
     pub snapshot_loaded: bool,
     pub resume_iteration: u64,
     pub goal_similarity_score: f64,
+    pub goal_drift: f64,
+    pub planner_refocus: bool,
     pub template_reuse_by_embedding: bool,
     pub embedding_cache_hits: u64,
 }
@@ -91,7 +96,7 @@ pub fn telemetry_progress_fraction(graph: &ExecutionGraph) -> f64 {
     let completed = graph.nodes.iter().filter(|n| n.status == super::dag::NodeStatus::Completed).count();
     completed as f64 / graph.nodes.len() as f64
 }
-pub fn telemetry_compute_reward(graph: &ExecutionGraph, iterations_used: u64, max_iterations: u64) -> f64 {
+pub fn telemetry_compute_reward(graph: &ExecutionGraph, iterations_used: u64, max_iterations: u64, goal: &GoalSpec) -> f64 {
     let n_total = graph.nodes.len() as f64;
     if n_total == 0.0 {
         return 0.0;
@@ -99,7 +104,15 @@ pub fn telemetry_compute_reward(graph: &ExecutionGraph, iterations_used: u64, ma
     let n_completed = graph.nodes.iter().filter(|n| n.status == super::dag::NodeStatus::Completed).count() as f64;
     let n_failed = graph.nodes.iter().filter(|n| n.status == super::dag::NodeStatus::Failed).count() as f64;
     let iter_ratio = iterations_used as f64 / max_iterations.max(1) as f64;
-    (n_completed / n_total) - 0.2 * iter_ratio - 0.3 * (n_failed / n_total)
+    let mut reward = (n_completed / n_total) - 0.2 * iter_ratio - 0.3 * (n_failed / n_total);
+    let goal_sim = telemetry_goal_similarity(graph, goal);
+    reward += goal_sim * 0.3;
+    reward
+}
+
+pub fn telemetry_goal_similarity(graph: &ExecutionGraph, goal: &GoalSpec) -> f64 {
+    let graph_embed = graph_algo::graph_embedding(graph, goal.embedding.len());
+    goal_embedding::goal_embedding_cosine_similarity(&goal.embedding, &graph_embed)
 }
 pub static PENDING_REQUESTS: AtomicU64 = AtomicU64::new(0);
 pub static RESUME_ITERATION: AtomicU64 = AtomicU64::new(0);

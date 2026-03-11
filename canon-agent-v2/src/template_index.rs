@@ -1,6 +1,7 @@
 use super::dag::ExecutionGraph;
 use super::decompose;
 use super::goal_embedding;
+use super::goal::GoalSpec;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -64,29 +65,17 @@ impl GraphTemplateIndex {
             entry.failure_count = entry.failure_count.saturating_add(1);
         }
     }
-    pub fn find_similar(&self, goal: &str, graph: &ExecutionGraph, top_k: usize, goal_w: f64, struct_w: f64, embedding_dim: usize) -> TemplateSearchResult {
+    pub fn find_similar(&self, goal: &GoalSpec, graph: &ExecutionGraph, top_k: usize, goal_w: f64, struct_w: f64) -> TemplateSearchResult {
         if self.entries.is_empty() {
             return TemplateSearchResult { templates: Vec::new(), cache_hits: 0 };
         }
-        let mut cache = goal_embedding::goal_embedding_load_cache();
-        let g_hash = goal_embedding::goal_embedding_goal_hash(goal);
-        let mut cache_hits = 0u64;
-        let g_embed = if let Some(embed) = cache.get(&g_hash) {
-            cache_hits += 1;
-            embed.clone()
-        } else {
-            let emb = goal_embedding::goal_embedding_embed_goal(goal, embedding_dim);
-            cache.insert(g_hash.clone(), emb.vector.clone());
-            emb.vector
-        };
-        if cache_hits == 0 {
-            goal_embedding::goal_embedding_save_cache(&cache);
-        }
+        let cache_hits = 0u64;
+        let g_embed = goal.embedding.clone();
         let (max_nodes, max_edges, max_depth) = self.maxima_with_graph(graph);
-        let target_entry = template_index_entry_from_graph("target", goal, graph, 0.0);
+        let target_entry = template_index_entry_from_graph("target", &goal.raw, graph, 0.0);
         let target_vec = template_index_structural_features(&target_entry, max_nodes, max_edges, max_depth);
         let mut scored: Vec<TemplateMatch> =
-            template_index_batch_similarity(&self.entries, goal, &g_embed, &target_vec, max_nodes, max_edges, max_depth, goal_w, struct_w).into_iter().filter(|s| s.score >= 0.2).collect();
+            template_index_batch_similarity(&self.entries, &goal.raw, &g_embed, &target_vec, max_nodes, max_edges, max_depth, goal_w, struct_w).into_iter().filter(|s| s.score >= 0.2).collect();
         scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_k);
         TemplateSearchResult { templates: scored, cache_hits }

@@ -1,6 +1,6 @@
 [watcher]
 debounce_ms = 300
-watch_dirs = ["canon-utils", "canon-agent-v2"]
+watch_dirs = ["canon-utils", "canon-agent-v2", "canon-agent-prompts"]
 
 [[process]]
 name = "canon-agent-v2"

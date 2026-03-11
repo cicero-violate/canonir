@@ -54,6 +54,10 @@ pub fn affected_crates(paths: &[PathBuf]) -> HashSet<String> {
     for path in paths {
         if let Some(name) = crate_for_path(path) {
             crates.insert(name);
+            continue;
+        }
+        if path.starts_with("/workspace/ai_sandbox/canon/canon-agent-prompts") {
+            crates.insert("canon-agent-v2".to_string());
         }
     }
     crates

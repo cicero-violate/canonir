@@ -114,3 +114,33 @@ pub fn must_terminal_nonzero(graph: &ExecutionGraph) {
         debug_assert!(terminal > 0, "I15 violated: no terminal nodes after failure");
     }
 }
+
+pub fn must_clear_orphan_running(graph: &mut ExecutionGraph, max_node_retries: u32) -> usize {
+    let mut cleared = 0usize;
+    let running_ids: Vec<String> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.status == NodeStatus::Running)
+        .map(|n| n.id.clone())
+        .collect();
+    for node_id in running_ids {
+        let (budget, fail_count) = graph
+            .get_node_mut(&node_id)
+            .map(|n| {
+                n.readonly_fail_count = n.readonly_fail_count.saturating_add(1);
+                let budget = n.budget.unwrap_or(max_node_retries);
+                (budget, n.readonly_fail_count)
+            })
+            .unwrap_or((max_node_retries, 1));
+        if fail_count >= budget {
+            let _ = graph.update_status(&node_id, NodeStatus::Failed);
+            if let Some(n) = graph.get_node_mut(&node_id) {
+                n.error = Some("orphan running: no results applied".to_string());
+            }
+        } else {
+            let _ = graph.update_status(&node_id, NodeStatus::Ready);
+        }
+        cleared += 1;
+    }
+    cleared
+}

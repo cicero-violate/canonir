@@ -1,12 +1,14 @@
 use super::dag;
 use super::graph_algo::{graph_analysis_emit_planned_graph, graph_analysis_run_graph_algorithms, score_node_utility};
 use super::graph_runtime::{prune_unreachable_nodes, validate_graph_semantics};
+use super::goal::GoalSpec;
 use anyhow::Result;
 use std::path::Path;
 pub struct GraphRepairMaintenanceCtx<'a> {
     pub graph: &'a mut dag::ExecutionGraph,
     pub log_dir: &'a Path,
     pub iter: u64,
+    pub goal: Option<&'a GoalSpec>,
     pub features_retry_rate: f64,
     pub features_failed_fraction: f64,
     pub features_branching_factor: f64,
@@ -75,7 +77,7 @@ pub fn repair_graph(ctx: GraphRepairMaintenanceCtx<'_>) -> Result<()> {
     if ctx.prune_unlinked {
         prune_unreachable_nodes(ctx.graph);
     }
-    validate_graph_semantics(ctx.graph)?;
+    validate_graph_semantics(ctx.graph, ctx.goal)?;
     prune_low_utility_nodes(ctx.graph, ctx.iter, ctx.auto_prune, ctx.prune_min_age, ctx.prune_threshold);
     let risk = graph_repair_risk_score(ctx.features_retry_rate, ctx.features_failed_fraction, ctx.features_branching_factor);
     let threshold = (ctx.recovery_retry_rate_threshold + ctx.recovery_failed_fraction_threshold) / 2.0;

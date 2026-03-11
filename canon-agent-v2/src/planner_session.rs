@@ -5,6 +5,7 @@ use super::dag::NodeStatus;
 use super::decompose::DecomposeTaskSpec;
 use super::failure_store::FailureStore;
 use super::graph_algo::{self, GraphAnalysis};
+use super::goal::GoalSpec;
 use super::planner_update::{apply_graph_patch, GraphPatch, PlannerUpdateEdgeSpec, PlannerUpdateRetractSpec, PlannerUpdateRewriteSpec};
 use crate::llm_provider::JsonExtractor;
 use anyhow::{Context, Result};
@@ -36,14 +37,14 @@ pub struct PlannerController {
     endpoint_id: String,
     url: String,
     role_schema: String,
-    goal: String,
+    goal: GoalSpec,
     history: Vec<String>,
     stateful: bool,
     reward_context: Option<PlannerControllerRewardContext>,
 }
 const MAX_HISTORY: usize = 2;
 impl PlannerController {
-    pub fn new(endpoint: &CapabilityConfigLlmEndpoint, goal: String) -> Self {
+    pub fn new(endpoint: &CapabilityConfigLlmEndpoint, goal: GoalSpec) -> Self {
         Self { endpoint_id: endpoint.id.clone(), url: endpoint.url.clone(), role_schema: endpoint.role_markdown.clone(), goal, history: Vec::new(), stateful: endpoint.stateful, reward_context: None }
     }
     pub fn set_reward_context(&mut self, ctx: PlannerControllerRewardContext) {
@@ -51,6 +52,9 @@ impl PlannerController {
     }
     pub fn reward_context(&self) -> Option<&PlannerControllerRewardContext> {
         self.reward_context.as_ref()
+    }
+    pub fn goal_spec(&self) -> &GoalSpec {
+        &self.goal
     }
     pub fn build_prompt(
         &mut self, graph: &ExecutionGraph, signals: &GraphAnalysis, features: &graph_algo::GraphFeatureVector, cost_summary: &str, rewrite_requests: &[String], bias_text: &str,
@@ -192,13 +196,17 @@ CAPABILITY COSTS (highest)\n\
 {}\n\
 {}\n\
 Goal:\n{}\n\n\
+GOAL_SPEC:\n{}\n\
+SUCCESS_CRITERIA:\n{:?}\n\n\
 Graph Nodes:\n{}\n\n\
 Graph Signals:\n{}\n\n\
 Recent History:\n{}\n\n\
 Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"description\":\"...\",\"deps\":[],\"required_capabilities\":[],\"node_type\":\"analysis|render\",\"priority\":0,\"budget\":3,\"reasoning_trace\":\"...\"}}],\n  \"new_edges\": [{{\"from\":\"id\",\"to\":\"id\"}}],\n  \"retract_nodes\": [{{\"id\":\"...\"}}],\n  \"rewrite_nodes\": [{{\"id\":\"...\",\"new_description\":\"...\",\"new_capabilities\":[]}}]\n}}",
             planner_max_new_nodes, planner_max_new_edges, expandable.join(", "),
             ready_nodes.join(", "), unreachable_nodes.join(", "), rewrite_text,
-            bias_text, metrics_text, cost_summary, reward_section, self.goal,
+            bias_text, metrics_text, cost_summary, reward_section, self.goal.raw,
+            self.goal.raw,
+            self.goal.success_criteria,
             serde_json::to_string_pretty(& nodes_json).unwrap_or_default(),
             serde_json::to_string_pretty(& signals_json).unwrap_or_default(),
             history_tail.join("\n")

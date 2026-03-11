@@ -14,6 +14,7 @@ pub use crate::engine;
 pub use crate::execution_result;
 pub use crate::executor_dispatch;
 pub use crate::failure_store;
+pub use crate::goal;
 pub use crate::goal_embedding;
 pub use crate::gpu_scheduler;
 pub use crate::graph_algo;
@@ -47,6 +48,7 @@ use crate::pipelines_core_4::{Pipeline, PipelineContext, PipelineOutcome};
 use crate::ws_server::WsBridge;
 use anyhow::Result;
 use config::{CapabilityConfig, CapabilityConfigGoalSpec};
+use crate::goal::GoalSpec;
 use graph_algo::{graph_analysis_emit_planned_graph, graph_analysis_run_graph_algorithms};
 use policy::ExecutionPolicyModel;
 use policy_train::PolicyTrainingPolicyDatasetEntry;
@@ -152,7 +154,8 @@ impl CapabilityPipeline {
             };
             updated.save(intent_path);
         }
-        if let Ok(pretty) = serde_json::to_string_pretty(&goal) {
+        let goal_spec = GoalSpec::new(goal.raw.clone(), graph_algo::graph_embedding_dim());
+        if let Ok(pretty) = serde_json::to_string_pretty(&goal_spec) {
             let _ = std::fs::write(Self::log_path("goal_spec.json"), pretty);
         }
         let endpoint = self
@@ -177,12 +180,12 @@ impl CapabilityPipeline {
         };
         let mut store = GraphTemplateStore::new(
             Path::new(TEMPLATE_ROOT).to_path_buf(),
-            self.config.embedding_dim,
+            graph_algo::graph_embedding_dim(),
         );
-        let template_name = goal.raw.clone();
+        let template_name = goal_spec.raw.clone();
         let mut planner_generate = || async {
             let request = decompose::build_goal_decompose_request(
-                &goal.raw,
+                &goal_spec.raw,
                 &ctx.cwd[0],
                 &workspace_listing,
                 Path::new(LOG_ROOT),
@@ -330,18 +333,22 @@ impl CapabilityPipeline {
             let snap = state_snapshot::snapshot_store_load(
                 Path::new(&self.config.snapshot_file),
             );
-           if let Some(snapshot) = snap {
-               telemetry::telemetry_set_resume_iteration(snapshot.iteration);
-               let mut g = snapshot.graph;
-               g.rebuild_index();
-               dag::task_graph_resolve_ready(&mut g);
-               resume_loaded = true;
-               for node in &mut g.nodes {
-                   if node.status != dag::NodeStatus::Completed {
-                       node.completed_iter = None;
-                   }
-               }
-              g
+            if let Some(snapshot) = snap {
+                if snapshot.goal.raw == goal_spec.raw {
+                    telemetry::telemetry_set_resume_iteration(snapshot.iteration);
+                    let mut g = snapshot.graph;
+                    g.rebuild_index();
+                    dag::task_graph_resolve_ready(&mut g);
+                    resume_loaded = true;
+                    for node in &mut g.nodes {
+                        if node.status != dag::NodeStatus::Completed {
+                            node.completed_iter = None;
+                        }
+                    }
+                    g
+                } else {
+                    planner_generate().await?
+                }
             } else {
                 planner_generate().await?
             }
@@ -400,6 +407,7 @@ impl CapabilityPipeline {
                     0.0,
                     &mut cost_table,
                     &mut exec_metrics,
+                    &goal_spec,
                 )
                 .await?;
             for failure in exec_failures {
@@ -417,6 +425,7 @@ impl CapabilityPipeline {
                 &graph,
                 iterations_used,
                 self.config.max_iterations,
+                &goal_spec,
             );
             let entry = PolicyTrainingPolicyDatasetEntry {
                 features: serde_json::json!(
@@ -457,6 +466,7 @@ impl CapabilityPipeline {
                 self.config.max_nodes.saturating_mul(4),
             );
             store.record_reward(&template_name, reward);
+            let goal_sim = telemetry::telemetry_goal_similarity(&graph, &goal_spec);
             let runtime = telemetry::RuntimeTelemetry {
                 queue_depth: telemetry::telemetry_pending_requests(),
                 retry_rate: 0.0,
@@ -491,7 +501,9 @@ impl CapabilityPipeline {
                 snapshot_written: false,
                 snapshot_loaded: false,
                 resume_iteration: 0,
-                goal_similarity_score: 0.0,
+                goal_similarity_score: goal_sim,
+                goal_drift: (1.0 - goal_sim).clamp(0.0, 1.0),
+                planner_refocus: false,
                 template_reuse_by_embedding: false,
                 embedding_cache_hits: 0,
             };
@@ -525,7 +537,7 @@ impl CapabilityPipeline {
             let planner_endpoint = self.config.planner_endpoint()?;
             let mut planner_session = planner_session::PlannerController::new(
                 planner_endpoint,
-                goal.raw.clone(),
+                goal_spec.clone(),
             );
             let recent = store.recent_rewards(&template_name, 4);
             let plateaued = store
@@ -536,12 +548,11 @@ impl CapabilityPipeline {
                 );
             let similar = store
                 .find_similar(
-                    &goal.raw,
+                    &goal_spec,
                     &graph,
                     1,
                     self.config.goal_similarity_weight,
                     self.config.structural_similarity_weight,
-                    self.config.embedding_dim,
                 );
             let bootstrap_seed = similar
                 .templates
@@ -597,7 +608,7 @@ impl CapabilityPipeline {
                     &self.tabs,
                     &ctx.cwd,
                     &workspace_listing,
-                    endpoint,
+                    planner_endpoint,
                     "exec",
                     &policy,
                     self.config.context_radius,
@@ -615,11 +626,15 @@ impl CapabilityPipeline {
                 )
                 .await?;
             let completion_velocity = if reward > prev_reward { 1.0 } else { 0.0 };
+            let goal_sim = telemetry::telemetry_goal_similarity(&graph, &goal_spec);
             let runtime = telemetry::RuntimeTelemetry {
                 queue_depth: telemetry::telemetry_pending_requests(),
                 progress_fraction: telemetry::telemetry_progress_fraction(&graph),
                 completion_velocity,
                 policy_run_planner: true,
+                goal_similarity_score: goal_sim,
+                goal_drift: (1.0 - goal_sim).clamp(0.0, 1.0),
+                planner_refocus: false,
                 ..Default::default()
             };
             let snapshot = telemetry::TelemetryFrame {

@@ -15,6 +15,7 @@ pub mod execution_result;
 pub mod executor_dispatch;
 pub mod failure_store;
 pub mod goal_embedding;
+pub mod goal;
 pub mod gpu_scheduler;
 pub mod gpu_scheduler_driver;
 pub mod gpu_scheduler_kernels;

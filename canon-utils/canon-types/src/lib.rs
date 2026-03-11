@@ -13,3 +13,6 @@ pub use types::{
     SpanRange,
     SCHEMA_VERSION,
 };
+
+mod kernel_types_generated;
+pub use kernel_types_generated::*;

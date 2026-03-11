@@ -1,6 +1,7 @@
 use super::capability::capability_model_assert_class_disjoint;
 use super::dag::ExecutionGraph;
 use super::goal_embedding;
+use super::goal::GoalSpec;
 use super::graph_algo;
 use super::planner_update::{apply_graph_patch, GraphPatch};
 use super::template_index;
@@ -146,8 +147,8 @@ impl GraphTemplateStore {
         self.index.remove(&hash);
         self.index.snapshot_store_save();
     }
-    pub fn find_similar(&self, goal: &str, graph: &ExecutionGraph, top_k: usize, goal_w: f64, struct_w: f64, embedding_dim: usize) -> template_index::TemplateSearchResult {
-        self.index.find_similar(goal, graph, top_k, goal_w, struct_w, embedding_dim)
+    pub fn find_similar(&self, goal: &GoalSpec, graph: &ExecutionGraph, top_k: usize, goal_w: f64, struct_w: f64) -> template_index::TemplateSearchResult {
+        self.index.find_similar(goal, graph, top_k, goal_w, struct_w)
     }
     pub fn record_failure(&mut self, template_hash: &str) {
         self.index.bump_failure_count(template_hash);

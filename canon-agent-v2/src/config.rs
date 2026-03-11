@@ -99,6 +99,12 @@ struct CapabilityConfigRawSystem {
     pub embedding_model: String,
     #[serde(default = "capability_config_default_embedding_dim")]
     pub embedding_dim: usize,
+    #[serde(default = "capability_config_default_goal_drift_threshold")]
+    pub goal_drift_threshold: f64,
+    #[serde(default = "capability_config_default_goal_refocus_strength")]
+    pub goal_refocus_strength: f64,
+    #[serde(default = "capability_config_default_goal_refocus_rewrite_strength")]
+    pub goal_refocus_rewrite_strength: f64,
 }
 #[derive(Debug, Deserialize, Default)]
 struct CapabilityConfigRawLlm {
@@ -249,6 +255,15 @@ fn capability_config_default_embedding_model() -> String {
 fn capability_config_default_embedding_dim() -> usize {
     64
 }
+fn capability_config_default_goal_drift_threshold() -> f64 {
+    0.6
+}
+fn capability_config_default_goal_refocus_strength() -> f64 {
+    0.5
+}
+fn capability_config_default_goal_refocus_rewrite_strength() -> f64 {
+    0.3
+}
 fn capability_config_default_max_tabs() -> usize {
     1
 }
@@ -319,6 +334,9 @@ pub struct CapabilityConfig {
     pub structural_similarity_weight: f64,
     pub embedding_model: String,
     pub embedding_dim: usize,
+    pub goal_drift_threshold: f64,
+    pub goal_refocus_strength: f64,
+    pub goal_refocus_rewrite_strength: f64,
     pub llm_endpoints: Vec<CapabilityConfigLlmEndpoint>,
     pub planner_endpoint: Option<CapabilityConfigLlmEndpoint>,
     pub llm_roles: HashMap<String, CapabilityConfigRawRoleConfig>,
@@ -397,6 +415,9 @@ impl CapabilityConfig {
             structural_similarity_weight: raw.system.structural_similarity_weight,
             embedding_model: raw.system.embedding_model,
             embedding_dim: raw.system.embedding_dim,
+            goal_drift_threshold: raw.system.goal_drift_threshold,
+            goal_refocus_strength: raw.system.goal_refocus_strength,
+            goal_refocus_rewrite_strength: raw.system.goal_refocus_rewrite_strength,
             llm_endpoints,
             planner_endpoint,
             llm_roles: raw.llm.roles,

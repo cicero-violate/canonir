@@ -15,6 +15,7 @@ use super::graph_algo::{compute_graph_features, graph_analysis_compute_graph_sig
 use super::graph_maintenance::{self, GraphRepairMaintenanceCtx};
 use super::graph_runtime::collect_execution_context;
 use super::invariants;
+use super::goal::GoalSpec;
 use super::planner_session::{planner_controller_auto_repair_planner_update, planner_controller_validate_planner_update, PlannerController};
 use super::planner_state::{PlannerStage, PlannerStagePersist, PlannerTransition, PLANNER_TRANSITIONS};
 use super::planner_update::{apply_graph_patch, GraphPatch, PlannerUpdateEdgeSpec};
@@ -72,6 +73,7 @@ pub(crate) async fn run_execution_loop(
     workspace_listing: &str, endpoint: &config::CapabilityConfigLlmEndpoint, exec_role: &str, policy: &config::CapabilityConfigCapabilityPolicy, context_radius: usize, max_concurrency: usize,
     max_iterations: u64, tab_cooldown_ms: u64, retry_count: u32, retry_delay: u64, max_output_lines: usize, execution_preference: f64, cost_table: &mut CapabilityCostCapabilityCostTable,
     exec_metrics: &mut ExecutionTelemetry,
+    goal: &GoalSpec,
 ) -> Result<(u64, Vec<ExecutionSchedulerExecFailure>)> {
     let semaphore = Arc::new(Semaphore::new(max_concurrency.max(1)));
     let mut blocked_streak = 0u32;
@@ -104,6 +106,13 @@ pub(crate) async fn run_execution_loop(
         loop {
             match step {
                 ExecutionStep::CollectReady => {
+                    let cleared = invariants::must_clear_orphan_running(graph, policy.max_node_retries);
+                    if cleared > 0 {
+                        eprintln!(
+                            "[logs] orphan_running iter={} cleared={}",
+                            iter, cleared
+                        );
+                    }
                     features = compute_graph_features(graph);
                     ready_ids = GpuScheduler::schedule(graph);
                     for id in &ready_ids {
@@ -196,7 +205,7 @@ pub(crate) async fn run_execution_loop(
                             config,
                             role_rr,
                             exec_role,
-                            (&endpoint.id, &endpoint.url, endpoint.max_tabs, endpoint.stateful),
+                            (&endpoint.id, &endpoint.url, endpoint.max_tabs, endpoint.stateful, &endpoint.role_markdown),
                             cwd[0].clone(),
                             Path::new(LOG_ROOT).to_path_buf(),
                         )
@@ -264,6 +273,7 @@ pub(crate) async fn run_execution_loop(
                         graph,
                         log_dir: Path::new(LOG_ROOT),
                         iter,
+                        goal: Some(goal),
                         features_retry_rate: features.retry_rate,
                         features_failed_fraction: features.failed_fraction,
                         features_branching_factor: features.branching_factor,
@@ -298,7 +308,7 @@ pub(crate) async fn run_execution_loop(
                         .count();
                     invariants::must_progress_monotonic(progress_before, progress_after);
                     if config.enable_resume && config.snapshot_interval_iters > 0 && iter % config.snapshot_interval_iters == 0 {
-                        let snapshot = state_snapshot::PipelineSnapshot { graph: graph.clone(), iteration: iter };
+                        let snapshot = state_snapshot::PipelineSnapshot { graph: graph.clone(), iteration: iter, goal: goal.clone() };
                         state_snapshot::snapshot_store_save(Path::new(&config.snapshot_file), &snapshot);
                         exec_metrics.last_snapshot_written = true;
                         eprintln!("{}", console::console_ui_info("snapshot", &format!("wrote {}", config.snapshot_file)));
@@ -379,11 +389,18 @@ pub(crate) async fn run_planner_loop(
         let failure_stats = failure_store.stats();
         let features = compute_graph_features(graph).with_failure_stats(&failure_stats);
         let policy_outcome = policy_engine::evaluate_policy(&features, config.max_nodes, config.max_nodes.saturating_mul(4));
-        let policy_bias = policy_outcome.bias.clone();
+        let mut policy_bias = policy_outcome.bias.clone();
         let policy_decision = policy_outcome.decision.clone();
         let mut run_planner = policy_decision.run_planner;
         let mut expansion_scale = policy_decision.expansion_scale;
         let execution_preference = policy_decision.execution_preference;
+        let drift = 1.0 - telemetry::telemetry_goal_similarity(graph, planner.goal_spec());
+        let mut planner_refocus = false;
+        if drift > config.goal_drift_threshold {
+            policy_bias.planner_bias += config.goal_refocus_strength;
+            policy_bias.rewrite_bias += config.goal_refocus_rewrite_strength;
+            planner_refocus = true;
+        }
         let current_sig = hash_graph_structure(graph);
         let signal_changed = !current_sig.is_empty() && current_sig != last_signal_sig;
         if signal_changed {
@@ -408,7 +425,7 @@ pub(crate) async fn run_planner_loop(
         last_embedding_cache_hits = 0;
         if matches!(phase, PlannerStage::ReuseTemplate) {
             if !run_planner {
-                let search = store.find_similar(template_name, graph, config.template_top_k, config.goal_similarity_weight, config.structural_similarity_weight, config.embedding_dim);
+                let search = store.find_similar(planner.goal_spec(), graph, config.template_top_k, config.goal_similarity_weight, config.structural_similarity_weight);
                 last_embedding_cache_hits = search.cache_hits;
                 if let Some(best) = search.templates.into_iter().max_by(|a, b| {
                     let a_score = a.score * a.entry.reward;
@@ -510,10 +527,11 @@ pub(crate) async fn run_planner_loop(
                     execution_preference,
                     &mut cost_table,
                     &mut exec_metrics,
+                    planner.goal_spec(),
                 )
                 .await
                 {
-                    let reward = telemetry::telemetry_compute_reward(&eval_graph, 1, config.max_expand_iters as u64);
+                    let reward = telemetry::telemetry_compute_reward(&eval_graph, 1, config.max_expand_iters as u64, planner.goal_spec());
                     success += 1;
                     if reward > best_reward {
                         best_reward = reward;
@@ -779,6 +797,7 @@ pub(crate) async fn run_planner_loop(
                 execution_preference,
                 &mut cost_table,
                 &mut exec_metrics,
+                planner.goal_spec(),
             )
             .await?;
             let completed_after = graph
@@ -823,7 +842,7 @@ pub(crate) async fn run_planner_loop(
         let _exec_iters = exec_iters;
         let iterations_used = iter.saturating_add(1);
         planner_metrics.iterations += 1;
-        let reward = telemetry::telemetry_compute_reward(graph, iterations_used, max_iterations);
+        let reward = telemetry::telemetry_compute_reward(graph, iterations_used, max_iterations, planner.goal_spec());
         let policy_prediction = policy_bias.planner_bias;
         let policy_error = reward - policy_prediction;
         let avg_node_utility = if graph.nodes.is_empty() {
@@ -836,6 +855,7 @@ pub(crate) async fn run_planner_loop(
             }
             total / graph.nodes.len() as f64
         };
+        let goal_sim = telemetry::telemetry_goal_similarity(graph, planner.goal_spec());
         let runtime = RuntimeTelemetry {
             queue_depth: telemetry::telemetry_pending_requests(),
             retry_rate: if planner_metrics.planner_calls == 0 { 0.0 } else { planner_metrics.planner_retries as f64 / planner_metrics.planner_calls as f64 },
@@ -870,7 +890,9 @@ pub(crate) async fn run_planner_loop(
             snapshot_written: exec_metrics.last_snapshot_written,
             snapshot_loaded: resume_iteration > 0,
             resume_iteration,
-            goal_similarity_score: last_goal_similarity,
+            goal_similarity_score: goal_sim,
+            goal_drift: (1.0 - goal_sim).clamp(0.0, 1.0),
+            planner_refocus,
             template_reuse_by_embedding: last_template_by_embedding,
             embedding_cache_hits: last_embedding_cache_hits,
         };
@@ -918,7 +940,7 @@ pub(crate) async fn run_planner_loop(
         iter += 1;
         resume_iteration = iter;
     }
-    let reward = telemetry::telemetry_compute_reward(graph, iter, max_iterations);
+    let reward = telemetry::telemetry_compute_reward(graph, iter, max_iterations, planner.goal_spec());
     if graph.all_completed() && !graph.has_failed() {
         if let Err(e) = store.save_with_reward(template_name, graph, reward) {
             eprintln!("[templates] failed to persist updated template: {}", e);

@@ -1,0 +1,14 @@
+[package]
+name = "canon_kernel_consumers"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+canon_graph = { path = "../graph" }
+canon_query = { path = "../canon-query" }
+analysis-engine = { path = "../smt-analysis-engine" }
+canon_reports = { path = "../reports" }
+canon_types = { path = "../canon-types" }

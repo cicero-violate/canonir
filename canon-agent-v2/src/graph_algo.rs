@@ -462,6 +462,20 @@ pub fn compute_graph_features(graph: &dag::ExecutionGraph) -> GraphFeatureVector
         deadlock_rate: 0.0,
     }
 }
+
+pub fn graph_embedding(graph: &dag::ExecutionGraph, dim: usize) -> Vec<f32> {
+    let feats = compute_graph_features(graph).to_vec();
+    let dim = dim.max(1).max(feats.len());
+    let mut out = vec![0.0f32; dim];
+    for (i, v) in feats.iter().enumerate() {
+        out[i % dim] += *v as f32;
+    }
+    out
+}
+
+pub fn graph_embedding_dim() -> usize {
+    GraphFeatureVector::default().to_vec().len()
+}
 pub fn graph_analysis_normalize_features(f: &GraphFeatureVector, max_nodes: usize, max_edges: usize) -> Vec<f64> {
     let denom_nodes = max_nodes.max(1) as f64;
     let denom_edges = max_edges.max(1) as f64;

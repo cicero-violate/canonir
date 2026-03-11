@@ -7,27 +7,27 @@ response_timeout_secs = 90
 [[agents.cards]]
 agent_url = "https://chatgpt.com/gg/69a5aa249554819e9ac25e2df27102f1"
 agent_id = "decompose"
-role = "GENERIC_AGENT_ROLE.md"
+role = "PLANNER_ROLE.md"
 goal = "AGENT_GOAL.md"
 tool_capabilities = []
 
 [[agents.cards]]
 agent_url = "https://chatgpt.com/gg/69a32d7d1a008199948ad06498df2f4f"
 agent_id = "planner"
-role = "GENERIC_AGENT_ROLE.md"
+role = "PLANNER_ROLE.md"
 goal = "AGENT_GOAL.md"
 tool_capabilities = []
 
 [[agents.cards]]
 agent_url = "https://chatgpt.com/gg/699c50e06bc881a3aa5ac1866bf15679"
 agent_id = "executor"
-role = "GENERIC_AGENT_ROLE.md"
+role = "EXECUTOR_AGENT_ROLE.md"
 goal = "AGENT_GOAL.md"
 tool_capabilities = ["apply_patch", "bash"]
 
 [[agents.cards]]
 agent_url = "https://chatgpt.com/gg/6992c359272881a19d30c226925f575d"
 agent_id = "verifier"
-role = "GENERIC_AGENT_ROLE.md"
+role = "EXECUTOR_AGENT_ROLE.md"
 goal = "AGENT_GOAL.md"
 tool_capabilities = []

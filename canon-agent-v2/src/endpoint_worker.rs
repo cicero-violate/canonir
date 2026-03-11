@@ -133,8 +133,11 @@ impl LlmWorker {
         }
         let hash = llm_worker_stable_hash64(&raw);
         if !self.seen_hashes.insert(hash) {
-            tab_manager_log_llm(format!("phase={} endpoint={} tab={} duplicate_hash={}", phase, self.endpoint_id, tab_id, hash));
-            return Err(anyhow::anyhow!("duplicate response hash"));
+            // Duplicate outputs can legitimately occur for verify/observe steps; don't fail the call.
+            tab_manager_log_llm(format!(
+                "phase={} endpoint={} tab={} duplicate_hash={}",
+                phase, self.endpoint_id, tab_id, hash
+            ));
         }
         Ok(raw)
     }
@@ -143,6 +146,30 @@ pub async fn llm_worker_send_request(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, allow_req_id_mismatch: bool, phase: &str,
     tabs: &TabManagerHandle, max_tabs: usize, tab_cooldown_ms: u64,
 ) -> Result<String> {
+    let (req_id, raw) = llm_worker_send_request_with_req_id(
+        bridge,
+        endpoint_id,
+        url,
+        stateful,
+        prompt,
+        role_schema,
+        node_id,
+        cache_key,
+        allow_req_id_mismatch,
+        phase,
+        tabs,
+        max_tabs,
+        tab_cooldown_ms,
+    )
+    .await?;
+    let _ = req_id;
+    Ok(raw)
+}
+
+pub async fn llm_worker_send_request_with_req_id(
+    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, allow_req_id_mismatch: bool, phase: &str,
+    tabs: &TabManagerHandle, max_tabs: usize, tab_cooldown_ms: u64,
+) -> Result<(u64, String)> {
     let req_id = NEXT_REQ_ID.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = oneshot::channel();
     let mut workers = WORKERS.lock().await;
@@ -177,7 +204,8 @@ pub async fn llm_worker_send_request(
         response: tx,
     };
     sender.send(req).await.map_err(|_| anyhow::anyhow!("endpoint worker closed"))?;
-    rx.await.map_err(|_| anyhow::anyhow!("endpoint worker canceled"))?
+    let raw = rx.await.map_err(|_| anyhow::anyhow!("endpoint worker canceled"))??;
+    Ok((req_id, raw))
 }
 pub async fn llm_worker_init_workers(bridge: &WsBridge, config: &CapabilityConfig, tabs: &TabManagerHandle) {
     let mut workers = WORKERS.lock().await;

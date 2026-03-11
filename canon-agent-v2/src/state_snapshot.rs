@@ -1,10 +1,13 @@
 use super::dag::ExecutionGraph;
+use super::goal::GoalSpec;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineSnapshot {
     pub graph: ExecutionGraph,
     pub iteration: u64,
+    #[serde(default)]
+    pub goal: GoalSpec,
 }
 pub fn snapshot_store_save(path: &Path, snapshot: &PipelineSnapshot) {
     if let Ok(pretty) = serde_json::to_string_pretty(snapshot) {

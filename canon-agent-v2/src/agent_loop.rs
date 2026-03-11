@@ -119,6 +119,17 @@ pub async fn run_agent_loop(
         };
         kernel_state.save(&kernel_state_path);
         write_agent_state(&agent_state_path, tick, stagnation, last_success_tick);
+        if let Some(outcome) = &outcome {
+            if outcome.summary == "capability completed" {
+                // Exit only if goal is actually satisfied.
+                let snap_path = Path::new("/workspace/ai_sandbox/canon/agent_logs/state_snapshot.json");
+                if let Some(snapshot) = crate::state_snapshot::snapshot_store_load(&snap_path) {
+                    if crate::graph_runtime::goal_reached(&snapshot.graph, &snapshot.goal) {
+                        break;
+                    }
+                }
+            }
+        }
         if config.max_ticks > 0 && tick >= config.max_ticks {
             break;
         }

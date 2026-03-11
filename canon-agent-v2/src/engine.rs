@@ -6,7 +6,11 @@ use super::dag::NodeAuthority;
 use super::dag::{ContextSnapshotNode, ExecutionGraph, ExecutionNode, NodeStatus};
 use super::invariants;
 pub use super::endpoint_worker::{llm_worker_new_tabs, TabManagerHandle};
-use super::llm::{llm_client_call_agent_json_with_retry_allow_mismatch, llm_client_call_agent_raw_with_retry_allow_mismatch};
+use super::llm::{
+    llm_client_call_agent_json_with_retry_allow_mismatch,
+    llm_client_call_agent_json_with_retry_allow_mismatch_with_req_id,
+    llm_client_call_agent_raw_with_retry_allow_mismatch,
+};
 use super::ExecutionDelta;
 use crate::ws_server::WsBridge;
 use anyhow::{Context, Result};
@@ -85,9 +89,9 @@ enum ModuleDispatchMode {
     Verify,
     Readonly,
 }
-const MUTATE_SCHEMA: &str = "You are an executor, not a planner. Do NOT return create_nodes, add_edges, or any planner schema. Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"results\": [\n    { \"id\": \"t1\", \"deltas\": [ { \"type\": \"write_file\", \"path\": \"x\", \"content\": \"...\" } ], \"rationale\": \"string\" }\n  ]\n}\nAllowed delta types:\n- read_file { path }\n- list_dir { path }\n- read_command { command, args, path } -- path is the working directory for the command\n- write_file { path, content }\n- replace_text { path, find, replace }\n- delete_file { path }\n";
-const VERIFY_SCHEMA: &str = "Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"updates\": [\n    { \"id\": \"t1\", \"status\": \"completed\", \"error\": null }\n  ]\n}\nAllowed status values: pending, ready, running, completed, failed, blocked.\n";
-const READONLY_SCHEMA: &str = "You are an executor, not a planner. Do NOT return create_nodes, add_edges, or any planner schema. Return exactly one fenced ```json block and nothing else.\nSchema:\n{\n  \"results\": [\n    { \"id\": \"t1\", \"deltas\": [ { \"type\": \"read_file\", \"path\": \"x\" } ], \"rationale\": \"string\" }\n  ]\n}\nAllowed delta types: read_file { path }, list_dir { path }, read_command { command, args, path } -- path is the working directory for the command.\n";
+const MUTATE_SCHEMA: &str = include_str!("../../canon-agent-prompts/EXECUTOR_MUTATE_SCHEMA.md");
+const VERIFY_SCHEMA: &str = include_str!("../../canon-agent-prompts/EXECUTOR_VERIFY_SCHEMA.md");
+const READONLY_SCHEMA: &str = include_str!("../../canon-agent-prompts/EXECUTOR_READONLY_SCHEMA.md");
 struct ModuleModeConfig {
     phase: &'static str,
     schema: &'static str,
@@ -246,6 +250,15 @@ fn module_parse_mutate(payload: Value, node: &ExecutionNode, iter: u64) -> Resul
 }
 fn module_parse_verify(payload: Value, node: &ExecutionNode, iter: u64) -> Result<ModuleNodeCallResult> {
     let output: ModuleVerifyOutput = serde_json::from_value(payload).context("verifier output did not match schema")?;
+    if output
+        .updates
+        .iter()
+        .any(|u| !matches!(u.status, NodeStatus::Completed | NodeStatus::Failed))
+    {
+        return Err(anyhow::anyhow!(
+            "verifier output must set status to completed or failed"
+        ));
+    }
     eprintln!(r#"[capability] {{"iter":{},"phase":"verifier","updates":{}}}"#, iter, output.updates.len());
     Ok(ModuleNodeCallResult::Verify { node_id: node.id.clone(), output })
 }
@@ -340,11 +353,47 @@ async fn module_call_mode(
     };
     let prompt =
         format!("{}\n\nWorkspace root: {}\nContext radius: {} nodes.\nINPUT:\n{}", config.schema, workspace_root.display(), context.len(), serde_json::to_string_pretty(&input).unwrap_or_default());
-    let payload =
+    // Log the exact request payload sent to the LLM so debugging is possible.
+    let (payload, req_id) =
         module_llm_call_with_retry(bridge, endpoint_id, url, stateful, &prompt, config.schema, &input, role_schema, config.phase, Some(&node.id), tabs, max_tabs, tab_cooldown_ms, retries, delay_secs)
             .await?;
+    eprintln!(
+        "[logs] llm_request iter={} phase={} node={} req_id={}",
+        iter,
+        config.phase,
+        node.id,
+        req_id
+    );
+    let request_log = serde_json::json!({
+        "iter": iter,
+        "phase": config.phase,
+        "node_id": node.id,
+        "req_id": req_id,
+        "role_markdown": role_schema,
+        "schema": config.schema,
+        "prompt": prompt,
+        "input": input,
+    });
+    let request_path = log_dir.join(format!("iter_{:03}_{}_request.json", iter, config.phase));
+    let _ = std::fs::write(request_path, serde_json::to_string_pretty(&request_log).unwrap_or_default());
     if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
-        let _ = std::fs::write(log_dir.join((config.log_name)(iter)), pretty);
+        let _ = std::fs::write(log_dir.join((config.log_name)(iter)), pretty.clone());
+        let response_log = serde_json::json!({
+            "iter": iter,
+            "phase": config.phase,
+            "node_id": node.id,
+            "req_id": req_id,
+            "payload": payload,
+        });
+        let response_path = log_dir.join(format!("iter_{:03}_{}_response.json", iter, config.phase));
+        let _ = std::fs::write(response_path, serde_json::to_string_pretty(&response_log).unwrap_or(pretty));
+        eprintln!(
+            "[logs] llm_response iter={} phase={} node={} req_id={}",
+            iter,
+            config.phase,
+            node.id,
+            req_id
+        );
     }
     let parse_fn = PARSE_FNS[mode as usize];
     let result = parse_fn(payload.clone(), node, iter);
@@ -362,10 +411,10 @@ async fn module_call_mode(
 async fn module_llm_call_with_retry(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, schema: &str, input: &Value, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle,
     max_tabs: usize, tab_cooldown_ms: u64, retries: u32, delay_secs: u64,
-) -> Result<Value> {
-    let payload =
-        llm_client_call_agent_json_with_retry_allow_mismatch(bridge, endpoint_id, url, stateful, prompt, role_schema, phase, node_id, tabs, max_tabs, tab_cooldown_ms, retries, delay_secs).await?;
-    Ok(payload)
+) -> Result<(Value, u64)> {
+    let (payload, req_id) =
+        llm_client_call_agent_json_with_retry_allow_mismatch_with_req_id(bridge, endpoint_id, url, stateful, prompt, role_schema, phase, node_id, tabs, max_tabs, tab_cooldown_ms, retries, delay_secs).await?;
+    Ok((payload, req_id))
 }
 fn module_apply_mutate_output(
     node_id: String, output: ModuleExecOutput, graph: &mut ExecutionGraph, roots: &[PathBuf], max_output_lines: usize, _log_dir: &Path, iter: u64, policy: &CapabilityConfigCapabilityPolicy,
@@ -399,6 +448,27 @@ fn module_apply_mutate_output(
     Ok(())
 }
 fn module_apply_verify_output(node_id: String, output: ModuleVerifyOutput, graph: &mut ExecutionGraph, _log_dir: &Path, iter: u64) -> Result<()> {
+    // Mark node as running once verification executes.
+    let _ = graph.update_status(&node_id, NodeStatus::Running);
+    if output.updates.is_empty() {
+        let mut fail = false;
+        let mut budget = 1u32;
+        if let Some(node) = graph.get_node_mut(&node_id) {
+            node.readonly_fail_count += 1;
+            budget = node.budget.unwrap_or(1);
+            fail = node.readonly_fail_count >= budget;
+            if fail {
+                node.error = Some("verify produced no updates".to_string());
+            }
+        }
+        if fail {
+            let _ = graph.update_status(&node_id, NodeStatus::Failed);
+        } else {
+            let _ = graph.update_status(&node_id, NodeStatus::Ready);
+        }
+        return Ok(());
+    }
+    let mut self_updated = false;
     for mut upd in output.updates {
         module_coerce_id(&mut upd.id, &node_id);
         let _ = graph.update_status(&upd.id, upd.status);
@@ -407,6 +477,15 @@ fn module_apply_verify_output(node_id: String, output: ModuleVerifyOutput, graph
             if upd.status == NodeStatus::Completed {
                 n.completed_iter = Some(iter);
             }
+        }
+        if upd.id == node_id {
+            self_updated = true;
+        }
+    }
+    if !self_updated {
+        let _ = graph.update_status(&node_id, NodeStatus::Completed);
+        if let Some(n) = graph.get_node_mut(&node_id) {
+            n.completed_iter = Some(iter);
         }
     }
     if let Some(node) = graph.get_node_mut(&node_id) {

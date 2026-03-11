@@ -12,10 +12,15 @@ pub fn role_burst_limit(config: &CapabilityConfig, role: &str) -> usize {
 }
 pub async fn endpoint_selector_select_endpoints_for_role(config: &CapabilityConfig, role_rr: &tokio::sync::Mutex<HashMap<String, usize>>, role: &str, burst: usize) -> Vec<EndpointSelection> {
     let role_cfg = config.role_config(role);
+    let has_explicit_roles = config.llm_endpoints.iter().any(|e| e.role.is_some());
     let mut weights: Vec<(usize, u32)> = Vec::new();
     let mut total = 0u32;
     for (idx, ep) in config.llm_endpoints.iter().enumerate() {
-        if let Some(ep_role) = ep.role.as_deref() {
+        if has_explicit_roles {
+            if ep.role.as_deref() != Some(role) {
+                continue;
+            }
+        } else if let Some(ep_role) = ep.role.as_deref() {
             if ep_role != role {
                 continue;
             }
@@ -29,7 +34,11 @@ pub async fn endpoint_selector_select_endpoints_for_role(config: &CapabilityConf
     let use_default_weights = total == 0;
     if use_default_weights {
         for (idx, _ep) in config.llm_endpoints.iter().enumerate() {
-            if let Some(ep_role) = config.llm_endpoints[idx].role.as_deref() {
+            if has_explicit_roles {
+                if config.llm_endpoints[idx].role.as_deref() != Some(role) {
+                    continue;
+                }
+            } else if let Some(ep_role) = config.llm_endpoints[idx].role.as_deref() {
                 if ep_role != role {
                     continue;
                 }

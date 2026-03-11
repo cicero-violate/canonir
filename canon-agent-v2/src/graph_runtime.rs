@@ -1,6 +1,7 @@
 use super::dag;
 use super::dag::ContextSnapshotNode;
 use super::decompose;
+use super::goal::GoalSpec;
 #[cfg(feature = "cuda")]
 use algorithms::graph::model_checking;
 use algorithms::graph::{csr::Csr, reachability, scc, topological_sort};
@@ -132,8 +133,11 @@ pub(crate) fn prune_unreachable_nodes(graph: &mut dag::ExecutionGraph) {
     }
     graph.nodes = next;
 }
-pub(crate) fn validate_graph_semantics(graph: &dag::ExecutionGraph) -> Result<()> {
+pub(crate) fn validate_graph_semantics(graph: &dag::ExecutionGraph, goal: Option<&GoalSpec>) -> Result<()> {
     validate_graph_invariants(graph)?;
+    if let Some(goal) = goal {
+        validate_goal(graph, goal)?;
+    }
     let kernels = graph_runtime_build_kernels(graph);
     let analysis_roots: Vec<usize> = graph.nodes.iter().enumerate().filter_map(|(i, n)| (n.node_type == decompose::DecomposeNodeType::Analysis).then_some(i)).collect();
     let reach = reachability::reachability_gpu(&kernels.csr, &analysis_roots);
@@ -166,6 +170,42 @@ pub(crate) fn validate_graph_semantics(graph: &dag::ExecutionGraph) -> Result<()
         }
     }
     Ok(())
+}
+
+fn validate_goal(graph: &dag::ExecutionGraph, goal: &GoalSpec) -> Result<()> {
+    if !graph.all_completed() {
+        // Goal validation is enforced only at terminal state.
+        return Ok(());
+    }
+    if goal.success_criteria.iter().any(|c| c == "graph_completed") {
+        if !graph.all_completed() {
+            return Err(anyhow::anyhow!("goal_not_satisfied: graph not completed"));
+        }
+    }
+    if goal.success_criteria.iter().any(|c| c == "no_failed_nodes") {
+        if graph.has_failed() {
+            return Err(anyhow::anyhow!("goal_not_satisfied: failed nodes present"));
+        }
+    }
+    if goal.success_criteria.iter().any(|c| c == "invariants_hold") {
+        validate_graph_invariants(graph)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn goal_reached(graph: &dag::ExecutionGraph, goal: &GoalSpec) -> bool {
+    if !graph.all_completed() {
+        return false;
+    }
+    if goal.success_criteria.iter().any(|c| c == "no_failed_nodes") && graph.has_failed() {
+        return false;
+    }
+    if goal.success_criteria.iter().any(|c| c == "invariants_hold") {
+        if validate_graph_invariants(graph).is_err() {
+            return false;
+        }
+    }
+    true
 }
 fn validate_graph_invariants(graph: &dag::ExecutionGraph) -> Result<()> {
     if graph.nodes.is_empty() {

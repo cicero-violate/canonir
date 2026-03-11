@@ -14,15 +14,39 @@ pub struct NodeDispatchContext {
     pub url: String,
     pub max_tabs: usize,
     pub stateful: bool,
+    pub role_markdown: String,
     pub workspace_root: PathBuf,
     pub log_dir: PathBuf,
 }
+fn resolve_role_markdown(raw: &str) -> String {
+    // If it already looks like content, keep it.
+    if raw.contains('\n') || raw.contains("```") {
+        return raw.to_string();
+    }
+    // Try canon-agent-prompts/<name>
+    let prompt_path = PathBuf::from("/workspace/ai_sandbox/canon/canon-agent-prompts").join(raw);
+    if let Ok(text) = std::fs::read_to_string(&prompt_path) {
+        return text;
+    }
+    // Fall back to raw value.
+    raw.to_string()
+}
 pub async fn node_dispatch_resolve_endpoint(
-    config: &CapabilityConfig, role_rr: &tokio::sync::Mutex<std::collections::HashMap<String, usize>>, exec_role: &str, fallback: (&str, &str, usize, bool), workspace_root: PathBuf, log_dir: PathBuf,
+    config: &CapabilityConfig, role_rr: &tokio::sync::Mutex<std::collections::HashMap<String, usize>>, exec_role: &str, fallback: (&str, &str, usize, bool, &str), workspace_root: PathBuf, log_dir: PathBuf,
 ) -> NodeDispatchContext {
     let selected = endpoint_scheduler::endpoint_selector_select_endpoints_for_role(config, role_rr, exec_role, 1).await;
-    let (endpoint_id, url, max_tabs) = selected.get(0).map(|e| (e.id.clone(), e.url.clone(), e.max_tabs)).unwrap_or_else(|| (fallback.0.to_string(), fallback.1.to_string(), fallback.2));
-    NodeDispatchContext { endpoint_id, url, max_tabs, stateful: fallback.3, workspace_root, log_dir }
+    let (endpoint_id, url, max_tabs, role_markdown) = selected
+        .get(0)
+        .map(|e| {
+            let role_markdown = config
+                .endpoint_by_id(&e.id)
+                .map(|cfg| cfg.role_markdown.clone())
+                .unwrap_or_else(|_| fallback.4.to_string());
+            (e.id.clone(), e.url.clone(), e.max_tabs, role_markdown)
+        })
+        .unwrap_or_else(|| (fallback.0.to_string(), fallback.1.to_string(), fallback.2, fallback.4.to_string()));
+    let role_markdown = resolve_role_markdown(&role_markdown);
+    NodeDispatchContext { endpoint_id, url, max_tabs, stateful: fallback.3, role_markdown, workspace_root, log_dir }
 }
 pub fn node_dispatch_log_dispatch(node: &ExecutionNode, mode_label: &str, endpoint_id: &str) {
     let node_type_str = format!("{:?}", node.node_type).to_lowercase();
@@ -42,7 +66,7 @@ pub async fn dispatch_node_execution(
         &ctx.endpoint_id,
         &ctx.url,
         ctx.stateful,
-        "",
+        &ctx.role_markdown,
         tabs,
         ctx.max_tabs,
         tab_cooldown_ms,
