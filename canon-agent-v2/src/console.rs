@@ -10,7 +10,7 @@ const CYAN: &str = "\x1b[36m";
 pub fn console_ui_tag(label: &str, color: &str) -> String {
     format!("{}[{}]{}", color, label, RESET)
 }
-pub fn console_ui_info(label: &str, msg: &str) -> String {
+pub fn console_ui_note(label: &str, msg: &str) -> String {
     format!("{} {}", console_ui_tag(label, BLUE), msg)
 }
 pub fn console_ui_warn(label: &str, msg: &str) -> String {
