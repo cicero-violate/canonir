@@ -24,7 +24,7 @@ use super::graph_runtime::collect_execution_context;
 use super::invariants;
 use super::goal::GoalSpec;
 use super::planner_session::{
-    planner_controller_auto_repair_planner_update,
+    planner_controller_auto_repair_update,
     planner_controller_validate_planner_update, PlannerController,
 };
 use super::planner_state::{
@@ -73,7 +73,7 @@ pub struct ExecutionSchedulerExecFailure {
     pub kind: &'static str,
     pub iter: u64,
 }
-fn update_adaptive_concurrency(
+fn adjust_adaptive_concurrency(
     current: usize,
     max_cfg: usize,
     features: &GraphFeatureVector,
@@ -88,7 +88,7 @@ fn update_adaptive_concurrency(
     }
     next.clamp(1, max_cfg.max(1))
 }
-fn planner_entropy_from_history(history: &[String]) -> f64 {
+fn compute_planner_entropy(history: &[String]) -> f64 {
     if history.is_empty() {
         return 0.0;
     }
@@ -108,7 +108,7 @@ fn planner_entropy_from_history(history: &[String]) -> f64 {
     let max_entropy = (counts.len() as f64).ln().max(1.0);
     (entropy / max_entropy).clamp(0.0, 1.0)
 }
-fn planner_constraints_text(constraints: &[FailureStoreConstraint]) -> String {
+fn format_planner_constraints(constraints: &[FailureStoreConstraint]) -> String {
     if constraints.is_empty() {
         return "none\n".to_string();
     }
@@ -319,7 +319,7 @@ pub(crate) async fn run_execution_loop(
                         .filter(|n| n.status == dag::NodeStatus::Failed)
                         .count();
                     eprintln!(
-                        "{}", console::console_ui_phase("tick", &
+                        "{}", console::console_format_phase("tick", &
                         format!("iter={} ready={} completed={}/{} failed={}", iter,
                         ready_ids.len(), completed_count, graph.nodes.len(),
                         failed_count))
@@ -363,7 +363,7 @@ pub(crate) async fn run_execution_loop(
                     if skip_iter {
                         break;
                     }
-                    adaptive_concurrency = update_adaptive_concurrency(
+                    adaptive_concurrency = adjust_adaptive_concurrency(
                         adaptive_concurrency,
                         max_concurrency,
                         &features,
@@ -428,8 +428,8 @@ pub(crate) async fn run_execution_loop(
                         let mode = capability_model_dominant_class(
                             &node.required_capabilities,
                         );
-                        let mode_label = console::console_ui_mode_tag(mode);
-                        dispatch::node_dispatch_log_dispatch(
+                        let mode_label = console::console_mode_tag(mode);
+                        dispatch::log_node_dispatch(
                             &node,
                             &mode_label,
                             &ctx.endpoint_id,
@@ -439,7 +439,7 @@ pub(crate) async fn run_execution_loop(
                             &node.id,
                             context_radius,
                         );
-                        let fut = dispatch::dispatch_node_execution(
+                        let fut = dispatch::dispatch_node_call(
                             node,
                             auth,
                             bridge,
@@ -578,7 +578,7 @@ pub(crate) async fn run_execution_loop(
                         );
                         exec_metrics.last_snapshot_written = true;
                         eprintln!(
-                            "{}", console::console_ui_note("snapshot", &
+                            "{}", console::console_format_info("snapshot", &
                             format!("wrote {}", config.snapshot_file))
                         );
                     }
@@ -619,7 +619,7 @@ pub(crate) async fn run_planner_loop(
     planner_stage_path: Option<&Path>,
     tick: u64,
 ) -> Result<f64> {
-    let template_hash = store.hash_for(template_name);
+    let template_hash = store.template_hash(template_name);
     let mut failure_store = FailureStore::snapshot_store_load(&template_hash);
     let mut cost_table = CapabilityCostCapabilityCostTable::snapshot_store_load();
     let mut planner_metrics = PlannerTelemetry::default();
@@ -650,7 +650,7 @@ pub(crate) async fn run_planner_loop(
     }
     while !graph.all_completed() && iter < max_iterations {
         eprintln!(
-            "{}", console::console_ui_phase("planner", & format!("iter={} nodes={}",
+            "{}", console::console_format_phase("planner", & format!("iter={} nodes={}",
             iter, graph.nodes.len()))
         );
         eprintln!(
@@ -709,8 +709,7 @@ pub(crate) async fn run_planner_loop(
             .nodes
             .iter()
             .filter_map(|n| {
-                n
-                    .reasoning_trace
+                n.reasoning_trace
                     .as_ref()
                     .and_then(|trace| {
                         trace.starts_with("REWRITE_REQUESTED").then(|| n.id.clone())
@@ -726,7 +725,7 @@ pub(crate) async fn run_planner_loop(
         if matches!(phase, PlannerStage::ReuseTemplate) {
             if !run_planner {
                 let search = store
-                    .find_similar(
+                    .find_similar_templates(
                         planner.goal_spec(),
                         graph,
                         config.template_top_k,
@@ -751,7 +750,7 @@ pub(crate) async fn run_planner_loop(
                     reuse_goal_similarity = best.goal_similarity;
                     reuse_by_embedding = best.used_embedding;
                     if reuse_score >= config.template_reuse_threshold {
-                        if let Ok(loaded) = store.snapshot_store_load(&best.entry.goal) {
+                        if let Ok(loaded) = store.load_snapshot(&best.entry.goal) {
                             *graph = loaded;
                             graph.reset_for_execution();
                             graph.rebuild_index();
@@ -787,7 +786,7 @@ pub(crate) async fn run_planner_loop(
                 }
             }
             eprintln!(
-                "{}", console::console_ui_note("recovery", &
+                "{}", console::console_format_info("recovery", &
                 format!("reason={} rewrites={}", reason, rewrite_requests.len()))
             );
         }
@@ -800,7 +799,7 @@ pub(crate) async fn run_planner_loop(
         let mut constraint_types: Vec<String> = Vec::new();
         let attempts = retry_count.max(1);
         let force_planner_expand = store
-            .is_plateaued(
+            .is_reward_plateaued(
                 template_name,
                 config.planner_plateau_window,
                 config.planner_plateau_threshold,
@@ -832,7 +831,7 @@ pub(crate) async fn run_planner_loop(
         if matches!(phase, PlannerStage::MutateTemplate) && force_planner_expand
             && config.mutation_candidates > 0
         {
-            let base_reward = store.stored_reward(template_name);
+            let base_reward = store.reward_for_template(template_name);
             let target_symbols = planner
                 .goal_spec()
                 .artifact
@@ -841,7 +840,7 @@ pub(crate) async fn run_planner_loop(
                 .unwrap_or_default();
             let mut base_graph = graph.clone();
             let seed = store
-                .find_similar(
+                .find_similar_templates(
                     planner.goal_spec(),
                     graph,
                     1,
@@ -856,7 +855,7 @@ pub(crate) async fn run_planner_loop(
                     a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal)
                 })
             {
-                if let Ok(mut loaded) = store.snapshot_store_load(&best.entry.goal) {
+                if let Ok(mut loaded) = store.load_snapshot(&best.entry.goal) {
                     loaded.reset_for_execution();
                     loaded.rebuild_index();
                     base_graph = loaded;
@@ -929,7 +928,8 @@ pub(crate) async fn run_planner_loop(
             last_mutation_reward_delta = best_reward - base_reward;
             if let Some(best_graph) = best_graph {
                 *graph = best_graph;
-                let _ = store.save_with_reward(template_name, graph, best_reward);
+                let _ = store
+                    .save_snapshot_with_reward(template_name, graph, best_reward);
             }
         }
         if matches!(phase, PlannerStage::MutateTemplate) {
@@ -969,7 +969,7 @@ pub(crate) async fn run_planner_loop(
                         config.failure_constraint_threshold,
                         config.max_constraints,
                     );
-                let constraints_text = planner_constraints_text(&constraints);
+                let constraints_text = format_planner_constraints(&constraints);
                 let graph_signals_text = graph_analysis_planner_signals_for_graph(graph);
                 let feature_vector_text = serde_json::to_string_pretty(&features)
                     .unwrap_or_default();
@@ -1081,7 +1081,7 @@ pub(crate) async fn run_planner_loop(
                         }
                     }
                 }
-                let repaired = planner_controller_auto_repair_planner_update(
+                let repaired = planner_controller_auto_repair_update(
                     graph,
                     &mut candidate,
                 );
@@ -1152,7 +1152,7 @@ pub(crate) async fn run_planner_loop(
                     if err_msg.contains("cycle detected")
                         || err_msg.contains("capability class")
                     {
-                        store.record_failure(&template_hash);
+                        store.record_template_failure(&template_hash);
                     }
                     let payload = serde_json::json!(
                         { "iter" : iter, "attempt" : attempt, "error" : err_msg,
@@ -1214,7 +1214,7 @@ pub(crate) async fn run_planner_loop(
             let mut updated = graph.clone();
             apply_graph_patch(&mut updated, update)?;
             updated.validate().map_err(|e| anyhow::anyhow!(e))?;
-            store.snapshot_store_save(template_name, &updated)?;
+            store.save_snapshot(template_name, &updated)?;
             *graph = updated;
             eprintln!(
                 "[planner] applied update: nodes={} edges={}", graph.nodes.len(),
@@ -1311,7 +1311,7 @@ pub(crate) async fn run_planner_loop(
         for failure in exec_failures {
             failure_store.record_graph(failure.kind, graph, failure.iter);
             store
-                .record_failure_and_maybe_evict(
+                .record_failure_and_evict_if_needed(
                     template_name,
                     config.template_population_size,
                 );
@@ -1404,7 +1404,7 @@ pub(crate) async fn run_planner_loop(
         } else {
             Some(constraint_types.join(","))
         };
-        runtime.repair.planner_entropy = planner_entropy_from_history(&planner_history);
+        runtime.repair.planner_entropy = compute_planner_entropy(&planner_history);
         runtime.performance.avg_capability_latency = cost_table.avg_latency();
         runtime.performance.avg_capability_failure = cost_table.avg_failure();
         runtime.performance.avg_node_utility = avg_node_utility;
@@ -1414,7 +1414,7 @@ pub(crate) async fn run_planner_loop(
         runtime.goal.goal_similarity_score = goal_sim;
         runtime.goal.goal_drift = (1.0 - goal_sim).clamp(0.0, 1.0);
         runtime.goal.planner_refocus = planner_refocus;
-        let reward_history = store.recent_rewards(template_name, 6);
+        let reward_history = store.recent_template_rewards(template_name, 6);
         let features = features.with_reward_history(&reward_history);
         let failures = failure_store.failure_count();
         let (add_nodes, add_edges, rewrites) = last_update_counts.unwrap_or((0, 0, 0));
@@ -1454,14 +1454,14 @@ pub(crate) async fn run_planner_loop(
             config.max_nodes.saturating_mul(4),
         );
         if let Some(rewrites) = revision_rewrites {
-            store.record_revision(template_name, graph, reward, rewrites, iter);
+            store.record_template_revision(template_name, graph, reward, rewrites, iter);
         }
         let snapshot = TelemetryFrame {
             planner: planner_metrics.clone(),
             exec: exec_metrics.clone(),
             runtime,
             reward,
-            template_hash: Some(store.hash_for(template_name)),
+            template_hash: Some(store.template_hash(template_name)),
             goal: Some(template_name.to_string()),
         };
         telemetry::telemetry_record_all_snapshots(
@@ -1516,10 +1516,10 @@ pub(crate) async fn run_planner_loop(
         config.max_nodes.saturating_mul(4),
     );
     if graph.all_completed() && !graph.has_failed() {
-        if let Err(e) = store.save_with_reward(template_name, graph, reward) {
+        if let Err(e) = store.save_snapshot_with_reward(template_name, graph, reward) {
             eprintln!("[templates] failed to persist updated template: {}", e);
         }
     }
-    store.record_reward(template_name, reward);
+    store.record_template_reward(template_name, reward);
     Ok(reward)
 }

@@ -17,6 +17,9 @@ serde_json = "1"
 chrono = "0.4"
 canon = { path = "../../canon" }
 
+[dev-dependencies]
+tempfile = "3"
+
 [[bin]]
 name = "project_editor"
 path = "src/bin/project_editor.rs"

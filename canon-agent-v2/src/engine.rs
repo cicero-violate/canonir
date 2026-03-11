@@ -56,25 +56,83 @@ pub enum ModuleNodeCallResult {
     Verify { node_id: String, output: ModuleVerifyOutput },
 }
 pub async fn module_call_llm_raw_with_retry_allow_mismatch(
-    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle, max_tabs: usize,
-    tab_cooldown_ms: u64, max_retries: u32, delay_secs: u64,
+    bridge: &WsBridge,
+    endpoint_id: &str,
+    url: &str,
+    stateful: bool,
+    prompt: &str,
+    role_schema: &str,
+    phase: &str,
+    node_id: Option<&str>,
+    tabs: &TabManagerHandle,
+    max_tabs: usize,
+    tab_cooldown_ms: u64,
+    max_retries: u32,
+    delay_secs: u64,
 ) -> Result<String> {
-    llm_client_call_agent_raw_with_retry_allow_mismatch(bridge, endpoint_id, url, stateful, prompt, role_schema, phase, node_id, tabs, max_tabs, tab_cooldown_ms, max_retries, delay_secs).await
+    llm_client_call_agent_raw_with_retry_allow_mismatch(
+            bridge,
+            endpoint_id,
+            url,
+            stateful,
+            prompt,
+            role_schema,
+            phase,
+            node_id,
+            tabs,
+            max_tabs,
+            tab_cooldown_ms,
+            max_retries,
+            delay_secs,
+        )
+        .await
 }
 pub async fn module_call_llm_json_with_retry_allow_mismatch(
-    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle, max_tabs: usize,
-    tab_cooldown_ms: u64, max_retries: u32, delay_secs: u64,
+    bridge: &WsBridge,
+    endpoint_id: &str,
+    url: &str,
+    stateful: bool,
+    prompt: &str,
+    role_schema: &str,
+    phase: &str,
+    node_id: Option<&str>,
+    tabs: &TabManagerHandle,
+    max_tabs: usize,
+    tab_cooldown_ms: u64,
+    max_retries: u32,
+    delay_secs: u64,
 ) -> Result<Value> {
-    llm_client_call_agent_json_with_retry_allow_mismatch(bridge, endpoint_id, url, stateful, prompt, role_schema, phase, node_id, tabs, max_tabs, tab_cooldown_ms, max_retries, delay_secs).await
+    llm_client_call_agent_json_with_retry_allow_mismatch(
+            bridge,
+            endpoint_id,
+            url,
+            stateful,
+            prompt,
+            role_schema,
+            phase,
+            node_id,
+            tabs,
+            max_tabs,
+            tab_cooldown_ms,
+            max_retries,
+            delay_secs,
+        )
+        .await
 }
-pub async fn module_init_io_workers(bridge: &WsBridge, config: &super::config::CapabilityConfig, tabs: &TabManagerHandle) {
+pub async fn module_init_io_workers(
+    bridge: &WsBridge,
+    config: &super::config::CapabilityConfig,
+    tabs: &TabManagerHandle,
+) {
     super::endpoint_worker::llm_worker_init_workers(bridge, config, tabs).await;
 }
 pub fn module_take_recovery_signal(log_root: &Path) -> Option<String> {
     let path = log_root.join("recovery_signal.json");
     let raw = std::fs::read_to_string(&path).ok()?;
     let _ = std::fs::remove_file(&path);
-    serde_json::from_str::<serde_json::Value>(&raw).ok().and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(|s| s.to_string()))
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(|s| s.to_string()))
 }
 pub struct ModuleNodeProcessReport {
     pub node_id: String,
@@ -89,90 +147,191 @@ enum ModuleDispatchMode {
     Verify,
     Readonly,
 }
-const MUTATE_SCHEMA: &str = include_str!("../../canon-agent-prompts/EXECUTOR_MUTATE_SCHEMA.md");
-const VERIFY_SCHEMA: &str = include_str!("../../canon-agent-prompts/EXECUTOR_VERIFY_SCHEMA.md");
-const READONLY_SCHEMA: &str = include_str!("../../canon-agent-prompts/EXECUTOR_READONLY_SCHEMA.md");
+const MUTATE_SCHEMA: &str = include_str!(
+    "../../canon-agent-prompts/EXECUTOR_MUTATE_SCHEMA.md"
+);
+const VERIFY_SCHEMA: &str = include_str!(
+    "../../canon-agent-prompts/EXECUTOR_VERIFY_SCHEMA.md"
+);
+const READONLY_SCHEMA: &str = include_str!(
+    "../../canon-agent-prompts/EXECUTOR_READONLY_SCHEMA.md"
+);
 struct ModuleModeConfig {
     phase: &'static str,
     schema: &'static str,
     log_name: fn(u64) -> String,
 }
-fn module_log_name_mutate(iter: u64) -> String {
+fn module_log_name_mutation(iter: u64) -> String {
     format!("iter_{:03}_execute_output.json", iter)
 }
-fn module_log_name_verify(iter: u64) -> String {
+fn module_log_name_verification(iter: u64) -> String {
     format!("iter_{:03}_verify_output.json", iter)
 }
-fn module_log_name_readonly(iter: u64) -> String {
+fn module_log_name_read_only(iter: u64) -> String {
     format!("iter_{:03}_readonly_output.json", iter)
 }
 const MODE_CONFIGS: [ModuleModeConfig; 3] = [
-    ModuleModeConfig { phase: "mutate", schema: MUTATE_SCHEMA, log_name: module_log_name_mutate },
-    ModuleModeConfig { phase: "verify", schema: VERIFY_SCHEMA, log_name: module_log_name_verify },
-    ModuleModeConfig { phase: "readonly", schema: READONLY_SCHEMA, log_name: module_log_name_readonly },
+    ModuleModeConfig {
+        phase: "mutate",
+        schema: MUTATE_SCHEMA,
+        log_name: module_log_name_mutation,
+    },
+    ModuleModeConfig {
+        phase: "verify",
+        schema: VERIFY_SCHEMA,
+        log_name: module_log_name_verification,
+    },
+    ModuleModeConfig {
+        phase: "readonly",
+        schema: READONLY_SCHEMA,
+        log_name: module_log_name_read_only,
+    },
 ];
 type ModuleParseFn = fn(Value, &ExecutionNode, u64) -> Result<ModuleNodeCallResult>;
-const PARSE_FNS: [ModuleParseFn; 3] = [module_parse_mutate, module_parse_verify, module_parse_readonly];
-pub(crate) fn module_repair_node(graph: &mut ExecutionGraph, node_id: &str, policy: &CapabilityConfigCapabilityPolicy, repair_radius: usize, max_repairs: u32) -> Option<String> {
+const PARSE_FNS: [ModuleParseFn; 3] = [
+    module_parse_mutation,
+    module_parse_verification,
+    module_parse_read_only,
+];
+pub(crate) fn module_repair_node(
+    graph: &mut ExecutionGraph,
+    node_id: &str,
+    policy: &CapabilityConfigCapabilityPolicy,
+    repair_radius: usize,
+    max_repairs: u32,
+) -> Option<String> {
     let node = graph.get_node_mut(node_id)?;
     if node.repair_attempts >= max_repairs {
-        eprintln!("[logs] repair node={} attempts={} max_repairs={} action=exhausted", node_id, node.repair_attempts, max_repairs);
+        eprintln!(
+            "[logs] repair node={} attempts={} max_repairs={} action=exhausted", node_id,
+            node.repair_attempts, max_repairs
+        );
         return None;
     }
     node.repair_attempts += 1;
-    eprintln!("[logs] repair node={} attempt={} max_repairs={}", node_id, node.repair_attempts, max_repairs);
+    eprintln!(
+        "[logs] repair node={} attempt={} max_repairs={}", node_id, node.repair_attempts,
+        max_repairs
+    );
     drop(node);
-    let rules: &[fn(&mut ExecutionGraph, &str, &CapabilityConfigCapabilityPolicy, usize) -> Option<&'static str>] =
-        &[module_rule_retry, module_rule_capability_downgrade, module_rule_dependency_rewire, module_rule_node_split];
+    let rules: &[fn(
+        &mut ExecutionGraph,
+        &str,
+        &CapabilityConfigCapabilityPolicy,
+        usize,
+    ) -> Option<&'static str>] = &[
+        module_rule_retry,
+        module_rule_capability_downgrade,
+        module_rule_dependency_rewire,
+        module_rule_node_split,
+    ];
     for rule in rules {
         if let Some(kind) = rule(graph, node_id, policy, repair_radius) {
             return Some(kind.to_string());
         }
     }
-    // I13: d >= f && delta == 0 => Failed
     invariants::must_fail_node_if_repair_exhausted(graph, node_id, max_repairs);
     None
 }
 pub(crate) fn module_process_call_result(
-    node_id: String, call_result: Result<ModuleNodeCallResult>, graph: &mut ExecutionGraph, cwd: &[PathBuf], max_output_lines: usize, log_root: &Path, iter: u64,
-    policy: &CapabilityConfigCapabilityPolicy, repair_radius: usize, max_repairs: u32,
+    node_id: String,
+    call_result: Result<ModuleNodeCallResult>,
+    graph: &mut ExecutionGraph,
+    cwd: &[PathBuf],
+    max_output_lines: usize,
+    log_root: &Path,
+    iter: u64,
+    policy: &CapabilityConfigCapabilityPolicy,
+    repair_radius: usize,
+    max_repairs: u32,
 ) -> Result<ModuleNodeProcessReport> {
-    // I5: terminal nodes cannot execute again
     if invariants::must_terminal_lock(graph, &node_id) {
-        return Ok(ModuleNodeProcessReport { node_id, had_error: false, repair_kind: None, repair_succeeded: false });
+        return Ok(ModuleNodeProcessReport {
+            node_id,
+            had_error: false,
+            repair_kind: None,
+            repair_succeeded: false,
+        });
     }
-    let outcome = call_result.and_then(|r| module_apply_node_result(r, graph, cwd, max_output_lines, log_root, iter, policy));
+    let outcome = call_result
+        .and_then(|r| module_apply_node_result(
+            r,
+            graph,
+            cwd,
+            max_output_lines,
+            log_root,
+            iter,
+            policy,
+        ));
     if let Err(e) = outcome {
         eprintln!("[node_error] iter={} node={} error={}", iter, node_id, e);
-        // I4/I3: parse failure increments readonly count; exhaust => fail
-        let (observe_only, exhausted) =
-            invariants::must_increment_readonly_fail_on_parse(graph, &node_id, policy.max_node_retries);
+        let (observe_only, exhausted) = invariants::must_increment_readonly_fail_on_parse(
+            graph,
+            &node_id,
+            policy.max_node_retries,
+        );
         if observe_only && exhausted {
             invariants::must_fail_node_with_error(graph, &node_id, &e.to_string());
-            return Ok(ModuleNodeProcessReport { node_id, had_error: true, repair_kind: Some("readonly_budget_exhausted".to_string()), repair_succeeded: false });
+            return Ok(ModuleNodeProcessReport {
+                node_id,
+                had_error: true,
+                repair_kind: Some("readonly_budget_exhausted".to_string()),
+                repair_succeeded: false,
+            });
         }
-        if let Some(kind) = module_repair_node(graph, &node_id, policy, repair_radius, max_repairs) {
-            return Ok(ModuleNodeProcessReport { node_id, had_error: true, repair_kind: Some(kind), repair_succeeded: true });
+        if let Some(kind) = module_repair_node(
+            graph,
+            &node_id,
+            policy,
+            repair_radius,
+            max_repairs,
+        ) {
+            return Ok(ModuleNodeProcessReport {
+                node_id,
+                had_error: true,
+                repair_kind: Some(kind),
+                repair_succeeded: true,
+            });
         }
         let _ = graph.update_status(&node_id, NodeStatus::Failed);
         invariants::must_terminal_nonzero(graph);
         if let Some(n) = graph.get_node_mut(&node_id) {
             n.error = Some(e.to_string());
         }
-        return Ok(ModuleNodeProcessReport { node_id, had_error: true, repair_kind: Some("repair_failed".to_string()), repair_succeeded: false });
+        return Ok(ModuleNodeProcessReport {
+            node_id,
+            had_error: true,
+            repair_kind: Some("repair_failed".to_string()),
+            repair_succeeded: false,
+        });
     }
     if let Some(n) = graph.get_node_mut(&node_id) {
         if n.readonly_fail_count > policy.max_node_retries {
-            n.reasoning_trace = Some(format!("REWRITE_REQUESTED: readonly failures exceeded {}", policy.max_node_retries));
+            n.reasoning_trace = Some(
+                format!(
+                    "REWRITE_REQUESTED: readonly failures exceeded {}", policy
+                    .max_node_retries
+                ),
+            );
             n.readonly_fail_count = 0;
             n.status = NodeStatus::Pending;
             n.error = None;
             n.result = None;
         }
     }
-    Ok(ModuleNodeProcessReport { node_id, had_error: false, repair_kind: None, repair_succeeded: false })
+    Ok(ModuleNodeProcessReport {
+        node_id,
+        had_error: false,
+        repair_kind: None,
+        repair_succeeded: false,
+    })
 }
-fn module_rule_retry(graph: &mut ExecutionGraph, node_id: &str, policy: &CapabilityConfigCapabilityPolicy, _repair_radius: usize) -> Option<&'static str> {
+fn module_rule_retry(
+    graph: &mut ExecutionGraph,
+    node_id: &str,
+    policy: &CapabilityConfigCapabilityPolicy,
+    _repair_radius: usize,
+) -> Option<&'static str> {
     let node = graph.get_node_mut(node_id)?;
     if node.readonly_fail_count < policy.max_node_retries {
         node.status = NodeStatus::Ready;
@@ -182,7 +341,12 @@ fn module_rule_retry(graph: &mut ExecutionGraph, node_id: &str, policy: &Capabil
     }
     None
 }
-fn module_rule_capability_downgrade(graph: &mut ExecutionGraph, node_id: &str, _policy: &CapabilityConfigCapabilityPolicy, _repair_radius: usize) -> Option<&'static str> {
+fn module_rule_capability_downgrade(
+    graph: &mut ExecutionGraph,
+    node_id: &str,
+    _policy: &CapabilityConfigCapabilityPolicy,
+    _repair_radius: usize,
+) -> Option<&'static str> {
     let node = graph.get_node_mut(node_id)?;
     if node.required_capabilities.iter().any(|c| c.class() == CapabilityMode::Mutate) {
         node.required_capabilities = vec![PipelineCapability::FileRead];
@@ -193,11 +357,21 @@ fn module_rule_capability_downgrade(graph: &mut ExecutionGraph, node_id: &str, _
     }
     None
 }
-fn module_rule_dependency_rewire(graph: &mut ExecutionGraph, node_id: &str, _policy: &CapabilityConfigCapabilityPolicy, repair_radius: usize) -> Option<&'static str> {
+fn module_rule_dependency_rewire(
+    graph: &mut ExecutionGraph,
+    node_id: &str,
+    _policy: &CapabilityConfigCapabilityPolicy,
+    repair_radius: usize,
+) -> Option<&'static str> {
     if repair_radius < 1 {
         return None;
     }
-    let failed_deps: HashSet<String> = graph.nodes.iter().filter(|n| n.status == NodeStatus::Failed).map(|n| n.id.clone()).collect();
+    let failed_deps: HashSet<String> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.status == NodeStatus::Failed)
+        .map(|n| n.id.clone())
+        .collect();
     let node = graph.get_node_mut(node_id)?;
     let before = node.deps.len();
     node.deps.retain(|dep| !failed_deps.contains(dep));
@@ -207,7 +381,12 @@ fn module_rule_dependency_rewire(graph: &mut ExecutionGraph, node_id: &str, _pol
     }
     None
 }
-fn module_rule_node_split(graph: &mut ExecutionGraph, node_id: &str, _policy: &CapabilityConfigCapabilityPolicy, _repair_radius: usize) -> Option<&'static str> {
+fn module_rule_node_split(
+    graph: &mut ExecutionGraph,
+    node_id: &str,
+    _policy: &CapabilityConfigCapabilityPolicy,
+    _repair_radius: usize,
+) -> Option<&'static str> {
     let node_snapshot = graph.get_node(node_id).cloned()?;
     if node_snapshot.description.len() <= 120 {
         return None;
@@ -239,37 +418,81 @@ fn module_rule_node_split(graph: &mut ExecutionGraph, node_id: &str, _policy: &C
     graph.rebuild_index();
     Some("node_split")
 }
-fn module_parse_mutate(payload: Value, node: &ExecutionNode, iter: u64) -> Result<ModuleNodeCallResult> {
-    let output = module_parse_exec_output(&payload, &node.id)?;
+fn module_parse_mutation(
+    payload: Value,
+    node: &ExecutionNode,
+    iter: u64,
+) -> Result<ModuleNodeCallResult> {
+    let output = module_parse_execution_output(&payload, &node.id)?;
     if node.node_type != super::decompose::DecomposeNodeType::Render {
         return Err(anyhow::anyhow!("non-render node attempted mutation call"));
     }
     let delta_count: usize = output.results.iter().map(|r| r.deltas.len()).sum();
-    eprintln!(r#"[capability] {{"iter":{},"phase":"executor","results":{},"deltas":{}}}"#, iter, output.results.len(), delta_count);
-    Ok(ModuleNodeCallResult::Mutate { node_id: node.id.clone(), output })
+    eprintln!(
+        r#"[capability] {{"iter":{},"phase":"executor","results":{},"deltas":{}}}"#,
+        iter, output.results.len(), delta_count
+    );
+    Ok(ModuleNodeCallResult::Mutate {
+        node_id: node.id.clone(),
+        output,
+    })
 }
-fn module_parse_verify(payload: Value, node: &ExecutionNode, iter: u64) -> Result<ModuleNodeCallResult> {
-    let output: ModuleVerifyOutput = serde_json::from_value(payload).context("verifier output did not match schema")?;
+fn module_parse_verification(
+    payload: Value,
+    node: &ExecutionNode,
+    iter: u64,
+) -> Result<ModuleNodeCallResult> {
+    let output: ModuleVerifyOutput = serde_json::from_value(payload)
+        .context("verifier output did not match schema")?;
     if output
         .updates
         .iter()
         .any(|u| !matches!(u.status, NodeStatus::Completed | NodeStatus::Failed))
     {
-        return Err(anyhow::anyhow!(
-            "verifier output must set status to completed or failed"
-        ));
+        return Err(
+            anyhow::anyhow!("verifier output must set status to completed or failed"),
+        );
     }
-    eprintln!(r#"[capability] {{"iter":{},"phase":"verifier","updates":{}}}"#, iter, output.updates.len());
-    Ok(ModuleNodeCallResult::Verify { node_id: node.id.clone(), output })
+    eprintln!(
+        r#"[capability] {{"iter":{},"phase":"verifier","updates":{}}}"#, iter, output
+        .updates.len()
+    );
+    Ok(ModuleNodeCallResult::Verify {
+        node_id: node.id.clone(),
+        output,
+    })
 }
-fn module_parse_readonly(payload: Value, node: &ExecutionNode, iter: u64) -> Result<ModuleNodeCallResult> {
-    let output = module_parse_exec_output(&payload, &node.id)?;
-    if output.results.iter().any(|r| r.deltas.iter().any(|d| matches!(d, ExecutionDelta::WriteFile { .. } | ExecutionDelta::ReplaceText { .. } | ExecutionDelta::DeleteFile { .. }))) {
+fn module_parse_read_only(
+    payload: Value,
+    node: &ExecutionNode,
+    iter: u64,
+) -> Result<ModuleNodeCallResult> {
+    let output = module_parse_execution_output(&payload, &node.id)?;
+    if output
+        .results
+        .iter()
+        .any(|r| {
+            r.deltas
+                .iter()
+                .any(|d| {
+                    matches!(
+                        d, ExecutionDelta::WriteFile { .. } | ExecutionDelta::ReplaceText
+                        { .. } | ExecutionDelta::DeleteFile { .. }
+                    )
+                })
+        })
+    {
         return Err(anyhow::anyhow!("readonly node returned mutation deltas"));
     }
     let delta_count: usize = output.results.iter().map(|r| r.deltas.len()).sum();
-    eprintln!(r#"[capability] {{"iter":{},"phase":"readonly","results":{},"deltas":{}}}"#, iter, output.results.len(), delta_count);
-    Ok(ModuleNodeCallResult::Readonly { node_id: node.id.clone(), output })
+    eprintln!(
+        r#"[capability] {{"iter":{},"phase":"readonly","results":{},"deltas":{}}}"#,
+        iter, output.results.len(), delta_count
+    );
+    Ok(ModuleNodeCallResult::Readonly {
+        node_id: node.id.clone(),
+        output,
+    })
 }
 type ModuleModePredicate = fn(&NodeAuthority) -> bool;
 type ModuleModeValidator = fn(&NodeAuthority, &str) -> Result<()>;
@@ -278,55 +501,208 @@ struct ModuleModeRule {
     validate: ModuleModeValidator,
     mode: ModuleDispatchMode,
 }
-fn module_validate_verify(ctx: &NodeAuthority, node_id: &str) -> Result<()> {
-    ctx.capabilities.iter().any(|c| c.class() == CapabilityMode::Verify).then_some(()).ok_or_else(|| anyhow::anyhow!("node {} has no Verify-class capability", node_id))
+fn module_validate_verification(ctx: &NodeAuthority, node_id: &str) -> Result<()> {
+    ctx.capabilities
+        .iter()
+        .any(|c| c.class() == CapabilityMode::Verify)
+        .then_some(())
+        .ok_or_else(|| {
+            anyhow::anyhow!("node {} has no Verify-class capability", node_id)
+        })
 }
-fn module_validate_mutate(ctx: &NodeAuthority, node_id: &str) -> Result<()> {
-    ctx.capabilities.iter().any(|c| c.class() == CapabilityMode::Mutate).then_some(()).ok_or_else(|| anyhow::anyhow!("node {} has no Mutate-class capability", node_id))
+fn module_validate_mutation(ctx: &NodeAuthority, node_id: &str) -> Result<()> {
+    ctx.capabilities
+        .iter()
+        .any(|c| c.class() == CapabilityMode::Mutate)
+        .then_some(())
+        .ok_or_else(|| {
+            anyhow::anyhow!("node {} has no Mutate-class capability", node_id)
+        })
 }
-fn module_validate_pass(_: &NodeAuthority, _: &str) -> Result<()> {
+fn module_validate_noop(_: &NodeAuthority, _: &str) -> Result<()> {
     Ok(())
 }
 const MODE_RULES: [ModuleModeRule; 3] = [
-    ModuleModeRule { predicate: NodeAuthority::is_verify_context, validate: module_validate_verify, mode: ModuleDispatchMode::Verify },
-    ModuleModeRule { predicate: NodeAuthority::is_mutation_context, validate: module_validate_mutate, mode: ModuleDispatchMode::Mutate },
-    ModuleModeRule { predicate: |_| true, validate: module_validate_pass, mode: ModuleDispatchMode::Readonly },
+    ModuleModeRule {
+        predicate: NodeAuthority::is_verify_context,
+        validate: module_validate_verification,
+        mode: ModuleDispatchMode::Verify,
+    },
+    ModuleModeRule {
+        predicate: NodeAuthority::is_mutation_context,
+        validate: module_validate_mutation,
+        mode: ModuleDispatchMode::Mutate,
+    },
+    ModuleModeRule {
+        predicate: |_| true,
+        validate: module_validate_noop,
+        mode: ModuleDispatchMode::Readonly,
+    },
 ];
 fn module_select_mode(ctx: &NodeAuthority, node_id: &str) -> Result<ModuleDispatchMode> {
-    if ctx.is_verify_context() && !ctx.is_mutation_context() && ctx.capabilities.iter().any(|c| c.class() == CapabilityMode::Observe) {
+    if ctx.is_verify_context() && !ctx.is_mutation_context()
+        && ctx.capabilities.iter().any(|c| c.class() == CapabilityMode::Observe)
+    {
         return Ok(ModuleDispatchMode::Readonly);
     }
-    MODE_RULES.iter().find(|r| (r.predicate)(ctx)).map(|r| (r.validate)(ctx, node_id).map(|_| r.mode)).unwrap_or(Ok(ModuleDispatchMode::Readonly))
+    MODE_RULES
+        .iter()
+        .find(|r| (r.predicate)(ctx))
+        .map(|r| (r.validate)(ctx, node_id).map(|_| r.mode))
+        .unwrap_or(Ok(ModuleDispatchMode::Readonly))
 }
 pub async fn module_call_node(
-    node: &ExecutionNode, ctx: &NodeAuthority, bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, role_schema: &str, tabs: &TabManagerHandle, max_tabs: usize, tab_cooldown_ms: u64,
-    workspace_root: &Path, context: &[ContextSnapshotNode], log_dir: &Path, iter: u64, retries: u32, delay_secs: u64,
+    node: &ExecutionNode,
+    ctx: &NodeAuthority,
+    bridge: &WsBridge,
+    endpoint_id: &str,
+    url: &str,
+    stateful: bool,
+    role_schema: &str,
+    tabs: &TabManagerHandle,
+    max_tabs: usize,
+    tab_cooldown_ms: u64,
+    workspace_root: &Path,
+    context: &[ContextSnapshotNode],
+    log_dir: &Path,
+    iter: u64,
+    retries: u32,
+    delay_secs: u64,
 ) -> Result<ModuleNodeCallResult> {
     let mode = module_select_mode(ctx, &node.id)?;
-    module_call_mode(mode, node, bridge, endpoint_id, url, stateful, role_schema, tabs, max_tabs, tab_cooldown_ms, workspace_root, context, log_dir, iter, retries, delay_secs).await
+    module_call_with_mode(
+            mode,
+            node,
+            bridge,
+            endpoint_id,
+            url,
+            stateful,
+            role_schema,
+            tabs,
+            max_tabs,
+            tab_cooldown_ms,
+            workspace_root,
+            context,
+            log_dir,
+            iter,
+            retries,
+            delay_secs,
+        )
+        .await
 }
 pub fn module_apply_node_result(
-    result: ModuleNodeCallResult, graph: &mut ExecutionGraph, roots: &[PathBuf], max_output_lines: usize, log_dir: &Path, iter: u64, policy: &CapabilityConfigCapabilityPolicy,
+    result: ModuleNodeCallResult,
+    graph: &mut ExecutionGraph,
+    roots: &[PathBuf],
+    max_output_lines: usize,
+    log_dir: &Path,
+    iter: u64,
+    policy: &CapabilityConfigCapabilityPolicy,
 ) -> Result<()> {
     match result {
-        ModuleNodeCallResult::Mutate { node_id, output } => module_apply_mutate_output(node_id, output, graph, roots, max_output_lines, log_dir, iter, policy),
-        ModuleNodeCallResult::Readonly { node_id, output } => module_apply_readonly_output(node_id, output, graph, roots, max_output_lines, log_dir, iter, policy.max_node_retries),
-        ModuleNodeCallResult::Verify { node_id, output } => module_apply_verify_output(node_id, output, graph, log_dir, iter),
+        ModuleNodeCallResult::Mutate { node_id, output } => {
+            module_apply_mutation_output(
+                node_id,
+                output,
+                graph,
+                roots,
+                max_output_lines,
+                log_dir,
+                iter,
+                policy,
+            )
+        }
+        ModuleNodeCallResult::Readonly { node_id, output } => {
+            module_apply_read_only_output(
+                node_id,
+                output,
+                graph,
+                roots,
+                max_output_lines,
+                log_dir,
+                iter,
+                policy.max_node_retries,
+            )
+        }
+        ModuleNodeCallResult::Verify { node_id, output } => {
+            module_apply_verification_output(node_id, output, graph, log_dir, iter)
+        }
     }
 }
 /// Convenience: call + apply in one shot (used by dispatch path in mod.rs).
 pub async fn module_dispatch_node(
-    node: &ExecutionNode, ctx: &NodeAuthority, graph: &mut ExecutionGraph, bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, role_schema: &str, tabs: &TabManagerHandle,
-    max_tabs: usize, tab_cooldown_ms: u64, workspace_root: &Path, roots: &[PathBuf], max_output_lines: usize, log_dir: &Path, iter: u64, retries: u32, delay_secs: u64,
+    node: &ExecutionNode,
+    ctx: &NodeAuthority,
+    graph: &mut ExecutionGraph,
+    bridge: &WsBridge,
+    endpoint_id: &str,
+    url: &str,
+    stateful: bool,
+    role_schema: &str,
+    tabs: &TabManagerHandle,
+    max_tabs: usize,
+    tab_cooldown_ms: u64,
+    workspace_root: &Path,
+    roots: &[PathBuf],
+    max_output_lines: usize,
+    log_dir: &Path,
+    iter: u64,
+    retries: u32,
+    delay_secs: u64,
 ) -> Result<ModuleNodeOutcome> {
     let mode = module_select_mode(ctx, &node.id)?;
-    let result = module_call_mode(mode, node, bridge, endpoint_id, url, stateful, role_schema, tabs, max_tabs, tab_cooldown_ms, workspace_root, &[], log_dir, iter, retries, delay_secs).await?;
-    module_apply_node_result(result, graph, roots, max_output_lines, log_dir, iter, &CapabilityConfigCapabilityPolicy::default())?;
-    Ok(ModuleNodeOutcome { node_id: node.id.clone(), result: None, error: None, status_update: None })
+    let result = module_call_with_mode(
+            mode,
+            node,
+            bridge,
+            endpoint_id,
+            url,
+            stateful,
+            role_schema,
+            tabs,
+            max_tabs,
+            tab_cooldown_ms,
+            workspace_root,
+            &[],
+            log_dir,
+            iter,
+            retries,
+            delay_secs,
+        )
+        .await?;
+    module_apply_node_result(
+        result,
+        graph,
+        roots,
+        max_output_lines,
+        log_dir,
+        iter,
+        &CapabilityConfigCapabilityPolicy::default(),
+    )?;
+    Ok(ModuleNodeOutcome {
+        node_id: node.id.clone(),
+        result: None,
+        error: None,
+        status_update: None,
+    })
 }
-async fn module_call_mode(
-    mode: ModuleDispatchMode, node: &ExecutionNode, bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, role_schema: &str, tabs: &TabManagerHandle, max_tabs: usize, tab_cooldown_ms: u64,
-    workspace_root: &Path, context: &[ContextSnapshotNode], log_dir: &Path, iter: u64, retries: u32, delay_secs: u64,
+async fn module_call_with_mode(
+    mode: ModuleDispatchMode,
+    node: &ExecutionNode,
+    bridge: &WsBridge,
+    endpoint_id: &str,
+    url: &str,
+    stateful: bool,
+    role_schema: &str,
+    tabs: &TabManagerHandle,
+    max_tabs: usize,
+    tab_cooldown_ms: u64,
+    workspace_root: &Path,
+    context: &[ContextSnapshotNode],
+    log_dir: &Path,
+    iter: u64,
+    retries: u32,
+    delay_secs: u64,
 ) -> Result<ModuleNodeCallResult> {
     let config = &MODE_CONFIGS[mode as usize];
     let input: Value = match mode {
@@ -351,75 +727,118 @@ async fn module_call_mode(
             )
         }
     };
-    let prompt =
-        format!("{}\n\nWorkspace root: {}\nContext radius: {} nodes.\nINPUT:\n{}", config.schema, workspace_root.display(), context.len(), serde_json::to_string_pretty(&input).unwrap_or_default());
-    // Log the exact request payload sent to the LLM so debugging is possible.
-    let (payload, req_id) =
-        module_llm_call_with_retry(bridge, endpoint_id, url, stateful, &prompt, config.schema, &input, role_schema, config.phase, Some(&node.id), tabs, max_tabs, tab_cooldown_ms, retries, delay_secs)
-            .await?;
-    eprintln!(
-        "[logs] llm_request iter={} phase={} node={} req_id={}",
-        iter,
-        config.phase,
-        node.id,
-        req_id
+    let prompt = format!(
+        "{}\n\nWorkspace root: {}\nContext radius: {} nodes.\nINPUT:\n{}", config.schema,
+        workspace_root.display(), context.len(), serde_json::to_string_pretty(& input)
+        .unwrap_or_default()
     );
-    let request_log = serde_json::json!({
-        "iter": iter,
-        "phase": config.phase,
-        "node_id": node.id,
-        "req_id": req_id,
-        "role_markdown": role_schema,
-        "schema": config.schema,
-        "prompt": prompt,
-        "input": input,
-    });
-    let request_path = log_dir.join(format!("iter_{:03}_{}_request.json", iter, config.phase));
-    let _ = std::fs::write(request_path, serde_json::to_string_pretty(&request_log).unwrap_or_default());
+    let (payload, req_id) = module_llm_call_retry(
+            bridge,
+            endpoint_id,
+            url,
+            stateful,
+            &prompt,
+            config.schema,
+            &input,
+            role_schema,
+            config.phase,
+            Some(&node.id),
+            tabs,
+            max_tabs,
+            tab_cooldown_ms,
+            retries,
+            delay_secs,
+        )
+        .await?;
+    eprintln!(
+        "[logs] llm_request iter={} phase={} node={} req_id={}", iter, config.phase, node
+        .id, req_id
+    );
+    let request_log = serde_json::json!(
+        { "iter" : iter, "phase" : config.phase, "node_id" : node.id, "req_id" : req_id,
+        "role_markdown" : role_schema, "schema" : config.schema, "prompt" : prompt,
+        "input" : input, }
+    );
+    let request_path = log_dir
+        .join(format!("iter_{:03}_{}_request.json", iter, config.phase));
+    let _ = std::fs::write(
+        request_path,
+        serde_json::to_string_pretty(&request_log).unwrap_or_default(),
+    );
     if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
         let _ = std::fs::write(log_dir.join((config.log_name)(iter)), pretty.clone());
-        let response_log = serde_json::json!({
-            "iter": iter,
-            "phase": config.phase,
-            "node_id": node.id,
-            "req_id": req_id,
-            "payload": payload,
-        });
-        let response_path = log_dir.join(format!("iter_{:03}_{}_response.json", iter, config.phase));
-        let _ = std::fs::write(response_path, serde_json::to_string_pretty(&response_log).unwrap_or(pretty));
+        let response_log = serde_json::json!(
+            { "iter" : iter, "phase" : config.phase, "node_id" : node.id, "req_id" :
+            req_id, "payload" : payload, }
+        );
+        let response_path = log_dir
+            .join(format!("iter_{:03}_{}_response.json", iter, config.phase));
+        let _ = std::fs::write(
+            response_path,
+            serde_json::to_string_pretty(&response_log).unwrap_or(pretty),
+        );
         eprintln!(
-            "[logs] llm_response iter={} phase={} node={} req_id={}",
-            iter,
-            config.phase,
-            node.id,
-            req_id
+            "[logs] llm_response iter={} phase={} node={} req_id={}", iter, config.phase,
+            node.id, req_id
         );
     }
     let parse_fn = PARSE_FNS[mode as usize];
     let result = parse_fn(payload.clone(), node, iter);
     if result.is_err() {
         eprintln!(
-            "[parse_error] iter={} node={} mode={} payload={}",
-            iter,
-            node.id,
-            config.phase,
-            serde_json::to_string(&payload).unwrap_or_default().chars().take(400).collect::<String>()
+            "[parse_error] iter={} node={} mode={} payload={}", iter, node.id, config
+            .phase, serde_json::to_string(& payload).unwrap_or_default().chars()
+            .take(400).collect::< String > ()
         );
     }
     result
 }
-async fn module_llm_call_with_retry(
-    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, schema: &str, input: &Value, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle,
-    max_tabs: usize, tab_cooldown_ms: u64, retries: u32, delay_secs: u64,
+async fn module_llm_call_retry(
+    bridge: &WsBridge,
+    endpoint_id: &str,
+    url: &str,
+    stateful: bool,
+    prompt: &str,
+    schema: &str,
+    input: &Value,
+    role_schema: &str,
+    phase: &str,
+    node_id: Option<&str>,
+    tabs: &TabManagerHandle,
+    max_tabs: usize,
+    tab_cooldown_ms: u64,
+    retries: u32,
+    delay_secs: u64,
 ) -> Result<(Value, u64)> {
-    let (payload, req_id) =
-        llm_client_call_agent_json_with_retry_allow_mismatch_with_req_id(bridge, endpoint_id, url, stateful, prompt, role_schema, phase, node_id, tabs, max_tabs, tab_cooldown_ms, retries, delay_secs).await?;
+    let (payload, req_id) = llm_client_call_agent_json_with_retry_allow_mismatch_with_req_id(
+            bridge,
+            endpoint_id,
+            url,
+            stateful,
+            prompt,
+            role_schema,
+            phase,
+            node_id,
+            tabs,
+            max_tabs,
+            tab_cooldown_ms,
+            retries,
+            delay_secs,
+        )
+        .await?;
     Ok((payload, req_id))
 }
-fn module_apply_mutate_output(
-    node_id: String, output: ModuleExecOutput, graph: &mut ExecutionGraph, roots: &[PathBuf], max_output_lines: usize, _log_dir: &Path, iter: u64, policy: &CapabilityConfigCapabilityPolicy,
+fn module_apply_mutation_output(
+    node_id: String,
+    output: ModuleExecOutput,
+    graph: &mut ExecutionGraph,
+    roots: &[PathBuf],
+    max_output_lines: usize,
+    _log_dir: &Path,
+    iter: u64,
+    policy: &CapabilityConfigCapabilityPolicy,
 ) -> Result<()> {
-    if module_mutate_is_blocked(&node_id, graph, policy) {
+    if module_mutation_is_blocked(&node_id, graph, policy) {
         let failed = invariants::must_render_blocked_fail_or_ready(
             graph,
             &node_id,
@@ -427,28 +846,45 @@ fn module_apply_mutate_output(
             "render blocked: repair budget exhausted",
         );
         if failed {
-            eprintln!(r#"[capability] {{"iter":{},"phase":"executor","event":"render_blocked_failed","node":"{}"}}"#, iter, node_id);
+            eprintln!(
+                r#"[capability] {{"iter":{},"phase":"executor","event":"render_blocked_failed","node":"{}"}}"#,
+                iter, node_id
+            );
         } else {
-            eprintln!(r#"[capability] {{"iter":{},"phase":"executor","event":"render_blocked","node":"{}"}}"#, iter, node_id);
+            eprintln!(
+                r#"[capability] {{"iter":{},"phase":"executor","event":"render_blocked","node":"{}"}}"#,
+                iter, node_id
+            );
         }
         return Ok(());
     }
-    // increment repair_attempts on every blocked pass so budget exhaustion is reachable
     if let Some(n) = graph.get_node_mut(&node_id) {
         n.repair_attempts = n.repair_attempts.saturating_add(1);
         eprintln!(
-            "[node_blocked] iter={} node={} repair_attempts={} budget={:?}",
-            iter, node_id, n.repair_attempts, n.budget
+            "[node_blocked] iter={} node={} repair_attempts={} budget={:?}", iter,
+            node_id, n.repair_attempts, n.budget
         );
     }
     for mut result in output.results {
-        module_coerce_id(&mut result.id, &node_id);
-        module_apply_mutate_result(result, &node_id, graph, roots, max_output_lines, iter);
+        module_coerce_identifier(&mut result.id, &node_id);
+        module_apply_mutation_result(
+            result,
+            &node_id,
+            graph,
+            roots,
+            max_output_lines,
+            iter,
+        );
     }
     Ok(())
 }
-fn module_apply_verify_output(node_id: String, output: ModuleVerifyOutput, graph: &mut ExecutionGraph, _log_dir: &Path, iter: u64) -> Result<()> {
-    // Mark node as running once verification executes.
+fn module_apply_verification_output(
+    node_id: String,
+    output: ModuleVerifyOutput,
+    graph: &mut ExecutionGraph,
+    _log_dir: &Path,
+    iter: u64,
+) -> Result<()> {
     let _ = graph.update_status(&node_id, NodeStatus::Running);
     if output.updates.is_empty() {
         let mut fail = false;
@@ -470,7 +906,7 @@ fn module_apply_verify_output(node_id: String, output: ModuleVerifyOutput, graph
     }
     let mut self_updated = false;
     for mut upd in output.updates {
-        module_coerce_id(&mut upd.id, &node_id);
+        module_coerce_identifier(&mut upd.id, &node_id);
         let _ = graph.update_status(&upd.id, upd.status);
         if let Some(n) = graph.get_node_mut(&upd.id) {
             n.error = upd.error;
@@ -489,42 +925,114 @@ fn module_apply_verify_output(node_id: String, output: ModuleVerifyOutput, graph
         }
     }
     if let Some(node) = graph.get_node_mut(&node_id) {
-        let has_mutate = node.required_capabilities.iter().any(|c| c.class() == CapabilityMode::Mutate);
-        let has_observe = node.required_capabilities.iter().any(|c| c.class() == CapabilityMode::Observe);
-        let has_verify = node.required_capabilities.iter().any(|c| c.class() == CapabilityMode::Verify);
-        if has_verify && !has_mutate && !has_observe && node.status == NodeStatus::Ready {
+        let has_mutate = node
+            .required_capabilities
+            .iter()
+            .any(|c| c.class() == CapabilityMode::Mutate);
+        let has_observe = node
+            .required_capabilities
+            .iter()
+            .any(|c| c.class() == CapabilityMode::Observe);
+        let has_verify = node
+            .required_capabilities
+            .iter()
+            .any(|c| c.class() == CapabilityMode::Verify);
+        if has_verify && !has_mutate && !has_observe && node.status == NodeStatus::Ready
+        {
             let _ = graph.update_status(&node_id, NodeStatus::Completed);
             if let Some(n) = graph.get_node_mut(&node_id) {
                 n.completed_iter = Some(iter);
             }
-            eprintln!("{}", console::console_ui_phase("verify", &format!("node={} auto-completed verify-only", node_id)));
+            eprintln!(
+                "{}", console::console_format_phase("verify", &
+                format!("node={} auto-completed verify-only", node_id))
+            );
         }
     }
     Ok(())
 }
-fn module_apply_readonly_output(
-    node_id: String, output: ModuleExecOutput, graph: &mut ExecutionGraph, roots: &[PathBuf], max_output_lines: usize, log_dir: &Path, iter: u64, max_node_retries: u32,
+fn module_apply_read_only_output(
+    node_id: String,
+    output: ModuleExecOutput,
+    graph: &mut ExecutionGraph,
+    roots: &[PathBuf],
+    max_output_lines: usize,
+    log_dir: &Path,
+    iter: u64,
+    max_node_retries: u32,
 ) -> Result<()> {
-    output.results.is_empty().then(|| module_log_empty_readonly(iter, &node_id, log_dir)).and_then(|_| graph.update_status(&node_id, NodeStatus::Ready).ok());
+    output
+        .results
+        .is_empty()
+        .then(|| module_log_empty_read_only(iter, &node_id, log_dir))
+        .and_then(|_| graph.update_status(&node_id, NodeStatus::Ready).ok());
     for mut result in output.results {
-        module_coerce_id(&mut result.id, &node_id);
-        module_apply_readonly_result(result, &node_id, graph, roots, max_output_lines, log_dir, iter, max_node_retries);
+        module_coerce_identifier(&mut result.id, &node_id);
+        module_apply_read_only_result(
+            result,
+            &node_id,
+            graph,
+            roots,
+            max_output_lines,
+            log_dir,
+            iter,
+            max_node_retries,
+        );
     }
     Ok(())
 }
-fn module_partition_deltas(deltas: Vec<ExecutionDelta>) -> (Vec<ExecutionDelta>, Vec<ExecutionDelta>) {
-    deltas.into_iter().partition(|d| matches!(d, ExecutionDelta::ReadFile { .. } | ExecutionDelta::ListDir { .. } | ExecutionDelta::ReadCommand { .. }))
+fn module_partition_execution_deltas(
+    deltas: Vec<ExecutionDelta>,
+) -> (Vec<ExecutionDelta>, Vec<ExecutionDelta>) {
+    deltas
+        .into_iter()
+        .partition(|d| {
+            matches!(
+                d, ExecutionDelta::ReadFile { .. } | ExecutionDelta::ListDir { .. } |
+                ExecutionDelta::ReadCommand { .. }
+            )
+        })
 }
-fn module_mutate_is_blocked(node_id: &str, graph: &ExecutionGraph, policy: &CapabilityConfigCapabilityPolicy) -> bool {
-    let not_render = graph.nodes.iter().find(|n| n.id == node_id).map(|n| n.node_type != super::decompose::DecomposeNodeType::Render).unwrap_or(false);
-    let render_blocked = policy.require_final_render && graph.nodes.iter().any(|n| n.status != NodeStatus::Completed && !n.required_capabilities.iter().any(|c| c.class() == CapabilityMode::Mutate));
+fn module_mutation_is_blocked(
+    node_id: &str,
+    graph: &ExecutionGraph,
+    policy: &CapabilityConfigCapabilityPolicy,
+) -> bool {
+    let not_render = graph
+        .nodes
+        .iter()
+        .find(|n| n.id == node_id)
+        .map(|n| n.node_type != super::decompose::DecomposeNodeType::Render)
+        .unwrap_or(false);
+    let render_blocked = policy.require_final_render
+        && graph
+            .nodes
+            .iter()
+            .any(|n| {
+                n.status != NodeStatus::Completed
+                    && !n
+                        .required_capabilities
+                        .iter()
+                        .any(|c| c.class() == CapabilityMode::Mutate)
+            });
     not_render || render_blocked
 }
-fn module_apply_mutate_result(result: ModuleExecNodeResult, node_id: &str, graph: &mut ExecutionGraph, roots: &[PathBuf], max_output_lines: usize, iter: u64) {
+fn module_apply_mutation_result(
+    result: ModuleExecNodeResult,
+    node_id: &str,
+    graph: &mut ExecutionGraph,
+    roots: &[PathBuf],
+    max_output_lines: usize,
+    iter: u64,
+) {
     if !result.rationale.trim().is_empty() {
-        eprintln!("{}", console::console_ui_phase("mutate", &format!("node={} rationale={}", node_id, console::console_ui_truncate(&result.rationale, 180))));
+        eprintln!(
+            "{}", console::console_format_phase("mutate", &
+            format!("node={} rationale={}", node_id, console::console_truncate(& result
+            .rationale, 180)))
+        );
     }
-    let (ro, mutate) = module_partition_deltas(result.deltas);
+    let (ro, mutate) = module_partition_execution_deltas(result.deltas);
     if !ro.is_empty() {
         let _ = apply_read_deltas(&ro, roots, max_output_lines);
     }
@@ -533,11 +1041,18 @@ fn module_apply_mutate_result(result: ModuleExecNodeResult, node_id: &str, graph
     let (requires_verify, has_err) = if let Some(n) = graph.get_node_mut(node_id) {
         n.result = Some(out);
         n.error = err;
-        (n.required_capabilities.iter().any(|c| c.class() == CapabilityMode::Verify), n.error.is_some())
+        (
+            n.required_capabilities.iter().any(|c| c.class() == CapabilityMode::Verify),
+            n.error.is_some(),
+        )
     } else {
         (false, false)
     };
-    let final_status = requires_verify.then_some(None).unwrap_or_else(|| Some(if has_err { NodeStatus::Failed } else { NodeStatus::Completed }));
+    let final_status = requires_verify
+        .then_some(None)
+        .unwrap_or_else(|| Some(
+            if has_err { NodeStatus::Failed } else { NodeStatus::Completed },
+        ));
     if let Some(s) = final_status {
         let _ = graph.update_status(node_id, s);
         if s == NodeStatus::Completed {
@@ -547,27 +1062,52 @@ fn module_apply_mutate_result(result: ModuleExecNodeResult, node_id: &str, graph
         }
     }
 }
-fn module_log_empty_readonly(iter: u64, node_id: &str, log_dir: &Path) {
+fn module_log_empty_read_only(iter: u64, node_id: &str, log_dir: &Path) {
     let summary = serde_json::json!(
         { "iter" : iter, "phase" : "readonly", "event" : "empty_results", "node" :
         node_id }
     );
-    let _ = std::fs::write(log_dir.join(format!("iter_{:03}_readonly_error.json", iter)), serde_json::to_string_pretty(&summary).unwrap_or_default());
+    let _ = std::fs::write(
+        log_dir.join(format!("iter_{:03}_readonly_error.json", iter)),
+        serde_json::to_string_pretty(&summary).unwrap_or_default(),
+    );
     eprintln!("[capability] {}", summary);
 }
-fn module_log_readonly_error(iter: u64, node_id: &str, err: &str, deltas: &[ExecutionDelta], log_dir: &Path) {
+fn module_log_read_only_error(
+    iter: u64,
+    node_id: &str,
+    err: &str,
+    deltas: &[ExecutionDelta],
+    log_dir: &Path,
+) {
     let summary = serde_json::json!(
         { "iter" : iter, "phase" : "readonly", "event" : "delta_error", "node" : node_id,
         "error" : err, "deltas" : summarize_execution_deltas(deltas) }
     );
-    let _ = std::fs::write(log_dir.join(format!("iter_{:03}_readonly_error.json", iter)), serde_json::to_string_pretty(&summary).unwrap_or_default());
+    let _ = std::fs::write(
+        log_dir.join(format!("iter_{:03}_readonly_error.json", iter)),
+        serde_json::to_string_pretty(&summary).unwrap_or_default(),
+    );
     eprintln!("[capability] {}", summary);
 }
-fn module_apply_readonly_result(result: ModuleExecNodeResult, node_id: &str, graph: &mut ExecutionGraph, roots: &[PathBuf], max_output_lines: usize, log_dir: &Path, iter: u64, max_node_retries: u32) {
+fn module_apply_read_only_result(
+    result: ModuleExecNodeResult,
+    node_id: &str,
+    graph: &mut ExecutionGraph,
+    roots: &[PathBuf],
+    max_output_lines: usize,
+    log_dir: &Path,
+    iter: u64,
+    max_node_retries: u32,
+) {
     if !result.rationale.trim().is_empty() {
-        eprintln!("{}", console::console_ui_phase("observe", &format!("node={} rationale={}", node_id, console::console_ui_truncate(&result.rationale, 180))));
+        eprintln!(
+            "{}", console::console_format_phase("observe", &
+            format!("node={} rationale={}", node_id, console::console_truncate(& result
+            .rationale, 180)))
+        );
     }
-    let (ro, mutate) = module_partition_deltas(result.deltas);
+    let (ro, mutate) = module_partition_execution_deltas(result.deltas);
     if !mutate.is_empty() {
         let msg = "read-only context received mutation deltas".to_string();
         if let Some(n) = graph.get_node_mut(node_id) {
@@ -583,10 +1123,15 @@ fn module_apply_readonly_result(result: ModuleExecNodeResult, node_id: &str, gra
         n.result = Some(out);
         n.error = err.clone();
     }
-    let effective_budget = graph.nodes.iter().find(|n| n.id == node_id).and_then(|n| n.budget).unwrap_or(max_node_retries);
+    let effective_budget = graph
+        .nodes
+        .iter()
+        .find(|n| n.id == node_id)
+        .and_then(|n| n.budget)
+        .unwrap_or(max_node_retries);
     let next_status = err
         .map(|e| {
-            module_log_readonly_error(iter, node_id, &e, &ro, log_dir);
+            module_log_read_only_error(iter, node_id, &e, &ro, log_dir);
             let fail_count = graph
                 .get_node_mut(node_id)
                 .map(|n| {
@@ -623,39 +1168,51 @@ fn module_apply_readonly_result(result: ModuleExecNodeResult, node_id: &str, gra
         }
     }
     eprintln!(
-        "[node_result] iter={} node={} status={:?} error={} result_len={}",
-        iter,
-        node_id,
-        next_status,
-        graph.nodes.iter().find(|n| n.id == node_id).and_then(|n| n.error.as_deref()).unwrap_or("none"),
-        graph.nodes.iter().find(|n| n.id == node_id).and_then(|n| n.result.as_deref()).map(|r| r.len()).unwrap_or(0),
+        "[node_result] iter={} node={} status={:?} error={} result_len={}", iter,
+        node_id, next_status, graph.nodes.iter().find(| n | n.id == node_id).and_then(| n
+        | n.error.as_deref()).unwrap_or("none"), graph.nodes.iter().find(| n | n.id ==
+        node_id).and_then(| n | n.result.as_deref()).map(| r | r.len()).unwrap_or(0),
     );
 }
-fn module_coerce_id(result_id: &mut String, canonical: &str) {
+fn module_coerce_identifier(result_id: &mut String, canonical: &str) {
     result_id.clear();
     result_id.push_str(canonical);
 }
-fn module_parse_exec_output(payload: &Value, default_id: &str) -> Result<ModuleExecOutput> {
-    // Reject planner-shaped responses before any deserialization attempt.
+fn module_parse_execution_output(
+    payload: &Value,
+    default_id: &str,
+) -> Result<ModuleExecOutput> {
     if payload.get("create_nodes").is_some() || payload.get("add_edges").is_some() {
-        return Err(anyhow::anyhow!(
-            "executor output did not match schema: received planner response (create_nodes/add_edges)"
-        ));
+        return Err(
+            anyhow::anyhow!(
+                "executor output did not match schema: received planner response (create_nodes/add_edges)"
+            ),
+        );
     }
     if let Ok(v) = serde_json::from_value::<ModuleExecOutput>(payload.clone()) {
         return Ok(v);
     }
     if let Some(raw) = payload.as_str() {
-        if let Some(json_text) = extract_json_from_text(raw) {
+        if let Some(json_text) = extract_json_fragment(raw) {
             if let Ok(val) = serde_json::from_str::<Value>(&json_text) {
                 if let Ok(v) = serde_json::from_value::<ModuleExecOutput>(val.clone()) {
                     return Ok(v);
                 }
                 if let Some(deltas) = val.get("deltas") {
-                    let deltas: Vec<ExecutionDelta> =
-                        serde_json::from_value(deltas.clone()).context("executor deltas field invalid")?;
-                    let rationale = val.get("rationale").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let id = val.get("id").and_then(|v| v.as_str()).unwrap_or(default_id).to_string();
+                    let deltas: Vec<ExecutionDelta> = serde_json::from_value(
+                            deltas.clone(),
+                        )
+                        .context("executor deltas field invalid")?;
+                    let rationale = val
+                        .get("rationale")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let id = val
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(default_id)
+                        .to_string();
                     return Ok(ModuleExecOutput {
                         results: vec![ModuleExecNodeResult { id, deltas, rationale }],
                     });
@@ -664,19 +1221,28 @@ fn module_parse_exec_output(payload: &Value, default_id: &str) -> Result<ModuleE
         }
     }
     if let Some(deltas) = payload.get("deltas") {
-        let deltas: Vec<ExecutionDelta> = serde_json::from_value(deltas.clone()).context("executor deltas field invalid")?;
-        let rationale = payload.get("rationale").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let id = payload.get("id").and_then(|v| v.as_str()).unwrap_or(default_id).to_string();
-        return Ok(ModuleExecOutput { results: vec![ModuleExecNodeResult { id, deltas, rationale }] });
+        let deltas: Vec<ExecutionDelta> = serde_json::from_value(deltas.clone())
+            .context("executor deltas field invalid")?;
+        let rationale = payload
+            .get("rationale")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let id = payload
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or(default_id)
+            .to_string();
+        return Ok(ModuleExecOutput {
+            results: vec![ModuleExecNodeResult { id, deltas, rationale }],
+        });
     }
     Err(anyhow::anyhow!("executor output did not match schema"))
 }
-
-fn extract_json_from_text(raw: &str) -> Option<String> {
+fn extract_json_fragment(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     let mut body = trimmed;
     if trimmed.starts_with("```") {
-        // strip the first fence line and trailing fence
         if let Some(rest) = trimmed.splitn(2, '\n').nth(1) {
             body = rest;
             if let Some(end) = body.rfind("```") {

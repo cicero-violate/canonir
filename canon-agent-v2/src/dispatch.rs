@@ -18,7 +18,7 @@ pub struct NodeDispatchContext {
     pub workspace_root: PathBuf,
     pub log_dir: PathBuf,
 }
-fn resolve_role_markdown(raw: &str) -> String {
+fn resolve_role_prompt_markdown(raw: &str) -> String {
     if raw.contains('\n') || raw.contains("```") {
         return raw.to_string();
     }
@@ -59,7 +59,7 @@ pub async fn node_dispatch_resolve_endpoint(
             fallback.2,
             fallback.4.to_string(),
         ));
-    let role_markdown = resolve_role_markdown(&role_markdown);
+    let role_markdown = resolve_role_prompt_markdown(&role_markdown);
     NodeDispatchContext {
         endpoint_id,
         url,
@@ -70,11 +70,7 @@ pub async fn node_dispatch_resolve_endpoint(
         log_dir,
     }
 }
-pub fn node_dispatch_log_dispatch(
-    node: &ExecutionNode,
-    mode_label: &str,
-    endpoint_id: &str,
-) {
+pub fn log_node_dispatch(node: &ExecutionNode, mode_label: &str, endpoint_id: &str) {
     let node_type_str = format!("{:?}", node.node_type).to_lowercase();
     let caps_str = node
         .required_capabilities
@@ -83,12 +79,12 @@ pub fn node_dispatch_log_dispatch(
         .collect::<Vec<_>>()
         .join(",");
     eprintln!(
-        "{}", console::console_ui_note("dispatch", &
+        "{}", console::console_format_info("dispatch", &
         format!("node={} type={} mode={} caps=[{}] endpoint={}", node.id, node_type_str,
         mode_label, caps_str, endpoint_id))
     );
 }
-pub async fn dispatch_node_execution(
+pub async fn dispatch_node_call(
     node: ExecutionNode,
     auth: NodeAuthority,
     bridge: &WsBridge,

@@ -64,7 +64,12 @@ pub const TEMPLATE_ROOT: &str = "/workspace/ai_sandbox/canon/agent_logs/template
 pub enum ExecutionDelta {
     ReadFile { path: String },
     ListDir { path: String },
-    ReadCommand { command: String, args: Vec<String>, #[serde(default)] path: Option<String> },
+    ReadCommand {
+        command: String,
+        args: Vec<String>,
+        #[serde(default)]
+        path: Option<String>,
+    },
     WriteFile { path: String, content: String },
     ReplaceText { path: String, find: String, replace: String },
     DeleteFile { path: String },
@@ -135,7 +140,9 @@ impl CapabilityPipeline {
         }
         engine::module_init_io_workers(&self.bridge, &self.config, &self.tabs).await;
         let mut goal = CapabilityConfigGoalSpec::from_file(&self.config.goal_file)?;
-        let intent_path = Path::new("/workspace/ai_sandbox/canon/kernel/state/intent_state.json");
+        let intent_path = Path::new(
+            "/workspace/ai_sandbox/canon/kernel/state/intent_state.json",
+        );
         if let Some(intent) = IntentStatePersist::load(intent_path) {
             if !intent.goal.trim().is_empty() {
                 goal.raw = intent.goal;
@@ -155,9 +162,14 @@ impl CapabilityPipeline {
             };
             updated.save(intent_path);
         }
-        let selection = objectives::load_goal_from_reports(objectives::ObjectiveWeights::default());
+        let selection = objectives::load_goal_from_reports(
+            objectives::ObjectiveWeights::default(),
+        );
         if let Some(selection) = selection.as_ref() {
-            goal.raw = objectives::goal_raw_with_artifact(&goal.raw, &selection.artifact);
+            goal.raw = objectives::goal_raw_with_artifact(
+                &goal.raw,
+                &selection.artifact,
+            );
         }
         let goal_spec = GoalSpec::new_with_artifact(
             goal.raw.clone(),
@@ -364,8 +376,8 @@ impl CapabilityPipeline {
             } else {
                 planner_generate().await?
             }
-        } else if store.exists(&template_name) {
-            match store.snapshot_store_load(&template_name) {
+        } else if store.template_exists(&template_name) {
+            match store.load_snapshot(&template_name) {
                 Ok(g) if g.validate().is_ok() => {
                     eprintln!("[templates] cache hit");
                     cache_hit = true;
@@ -375,14 +387,14 @@ impl CapabilityPipeline {
                     eprintln!("[templates] invalid template, evicting");
                     store.evict(&template_name);
                     let g = planner_generate().await?;
-                    let _ = store.snapshot_store_save(&template_name, &g);
+                    let _ = store.save_snapshot(&template_name, &g);
                     g
                 }
             }
         } else {
             eprintln!("[templates] cache miss — invoking planner");
             let g = planner_generate().await?;
-            let _ = store.snapshot_store_save(&template_name, &g);
+            let _ = store.save_snapshot(&template_name, &g);
             g
         };
         if graph.nodes.is_empty() {
@@ -394,7 +406,9 @@ impl CapabilityPipeline {
         }
         graph_analysis_emit_planned_graph(&graph, Path::new(LOG_ROOT), 0);
         graph_analysis_run_graph_algorithms(&graph, Path::new(LOG_ROOT), 0);
-        let _ = std::fs::read_to_string(Path::new(LOG_ROOT).join("graph_algorithms.json"));
+        let _ = std::fs::read_to_string(
+            Path::new(LOG_ROOT).join("graph_algorithms.json"),
+        );
         if graph_runtime::ensure_render_reachable(&mut graph) {
             eprintln!("[graph] repaired render reachability after planning");
         }
@@ -412,7 +426,7 @@ impl CapabilityPipeline {
         }
         if cache_hit && !self.config.planner_refine_on_cache {
             let mut exec_metrics = Default::default();
-            let template_hash = store.hash_for(&template_name);
+            let template_hash = store.template_hash(&template_name);
             let mut failure_store = failure_store::FailureStore::snapshot_store_load(
                 &template_hash,
             );
@@ -443,7 +457,7 @@ impl CapabilityPipeline {
                 .await?;
             for failure in exec_failures {
                 failure_store.record_graph(failure.kind, &graph, failure.iter);
-                store.record_failure(&template_hash);
+                store.record_template_failure(&template_hash);
             }
             let features = graph_algo::compute_graph_features_parallel(&graph)
                 .with_failure_stats(&failure_store.stats());
@@ -497,12 +511,14 @@ impl CapabilityPipeline {
                 self.config.max_nodes,
                 self.config.max_nodes.saturating_mul(4),
             );
-            store.record_reward(&template_name, reward);
+            store.record_template_reward(&template_name, reward);
             let goal_sim = telemetry::telemetry_goal_similarity(&graph, &goal_spec);
             let mut runtime = telemetry::RuntimeTelemetry::default();
             runtime.queue.queue_depth = telemetry::telemetry_pending_requests();
             runtime.queue.retry_rate = 0.0;
-            runtime.queue.progress_fraction = telemetry::telemetry_progress_fraction(&graph);
+            runtime.queue.progress_fraction = telemetry::telemetry_progress_fraction(
+                &graph,
+            );
             runtime.queue.iteration_time_ms = 0;
             runtime.queue.branching_factor = features.branching_factor;
             runtime.queue.blocked_fraction = features.blocked_fraction;
@@ -543,7 +559,7 @@ impl CapabilityPipeline {
                 exec: exec_metrics.clone(),
                 runtime,
                 reward,
-                template_hash: Some(store.hash_for(&template_name)),
+                template_hash: Some(store.template_hash(&template_name)),
                 goal: Some(template_name.clone()),
             };
             telemetry::telemetry_record_snapshot(
@@ -560,7 +576,9 @@ impl CapabilityPipeline {
                     .join(format!("metrics_{}.json", template_hash)),
                 &snapshot,
             );
-            if let Ok(text) = std::fs::read_to_string(Path::new(LOG_ROOT).join("metrics.json")) {
+            if let Ok(text) = std::fs::read_to_string(
+                Path::new(LOG_ROOT).join("metrics.json"),
+            ) {
                 eprintln!("[logs] capability_metrics {}", text.trim());
             }
             Ok(reward)
@@ -570,15 +588,15 @@ impl CapabilityPipeline {
                 planner_endpoint,
                 goal_spec.clone(),
             );
-            let recent = store.recent_rewards(&template_name, 4);
+            let recent = store.recent_template_rewards(&template_name, 4);
             let plateaued = store
-                .is_plateaued(
+                .is_reward_plateaued(
                     &template_name,
                     self.config.planner_plateau_window,
                     self.config.planner_plateau_threshold,
                 );
             let similar = store
-                .find_similar(
+                .find_similar_templates(
                     &goal_spec,
                     &graph,
                     1,
@@ -591,7 +609,7 @@ impl CapabilityPipeline {
                 .into_iter()
                 .next()
                 .map(|s| {
-                    let seed_graph = store.snapshot_store_load(&s.entry.goal).ok();
+                    let seed_graph = store.load_snapshot(&s.entry.goal).ok();
                     let node_summaries = seed_graph
                         .as_ref()
                         .map(|g| {
@@ -599,7 +617,7 @@ impl CapabilityPipeline {
                                 .iter()
                                 .map(|n| {
                                     let desc = if n.description.len() > 60 {
-                                        format!("{}…", &n.description[..60])
+                                        format!("{}…", & n.description[..60])
                                     } else {
                                         n.description.clone()
                                     };
@@ -621,8 +639,8 @@ impl CapabilityPipeline {
             let reward_ctx = planner_session::PlannerControllerRewardContext {
                 recent_rewards: recent,
                 plateaued,
-                best_reward: store.stored_reward(&template_name),
-                stored_reward: store.stored_reward(&template_name),
+                best_reward: store.reward_for_template(&template_name),
+                stored_reward: store.reward_for_template(&template_name),
                 bootstrap_seed,
             };
             planner_session.set_reward_context(reward_ctx);
@@ -630,7 +648,7 @@ impl CapabilityPipeline {
             let start_stage = PlannerStagePersist::load(&planner_stage_path)
                 .map(|persist| persist.stage)
                 .unwrap_or(PlannerStage::ReuseTemplate);
-            let prev_reward = store.stored_reward(&template_name);
+            let prev_reward = store.reward_for_template(&template_name);
             let reward = scheduler::run_planner_loop(
                     &mut planner_session,
                     &mut graph,
@@ -661,7 +679,9 @@ impl CapabilityPipeline {
             let goal_sim = telemetry::telemetry_goal_similarity(&graph, &goal_spec);
             let mut runtime = telemetry::RuntimeTelemetry::default();
             runtime.queue.queue_depth = telemetry::telemetry_pending_requests();
-            runtime.queue.progress_fraction = telemetry::telemetry_progress_fraction(&graph);
+            runtime.queue.progress_fraction = telemetry::telemetry_progress_fraction(
+                &graph,
+            );
             runtime.queue.completion_velocity = completion_velocity;
             runtime.policy.policy_run_planner = true;
             runtime.goal.goal_similarity_score = goal_sim;
@@ -672,7 +692,7 @@ impl CapabilityPipeline {
                 exec: Default::default(),
                 runtime,
                 reward,
-                template_hash: Some(store.hash_for(&template_name)),
+                template_hash: Some(store.template_hash(&template_name)),
                 goal: Some(template_name.clone()),
             };
             telemetry::telemetry_record_snapshot(
@@ -683,7 +703,9 @@ impl CapabilityPipeline {
                 &Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"),
                 &snapshot,
             );
-            if let Ok(text) = std::fs::read_to_string(Path::new(LOG_ROOT).join("metrics.json")) {
+            if let Ok(text) = std::fs::read_to_string(
+                Path::new(LOG_ROOT).join("metrics.json"),
+            ) {
                 eprintln!("[logs] capability_metrics {}", text.trim());
             }
             Ok(reward)

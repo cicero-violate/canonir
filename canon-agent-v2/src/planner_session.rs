@@ -1,4 +1,6 @@
-use super::capability::{capability_model_assert_class_disjoint, CapabilityMode, PipelineCapability};
+use super::capability::{
+    capability_model_assert_class_disjoint, CapabilityMode, PipelineCapability,
+};
 use super::config::CapabilityConfigLlmEndpoint;
 use super::dag::ExecutionGraph;
 use super::dag::NodeStatus;
@@ -6,7 +8,10 @@ use super::decompose::DecomposeTaskSpec;
 use super::failure_store::FailureStore;
 use super::graph_algo::{self, GraphAnalysis};
 use super::goal::GoalSpec;
-use super::planner_update::{apply_graph_patch, GraphPatch, PlannerUpdateEdgeSpec, PlannerUpdateRetractSpec, PlannerUpdateRewriteSpec};
+use super::planner_update::{
+    apply_graph_patch, GraphPatch, PlannerUpdateEdgeSpec, PlannerUpdateRetractSpec,
+    PlannerUpdateRewriteSpec,
+};
 use crate::llm_provider::JsonExtractor;
 use crate::objectives;
 use anyhow::{Context, Result};
@@ -44,33 +49,40 @@ pub struct PlannerController {
     reward_context: Option<PlannerControllerRewardContext>,
 }
 const MAX_HISTORY: usize = 2;
-fn planner_controller_rewrite_text(rewrite_requests: &[String]) -> String {
+fn planner_controller_rewrite_block(rewrite_requests: &[String]) -> String {
     if rewrite_requests.is_empty() {
         "Rewrite requests: none\n".to_string()
     } else {
         format!("Rewrite requests: {}\n", rewrite_requests.join(", "))
     }
 }
-fn planner_controller_nodes_json(graph: &ExecutionGraph) -> Vec<Value> {
+fn planner_controller_nodes_payload(graph: &ExecutionGraph) -> Vec<Value> {
     graph
         .nodes
         .iter()
         .map(|n| {
             serde_json::json!(
-                { "id" : n.id, "description" : n.description, "deps" : n.deps,
-                "status" : n.status, "node_type" : n.node_type,
-                "required_capabilities" : n.required_capabilities, "priority" : n
-                .priority, "budget" : n.budget, "reasoning_trace" : n
-                .reasoning_trace, "error" : n.error, }
+                { "id" : n.id, "description" : n.description, "deps" : n.deps, "status" :
+                n.status, "node_type" : n.node_type, "required_capabilities" : n
+                .required_capabilities, "priority" : n.priority, "budget" : n.budget,
+                "reasoning_trace" : n.reasoning_trace, "error" : n.error, }
             )
         })
         .collect()
 }
-fn planner_controller_reward_section(graph: &ExecutionGraph, reward_context: Option<&PlannerControllerRewardContext>) -> String {
+fn planner_controller_reward_block(
+    graph: &ExecutionGraph,
+    reward_context: Option<&PlannerControllerRewardContext>,
+) -> String {
     let Some(r) = reward_context else {
         return String::new();
     };
-    let trend = r.recent_rewards.iter().map(|v| format!("{:.3}", v)).collect::<Vec<_>>().join(", ");
+    let trend = r
+        .recent_rewards
+        .iter()
+        .map(|v| format!("{:.3}", v))
+        .collect::<Vec<_>>()
+        .join(", ");
     let seed_section = match r.bootstrap_seed.as_ref() {
         None => String::new(),
         Some(seed) => {
@@ -80,17 +92,15 @@ Prior goal: {}\n\
 Prior graph had {} nodes, {} edges.\n\
 Capabilities used: {}\n\
 Consider reusing this structure as a starting point, adapting it to the current goal.\n",
-                seed.similarity_score,
-                seed.reward,
-                seed.goal,
-                seed.node_count,
-                seed.edge_count,
-                seed.capability_set.join(", "),
+                seed.similarity_score, seed.reward, seed.goal, seed.node_count, seed
+                .edge_count, seed.capability_set.join(", "),
             )
         }
     };
     let base = if r.plateaued {
-        let signals_str = super::graph_algo::graph_analysis_planner_signals_for_graph(graph);
+        let signals_str = super::graph_algo::graph_analysis_planner_signals_for_graph(
+            graph,
+        );
         format!(
             "Reward history (last {} runs): [{}]\n\
 Best recorded reward: {:.3}\n\
@@ -99,27 +109,22 @@ You MUST propose a structurally different graph: different node decomposition, \
 different capability assignments, or different dependency topology. Do not make incremental edits.\n\
 Current graph topology: {}\n\
 Use these signals to identify structural bottlenecks before proposing changes.\n",
-            r.recent_rewards.len(),
-            trend,
-            r.best_reward,
-            signals_str
+            r.recent_rewards.len(), trend, r.best_reward, signals_str
         )
     } else {
         format!(
             "Reward history (last {} runs): [{}]\n\
 Best recorded reward: {:.3}\n\
 Continue refining the current graph.\n",
-            r.recent_rewards.len(),
-            trend,
-            r.best_reward
+            r.recent_rewards.len(), trend, r.best_reward
         )
     };
     base + &seed_section
 }
-fn planner_controller_history_tail(history: &[String]) -> String {
+fn planner_controller_history_snippet(history: &[String]) -> String {
     history.iter().rev().take(MAX_HISTORY).cloned().collect::<Vec<_>>().join("\n")
 }
-fn planner_controller_objective_context(goal: &GoalSpec) -> (String, String) {
+fn planner_controller_objective_block(goal: &GoalSpec) -> (String, String) {
     match goal.artifact.as_ref() {
         Some(artifact) => {
             let context = objectives::objective_context(artifact);
@@ -137,7 +142,15 @@ fn planner_controller_objective_context(goal: &GoalSpec) -> (String, String) {
 }
 impl PlannerController {
     pub fn new(endpoint: &CapabilityConfigLlmEndpoint, goal: GoalSpec) -> Self {
-        Self { endpoint_id: endpoint.id.clone(), url: endpoint.url.clone(), role_schema: endpoint.role_markdown.clone(), goal, history: Vec::new(), stateful: endpoint.stateful, reward_context: None }
+        Self {
+            endpoint_id: endpoint.id.clone(),
+            url: endpoint.url.clone(),
+            role_schema: endpoint.role_markdown.clone(),
+            goal,
+            history: Vec::new(),
+            stateful: endpoint.stateful,
+            reward_context: None,
+        }
     }
     pub fn set_reward_context(&mut self, ctx: PlannerControllerRewardContext) {
         self.reward_context = Some(ctx);
@@ -165,14 +178,27 @@ impl PlannerController {
     ) -> String {
         let ids: Vec<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
         let signals_json = signals.to_json(&ids);
-        let expandable = planner_controller_expandable_nodes(graph);
-        let ready_nodes = graph.ready_nodes().iter().map(|n| n.id.clone()).collect::<Vec<_>>();
-        let unreachable_nodes = signals.unreachable.iter().filter_map(|&idx| ids.get(idx).cloned()).collect::<Vec<_>>();
-        let rewrite_text = planner_controller_rewrite_text(rewrite_requests);
-        let nodes_json: Vec<Value> = planner_controller_nodes_json(graph);
-        let history_tail = planner_controller_history_tail(&self.history);
-        let reward_section = planner_controller_reward_section(graph, self.reward_context.as_ref());
-        let (objective_context, objective_tasks) = planner_controller_objective_context(&self.goal);
+        let expandable = planner_controller_expandable_node_ids(graph);
+        let ready_nodes = graph
+            .ready_nodes()
+            .iter()
+            .map(|n| n.id.clone())
+            .collect::<Vec<_>>();
+        let unreachable_nodes = signals
+            .unreachable
+            .iter()
+            .filter_map(|&idx| ids.get(idx).cloned())
+            .collect::<Vec<_>>();
+        let rewrite_text = planner_controller_rewrite_block(rewrite_requests);
+        let nodes_json: Vec<Value> = planner_controller_nodes_payload(graph);
+        let history_tail = planner_controller_history_snippet(&self.history);
+        let reward_section = planner_controller_reward_block(
+            graph,
+            self.reward_context.as_ref(),
+        );
+        let (objective_context, objective_tasks) = planner_controller_objective_block(
+            &self.goal,
+        );
         let mut features = features.clone();
         if let Some(ctx) = self.reward_context.as_ref() {
             features = features.with_reward_history(&ctx.recent_rewards);
@@ -186,28 +212,14 @@ priority_avg={:.2} budget_avg={:.2}\n\
 blocked_frac={:.2} ready_frac={:.2} failed_frac={:.2}\n\
 completion_velocity={:.3} retry_rate={:.3}\n\
 failure_pattern_rate={:.3} cycle_freq={:.3} deadlock_rate={:.3}\n",
-            features.nodes,
-            features.edges,
-            features.depth,
-            features.scc_count,
-            features.root_count,
-            features.leaf_count,
-            features.avg_out_degree,
-            features.avg_in_degree,
-            features.branching_factor,
-            features.verify_to_mutate_ratio,
-            features.observe_to_mutate_ratio,
-            features.node_type_entropy,
-            features.avg_node_priority,
-            features.avg_node_budget,
-            features.blocked_fraction,
-            features.ready_fraction,
-            features.failed_fraction,
-            features.completion_velocity,
-            features.retry_rate,
-            features.failure_pattern_rate,
-            features.cycle_frequency,
-            features.deadlock_rate,
+            features.nodes, features.edges, features.depth, features.scc_count, features
+            .root_count, features.leaf_count, features.avg_out_degree, features
+            .avg_in_degree, features.branching_factor, features.verify_to_mutate_ratio,
+            features.observe_to_mutate_ratio, features.node_type_entropy, features
+            .avg_node_priority, features.avg_node_budget, features.blocked_fraction,
+            features.ready_fraction, features.failed_fraction, features
+            .completion_velocity, features.retry_rate, features.failure_pattern_rate,
+            features.cycle_frequency, features.deadlock_rate,
         );
         let prompt = format!(
             "You are a planner. Maintain continuity across iterations.\n\
@@ -256,45 +268,61 @@ Recent History:\n{}\n\n\
 Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"description\":\"...\",\"deps\":[],\"required_capabilities\":[],\"node_type\":\"analysis|render\",\"priority\":0,\"budget\":3,\"reasoning_trace\":\"...\"}}],\n  \"new_edges\": [{{\"from\":\"id\",\"to\":\"id\"}}],\n  \"retract_nodes\": [{{\"id\":\"...\"}}],\n  \"rewrite_nodes\": [{{\"id\":\"...\",\"new_description\":\"...\",\"new_capabilities\":[]}}]\n}}",
             planner_max_new_nodes, planner_max_new_edges, expandable.join(", "),
             ready_nodes.join(", "), unreachable_nodes.join(", "), rewrite_text,
-            bias_text,
-            objective_context,
-            objective_tasks,
-            refocus_text,
-            constraints_text,
-            graph_signals_text,
-            feature_vector_text,
-            metrics_text,
-            cost_summary,
-            reward_section,
-            self.goal.raw,
-            self.goal.raw,
-            self.goal.success_criteria,
-            serde_json::to_string_pretty(& nodes_json).unwrap_or_default(),
-            serde_json::to_string_pretty(& signals_json).unwrap_or_default(),
-            history_tail
+            bias_text, objective_context, objective_tasks, refocus_text,
+            constraints_text, graph_signals_text, feature_vector_text, metrics_text,
+            cost_summary, reward_section, self.goal.raw, self.goal.raw, self.goal
+            .success_criteria, serde_json::to_string_pretty(& nodes_json)
+            .unwrap_or_default(), serde_json::to_string_pretty(& signals_json)
+            .unwrap_or_default(), history_tail
         );
         prompt
     }
-    pub fn apply_raw_response(&mut self, raw: String, log_dir: &std::path::Path, iter: u64, graph_nodes_len: usize, signals: &GraphAnalysis) -> Result<GraphPatch> {
+    pub fn apply_raw_response(
+        &mut self,
+        raw: String,
+        log_dir: &std::path::Path,
+        iter: u64,
+        graph_nodes_len: usize,
+        signals: &GraphAnalysis,
+    ) -> Result<GraphPatch> {
         self.history.push(raw.clone());
         if self.history.len() > MAX_HISTORY {
             self.history.remove(0);
         }
         let parsed = JsonExtractor::extract(&raw)
-            .or_else(|_| try_parse_lenient_json(&raw).ok_or_else(|| anyhow::anyhow!("planner json extract error")))
-            .and_then(|payload| serde_json::from_value(payload).context("planner update did not match schema"));
+            .or_else(|_| {
+                try_parse_lenient_json_value(&raw)
+                    .ok_or_else(|| anyhow::anyhow!("planner json extract error"))
+            })
+            .and_then(|payload| {
+                serde_json::from_value(payload)
+                    .context("planner update did not match schema")
+            });
         match parsed {
             Ok(update) => {
-                planner_controller_log_planner_iteration(log_dir, iter, graph_nodes_len, signals, &update, &raw, None);
-                Ok(update)
-            }
-            Err(e) => {
-                planner_controller_log_planner_iteration(
+                planner_controller_log_iteration(
                     log_dir,
                     iter,
                     graph_nodes_len,
                     signals,
-                    &GraphPatch { new_nodes: Vec::new(), new_edges: Vec::new(), retract_nodes: Vec::new(), rewrite_nodes: Vec::new() },
+                    &update,
+                    &raw,
+                    None,
+                );
+                Ok(update)
+            }
+            Err(e) => {
+                planner_controller_log_iteration(
+                    log_dir,
+                    iter,
+                    graph_nodes_len,
+                    signals,
+                    &GraphPatch {
+                        new_nodes: Vec::new(),
+                        new_edges: Vec::new(),
+                        retract_nodes: Vec::new(),
+                        rewrite_nodes: Vec::new(),
+                    },
                     &raw,
                     Some(&e.to_string()),
                 );
@@ -310,11 +338,23 @@ Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"descript
     }
 }
 pub(crate) fn planner_controller_validate_planner_update(
-    graph: &ExecutionGraph, update: &GraphPatch, planner_max_new_nodes: usize, planner_max_new_edges: usize, failure_store: &mut FailureStore, iteration: u64, failure_constraint_threshold: usize,
+    graph: &ExecutionGraph,
+    update: &GraphPatch,
+    planner_max_new_nodes: usize,
+    planner_max_new_edges: usize,
+    failure_store: &mut FailureStore,
+    iteration: u64,
+    failure_constraint_threshold: usize,
     max_constraints: usize,
 ) -> Result<()> {
-    planner_controller_ensure(update.new_nodes.len() <= planner_max_new_nodes, "planner expansion limit exceeded")?;
-    planner_controller_ensure(update.new_edges.len() <= planner_max_new_edges, "planner edge limit exceeded")?;
+    planner_controller_require(
+        update.new_nodes.len() <= planner_max_new_nodes,
+        "planner expansion limit exceeded",
+    )?;
+    planner_controller_require(
+        update.new_edges.len() <= planner_max_new_edges,
+        "planner edge limit exceeded",
+    )?;
     let mut existing: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut status_by_id: std::collections::HashMap<String, NodeStatus> = std::collections::HashMap::new();
     for (idx, node) in graph.nodes.iter().enumerate() {
@@ -322,31 +362,88 @@ pub(crate) fn planner_controller_validate_planner_update(
         status_by_id.insert(node.id.clone(), node.status);
     }
     let mut new_ids: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    update.new_nodes.iter().try_for_each(|spec| {
-        planner_controller_ensure(!spec.id.trim().is_empty(), "planner node id empty")?;
-        planner_controller_ensure(!spec.description.trim().is_empty(), "planner node description empty")?;
-        planner_controller_ensure(!spec.required_capabilities.iter().any(|c| matches!(c, PipelineCapability::Unknown)), "planner node has unknown capability")?;
-        planner_controller_ensure(!(existing.contains_key(&spec.id) || new_ids.contains_key(&spec.id)), &format!("duplicate node id {}", spec.id))?;
-        new_ids.insert(spec.id.clone(), new_ids.len());
-        Ok::<(), anyhow::Error>(())
-    })?;
-    update.new_edges.iter().try_for_each(|edge| {
-        planner_controller_ensure(!edge.from.trim().is_empty() && !edge.to.trim().is_empty(), "planner edge endpoints empty")?;
-        let from_ok = existing.contains_key(&edge.from) || new_ids.contains_key(&edge.from);
-        let to_ok = existing.contains_key(&edge.to) || new_ids.contains_key(&edge.to);
-        planner_controller_ensure(from_ok && to_ok, "planner edge references unknown node")
-    })?;
-    update.retract_nodes.iter().try_for_each(|spec| {
-        let status = status_by_id.get(&spec.id).copied().ok_or_else(|| anyhow::anyhow!("retract references unknown node"))?;
-        planner_controller_ensure(matches!(status, NodeStatus::Pending | NodeStatus::Failed), "retract node must be pending or failed")
-    })?;
-    update.rewrite_nodes.iter().try_for_each(|spec| {
-        let status = status_by_id.get(&spec.id).copied().ok_or_else(|| anyhow::anyhow!("rewrite references unknown node"))?;
-        planner_controller_ensure(matches!(status, NodeStatus::Pending | NodeStatus::Failed), "rewrite node must be pending or failed")?;
-        planner_controller_ensure(!spec.new_capabilities.iter().any(|c| matches!(c, PipelineCapability::Unknown)), "rewrite node has unknown capability")?;
-        let caps: std::collections::HashSet<_> = spec.new_capabilities.iter().copied().collect();
-        capability_model_assert_class_disjoint(&caps).map_err(|e| anyhow::anyhow!(e))
-    })?;
+    update
+        .new_nodes
+        .iter()
+        .try_for_each(|spec| {
+            planner_controller_require(
+                !spec.id.trim().is_empty(),
+                "planner node id empty",
+            )?;
+            planner_controller_require(
+                !spec.description.trim().is_empty(),
+                "planner node description empty",
+            )?;
+            planner_controller_require(
+                !spec
+                    .required_capabilities
+                    .iter()
+                    .any(|c| matches!(c, PipelineCapability::Unknown)),
+                "planner node has unknown capability",
+            )?;
+            planner_controller_require(
+                !(existing.contains_key(&spec.id) || new_ids.contains_key(&spec.id)),
+                &format!("duplicate node id {}", spec.id),
+            )?;
+            new_ids.insert(spec.id.clone(), new_ids.len());
+            Ok::<(), anyhow::Error>(())
+        })?;
+    update
+        .new_edges
+        .iter()
+        .try_for_each(|edge| {
+            planner_controller_require(
+                !edge.from.trim().is_empty() && !edge.to.trim().is_empty(),
+                "planner edge endpoints empty",
+            )?;
+            let from_ok = existing.contains_key(&edge.from)
+                || new_ids.contains_key(&edge.from);
+            let to_ok = existing.contains_key(&edge.to)
+                || new_ids.contains_key(&edge.to);
+            planner_controller_require(
+                from_ok && to_ok,
+                "planner edge references unknown node",
+            )
+        })?;
+    update
+        .retract_nodes
+        .iter()
+        .try_for_each(|spec| {
+            let status = status_by_id
+                .get(&spec.id)
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("retract references unknown node"))?;
+            planner_controller_require(
+                matches!(status, NodeStatus::Pending | NodeStatus::Failed),
+                "retract node must be pending or failed",
+            )
+        })?;
+    update
+        .rewrite_nodes
+        .iter()
+        .try_for_each(|spec| {
+            let status = status_by_id
+                .get(&spec.id)
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("rewrite references unknown node"))?;
+            planner_controller_require(
+                matches!(status, NodeStatus::Pending | NodeStatus::Failed),
+                "rewrite node must be pending or failed",
+            )?;
+            planner_controller_require(
+                !spec
+                    .new_capabilities
+                    .iter()
+                    .any(|c| matches!(c, PipelineCapability::Unknown)),
+                "rewrite node has unknown capability",
+            )?;
+            let caps: std::collections::HashSet<_> = spec
+                .new_capabilities
+                .iter()
+                .copied()
+                .collect();
+            capability_model_assert_class_disjoint(&caps).map_err(|e| anyhow::anyhow!(e))
+        })?;
     let mut test_graph = graph.clone();
     apply_graph_patch(&mut test_graph, update.clone())?;
     if let Err(e) = test_graph.validate() {
@@ -358,57 +455,92 @@ pub(crate) fn planner_controller_validate_planner_update(
         }
         return Err(anyhow::anyhow!(e));
     }
-    let constraints = failure_store.constraints(failure_constraint_threshold, max_constraints);
+    let constraints = failure_store
+        .constraints(failure_constraint_threshold, max_constraints);
     if !constraints.is_empty() {
         let signals = graph_algo::graph_analysis_compute_graph_signals(&test_graph);
         for c in constraints {
-            if let Some(err) = planner_controller_check_constraint(&test_graph, &signals, &c) {
+            if let Some(err) = planner_controller_check_constraint_violation(
+                &test_graph,
+                &signals,
+                &c,
+            ) {
                 return Err(anyhow::anyhow!(err));
             }
         }
     }
     Ok(())
 }
-fn planner_controller_check_constraint(graph: &ExecutionGraph, signals: &graph_algo::GraphAnalysis, constraint: &super::failure_store::FailureStoreConstraint) -> Option<String> {
+fn planner_controller_check_constraint_violation(
+    graph: &ExecutionGraph,
+    signals: &graph_algo::GraphAnalysis,
+    constraint: &super::failure_store::FailureStoreConstraint,
+) -> Option<String> {
     use super::failure_store::FailureStoreConstraintRule;
     match &constraint.rule {
-        FailureStoreConstraintRule::NoCycle => signals.has_cycle.then(|| "constraint violated: NoCycle".to_string()),
-        FailureStoreConstraintRule::NoUnreachable => (!signals.unreachable.is_empty()).then(|| "constraint violated: NoUnreachable".to_string()),
+        FailureStoreConstraintRule::NoCycle => {
+            signals.has_cycle.then(|| "constraint violated: NoCycle".to_string())
+        }
+        FailureStoreConstraintRule::NoUnreachable => {
+            (!signals.unreachable.is_empty())
+                .then(|| "constraint violated: NoUnreachable".to_string())
+        }
         FailureStoreConstraintRule::CapabilityConflict => {
-            let bad = graph.nodes.iter().any(|n| {
-                let mut has_obs = false;
-                let mut has_ver = false;
-                let mut has_mut = false;
-                for c in &n.required_capabilities {
-                    match c.class() {
-                        CapabilityMode::Observe => has_obs = true,
-                        CapabilityMode::Verify => has_ver = true,
-                        CapabilityMode::Mutate => has_mut = true,
+            let bad = graph
+                .nodes
+                .iter()
+                .any(|n| {
+                    let mut has_obs = false;
+                    let mut has_ver = false;
+                    let mut has_mut = false;
+                    for c in &n.required_capabilities {
+                        match c.class() {
+                            CapabilityMode::Observe => has_obs = true,
+                            CapabilityMode::Verify => has_ver = true,
+                            CapabilityMode::Mutate => has_mut = true,
+                        }
                     }
-                }
-                (has_ver && has_mut) || (has_obs && has_mut && has_ver)
-            });
+                    (has_ver && has_mut) || (has_obs && has_mut && has_ver)
+                });
             bad.then(|| "constraint violated: CapabilityConflict".to_string())
         }
         FailureStoreConstraintRule::InvalidDependency => {
-            let id_set: std::collections::HashSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
-            let bad = graph.nodes.iter().any(|n| {
-                n.deps.iter().any(|d| d == &n.id || !id_set.contains(d.as_str()))
-            });
+            let id_set: std::collections::HashSet<&str> = graph
+                .nodes
+                .iter()
+                .map(|n| n.id.as_str())
+                .collect();
+            let bad = graph
+                .nodes
+                .iter()
+                .any(|n| {
+                    n.deps.iter().any(|d| d == &n.id || !id_set.contains(d.as_str()))
+                });
             bad.then(|| "constraint violated: InvalidDependency".to_string())
         }
         FailureStoreConstraintRule::PatternRewrite { pattern, .. } => {
-            let bad = graph.nodes.iter().any(|n| n.description.to_lowercase().contains(pattern));
+            let bad = graph
+                .nodes
+                .iter()
+                .any(|n| n.description.to_lowercase().contains(pattern));
             bad.then(|| format!("constraint violated: PatternRewrite({})", pattern))
         }
         FailureStoreConstraintRule::SignatureBan => {
             let sig = graph_algo::hash_graph_structure(graph);
-            (sig == constraint.signature).then(|| "constraint violated: SignatureBan".to_string())
+            (sig == constraint.signature)
+                .then(|| "constraint violated: SignatureBan".to_string())
         }
     }
 }
-pub(crate) fn planner_controller_auto_repair_planner_update(graph: &ExecutionGraph, update: &mut GraphPatch) -> PlannerControllerRepairReport {
-    let mut used: std::collections::HashSet<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
+pub(crate) fn planner_controller_auto_repair_update(
+    graph: &ExecutionGraph,
+    update: &mut GraphPatch,
+) -> PlannerControllerRepairReport {
+    let mut used: std::collections::HashSet<String> = graph
+        .nodes
+        .iter()
+        .map(|n| n.id.clone())
+        .collect();
     for spec in &update.new_nodes {
         used.insert(spec.id.clone());
     }
@@ -419,17 +551,27 @@ pub(crate) fn planner_controller_auto_repair_planner_update(graph: &ExecutionGra
     let mut ids = Vec::new();
     let mut repaired_nodes: Vec<DecomposeTaskSpec> = Vec::new();
     for mut spec in update.new_nodes.drain(..) {
-        planner_controller_normalize_capabilities(&mut spec.required_capabilities, &spec.description);
-        let (observe, verify, mutate) = planner_controller_split_caps(&spec.required_capabilities);
+        planner_controller_normalize_caps(
+            &mut spec.required_capabilities,
+            &spec.description,
+        );
+        let (observe, verify, mutate) = planner_controller_split_capabilities(
+            &spec.required_capabilities,
+        );
         if !mutate.is_empty() && !verify.is_empty() {
             repairs += 1;
             ids.push(spec.id.clone());
-            let verify_id = planner_controller_unique_id(format!("{}_verify", spec.id), &mut used);
+            let verify_id = planner_controller_unique_identifier(
+                format!("{}_verify", spec.id),
+                &mut used,
+            );
             let mut verify_caps = verify;
             verify_caps.extend(observe);
             let verify_node = DecomposeTaskSpec {
                 id: verify_id.clone(),
-                description: format!("Verify preconditions for {}: {}", spec.id, spec.description),
+                description: format!(
+                    "Verify preconditions for {}: {}", spec.id, spec.description
+                ),
                 deps: spec.deps.clone(),
                 required_capabilities: verify_caps,
                 node_type: super::decompose::DecomposeNodeType::Analysis,
@@ -454,7 +596,12 @@ pub(crate) fn planner_controller_auto_repair_planner_update(graph: &ExecutionGra
             let mutate_id = mutate_node.id.clone();
             repaired_nodes.push(verify_node);
             repaired_nodes.push(mutate_node);
-            update.new_edges.push(PlannerUpdateEdgeSpec { from: verify_id, to: mutate_id });
+            update
+                .new_edges
+                .push(PlannerUpdateEdgeSpec {
+                    from: verify_id,
+                    to: mutate_id,
+                });
         } else {
             let mut caps = if !mutate.is_empty() { mutate } else { verify };
             if !caps.is_empty() {
@@ -468,25 +615,44 @@ pub(crate) fn planner_controller_auto_repair_planner_update(graph: &ExecutionGra
         }
     }
     for spec in update.rewrite_nodes.iter_mut() {
-        planner_controller_normalize_capabilities(&mut spec.new_capabilities, &spec.new_description);
-        let (observe, verify, mutate) = planner_controller_split_caps(&spec.new_capabilities);
+        planner_controller_normalize_caps(
+            &mut spec.new_capabilities,
+            &spec.new_description,
+        );
+        let (observe, verify, mutate) = planner_controller_split_capabilities(
+            &spec.new_capabilities,
+        );
         if !mutate.is_empty() && !verify.is_empty() {
             repairs += 1;
             ids.push(spec.id.clone());
-            let verify_id = planner_controller_unique_id(format!("{}_verify", spec.id), &mut used);
+            let verify_id = planner_controller_unique_identifier(
+                format!("{}_verify", spec.id),
+                &mut used,
+            );
             let mut verify_caps = verify;
             verify_caps.extend(observe);
-            update.new_nodes.push(DecomposeTaskSpec {
-                id: verify_id.clone(),
-                description: format!("Verify preconditions for {}: {}", spec.id, spec.new_description),
-                deps: Vec::new(),
-                required_capabilities: verify_caps,
-                node_type: super::decompose::DecomposeNodeType::Analysis,
-                priority: 5,
-                budget: None,
-                reasoning_trace: Some("AUTO_REPAIR: split rewrite verify/mutate".to_string()),
-            });
-            update.new_edges.push(PlannerUpdateEdgeSpec { from: verify_id, to: spec.id.clone() });
+            update
+                .new_nodes
+                .push(DecomposeTaskSpec {
+                    id: verify_id.clone(),
+                    description: format!(
+                        "Verify preconditions for {}: {}", spec.id, spec.new_description
+                    ),
+                    deps: Vec::new(),
+                    required_capabilities: verify_caps,
+                    node_type: super::decompose::DecomposeNodeType::Analysis,
+                    priority: 5,
+                    budget: None,
+                    reasoning_trace: Some(
+                        "AUTO_REPAIR: split rewrite verify/mutate".to_string(),
+                    ),
+                });
+            update
+                .new_edges
+                .push(PlannerUpdateEdgeSpec {
+                    from: verify_id,
+                    to: spec.id.clone(),
+                });
             spec.new_capabilities = mutate;
         } else if !mutate.is_empty() {
             let mut caps = mutate;
@@ -499,10 +665,16 @@ pub(crate) fn planner_controller_auto_repair_planner_update(graph: &ExecutionGra
         }
     }
     update.new_nodes.extend(repaired_nodes);
-    planner_controller_seed_orchestration_node_if_empty(graph, update);
-    PlannerControllerRepairReport { count: repairs, ids }
+    planner_controller_seed_orchestration_if_empty(graph, update);
+    PlannerControllerRepairReport {
+        count: repairs,
+        ids,
+    }
 }
-fn planner_controller_normalize_capabilities(caps: &mut Vec<PipelineCapability>, description: &str) {
+fn planner_controller_normalize_caps(
+    caps: &mut Vec<PipelineCapability>,
+    description: &str,
+) {
     let lower = description.to_lowercase();
     if caps.iter().any(|c| matches!(c, PipelineCapability::StatelessInvoke)) {
         let replacement = if lower.contains("cargo check") {
@@ -515,36 +687,62 @@ fn planner_controller_normalize_capabilities(caps: &mut Vec<PipelineCapability>,
             None
         };
         if let Some(rep) = replacement {
-            *caps = caps.iter().filter(|c| !matches!(c, PipelineCapability::StatelessInvoke)).copied().collect();
+            *caps = caps
+                .iter()
+                .filter(|c| !matches!(c, PipelineCapability::StatelessInvoke))
+                .copied()
+                .collect();
             caps.push(rep);
         }
     }
 }
-fn planner_controller_seed_orchestration_node_if_empty(graph: &ExecutionGraph, update: &mut GraphPatch) {
+fn planner_controller_seed_orchestration_if_empty(
+    graph: &ExecutionGraph,
+    update: &mut GraphPatch,
+) {
     if !graph.nodes.is_empty() {
         return;
     }
-    let has_orch = update.new_nodes.iter().any(|n| {
-        let d = n.description.to_lowercase();
-        d.contains("orchestration -- --all") || d.contains("cargo run --bin orchestration")
-    });
+    let has_orch = update
+        .new_nodes
+        .iter()
+        .any(|n| {
+            let d = n.description.to_lowercase();
+            d.contains("orchestration -- --all")
+                || d.contains("cargo run --bin orchestration")
+        });
     if has_orch {
         return;
     }
-    let mut used: std::collections::HashSet<String> = update.new_nodes.iter().map(|n| n.id.clone()).collect();
-    let id = planner_controller_unique_id("run_orchestration_build".to_string(), &mut used);
-    update.new_nodes.push(DecomposeTaskSpec {
-        id,
-        description: "Run `cargo run --bin orchestration -- --all` to reproduce the pipeline and capture diagnostics.".to_string(),
-        deps: Vec::new(),
-        required_capabilities: vec![PipelineCapability::Bash],
-        node_type: super::decompose::DecomposeNodeType::Analysis,
-        priority: 10,
-        budget: Some(3),
-        reasoning_trace: Some("AUTO_SEED: ensure orchestration build runs when graph is empty".to_string()),
-    });
+    let mut used: std::collections::HashSet<String> = update
+        .new_nodes
+        .iter()
+        .map(|n| n.id.clone())
+        .collect();
+    let id = planner_controller_unique_identifier(
+        "run_orchestration_build".to_string(),
+        &mut used,
+    );
+    update
+        .new_nodes
+        .push(DecomposeTaskSpec {
+            id,
+            description: "Run `cargo run --bin orchestration -- --all` to reproduce the pipeline and capture diagnostics."
+                .to_string(),
+            deps: Vec::new(),
+            required_capabilities: vec![PipelineCapability::Bash],
+            node_type: super::decompose::DecomposeNodeType::Analysis,
+            priority: 10,
+            budget: Some(3),
+            reasoning_trace: Some(
+                "AUTO_SEED: ensure orchestration build runs when graph is empty"
+                    .to_string(),
+            ),
+        });
 }
-fn planner_controller_split_caps(caps: &[PipelineCapability]) -> (Vec<PipelineCapability>, Vec<PipelineCapability>, Vec<PipelineCapability>) {
+fn planner_controller_split_capabilities(
+    caps: &[PipelineCapability],
+) -> (Vec<PipelineCapability>, Vec<PipelineCapability>, Vec<PipelineCapability>) {
     let mut observe = Vec::new();
     let mut verify = Vec::new();
     let mut mutate = Vec::new();
@@ -557,7 +755,10 @@ fn planner_controller_split_caps(caps: &[PipelineCapability]) -> (Vec<PipelineCa
     }
     (observe, verify, mutate)
 }
-fn planner_controller_unique_id(base: String, used: &mut std::collections::HashSet<String>) -> String {
+fn planner_controller_unique_identifier(
+    base: String,
+    used: &mut std::collections::HashSet<String>,
+) -> String {
     if !used.contains(&base) {
         used.insert(base.clone());
         return base;
@@ -572,19 +773,28 @@ fn planner_controller_unique_id(base: String, used: &mut std::collections::HashS
         idx = idx.saturating_add(1);
     }
 }
-fn planner_controller_ensure(cond: bool, msg: &str) -> Result<()> {
+fn planner_controller_require(cond: bool, msg: &str) -> Result<()> {
     cond.then_some(()).ok_or_else(|| anyhow::anyhow!("{}", msg))
 }
-fn planner_controller_expandable_nodes(graph: &ExecutionGraph) -> Vec<String> {
+fn planner_controller_expandable_node_ids(graph: &ExecutionGraph) -> Vec<String> {
     let mut has_children = std::collections::HashSet::new();
     for node in &graph.nodes {
         for dep in &node.deps {
             has_children.insert(dep.clone());
         }
     }
-    graph.nodes.iter().filter(|n| n.status == NodeStatus::Pending && n.node_type == super::decompose::DecomposeNodeType::Analysis && !has_children.contains(&n.id)).map(|n| n.id.clone()).collect()
+    graph
+        .nodes
+        .iter()
+        .filter(|n| {
+            n.status == NodeStatus::Pending
+                && n.node_type == super::decompose::DecomposeNodeType::Analysis
+                && !has_children.contains(&n.id)
+        })
+        .map(|n| n.id.clone())
+        .collect()
 }
-fn try_parse_lenient_json(raw: &str) -> Option<Value> {
+fn try_parse_lenient_json_value(raw: &str) -> Option<Value> {
     let start = raw.find('{').or_else(|| raw.find('['))?;
     let end = raw.rfind('}').or_else(|| raw.rfind(']'))?;
     if end <= start {
@@ -593,7 +803,15 @@ fn try_parse_lenient_json(raw: &str) -> Option<Value> {
     let slice = raw[start..=end].trim();
     serde_json::from_str(slice).ok()
 }
-fn planner_controller_log_planner_iteration(log_dir: &std::path::Path, iter: u64, graph_nodes: usize, signals: &GraphAnalysis, update: &GraphPatch, raw: &str, error: Option<&str>) {
+fn planner_controller_log_iteration(
+    log_dir: &std::path::Path,
+    iter: u64,
+    graph_nodes: usize,
+    signals: &GraphAnalysis,
+    update: &GraphPatch,
+    raw: &str,
+    error: Option<&str>,
+) {
     let _ = std::fs::create_dir_all(log_dir);
     let payload = serde_json::json!(
         { "iter" : iter, "graph_nodes" : graph_nodes, "signals" : signals,
