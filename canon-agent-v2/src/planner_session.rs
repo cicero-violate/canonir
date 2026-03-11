@@ -536,6 +536,35 @@ pub(crate) fn planner_controller_auto_repair_update(
     graph: &ExecutionGraph,
     update: &mut GraphPatch,
 ) -> PlannerControllerRepairReport {
+    fn ensure_mutation_caps(
+        caps: &mut Vec<PipelineCapability>,
+        description: &str,
+        node_type: Option<super::decompose::DecomposeNodeType>,
+    ) {
+        let has_mutate = caps.iter().any(|c| c.class() == CapabilityMode::Mutate);
+        if has_mutate {
+            return;
+        }
+        let lower = description.to_lowercase();
+        let keyword_mutate = [
+            "edit",
+            "modify",
+            "patch",
+            "apply",
+            "write",
+            "update",
+            "fix",
+            "refactor",
+            "rename",
+        ]
+        .iter()
+        .any(|k| lower.contains(k));
+        let render = matches!(node_type, Some(super::decompose::DecomposeNodeType::Render));
+        if render || keyword_mutate {
+            caps.push(PipelineCapability::ApplyPatch);
+        }
+    }
+
     let mut used: std::collections::HashSet<String> = graph
         .nodes
         .iter()
@@ -549,15 +578,24 @@ pub(crate) fn planner_controller_auto_repair_update(
     }
     let mut repairs = 0u64;
     let mut ids = Vec::new();
+    let mut mutate_seen = 0usize;
     let mut repaired_nodes: Vec<DecomposeTaskSpec> = Vec::new();
     for mut spec in update.new_nodes.drain(..) {
         planner_controller_normalize_caps(
             &mut spec.required_capabilities,
             &spec.description,
         );
+        ensure_mutation_caps(
+            &mut spec.required_capabilities,
+            &spec.description,
+            Some(spec.node_type),
+        );
         let (observe, verify, mutate) = planner_controller_split_capabilities(
             &spec.required_capabilities,
         );
+        if !mutate.is_empty() {
+            mutate_seen += 1;
+        }
         if !mutate.is_empty() && !verify.is_empty() {
             repairs += 1;
             ids.push(spec.id.clone());
@@ -619,9 +657,17 @@ pub(crate) fn planner_controller_auto_repair_update(
             &mut spec.new_capabilities,
             &spec.new_description,
         );
+        ensure_mutation_caps(
+            &mut spec.new_capabilities,
+            &spec.new_description,
+            None,
+        );
         let (observe, verify, mutate) = planner_controller_split_capabilities(
             &spec.new_capabilities,
         );
+        if !mutate.is_empty() {
+            mutate_seen += 1;
+        }
         if !mutate.is_empty() && !verify.is_empty() {
             repairs += 1;
             ids.push(spec.id.clone());
@@ -666,6 +712,11 @@ pub(crate) fn planner_controller_auto_repair_update(
     }
     update.new_nodes.extend(repaired_nodes);
     planner_controller_seed_orchestration_if_empty(graph, update);
+    if mutate_seen == 0 && (!update.new_nodes.is_empty() || !update.rewrite_nodes.is_empty()) {
+        eprintln!(
+            "[planner] warning: no mutate-capable nodes produced after repair; edits may stall"
+        );
+    }
     PlannerControllerRepairReport {
         count: repairs,
         ids,

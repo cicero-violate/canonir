@@ -409,6 +409,16 @@ pub(crate) async fn run_execution_loop(
                                 continue;
                             }
                         };
+                        if node.node_type == super::decompose::DecomposeNodeType::Render
+                            && !auth.is_mutation_context()
+                        {
+                            eprintln!(
+                                r#"[capability] {{"iter":{},"event":"render_without_mutate","node":"{}","caps":"{:?}"}}"#,
+                                iter,
+                                node.id,
+                                node.required_capabilities
+                            );
+                        }
                         let sem = semaphore.clone();
                         let ctx = dispatch::node_dispatch_resolve_endpoint(
                                 config,

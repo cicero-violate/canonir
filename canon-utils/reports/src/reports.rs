@@ -136,7 +136,7 @@ pub fn generate_reports(output_dir: &Path, out_dir: &Path) -> Result<()> {
     let files = read_files_txt(output_dir.join("files.txt"))?;
     let _symbols_json = fs::read_to_string(output_dir.join("symbols.json"))
         .map_err(|e| anyhow!("failed to read symbols.json: {e}"))?;
-    let reports_dir = out_dir.join("reports");
+    let reports_dir = out_dir.parent().unwrap_or(out_dir).join("reports");
     generate_reports_from_parts(nodes, edges, files, out_dir, &reports_dir)
 }
 
@@ -160,7 +160,7 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
         };
         write_snapshot_meta(&meta_path, &meta)?;
     }
-    let reports_dir = out_dir.join("reports");
+    let reports_dir = out_dir.parent().unwrap_or(out_dir).join("reports");
     generate_reports_from_parts(nodes, edges, files, out_dir, &reports_dir)?;
     if let Ok(cache) = load_and_update_graph_cache(tlog_path, &reports_dir) {
         let (modulegraph, module_nodes) = build_modulegraph_from_cache(&cache);
@@ -169,6 +169,9 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
             let (typegraph, type_nodes) = build_typegraph_from_cache(&cache);
             write_typegraph_csv_from_cache(out_dir, &typegraph, &type_nodes)?;
         }
+    }
+    if let Err(err) = crate::invariant_validator::run_invariant_pipeline(out_dir) {
+        eprintln!("canon_reports: invariant pipeline failed: {err:?}");
     }
     Ok(())
 }
@@ -548,13 +551,19 @@ fn build_cfg_edges(nodes: &[NodeRow], edges: &[EdgeRow]) -> Vec<EdgeRow> {
     let id_to_kind: HashMap<u32, &str> = nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
     let mut out = Vec::new();
     for edge in edges {
-        if edge.kind != "FLOW" && edge.kind != "UNWIND" {
+        if edge.kind != "FLOW" && edge.kind != "UNWIND" && edge.kind != "RETURN" {
             continue;
         }
         let src_kind = id_to_kind.get(&edge.src);
         let dst_kind = id_to_kind.get(&edge.dst);
-        if src_kind == Some(&"BASIC_BLOCK") && dst_kind == Some(&"BASIC_BLOCK") {
-            out.push(edge.clone());
+        if src_kind == Some(&"BASIC_BLOCK") {
+            if edge.kind == "RETURN" {
+                out.push(edge.clone());
+                continue;
+            }
+            if dst_kind == Some(&"BASIC_BLOCK") {
+                out.push(edge.clone());
+            }
         }
     }
     out
@@ -668,25 +677,23 @@ fn build_modulegraph(nodes: &[NodeRow], files: &[String]) -> (Vec<(u32, u32)>, V
     let mut module_files: BTreeMap<String, String> = BTreeMap::new();
 
     for node in nodes {
-        if node.kind == "MODULE" {
-            let file = node
-                .file_id
-                .and_then(|id| files.get(id as usize))
-                .cloned()
-                .unwrap_or_default();
-            module_files
-                .entry(node.symbol.clone())
-                .or_insert(file);
+        if node.kind != "MODULE" {
+            continue;
         }
-        if !node.symbol.is_empty() {
-            let file = node
-                .file_id
-                .and_then(|id| files.get(id as usize))
-                .cloned()
-                .unwrap_or_default();
-            for module_sym in module_prefixes(&node.symbol) {
-                module_files.entry(module_sym).or_insert(file.clone());
-            }
+        let file = node
+            .file_id
+            .and_then(|id| files.get(id as usize))
+            .cloned()
+            .unwrap_or_default();
+        if node.symbol.is_empty() {
+            module_files.entry("".to_string()).or_insert(file);
+            continue;
+        }
+        module_files
+            .entry(node.symbol.clone())
+            .or_insert(file.clone());
+        for module_sym in module_prefixes(&node.symbol) {
+            module_files.entry(module_sym).or_insert(file.clone());
         }
     }
 
@@ -797,18 +804,24 @@ fn apply_cache_record(value: Value, cache: &mut GraphCache) {
                 return;
             }
 
-            if !sym.is_empty() {
-                for module_sym in module_prefixes(sym) {
+            if kind == "MODULE" {
+                if sym.is_empty() {
                     cache
                         .module_files
-                        .entry(module_sym)
+                        .entry("".to_string())
                         .or_insert_with(|| file.to_string());
+                } else {
+                    cache
+                        .module_files
+                        .entry(sym.to_string())
+                        .or_insert_with(|| file.to_string());
+                    for module_sym in module_prefixes(sym) {
+                        cache
+                            .module_files
+                            .entry(module_sym)
+                            .or_insert_with(|| file.to_string());
+                    }
                 }
-            } else if kind == "MODULE" {
-                cache
-                    .module_files
-                    .entry(sym.to_string())
-                    .or_insert_with(|| file.to_string());
             }
 
             let type_kinds = ["STRUCT", "ENUM", "TRAIT", "IMPL", "TYPE"];
@@ -1533,8 +1546,8 @@ fn write_modulegraph_csv(
         let parent_file = parent_node.map(|n| n.file.as_str()).unwrap_or("");
         let child_file = child_node.map(|n| n.file.as_str()).unwrap_or("");
         writer.write_record([
-            parent.to_string(),
-            child.to_string(),
+            parent_sym.to_string(),
+            child_sym.to_string(),
             parent_sym.to_string(),
             child_sym.to_string(),
             parent_file.to_string(),
@@ -2500,6 +2513,9 @@ fn build_dependency_cycles(
     let mut adj: HashMap<u32, Vec<u32>> = HashMap::new();
     let mut nodes: HashSet<u32> = HashSet::new();
     for (s, d) in callgraph {
+        if s == d {
+            continue;
+        }
         adj.entry(*s).or_default().push(*d);
         nodes.insert(*s);
         nodes.insert(*d);
@@ -2568,17 +2584,7 @@ fn build_dependency_cycles(
     let mut out = Vec::new();
     let mut cycle_id = 0usize;
     for scc in sccs {
-        let mut is_cycle = scc.len() > 1;
-        if !is_cycle {
-            // self-loop
-            let v = scc[0];
-            if let Some(neigh) = adj.get(&v) {
-                if neigh.contains(&v) {
-                    is_cycle = true;
-                }
-            }
-        }
-        if !is_cycle {
+        if scc.len() <= 1 {
             continue;
         }
         let mut node_syms: Vec<String> = Vec::new();

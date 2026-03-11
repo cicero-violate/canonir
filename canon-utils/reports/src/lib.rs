@@ -1,8 +1,20 @@
 mod reports;
 mod errors;
+mod artifacts_loader;
+mod report_ingest;
+mod invariant_discovery;
+mod invariant_validator;
+mod semantic_features;
+mod semantic_signature;
+mod semantic_fingerprints;
+mod semantic_clustering;
+mod pattern_mining;
+mod invariant_generator;
+mod invariant_sat;
 pub mod consumer;
 
 pub use reports::generate_reports;
 pub use reports::generate_reports_from_tlog;
 pub use errors::{augment_with_errors, write_repair_surface};
 pub use consumer::ReportConsumer;
+pub use invariant_validator::run_invariant_pipeline;
