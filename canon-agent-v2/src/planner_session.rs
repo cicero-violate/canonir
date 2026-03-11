@@ -43,6 +43,81 @@ pub struct PlannerController {
     reward_context: Option<PlannerControllerRewardContext>,
 }
 const MAX_HISTORY: usize = 2;
+fn planner_controller_rewrite_text(rewrite_requests: &[String]) -> String {
+    if rewrite_requests.is_empty() {
+        "Rewrite requests: none\n".to_string()
+    } else {
+        format!("Rewrite requests: {}\n", rewrite_requests.join(", "))
+    }
+}
+fn planner_controller_nodes_json(graph: &ExecutionGraph) -> Vec<Value> {
+    graph
+        .nodes
+        .iter()
+        .map(|n| {
+            serde_json::json!(
+                { "id" : n.id, "description" : n.description, "deps" : n.deps,
+                "status" : n.status, "node_type" : n.node_type,
+                "required_capabilities" : n.required_capabilities, "priority" : n
+                .priority, "budget" : n.budget, "reasoning_trace" : n
+                .reasoning_trace, "error" : n.error, }
+            )
+        })
+        .collect()
+}
+fn planner_controller_reward_section(graph: &ExecutionGraph, reward_context: Option<&PlannerControllerRewardContext>) -> String {
+    let Some(r) = reward_context else {
+        return String::new();
+    };
+    let trend = r.recent_rewards.iter().map(|v| format!("{:.3}", v)).collect::<Vec<_>>().join(", ");
+    let seed_section = match r.bootstrap_seed.as_ref() {
+        None => String::new(),
+        Some(seed) => {
+            format!(
+                "Bootstrap seed (similar prior goal, similarity={:.2}, reward={:.3}):\n\
+Prior goal: {}\n\
+Prior graph had {} nodes, {} edges.\n\
+Capabilities used: {}\n\
+Consider reusing this structure as a starting point, adapting it to the current goal.\n",
+                seed.similarity_score,
+                seed.reward,
+                seed.goal,
+                seed.node_count,
+                seed.edge_count,
+                seed.capability_set.join(", "),
+            )
+        }
+    };
+    let base = if r.plateaued {
+        let signals_str = super::graph_algo::graph_analysis_planner_signals_for_graph(graph);
+        format!(
+            "Reward history (last {} runs): [{}]\n\
+Best recorded reward: {:.3}\n\
+STATUS: PLATEAUED. The current graph structure is not improving.\n\
+You MUST propose a structurally different graph: different node decomposition, \
+different capability assignments, or different dependency topology. Do not make incremental edits.\n\
+Current graph topology: {}\n\
+Use these signals to identify structural bottlenecks before proposing changes.\n",
+            r.recent_rewards.len(),
+            trend,
+            r.best_reward,
+            signals_str
+        )
+    } else {
+        format!(
+            "Reward history (last {} runs): [{}]\n\
+Best recorded reward: {:.3}\n\
+Continue refining the current graph.\n",
+            r.recent_rewards.len(),
+            trend,
+            r.best_reward
+        )
+    };
+    base + &seed_section
+}
+fn planner_controller_history_tail(history: &[String]) -> String {
+    history.iter().rev().take(MAX_HISTORY).cloned().collect::<Vec<_>>().join("\n")
+}
 impl PlannerController {
     pub fn new(endpoint: &CapabilityConfigLlmEndpoint, goal: GoalSpec) -> Self {
         Self { endpoint_id: endpoint.id.clone(), url: endpoint.url.clone(), role_schema: endpoint.role_markdown.clone(), goal, history: Vec::new(), stateful: endpoint.stateful, reward_context: None }
@@ -65,71 +140,10 @@ impl PlannerController {
         let expandable = planner_controller_expandable_nodes(graph);
         let ready_nodes = graph.ready_nodes().iter().map(|n| n.id.clone()).collect::<Vec<_>>();
         let unreachable_nodes = signals.unreachable.iter().filter_map(|&idx| ids.get(idx).cloned()).collect::<Vec<_>>();
-        let rewrite_text = if rewrite_requests.is_empty() { "Rewrite requests: none\n".to_string() } else { format!("Rewrite requests: {}\n", rewrite_requests.join(", ")) };
-        let nodes_json: Vec<Value> = graph
-            .nodes
-            .iter()
-            .map(|n| {
-                serde_json::json!(
-                    { "id" : n.id, "description" : n.description, "deps" : n.deps,
-                    "status" : n.status, "node_type" : n.node_type,
-                    "required_capabilities" : n.required_capabilities, "priority" : n
-                    .priority, "budget" : n.budget, "reasoning_trace" : n
-                    .reasoning_trace, "error" : n.error, }
-                )
-            })
-            .collect();
-        let history_tail = self.history.iter().rev().take(2).cloned().collect::<Vec<_>>();
-        let reward_section = match &self.reward_context {
-            None => String::new(),
-            Some(r) => {
-                let trend = r.recent_rewards.iter().map(|v| format!("{:.3}", v)).collect::<Vec<_>>().join(", ");
-                let seed_section = match r.bootstrap_seed.as_ref() {
-                    None => String::new(),
-                    Some(seed) => {
-                        format!(
-                            "Bootstrap seed (similar prior goal, similarity={:.2}, reward={:.3}):\n\
-Prior goal: {}\n\
-Prior graph had {} nodes, {} edges.\n\
-Capabilities used: {}\n\
-Consider reusing this structure as a starting point, adapting it to the current goal.\n",
-                            seed.similarity_score,
-                            seed.reward,
-                            seed.goal,
-                            seed.node_count,
-                            seed.edge_count,
-                            seed.capability_set.join(", "),
-                        )
-                    }
-                };
-                let base = if r.plateaued {
-                    let signals_str = super::graph_algo::graph_analysis_planner_signals_for_graph(graph);
-                    format!(
-                        "Reward history (last {} runs): [{}]\n\
-Best recorded reward: {:.3}\n\
-STATUS: PLATEAUED. The current graph structure is not improving.\n\
-You MUST propose a structurally different graph: different node decomposition, \
-different capability assignments, or different dependency topology. Do not make incremental edits.\n\
-Current graph topology: {}\n\
-Use these signals to identify structural bottlenecks before proposing changes.\n",
-                        r.recent_rewards.len(),
-                        trend,
-                        r.best_reward,
-                        signals_str
-                    )
-                } else {
-                    format!(
-                        "Reward history (last {} runs): [{}]\n\
-Best recorded reward: {:.3}\n\
-Continue refining the current graph.\n",
-                        r.recent_rewards.len(),
-                        trend,
-                        r.best_reward
-                    )
-                };
-                base + &seed_section
-            }
-        };
+        let rewrite_text = planner_controller_rewrite_text(rewrite_requests);
+        let nodes_json: Vec<Value> = planner_controller_nodes_json(graph);
+        let history_tail = planner_controller_history_tail(&self.history);
+        let reward_section = planner_controller_reward_section(graph, self.reward_context.as_ref());
         let mut features = features.clone();
         if let Some(ctx) = self.reward_context.as_ref() {
             features = features.with_reward_history(&ctx.recent_rewards);
@@ -209,7 +223,7 @@ Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"descript
             self.goal.success_criteria,
             serde_json::to_string_pretty(& nodes_json).unwrap_or_default(),
             serde_json::to_string_pretty(& signals_json).unwrap_or_default(),
-            history_tail.join("\n")
+            history_tail
         );
         prompt
     }

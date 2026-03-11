@@ -90,7 +90,7 @@ pub async fn run_agent_loop(
             }
         };
         if let Some(metrics) = read_metrics() {
-            if metrics.runtime.completion_velocity == 0.0 {
+            if metrics.runtime.queue.completion_velocity == 0.0 {
                 stagnation += 1;
             } else {
                 stagnation = 0;
@@ -99,10 +99,10 @@ pub async fn run_agent_loop(
                 write_recovery_signal("stagnation");
                 stagnation = 0;
             }
-            if metrics.runtime.retry_rate > config.retry_threshold {
+            if metrics.runtime.queue.retry_rate > config.retry_threshold {
                 write_recovery_signal("retry_rate");
             }
-            if metrics.runtime.deadlock_rate > config.deadlock_threshold {
+            if metrics.runtime.queue.deadlock_rate > config.deadlock_threshold {
                 write_recovery_signal("deadlock_rate");
             }
         }

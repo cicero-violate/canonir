@@ -254,32 +254,49 @@ fn strip_leading_length_line(input: &str) -> &str {
     input
 }
 fn collect_gemini_fragments(v: &Value, out: &mut String, depth: usize) {
-    if depth > 12 {
-        return;
+    enum GeminiNode<'a> {
+        Borrowed(&'a Value),
+        Owned(usize),
     }
-    match v {
-        Value::String(s) => {
-            if s.starts_with('{') || s.starts_with('[') {
-                if let Ok(inner) = serde_json::from_str::<Value>(s) {
-                    collect_gemini_fragments(&inner, out, depth + 1);
-                    return;
+    let mut owned: Vec<Value> = Vec::new();
+    let mut stack: Vec<(GeminiNode<'_>, usize)> = vec![(GeminiNode::Borrowed(v), depth)];
+    while let Some((node, depth)) = stack.pop() {
+        if depth > 12 {
+            continue;
+        }
+        let current = match node {
+            GeminiNode::Borrowed(v) => v,
+            GeminiNode::Owned(idx) => match owned.get(idx) {
+                Some(v) => v,
+                None => continue,
+            },
+        };
+        match current {
+            Value::String(s) => {
+                if s.starts_with('{') || s.starts_with('[') {
+                    if let Ok(inner) = serde_json::from_str::<Value>(s) {
+                        let idx = owned.len();
+                        owned.push(inner);
+                        stack.push((GeminiNode::Owned(idx), depth + 1));
+                        continue;
+                    }
+                }
+                if s.contains("```json") {
+                    out.push_str(s);
                 }
             }
-            if s.contains("```json") {
-                out.push_str(s);
+            Value::Array(arr) => {
+                for item in arr.iter().rev() {
+                    stack.push((GeminiNode::Borrowed(item), depth + 1));
+                }
             }
-        }
-        Value::Array(arr) => {
-            for item in arr {
-                collect_gemini_fragments(item, out, depth + 1);
+            Value::Object(map) => {
+                for val in map.values() {
+                    stack.push((GeminiNode::Borrowed(val), depth + 1));
+                }
             }
+            _ => {}
         }
-        Value::Object(map) => {
-            for val in map.values() {
-                collect_gemini_fragments(val, out, depth + 1);
-            }
-        }
-        _ => {}
     }
 }
 fn classify_calpico_array(arr: &[Value]) -> FrameResult {

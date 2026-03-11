@@ -1,12 +1,11 @@
 # Agent Goal
 
-Fix the `orchestration` pipeline so:
+Diagnose and fix **one** concrete build error in emitted sources so that the next run shows **fewer** errors.
 
+Primary command:
 ```
 cargo run --bin orchestration -- --all
 ```
-
-completes with zero build errors in emitted files (focus on `emit/repomap/src/*.rs` first).
 
 ## Constraints
 - You may modify code under:
@@ -14,13 +13,15 @@ completes with zero build errors in emitted files (focus on `emit/repomap/src/*.
   - `/workspace/ai_sandbox/canon/canon-projection`
   - `/workspace/ai_sandbox/canon/canon`
 - Do not edit files outside those roots.
+- Focus on `emit/repomap/src/*.rs` errors first.
 
 ## Required execution order
-1. Run `cargo run --bin orchestration -- --all` and capture diagnostics.
-2. Read failing emitted files directly.
-3. Apply targeted fixes (write_file or apply_patch) to eliminate the reported errors.
+1. Run the orchestration command and capture diagnostics.
+2. Read at least one failing emitted file directly.
+3. Apply a single targeted fix (write_file or apply_patch) that addresses a specific diagnostic.
+4. Re-run orchestration and confirm the **error count decreases**.
 
 ## Structural requirements
-- At least 3 mutate nodes (apply_patch or write_file) must appear in the first 6 nodes.
-- Every node must either read a specific file or write a specific fix.
-- Avoid analysis-only nodes without concrete I/O.
+- The first node must be the orchestration command.
+- The second node must read a failing emitted file.
+- The third node must be a mutate node (apply_patch or write_file) tied to a specific error message.

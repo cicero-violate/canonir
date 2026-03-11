@@ -75,6 +75,9 @@ pub(crate) async fn run_execution_loop(
     exec_metrics: &mut ExecutionTelemetry,
     goal: &GoalSpec,
 ) -> Result<(u64, Vec<ExecutionSchedulerExecFailure>)> {
+    if graph.nodes.is_empty() {
+        return Ok((0, vec![ExecutionSchedulerExecFailure { kind: "empty_graph", iter: 0 }]));
+    }
     let semaphore = Arc::new(Semaphore::new(max_concurrency.max(1)));
     let mut blocked_streak = 0u32;
     let mut state = SchedulerState::Running;
@@ -856,46 +859,45 @@ pub(crate) async fn run_planner_loop(
             total / graph.nodes.len() as f64
         };
         let goal_sim = telemetry::telemetry_goal_similarity(graph, planner.goal_spec());
-        let runtime = RuntimeTelemetry {
-            queue_depth: telemetry::telemetry_pending_requests(),
-            retry_rate: if planner_metrics.planner_calls == 0 { 0.0 } else { planner_metrics.planner_retries as f64 / planner_metrics.planner_calls as f64 },
-            progress_fraction: telemetry::telemetry_progress_fraction(graph),
-            iteration_time_ms: iter_start.elapsed().as_millis() as u64,
-            branching_factor: features.branching_factor,
-            blocked_fraction: features.blocked_fraction,
-            completion_velocity: features.completion_velocity,
-            policy_prediction,
-            policy_error,
-            policy_weight_norm: policy_outcome.weight_norm,
-            dataset_size: policy_train::policy_training_dataset_size(),
-            deadlock_rate: features.deadlock_rate,
-            policy_run_planner: run_planner_now,
-            policy_expansion_scale: expansion_scale,
-            policy_execution_preference: execution_preference,
-            template_reuse: last_template_reuse,
-            template_score: last_template_score,
-            template_selected: last_template_selected.clone(),
-            repair_attempts: exec_metrics.last_repair_attempts,
-            repair_success_rate: if exec_metrics.last_repair_attempts == 0 { 0.0 } else { exec_metrics.last_repair_successes as f64 / exec_metrics.last_repair_attempts as f64 },
-            repair_type: exec_metrics.last_repair_kind.clone(),
-            constraint_rejections,
-            constraint_hit_rate: if attempts == 0 { 0.0 } else { constraint_rejections as f64 / attempts as f64 },
-            constraint_types: if constraint_types.is_empty() { None } else { Some(constraint_types.join(",")) },
-            avg_capability_latency: cost_table.avg_latency(),
-            avg_capability_failure: cost_table.avg_failure(),
-            avg_node_utility,
-            template_mutations: last_mutations,
-            mutation_success_rate: if last_mutations == 0 { 0.0 } else { last_mutation_success as f64 / last_mutations as f64 },
-            mutation_reward_delta: last_mutation_reward_delta,
-            snapshot_written: exec_metrics.last_snapshot_written,
-            snapshot_loaded: resume_iteration > 0,
-            resume_iteration,
-            goal_similarity_score: goal_sim,
-            goal_drift: (1.0 - goal_sim).clamp(0.0, 1.0),
-            planner_refocus,
-            template_reuse_by_embedding: last_template_by_embedding,
-            embedding_cache_hits: last_embedding_cache_hits,
-        };
+        let mut runtime = RuntimeTelemetry::default();
+        runtime.queue.queue_depth = telemetry::telemetry_pending_requests();
+        runtime.queue.retry_rate = if planner_metrics.planner_calls == 0 { 0.0 } else { planner_metrics.planner_retries as f64 / planner_metrics.planner_calls as f64 };
+        runtime.queue.progress_fraction = telemetry::telemetry_progress_fraction(graph);
+        runtime.queue.iteration_time_ms = iter_start.elapsed().as_millis() as u64;
+        runtime.queue.branching_factor = features.branching_factor;
+        runtime.queue.blocked_fraction = features.blocked_fraction;
+        runtime.queue.completion_velocity = features.completion_velocity;
+        runtime.queue.deadlock_rate = features.deadlock_rate;
+        runtime.policy.policy_prediction = policy_prediction;
+        runtime.policy.policy_error = policy_error;
+        runtime.policy.policy_weight_norm = policy_outcome.weight_norm;
+        runtime.policy.dataset_size = policy_train::policy_training_dataset_size();
+        runtime.policy.policy_run_planner = run_planner_now;
+        runtime.policy.policy_expansion_scale = expansion_scale;
+        runtime.policy.policy_execution_preference = execution_preference;
+        runtime.template.template_reuse = last_template_reuse;
+        runtime.template.template_score = last_template_score;
+        runtime.template.template_selected = last_template_selected.clone();
+        runtime.template.template_mutations = last_mutations;
+        runtime.template.mutation_success_rate = if last_mutations == 0 { 0.0 } else { last_mutation_success as f64 / last_mutations as f64 };
+        runtime.template.mutation_reward_delta = last_mutation_reward_delta;
+        runtime.template.template_reuse_by_embedding = last_template_by_embedding;
+        runtime.template.embedding_cache_hits = last_embedding_cache_hits;
+        runtime.repair.repair_attempts = exec_metrics.last_repair_attempts;
+        runtime.repair.repair_success_rate = if exec_metrics.last_repair_attempts == 0 { 0.0 } else { exec_metrics.last_repair_successes as f64 / exec_metrics.last_repair_attempts as f64 };
+        runtime.repair.repair_type = exec_metrics.last_repair_kind.clone();
+        runtime.repair.constraint_rejections = constraint_rejections;
+        runtime.repair.constraint_hit_rate = if attempts == 0 { 0.0 } else { constraint_rejections as f64 / attempts as f64 };
+        runtime.repair.constraint_types = if constraint_types.is_empty() { None } else { Some(constraint_types.join(",")) };
+        runtime.performance.avg_capability_latency = cost_table.avg_latency();
+        runtime.performance.avg_capability_failure = cost_table.avg_failure();
+        runtime.performance.avg_node_utility = avg_node_utility;
+        runtime.snapshot.snapshot_written = exec_metrics.last_snapshot_written;
+        runtime.snapshot.snapshot_loaded = resume_iteration > 0;
+        runtime.snapshot.resume_iteration = resume_iteration;
+        runtime.goal.goal_similarity_score = goal_sim;
+        runtime.goal.goal_drift = (1.0 - goal_sim).clamp(0.0, 1.0);
+        runtime.goal.planner_refocus = planner_refocus;
         let reward_history = store.recent_rewards(template_name, 6);
         let features = features.with_reward_history(&reward_history);
         let failures = failure_store.failure_count();

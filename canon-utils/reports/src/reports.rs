@@ -7,6 +7,7 @@ use rkyv::{
     Serialize as RkyvSerialize,
 };
 use rkyv::Infallible;
+use rkyv::ser::Serializer;
 use memmap2::Mmap;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
@@ -134,15 +135,32 @@ pub fn generate_reports(output_dir: &Path, out_dir: &Path) -> Result<()> {
     let files = read_files_txt(output_dir.join("files.txt"))?;
     let _symbols_json = fs::read_to_string(output_dir.join("symbols.json"))
         .map_err(|e| anyhow!("failed to read symbols.json: {e}"))?;
-    generate_reports_from_parts(nodes, edges, files, out_dir)
+    let reports_dir = out_dir.join("reports");
+    generate_reports_from_parts(nodes, edges, files, out_dir, &reports_dir)
 }
 
 pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()> {
     let snapshot_path = out_dir.join("graph_snapshot.bin");
     let meta_path = out_dir.join("snapshot.meta.json");
-    let (nodes, edges, files) = read_tlog_graph_incremental(tlog_path, &snapshot_path, &meta_path)?;
-    generate_reports_from_parts(nodes, edges, files, out_dir)?;
+    let graph_bin_path = out_dir.join("graph.bin");
+    let (nodes, edges, files) = if graph_bin_path.exists() && is_graph_bin_fresh(&graph_bin_path, tlog_path) {
+        load_graph_bin(&graph_bin_path)?
+    } else {
+        read_tlog_graph_incremental(tlog_path, &snapshot_path, &meta_path)?
+    };
+    if !graph_bin_path.exists() || !is_graph_bin_fresh(&graph_bin_path, tlog_path) {
+        write_graph_bin(&graph_bin_path, &nodes, &edges, &files)?;
+        write_kernel_snapshot(&snapshot_path, &nodes, &edges, &files)?;
+        let meta = SnapshotMeta {
+            tlog_offset: tlog_path.metadata().map(|m| m.len()).unwrap_or(0),
+            event_count: (nodes.len() + edges.len()) as u64,
+            created_at: current_timestamp(),
+            version: 2,
+        };
+        write_snapshot_meta(&meta_path, &meta)?;
+    }
     let reports_dir = out_dir.join("reports");
+    generate_reports_from_parts(nodes, edges, files, out_dir, &reports_dir)?;
     if let Ok(cache) = load_and_update_graph_cache(tlog_path, &reports_dir) {
         let (modulegraph, module_nodes) = build_modulegraph_from_cache(&cache);
         write_modulegraph_csv(out_dir, &modulegraph, &module_nodes)?;
@@ -158,13 +176,12 @@ fn generate_reports_from_parts(
     nodes: Vec<NodeRow>,
     edges: Vec<EdgeRow>,
     files: Vec<String>,
-    out_dir: &Path,
+    graph_dir: &Path,
+    reports_dir: &Path,
 ) -> Result<()> {
-    fs::create_dir_all(out_dir)?;
-    let (cfg, callgraph) = write_graph_artifacts(out_dir, &nodes, &edges, &files)?;
-
-    let reports_dir = out_dir.join("reports");
-    fs::create_dir_all(&reports_dir)?;
+    fs::create_dir_all(graph_dir)?;
+    fs::create_dir_all(reports_dir)?;
+    let (cfg, callgraph) = write_graph_artifacts(graph_dir, &nodes, &edges, &files)?;
 
     let node_map: HashMap<u32, NodeRow> = nodes.iter().map(|n| (n.id, n.clone())).collect();
 
@@ -846,6 +863,369 @@ fn load_kernel_snapshot(path: &Path) -> Result<KernelSnapshot> {
         .deserialize(&mut Infallible)
         .map_err(|e| anyhow!("snapshot deserialize failed: {e}"))?;
     Ok(snapshot)
+}
+
+fn write_kernel_snapshot(
+    path: &Path,
+    nodes: &[NodeRow],
+    edges: &[EdgeRow],
+    files: &[String],
+) -> Result<()> {
+    let mut nodes_out: Vec<KernelSnapshotNode> = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        let file = node
+            .file_id
+            .and_then(|id| files.get(id as usize))
+            .cloned()
+            .unwrap_or_default();
+        nodes_out.push(KernelSnapshotNode {
+            kind: node.kind.clone(),
+            symbol: node.symbol.clone(),
+            file,
+            line: node.line.unwrap_or(0),
+            column: 0,
+        });
+    }
+
+    let mut id_to_kind: HashMap<u32, (&str, &str)> = HashMap::new();
+    for node in nodes {
+        id_to_kind.insert(node.id, (node.symbol.as_str(), node.kind.as_str()));
+    }
+
+    let mut edges_out: Vec<KernelSnapshotEdge> = Vec::with_capacity(edges.len());
+    for edge in edges {
+        let (src_sym, src_kind) = id_to_kind
+            .get(&edge.src)
+            .copied()
+            .unwrap_or(("", "UNKNOWN"));
+        let (dst_sym, dst_kind) = id_to_kind
+            .get(&edge.dst)
+            .copied()
+            .unwrap_or(("", "UNKNOWN"));
+        edges_out.push(KernelSnapshotEdge {
+            src_symbol: src_sym.to_string(),
+            src_kind: src_kind.to_string(),
+            dst_symbol: dst_sym.to_string(),
+            dst_kind: dst_kind.to_string(),
+            kind: edge.kind.clone(),
+        });
+    }
+
+    let snapshot = KernelSnapshot {
+        nodes: nodes_out,
+        edges: edges_out,
+        files: files.to_vec(),
+    };
+
+    let mut serializer = rkyv::ser::serializers::AllocSerializer::<256>::default();
+    serializer
+        .serialize_value(&snapshot)
+        .map_err(|e| anyhow!("snapshot serialize failed: {e}"))?;
+    let buf = serializer.into_serializer().into_inner();
+    fs::write(path, buf)?;
+    Ok(())
+}
+
+fn is_graph_bin_fresh(graph_bin: &Path, tlog_path: &Path) -> bool {
+    let tlog_idx = tlog_path.with_extension("tlog.idx");
+    let bin_meta = graph_bin.metadata().and_then(|m| m.modified());
+    let idx_meta = tlog_idx.metadata().and_then(|m| m.modified());
+    match (bin_meta, idx_meta) {
+        (Ok(bin), Ok(idx)) => bin >= idx,
+        _ => false,
+    }
+}
+
+fn write_graph_bin(path: &Path, nodes: &[NodeRow], edges: &[EdgeRow], files: &[String]) -> Result<()> {
+    const MAGIC: &[u8; 4] = b"CGBN";
+    const VERSION: u32 = 1;
+    const HEADER_SIZE: usize = 32;
+    const NODE_RECORD_SIZE: usize = 21;
+    const EDGE_RECORD_SIZE: usize = 9;
+    const NO_FILE_ID: u32 = u32::MAX;
+
+    let n_nodes = nodes.len() as u32;
+    let n_edges = edges.len() as u32;
+    let n_files = files.len() as u32;
+
+    let mut file_index: HashMap<&str, u32> = HashMap::new();
+    for (idx, path) in files.iter().enumerate() {
+        file_index.insert(path.as_str(), idx as u32);
+    }
+
+    let mut string_table: Vec<u8> = Vec::new();
+    let mut string_offsets: HashMap<&str, (u32, u32)> = HashMap::new();
+
+    for path in files {
+        let offset = string_table.len() as u32;
+        let bytes = path.as_bytes();
+        string_table.extend_from_slice(bytes);
+        string_table.push(0);
+        string_offsets.insert(path.as_str(), (offset, bytes.len() as u32));
+    }
+
+    for node in nodes {
+        if string_offsets.contains_key(node.symbol.as_str()) {
+            continue;
+        }
+        let offset = string_table.len() as u32;
+        let bytes = node.symbol.as_bytes();
+        string_table.extend_from_slice(bytes);
+        string_table.push(0);
+        string_offsets.insert(node.symbol.as_str(), (offset, bytes.len() as u32));
+    }
+
+    let str_table_offset = HEADER_SIZE as u32
+        + n_nodes
+            .checked_mul(NODE_RECORD_SIZE as u32)
+            .ok_or_else(|| anyhow!("graph.bin node section too large"))?
+        + n_edges
+            .checked_mul(EDGE_RECORD_SIZE as u32)
+            .ok_or_else(|| anyhow!("graph.bin edge section too large"))?;
+
+    let mut out = Vec::with_capacity(
+        HEADER_SIZE + (n_nodes as usize * NODE_RECORD_SIZE) + (n_edges as usize * EDGE_RECORD_SIZE) + string_table.len(),
+    );
+
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&VERSION.to_le_bytes());
+    out.extend_from_slice(&n_nodes.to_le_bytes());
+    out.extend_from_slice(&n_edges.to_le_bytes());
+    out.extend_from_slice(&n_files.to_le_bytes());
+    out.extend_from_slice(&str_table_offset.to_le_bytes());
+    out.extend_from_slice(&[0u8; 8]);
+
+    for node in nodes {
+        let (sym_off, sym_len) = string_offsets
+            .get(node.symbol.as_str())
+            .copied()
+            .unwrap_or((0, 0));
+        let file_id = node
+            .file_id
+            .and_then(|id| files.get(id as usize))
+            .and_then(|p| file_index.get(p.as_str()))
+            .copied()
+            .unwrap_or(NO_FILE_ID);
+        out.extend_from_slice(&node.id.to_le_bytes());
+        out.push(node_kind_code(node.kind.as_str()));
+        out.extend_from_slice(&file_id.to_le_bytes());
+        out.extend_from_slice(&node.line.unwrap_or(0).to_le_bytes());
+        out.extend_from_slice(&sym_off.to_le_bytes());
+        out.extend_from_slice(&sym_len.to_le_bytes());
+    }
+
+    for edge in edges {
+        out.extend_from_slice(&edge.src.to_le_bytes());
+        out.extend_from_slice(&edge.dst.to_le_bytes());
+        out.push(edge_kind_code(edge.kind.as_str()));
+    }
+
+    out.extend_from_slice(&string_table);
+
+    fs::write(path, out)?;
+    Ok(())
+}
+
+fn node_kind_code(kind: &str) -> u8 {
+    match kind {
+        "FUNCTION" => 1,
+        "METHOD" => 2,
+        "STRUCT" => 3,
+        "ENUM" => 4,
+        "TRAIT" => 5,
+        "IMPL" => 6,
+        "FIELD" => 7,
+        "PARAM" => 8,
+        "VARIABLE" => 9,
+        "MODULE" => 10,
+        "TYPE" => 11,
+        "BASIC_BLOCK" => 12,
+        "CALL_SITE" => 13,
+        "ERROR" => 14,
+        _ => 0,
+    }
+}
+
+fn edge_kind_code(kind: &str) -> u8 {
+    match kind {
+        "CONTAINS" => 1,
+        "HAS_FIELD" => 2,
+        "HAS_METHOD" => 3,
+        "HAS_BLOCK" => 4,
+        "HAS_PARAM" => 5,
+        "IMPORTS" => 6,
+        "EXPORT" => 7,
+        "PUBLIC_USE" => 8,
+        "FLOW" => 9,
+        "CALL" => 10,
+        "RETURN" => 11,
+        "UNWIND" => 12,
+        "IMPLEMENTS" => 13,
+        "FOR_TYPE" => 14,
+        "USES_TYPE" => 15,
+        "BOUNDS" => 16,
+        "ASSIGN" => 17,
+        "PROPAGATES" => 18,
+        "ARG_TO_PARAM" => 19,
+        "RETURNS" => 20,
+        "ERROR_TO_FUNCTION" => 21,
+        "ERROR_TO_BLOCK" => 22,
+        _ => 0,
+    }
+}
+
+fn current_timestamp() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn load_graph_bin(path: &Path) -> Result<(Vec<NodeRow>, Vec<EdgeRow>, Vec<String>)> {
+    const HEADER_SIZE: usize = 32;
+    const NODE_RECORD_SIZE: usize = 21;
+    const EDGE_RECORD_SIZE: usize = 9;
+    const NO_FILE_ID: u32 = u32::MAX;
+
+    let file = fs::File::open(path)?;
+    let mmap = unsafe { Mmap::map(&file)? };
+    let data = &mmap[..];
+    if data.len() < HEADER_SIZE {
+        return Err(anyhow!("graph.bin too small"));
+    }
+    if &data[0..4] != b"CGBN" {
+        return Err(anyhow!("graph.bin magic mismatch"));
+    }
+    let version = u32::from_le_bytes(data[4..8].try_into()?);
+    if version != 1 {
+        return Err(anyhow!("graph.bin version mismatch"));
+    }
+    let n_nodes = u32::from_le_bytes(data[8..12].try_into()?) as usize;
+    let n_edges = u32::from_le_bytes(data[12..16].try_into()?) as usize;
+    let n_files = u32::from_le_bytes(data[16..20].try_into()?) as usize;
+    let str_table_offset = u32::from_le_bytes(data[20..24].try_into()?) as usize;
+
+    let nodes_offset = HEADER_SIZE;
+    let edges_offset = nodes_offset + n_nodes * NODE_RECORD_SIZE;
+    let expected_str_offset = edges_offset + n_edges * EDGE_RECORD_SIZE;
+    if str_table_offset != expected_str_offset {
+        return Err(anyhow!("graph.bin string table offset mismatch"));
+    }
+    if data.len() < str_table_offset {
+        return Err(anyhow!("graph.bin truncated"));
+    }
+
+    let string_table = &data[str_table_offset..];
+
+    let mut files: Vec<String> = Vec::with_capacity(n_files);
+    let mut cursor = 0usize;
+    for _ in 0..n_files {
+        let start = cursor;
+        while cursor < string_table.len() && string_table[cursor] != 0 {
+            cursor += 1;
+        }
+        let s = std::str::from_utf8(&string_table[start..cursor]).unwrap_or("").to_string();
+        files.push(s);
+        cursor = cursor.saturating_add(1);
+    }
+
+    let mut nodes: Vec<NodeRow> = Vec::with_capacity(n_nodes);
+    let mut pos = nodes_offset;
+    for _ in 0..n_nodes {
+        let id = u32::from_le_bytes(data[pos..pos + 4].try_into()?);
+        let kind_code = data[pos + 4];
+        let file_id = u32::from_le_bytes(data[pos + 5..pos + 9].try_into()?);
+        let line = u32::from_le_bytes(data[pos + 9..pos + 13].try_into()?);
+        let sym_off = u32::from_le_bytes(data[pos + 13..pos + 17].try_into()?) as usize;
+        let sym_len = u32::from_le_bytes(data[pos + 17..pos + 21].try_into()?) as usize;
+        pos += NODE_RECORD_SIZE;
+
+        let symbol = if sym_len == 0 {
+            String::new()
+        } else {
+            let end = sym_off.saturating_add(sym_len);
+            if end <= string_table.len() {
+                std::str::from_utf8(&string_table[sym_off..end])
+                    .unwrap_or("")
+                    .to_string()
+            } else {
+                String::new()
+            }
+        };
+
+        nodes.push(NodeRow {
+            id,
+            kind: node_kind_str(kind_code).to_string(),
+            symbol,
+            file_id: if file_id == NO_FILE_ID { None } else { Some(file_id) },
+            line: Some(line),
+        });
+    }
+
+    let mut edges: Vec<EdgeRow> = Vec::with_capacity(n_edges);
+    let mut pos = edges_offset;
+    for _ in 0..n_edges {
+        let src = u32::from_le_bytes(data[pos..pos + 4].try_into()?);
+        let dst = u32::from_le_bytes(data[pos + 4..pos + 8].try_into()?);
+        let kind_code = data[pos + 8];
+        pos += EDGE_RECORD_SIZE;
+        edges.push(EdgeRow {
+            src,
+            dst,
+            kind: edge_kind_str(kind_code).to_string(),
+        });
+    }
+
+    Ok((nodes, edges, files))
+}
+
+fn node_kind_str(code: u8) -> &'static str {
+    match code {
+        1 => "FUNCTION",
+        2 => "METHOD",
+        3 => "STRUCT",
+        4 => "ENUM",
+        5 => "TRAIT",
+        6 => "IMPL",
+        7 => "FIELD",
+        8 => "PARAM",
+        9 => "VARIABLE",
+        10 => "MODULE",
+        11 => "TYPE",
+        12 => "BASIC_BLOCK",
+        13 => "CALL_SITE",
+        14 => "ERROR",
+        _ => "UNKNOWN",
+    }
+}
+
+fn edge_kind_str(code: u8) -> &'static str {
+    match code {
+        1 => "CONTAINS",
+        2 => "HAS_FIELD",
+        3 => "HAS_METHOD",
+        4 => "HAS_BLOCK",
+        5 => "HAS_PARAM",
+        6 => "IMPORTS",
+        7 => "EXPORT",
+        8 => "PUBLIC_USE",
+        9 => "FLOW",
+        10 => "CALL",
+        11 => "RETURN",
+        12 => "UNWIND",
+        13 => "IMPLEMENTS",
+        14 => "FOR_TYPE",
+        15 => "USES_TYPE",
+        16 => "BOUNDS",
+        17 => "ASSIGN",
+        18 => "PROPAGATES",
+        19 => "ARG_TO_PARAM",
+        20 => "RETURNS",
+        21 => "ERROR_TO_FUNCTION",
+        22 => "ERROR_TO_BLOCK",
+        _ => "UNKNOWN",
+    }
 }
 
 fn snapshot_into_rows(

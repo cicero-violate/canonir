@@ -25,7 +25,7 @@ pub struct ExecutionTelemetry {
     pub last_snapshot_written: bool,
 }
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
-pub struct RuntimeTelemetry {
+pub struct RuntimeQueueTelemetry {
     pub queue_depth: u64,
     pub retry_rate: f64,
     pub progress_fraction: f64,
@@ -33,37 +33,72 @@ pub struct RuntimeTelemetry {
     pub branching_factor: f64,
     pub blocked_fraction: f64,
     pub completion_velocity: f64,
+    pub deadlock_rate: f64,
+}
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct RuntimePolicyTelemetry {
     pub policy_prediction: f64,
     pub policy_error: f64,
     pub policy_weight_norm: f64,
     pub dataset_size: u64,
-    pub deadlock_rate: f64,
     pub policy_run_planner: bool,
     pub policy_expansion_scale: f64,
     pub policy_execution_preference: f64,
+}
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct RuntimeTemplateTelemetry {
     pub template_reuse: bool,
     pub template_score: f64,
     pub template_selected: Option<String>,
+    pub template_mutations: u64,
+    pub mutation_success_rate: f64,
+    pub mutation_reward_delta: f64,
+    pub template_reuse_by_embedding: bool,
+    pub embedding_cache_hits: u64,
+}
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct RuntimeRepairTelemetry {
     pub repair_attempts: u64,
     pub repair_success_rate: f64,
     pub repair_type: Option<String>,
     pub constraint_rejections: u64,
     pub constraint_hit_rate: f64,
     pub constraint_types: Option<String>,
+}
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct RuntimePerformanceTelemetry {
     pub avg_capability_latency: f64,
     pub avg_capability_failure: f64,
     pub avg_node_utility: f64,
-    pub template_mutations: u64,
-    pub mutation_success_rate: f64,
-    pub mutation_reward_delta: f64,
+}
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct RuntimeSnapshotTelemetry {
     pub snapshot_written: bool,
     pub snapshot_loaded: bool,
     pub resume_iteration: u64,
+}
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct RuntimeGoalTelemetry {
     pub goal_similarity_score: f64,
     pub goal_drift: f64,
     pub planner_refocus: bool,
-    pub template_reuse_by_embedding: bool,
-    pub embedding_cache_hits: u64,
+}
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct RuntimeTelemetry {
+    #[serde(default, flatten)]
+    pub queue: RuntimeQueueTelemetry,
+    #[serde(default, flatten)]
+    pub policy: RuntimePolicyTelemetry,
+    #[serde(default, flatten)]
+    pub template: RuntimeTemplateTelemetry,
+    #[serde(default, flatten)]
+    pub repair: RuntimeRepairTelemetry,
+    #[serde(default, flatten)]
+    pub performance: RuntimePerformanceTelemetry,
+    #[serde(default, flatten)]
+    pub snapshot: RuntimeSnapshotTelemetry,
+    #[serde(default, flatten)]
+    pub goal: RuntimeGoalTelemetry,
 }
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct TelemetryFrame {

@@ -22,14 +22,4 @@ if [ ! -f "$TLOG" ]; then
     exit 0
 fi
 
-if [ ! -f "$REPORTS_BIN" ]; then
-    echo "canon: reports_from_tlog not built yet, building..." >&2
-    cargo build --bin reports_from_tlog -p canon_reports
-fi
-
-"$REPORTS_BIN" \
-    --tlog "$TLOG" \
-    --out  "$REPORTS_OUT" \
-    </dev/null >/dev/null 2>&1 &
-
-echo "canon: reports generation started (pid $!)"
+echo "canon: build complete — reports watcher will trigger automatically"

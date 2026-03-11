@@ -319,6 +319,9 @@ impl CapabilityPipeline {
                 .collect();
             capability_pipeline_ensure_unique_node_ids(&mut nodes);
             capability_pipeline_ensure_unique_node_ids(&mut nodes);
+            if nodes.is_empty() {
+                return Err(anyhow::anyhow!("planner_generate produced empty graph"));
+            }
             Ok::<
                 dag::ExecutionGraph,
                 anyhow::Error,
@@ -373,6 +376,13 @@ impl CapabilityPipeline {
             let _ = store.snapshot_store_save(&template_name, &g);
             g
         };
+        if graph.nodes.is_empty() {
+            eprintln!("[templates] empty graph; invoking planner");
+            graph = planner_generate().await?;
+            eprintln!("[templates] planner returned nodes={}", graph.nodes.len());
+            cache_hit = false;
+            resume_loaded = false;
+        }
         graph_analysis_emit_planned_graph(&graph, Path::new(LOG_ROOT), 0);
         graph_analysis_run_graph_algorithms(&graph, Path::new(LOG_ROOT), 0);
         let _ = std::fs::read_to_string(Path::new(LOG_ROOT).join("graph_algorithms.json"));
@@ -467,46 +477,45 @@ impl CapabilityPipeline {
             );
             store.record_reward(&template_name, reward);
             let goal_sim = telemetry::telemetry_goal_similarity(&graph, &goal_spec);
-            let runtime = telemetry::RuntimeTelemetry {
-                queue_depth: telemetry::telemetry_pending_requests(),
-                retry_rate: 0.0,
-                progress_fraction: telemetry::telemetry_progress_fraction(&graph),
-                iteration_time_ms: 0,
-                branching_factor: features.branching_factor,
-                blocked_fraction: features.blocked_fraction,
-                completion_velocity: features.completion_velocity,
-                policy_prediction: 0.0,
-                policy_error: 0.0,
-                policy_weight_norm: 0.0,
-                dataset_size: 0,
-                deadlock_rate: features.deadlock_rate,
-                policy_run_planner: true,
-                policy_expansion_scale: 1.0,
-                policy_execution_preference: 0.0,
-                template_reuse: false,
-                template_score: 0.0,
-                template_selected: None,
-                repair_attempts: 0,
-                repair_success_rate: 0.0,
-                repair_type: None,
-                constraint_rejections: 0,
-                constraint_hit_rate: 0.0,
-                constraint_types: None,
-                avg_capability_latency: 0.0,
-                avg_capability_failure: 0.0,
-                avg_node_utility: 0.0,
-                template_mutations: 0,
-                mutation_success_rate: 0.0,
-                mutation_reward_delta: 0.0,
-                snapshot_written: false,
-                snapshot_loaded: false,
-                resume_iteration: 0,
-                goal_similarity_score: goal_sim,
-                goal_drift: (1.0 - goal_sim).clamp(0.0, 1.0),
-                planner_refocus: false,
-                template_reuse_by_embedding: false,
-                embedding_cache_hits: 0,
-            };
+            let mut runtime = telemetry::RuntimeTelemetry::default();
+            runtime.queue.queue_depth = telemetry::telemetry_pending_requests();
+            runtime.queue.retry_rate = 0.0;
+            runtime.queue.progress_fraction = telemetry::telemetry_progress_fraction(&graph);
+            runtime.queue.iteration_time_ms = 0;
+            runtime.queue.branching_factor = features.branching_factor;
+            runtime.queue.blocked_fraction = features.blocked_fraction;
+            runtime.queue.completion_velocity = features.completion_velocity;
+            runtime.queue.deadlock_rate = features.deadlock_rate;
+            runtime.policy.policy_prediction = 0.0;
+            runtime.policy.policy_error = 0.0;
+            runtime.policy.policy_weight_norm = 0.0;
+            runtime.policy.dataset_size = 0;
+            runtime.policy.policy_run_planner = true;
+            runtime.policy.policy_expansion_scale = 1.0;
+            runtime.policy.policy_execution_preference = 0.0;
+            runtime.template.template_reuse = false;
+            runtime.template.template_score = 0.0;
+            runtime.template.template_selected = None;
+            runtime.template.template_mutations = 0;
+            runtime.template.mutation_success_rate = 0.0;
+            runtime.template.mutation_reward_delta = 0.0;
+            runtime.template.template_reuse_by_embedding = false;
+            runtime.template.embedding_cache_hits = 0;
+            runtime.repair.repair_attempts = 0;
+            runtime.repair.repair_success_rate = 0.0;
+            runtime.repair.repair_type = None;
+            runtime.repair.constraint_rejections = 0;
+            runtime.repair.constraint_hit_rate = 0.0;
+            runtime.repair.constraint_types = None;
+            runtime.performance.avg_capability_latency = 0.0;
+            runtime.performance.avg_capability_failure = 0.0;
+            runtime.performance.avg_node_utility = 0.0;
+            runtime.snapshot.snapshot_written = false;
+            runtime.snapshot.snapshot_loaded = false;
+            runtime.snapshot.resume_iteration = 0;
+            runtime.goal.goal_similarity_score = goal_sim;
+            runtime.goal.goal_drift = (1.0 - goal_sim).clamp(0.0, 1.0);
+            runtime.goal.planner_refocus = false;
             let snapshot = telemetry::TelemetryFrame {
                 planner: Default::default(),
                 exec: exec_metrics.clone(),
@@ -627,16 +636,14 @@ impl CapabilityPipeline {
                 .await?;
             let completion_velocity = if reward > prev_reward { 1.0 } else { 0.0 };
             let goal_sim = telemetry::telemetry_goal_similarity(&graph, &goal_spec);
-            let runtime = telemetry::RuntimeTelemetry {
-                queue_depth: telemetry::telemetry_pending_requests(),
-                progress_fraction: telemetry::telemetry_progress_fraction(&graph),
-                completion_velocity,
-                policy_run_planner: true,
-                goal_similarity_score: goal_sim,
-                goal_drift: (1.0 - goal_sim).clamp(0.0, 1.0),
-                planner_refocus: false,
-                ..Default::default()
-            };
+            let mut runtime = telemetry::RuntimeTelemetry::default();
+            runtime.queue.queue_depth = telemetry::telemetry_pending_requests();
+            runtime.queue.progress_fraction = telemetry::telemetry_progress_fraction(&graph);
+            runtime.queue.completion_velocity = completion_velocity;
+            runtime.policy.policy_run_planner = true;
+            runtime.goal.goal_similarity_score = goal_sim;
+            runtime.goal.goal_drift = (1.0 - goal_sim).clamp(0.0, 1.0);
+            runtime.goal.planner_refocus = false;
             let snapshot = telemetry::TelemetryFrame {
                 planner: Default::default(),
                 exec: Default::default(),
