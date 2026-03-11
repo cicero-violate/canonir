@@ -8,9 +8,11 @@ pub struct ReportConsumer {
     pub last_tick: u64,
     pub event_count: usize,
     last_generated_tick: Option<u64>,
+    in_flight: bool,
     tlog_path: Option<PathBuf>,
     out_dir: Option<PathBuf>,
 }
+const DEBOUNCE_TICKS: u64 = 5;
 
 impl ReportConsumer {
     pub fn new() -> Self {
@@ -20,6 +22,7 @@ impl ReportConsumer {
             last_tick: 0,
             event_count: 0,
             last_generated_tick: None,
+            in_flight: false,
             tlog_path,
             out_dir,
         }
@@ -43,10 +46,21 @@ impl KernelEventConsumer for ReportConsumer {
         if self.last_generated_tick == Some(delta.tick) {
             return;
         }
+        if let Some(last) = self.last_generated_tick {
+            if delta.tick.saturating_sub(last) < DEBOUNCE_TICKS {
+                return;
+            }
+        }
+        if self.in_flight {
+            return;
+        }
+        self.in_flight = true;
         if let Err(err) = generate_reports_from_tlog(tlog_path, out_dir) {
             eprintln!("canon_reports: failed to generate reports: {err}");
+            self.in_flight = false;
             return;
         }
         self.last_generated_tick = Some(delta.tick);
+        self.in_flight = false;
     }
 }

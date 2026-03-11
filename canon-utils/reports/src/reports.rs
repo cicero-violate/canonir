@@ -328,14 +328,14 @@ fn read_tlog_graph(tlog_path: &Path) -> Result<(Vec<NodeRow>, Vec<EdgeRow>, Vec<
                 if idx > 0 {
                     let (prefix, suffix) = line.split_at(idx);
                     if let Some(record) = parse_tlog_line(prefix) {
-                        apply_tlog_record(record, &mut nodes, &mut edges, &mut files, &mut symbol_to_id);
+                        apply_tlog_record(record, &mut nodes, &mut edges, &mut files, &mut symbol_to_id, true);
                     }
                     line = suffix;
                     continue;
                 }
             }
             if let Some(record) = parse_tlog_line(line) {
-                apply_tlog_record(record, &mut nodes, &mut edges, &mut files, &mut symbol_to_id);
+                apply_tlog_record(record, &mut nodes, &mut edges, &mut files, &mut symbol_to_id, true);
             }
             break;
         }
@@ -415,12 +415,13 @@ fn replay_tlog_from_offset(
         let line_bytes = &bytes[cursor..line_end];
         let line = String::from_utf8_lossy(line_bytes);
         let mut slice = line.as_ref();
+        let clear_on_session = start_offset == 0;
         loop {
             if let Some(idx) = slice.find("{\"t\":\"SESSION\"") {
                 if idx > 0 {
                     let (prefix, suffix) = slice.split_at(idx);
                     if let Some(record) = parse_tlog_line(prefix) {
-                        if apply_tlog_record(record, nodes, edges, files, symbol_to_id) {
+                        if apply_tlog_record(record, nodes, edges, files, symbol_to_id, clear_on_session) {
                             events_added += 1;
                         }
                     }
@@ -429,7 +430,7 @@ fn replay_tlog_from_offset(
                 }
             }
             if let Some(record) = parse_tlog_line(slice) {
-                if apply_tlog_record(record, nodes, edges, files, symbol_to_id) {
+                if apply_tlog_record(record, nodes, edges, files, symbol_to_id, clear_on_session) {
                     events_added += 1;
                 }
             }
@@ -455,16 +456,19 @@ fn apply_tlog_record(
     edges: &mut Vec<EdgeRow>,
     files: &mut Vec<String>,
     symbol_to_id: &mut HashMap<String, u32>,
+    clear_on_session: bool,
 ) -> bool {
     let Some(tag) = value.get("t").and_then(|v| v.as_str()) else {
         return false;
     };
     match tag {
         "SESSION" => {
-            nodes.clear();
-            edges.clear();
-            files.clear();
-            symbol_to_id.clear();
+            if clear_on_session {
+                nodes.clear();
+                edges.clear();
+                files.clear();
+                symbol_to_id.clear();
+            }
             true
         }
         "N" => {
@@ -943,6 +947,7 @@ fn write_graph_bin(path: &Path, nodes: &[NodeRow], edges: &[EdgeRow], files: &[S
     const NODE_RECORD_SIZE: usize = 21;
     const EDGE_RECORD_SIZE: usize = 9;
     const NO_FILE_ID: u32 = u32::MAX;
+    const NO_LINE: u32 = u32::MAX;
 
     let n_nodes = nodes.len() as u32;
     let n_edges = edges.len() as u32;
@@ -1009,7 +1014,7 @@ fn write_graph_bin(path: &Path, nodes: &[NodeRow], edges: &[EdgeRow], files: &[S
         out.extend_from_slice(&node.id.to_le_bytes());
         out.push(node_kind_code(node.kind.as_str()));
         out.extend_from_slice(&file_id.to_le_bytes());
-        out.extend_from_slice(&node.line.unwrap_or(0).to_le_bytes());
+        out.extend_from_slice(&node.line.unwrap_or(NO_LINE).to_le_bytes());
         out.extend_from_slice(&sym_off.to_le_bytes());
         out.extend_from_slice(&sym_len.to_le_bytes());
     }
@@ -1087,6 +1092,7 @@ fn load_graph_bin(path: &Path) -> Result<(Vec<NodeRow>, Vec<EdgeRow>, Vec<String
     const NODE_RECORD_SIZE: usize = 21;
     const EDGE_RECORD_SIZE: usize = 9;
     const NO_FILE_ID: u32 = u32::MAX;
+    const NO_LINE: u32 = u32::MAX;
 
     let file = fs::File::open(path)?;
     let mmap = unsafe { Mmap::map(&file)? };
@@ -1159,7 +1165,7 @@ fn load_graph_bin(path: &Path) -> Result<(Vec<NodeRow>, Vec<EdgeRow>, Vec<String
             kind: node_kind_str(kind_code).to_string(),
             symbol,
             file_id: if file_id == NO_FILE_ID { None } else { Some(file_id) },
-            line: Some(line),
+            line: if line == NO_LINE { None } else { Some(line) },
         });
     }
 
@@ -1942,6 +1948,22 @@ fn build_branch_complexity(
     block_effect_sig: &HashMap<u32, Vec<String>>,
 ) -> Vec<BranchComplexityEntry> {
     let mut out = Vec::new();
+    for (_block_id, entry) in build_branch_complexity_with_ids(nodes, node_map, file_map, cfg_out, cfg_in, block_effect_sig) {
+        out.push(entry);
+    }
+    out.sort_by(|a, b| b.score.cmp(&a.score));
+    out
+}
+
+fn build_branch_complexity_with_ids(
+    nodes: &[NodeRow],
+    node_map: &HashMap<u32, NodeRow>,
+    file_map: &HashMap<u32, String>,
+    cfg_out: &HashMap<u32, Vec<u32>>,
+    cfg_in: &HashMap<u32, usize>,
+    block_effect_sig: &HashMap<u32, Vec<String>>,
+) -> Vec<(u32, BranchComplexityEntry)> {
+    let mut out = Vec::new();
     for node in nodes {
         if node.kind != "BASIC_BLOCK" {
             continue;
@@ -1981,16 +2003,19 @@ fn build_branch_complexity(
         let file = node.file_id.and_then(|id| file_map.get(&id).cloned()).unwrap_or_default();
         let score = outs * dup_blocks;
         let symbol = node_map.get(&node.id).map(|n| n.symbol.clone()).unwrap_or_default();
-        out.push(BranchComplexityEntry {
-            symbol,
-            file,
-            line: node.line,
-            branch_count: outs,
-            duplicate_block_count: dup_blocks,
-            score,
-        });
+        out.push((
+            node.id,
+            BranchComplexityEntry {
+                symbol,
+                file,
+                line: node.line,
+                branch_count: outs,
+                duplicate_block_count: dup_blocks,
+                score,
+            },
+        ));
     }
-    out.sort_by(|a, b| b.score.cmp(&a.score));
+    out.sort_by(|a, b| b.1.score.cmp(&a.1.score));
     out
 }
 
@@ -2210,9 +2235,10 @@ fn build_dead_code_gpu(
     #[cfg(not(feature = "cuda"))]
     let reachable_callgraph = {
         let roots = find_callgraph_roots(callgraph);
+        let adj = build_callgraph_adj(callgraph);
         let mut reachable = HashSet::new();
         for root in roots {
-            dfs_callgraph(callgraph, root, &mut reachable);
+            dfs_callgraph(&adj, root, &mut reachable);
         }
         reachable
             .into_iter()
@@ -2240,7 +2266,7 @@ fn build_dead_code_gpu(
         node_map
             .iter()
             .find(|(_, n)| n.symbol == entry.symbol)
-            .map(|(id, _)| reachable_callgraph_ids.contains(id))
+            .map(|(id, _)| !reachable_callgraph_ids.contains(id))
             .unwrap_or(true)
     })
     .collect()
@@ -2333,7 +2359,7 @@ fn build_reachability_report_gpu(
             node_map
                 .iter()
                 .find(|(_, n)| n.symbol == entry.symbol)
-                .map(|(id, _)| reachable_callgraph_ids.contains(id))
+                .map(|(id, _)| !reachable_callgraph_ids.contains(id))
                 .unwrap_or(true)
         })
         .collect()
@@ -2354,13 +2380,21 @@ fn find_callgraph_roots_from_edges(cg_local_to_id: &[u32]) -> Vec<u32> {
     cg_local_to_id.iter().copied().collect()
 }
 
-fn dfs_callgraph(callgraph: &[(u32, u32)], start: u32, visited: &mut HashSet<u32>) {
+fn build_callgraph_adj(callgraph: &[(u32, u32)]) -> HashMap<u32, Vec<u32>> {
+    let mut adj: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (src, dst) in callgraph {
+        adj.entry(*src).or_default().push(*dst);
+    }
+    adj
+}
+
+fn dfs_callgraph(adj: &HashMap<u32, Vec<u32>>, start: u32, visited: &mut HashSet<u32>) {
     if !visited.insert(start) {
         return;
     }
-    for (src, dst) in callgraph {
-        if *src == start {
-            dfs_callgraph(callgraph, *dst, visited);
+    if let Some(nexts) = adj.get(&start) {
+        for dst in nexts {
+            dfs_callgraph(adj, *dst, visited);
         }
     }
 }
@@ -2571,20 +2605,13 @@ fn build_structural_hotspots(
         callers.entry(*d).or_default().insert(*s);
     }
 
-    let mut branch_entries = build_branch_complexity(nodes, node_map, file_map, cfg_out, cfg_in, block_effect_sig);
+    let mut branch_entries = build_branch_complexity_with_ids(nodes, node_map, file_map, cfg_out, cfg_in, block_effect_sig);
     let mut per_fn: HashMap<u32, (usize, usize)> = HashMap::new(); // fn -> (branch_count, dup_blocks)
-    for entry in branch_entries.drain(..) {
-        // branch symbol is block; map to function owner
-        let block_id = node_map
-            .iter()
-            .find(|(_, n)| n.symbol == entry.symbol && n.line == entry.line)
-            .map(|(id, _)| *id);
-        if let Some(bid) = block_id {
-            if let Some(fid) = block_owner.get(&bid) {
-                let e = per_fn.entry(*fid).or_insert((0, 0));
-                e.0 += entry.branch_count;
-                e.1 += entry.duplicate_block_count;
-            }
+    for (block_id, entry) in branch_entries.drain(..) {
+        if let Some(fid) = block_owner.get(&block_id) {
+            let e = per_fn.entry(*fid).or_insert((0, 0));
+            e.0 += entry.branch_count;
+            e.1 += entry.duplicate_block_count;
         }
     }
 
