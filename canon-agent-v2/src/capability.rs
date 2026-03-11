@@ -33,6 +33,7 @@ pub use crate::scheduler_scoring;
 pub use crate::scheduler_state;
 pub use crate::state_snapshot;
 pub use crate::telemetry;
+pub use crate::objectives;
 pub use crate::template_index;
 pub use crate::template_mutation;
 pub use crate::templates;
@@ -154,7 +155,15 @@ impl CapabilityPipeline {
             };
             updated.save(intent_path);
         }
-        let goal_spec = GoalSpec::new(goal.raw.clone(), graph_algo::graph_embedding_dim());
+        let selection = objectives::load_goal_from_reports(objectives::ObjectiveWeights::default());
+        if let Some(selection) = selection.as_ref() {
+            goal.raw = objectives::goal_raw_with_artifact(&goal.raw, &selection.artifact);
+        }
+        let goal_spec = GoalSpec::new_with_artifact(
+            goal.raw.clone(),
+            graph_algo::graph_embedding_dim(),
+            selection.map(|s| s.artifact),
+        );
         if let Ok(pretty) = serde_json::to_string_pretty(&goal_spec) {
             let _ = std::fs::write(Self::log_path("goal_spec.json"), pretty);
         }
@@ -386,6 +395,12 @@ impl CapabilityPipeline {
         graph_analysis_emit_planned_graph(&graph, Path::new(LOG_ROOT), 0);
         graph_analysis_run_graph_algorithms(&graph, Path::new(LOG_ROOT), 0);
         let _ = std::fs::read_to_string(Path::new(LOG_ROOT).join("graph_algorithms.json"));
+        if graph_runtime::validate_graph_semantics(&graph, Some(&goal_spec)).is_err() {
+            eprintln!("[graph] invalid graph after planning; regenerating");
+            graph = planner_generate().await?;
+            graph_runtime::validate_graph_semantics(&graph, Some(&goal_spec))
+                .map_err(|e| anyhow::anyhow!("graph validation failed: {e}"))?;
+        }
         if !self.config.enable_resume || !resume_loaded {
             let _ = std::fs::remove_file(Path::new(LOG_ROOT).join("planner_stage.json"));
         }
@@ -426,11 +441,12 @@ impl CapabilityPipeline {
             }
             let features = graph_algo::compute_graph_features(&graph)
                 .with_failure_stats(&failure_store.stats());
-            let policy_outcome = policy_engine::evaluate_policy(
+            let normalized = graph_algo::graph_analysis_normalize_features(
                 &features,
                 self.config.max_nodes,
                 self.config.max_nodes.saturating_mul(4),
             );
+            let policy_outcome = policy_engine::evaluate_policy_normalized(normalized);
             let reward = telemetry::telemetry_compute_reward(
                 &graph,
                 iterations_used,

@@ -25,7 +25,12 @@ fn policy_training_features_from_json(value: &serde_json::Value) -> Option<Graph
     if let serde_json::Value::Object(map) = &mut clean {
         map.remove("failures");
     }
-    serde_json::from_value::<GraphFeatureVector>(clean).ok()
+    let parsed = serde_json::from_value::<GraphFeatureVector>(clean).ok()?;
+    let fv = graph_analysis_normalize_features(&parsed, usize::MAX, usize::MAX);
+    if fv.iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+    Some(parsed)
 }
 pub fn train_policy_weights(max_nodes: usize, max_edges: usize) -> ExecutionPolicyWeights {
     let entries = policy_training_load_dataset();
@@ -60,14 +65,18 @@ pub fn policy_training_save_weights(weights: &ExecutionPolicyWeights) {
 pub fn policy_training_update_online(entry: &PolicyTrainingPolicyDatasetEntry, max_nodes: usize, max_edges: usize) {
     let mut model = ExecutionPolicyModel::load_default();
     let mut weights = model.weights.clone();
+    if !entry.reward.is_finite() {
+        return;
+    }
+    let reward = entry.reward.clamp(-1.0, 1.0);
     if let Some(features) = policy_training_features_from_json(&entry.features) {
         let fv = graph_analysis_normalize_features(&features, max_nodes, max_edges);
         policy_training_ensure_head_len(&mut weights, fv.len());
-        policy_training_update_head(&mut weights.planner_bias, &fv, entry.reward);
-        policy_training_update_head(&mut weights.run_planner_head, &fv, entry.reward);
-        policy_training_update_head(&mut weights.expansion_head, &fv, entry.reward);
-        policy_training_update_head(&mut weights.execution_head, &fv, entry.reward);
-        policy_training_update_head(&mut weights.unblock_head, &fv, entry.reward);
+        policy_training_update_head(&mut weights.planner_bias, &fv, reward);
+        policy_training_update_head(&mut weights.run_planner_head, &fv, reward);
+        policy_training_update_head(&mut weights.expansion_head, &fv, reward);
+        policy_training_update_head(&mut weights.execution_head, &fv, reward);
+        policy_training_update_head(&mut weights.unblock_head, &fv, reward);
         model = ExecutionPolicyModel { weights };
         let _ = model.snapshot_store_save(Path::new(WEIGHTS_PATH));
     }
@@ -106,5 +115,9 @@ fn policy_training_update_head(head: &mut [f64], fv: &[f64], reward: f64) {
     let error = reward - predicted;
     for (w, f) in head.iter_mut().zip(fv.iter()) {
         *w += LEARNING_RATE * error * f;
+        if !w.is_finite() {
+            *w = 0.0;
+        }
+        *w = w.clamp(-5.0, 5.0);
     }
 }

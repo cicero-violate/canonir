@@ -3,6 +3,7 @@ use super::gpu_scheduler::kernels as gpu_kernels;
 use super::{dag, decompose};
 use algorithms::graph::adj_list::AdjList;
 use algorithms::graph::csr::Csr;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 fn graph_analysis_algo_log_path(log_dir: &Path, iter: u32, name: &str) -> PathBuf {
@@ -461,6 +462,19 @@ pub fn compute_graph_features(graph: &dag::ExecutionGraph) -> GraphFeatureVector
         cycle_frequency: 0.0,
         deadlock_rate: 0.0,
     }
+}
+
+pub fn compute_graph_features_parallel(graph: &dag::ExecutionGraph) -> GraphFeatureVector {
+    let mut features = compute_graph_features(graph);
+    if !graph.nodes.is_empty() {
+        let total: f64 = graph
+            .nodes
+            .par_iter()
+            .map(|n| score_node_utility(graph, &n.id, 0))
+            .sum();
+        features.avg_node_priority = total / graph.nodes.len() as f64;
+    }
+    features
 }
 
 pub fn graph_embedding(graph: &dag::ExecutionGraph, dim: usize) -> Vec<f32> {

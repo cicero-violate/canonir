@@ -1,5 +1,6 @@
-use crate::ir::{KernelStatePersist, PipelineStage, SystemState};
+use crate::ir::{IntentStatePersist, KernelStatePersist, PipelineStage, SystemState};
 use crate::layout::FileTopology;
+use crate::objectives;
 use crate::pipelines_core_4::capability::telemetry::TelemetryFrame;
 use crate::pipelines_core_4::capability::CapabilityPipeline;
 use crate::pipelines_core_4::{Pipeline, PipelineContext};
@@ -37,6 +38,7 @@ pub async fn run_agent_loop(
     config: AgentLoopConfig,
 ) -> Result<()> {
     let mut stagnation = 0u64;
+    let mut last_reward: Option<f64> = None;
     let mut tick = 0u64;
     let state_dir = config.state_dir.clone();
     let kernel_state_path = state_dir.join("kernel_state.json");
@@ -55,8 +57,15 @@ pub async fn run_agent_loop(
         }
     }
     let mut last_success_tick = tick;
+    let mut last_reports_mtime = None;
     loop {
         tick += 1;
+        if objectives::maybe_regenerate_reports_if_stale() {
+            eprintln!("[agent-loop] reports regenerated");
+        }
+        if maybe_refresh_objective_goal(&mut last_reports_mtime) {
+            eprintln!("[agent-loop] objective updated from reports");
+        }
         let ctx = PipelineContext {
             tick,
             ..base_ctx.clone()
@@ -90,11 +99,14 @@ pub async fn run_agent_loop(
             }
         };
         if let Some(metrics) = read_metrics() {
-            if metrics.runtime.queue.completion_velocity == 0.0 {
-                stagnation += 1;
-            } else {
-                stagnation = 0;
+            if let Some(prev) = last_reward {
+                if metrics.reward <= prev {
+                    stagnation += 1;
+                } else {
+                    stagnation = 0;
+                }
             }
+            last_reward = Some(metrics.reward);
             if stagnation >= config.stagnation_window {
                 write_recovery_signal("stagnation");
                 stagnation = 0;
@@ -141,6 +153,36 @@ fn read_metrics() -> Option<TelemetryFrame> {
     let path = Path::new(LOG_ROOT).join("metrics.json");
     let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
+}
+
+fn maybe_refresh_objective_goal(last_mtime: &mut Option<std::time::SystemTime>) -> bool {
+    let latest = match objectives::reports_last_modified() {
+        Some(time) => time,
+        None => return false,
+    };
+    let should_refresh = match last_mtime {
+        Some(prev) => &latest > prev,
+        None => true,
+    };
+    if !should_refresh {
+        return false;
+    }
+    let selection = objectives::load_goal_from_reports(objectives::ObjectiveWeights::default());
+    let Some(selection) = selection else {
+        *last_mtime = Some(latest);
+        return false;
+    };
+    let goal_text = objectives::goal_raw_with_artifact("", &selection.artifact);
+    let path = Path::new("/workspace/ai_sandbox/canon/kernel/state/intent_state.json");
+    let intent = IntentStatePersist {
+        goal: goal_text,
+        intent_radius: 0,
+        execution_budget: 0,
+    };
+    intent.save(path);
+    objectives::maybe_write_baseline(&selection);
+    *last_mtime = Some(latest);
+    true
 }
 fn write_recovery_signal(reason: &str) {
     let payload = serde_json::json!(

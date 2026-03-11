@@ -45,6 +45,7 @@ pub mod ir;
 pub mod invariants;
 pub mod llm_domains;
 pub mod llm_provider;
+pub mod objectives;
 pub mod parsers;
 pub mod pipelines_core_4;
 pub mod runtime;

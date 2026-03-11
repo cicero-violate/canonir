@@ -8,6 +8,7 @@ use super::graph_algo::{self, GraphAnalysis};
 use super::goal::GoalSpec;
 use super::planner_update::{apply_graph_patch, GraphPatch, PlannerUpdateEdgeSpec, PlannerUpdateRetractSpec, PlannerUpdateRewriteSpec};
 use crate::llm_provider::JsonExtractor;
+use crate::objectives;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -118,6 +119,22 @@ Continue refining the current graph.\n",
 fn planner_controller_history_tail(history: &[String]) -> String {
     history.iter().rev().take(MAX_HISTORY).cloned().collect::<Vec<_>>().join("\n")
 }
+fn planner_controller_objective_context(goal: &GoalSpec) -> (String, String) {
+    match goal.artifact.as_ref() {
+        Some(artifact) => {
+            let context = objectives::objective_context(artifact);
+            let tasks = objectives::objective_task_hints(artifact);
+            let metrics = objectives::objective_metrics_context(goal);
+            let tasks_text = if tasks.is_empty() {
+                String::new()
+            } else {
+                format!("OBJECTIVE TASKS:\n- {}\n", tasks.join("\n- "))
+            };
+            (format!("{}{}", context, metrics), tasks_text)
+        }
+        None => (String::new(), String::new()),
+    }
+}
 impl PlannerController {
     pub fn new(endpoint: &CapabilityConfigLlmEndpoint, goal: GoalSpec) -> Self {
         Self { endpoint_id: endpoint.id.clone(), url: endpoint.url.clone(), role_schema: endpoint.role_markdown.clone(), goal, history: Vec::new(), stateful: endpoint.stateful, reward_context: None }
@@ -132,8 +149,19 @@ impl PlannerController {
         &self.goal
     }
     pub fn build_prompt(
-        &mut self, graph: &ExecutionGraph, signals: &GraphAnalysis, features: &graph_algo::GraphFeatureVector, cost_summary: &str, rewrite_requests: &[String], bias_text: &str,
-        planner_max_new_nodes: usize, planner_max_new_edges: usize,
+        &mut self,
+        graph: &ExecutionGraph,
+        signals: &GraphAnalysis,
+        features: &graph_algo::GraphFeatureVector,
+        cost_summary: &str,
+        rewrite_requests: &[String],
+        bias_text: &str,
+        planner_max_new_nodes: usize,
+        planner_max_new_edges: usize,
+        constraints_text: &str,
+        graph_signals_text: &str,
+        feature_vector_text: &str,
+        refocus_text: &str,
     ) -> String {
         let ids: Vec<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
         let signals_json = signals.to_json(&ids);
@@ -144,6 +172,7 @@ impl PlannerController {
         let nodes_json: Vec<Value> = planner_controller_nodes_json(graph);
         let history_tail = planner_controller_history_tail(&self.history);
         let reward_section = planner_controller_reward_section(graph, self.reward_context.as_ref());
+        let (objective_context, objective_tasks) = planner_controller_objective_context(&self.goal);
         let mut features = features.clone();
         if let Some(ctx) = self.reward_context.as_ref() {
             features = features.with_reward_history(&ctx.recent_rewards);
@@ -204,6 +233,15 @@ Rules:\n\
 9) Do not avoid Mutate tasks; execute Mutate steps early if they unblock diagnostics.\n\
 POLICY BIAS\n\
 {}\n\
+{}\n\
+{}\n\
+{}\n\
+PLANNER_CONSTRAINTS\n\
+{}\n\
+GRAPH_SIGNALS\n\
+{}\n\
+GRAPH_FEATURE_VECTOR\n\
+{}\n\
 SYSTEM GRAPH METRICS\n\
 {}\n\
 CAPABILITY COSTS (highest)\n\
@@ -218,7 +256,17 @@ Recent History:\n{}\n\n\
 Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"description\":\"...\",\"deps\":[],\"required_capabilities\":[],\"node_type\":\"analysis|render\",\"priority\":0,\"budget\":3,\"reasoning_trace\":\"...\"}}],\n  \"new_edges\": [{{\"from\":\"id\",\"to\":\"id\"}}],\n  \"retract_nodes\": [{{\"id\":\"...\"}}],\n  \"rewrite_nodes\": [{{\"id\":\"...\",\"new_description\":\"...\",\"new_capabilities\":[]}}]\n}}",
             planner_max_new_nodes, planner_max_new_edges, expandable.join(", "),
             ready_nodes.join(", "), unreachable_nodes.join(", "), rewrite_text,
-            bias_text, metrics_text, cost_summary, reward_section, self.goal.raw,
+            bias_text,
+            objective_context,
+            objective_tasks,
+            refocus_text,
+            constraints_text,
+            graph_signals_text,
+            feature_vector_text,
+            metrics_text,
+            cost_summary,
+            reward_section,
+            self.goal.raw,
             self.goal.raw,
             self.goal.success_criteria,
             serde_json::to_string_pretty(& nodes_json).unwrap_or_default(),
@@ -326,8 +374,29 @@ fn planner_controller_check_constraint(graph: &ExecutionGraph, signals: &graph_a
     match &constraint.rule {
         FailureStoreConstraintRule::NoCycle => signals.has_cycle.then(|| "constraint violated: NoCycle".to_string()),
         FailureStoreConstraintRule::NoUnreachable => (!signals.unreachable.is_empty()).then(|| "constraint violated: NoUnreachable".to_string()),
-        FailureStoreConstraintRule::CapabilityConflict => None,
-        FailureStoreConstraintRule::InvalidDependency => None,
+        FailureStoreConstraintRule::CapabilityConflict => {
+            let bad = graph.nodes.iter().any(|n| {
+                let mut has_obs = false;
+                let mut has_ver = false;
+                let mut has_mut = false;
+                for c in &n.required_capabilities {
+                    match c.class() {
+                        CapabilityMode::Observe => has_obs = true,
+                        CapabilityMode::Verify => has_ver = true,
+                        CapabilityMode::Mutate => has_mut = true,
+                    }
+                }
+                (has_ver && has_mut) || (has_obs && has_mut && has_ver)
+            });
+            bad.then(|| "constraint violated: CapabilityConflict".to_string())
+        }
+        FailureStoreConstraintRule::InvalidDependency => {
+            let id_set: std::collections::HashSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
+            let bad = graph.nodes.iter().any(|n| {
+                n.deps.iter().any(|d| d == &n.id || !id_set.contains(d.as_str()))
+            });
+            bad.then(|| "constraint violated: InvalidDependency".to_string())
+        }
         FailureStoreConstraintRule::PatternRewrite { pattern, .. } => {
             let bad = graph.nodes.iter().any(|n| n.description.to_lowercase().contains(pattern));
             bad.then(|| format!("constraint violated: PatternRewrite({})", pattern))

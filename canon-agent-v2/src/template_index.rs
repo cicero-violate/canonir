@@ -2,12 +2,15 @@ use super::dag::ExecutionGraph;
 use super::decompose;
 use super::goal_embedding;
 use super::goal::GoalSpec;
+use super::graph_algo;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphTemplateEntry {
     pub hash: String,
+    #[serde(default)]
+    pub structural_hash: String,
     pub goal: String,
     #[serde(default)]
     pub goal_embedding: Vec<f32>,
@@ -60,6 +63,11 @@ impl GraphTemplateIndex {
     pub fn get(&self, hash: &str) -> Option<&GraphTemplateEntry> {
         self.entries.iter().find(|e| e.hash == hash)
     }
+    pub fn get_by_structural_hash(&self, structural_hash: &str) -> Option<&GraphTemplateEntry> {
+        self.entries
+            .iter()
+            .find(|e| e.structural_hash == structural_hash)
+    }
     pub fn bump_failure_count(&mut self, hash: &str) {
         if let Some(entry) = self.entries.iter_mut().find(|e| e.hash == hash) {
             entry.failure_count = entry.failure_count.saturating_add(1);
@@ -102,6 +110,7 @@ pub fn template_index_entry_from_graph(hash: &str, goal: &str, graph: &Execution
     caps.sort();
     GraphTemplateEntry {
         hash: hash.to_string(),
+        structural_hash: graph_algo::hash_graph_structure(graph),
         goal: goal.to_string(),
         goal_embedding: Vec::new(),
         reward,
@@ -177,7 +186,9 @@ fn template_index_batch_similarity(
             };
             let vec = template_index_structural_features(entry, max_nodes, max_edges, max_depth);
             let struct_sim = template_index_cosine(target_vec, &vec);
-            let score = goal_w * goal_sim + struct_w * struct_sim;
+            let mut score = goal_w * goal_sim + struct_w * struct_sim;
+            let failure_penalty = 1.0 / (1.0 + entry.failure_count as f64);
+            score *= failure_penalty;
             TemplateMatch { entry: entry.clone(), score, goal_similarity: goal_sim, structural_similarity: struct_sim, used_embedding }
         })
         .collect()

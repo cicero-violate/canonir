@@ -2,6 +2,7 @@ use super::dag::ExecutionGraph;
 use super::goal::GoalSpec;
 use super::graph_algo;
 use super::goal_embedding;
+use super::objectives;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -55,6 +56,8 @@ pub struct RuntimeTemplateTelemetry {
     pub mutation_reward_delta: f64,
     pub template_reuse_by_embedding: bool,
     pub embedding_cache_hits: u64,
+    pub objective_delta: f64,
+    pub template_hit_rate: f64,
 }
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct RuntimeRepairTelemetry {
@@ -64,6 +67,7 @@ pub struct RuntimeRepairTelemetry {
     pub constraint_rejections: u64,
     pub constraint_hit_rate: f64,
     pub constraint_types: Option<String>,
+    pub planner_entropy: f64,
 }
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct RuntimePerformanceTelemetry {
@@ -142,7 +146,9 @@ pub fn telemetry_compute_reward(graph: &ExecutionGraph, iterations_used: u64, ma
     let mut reward = (n_completed / n_total) - 0.2 * iter_ratio - 0.3 * (n_failed / n_total);
     let goal_sim = telemetry_goal_similarity(graph, goal);
     reward += goal_sim * 0.3;
-    reward
+    const OBJECTIVE_ALPHA: f64 = 0.1;
+    let objective_delta = objectives::objective_reward_delta();
+    reward + (OBJECTIVE_ALPHA * objective_delta)
 }
 
 pub fn telemetry_goal_similarity(graph: &ExecutionGraph, goal: &GoalSpec) -> f64 {

@@ -45,6 +45,12 @@ impl GraphTemplateStore {
         Ok(graph)
     }
     pub fn snapshot_store_save(&mut self, name: &str, graph: &ExecutionGraph) -> Result<()> {
+        let structural_hash = graph_algo::hash_graph_structure(graph);
+        if let Some(existing) = self.index.get_by_structural_hash(&structural_hash) {
+            if existing.hash != self.hash_for(name) {
+                return Ok(());
+            }
+        }
         fs::create_dir_all(&self.root)?;
         let json = serde_json::to_string_pretty(graph)?;
         fs::write(self.path_for(name), json)?;
@@ -105,6 +111,12 @@ impl GraphTemplateStore {
         if reward <= self.stored_reward(name) {
             return Ok(());
         }
+        let structural_hash = graph_algo::hash_graph_structure(graph);
+        if let Some(existing) = self.index.get_by_structural_hash(&structural_hash) {
+            if existing.hash != self.hash_for(name) {
+                return Ok(());
+            }
+        }
         self.snapshot_store_save(name, graph)?;
         fs::write(self.reward_path(name), reward.to_string())?;
         let hash = self.hash_for(name);
@@ -153,6 +165,24 @@ impl GraphTemplateStore {
     pub fn record_failure(&mut self, template_hash: &str) {
         self.index.bump_failure_count(template_hash);
         self.index.snapshot_store_save();
+    }
+    pub fn failure_count(&self, template_hash: &str) -> usize {
+        self.index.get(template_hash).map(|e| e.failure_count).unwrap_or(0)
+    }
+    pub fn record_failure_and_maybe_evict(&mut self, name: &str, threshold: usize) {
+        let hash = self.hash_for(name);
+        self.record_failure(&hash);
+        if threshold > 0 && self.failure_count(&hash) >= threshold {
+            self.evict(name);
+            return;
+        }
+        if threshold > 1 {
+            let failures = self.failure_count(&hash);
+            let reward = self.stored_reward(name);
+            if failures >= threshold.saturating_sub(1) && reward <= 0.0 {
+                self.evict(name);
+            }
+        }
     }
     pub fn record_revision(&self, template_name: &str, graph: &ExecutionGraph, reward: f64, rewrites: usize, iter: u64) {
         #[derive(serde::Serialize)]

@@ -2,6 +2,8 @@ use super::dag;
 use super::dag::ContextSnapshotNode;
 use super::decompose;
 use super::goal::GoalSpec;
+use super::objectives;
+use super::graph_algo;
 #[cfg(feature = "cuda")]
 use algorithms::graph::model_checking;
 use algorithms::graph::{csr::Csr, reachability, scc, topological_sort};
@@ -14,7 +16,30 @@ struct GraphRuntimeGraphKernels {
     topo: Vec<usize>,
     sccs: Vec<Vec<usize>>,
 }
+#[derive(Clone)]
+struct GraphRuntimeKernelCache {
+    adj: Vec<Vec<usize>>,
+    topo: Vec<usize>,
+    sccs: Vec<Vec<usize>>,
+}
+static GRAPH_KERNEL_CACHE: std::sync::OnceLock<std::sync::Mutex<(String, GraphRuntimeKernelCache)>> =
+    std::sync::OnceLock::new();
 fn graph_runtime_build_kernels(graph: &dag::ExecutionGraph) -> GraphRuntimeGraphKernels {
+    let sig = graph_algo::hash_graph_structure(graph);
+    let cache = GRAPH_KERNEL_CACHE.get_or_init(|| std::sync::Mutex::new((String::new(), GraphRuntimeKernelCache {
+        adj: Vec::new(),
+        topo: Vec::new(),
+        sccs: Vec::new(),
+    })));
+    if let Ok(guard) = cache.lock() {
+        if guard.0 == sig && !guard.1.adj.is_empty() {
+            let adj = guard.1.adj.clone();
+            let csr = Csr::from_adj(&adj);
+            let topo = guard.1.topo.clone();
+            let sccs = guard.1.sccs.clone();
+            return GraphRuntimeGraphKernels { adj, csr, topo, sccs };
+        }
+    }
     let id_to_idx: HashMap<&str, usize> = graph.nodes.iter().enumerate().map(|(i, n)| (n.id.as_str(), i)).collect();
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); graph.nodes.len()];
     for n in &graph.nodes {
@@ -31,7 +56,18 @@ fn graph_runtime_build_kernels(graph: &dag::ExecutionGraph) -> GraphRuntimeGraph
     let csr = Csr::from_adj(&adj);
     let topo = topological_sort::topological_sort(&adj);
     let sccs = scc::kosaraju_scc(&adj);
-    GraphRuntimeGraphKernels { adj, csr, topo, sccs }
+    let kernels = GraphRuntimeGraphKernels { adj, csr, topo, sccs };
+    if let Ok(mut guard) = cache.lock() {
+        *guard = (
+            sig,
+            GraphRuntimeKernelCache {
+                adj: kernels.adj.clone(),
+                topo: kernels.topo.clone(),
+                sccs: kernels.sccs.clone(),
+            },
+        );
+    }
+    kernels
 }
 fn graph_runtime_prune_roots(kernels: &GraphRuntimeGraphKernels) -> Vec<usize> {
     let all: std::collections::HashSet<usize> = kernels.topo.iter().chain(kernels.sccs.iter().flatten()).copied().collect();
@@ -190,6 +226,11 @@ fn validate_goal(graph: &dag::ExecutionGraph, goal: &GoalSpec) -> Result<()> {
     if goal.success_criteria.iter().any(|c| c == "invariants_hold") {
         validate_graph_invariants(graph)?;
     }
+    if goal.success_criteria.iter().any(|c| c == "objective_improved") {
+        if objectives::objective_reward_delta() <= 0.0 {
+            return Err(anyhow::anyhow!("goal_not_satisfied: objective did not improve"));
+        }
+    }
     Ok(())
 }
 
@@ -205,11 +246,45 @@ pub(crate) fn goal_reached(graph: &dag::ExecutionGraph, goal: &GoalSpec) -> bool
             return false;
         }
     }
+    if goal.success_criteria.iter().any(|c| c == "objective_improved") {
+        if objectives::objective_reward_delta() <= 0.0 {
+            return false;
+        }
+    }
     true
 }
 fn validate_graph_invariants(graph: &dag::ExecutionGraph) -> Result<()> {
     if graph.nodes.is_empty() {
         return Ok(());
+    }
+    let mut ids = std::collections::HashSet::new();
+    for n in &graph.nodes {
+        if !ids.insert(n.id.as_str()) {
+            return Err(anyhow::anyhow!("assertion check failed: duplicate node id {}", n.id));
+        }
+    }
+    let id_set: std::collections::HashSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
+    for n in &graph.nodes {
+        let mut dep_set = std::collections::HashSet::new();
+        for dep in &n.deps {
+            if dep == &n.id {
+                return Err(anyhow::anyhow!("assertion check failed: self-dependency {}", n.id));
+            }
+            if !id_set.contains(dep.as_str()) {
+                return Err(anyhow::anyhow!(
+                    "assertion check failed: missing dependency {} for node {}",
+                    dep,
+                    n.id
+                ));
+            }
+            if !dep_set.insert(dep.as_str()) {
+                return Err(anyhow::anyhow!(
+                    "assertion check failed: duplicate dependency {} on node {}",
+                    dep,
+                    n.id
+                ));
+            }
+        }
     }
     let kernels = graph_runtime_build_kernels(graph);
     let invariant_mask: Vec<u8> = graph

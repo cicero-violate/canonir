@@ -17,6 +17,7 @@ mkdir -p "$(dirname "$TLOG_IDX")"
 touch "$TLOG_IDX"
 
 last_seen=0
+reports_pid=""
 
 while true; do
     # Block until any close_write on the idx file
@@ -44,8 +45,17 @@ while true; do
     fi
 
     echo "canon: build quiet — generating reports..."
+
+    # Kill any still-running previous invocation before spawning a new one
+    if [ -n "$reports_pid" ] && kill -0 "$reports_pid" 2>/dev/null; then
+        echo "canon: killing previous reports run (pid $reports_pid)"
+        kill "$reports_pid" 2>/dev/null || true
+        wait "$reports_pid" 2>/dev/null || true
+    fi
+
     "$REPORTS_BIN" \
         --tlog "$TLOG" \
         --out  "$REPORTS_OUT" \
         </dev/null 2>&1 | sed 's/^/canon: /' &
+    reports_pid=$!
 done
