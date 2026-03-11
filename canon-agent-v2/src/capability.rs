@@ -412,13 +412,15 @@ impl CapabilityPipeline {
         if graph_runtime::ensure_render_reachable(&mut graph) {
             eprintln!("[graph] repaired render reachability after planning");
         }
-        if graph_runtime::validate_graph_semantics(&graph, Some(&goal_spec)).is_err() {
+        if graph_runtime::must_validate_graph_semantics(&graph, Some(&goal_spec))
+            .is_err()
+        {
             eprintln!("[graph] invalid graph after planning; regenerating");
             graph = planner_generate().await?;
             if graph_runtime::ensure_render_reachable(&mut graph) {
                 eprintln!("[graph] repaired render reachability after regeneration");
             }
-            graph_runtime::validate_graph_semantics(&graph, Some(&goal_spec))
+            graph_runtime::must_validate_graph_semantics(&graph, Some(&goal_spec))
                 .map_err(|e| anyhow::anyhow!("graph validation failed: {e}"))?;
         }
         if !self.config.enable_resume || !resume_loaded {

@@ -144,12 +144,15 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
     let snapshot_path = out_dir.join("graph_snapshot.bin");
     let meta_path = out_dir.join("snapshot.meta.json");
     let graph_bin_path = out_dir.join("graph.bin");
-    let (nodes, edges, files) = if graph_bin_path.exists() && is_graph_bin_fresh(&graph_bin_path, tlog_path) {
+    let graph_bin_fresh = graph_bin_path.exists() && is_graph_bin_fresh(&graph_bin_path, tlog_path);
+    let tlog_has_modules = tlog_last_session_has_module_nodes(tlog_path);
+    let prefer_graph_bin = graph_bin_path.exists() && !graph_bin_fresh && !tlog_has_modules;
+    let (nodes, edges, files) = if graph_bin_fresh || prefer_graph_bin {
         load_graph_bin(&graph_bin_path)?
     } else {
         read_tlog_graph_incremental(tlog_path, &snapshot_path, &meta_path)?
     };
-    if !graph_bin_path.exists() || !is_graph_bin_fresh(&graph_bin_path, tlog_path) {
+    if !graph_bin_fresh && !prefer_graph_bin {
         write_graph_bin(&graph_bin_path, &nodes, &edges, &files)?;
         write_kernel_snapshot(&snapshot_path, &nodes, &edges, &files)?;
         let meta = SnapshotMeta {
@@ -452,6 +455,46 @@ fn read_last_session_offset(tlog_path: &Path) -> Option<u64> {
     let data = fs::read_to_string(idx_path).ok()?;
     let value: Value = serde_json::from_str(&data).ok()?;
     value.get("last_session_offset").and_then(|v| v.as_u64())
+}
+
+fn tlog_last_session_has_module_nodes(tlog_path: &Path) -> bool {
+    let Ok(mut file) = fs::File::open(tlog_path) else {
+        return false;
+    };
+    if let Some(offset) = read_last_session_offset(tlog_path) {
+        use std::io::Seek;
+        use std::io::SeekFrom;
+        let _ = file.seek(SeekFrom::Start(offset));
+    }
+    let reader = std::io::BufReader::new(file);
+    for raw_line in reader.lines().flatten() {
+        let mut line = raw_line.as_str();
+        loop {
+            if let Some(idx) = line.find("{\"t\":\"SESSION\"") {
+                if idx > 0 {
+                    let (prefix, suffix) = line.split_at(idx);
+                    if let Some(record) = parse_tlog_line(prefix) {
+                        if matches!(record.get("t").and_then(|v| v.as_str()), Some("N"))
+                            && matches!(record.get("kind").and_then(|v| v.as_str()), Some("MODULE"))
+                        {
+                            return true;
+                        }
+                    }
+                    line = suffix;
+                    continue;
+                }
+            }
+            if let Some(record) = parse_tlog_line(line) {
+                if matches!(record.get("t").and_then(|v| v.as_str()), Some("N"))
+                    && matches!(record.get("kind").and_then(|v| v.as_str()), Some("MODULE"))
+                {
+                    return true;
+                }
+            }
+            break;
+        }
+    }
+    false
 }
 
 fn apply_tlog_record(

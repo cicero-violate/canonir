@@ -32,7 +32,14 @@ fn signature_for(f: &NodeFeatureVector) -> u64 {
 }
 
 fn write_signatures_csv(graph_dir: &Path, sigs: &[SemanticSignature]) -> Result<()> {
-    let path = graph_dir.parent().unwrap_or(graph_dir).join("reports").join("node_semantic_signatures.csv");
+    let path = graph_dir
+        .parent()
+        .unwrap_or(graph_dir)
+        .join("semantics")
+        .join("node_semantic_signatures.csv");
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
     let mut buf = String::with_capacity(sigs.len() * 32 + 64);
     buf.push_str("node_id,signature\n");
     for s in sigs {
