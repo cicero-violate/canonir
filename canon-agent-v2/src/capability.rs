@@ -395,9 +395,15 @@ impl CapabilityPipeline {
         graph_analysis_emit_planned_graph(&graph, Path::new(LOG_ROOT), 0);
         graph_analysis_run_graph_algorithms(&graph, Path::new(LOG_ROOT), 0);
         let _ = std::fs::read_to_string(Path::new(LOG_ROOT).join("graph_algorithms.json"));
+        if graph_runtime::ensure_render_reachable(&mut graph) {
+            eprintln!("[graph] repaired render reachability after planning");
+        }
         if graph_runtime::validate_graph_semantics(&graph, Some(&goal_spec)).is_err() {
             eprintln!("[graph] invalid graph after planning; regenerating");
             graph = planner_generate().await?;
+            if graph_runtime::ensure_render_reachable(&mut graph) {
+                eprintln!("[graph] repaired render reachability after regeneration");
+            }
             graph_runtime::validate_graph_semantics(&graph, Some(&goal_spec))
                 .map_err(|e| anyhow::anyhow!("graph validation failed: {e}"))?;
         }

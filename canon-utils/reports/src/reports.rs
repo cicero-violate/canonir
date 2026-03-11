@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use serde_json::Value;
+use csv::Writer;
 use serde::{Deserialize, Serialize};
 use rkyv::{
     Archive,
@@ -1515,8 +1516,15 @@ fn write_modulegraph_csv(
     module_nodes: &[ModuleNode],
 ) -> Result<()> {
     let path = out_dir.join("modulegraph.csv");
-    let mut buf = String::with_capacity(modulegraph.len() * 64 + 64);
-    buf.push_str("parent_module,child_module,parent_symbol,child_symbol,parent_file,child_file\n");
+    let mut writer = Writer::from_path(path)?;
+    writer.write_record([
+        "parent_module",
+        "child_module",
+        "parent_symbol",
+        "child_symbol",
+        "parent_file",
+        "child_file",
+    ])?;
     for (parent, child) in modulegraph {
         let parent_node = module_nodes.iter().find(|n| n.id == *parent);
         let child_node = module_nodes.iter().find(|n| n.id == *child);
@@ -1524,9 +1532,16 @@ fn write_modulegraph_csv(
         let child_sym = child_node.map(|n| n.symbol.as_str()).unwrap_or("");
         let parent_file = parent_node.map(|n| n.file.as_str()).unwrap_or("");
         let child_file = child_node.map(|n| n.file.as_str()).unwrap_or("");
-        buf.push_str(&format!("{parent},{child},{parent_sym},{child_sym},{parent_file},{child_file}\n"));
+        writer.write_record([
+            parent.to_string(),
+            child.to_string(),
+            parent_sym.to_string(),
+            child_sym.to_string(),
+            parent_file.to_string(),
+            child_file.to_string(),
+        ])?;
     }
-    fs::write(path, buf)?;
+    writer.flush()?;
     Ok(())
 }
 

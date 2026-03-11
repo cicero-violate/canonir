@@ -208,6 +208,45 @@ pub(crate) fn validate_graph_semantics(graph: &dag::ExecutionGraph, goal: Option
     Ok(())
 }
 
+pub(crate) fn ensure_render_reachable(graph: &mut dag::ExecutionGraph) -> bool {
+    let analysis_ids: Vec<String> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == decompose::DecomposeNodeType::Analysis)
+        .map(|n| n.id.clone())
+        .collect();
+    if analysis_ids.is_empty() {
+        return false;
+    }
+    let kernels = graph_runtime_build_kernels(graph);
+    let analysis_roots: Vec<usize> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, n)| (n.node_type == decompose::DecomposeNodeType::Analysis).then_some(i))
+        .collect();
+    let reach = reachability::reachability_gpu(&kernels.csr, &analysis_roots);
+    let mut changed = false;
+    for (idx, n) in graph.nodes.iter_mut().enumerate() {
+        if n.node_type != decompose::DecomposeNodeType::Render {
+            continue;
+        }
+        let ok = reach.get(idx).copied().unwrap_or(false);
+        if ok {
+            continue;
+        }
+        let dep = analysis_ids[0].clone();
+        if !n.deps.contains(&dep) {
+            n.deps.push(dep);
+            changed = true;
+        }
+    }
+    if changed {
+        graph.rebuild_index();
+    }
+    changed
+}
+
 fn validate_goal(graph: &dag::ExecutionGraph, goal: &GoalSpec) -> Result<()> {
     if !graph.all_completed() {
         // Goal validation is enforced only at terminal state.

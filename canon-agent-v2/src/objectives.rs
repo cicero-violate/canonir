@@ -692,6 +692,12 @@ pub fn objective_metrics_context(goal: &crate::goal::GoalSpec) -> String {
 }
 
 pub fn maybe_regenerate_reports_if_stale() -> bool {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+    use std::time::{Duration, SystemTime};
+    static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+    static LAST_START: std::sync::OnceLock<Mutex<Option<SystemTime>>> = std::sync::OnceLock::new();
+
     let reports_dir = reports_dir();
     let tlog = Path::new("/workspace/ai_sandbox/canon/kernel/logs/graph.tlog");
     let tlog_idx = Path::new("/workspace/ai_sandbox/canon/kernel/logs/graph.tlog.idx");
@@ -709,11 +715,31 @@ pub fn maybe_regenerate_reports_if_stale() -> bool {
     if !should_run {
         return false;
     }
-    let status = std::process::Command::new(reports_bin)
-        .arg("--tlog")
-        .arg(tlog)
-        .arg("--out")
-        .arg(reports_dir)
-        .status();
-    status.map(|s| s.success()).unwrap_or(false)
+    let last_start = LAST_START.get_or_init(|| Mutex::new(None));
+    let now = SystemTime::now();
+    if let Ok(mut guard) = last_start.lock() {
+        if let Some(prev) = *guard {
+            if now.duration_since(prev).unwrap_or_default() < Duration::from_secs(30) {
+                return false;
+            }
+        }
+        *guard = Some(now);
+    }
+    if IN_FLIGHT.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    let tlog = tlog.to_path_buf();
+    let reports_dir = reports_dir.to_path_buf();
+    let reports_bin = reports_bin.to_path_buf();
+    std::thread::spawn(move || {
+        let status = std::process::Command::new(reports_bin)
+            .arg("--tlog")
+            .arg(tlog)
+            .arg("--out")
+            .arg(reports_dir)
+            .status();
+        let _ = status;
+        IN_FLIGHT.store(false, Ordering::SeqCst);
+    });
+    true
 }
