@@ -2,6 +2,7 @@
 members = [
   "canon-utils/reports",
   "algorithms",
+  # "algorithms",
   # "canon-capture",
   # "canon-mutation",
   # "orchestration",
