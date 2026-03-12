@@ -2,6 +2,9 @@
 rustc-wrapper = "/workspace/ai_sandbox/canon_kernel/target/debug/canon_kernel"
 rustflags = ["-Awarnings"]
 
+
+
+
 [env]
 RUST_BACKTRACE = "full"
 
