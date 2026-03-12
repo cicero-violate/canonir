@@ -449,7 +449,8 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
                     return;
                 }
             } else if expected.is_some() {
-                return;
+                // Accept chunks that do not include turn_id and bind to expected.
+                inbound_turn_id = expected;
             }
 
             // Dump every inbound frame to disk for parser inspection.

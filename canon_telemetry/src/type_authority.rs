@@ -103,9 +103,39 @@ fn render_type(type_id: u64, by_id: &HashMap<u64, &Value>, paths: &[Value], dept
         return format!("<param:{}>", resolve_path(path_id, paths));
     }
 
-    // Adt(node_id) — algebraic data type, resolve via PathRef node
+    // Adt(node_id) — algebraic data type, resolve via PathRef/TypeRef node
     if let Some(adt_id) = kind.get("Adt").and_then(|v| v.as_u64()) {
-        return render_adt(adt_id, by_id, paths, depth + 1);
+        let adt_node = match by_id.get(&adt_id) {
+            Some(n) => n,
+            None => return format!("<unknown_adt_{}>", adt_id),
+        };
+        // PathRef node: {"PathRef": {"path_id": N, "generics": [...]}}
+        if let Some(pr) = node_kind_inner(adt_node, "PathRef") {
+            let path_id = pr.get("path_id").and_then(|v| v.as_u64()).unwrap_or(0);
+            let base = resolve_path(path_id, paths);
+            let generics: Vec<String> = pr
+                .get("generics")
+                .and_then(|g| g.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_u64())
+                        .map(|tid| render_type(tid, by_id, paths, depth + 1))
+                        .collect()
+                })
+                .unwrap_or_default();
+            return if generics.is_empty() {
+                base
+            } else {
+                format!("{}<{}>", base, generics.join(", "))
+            };
+        }
+        // TypeRef node: {"TypeRef": {"type_id": N}}
+        if let Some(tr) = node_kind_inner(adt_node, "TypeRef") {
+            if let Some(tid) = tr.get("type_id").and_then(|v| v.as_u64()) {
+                return render_type(tid, by_id, paths, depth + 1);
+            }
+        }
+        return format!("<adt_{}>", adt_id);
     }
 
     // Ref{inner, mutable, lifetime}
@@ -120,29 +150,6 @@ fn render_type(type_id: u64, by_id: &HashMap<u64, &Value>, paths: &[Value], dept
     }
 
     format!("<unknown_kind>")
-}
-
-/// Render an Adt node (PathRef or similar).
-fn render_adt(adt_id: u64, by_id: &HashMap<u64, &Value>, paths: &[Value], depth: u8) -> String {
-    let node = match by_id.get(&adt_id) {
-        Some(n) => n,
-        None => return format!("<unknown_adt_{}>", adt_id),
-    };
-    // PathRef node: {"PathRef": {"path_id": N, "generics": [...]}}
-    if let Some(pr) = node_kind_inner(node, "PathRef") {
-        let path_id = pr.get("path_id").and_then(|v| v.as_u64()).unwrap_or(0);
-        let base = resolve_path(path_id, paths);
-        let generics: Vec<String> =
-            pr.get("generics").and_then(|g| g.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_u64()).map(|tid| render_type(tid, by_id, paths, depth + 1)).collect()).unwrap_or_default();
-        return if generics.is_empty() { base } else { format!("{}<{}>", base, generics.join(", ")) };
-    }
-    // TypeRef node: {"TypeRef": {"type_id": N}}
-    if let Some(tr) = node_kind_inner(node, "TypeRef") {
-        if let Some(tid) = tr.get("type_id").and_then(|v| v.as_u64()) {
-            return render_type(tid, by_id, paths, depth + 1);
-        }
-    }
-    format!("<adt_{}>", adt_id)
 }
 
 /// Resolve a path_intern index to its string.

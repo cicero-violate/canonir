@@ -27,6 +27,8 @@ use super::planner_session::{
     planner_controller_auto_repair_update,
     planner_controller_validate_planner_update, PlannerController,
 };
+use super::planner_metrics;
+use super::repair_pipeline;
 use super::planner_state::{
     PlannerStage, PlannerStagePersist, PlannerTransition, PLANNER_TRANSITIONS,
 };
@@ -871,18 +873,29 @@ pub(crate) async fn run_planner_loop(
                     base_graph = loaded;
                 }
             }
-            let candidates = template_mutation::generate_mutation_candidates(
-                &base_graph,
-                config.mutation_candidates,
-                config.mutation_budget,
-                config.mutation_rate,
-                iter,
-                &target_symbols,
-            );
+            let efficiency = if last_mutations == 0 {
+                0.0
+            } else {
+                (last_mutation_reward_delta / last_mutations as f64).clamp(0.0, 1.0)
+            };
+            let effective_budget = ((config.mutation_budget as f64) * efficiency).round() as usize;
+            if effective_budget == 0 {
+                last_mutations = 0;
+            } else {
+                let candidates = template_mutation::generate_mutation_candidates(
+                    &base_graph,
+                    config.mutation_candidates,
+                    effective_budget,
+                    config.mutation_rate,
+                    iter,
+                    &target_symbols,
+                );
             let mut scored = template_mutation::score_mutation_candidates(
                 candidates,
                 iter,
             );
+                let base_features = compute_graph_features_parallel(&base_graph);
+                scored = template_mutation::filter_scored_candidates(scored, &base_features);
             scored
                 .sort_by(|a, b| {
                     b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
@@ -927,6 +940,9 @@ pub(crate) async fn run_planner_loop(
                         config.max_expand_iters as u64,
                         planner.goal_spec(),
                     );
+                    if reward < base_reward {
+                        continue;
+                    }
                     success += 1;
                     if reward > best_reward {
                         best_reward = reward;
@@ -940,6 +956,7 @@ pub(crate) async fn run_planner_loop(
                 *graph = best_graph;
                 let _ = store
                     .save_snapshot_with_reward(template_name, graph, best_reward);
+            }
             }
         }
         if matches!(phase, PlannerStage::MutateTemplate) {
@@ -1474,6 +1491,22 @@ pub(crate) async fn run_planner_loop(
             template_hash: Some(store.template_hash(template_name)),
             goal: Some(template_name.to_string()),
         };
+
+        let planner_report = planner_metrics::build_planner_metrics(
+            last_mutations,
+            last_mutation_success,
+            last_mutation_reward_delta,
+            planner_metrics.planner_calls,
+            planner_metrics.planner_retries,
+            planner_metrics.planner_failures,
+            planner_metrics.iterations,
+        );
+        planner_metrics::write_planner_metrics(
+            &std::path::Path::new("/workspace/ai_sandbox/canon/agent_logs/planner_metrics.json"),
+            &planner_report,
+        );
+
+        repair_pipeline::run_repair_pipeline();
         telemetry::telemetry_record_all_snapshots(
             &snapshot,
             LOG_ROOT,

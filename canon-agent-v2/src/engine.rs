@@ -961,11 +961,10 @@ fn module_apply_read_only_output(
     iter: u64,
     max_node_retries: u32,
 ) -> Result<()> {
-    output
-        .results
-        .is_empty()
-        .then(|| module_log_empty_read_only(iter, &node_id, log_dir))
-        .and_then(|_| graph.update_status(&node_id, NodeStatus::Ready).ok());
+    if output.results.is_empty() {
+        module_log_empty_read_only(iter, &node_id, log_dir);
+        return Err(anyhow::anyhow!("readonly executor returned empty results"));
+    }
     for mut result in output.results {
         module_coerce_identifier(&mut result.id, &node_id);
         module_apply_read_only_result(
@@ -1182,14 +1181,17 @@ fn module_parse_execution_output(
     payload: &Value,
     default_id: &str,
 ) -> Result<ModuleExecOutput> {
-    if payload.get("create_nodes").is_some() || payload.get("add_edges").is_some() {
+    if !invariants::must_executor_payload_not_planner(payload) {
         return Err(
             anyhow::anyhow!(
-                "executor output did not match schema: received planner response (create_nodes/add_edges)"
+                "executor output did not match schema: received planner response"
             ),
         );
     }
     if let Ok(v) = serde_json::from_value::<ModuleExecOutput>(payload.clone()) {
+        if v.results.is_empty() {
+            return Err(anyhow::anyhow!("executor output returned empty results"));
+        }
         return Ok(v);
     }
     if let Some(raw) = payload.as_str() {

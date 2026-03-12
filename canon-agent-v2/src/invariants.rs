@@ -1,6 +1,7 @@
 use crate::capability_types::CapabilityMode;
 use crate::dag::{ExecutionGraph, NodeStatus};
 use crate::planner_state::{PlannerStage, PlannerStagePersist};
+use serde_json::Value;
 use std::path::Path;
 
 pub fn must_terminal_lock(graph: &ExecutionGraph, node_id: &str) -> bool {
@@ -143,4 +144,16 @@ pub fn must_clear_orphan_running(graph: &mut ExecutionGraph, max_node_retries: u
         cleared += 1;
     }
     cleared
+}
+
+pub fn must_executor_payload_not_planner(payload: &Value) -> bool {
+    let planner_keys = [
+        "create_nodes",
+        "add_edges",
+        "new_nodes",
+        "new_edges",
+        "rewrite_nodes",
+        "retract_nodes",
+    ];
+    !planner_keys.iter().any(|k| payload.get(*k).is_some())
 }

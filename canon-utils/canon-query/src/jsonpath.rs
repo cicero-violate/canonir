@@ -285,7 +285,7 @@ impl JSONPathParser {
 
     pub fn compile(mut self) -> Result<JSONPathResult, JSONPathError> {
         self.scanner.expect_char(b'$')?;
-        self.compile_next_expression()?;
+        self.compile_expressions()?;
         if !self.skip_terminal_store {
             self.ir.store_result();
         }
@@ -308,6 +308,13 @@ impl JSONPathParser {
         }
     }
 
+    fn compile_expressions(&mut self) -> Result<(), JSONPathError> {
+        while self.scanner.has_next() {
+            self.compile_next_expression()?;
+        }
+        Ok(())
+    }
+
     fn compile_dot_expression(&mut self) -> Result<(), JSONPathError> {
         self.scanner.expect_char(b'.')?;
         if self.scanner.peek()? == b'.' {
@@ -318,9 +325,6 @@ impl JSONPathParser {
             return Err(self.scanner.error("Unexpected empty property"));
         }
         self.create_property_ir(&property);
-        if self.scanner.has_next() {
-            self.compile_next_expression()?;
-        }
         Ok(())
     }
 
@@ -356,10 +360,6 @@ impl JSONPathParser {
 
         self.scanner.expect_char(b']')?;
 
-        if self.scanner.has_next() {
-            self.compile_next_expression()?;
-        }
-
         Ok(())
     }
 
@@ -380,7 +380,7 @@ impl JSONPathParser {
             let current_max_level = self.max_level;
 
             if self.scanner.has_next() {
-                self.compile_next_expression()?;
+                self.compile_expressions()?;
             }
 
             max_max_level = max_max_level.max(self.max_level);

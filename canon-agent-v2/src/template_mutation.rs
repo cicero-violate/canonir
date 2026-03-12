@@ -314,3 +314,47 @@ fn compute_node_utility_avg(graph: &ExecutionGraph, iter: u64) -> f64 {
     }
     total / graph.nodes.len() as f64
 }
+
+fn mutation_score_threshold() -> f64 {
+    std::env::var("CANON_MUTATION_SCORE_MIN")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.0)
+}
+
+fn mutation_radius_threshold() -> f64 {
+    std::env::var("CANON_MUTATION_RADIUS")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.0)
+}
+
+pub fn filter_scored_candidates(
+    candidates: Vec<GraphMutationCandidateScore>,
+    base_features: &GraphFeatureVector,
+) -> Vec<GraphMutationCandidateScore> {
+    let min_score = mutation_score_threshold();
+    let radius = mutation_radius_threshold();
+    candidates
+        .into_iter()
+        .filter(|c| c.score >= min_score)
+        .filter(|c| {
+            if radius <= 0.0 {
+                return true;
+            }
+            let dist = feature_distance(base_features, &c.features);
+            dist <= radius
+        })
+        .collect()
+}
+
+fn feature_distance(a: &GraphFeatureVector, b: &GraphFeatureVector) -> f64 {
+    let va = a.to_vec();
+    let vb = b.to_vec();
+    let mut sum = 0.0;
+    for (x, y) in va.iter().zip(vb.iter()) {
+        let d = x - y;
+        sum += d * d;
+    }
+    sum.sqrt()
+}

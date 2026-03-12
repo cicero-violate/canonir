@@ -1,3 +1,5 @@
+# file:/workspace/ai_sandbox/canon/canon-agent-prompts/capability_config.toml
+
 [system]
 exit_check_command = "cd /workspace/ai_sandbox/canon && cargo run -p orchestration -- --all 2>&1"
 max_message_output_lines = 2000
@@ -38,7 +40,7 @@ mutation_budget = 2
 mutation_candidates = 2
 template_population_size = 5
 template_failure_hard_ban = 6
-enable_resume = true
+enable_resume = false
 snapshot_interval_iters = 1
 snapshot_file = "/workspace/ai_sandbox/canon/agent_logs/state_snapshot.json"
 goal_similarity_weight = 0.6

@@ -293,6 +293,7 @@ pub struct CapabilityConfigLlmEndpoint {
     #[serde(default = "capability_config_default_max_tabs")]
     pub max_tabs: usize,
 }
+#[derive(Clone)]
 pub struct CapabilityConfig {
     pub exit_check_command: String,
     pub max_output_lines: usize,

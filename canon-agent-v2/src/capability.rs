@@ -52,13 +52,22 @@ use config::{CapabilityConfig, CapabilityConfigGoalSpec};
 use crate::goal::GoalSpec;
 use graph_algo::{graph_analysis_emit_planned_graph, graph_analysis_run_graph_algorithms};
 use policy::ExecutionPolicyModel;
-use policy_train::PolicyTrainingPolicyDatasetEntry;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use templates::GraphTemplateStore;
 pub const LOG_ROOT: &str = "/workspace/ai_sandbox/canon/agent_logs/capability";
 pub const TEMPLATE_ROOT: &str = "/workspace/ai_sandbox/canon/agent_logs/templates";
+#[derive(Clone, Default)]
+struct TemplateMutationStats {
+    add_nodes: u64,
+    add_edges: u64,
+    rewrites: u64,
+    reward_delta: f64,
+    stage_reuse: u64,
+    stage_mutate: u64,
+    stage_patch: u64,
+    stage_execute: u64,
+}
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ExecutionDelta {
@@ -78,7 +87,7 @@ pub struct CapabilityPipeline {
     bridge: WsBridge,
     config: CapabilityConfig,
     tabs: engine::TabManagerHandle,
-    role_rr: tokio::sync::Mutex<HashMap<String, usize>>,
+    role_rr: std::sync::Arc<tokio::sync::Mutex<HashMap<String, usize>>>,
 }
 impl CapabilityPipeline {
     pub fn new(bridge: WsBridge) -> Self {
@@ -88,7 +97,7 @@ impl CapabilityPipeline {
             bridge,
             config,
             tabs: engine::llm_worker_new_tabs(),
-            role_rr: tokio::sync::Mutex::new(HashMap::new()),
+            role_rr: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
     fn ensure_log_dir() {
@@ -204,29 +213,57 @@ impl CapabilityPipeline {
             graph_algo::graph_embedding_dim(),
         );
         let template_name = goal_spec.raw.clone();
-        let mut planner_generate = || async {
-            let request = decompose::build_goal_decompose_request(
-                &goal_spec.raw,
-                &ctx.cwd[0],
-                &workspace_listing,
-                Path::new(LOG_ROOT),
-            );
-            let mut payload = engine::module_call_llm_json_with_retry_allow_mismatch(
-                    &self.bridge,
-                    &endpoint.id,
-                    &endpoint.url,
-                    endpoint.stateful,
-                    &request.prompt,
-                    "",
-                    request.phase,
-                    None,
-                    &self.tabs,
-                    endpoint.max_tabs,
-                    self.config.tab_cooldown_ms,
-                    self.config.llm_retry_count,
-                    self.config.llm_retry_delay_secs,
-                )
-                .await?;
+        let goal_raw = std::sync::Arc::new(goal_spec.raw.clone());
+        let cwd0 = std::sync::Arc::new(ctx.cwd[0].clone());
+        let workspace_listing = workspace_listing.clone();
+        let workspace_listing_arc = std::sync::Arc::new(workspace_listing.clone());
+        let bridge = self.bridge.clone();
+        let tabs = self.tabs.clone();
+        let endpoint_id = endpoint.id.clone();
+        let endpoint_url = endpoint.url.clone();
+        let endpoint_stateful = endpoint.stateful;
+        let endpoint_max_tabs = endpoint.max_tabs;
+        let tab_cooldown_ms = self.config.tab_cooldown_ms;
+        let llm_retry_count = self.config.llm_retry_count;
+        let llm_retry_delay_secs = self.config.llm_retry_delay_secs;
+        let planner_generate: crate::async_pipeline::PlannerGenerateFn =
+            std::sync::Arc::new(move || {
+                let goal_raw = goal_raw.clone();
+                let cwd0 = cwd0.clone();
+                let workspace_listing = workspace_listing_arc.clone();
+                let bridge = bridge.clone();
+                let tabs = tabs.clone();
+                let endpoint_id = endpoint_id.clone();
+                let endpoint_url = endpoint_url.clone();
+                Box::pin(async move {
+                    let request = decompose::build_goal_decompose_request(
+                        &goal_raw,
+                        &cwd0,
+                        &workspace_listing,
+                        Path::new(LOG_ROOT),
+                    );
+                    eprintln!(
+                        "[planner] decompose_send endpoint={} chars={}",
+                        endpoint_id,
+                        request.prompt.len()
+                    );
+                    let mut payload = engine::module_call_llm_json_with_retry_allow_mismatch(
+                            &bridge,
+                            &endpoint_id,
+                            &endpoint_url,
+                            endpoint_stateful,
+                            &request.prompt,
+                            "",
+                            request.phase,
+                            None,
+                            &tabs,
+                            endpoint_max_tabs,
+                            tab_cooldown_ms,
+                            llm_retry_count,
+                            llm_retry_delay_secs,
+                        )
+                        .await?;
+                    eprintln!("[planner] decompose_recv type=Value");
             let mut extra_retries = 2u32;
             let decomp = loop {
                 match decompose::validate_decompose_payload(payload.clone(), &request) {
@@ -245,19 +282,19 @@ impl CapabilityPipeline {
                         }
                         extra_retries = extra_retries.saturating_sub(1);
                         payload = engine::module_call_llm_json_with_retry_allow_mismatch(
-                                &self.bridge,
-                                &endpoint.id,
-                                &endpoint.url,
-                                endpoint.stateful,
+                                &bridge,
+                                &endpoint_id,
+                                &endpoint_url,
+                                endpoint_stateful,
                                 &prompt,
                                 "",
                                 request.phase,
                                 None,
-                                &self.tabs,
-                                endpoint.max_tabs,
-                                self.config.tab_cooldown_ms,
+                                &tabs,
+                                endpoint_max_tabs,
+                                tab_cooldown_ms,
                                 1,
-                                self.config.llm_retry_delay_secs,
+                                llm_retry_delay_secs,
                             )
                             .await?;
                     }
@@ -274,19 +311,19 @@ impl CapabilityPipeline {
                         }
                         extra_retries = extra_retries.saturating_sub(1);
                         let retry_payload = engine::module_call_llm_json_with_retry_allow_mismatch(
-                                &self.bridge,
-                                &endpoint.id,
-                                &endpoint.url,
-                                endpoint.stateful,
+                                &bridge,
+                                &endpoint_id,
+                                &endpoint_url,
+                                endpoint_stateful,
                                 &prompt,
                                 "",
                                 request.phase,
                                 None,
-                                &self.tabs,
-                                endpoint.max_tabs,
-                                self.config.tab_cooldown_ms,
+                                &tabs,
+                                endpoint_max_tabs,
+                                tab_cooldown_ms,
                                 1,
-                                self.config.llm_retry_delay_secs,
+                                llm_retry_delay_secs,
                             )
                             .await?;
                         let retry_output = decompose::parse_decompose_payload(
@@ -350,6 +387,10 @@ impl CapabilityPipeline {
                 nodes,
                 id_index: HashMap::new(),
             })
+                })
+            });
+        let mut planner_generate_once = || async {
+            (planner_generate.as_ref())().await
         };
         let mut cache_hit = false;
         let mut resume_loaded = false;
@@ -371,35 +412,46 @@ impl CapabilityPipeline {
                     }
                     g
                 } else {
-                    planner_generate().await?
+                    planner_generate_once().await?
                 }
             } else {
-                planner_generate().await?
+                planner_generate_once().await?
             }
         } else if store.template_exists(&template_name) {
             match store.load_snapshot(&template_name) {
                 Ok(g) if g.validate().is_ok() => {
                     eprintln!("[templates] cache hit");
                     cache_hit = true;
+                    let mut g = g;
+                    for n in &mut g.nodes {
+                        n.status = dag::NodeStatus::Pending;
+                        n.result = None;
+                        n.error = None;
+                        n.readonly_fail_count = 0;
+                        n.repair_attempts = 0;
+                        n.completed_iter = None;
+                    }
+                    g.rebuild_index();
+                    dag::task_graph_resolve_ready(&mut g);
                     g
                 }
                 _ => {
                     eprintln!("[templates] invalid template, evicting");
                     store.evict(&template_name);
-                    let g = planner_generate().await?;
+                    let g = planner_generate_once().await?;
                     let _ = store.save_snapshot(&template_name, &g);
                     g
                 }
             }
         } else {
             eprintln!("[templates] cache miss — invoking planner");
-            let g = planner_generate().await?;
+            let g = planner_generate_once().await?;
             let _ = store.save_snapshot(&template_name, &g);
             g
         };
         if graph.nodes.is_empty() {
             eprintln!("[templates] empty graph; invoking planner");
-            graph = planner_generate().await?;
+            graph = planner_generate_once().await?;
             eprintln!("[templates] planner returned nodes={}", graph.nodes.len());
             cache_hit = false;
             resume_loaded = false;
@@ -416,7 +468,7 @@ impl CapabilityPipeline {
             .is_err()
         {
             eprintln!("[graph] invalid graph after planning; regenerating");
-            graph = planner_generate().await?;
+            graph = planner_generate_once().await?;
             if graph_runtime::ensure_render_reachable(&mut graph) {
                 eprintln!("[graph] repaired render reachability after regeneration");
             }
@@ -426,292 +478,310 @@ impl CapabilityPipeline {
         if !self.config.enable_resume || !resume_loaded {
             let _ = std::fs::remove_file(Path::new(LOG_ROOT).join("planner_stage.json"));
         }
-        if cache_hit && !self.config.planner_refine_on_cache {
-            let mut exec_metrics = Default::default();
-            let template_hash = store.template_hash(&template_name);
-            let mut failure_store = failure_store::FailureStore::snapshot_store_load(
-                &template_hash,
+        // Async pipeline only (legacy sequential path removed).
+        let planner_endpoint = self.config.planner_endpoint()?;
+        let mut planner_session = planner_session::PlannerController::new(
+            planner_endpoint,
+            goal_spec.clone(),
+        );
+        let recent = store.recent_template_rewards(&template_name, 4);
+        let plateaued = store
+            .is_reward_plateaued(
+                &template_name,
+                self.config.planner_plateau_window,
+                self.config.planner_plateau_threshold,
             );
-            let mut cost_table = capability_cost::CapabilityCostCapabilityCostTable::snapshot_store_load();
-            let (iterations_used, exec_failures) = scheduler::run_execution_loop(
-                    &mut graph,
-                    &self.bridge,
-                    &self.config,
-                    &self.role_rr,
-                    &self.tabs,
-                    &ctx.cwd,
-                    &workspace_listing,
-                    endpoint,
-                    "exec",
-                    &policy,
-                    self.config.context_radius,
-                    self.config.max_concurrency,
-                    self.config.max_iterations,
-                    self.config.tab_cooldown_ms,
-                    retry_count,
-                    retry_delay,
-                    max_output_lines,
-                    0.0,
-                    &mut cost_table,
-                    &mut exec_metrics,
-                    &goal_spec,
-                )
-                .await?;
-            for failure in exec_failures {
-                failure_store.record_graph(failure.kind, &graph, failure.iter);
-                store.record_template_failure(&template_hash);
-            }
-            let features = graph_algo::compute_graph_features_parallel(&graph)
-                .with_failure_stats(&failure_store.stats());
-            let normalized = graph_algo::graph_analysis_normalize_features(
-                &features,
-                self.config.max_nodes,
-                self.config.max_nodes.saturating_mul(4),
-            );
-            let policy_outcome = policy_engine::evaluate_policy_normalized(normalized);
-            let reward = telemetry::telemetry_compute_reward(
-                &graph,
-                iterations_used,
-                self.config.max_iterations,
+        let similar = store
+            .find_similar_templates(
                 &goal_spec,
-            );
-            let entry = PolicyTrainingPolicyDatasetEntry {
-                features: serde_json::json!(
-                    { "nodes" : features.nodes, "edges" : features.edges, "depth" :
-                    features.depth, "scc_count" : features.scc_count, "failure_rate" :
-                    features.failure_rate, "reward_trend" : features.reward_trend,
-                    "avg_out_degree" : features.avg_out_degree, "avg_in_degree" :
-                    features.avg_in_degree, "branching_factor" : features
-                    .branching_factor, "leaf_count" : features.leaf_count, "root_count" :
-                    features.root_count, "verify_to_mutate_ratio" : features
-                    .verify_to_mutate_ratio, "observe_to_mutate_ratio" : features
-                    .observe_to_mutate_ratio, "node_type_entropy" : features
-                    .node_type_entropy, "avg_node_priority" : features.avg_node_priority,
-                    "avg_node_budget" : features.avg_node_budget, "blocked_fraction" :
-                    features.blocked_fraction, "ready_fraction" : features
-                    .ready_fraction, "failed_fraction" : features.failed_fraction,
-                    "completion_velocity" : features.completion_velocity, "retry_rate" :
-                    features.retry_rate, "failure_pattern_rate" : features
-                    .failure_pattern_rate, "cycle_frequency" : features.cycle_frequency,
-                    "deadlock_rate" : features.deadlock_rate, "failures" : failure_store
-                    .failure_count(), }
-                ),
-                action: serde_json::json!(
-                    { "add_nodes" : 0, "add_edges" : 0, "rewrites" : 0 }
-                ),
-                policy_decision: serde_json::json!(
-                    { "run_planner" : policy_outcome.decision.run_planner,
-                    "expansion_scale" : policy_outcome.decision.expansion_scale,
-                    "execution_preference" : policy_outcome.decision.execution_preference
-                    }
-                ),
-                reward,
-            };
-            policy_train::policy_training_append_policy_dataset(&entry);
-            policy_train::policy_training_update_online(
-                &entry,
-                self.config.max_nodes,
-                self.config.max_nodes.saturating_mul(4),
-            );
-            store.record_template_reward(&template_name, reward);
-            let goal_sim = telemetry::telemetry_goal_similarity(&graph, &goal_spec);
-            let mut runtime = telemetry::RuntimeTelemetry::default();
-            runtime.queue.queue_depth = telemetry::telemetry_pending_requests();
-            runtime.queue.retry_rate = 0.0;
-            runtime.queue.progress_fraction = telemetry::telemetry_progress_fraction(
                 &graph,
+                1,
+                self.config.goal_similarity_weight,
+                self.config.structural_similarity_weight,
+                self.config.template_failure_hard_ban,
             );
-            runtime.queue.iteration_time_ms = 0;
-            runtime.queue.branching_factor = features.branching_factor;
-            runtime.queue.blocked_fraction = features.blocked_fraction;
-            runtime.queue.completion_velocity = features.completion_velocity;
-            runtime.queue.deadlock_rate = features.deadlock_rate;
-            runtime.policy.policy_prediction = 0.0;
-            runtime.policy.policy_error = 0.0;
-            runtime.policy.policy_weight_norm = 0.0;
-            runtime.policy.dataset_size = 0;
-            runtime.policy.policy_run_planner = true;
-            runtime.policy.policy_expansion_scale = 1.0;
-            runtime.policy.policy_execution_preference = 0.0;
-            runtime.template.template_reuse = false;
-            runtime.template.template_score = 0.0;
-            runtime.template.template_selected = None;
-            runtime.template.template_mutations = 0;
-            runtime.template.mutation_success_rate = 0.0;
-            runtime.template.mutation_reward_delta = 0.0;
-            runtime.template.template_reuse_by_embedding = false;
-            runtime.template.embedding_cache_hits = 0;
-            runtime.repair.repair_attempts = 0;
-            runtime.repair.repair_success_rate = 0.0;
-            runtime.repair.repair_type = None;
-            runtime.repair.constraint_rejections = 0;
-            runtime.repair.constraint_hit_rate = 0.0;
-            runtime.repair.constraint_types = None;
-            runtime.performance.avg_capability_latency = 0.0;
-            runtime.performance.avg_capability_failure = 0.0;
-            runtime.performance.avg_node_utility = 0.0;
-            runtime.snapshot.snapshot_written = false;
-            runtime.snapshot.snapshot_loaded = false;
-            runtime.snapshot.resume_iteration = 0;
-            runtime.goal.goal_similarity_score = goal_sim;
-            runtime.goal.goal_drift = (1.0 - goal_sim).clamp(0.0, 1.0);
-            runtime.goal.planner_refocus = false;
-            let snapshot = telemetry::TelemetryFrame {
-                planner: Default::default(),
-                exec: exec_metrics.clone(),
-                runtime,
-                reward,
-                template_hash: Some(store.template_hash(&template_name)),
-                goal: Some(template_name.clone()),
-            };
-            telemetry::telemetry_record_snapshot(
-                &Path::new(LOG_ROOT).join("metrics.json"),
-                &snapshot,
-            );
-            telemetry::telemetry_record_snapshot(
-                &Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"),
-                &snapshot,
-            );
-            let _ = std::fs::create_dir_all(Path::new(TEMPLATE_ROOT));
-            telemetry::telemetry_record_snapshot(
-                &Path::new(TEMPLATE_ROOT)
-                    .join(format!("metrics_{}.json", template_hash)),
-                &snapshot,
-            );
-            if let Ok(text) = std::fs::read_to_string(
-                Path::new(LOG_ROOT).join("metrics.json"),
-            ) {
-                eprintln!("[logs] capability_metrics {}", text.trim());
-            }
-            Ok(reward)
-        } else {
-            let planner_endpoint = self.config.planner_endpoint()?;
-            let mut planner_session = planner_session::PlannerController::new(
-                planner_endpoint,
-                goal_spec.clone(),
-            );
-            let recent = store.recent_template_rewards(&template_name, 4);
-            let plateaued = store
-                .is_reward_plateaued(
-                    &template_name,
-                    self.config.planner_plateau_window,
-                    self.config.planner_plateau_threshold,
-                );
-            let similar = store
-                .find_similar_templates(
-                    &goal_spec,
-                    &graph,
-                    1,
-                    self.config.goal_similarity_weight,
-                    self.config.structural_similarity_weight,
-                    self.config.template_failure_hard_ban,
-                );
-            let bootstrap_seed = similar
-                .templates
-                .into_iter()
-                .next()
-                .map(|s| {
-                    let seed_graph = store.load_snapshot(&s.entry.goal).ok();
-                    let node_summaries = seed_graph
-                        .as_ref()
-                        .map(|g| {
-                            g.nodes
-                                .iter()
-                                .map(|n| {
-                                    let desc = if n.description.len() > 60 {
-                                        format!("{}…", & n.description[..60])
-                                    } else {
-                                        n.description.clone()
-                                    };
-                                    format!("{}: {}", n.id, desc)
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-                    planner_session::PlannerControllerBootstrapSeed {
-                        goal: s.entry.goal.clone(),
-                        similarity_score: s.score,
-                        reward: s.entry.reward,
-                        node_summaries,
-                        capability_set: s.entry.capability_set.clone(),
-                        node_count: s.entry.node_count,
-                        edge_count: s.entry.edge_count,
+        let bootstrap_seed = similar
+            .templates
+            .into_iter()
+            .next()
+            .map(|s| {
+                let seed_graph = store.load_snapshot(&s.entry.goal).ok();
+                let node_summaries = seed_graph
+                    .as_ref()
+                    .map(|g| {
+                        g.nodes
+                            .iter()
+                            .map(|n| {
+                                let desc = if n.description.len() > 60 {
+                                    format!("{}…", & n.description[..60])
+                                } else {
+                                    n.description.clone()
+                                };
+                                format!("{}: {}", n.id, desc)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                planner_session::PlannerControllerBootstrapSeed {
+                    goal: s.entry.goal.clone(),
+                    similarity_score: s.score,
+                    reward: s.entry.reward,
+                    node_summaries,
+                    capability_set: s.entry.capability_set.clone(),
+                    node_count: s.entry.node_count,
+                    edge_count: s.entry.edge_count,
+                }
+            });
+        let reward_ctx = planner_session::PlannerControllerRewardContext {
+            recent_rewards: recent,
+            plateaued,
+            best_reward: store.reward_for_template(&template_name),
+            stored_reward: store.reward_for_template(&template_name),
+            bootstrap_seed,
+        };
+        planner_session.set_reward_context(reward_ctx);
+        let planner_session = std::sync::Arc::new(tokio::sync::Mutex::new(planner_session));
+        let store = std::sync::Arc::new(tokio::sync::Mutex::new(store));
+        let planner_stage_path = Path::new(LOG_ROOT).join("planner_stage.json");
+        let template_name_async = template_name.clone();
+        let config = std::sync::Arc::new(self.config.clone());
+        let policy_arc = std::sync::Arc::new(policy.clone());
+        let policy_for_task = policy_arc.clone();
+        let role_rr = self.role_rr.clone();
+        let bridge = self.bridge.clone();
+        let tabs = self.tabs.clone();
+        let cwd = ctx.cwd.clone();
+        let workspace_listing_async = workspace_listing.clone();
+        let planner_endpoint_async = planner_endpoint.clone();
+        let store_for_planner = store.clone();
+        let mutation_stats = std::sync::Arc::new(tokio::sync::Mutex::new(TemplateMutationStats::default()));
+        let mutation_stats_planner = mutation_stats.clone();
+        let planner_task: crate::async_pipeline::PlannerTaskFn =
+            std::sync::Arc::new(move |graph, tick| {
+                let planner_session = planner_session.clone();
+                let store = store_for_planner.clone();
+                let config = config.clone();
+                let policy = policy_for_task.clone();
+                let role_rr = role_rr.clone();
+                let bridge = bridge.clone();
+                let tabs = tabs.clone();
+                let cwd = cwd.clone();
+                let workspace_listing_async = workspace_listing_async.clone();
+                let planner_endpoint_async = planner_endpoint_async.clone();
+                let planner_stage_path = planner_stage_path.clone();
+                let template_name_async = template_name_async.clone();
+                let mutation_stats = mutation_stats_planner.clone();
+                Box::pin(async move {
+                    let start_stage = PlannerStagePersist::load(&planner_stage_path)
+                        .map(|persist| persist.stage)
+                        .unwrap_or(PlannerStage::ReuseTemplate);
+                    {
+                        let mut stats = mutation_stats.blocking_lock();
+                        *stats = TemplateMutationStats::default();
                     }
-                });
-            let reward_ctx = planner_session::PlannerControllerRewardContext {
-                recent_rewards: recent,
-                plateaued,
-                best_reward: store.reward_for_template(&template_name),
-                stored_reward: store.reward_for_template(&template_name),
-                bootstrap_seed,
-            };
-            planner_session.set_reward_context(reward_ctx);
-            let planner_stage_path = Path::new(LOG_ROOT).join("planner_stage.json");
-            let start_stage = PlannerStagePersist::load(&planner_stage_path)
-                .map(|persist| persist.stage)
-                .unwrap_or(PlannerStage::ReuseTemplate);
-            let prev_reward = store.reward_for_template(&template_name);
-            let reward = scheduler::run_planner_loop(
-                    &mut planner_session,
-                    &mut graph,
-                    &self.bridge,
-                    &self.config,
-                    &self.role_rr,
-                    &self.tabs,
-                    &ctx.cwd,
-                    &workspace_listing,
-                    planner_endpoint,
-                    "exec",
-                    &policy,
-                    self.config.context_radius,
-                    self.config.max_concurrency,
-                    self.config.max_iterations,
-                    self.config.tab_cooldown_ms,
-                    retry_count,
-                    retry_delay,
-                    max_output_lines,
-                    &mut store,
-                    &template_name,
-                    start_stage,
-                    Some(planner_stage_path.as_path()),
-                    ctx.tick,
-                )
-                .await?;
-            let completion_velocity = if reward > prev_reward { 1.0 } else { 0.0 };
-            let goal_sim = telemetry::telemetry_goal_similarity(&graph, &goal_spec);
-            let mut runtime = telemetry::RuntimeTelemetry::default();
-            runtime.queue.queue_depth = telemetry::telemetry_pending_requests();
-            runtime.queue.progress_fraction = telemetry::telemetry_progress_fraction(
-                &graph,
-            );
-            runtime.queue.completion_velocity = completion_velocity;
-            runtime.policy.policy_run_planner = true;
-            runtime.goal.goal_similarity_score = goal_sim;
-            runtime.goal.goal_drift = (1.0 - goal_sim).clamp(0.0, 1.0);
-            runtime.goal.planner_refocus = false;
-            let snapshot = telemetry::TelemetryFrame {
-                planner: Default::default(),
-                exec: Default::default(),
-                runtime,
-                reward,
-                template_hash: Some(store.template_hash(&template_name)),
-                goal: Some(template_name.clone()),
-            };
-            telemetry::telemetry_record_snapshot(
-                &Path::new(LOG_ROOT).join("metrics.json"),
-                &snapshot,
-            );
-            telemetry::telemetry_record_snapshot(
-                &Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"),
-                &snapshot,
-            );
-            if let Ok(text) = std::fs::read_to_string(
-                Path::new(LOG_ROOT).join("metrics.json"),
-            ) {
-                eprintln!("[logs] capability_metrics {}", text.trim());
-            }
-            Ok(reward)
-        }
+                    let mut session = planner_session.lock().await;
+                    let mut store = store.lock().await;
+                    let mut g = graph.lock().await;
+                    let before_nodes = g.nodes.len() as u64;
+                    let before_edges = graph_algo::graph_analysis_edge_count(&g) as u64;
+                    let before_reward = telemetry::telemetry_compute_reward(
+                        &g,
+                        0,
+                        config.max_iterations,
+                        session.goal_spec(),
+                    );
+                    let mut before_desc = HashMap::new();
+                    for n in &g.nodes {
+                        before_desc.insert(n.id.clone(), n.description.clone());
+                    }
+                    scheduler::run_planner_loop(
+                        &mut session,
+                        &mut g,
+                        &bridge,
+                        config.as_ref(),
+                        &role_rr,
+                        &tabs,
+                        &cwd,
+                        &workspace_listing_async,
+                        &planner_endpoint_async,
+                        "exec",
+                        policy.as_ref(),
+                        config.context_radius,
+                        config.max_concurrency,
+                        config.max_iterations,
+                        config.tab_cooldown_ms,
+                        retry_count,
+                        retry_delay,
+                        max_output_lines,
+                        &mut store,
+                        &template_name_async,
+                        start_stage,
+                        Some(planner_stage_path.as_path()),
+                        tick,
+                    )
+                    .await
+                    .map(|reward| {
+                        {
+                            let mut stats = mutation_stats.blocking_lock();
+                            match start_stage {
+                                PlannerStage::ReuseTemplate => stats.stage_reuse = stats.stage_reuse.saturating_add(1),
+                                PlannerStage::MutateTemplate => stats.stage_mutate = stats.stage_mutate.saturating_add(1),
+                                PlannerStage::GraphPatch => stats.stage_patch = stats.stage_patch.saturating_add(1),
+                                PlannerStage::Execute => stats.stage_execute = stats.stage_execute.saturating_add(1),
+                                _ => {}
+                            }
+                        }
+                        let after_nodes = g.nodes.len() as u64;
+                        let after_edges = graph_algo::graph_analysis_edge_count(&g) as u64;
+                        let mut rewrites = 0u64;
+                        for n in &g.nodes {
+                            if let Some(prev) = before_desc.get(&n.id) {
+                                if prev != &n.description {
+                                    rewrites += 1;
+                                }
+                            }
+                        }
+                        let add_nodes = after_nodes.saturating_sub(before_nodes);
+                        let add_edges = after_edges.saturating_sub(before_edges);
+                        let reward_delta = reward - before_reward;
+                        let mut stats = mutation_stats.blocking_lock();
+                        stats.add_nodes = add_nodes;
+                        stats.add_edges = add_edges;
+                        stats.rewrites = rewrites;
+                        stats.reward_delta = reward_delta;
+                        // per-planner-iteration telemetry
+                        let features = graph_algo::compute_graph_features_parallel(&g);
+                        let goal_sim = telemetry::telemetry_goal_similarity(&g, session.goal_spec());
+                        let mut runtime = telemetry::RuntimeTelemetry::default();
+                        runtime.queue.queue_depth = telemetry::telemetry_pending_requests();
+                        runtime.queue.progress_fraction = telemetry::telemetry_progress_fraction(&g);
+                        runtime.queue.branching_factor = features.branching_factor;
+                        runtime.queue.blocked_fraction = features.blocked_fraction;
+                        runtime.queue.completion_velocity = features.completion_velocity;
+                        runtime.queue.deadlock_rate = features.deadlock_rate;
+                        runtime.goal.goal_similarity_score = goal_sim;
+                        runtime.goal.goal_drift = (1.0 - goal_sim).clamp(0.0, 1.0);
+                        runtime.goal.planner_refocus = false;
+                        let template_hash = store.template_hash(&template_name_async);
+                        let mut tmpl = telemetry::RuntimeTemplateTelemetry::default();
+                        tmpl.template_reuse = store.template_exists(&template_name_async);
+                        tmpl.template_score = store.reward_for_template(&template_name_async);
+                        tmpl.template_selected = Some(template_name_async.clone());
+                        tmpl.template_mutations = add_nodes + add_edges + rewrites;
+                        tmpl.template_new_nodes = add_nodes;
+                        tmpl.template_new_edges = add_edges;
+                        tmpl.template_rewrites = rewrites;
+                        {
+                            let stats = mutation_stats.blocking_lock();
+                            tmpl.template_mutations_reuse = stats.stage_reuse;
+                            tmpl.template_mutations_mutate = stats.stage_mutate;
+                            tmpl.template_mutations_patch = stats.stage_patch;
+                            tmpl.template_mutations_execute = stats.stage_execute;
+                        }
+                        tmpl.mutation_success_rate = if tmpl.template_mutations == 0 { 0.0 } else { 1.0 };
+                        tmpl.mutation_reward_delta = reward_delta;
+                        runtime.template = tmpl;
+                        let snapshot = telemetry::TelemetryFrame {
+                            planner: Default::default(),
+                            exec: Default::default(),
+                            runtime,
+                            reward,
+                            template_hash: Some(template_hash),
+                            goal: Some(template_name_async.clone()),
+                        };
+                        telemetry::telemetry_record_snapshot(&Path::new(LOG_ROOT).join("metrics.json"), &snapshot);
+                        telemetry::telemetry_record_snapshot(
+                            &Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"),
+                            &snapshot,
+                        );
+                        reward
+                    })
+                })
+            });
+        let template_store = store.clone();
+        let template_name_hook = template_name.clone();
+        let template_reward: crate::async_pipeline::TemplateRewardHook =
+            std::sync::Arc::new(move |reward| {
+                let template_store = template_store.clone();
+                let template_name_hook = template_name_hook.clone();
+                Box::pin(async move {
+                    let mut store = template_store.lock().await;
+                    store.record_template_reward(&template_name_hook, reward);
+                    Ok(())
+                })
+            });
+        let template_store = store.clone();
+        let template_name_hook = template_name.clone();
+        let template_failure: crate::async_pipeline::TemplateFailureHook =
+            std::sync::Arc::new(move |reason| {
+                let template_store = template_store.clone();
+                let template_name_hook = template_name_hook.clone();
+                Box::pin(async move {
+                    let mut store = template_store.lock().await;
+                    let hash = store.template_hash(&template_name_hook);
+                    store.record_template_failure(&hash);
+                    Ok(())
+                })
+            });
+        let template_store = store.clone();
+        let template_name_hook = template_name.clone();
+        let template_telemetry: crate::async_pipeline::TemplateTelemetryHook =
+            std::sync::Arc::new(move || {
+                let template_store = template_store.clone();
+                let template_name_hook = template_name_hook.clone();
+                let mutation_stats = mutation_stats.clone();
+                Box::pin(async move {
+                    let store = template_store.lock().await;
+                    let hash = store.template_hash(&template_name_hook);
+                    let mut rt = telemetry::RuntimeTemplateTelemetry::default();
+                    let stats = mutation_stats.lock().await.clone();
+                    rt.template_reuse = store.template_exists(&template_name_hook);
+                    rt.template_score = store.reward_for_template(&template_name_hook);
+                    rt.template_selected = Some(template_name_hook.clone());
+                    rt.template_mutations = stats.add_nodes + stats.add_edges + stats.rewrites;
+                    rt.template_new_nodes = stats.add_nodes;
+                    rt.template_new_edges = stats.add_edges;
+                    rt.template_rewrites = stats.rewrites;
+                    rt.template_mutations_reuse = stats.stage_reuse;
+                    rt.template_mutations_mutate = stats.stage_mutate;
+                    rt.template_mutations_patch = stats.stage_patch;
+                    rt.template_mutations_execute = stats.stage_execute;
+                    rt.mutation_success_rate = if rt.template_mutations == 0 { 0.0 } else { 1.0 };
+                    rt.mutation_reward_delta = stats.reward_delta;
+                    rt.template_reuse_by_embedding = false;
+                    rt.embedding_cache_hits = 0;
+                    rt.objective_delta = 0.0;
+                    rt.template_hit_rate = 0.0;
+                    Ok((Some(hash), rt))
+                })
+            });
+        return crate::async_pipeline::run_async_pipeline(
+            graph,
+            planner_generate.clone(),
+            Some(planner_task),
+            Some(template_reward),
+            Some(template_failure),
+            Some(template_telemetry),
+            self.bridge.clone(),
+            std::sync::Arc::new(self.config.clone()),
+            self.role_rr.clone(),
+            self.tabs.clone(),
+            &ctx.cwd,
+            &workspace_listing,
+            endpoint.clone(),
+            "exec",
+            policy_arc.clone(),
+            self.config.context_radius,
+            self.config.max_concurrency,
+            self.config.max_iterations,
+            self.config.tab_cooldown_ms,
+            retry_count,
+            retry_delay,
+            max_output_lines,
+            &goal_spec,
+            Path::new(LOG_ROOT),
+        )
+        .await;
     }
 }
 fn capability_pipeline_list_workspace_entries(root: &Path, limit: usize) -> String {

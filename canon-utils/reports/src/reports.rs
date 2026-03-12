@@ -145,7 +145,14 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
     let meta_path = out_dir.join("snapshot.meta.json");
     let graph_bin_path = out_dir.join("graph.bin");
     let graph_bin_fresh = graph_bin_path.exists() && is_graph_bin_fresh(&graph_bin_path, tlog_path);
-    let tlog_has_modules = tlog_last_session_has_module_nodes(tlog_path);
+    let tlog_has_modules = if graph_bin_fresh
+        || (std::env::var("CANON_REPORTS_MINIMAL").ok().as_deref() == Some("1")
+            && graph_bin_path.exists())
+    {
+        true
+    } else {
+        tlog_last_session_has_module_nodes(tlog_path)
+    };
     let prefer_graph_bin = graph_bin_path.exists() && !graph_bin_fresh && !tlog_has_modules;
     let (nodes, edges, files) = if graph_bin_fresh || prefer_graph_bin {
         load_graph_bin(&graph_bin_path)?
@@ -165,6 +172,8 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
     }
     let reports_dir = out_dir.parent().unwrap_or(out_dir).join("reports");
     generate_reports_from_parts(nodes, edges, files, out_dir, &reports_dir)?;
+    write_tlog_integrity_report(tlog_path, &reports_dir)?;
+    write_system_health_report(tlog_path, &reports_dir)?;
     if let Ok(cache) = load_and_update_graph_cache(tlog_path, &reports_dir) {
         let (modulegraph, module_nodes) = build_modulegraph_from_cache(&cache);
         write_modulegraph_csv(out_dir, &modulegraph, &module_nodes)?;
@@ -189,6 +198,11 @@ fn generate_reports_from_parts(
     fs::create_dir_all(graph_dir)?;
     fs::create_dir_all(reports_dir)?;
     let (cfg, callgraph) = write_graph_artifacts(graph_dir, &nodes, &edges, &files)?;
+
+    if std::env::var("CANON_REPORTS_MINIMAL").ok().as_deref() == Some("1") {
+        write_graph_health_report(graph_dir, reports_dir, &nodes, &edges, &files, &cfg, &callgraph)?;
+        return Ok(());
+    }
 
     let node_map: HashMap<u32, NodeRow> = nodes.iter().map(|n| (n.id, n.clone())).collect();
 
@@ -311,6 +325,10 @@ fn generate_reports_from_parts(
         result?;
     }
 
+    write_graph_health_report(graph_dir, reports_dir, &nodes, &edges, &files, &cfg, &callgraph)?;
+    write_semantic_signatures(graph_dir, reports_dir, &nodes, &edges, &callgraph)?;
+    write_semantic_clusters(graph_dir, reports_dir, &nodes, &edges, &callgraph)?;
+
     Ok(())
 }
 
@@ -372,6 +390,9 @@ fn read_tlog_graph_incremental(
                     files = snap_files;
                     symbol_to_id = rebuild_symbol_index(&nodes);
                     base_offset = meta.tlog_offset;
+                } else {
+                    // Corrupt snapshot: fall back to full tlog replay.
+                    base_offset = 0;
                 }
             }
         }
@@ -919,7 +940,13 @@ fn write_snapshot_meta(path: &Path, meta: &SnapshotMeta) -> Result<()> {
 
 fn load_kernel_snapshot(path: &Path) -> Result<KernelSnapshot> {
     let data = fs::read(path)?;
-    let archived = unsafe { rkyv::archived_root::<KernelSnapshot>(&data) };
+    let archived = std::panic::catch_unwind(|| unsafe { rkyv::archived_root::<KernelSnapshot>(&data) });
+    let archived = match archived {
+        Ok(v) => v,
+        Err(_) => {
+            return Err(anyhow!("snapshot deserialize failed: panic during archived_root"));
+        }
+    };
     let snapshot: KernelSnapshot = archived
         .deserialize(&mut Infallible)
         .map_err(|e| anyhow!("snapshot deserialize failed: {e}"))?;
@@ -2366,16 +2393,21 @@ fn build_dependency_cycles_gpu(
                     return None;
                 }
                 let mut nodes = Vec::new();
+                let mut unique_symbols = BTreeSet::new();
                 let mut files = Vec::new();
                 for local in comp {
                     let id = *cg_local_to_id.get(local as usize)?;
                     let node = node_map.get(&id)?;
                     nodes.push(node.symbol.clone());
+                    unique_symbols.insert(node.symbol.clone());
                     if let Some(file_id) = node.file_id {
                         if let Some(path) = file_map.get(&file_id) {
                             files.push(path.clone());
                         }
                     }
+                }
+                if unique_symbols.len() < 2 {
+                    return None;
                 }
                 Some(DependencyCycleEntry {
                     cycle_id: idx + 1,
@@ -2631,16 +2663,21 @@ fn build_dependency_cycles(
             continue;
         }
         let mut node_syms: Vec<String> = Vec::new();
+        let mut unique_symbols: BTreeSet<String> = BTreeSet::new();
         let mut file_set: BTreeSet<String> = BTreeSet::new();
         for n in &scc {
             if let Some(node) = node_map.get(n) {
                 node_syms.push(node.symbol.clone());
+                unique_symbols.insert(node.symbol.clone());
                 if let Some(fid) = node.file_id {
                     if let Some(path) = file_map.get(&fid) {
                         file_set.insert(path.clone());
                     }
                 }
             }
+        }
+        if unique_symbols.len() < 2 {
+            continue;
         }
         node_syms.sort();
         cycle_id += 1;
@@ -2749,4 +2786,543 @@ fn build_dataflow_fanout(
     }
     out.sort_by(|a, b| b.outgoing_edges.cmp(&a.outgoing_edges));
     out
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GraphHealthReport {
+    node_count: usize,
+    edge_count: usize,
+    node_kind_counts: BTreeMap<String, usize>,
+    edge_histogram: BTreeMap<String, usize>,
+    callsite_nodes: usize,
+    call_edges: usize,
+    callsite_coverage: f64,
+    callgraph_ratio: f64,
+    orphan_nodes: usize,
+    module_owner_coverage: f64,
+    graph_hash: u64,
+    prev_node_count: Option<usize>,
+    prev_edge_count: Option<usize>,
+    graph_drift: f64,
+    generated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TlogIntegrityReport {
+    tlog_path: String,
+    file_size: u64,
+    line_count: u64,
+    session_count: u64,
+    last_session_offset_idx: Option<u64>,
+    last_session_offset_found: bool,
+    session_offsets_monotonic: bool,
+    parse_errors: u64,
+    hash_chain_last: u64,
+    replay_determinism_ok: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SemanticSignature {
+    node_id: u32,
+    symbol: String,
+    node_type: String,
+    fan_in: u32,
+    fan_out: u32,
+    call_depth: u32,
+    mutation_rate: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SemanticCluster {
+    cluster_id: u32,
+    label: String,
+    size: usize,
+    avg_fan_in: f64,
+    avg_fan_out: f64,
+    avg_call_depth: f64,
+    nodes: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SystemHealthReport {
+    graph_drift: f64,
+    callgraph_ratio: f64,
+    orphan_nodes: usize,
+    tlog_growth_rate: f64,
+    tlog_ok: bool,
+    generated_at: String,
+}
+
+fn write_graph_health_report(
+    _graph_dir: &Path,
+    reports_dir: &Path,
+    nodes: &[NodeRow],
+    edges: &[EdgeRow],
+    _files: &[String],
+    cfg: &[EdgeRow],
+    callgraph: &[(u32, u32)],
+) -> Result<()> {
+    fs::create_dir_all(reports_dir)?;
+    let mut node_kind_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for n in nodes {
+        *node_kind_counts.entry(n.kind.clone()).or_insert(0) += 1;
+    }
+    let mut edge_histogram: BTreeMap<String, usize> = BTreeMap::new();
+    for e in edges {
+        *edge_histogram.entry(e.kind.clone()).or_insert(0) += 1;
+    }
+    let callsite_nodes = nodes.iter().filter(|n| n.kind == "CALL_SITE").count();
+    let call_edges = edges.iter().filter(|e| e.kind == "CALL").count();
+    let callsite_coverage = if callsite_nodes == 0 {
+        0.0
+    } else {
+        call_edges as f64 / callsite_nodes as f64
+    };
+    let mut incoming: HashSet<u32> = HashSet::new();
+    let mut outgoing: HashSet<u32> = HashSet::new();
+    for e in edges {
+        outgoing.insert(e.src);
+        incoming.insert(e.dst);
+    }
+    let orphan_nodes = nodes
+        .iter()
+        .filter(|n| !incoming.contains(&n.id) && !outgoing.contains(&n.id))
+        .count();
+
+    let mut id_to_kind: HashMap<u32, &str> = HashMap::new();
+    for n in nodes {
+        id_to_kind.insert(n.id, n.kind.as_str());
+    }
+    let mut owned: HashSet<u32> = HashSet::new();
+    for e in edges {
+        if e.kind != "CONTAINS" {
+            continue;
+        }
+        if id_to_kind.get(&e.src).copied() == Some("MODULE") {
+            owned.insert(e.dst);
+        }
+    }
+    let eligible = nodes.iter().filter(|n| n.kind != "MODULE").count();
+    let module_owner_coverage = if eligible == 0 {
+        1.0
+    } else {
+        owned.len() as f64 / eligible as f64
+    };
+
+    let graph_hash = hash_graph_signature(nodes, edges);
+    let report_path = reports_dir.join("graph_health.json");
+    let (prev_node_count, prev_edge_count, graph_drift) = if report_path.exists() {
+        let prev: GraphHealthReport = serde_json::from_str(&fs::read_to_string(&report_path)?)
+            .unwrap_or(GraphHealthReport {
+                node_count: 0,
+                edge_count: 0,
+                node_kind_counts: BTreeMap::new(),
+                edge_histogram: BTreeMap::new(),
+                callsite_nodes: 0,
+                call_edges: 0,
+                callsite_coverage: 0.0,
+                callgraph_ratio: 0.0,
+                orphan_nodes: 0,
+                module_owner_coverage: 0.0,
+                graph_hash: 0,
+                prev_node_count: None,
+                prev_edge_count: None,
+                graph_drift: 0.0,
+                generated_at: String::new(),
+            });
+        let prev_total = (prev.node_count + prev.edge_count).max(1) as f64;
+        let drift = ((nodes.len() as i64 - prev.node_count as i64).abs() as f64
+            + (edges.len() as i64 - prev.edge_count as i64).abs() as f64)
+            / prev_total;
+        (Some(prev.node_count), Some(prev.edge_count), drift)
+    } else {
+        (None, None, 0.0)
+    };
+
+    let callgraph_ratio = if cfg.is_empty() {
+        0.0
+    } else {
+        callgraph.len() as f64 / cfg.len() as f64
+    };
+
+    let report = GraphHealthReport {
+        node_count: nodes.len(),
+        edge_count: edges.len(),
+        node_kind_counts,
+        edge_histogram,
+        callsite_nodes,
+        call_edges,
+        callsite_coverage,
+        callgraph_ratio,
+        orphan_nodes,
+        module_owner_coverage,
+        graph_hash,
+        prev_node_count,
+        prev_edge_count,
+        graph_drift,
+        generated_at: current_timestamp().to_string(),
+    };
+    fs::write(report_path, serde_json::to_string_pretty(&report)?)?;
+    Ok(())
+}
+
+fn hash_graph_signature(nodes: &[NodeRow], edges: &[EdgeRow]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut node_keys: Vec<(u32, &str, &str, Option<u32>)> = nodes
+        .iter()
+        .map(|n| (n.id, n.kind.as_str(), n.symbol.as_str(), n.file_id))
+        .collect();
+    node_keys.sort_by(|a, b| a.0.cmp(&b.0));
+    node_keys.hash(&mut hasher);
+    let mut edge_keys: Vec<(u32, u32, &str)> = edges
+        .iter()
+        .map(|e| (e.src, e.dst, e.kind.as_str()))
+        .collect();
+    edge_keys.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
+    edge_keys.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn write_tlog_integrity_report(tlog_path: &Path, reports_dir: &Path) -> Result<()> {
+    fs::create_dir_all(reports_dir)?;
+    let mut file = fs::File::open(tlog_path)?;
+    let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let idx_offset = read_last_session_offset(tlog_path);
+    let reader = std::io::BufReader::new(&file);
+    let mut offset: u64 = 0;
+    let mut line_count = 0u64;
+    let mut session_count = 0u64;
+    let mut parse_errors = 0u64;
+    let mut last_session_offset_found = false;
+    let mut session_offsets_monotonic = true;
+    let mut last_session_offset_seen: Option<u64> = None;
+    let mut hash_chain: u64 = 0;
+
+    for raw_line in reader.lines() {
+        let raw_line = raw_line?;
+        let line_start = offset;
+        offset = offset.saturating_add(raw_line.as_bytes().len() as u64 + 1);
+        line_count += 1;
+        let mut line = raw_line.as_str();
+        loop {
+            if let Some(idx) = line.find("{\"t\":\"SESSION\"") {
+                if idx > 0 {
+                    let (prefix, suffix) = line.split_at(idx);
+                    if let Some(value) = parse_tlog_line(prefix) {
+                        if apply_tlog_integrity_record(&value, line_start, &idx_offset, &mut session_count, &mut last_session_offset_found, &mut session_offsets_monotonic, &mut last_session_offset_seen) {
+                            // ok
+                        }
+                    } else {
+                        parse_errors += 1;
+                    }
+                    line = suffix;
+                    continue;
+                }
+            }
+            if let Some(value) = parse_tlog_line(line) {
+                if apply_tlog_integrity_record(&value, line_start, &idx_offset, &mut session_count, &mut last_session_offset_found, &mut session_offsets_monotonic, &mut last_session_offset_seen) {
+                    // ok
+                }
+            } else if !line.trim().is_empty() {
+                parse_errors += 1;
+            }
+            break;
+        }
+        hash_chain = hash_chain.wrapping_mul(1315423911).wrapping_add(hash_bytes(raw_line.as_bytes()));
+    }
+
+    let report = TlogIntegrityReport {
+        tlog_path: tlog_path.to_string_lossy().to_string(),
+        file_size,
+        line_count,
+        session_count,
+        last_session_offset_idx: idx_offset,
+        last_session_offset_found,
+        session_offsets_monotonic,
+        parse_errors,
+        hash_chain_last: hash_chain,
+        replay_determinism_ok: parse_errors == 0 && session_offsets_monotonic,
+    };
+    fs::write(reports_dir.join("tlog_integrity.json"), serde_json::to_string_pretty(&report)?)?;
+    Ok(())
+}
+
+fn apply_tlog_integrity_record(
+    value: &Value,
+    line_start: u64,
+    idx_offset: &Option<u64>,
+    session_count: &mut u64,
+    last_session_offset_found: &mut bool,
+    session_offsets_monotonic: &mut bool,
+    last_session_offset_seen: &mut Option<u64>,
+) -> bool {
+    let Some(tag) = value.get("t").and_then(|v| v.as_str()) else {
+        return false;
+    };
+    if tag != "SESSION" {
+        return true;
+    }
+    *session_count += 1;
+    let byte_offset = value.get("byte_offset").and_then(|v| v.as_u64());
+    if let Some(offset) = byte_offset {
+        if Some(offset) == *idx_offset {
+            *last_session_offset_found = true;
+        }
+        if let Some(prev) = *last_session_offset_seen {
+            if offset < prev {
+                *session_offsets_monotonic = false;
+            }
+        }
+        *last_session_offset_seen = Some(offset);
+        if offset != line_start {
+            *session_offsets_monotonic = false;
+        }
+    }
+    true
+}
+
+fn hash_bytes(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 1469598103934665603;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(1099511628211);
+    }
+    h
+}
+
+fn write_semantic_signatures(
+    _graph_dir: &Path,
+    reports_dir: &Path,
+    nodes: &[NodeRow],
+    edges: &[EdgeRow],
+    callgraph: &[(u32, u32)],
+) -> Result<()> {
+        fs::create_dir_all(reports_dir)?;
+    let mut fan_in: HashMap<u32, u32> = HashMap::new();
+    let mut fan_out: HashMap<u32, u32> = HashMap::new();
+    for e in edges {
+        *fan_out.entry(e.src).or_insert(0) += 1;
+        *fan_in.entry(e.dst).or_insert(0) += 1;
+    }
+    let call_depth = compute_call_depths(callgraph);
+    let mut out: Vec<SemanticSignature> = Vec::with_capacity(nodes.len());
+    for n in nodes {
+        out.push(SemanticSignature {
+            node_id: n.id,
+            symbol: n.symbol.clone(),
+            node_type: n.kind.clone(),
+            fan_in: *fan_in.get(&n.id).unwrap_or(&0),
+            fan_out: *fan_out.get(&n.id).unwrap_or(&0),
+            call_depth: *call_depth.get(&n.id).unwrap_or(&0),
+            mutation_rate: 0.0,
+        });
+    }
+    fs::write(
+        reports_dir.join("semantic_signatures.json"),
+        serde_json::to_string_pretty(&out)?,
+    )?;
+    Ok(())
+}
+
+fn compute_call_depths(callgraph: &[(u32, u32)]) -> HashMap<u32, u32> {
+    let roots = find_callgraph_roots(callgraph);
+    let mut adj: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (s, d) in callgraph {
+        adj.entry(*s).or_default().push(*d);
+    }
+    let mut depth: HashMap<u32, u32> = HashMap::new();
+    let mut queue: VecDeque<u32> = VecDeque::new();
+    for r in roots {
+        depth.insert(r, 0);
+        queue.push_back(r);
+    }
+    while let Some(v) = queue.pop_front() {
+        let next_depth = depth.get(&v).copied().unwrap_or(0).saturating_add(1);
+        if let Some(neigh) = adj.get(&v) {
+            for n in neigh {
+                if !depth.contains_key(n) {
+                    depth.insert(*n, next_depth);
+                    queue.push_back(*n);
+                }
+            }
+        }
+    }
+    depth
+}
+
+fn write_semantic_clusters(
+    _graph_dir: &Path,
+    reports_dir: &Path,
+    nodes: &[NodeRow],
+    edges: &[EdgeRow],
+    callgraph: &[(u32, u32)],
+) -> Result<()> {
+        fs::create_dir_all(reports_dir)?;
+    let mut fan_in: HashMap<u32, u32> = HashMap::new();
+    let mut fan_out: HashMap<u32, u32> = HashMap::new();
+    for e in edges {
+        *fan_out.entry(e.src).or_insert(0) += 1;
+        *fan_in.entry(e.dst).or_insert(0) += 1;
+    }
+    let call_depth = compute_call_depths(callgraph);
+    let mut points: Vec<(u32, [f64; 3])> = Vec::with_capacity(nodes.len());
+    for n in nodes {
+        let fi = *fan_in.get(&n.id).unwrap_or(&0) as f64;
+        let fo = *fan_out.get(&n.id).unwrap_or(&0) as f64;
+        let cd = *call_depth.get(&n.id).unwrap_or(&0) as f64;
+        points.push((n.id, [fi, fo, cd]));
+    }
+    let k = 4usize.min(points.len().max(1));
+    let mut centroids: Vec<[f64; 3]> = Vec::new();
+    for (idx, (_id, feat)) in points.iter().enumerate() {
+        if centroids.len() >= k {
+            break;
+        }
+        if idx % (points.len().max(1) / k.max(1)).max(1) == 0 {
+            centroids.push(*feat);
+        }
+    }
+    if centroids.is_empty() {
+        centroids.push([0.0, 0.0, 0.0]);
+    }
+    let mut assignments: Vec<usize> = vec![0; points.len()];
+    for _ in 0..8 {
+        for (i, (_id, feat)) in points.iter().enumerate() {
+            let mut best = 0;
+            let mut best_dist = f64::MAX;
+            for (c_idx, c) in centroids.iter().enumerate() {
+                let dist = (feat[0] - c[0]).powi(2) + (feat[1] - c[1]).powi(2) + (feat[2] - c[2]).powi(2);
+                if dist < best_dist {
+                    best_dist = dist;
+                    best = c_idx;
+                }
+            }
+            assignments[i] = best;
+        }
+        let mut sums = vec![[0.0, 0.0, 0.0]; centroids.len()];
+        let mut counts = vec![0u32; centroids.len()];
+        for (i, (_id, feat)) in points.iter().enumerate() {
+            let idx = assignments[i];
+            sums[idx][0] += feat[0];
+            sums[idx][1] += feat[1];
+            sums[idx][2] += feat[2];
+            counts[idx] += 1;
+        }
+        for i in 0..centroids.len() {
+            let c = counts[i].max(1) as f64;
+            centroids[i] = [sums[i][0] / c, sums[i][1] / c, sums[i][2] / c];
+        }
+    }
+
+    let mut clusters: Vec<SemanticCluster> = Vec::new();
+    for (idx, centroid) in centroids.iter().enumerate() {
+        let mut nodes_in = Vec::new();
+        for (i, (id, _feat)) in points.iter().enumerate() {
+            if assignments[i] == idx {
+                nodes_in.push(*id);
+            }
+        }
+        let label = label_cluster(centroid[0], centroid[1], centroid[2]);
+        clusters.push(SemanticCluster {
+            cluster_id: idx as u32,
+            label,
+            size: nodes_in.len(),
+            avg_fan_in: centroid[0],
+            avg_fan_out: centroid[1],
+            avg_call_depth: centroid[2],
+            nodes: nodes_in,
+        });
+    }
+
+    fs::write(
+        reports_dir.join("semantic_clusters.json"),
+        serde_json::to_string_pretty(&clusters)?,
+    )?;
+
+    write_cluster_graph_bin(&reports_dir.join("cluster_graph.bin"), &clusters, edges)?;
+
+    Ok(())
+}
+
+fn label_cluster(fan_in: f64, fan_out: f64, call_depth: f64) -> String {
+    if fan_out >= fan_in * 1.5 && call_depth >= 2.0 {
+        return "orchestration".to_string();
+    }
+    if fan_in >= fan_out * 1.5 {
+        return "state".to_string();
+    }
+    if call_depth <= 1.0 {
+        return "compute".to_string();
+    }
+    "io".to_string()
+}
+
+fn write_cluster_graph_bin(path: &Path, clusters: &[SemanticCluster], edges: &[EdgeRow]) -> Result<()> {
+    const MAGIC: &[u8; 4] = b"CCGB";
+    const VERSION: u32 = 1;
+    let mut node_to_cluster: HashMap<u32, u32> = HashMap::new();
+    for c in clusters {
+        for id in &c.nodes {
+            node_to_cluster.insert(*id, c.cluster_id);
+        }
+    }
+    let mut edge_counts: BTreeMap<(u32, u32), u32> = BTreeMap::new();
+    for e in edges {
+        let Some(src_c) = node_to_cluster.get(&e.src).copied() else { continue; };
+        let Some(dst_c) = node_to_cluster.get(&e.dst).copied() else { continue; };
+        if src_c == dst_c {
+            continue;
+        }
+        *edge_counts.entry((src_c, dst_c)).or_insert(0) += 1;
+    }
+    let n_clusters = clusters.len() as u32;
+    let n_edges = edge_counts.len() as u32;
+    let mut out: Vec<u8> = Vec::new();
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&VERSION.to_le_bytes());
+    out.extend_from_slice(&n_clusters.to_le_bytes());
+    out.extend_from_slice(&n_edges.to_le_bytes());
+    for ((src, dst), weight) in edge_counts {
+        out.extend_from_slice(&src.to_le_bytes());
+        out.extend_from_slice(&dst.to_le_bytes());
+        out.extend_from_slice(&weight.to_le_bytes());
+    }
+    fs::write(path, out)?;
+    Ok(())
+}
+
+fn write_system_health_report(tlog_path: &Path, reports_dir: &Path) -> Result<()> {
+    fs::create_dir_all(reports_dir)?;
+    let graph_health_path = reports_dir.join("graph_health.json");
+    let tlog_integrity_path = reports_dir.join("tlog_integrity.json");
+    let graph_health: Option<GraphHealthReport> = if graph_health_path.exists() {
+        serde_json::from_str(&fs::read_to_string(&graph_health_path)?).ok()
+    } else {
+        None
+    };
+    let tlog_integrity: Option<TlogIntegrityReport> = if tlog_integrity_path.exists() {
+        serde_json::from_str(&fs::read_to_string(&tlog_integrity_path)?).ok()
+    } else {
+        None
+    };
+
+    let tlog_size = fs::metadata(tlog_path).map(|m| m.len()).unwrap_or(0);
+    let prev_size = tlog_integrity.as_ref().map(|r| r.file_size).unwrap_or(tlog_size);
+    let tlog_growth_rate = if prev_size == 0 {
+        0.0
+    } else {
+        (tlog_size.saturating_sub(prev_size)) as f64 / prev_size as f64
+    };
+
+    let report = SystemHealthReport {
+        graph_drift: graph_health.as_ref().map(|r| r.graph_drift).unwrap_or(0.0),
+        callgraph_ratio: graph_health.as_ref().map(|r| r.callgraph_ratio).unwrap_or(0.0),
+        orphan_nodes: graph_health.as_ref().map(|r| r.orphan_nodes).unwrap_or(0),
+        tlog_growth_rate,
+        tlog_ok: tlog_integrity.as_ref().map(|r| r.replay_determinism_ok).unwrap_or(false),
+        generated_at: current_timestamp().to_string(),
+    };
+    fs::write(reports_dir.join("system_health.json"), serde_json::to_string_pretty(&report)?)?;
+    Ok(())
 }

@@ -65,6 +65,7 @@ impl LlmWorker {
         if let Some(node_id) = req.node_id.as_deref() {
             response_router::response_router_register(req.req_id, node_id).await;
         }
+        tab_manager_log_llm(format!("phase={} endpoint={} req_id={} send_turn_start", req.phase, self.endpoint_id, req.req_id));
         let result = self.send_turn(&req.phase, req.req_id, req.allow_req_id_mismatch, full_prompt).await;
         if let Ok(raw) = result.as_ref() {
             if let Some(key) = req.cache_key {
