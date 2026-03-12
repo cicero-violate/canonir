@@ -2,16 +2,16 @@ use crate::artifacts_loader::{load_kernel_graph, KernelGraph};
 use crate::invariant_discovery::{discover_invariants, mine_candidates, InvariantResult};
 use crate::semantic_features::extract_node_features;
 use crate::semantic_signature::compute_signatures;
-use crate::semantic_clustering::{cluster_dbscan_like, ClusteringResult};
+use crate::semantic_clustering::cluster_dbscan_like;
 use crate::pattern_mining::mine_patterns;
 use crate::invariant_generator::generate_candidates;
 use crate::invariant_sat::validate_candidates;
 use crate::report_ingest::{ingest_reports, ReportFeatures};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Serialize)]
 struct InvariantRecord {
@@ -147,7 +147,7 @@ fn run_semantic_pipeline(base_dir: &Path, graph_dir: &Path, graph: &KernelGraph)
     fs::create_dir_all(&semantics_dir)?;
 
     let features = extract_node_features(graph_dir, graph)?;
-    let signatures = compute_signatures(graph_dir, &features)?;
+    let _signatures = compute_signatures(graph_dir, &features)?;
     let clustering = cluster_dbscan_like(&features, 5.0, 3);
     let patterns = mine_patterns(&clustering.clusters);
     let candidates = generate_candidates(&patterns);
@@ -164,7 +164,9 @@ fn run_semantic_pipeline(base_dir: &Path, graph_dir: &Path, graph: &KernelGraph)
 
     // Outliers: clusters with size 1
     let mut outliers = Vec::new();
-    for id in clustering.outliers {
+    let mut outlier_ids = clustering.outliers;
+    outlier_ids.sort_unstable();
+    for id in outlier_ids {
         if let Some(node) = graph.nodes.iter().find(|n| n.id == id) {
             outliers.push(serde_json::json!({
                 "node_id": node.id,

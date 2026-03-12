@@ -9,7 +9,6 @@ use algorithms::graph::model_checking;
 use algorithms::graph::{csr::Csr, reachability, scc, topological_sort};
 use anyhow::Result;
 use std::collections::HashMap;
-use std::path::Path;
 struct GraphRuntimeGraphKernels {
     adj: Vec<Vec<usize>>,
     csr: Csr,

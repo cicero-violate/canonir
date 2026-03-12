@@ -1,4 +1,3 @@
-use super::capability::capability_model_assert_class_disjoint;
 use super::dag::ExecutionGraph;
 use super::goal_embedding;
 use super::goal::GoalSpec;

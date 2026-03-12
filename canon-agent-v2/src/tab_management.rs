@@ -1,4 +1,3 @@
-use super::console;
 use crate::ws_server::WsBridge;
 use anyhow::Result;
 use std::collections::HashMap;

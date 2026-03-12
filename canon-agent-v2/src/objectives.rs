@@ -3,10 +3,11 @@ use crate::graph_algo;
 use crate::state_snapshot;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const REPORTS_DIR: &str = "/workspace/ai_sandbox/canon/kernel/graph/reports";
+const REPORTS_DIR: &str = "/workspace/ai_sandbox/canon/state/graph/reports";
 const BASELINE_PATH: &str = "/workspace/ai_sandbox/canon/agent_logs/objective_baseline.json";
 const SNAPSHOT_PATH: &str = "/workspace/ai_sandbox/canon/agent_logs/state_snapshot.json";
 
@@ -36,6 +37,7 @@ impl Default for ObjectiveWeights {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 struct BranchComplexityEntry {
     symbol: String,
     file: String,
@@ -47,6 +49,7 @@ struct BranchComplexityEntry {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 struct CallgraphCentralityEntry {
     symbol: String,
     file: String,
@@ -58,6 +61,7 @@ struct CallgraphCentralityEntry {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 struct PathRedundancyEntry {
     symbol: String,
     file: String,
@@ -69,6 +73,7 @@ struct PathRedundancyEntry {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 struct StructuralHotspotEntry {
     symbol: String,
     file: String,
@@ -80,6 +85,7 @@ struct StructuralHotspotEntry {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 struct MergeCandidateEntry {
     function: String,
     #[serde(default)]
@@ -91,6 +97,7 @@ struct MergeCandidateEntry {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 struct DependencyCycleEntry {
     cycle_id: u64,
     cycle_length: u64,
@@ -160,6 +167,13 @@ pub fn reports_last_modified() -> Option<SystemTime> {
         });
     }
     latest
+}
+
+fn current_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn normalize_map(map: &HashMap<String, f64>) -> HashMap<String, f64> {
@@ -698,9 +712,14 @@ pub fn maybe_regenerate_reports_if_stale() -> bool {
     static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
     static LAST_START: std::sync::OnceLock<Mutex<Option<SystemTime>>> = std::sync::OnceLock::new();
 
+    if std::env::var("CANON_REPORTS_DISABLE").ok().as_deref() == Some("1") {
+        return false;
+    }
+
     let reports_dir = reports_dir();
-    let tlog = Path::new("/workspace/ai_sandbox/canon/kernel/logs/graph.tlog");
-    let tlog_idx = Path::new("/workspace/ai_sandbox/canon/kernel/logs/graph.tlog.idx");
+    let lock_path = reports_dir.join(".regen.lock");
+    let tlog = Path::new("/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog");
+    let tlog_idx = Path::new("/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog.idx");
     let reports_bin = Path::new("/workspace/ai_sandbox/canon/target/debug/reports_from_tlog");
     if !tlog.exists() || !tlog_idx.exists() || !reports_bin.exists() {
         return false;
@@ -728,10 +747,29 @@ pub fn maybe_regenerate_reports_if_stale() -> bool {
     if IN_FLIGHT.swap(true, Ordering::SeqCst) {
         return false;
     }
+    // Cross-process lock to avoid spawning multiple report generators.
+    let lock_fh = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+        .ok();
+    if lock_fh.is_none() {
+        IN_FLIGHT.store(false, Ordering::SeqCst);
+        return false;
+    }
     let tlog = tlog.to_path_buf();
     let reports_dir = reports_dir.to_path_buf();
     let reports_bin = reports_bin.to_path_buf();
+    let lock_path = lock_path.to_path_buf();
     std::thread::spawn(move || {
+        if let Some(mut fh) = lock_fh {
+            let _ = writeln!(
+                fh,
+                "pid={} started_at={}",
+                std::process::id(),
+                current_timestamp()
+            );
+        }
         let status = std::process::Command::new(reports_bin)
             .arg("--tlog")
             .arg(tlog)
@@ -739,6 +777,7 @@ pub fn maybe_regenerate_reports_if_stale() -> bool {
             .arg(reports_dir)
             .status();
         let _ = status;
+        let _ = std::fs::remove_file(&lock_path);
         IN_FLIGHT.store(false, Ordering::SeqCst);
     });
     true

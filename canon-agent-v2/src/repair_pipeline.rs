@@ -25,7 +25,7 @@ struct SystemHealthReport {
 }
 
 pub fn run_repair_pipeline() {
-    let health_path = Path::new("/workspace/ai_sandbox/canon/kernel/graph/reports/system_health.json");
+    let health_path = Path::new("/workspace/ai_sandbox/canon/state/graph/reports/system_health.json");
     let data = match std::fs::read_to_string(health_path) {
         Ok(data) => data,
         Err(_) => return,

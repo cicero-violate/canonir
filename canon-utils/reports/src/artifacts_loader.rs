@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use memmap2::Mmap;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct Node {
@@ -21,12 +21,14 @@ pub struct Edge {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CsrGraph {
     pub row_ptr: Vec<u32>,
     pub col_idx: Vec<u32>,
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct KernelGraph {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,

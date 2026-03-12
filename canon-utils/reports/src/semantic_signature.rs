@@ -1,6 +1,5 @@
 use crate::semantic_features::NodeFeatureVector;
 use anyhow::Result;
-use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::Path;

@@ -256,7 +256,7 @@ pub fn decompose_write_payload_log(log_path: &Path, payload: &Value) {
         let _ = std::fs::write(log_path, pretty);
     }
 }
-fn normalize_task_node_type(node_type: DecomposeNodeType, caps: &[PipelineCapability], description: &str) -> DecomposeNodeType {
+fn normalize_task_node_type(_node_type: DecomposeNodeType, caps: &[PipelineCapability], _description: &str) -> DecomposeNodeType {
     let render_cap = caps.iter().any(|c| matches!(c, PipelineCapability::FileWrite | PipelineCapability::ApplyPatch));
     if render_cap {
         DecomposeNodeType::Render

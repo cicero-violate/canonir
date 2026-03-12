@@ -4,17 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1"
-canon = { path = "../canon" }
-algorithms = { path = "../algorithms" }
-rustc-hash = "1"
+canon = { path = "../canonir" }
 serde = { version = "=1.0.228", features = ["derive"] }
-serde_json = "1"
-toml = "0.8"
 
 [lib]
 path = "src/lib.rs"
-
-[features]
-default = ["rustc_frontend"]
-rustc_frontend = []

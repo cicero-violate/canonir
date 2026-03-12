@@ -59,10 +59,10 @@ impl SymbolIndex {
     }
 
     pub fn build(project_root: &Path) -> Result<Self> {
-        let tlog_path = project_root.join("logs/graph.tlog");
+        let tlog_path = project_root.join("state/kernel_logs/kernel.tlog");
         if !tlog_path.exists() {
             return Err(anyhow!(
-                "graph.tlog not found at {}; run canon_kernel first",
+                "kernel.tlog not found at {}; run canon_kernel first",
                 tlog_path.display()
             ));
         }
@@ -192,7 +192,7 @@ fn apply_tlog_line(
             file_modules.clear();
             files.clear();
         }
-        "N" => {
+        "N" | "NODE" => {
             let sym = value.get("sym").and_then(|v| v.as_str()).unwrap_or("");
             let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("");
             let file = value.get("file").and_then(|v| v.as_str()).unwrap_or("");

@@ -31,7 +31,7 @@ impl ReportConsumer {
 
 impl KernelEventConsumer for ReportConsumer {
     fn mask(&self) -> EventMask {
-        EventMask::ALL
+        EventMask::NODE_DEFINED | EventMask::EDGE_DEFINED
     }
 
     fn on_event(&mut self, delta: &EventDelta, _state: &KernelState) {

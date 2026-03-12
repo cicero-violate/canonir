@@ -25,7 +25,7 @@ impl Default for AgentLoopConfig {
             stagnation_window: 3,
             retry_threshold: 0.4,
             deadlock_threshold: 0.2,
-            state_dir: PathBuf::from("/workspace/ai_sandbox/canon/kernel/state"),
+            state_dir: PathBuf::from("/workspace/ai_sandbox/canon/state"),
             resume: false,
         }
     }
@@ -41,6 +41,7 @@ pub async fn run_agent_loop(
     let mut last_reward: Option<f64> = None;
     let mut tick = 0u64;
     let state_dir = config.state_dir.clone();
+    ensure_agent_state_layout(&state_dir);
     let kernel_state_path = state_dir.join("kernel_state.json");
     let agent_state_path = state_dir.join("agent_state.json");
     let mut last_event_id = 0u64;
@@ -173,7 +174,7 @@ fn maybe_refresh_objective_goal(last_mtime: &mut Option<std::time::SystemTime>) 
         return false;
     };
     let goal_text = objectives::goal_raw_with_artifact("", &selection.artifact);
-    let path = Path::new("/workspace/ai_sandbox/canon/kernel/state/intent_state.json");
+    let path = Path::new("/workspace/ai_sandbox/canon/state/intent_state.json");
     let intent = IntentStatePersist {
         goal: goal_text,
         intent_radius: 0,
@@ -210,5 +211,30 @@ fn write_agent_state(path: &Path, _tick: u64, stagnation: u64, last_success_tick
         if std::fs::write(&tmp, pretty).is_ok() {
             let _ = std::fs::rename(&tmp, path);
         }
+    }
+}
+
+fn ensure_agent_state_layout(state_dir: &Path) {
+    let _ = std::fs::create_dir_all(state_dir);
+    let kernel_state = state_dir.join("kernel_state.json");
+    if !kernel_state.exists() {
+        let _ = std::fs::write(
+            kernel_state,
+            "{\n  \"tick\": 0,\n  \"phase\": \"observe\",\n  \"last_event_id\": 0,\n  \"invariant_hash\": \"\",\n  \"graph_version\": 0\n}\n",
+        );
+    }
+    let agent_state = state_dir.join("agent_state.json");
+    if !agent_state.exists() {
+        let _ = std::fs::write(
+            agent_state,
+            "{\n  \"agent_id\": \"canon-agent\",\n  \"credits\": 0,\n  \"stagnation_counter\": 0,\n  \"last_success_tick\": 0\n}\n",
+        );
+    }
+    let intent_state = state_dir.join("intent_state.json");
+    if !intent_state.exists() {
+        let _ = std::fs::write(
+            intent_state,
+            "{\n  \"goal\": \"\",\n  \"intent_radius\": 0,\n  \"execution_budget\": 0\n}\n",
+        );
     }
 }

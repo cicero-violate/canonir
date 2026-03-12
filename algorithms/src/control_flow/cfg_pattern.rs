@@ -127,7 +127,7 @@ fn reachable_has_back_edge(start: usize, adj: &[Vec<usize>], back_edges: &HashSe
     false
 }
 
-fn find_loop_head(switch_block: usize, adj: &[Vec<usize>], back_edges: &HashSet<(usize, usize)>) -> usize {
+fn find_loop_head(switch_block: usize, _adj: &[Vec<usize>], back_edges: &HashSet<(usize, usize)>) -> usize {
     // Loop head is the target of any back-edge that reaches switch_block.
     for &(src, dst) in back_edges {
         if dst <= switch_block && src >= switch_block {

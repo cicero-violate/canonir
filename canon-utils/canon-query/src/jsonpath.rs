@@ -64,6 +64,7 @@ impl IRByteOutputBuffer {
         self.write_bytes(bytes);
     }
 
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.buffer.len()
     }
@@ -140,7 +141,8 @@ impl IRBuilder {
         self.num_result_stores
     }
 
-    pub fn into_result(mut self) -> JSONPathResult {
+    #[allow(dead_code)]
+    pub fn into_result(self) -> JSONPathResult {
         if !self.ended {
             panic!("Cannot convert to byte array until end() has been called");
         }
@@ -155,6 +157,7 @@ impl IRBuilder {
         &self.buffer
     }
 
+    #[allow(dead_code)]
     pub fn buffer_mut(&mut self) -> &mut IRByteOutputBuffer {
         &mut self.buffer
     }

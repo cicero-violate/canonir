@@ -93,6 +93,7 @@ impl CapabilityPipeline {
     pub fn new(bridge: WsBridge) -> Self {
         let config = CapabilityConfig::snapshot_store_load()
             .expect("failed to load capability config");
+        config.apply_env_flags();
         Self {
             bridge,
             config,
@@ -107,6 +108,19 @@ impl CapabilityPipeline {
             "/workspace/ai_sandbox/canon/agent_logs/templates",
         );
         Self::ensure_agent_log_files();
+    }
+    fn clear_capability_log_dir() {
+        if let Ok(entries) = std::fs::read_dir(LOG_ROOT) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let _ = if path.is_dir() {
+                    std::fs::remove_dir_all(&path)
+                } else {
+                    std::fs::remove_file(&path)
+                };
+            }
+        }
+        let _ = std::fs::create_dir_all(LOG_ROOT);
     }
     fn ensure_agent_log_files() {
         Self::ensure_file(
@@ -144,13 +158,14 @@ impl CapabilityPipeline {
     }
     pub async fn run_capability_loop(&self, ctx: &PipelineContext) -> Result<f64> {
         Self::ensure_log_dir();
+        Self::clear_capability_log_dir();
         if self.config.llm_endpoints.is_empty() {
             anyhow::bail!("capability config has no llm endpoints");
         }
         engine::module_init_io_workers(&self.bridge, &self.config, &self.tabs).await;
         let mut goal = CapabilityConfigGoalSpec::from_file(&self.config.goal_file)?;
         let intent_path = Path::new(
-            "/workspace/ai_sandbox/canon/kernel/state/intent_state.json",
+            "/workspace/ai_sandbox/canon/state/intent_state.json",
         );
         if let Some(intent) = IntentStatePersist::load(intent_path) {
             if !intent.goal.trim().is_empty() {
@@ -309,7 +324,6 @@ impl CapabilityPipeline {
                                 anyhow::anyhow!("decompose_goal retries exhausted"),
                             );
                         }
-                        extra_retries = extra_retries.saturating_sub(1);
                         let retry_payload = engine::module_call_llm_json_with_retry_allow_mismatch(
                                 &bridge,
                                 &endpoint_id,
@@ -389,10 +403,9 @@ impl CapabilityPipeline {
             })
                 })
             });
-        let mut planner_generate_once = || async {
+        let planner_generate_once = || async {
             (planner_generate.as_ref())().await
         };
-        let mut cache_hit = false;
         let mut resume_loaded = false;
         let mut graph = if self.config.enable_resume {
             let snap = state_snapshot::snapshot_store_load(
@@ -421,7 +434,6 @@ impl CapabilityPipeline {
             match store.load_snapshot(&template_name) {
                 Ok(g) if g.validate().is_ok() => {
                     eprintln!("[templates] cache hit");
-                    cache_hit = true;
                     let mut g = g;
                     for n in &mut g.nodes {
                         n.status = dag::NodeStatus::Pending;
@@ -453,7 +465,6 @@ impl CapabilityPipeline {
             eprintln!("[templates] empty graph; invoking planner");
             graph = planner_generate_once().await?;
             eprintln!("[templates] planner returned nodes={}", graph.nodes.len());
-            cache_hit = false;
             resume_loaded = false;
         }
         graph_analysis_emit_planned_graph(&graph, Path::new(LOG_ROOT), 0);
@@ -705,7 +716,7 @@ impl CapabilityPipeline {
                 let template_store = template_store.clone();
                 let template_name_hook = template_name_hook.clone();
                 Box::pin(async move {
-                    let mut store = template_store.lock().await;
+                    let store = template_store.lock().await;
                     store.record_template_reward(&template_name_hook, reward);
                     Ok(())
                 })
@@ -713,7 +724,7 @@ impl CapabilityPipeline {
         let template_store = store.clone();
         let template_name_hook = template_name.clone();
         let template_failure: crate::async_pipeline::TemplateFailureHook =
-            std::sync::Arc::new(move |reason| {
+            std::sync::Arc::new(move |_reason| {
                 let template_store = template_store.clone();
                 let template_name_hook = template_name_hook.clone();
                 Box::pin(async move {

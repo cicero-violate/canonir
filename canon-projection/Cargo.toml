@@ -5,4 +5,4 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1"
-canon = { path = "../canon" }
+canon = { path = "../canonir" }

@@ -61,12 +61,24 @@ pub fn cluster_dbscan_like(
                 }
                 cluster_nodes.push(nid);
             }
+            cluster_nodes.sort_unstable();
             clusters.push(SemanticCluster {
                 cluster_id,
                 node_kind: kind,
                 nodes: cluster_nodes,
             });
         }
+    }
+
+    outliers.sort_unstable();
+    clusters.sort_by(|a, b| {
+        a.node_kind
+            .cmp(&b.node_kind)
+            .then_with(|| a.nodes.len().cmp(&b.nodes.len()))
+            .then_with(|| a.nodes.first().cmp(&b.nodes.first()))
+    });
+    for (idx, cluster) in clusters.iter_mut().enumerate() {
+        cluster.cluster_id = idx as u64;
     }
 
     ClusteringResult { clusters, outliers }

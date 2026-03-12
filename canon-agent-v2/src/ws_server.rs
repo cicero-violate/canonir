@@ -135,7 +135,7 @@ impl ServerState {
         let raw = msg.to_string();
         match tx.try_send(Message::Text(raw.into())) {
             Ok(()) => Ok(()),
-            Err(e) => Err(WsBridgeError::NotConnected),
+            Err(_e) => Err(WsBridgeError::NotConnected),
         }
     }
 }
@@ -285,7 +285,7 @@ pub fn spawn(addr: SocketAddr, response_timeout_secs: u64) -> WsBridge {
                 Ok(listener) => {
                     accept_loop(listener, state.clone()).await;
                 }
-                Err(e) => {
+                Err(_e) => {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 }
             }
@@ -298,7 +298,7 @@ pub fn spawn(addr: SocketAddr, response_timeout_secs: u64) -> WsBridge {
 async fn accept_loop(listener: TcpListener, state: Arc<Mutex<ServerState>>) {
     loop {
         match listener.accept().await {
-            Ok((stream, peer)) => {
+            Ok((stream, _peer)) => {
                 handle_connection(stream, state.clone()).await;
             }
             Err(_e) => {}

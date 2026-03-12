@@ -19,7 +19,7 @@ pub struct ChangeReport {
 }
 
 #[derive(Default)]
-pub(crate) struct NodeRegistry {
+pub struct NodeRegistry {
     pub asts: HashMap<PathBuf, syn::File>,
     pub sources: HashMap<PathBuf, String>,
     pub handles: HashMap<String, SymbolHandle>,
@@ -42,7 +42,7 @@ pub struct ProjectEditor {
 }
 
 #[derive(Clone)]
-pub(crate) struct PendingEdit {
+pub struct PendingEdit {
     pub symbol_id: String,
     pub op: EditOp,
 }

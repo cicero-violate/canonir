@@ -1,4 +1,4 @@
-use crate::gpu_scheduler_layout::{gpu_scheduler_layout_is_completed, gpu_scheduler_layout_is_ready_candidate, GpuScheduleGraph};
+use crate::gpu_scheduler_layout::GpuScheduleGraph;
 use algorithms::graph::csr::Csr;
 #[cfg(feature = "cuda")]
 use algorithms::graph::scheduler_gpu;

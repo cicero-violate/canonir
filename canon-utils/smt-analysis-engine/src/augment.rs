@@ -156,6 +156,7 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
     Ok(())
 }
 
+#[allow(dead_code)]
 fn write_outputs(graph: &crate::loader::AnalysisGraph, output_dir: &Path) -> Result<()> {
     fs::create_dir_all(output_dir)?;
     write_nodes_csv(output_dir, &graph.nodes)?;
@@ -171,6 +172,7 @@ fn write_outputs(graph: &crate::loader::AnalysisGraph, output_dir: &Path) -> Res
     Ok(())
 }
 
+#[allow(dead_code)]
 fn write_nodes_csv(output_dir: &Path, nodes: &[Node]) -> Result<()> {
     let path = output_dir.join("nodes.csv");
     let mut file = fs::File::create(path)?;
@@ -191,6 +193,7 @@ fn write_nodes_csv(output_dir: &Path, nodes: &[Node]) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn write_edges_csv(output_dir: &Path, edges: &[Edge]) -> Result<()> {
     let path = output_dir.join("edges.csv");
     let mut file = fs::File::create(path)?;
@@ -201,6 +204,7 @@ fn write_edges_csv(output_dir: &Path, edges: &[Edge]) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn write_files_txt(output_dir: &Path, nodes: &[Node]) -> Result<()> {
     let path = output_dir.join("files.txt");
     let mut file = fs::File::create(path)?;
@@ -217,6 +221,7 @@ fn write_files_txt(output_dir: &Path, nodes: &[Node]) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn write_bin_u32(path: PathBuf, data: &[u32]) -> Result<()> {
     let mut file = fs::File::create(path)?;
     for &v in data {
@@ -439,6 +444,7 @@ fn build_csr(node_count: u32, edges: &[Edge]) -> (Vec<u32>, Vec<u32>) {
     (row_ptr, col_idx)
 }
 
+#[allow(dead_code)]
 fn sanitize_csv_field(raw: &str) -> String {
     let mut out = raw.replace('\n', " ").replace('\r', " ");
     if out.contains(',') {
@@ -447,6 +453,7 @@ fn sanitize_csv_field(raw: &str) -> String {
     out
 }
 
+#[allow(dead_code)]
 fn write_kinds(output_dir: &Path) -> Result<()> {
     let node_kinds = [
         "FUNCTION",

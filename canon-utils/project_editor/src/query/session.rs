@@ -21,7 +21,7 @@ impl AnalysisSession {
                 project_root.display()
             ));
         }
-        let tlog_path = project_root.join("logs/graph.tlog");
+        let tlog_path = project_root.join("state/kernel_logs/kernel.tlog");
         Ok(Self {
             module_files: index.module_files().clone(),
             file_modules: index.file_modules().clone(),

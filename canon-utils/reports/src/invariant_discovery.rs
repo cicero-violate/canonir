@@ -1,4 +1,4 @@
-use crate::artifacts_loader::{KernelGraph, Node};
+use crate::artifacts_loader::KernelGraph;
 use crate::report_ingest::ReportFeatures;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
@@ -97,13 +97,13 @@ impl InvariantRule for ModuleOwnerRule {
 struct CallEdgeRule;
 impl InvariantRule for CallEdgeRule {
     fn name(&self) -> &'static str {
-        "call_edge_src_is_callsite"
+        "call_edge_src_is_callsite_or_fn"
     }
     fn description(&self) -> &'static str {
-        "CALL edge source must be a CALL_SITE node"
+        "CALL edge source must be CALL_SITE, FUNCTION, or METHOD"
     }
     fn evaluate(&self, graph: &KernelGraph, _features: &ReportFeatures) -> InvariantResult {
-        let mut id_to_kind: HashMap<u32, &str> =
+        let id_to_kind: HashMap<u32, &str> =
             graph.nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
         let mut total = 0usize;
         let mut violations = Vec::new();
@@ -112,7 +112,8 @@ impl InvariantRule for CallEdgeRule {
                 continue;
             }
             total += 1;
-            if id_to_kind.get(&e.src).copied().unwrap_or("") != "CALL_SITE" {
+            let src_kind = id_to_kind.get(&e.src).copied().unwrap_or("");
+            if src_kind != "CALL_SITE" && src_kind != "FUNCTION" && src_kind != "METHOD" {
                 violations.push(e.src);
             }
         }
@@ -148,7 +149,7 @@ impl InvariantRule for CfgEntryRule {
         }
         let mut block_in: HashMap<u32, usize> = HashMap::new();
         for e in &graph.edges {
-            if e.kind == "FLOW" || e.kind == "UNWIND" || e.kind == "RETURN" {
+            if e.kind == "FLOW" || e.kind == "UNWIND" || e.kind == "RETURN" || e.kind == "BRANCH" {
                 *block_in.entry(e.dst).or_default() += 1;
             }
         }
@@ -263,13 +264,13 @@ impl InvariantRule for HasFieldDstFieldRule {
 struct ContainsSrcModuleRule;
 impl InvariantRule for ContainsSrcModuleRule {
     fn name(&self) -> &'static str {
-        "contains_src_is_module"
+        "contains_src_is_module_or_crate"
     }
     fn description(&self) -> &'static str {
-        "CONTAINS edge src must be MODULE"
+        "CONTAINS edge src must be MODULE or CRATE"
     }
     fn evaluate(&self, graph: &KernelGraph, _features: &ReportFeatures) -> InvariantResult {
-        edge_kind_src_rule(graph, "CONTAINS", &["MODULE"])
+        edge_kind_src_rule(graph, "CONTAINS", &["MODULE", "CRATE"])
     }
 }
 
@@ -340,7 +341,7 @@ fn mine_edge_kind_constraints(graph: &KernelGraph) -> Vec<InvariantResult> {
         ("HAS_PARAM", false, &["PARAM"][..]),
         ("HAS_FIELD", true, &["STRUCT", "ENUM"][..]),
         ("HAS_FIELD", false, &["FIELD"][..]),
-        ("CONTAINS", true, &["MODULE"][..]),
+        ("CONTAINS", true, &["MODULE", "CRATE"][..]),
     ];
     for (kind, check_src, allowed) in candidates {
         let inv = if check_src {

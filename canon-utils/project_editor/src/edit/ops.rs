@@ -527,6 +527,7 @@ impl ProjectEditor {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn rebuild_registry(&mut self) -> Result<()> {
         Ok(())
     }

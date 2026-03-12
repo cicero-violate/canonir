@@ -78,26 +78,25 @@ fn mutate_graph_with_mode(
         return g;
     }
     let target_set: HashSet<String> = target_scope.iter().cloned().collect();
-    let mut remaining = mutation_budget;
     match mode {
         0 => {
-            if remaining > 0 {
-                remaining -= mutate_node_descriptions(&mut g, &target_set);
+            if mutation_budget > 0 {
+                let _ = mutate_node_descriptions(&mut g, &target_set);
             }
         }
         1 => {
-            if remaining > 0 {
-                remaining -= mutate_node_capabilities(&mut g, &target_set);
+            if mutation_budget > 0 {
+                let _ = mutate_node_capabilities(&mut g, &target_set);
             }
         }
         2 => {
-            if remaining > 0 {
-                remaining -= drop_low_utility_nodes(&mut g, iter, &target_set);
+            if mutation_budget > 0 {
+                let _ = drop_low_utility_nodes(&mut g, iter, &target_set);
             }
         }
         _ => {
-            if remaining > 0 {
-                remaining -= mutate_edges(&mut g, &target_set);
+            if mutation_budget > 0 {
+                let _ = mutate_edges(&mut g, &target_set);
             }
         }
     }

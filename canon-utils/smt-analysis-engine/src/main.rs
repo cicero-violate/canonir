@@ -23,6 +23,7 @@ struct Args {
     phase: String,
     epsilon: f32,
     clear_cache: bool,
+    #[allow(dead_code)]
     dir_mode: bool,
 }
 

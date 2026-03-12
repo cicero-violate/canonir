@@ -1,6 +1,5 @@
 use crate::semantic_clustering::SemanticCluster;
 use serde::Serialize;
-use std::collections::HashMap;
 
 #[derive(Debug, Serialize)]
 pub struct PatternRule {

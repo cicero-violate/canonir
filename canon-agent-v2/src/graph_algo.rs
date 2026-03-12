@@ -114,6 +114,7 @@ pub fn graph_analysis_compute_graph_signals(graph: &dag::ExecutionGraph) -> Grap
     let unreachable = reach.iter().enumerate().filter_map(|(i, &ok)| (!ok).then_some(i)).collect::<Vec<_>>();
     GraphAnalysis { roots, topo_order, sccs, unreachable, has_cycle }
 }
+#[allow(dead_code)]
 fn graph_analysis_reachability_mask(adj: &[Vec<usize>], roots: &[usize]) -> Vec<bool> {
     gpu_kernels::graph_cpu_kernels_compute_reachability(adj, roots)
 }

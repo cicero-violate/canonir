@@ -268,6 +268,7 @@ pub(crate) fn insert_handle(file: &Path, module_path: &str, ident: &syn::Ident, 
     handles.insert(symbol_id, SymbolHandle { file: file.to_path_buf(), module_path: module_path.to_string(), name: ident.to_string(), kind });
 }
 
+#[allow(dead_code)]
 fn index_module_files(ast: &syn::File, file: &Path, module_path: &str, module_files: &mut HashMap<String, PathBuf>) {
     let base_dir = file.parent().unwrap_or_else(|| Path::new(""));
     for item in &ast.items {
@@ -321,6 +322,7 @@ fn index_module_files(ast: &syn::File, file: &Path, module_path: &str, module_fi
     }
 }
 
+#[allow(dead_code)]
 fn module_path_attr_value(item_mod: &ItemMod) -> Option<String> {
     for attr in &item_mod.attrs {
         if !attr.path().is_ident("path") {
@@ -334,6 +336,7 @@ fn module_path_attr_value(item_mod: &ItemMod) -> Option<String> {
     None
 }
 
+#[allow(dead_code)]
 fn module_path_for_file(module_files: &HashMap<String, PathBuf>, source_root: &Path, file: &Path) -> Result<String> {
     let candidates = module_paths_for_file(module_files, file);
     if candidates.is_empty() {
@@ -342,6 +345,7 @@ fn module_path_for_file(module_files: &HashMap<String, PathBuf>, source_root: &P
     Ok(select_best_module_path(&candidates))
 }
 
+#[allow(dead_code)]
 fn module_paths_for_file(module_files: &HashMap<String, PathBuf>, file: &Path) -> Vec<String> {
     let file_canon = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
     module_files

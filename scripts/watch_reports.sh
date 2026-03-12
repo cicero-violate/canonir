@@ -4,9 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-TLOG="$WORKSPACE_ROOT/kernel/logs/graph.tlog"
-TLOG_IDX="$WORKSPACE_ROOT/kernel/logs/graph.tlog.idx"
-REPORTS_OUT="$WORKSPACE_ROOT/kernel/graph"
+TLOG="$WORKSPACE_ROOT/state/kernel_logs/kernel.tlog"
+TLOG_IDX="$WORKSPACE_ROOT/state/kernel_logs/kernel.tlog.idx"
+REPORTS_OUT="$WORKSPACE_ROOT/state/graph"
 REPORTS_BIN="$WORKSPACE_ROOT/target/debug/reports_from_tlog"
 DEBOUNCE=1  # seconds of silence before triggering
 

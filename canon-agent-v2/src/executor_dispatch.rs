@@ -3,7 +3,7 @@ use super::ExecutionDelta;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 type DeltaExecutorReadHandler = fn(&ExecutionDelta, &[PathBuf], usize) -> Result<(String, String), String>;
 type DeltaExecutorWriteHandler = fn(&ExecutionDelta, &[PathBuf], &[PathBuf], usize) -> Result<String, String>;

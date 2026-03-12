@@ -1,10 +1,8 @@
 use super::capability::capability_model_dominant_class;
-use super::capability::PipelineCapability;
 use super::capability_cost::CapabilityCostCapabilityCostTable;
 use super::config::{self, CapabilityConfig};
 use super::console;
 use super::dag;
-use super::decompose;
 use super::dispatch;
 use super::engine;
 use super::engine::TabManagerHandle;
@@ -16,7 +14,7 @@ use super::gpu_scheduler::driver::GpuScheduler;
 use super::graph_algo::{
     compute_graph_features_parallel, graph_analysis_compute_graph_signals,
     graph_analysis_edge_count, graph_analysis_normalize_features,
-    graph_analysis_planner_signals_for_graph, hash_graph_structure, score_node_utility,
+    graph_analysis_planner_signals_for_graph, hash_graph_structure,
     GraphFeatureVector,
 };
 use super::graph_maintenance::{self, GraphRepairMaintenanceCtx};
@@ -32,7 +30,7 @@ use super::repair_pipeline;
 use super::planner_state::{
     PlannerStage, PlannerStagePersist, PlannerTransition, PLANNER_TRANSITIONS,
 };
-use super::planner_update::{apply_graph_patch, GraphPatch, PlannerUpdateEdgeSpec};
+use super::planner_update::{apply_graph_patch, GraphPatch};
 use super::policy;
 use super::policy_engine;
 use super::policy_train::{self, PolicyTrainingPolicyDatasetEntry};
@@ -50,9 +48,7 @@ use crate::objectives;
 use crate::ws_server::WsBridge;
 use anyhow::Result;
 use futures_util::future::join_all;
-use serde::Serialize;
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -151,7 +147,7 @@ pub(crate) async fn run_execution_loop(
     role_rr: &tokio::sync::Mutex<HashMap<String, usize>>,
     tabs: &TabManagerHandle,
     cwd: &[PathBuf],
-    workspace_listing: &str,
+    _workspace_listing: &str,
     endpoint: &config::CapabilityConfigLlmEndpoint,
     exec_role: &str,
     policy: &config::CapabilityConfigCapabilityPolicy,
@@ -179,8 +175,8 @@ pub(crate) async fn run_execution_loop(
     let mut blocked_streak = 0u32;
     let mut state = SchedulerState::Running;
     let mut failures = Vec::new();
-    let mut repair_stats = RepairAttemptStats::default();
     for iter in 1..=max_iterations {
+        let mut repair_stats = RepairAttemptStats::default();
         let progress_before = graph
             .nodes
             .iter()
@@ -203,7 +199,6 @@ pub(crate) async fn run_execution_loop(
             completed_count, failed_count, graph.nodes.len()
         );
         exec_metrics.last_snapshot_written = false;
-        repair_stats = RepairAttemptStats::default();
         let mut ready_ids: Vec<String> = Vec::new();
         let mut features = compute_graph_features_parallel(graph);
         let mut step = ExecutionStep::CollectReady;
@@ -358,6 +353,7 @@ pub(crate) async fn run_execution_loop(
                                 return Ok((iter, failures));
                             }
                             next_event = ExecutionEvent::Blocked;
+                            let _ = next_event;
                             skip_iter = true;
                         }
                         _ => blocked_streak = 0,
@@ -564,6 +560,7 @@ pub(crate) async fn run_execution_loop(
                     } else {
                         ExecutionEvent::Blocked
                     };
+                    let _ = next_event;
                     let progress_after = graph
                         .nodes
                         .iter()
@@ -641,9 +638,8 @@ pub(crate) async fn run_planner_loop(
     let mut last_template_reuse = false;
     let mut last_template_score = 0.0;
     let mut last_template_selected: Option<String> = None;
-    let mut last_goal_similarity = 0.0;
+    let _last_goal_similarity = 0.0;
     let mut last_template_by_embedding = false;
-    let mut last_embedding_cache_hits = 0u64;
     let mut last_mutations = 0u64;
     let mut last_mutation_success = 0u64;
     let mut last_mutation_reward_delta = 0.0;
@@ -661,6 +657,7 @@ pub(crate) async fn run_planner_loop(
         PlannerStagePersist::save(path, phase, tick);
     }
     while !graph.all_completed() && iter < max_iterations {
+        let mut last_embedding_cache_hits = 0u64;
         eprintln!(
             "{}", console::console_format_phase("planner", & format!("iter={} nodes={}",
             iter, graph.nodes.len()))
@@ -733,7 +730,6 @@ pub(crate) async fn run_planner_loop(
         let mut reuse_goal: Option<String> = None;
         let mut reuse_goal_similarity = 0.0;
         let mut reuse_by_embedding = false;
-        last_embedding_cache_hits = 0;
         if matches!(phase, PlannerStage::ReuseTemplate) {
             if !run_planner {
                 let search = store
@@ -775,7 +771,7 @@ pub(crate) async fn run_planner_loop(
             last_template_reuse = reuse_decision;
             last_template_score = reuse_score;
             last_template_selected = reuse_goal.clone();
-            last_goal_similarity = reuse_goal_similarity;
+            let _ = reuse_goal_similarity;
             last_template_by_embedding = reuse_by_embedding && reuse_decision;
             reuse_decisions += 1;
             if !reuse_decision && !run_planner {
@@ -806,6 +802,7 @@ pub(crate) async fn run_planner_loop(
         let log_dir = Path::new(LOG_ROOT).join("planner_logs");
         let mut revision_rewrites = None;
         let mut last_update_counts = None;
+        let _ = last_update_counts;
         let mut update = None;
         let mut constraint_rejections = 0u64;
         let mut constraint_types: Vec<String> = Vec::new();
@@ -1036,7 +1033,7 @@ pub(crate) async fn run_planner_loop(
                 };
                 let attempts = retry_count.max(1);
                 for attempt in 1..=attempts {
-                    let allow_mismatch = attempt > 1 && planner.is_history_empty();
+                    let _allow_mismatch = attempt > 1 && planner.is_history_empty();
                     let raw = engine::module_call_llm_raw_with_retry_allow_mismatch(
                             bridge,
                             &endpoint.id,
@@ -1140,6 +1137,7 @@ pub(crate) async fn run_planner_loop(
                         continue;
                     }
                     planner_metrics.planner_failures += 1;
+                    let _ = planner_metrics.planner_failures;
                     return Err(e);
                 }
                 let candidate_sig = hash_graph_structure(&candidate_graph);
@@ -1196,6 +1194,7 @@ pub(crate) async fn run_planner_loop(
                         continue;
                     }
                     planner_metrics.planner_failures += 1;
+                    let _ = planner_metrics.planner_failures;
                     return Err(e);
                 }
                 if force_planner_expand && candidate.new_nodes.is_empty()

@@ -6,6 +6,7 @@ pub enum AgentTask {
     ExecuteNode(String),
     RepairGraph,
     MaintainGraph,
+    Shutdown,
 }
 
 #[derive(Clone)]

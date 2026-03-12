@@ -11,6 +11,7 @@ mod semantic_clustering;
 mod pattern_mining;
 mod invariant_generator;
 mod invariant_sat;
+mod kernel_invariants;
 pub mod consumer;
 
 pub use reports::generate_reports;

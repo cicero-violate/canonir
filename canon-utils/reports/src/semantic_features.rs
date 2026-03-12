@@ -1,5 +1,5 @@
 use crate::artifacts_loader::KernelGraph;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -21,6 +21,11 @@ pub fn extract_node_features(graph_dir: &Path, graph: &KernelGraph) -> Result<Ve
     let mut outdeg: HashMap<u32, u32> = HashMap::new();
     let mut edge_hist: HashMap<u32, [u32; EDGE_KIND_COUNT]> = HashMap::new();
     let mut neighbor_hist: HashMap<u32, [u32; 16]> = HashMap::new();
+    let id_to_kind: HashMap<u32, u8> = graph
+        .nodes
+        .iter()
+        .map(|n| (n.id, node_kind_code(&n.kind)))
+        .collect();
 
     for e in &graph.edges {
         *outdeg.entry(e.src).or_default() += 1;
@@ -37,12 +42,7 @@ pub fn extract_node_features(graph_dir: &Path, graph: &KernelGraph) -> Result<Ve
             }
             edge_hist.insert(e.src, h);
         }
-        let dst_kind = graph
-            .nodes
-            .iter()
-            .find(|n| n.id == e.dst)
-            .map(|n| node_kind_code(&n.kind))
-            .unwrap_or(0);
+        let dst_kind = id_to_kind.get(&e.dst).copied().unwrap_or(0);
         let entry = neighbor_hist.entry(e.src).or_insert([0u32; 16]);
         let k = dst_kind as usize;
         if k < entry.len() {

@@ -9,8 +9,7 @@ use super::failure_store::FailureStore;
 use super::graph_algo::{self, GraphAnalysis};
 use super::goal::GoalSpec;
 use super::planner_update::{
-    apply_graph_patch, GraphPatch, PlannerUpdateEdgeSpec, PlannerUpdateRetractSpec,
-    PlannerUpdateRewriteSpec,
+    apply_graph_patch, GraphPatch, PlannerUpdateEdgeSpec,
 };
 use crate::llm_provider::JsonExtractor;
 use crate::objectives;
@@ -39,6 +38,7 @@ pub(crate) struct PlannerControllerRepairReport {
     pub count: u64,
     pub ids: Vec<String>,
 }
+#[allow(dead_code)]
 pub struct PlannerController {
     endpoint_id: String,
     url: String,

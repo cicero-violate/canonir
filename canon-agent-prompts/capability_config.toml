@@ -50,6 +50,8 @@ embedding_dim = 64
 goal_drift_threshold = 0.6
 goal_refocus_strength = 0.5
 goal_refocus_rewrite_strength = 0.3
+reports_disable = true
+reports_skip_snapshot = true
 
 [llm]
 tab_cooldown_ms = 4000

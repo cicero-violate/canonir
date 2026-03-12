@@ -67,6 +67,6 @@ Each operation is one of:
 - `analysis/symbols.json` entries have: `symbol_id`, `new_name`, `kind`, `rename_safe`.
 - External trait impls are auto-marked unsafe and skipped.
 - Bulk mode runs `cargo check` and restores on errors.
-- Kernel tlog mode requires the latest `logs/graph.tlog` session to include module nodes. If you see "tlog has no module mapping", delete `kernel/logs/graph.tlog*` and rebuild the target crate so the final session contains modules.
+- Kernel tlog mode requires the latest `kernel_logs/kernel.tlog` session to include module nodes. If you see "tlog has no module mapping", delete `state/kernel_logs/kernel.tlog*` and rebuild the target crate so the final session contains modules.
 - When using the kernel tlog, invoke the binary directly (e.g. `/workspace/ai_sandbox/canon/target/debug/project_editor`) to avoid appending a new tlog session that may not include module symbols.
 - We can extend kernel capture to emit reference spans (call sites) into the tlog. That would make it closer to a full refactor tool and avoid manual cleanup.

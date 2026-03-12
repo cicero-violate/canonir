@@ -6,5 +6,5 @@ edition = "2024"
 [dependencies]
 log = "0.4"
 anyhow = "1"
-canon = { path = "../canon" }
+canon = { path = "../canonir" }
 algorithms = { path = "../algorithms" }

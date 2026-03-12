@@ -107,6 +107,10 @@ struct CapabilityConfigRawSystem {
     pub goal_refocus_strength: f64,
     #[serde(default = "capability_config_default_goal_refocus_rewrite_strength")]
     pub goal_refocus_rewrite_strength: f64,
+    #[serde(default = "capability_config_default_reports_disable")]
+    pub reports_disable: bool,
+    #[serde(default = "capability_config_default_reports_skip_snapshot")]
+    pub reports_skip_snapshot: bool,
 }
 #[derive(Debug, Deserialize, Default)]
 struct CapabilityConfigRawLlm {
@@ -269,6 +273,12 @@ fn capability_config_default_goal_refocus_strength() -> f64 {
 fn capability_config_default_goal_refocus_rewrite_strength() -> f64 {
     0.3
 }
+fn capability_config_default_reports_disable() -> bool {
+    false
+}
+fn capability_config_default_reports_skip_snapshot() -> bool {
+    false
+}
 fn capability_config_default_max_tabs() -> usize {
     1
 }
@@ -344,6 +354,8 @@ pub struct CapabilityConfig {
     pub goal_drift_threshold: f64,
     pub goal_refocus_strength: f64,
     pub goal_refocus_rewrite_strength: f64,
+    pub reports_disable: bool,
+    pub reports_skip_snapshot: bool,
     pub llm_endpoints: Vec<CapabilityConfigLlmEndpoint>,
     pub planner_endpoint: Option<CapabilityConfigLlmEndpoint>,
     pub llm_roles: HashMap<String, CapabilityConfigRawRoleConfig>,
@@ -426,11 +438,25 @@ impl CapabilityConfig {
             goal_drift_threshold: raw.system.goal_drift_threshold,
             goal_refocus_strength: raw.system.goal_refocus_strength,
             goal_refocus_rewrite_strength: raw.system.goal_refocus_rewrite_strength,
+            reports_disable: raw.system.reports_disable,
+            reports_skip_snapshot: raw.system.reports_skip_snapshot,
             llm_endpoints,
             planner_endpoint,
             llm_roles: raw.llm.roles,
             tab_cooldown_ms: raw.llm.tab_cooldown_ms,
         })
+    }
+    pub fn apply_env_flags(&self) {
+        unsafe {
+            std::env::set_var(
+                "CANON_REPORTS_DISABLE",
+                if self.reports_disable { "1" } else { "0" },
+            );
+            std::env::set_var(
+                "CANON_REPORTS_SKIP_SNAPSHOT",
+                if self.reports_skip_snapshot { "1" } else { "0" },
+            );
+        }
     }
     pub fn endpoint_by_id(&self, id: &str) -> Result<&CapabilityConfigLlmEndpoint> {
         self.llm_endpoints.iter().find(|e| e.id == id).ok_or_else(|| anyhow::anyhow!("no llm endpoint for id={}", id))

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-canon = { path = "../canon" }
+canon = { path = "../canonir" }
 canon-analyzer = { path = "../canon-analyzer" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

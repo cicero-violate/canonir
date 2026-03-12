@@ -26,7 +26,7 @@ pub struct ModuleNodeOutcome {
     pub status_update: Option<NodeStatus>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ModuleExecNodeResult {
+pub struct ModuleExecNodeResult {
     pub id: String,
     #[serde(default)]
     pub deltas: Vec<ExecutionDelta>,
@@ -34,18 +34,18 @@ struct ModuleExecNodeResult {
     pub rationale: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ModuleExecOutput {
+pub struct ModuleExecOutput {
     #[serde(default)]
     pub results: Vec<ModuleExecNodeResult>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ModuleVerifyUpdate {
+pub struct ModuleVerifyUpdate {
     pub id: String,
     pub status: NodeStatus,
     pub error: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ModuleVerifyOutput {
+pub struct ModuleVerifyOutput {
     #[serde(default)]
     pub updates: Vec<ModuleVerifyUpdate>,
 }
@@ -213,7 +213,7 @@ pub(crate) fn module_repair_node(
         "[logs] repair node={} attempt={} max_repairs={}", node_id, node.repair_attempts,
         max_repairs
     );
-    drop(node);
+    let _ = node;
     let rules: &[fn(
         &mut ExecutionGraph,
         &str,
@@ -799,8 +799,8 @@ async fn module_llm_call_retry(
     url: &str,
     stateful: bool,
     prompt: &str,
-    schema: &str,
-    input: &Value,
+    _schema: &str,
+    _input: &Value,
     role_schema: &str,
     phase: &str,
     node_id: Option<&str>,
@@ -888,10 +888,9 @@ fn module_apply_verification_output(
     let _ = graph.update_status(&node_id, NodeStatus::Running);
     if output.updates.is_empty() {
         let mut fail = false;
-        let mut budget = 1u32;
         if let Some(node) = graph.get_node_mut(&node_id) {
             node.readonly_fail_count += 1;
-            budget = node.budget.unwrap_or(1);
+            let budget = node.budget.unwrap_or(1);
             fail = node.readonly_fail_count >= budget;
             if fail {
                 node.error = Some("verify produced no updates".to_string());

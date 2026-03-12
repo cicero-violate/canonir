@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-TLOG="$WORKSPACE_ROOT/kernel/logs/graph.tlog"
-REPORTS_OUT="$WORKSPACE_ROOT/kernel/graph"
+TLOG="$WORKSPACE_ROOT/state/kernel_logs/kernel.tlog"
+REPORTS_OUT="$WORKSPACE_ROOT/state/graph"
 REPORTS_BIN="$WORKSPACE_ROOT/target/debug/reports_from_tlog"
 
 # ── build ────────────────────────────────────────────────────────────────────

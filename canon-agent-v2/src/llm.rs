@@ -1,7 +1,7 @@
 use super::endpoint_worker::{self, tab_manager_log_llm, tab_manager_now_ms, TabManagerHandle};
 use crate::llm_provider::JsonExtractor;
 use crate::ws_server::WsBridge;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::Value;
 use std::hash::{Hash, Hasher};
 pub async fn request_agent_json(
