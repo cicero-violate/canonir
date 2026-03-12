@@ -1,6 +1,6 @@
 [build]
 rustc-wrapper = "/workspace/ai_sandbox/canon_kernel/target/debug/canon_kernel"
-# rustflags = ["-Awarnings"]
+rustflags = ["-Awarnings"]
 
 [env]
 RUST_BACKTRACE = "1"
