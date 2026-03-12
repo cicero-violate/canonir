@@ -116,34 +116,6 @@ Output only structured invariants.
 For each invariant provide: 1. Math rule 2. Logical condition 3. Rust function fn must_<property>() -> bool Prefer correctness, safety, bounds, and structural rules.
 List every invariant explicitly
 
-## INVARIANT VALIDATION PROTOCOL
-
-All invariant checks must satisfy:
-
-1. Deterministic
-Validation results must not depend on runtime ordering or nondeterministic state.
-
-2. Total
-Every node, edge, span, file, and symbol must participate in validation.
-
-3. Composable
-Each invariant must be independently checkable.
-
-4. Fail Fast
-Invariant violations terminate execution immediately.
-
-5. Structural
-Validation must operate on UPG structures:
-
-- nodes.csv
-- edges.csv
-- files.txt
-- spans.bin
-- upg_invariants.json
-
-Heuristic recovery logic is forbidden.
-
-
 ## CODING STYLE
 
 1. **Branching**		: Minimize `if` / `match` / `loop`; replace with table dispatch, iterators, and predicate functions.  
