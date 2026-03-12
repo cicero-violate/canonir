@@ -3,6 +3,8 @@ rustc-wrapper = "/workspace/ai_sandbox/canon_kernel/target/debug/canon_kernel"
 rustflags = ["-Awarnings"]
 
 [env]
+RUST_BACKTRACE = "1"
+
 # CANON_REPORTS_TLOG = "/workspace/ai_sandbox/canon/kernel/logs/graph.tlog"
 # CANON_REPORTS_OUT = "/workspace/ai_sandbox/canon/kernel/graph"
 # CANON_KERNEL_TYPEGEN= "/path/to/canon_kernel_typegen"
