@@ -17,3 +17,4 @@ canon_tlog_replay = { package = "canon-tlog-replay", path = "../tlog-replay" }
 canon_event_consumers = { path = "../event-consumers" }
 canon_event_log = { package = "canon-event-log", path = "../event-log" }
 serde_json = { workspace = true }
+crossbeam-channel = { workspace = true }

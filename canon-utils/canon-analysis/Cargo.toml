@@ -6,10 +6,6 @@ edition = "2021"
 [lib]
 path = "src/lib.rs"
 
-[[bin]]
-name = "analysis-engine"
-path = "src/bin/analysis_engine.rs"
-
 [dependencies]
 anyhow = { workspace = true }
 canon_graph = { package = "canon-graph", path = "../canon-graph" }
@@ -24,6 +20,8 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 canon_event_log = { package = "canon-event-log", path = "../event-log" }
 
+[dev-dependencies]
+tempfile = { workspace = true }
 [features]
 default = ["cuda"]
 cuda = []

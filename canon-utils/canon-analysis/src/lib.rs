@@ -15,6 +15,8 @@ pub use repair::error_surface::{augment_with_errors, write_repair_surface};
 pub use report_pipeline::{generate_reports, generate_reports_from_tlog};
 pub use report_consumer::ReportEventConsumer;
 pub use workspace::aggregator::aggregate_workspace;
+pub use workspace::layout_verify::verify_reports_layout;
+pub use workspace::migrate::migrate_reports_layout;
 pub use report_types::*;
 pub use panic_types::PanicRecord;
 pub mod smt;

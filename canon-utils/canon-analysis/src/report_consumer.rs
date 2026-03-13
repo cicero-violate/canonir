@@ -3,6 +3,8 @@ use canon_event_log::{info, error as log_error};
 use std::path::PathBuf;
 
 use crate::report_pipeline::generate_reports_from_tlog;
+use crate::verify_reports_layout;
+use canon_types::ReportLayout;
 
 #[derive(Debug, Default)]
 pub struct ReportEventConsumer {
@@ -91,6 +93,21 @@ impl KernelEventConsumer for ReportEventConsumer {
                 "out": out_dir.display().to_string()
             }),
         );
+        if std::env::var("CANON_REPORTS_VERIFY_LAYOUT").ok().as_deref() == Some("1") {
+            let layout = ReportLayout::from_crate_root(out_dir.clone());
+            match verify_reports_layout(layout.root()) {
+                Ok(_) => info(
+                    "report_consumer",
+                    "verify_layout_ok",
+                    serde_json::json!({ "root": layout.root().display().to_string() }),
+                ),
+                Err(err) => log_error(
+                    "report_consumer",
+                    "verify_layout_failed",
+                    serde_json::json!({ "error": err.to_string(), "root": layout.root().display().to_string() }),
+                ),
+            }
+        }
         self.last_generated_tick = Some(delta.tick);
         self.in_flight = false;
     }

@@ -1,21 +1,33 @@
 use anyhow::Result;
-use canon_tlog_replay::{extract_kernel_event, read_any_events_from_path, AnyEvent};
-use canon_types::{EventDelta, EventMask, KernelEvent, KernelEventConsumer, KernelState};
+mod bus;
+
+use canon_tlog_replay::{extract_edit_event, extract_kernel_event, read_any_events_from_path, AnyEvent};
+use canon_types::{EventDelta, KernelEvent, KernelState, RuntimeConsumer, RuntimeEvent};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use bus::EventBus;
 
 pub struct EventRuntime {
     state: KernelState,
-    consumers: Vec<Box<dyn KernelEventConsumer>>,
+    bus: EventBus,
     next_id: u64,
     tick: u64,
 }
 
 impl EventRuntime {
-    pub fn new(consumers: Vec<Box<dyn KernelEventConsumer>>) -> Self {
+    pub fn new(consumers: Vec<Box<dyn RuntimeConsumer>>) -> Self {
+        let queue_size = std::env::var("CANON_EVENT_BUS_QUEUE")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(1024);
+        let mut bus = EventBus::new(queue_size);
+        for (idx, consumer) in consumers.into_iter().enumerate() {
+            bus.register(format!("consumer_{idx}"), consumer);
+        }
+        bus.log_registry();
         Self {
             state: empty_state(),
-            consumers,
+            bus,
             next_id: 1,
             tick: 0,
         }
@@ -42,6 +54,8 @@ impl EventRuntime {
             if let AnyEvent::Canon(canon) = event {
                 if let Some(kernel) = extract_kernel_event(canon) {
                     self.handle_kernel_event(kernel)?;
+                } else if let Some(edit) = extract_edit_event(canon) {
+                    self.bus.dispatch(RuntimeEvent::Edit(edit));
                 }
             }
             processed += 1;
@@ -70,12 +84,7 @@ impl EventRuntime {
         };
 
         apply_delta(&mut self.state, &delta)?;
-        let mask = EventMask::for_event(&delta.event);
-        for consumer in &mut self.consumers {
-            if consumer.mask().contains(mask) {
-                consumer.on_event(&delta, &self.state);
-            }
-        }
+        self.bus.dispatch(RuntimeEvent::Kernel { delta, state: self.state.clone() });
         Ok(())
     }
 }

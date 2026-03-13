@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::edit::ProjectEditor;
 use crate::structured::{EditOp, FieldMutation};
+use crate::tlog::publish_edit_event;
 
 #[derive(Deserialize)]
 pub struct ApiRequest {
@@ -62,7 +63,7 @@ fn api_unsupported(op: &str, detail: &str) -> ApiResult {
     api_result(op, "unsupported", Some(detail.to_string()), None)
 }
 
-fn queue_result(op: &str, res: Result<(), anyhow::Error>) -> ApiResult {
+fn publish_result(op: &str, res: Result<(), anyhow::Error>) -> ApiResult {
     match res {
         Ok(_) => api_queued(op),
         Err(e) => api_error(op, e),
@@ -82,8 +83,11 @@ fn handle_rename_symbol(editor: &mut ProjectEditor, old: &str, new: &str) -> Api
         Ok(v) => v,
         Err(e) => return e,
     };
-    let op = EditOp::MutateField { handle, mutation: FieldMutation::RenameIdent(new_ident) };
-    queue_result("RenameSymbol", editor.queue(old, op))
+    let op = EditOp::MutateField { handle, symbol_id: old.to_string(), mutation: FieldMutation::RenameIdent(new_ident) };
+    publish_result(
+        "RenameSymbol",
+        publish_edit_event(&editor.project_root, op.to_event(editor.project_root.to_string_lossy().as_ref())),
+    )
 }
 
 fn handle_move_symbol(editor: &mut ProjectEditor, symbol_id: &str, new_module_path: &str) -> ApiResult {
@@ -92,7 +96,10 @@ fn handle_move_symbol(editor: &mut ProjectEditor, symbol_id: &str, new_module_pa
         Err(e) => return e,
     };
     let op = EditOp::MoveSymbol { handle, symbol_id: symbol_id.to_string(), new_module_path: new_module_path.to_string(), new_crate: None };
-    queue_result("MoveSymbol", editor.queue(symbol_id, op))
+    publish_result(
+        "MoveSymbol",
+        publish_edit_event(&editor.project_root, op.to_event(editor.project_root.to_string_lossy().as_ref())),
+    )
 }
 
 fn handle_delete_symbol(editor: &mut ProjectEditor, symbol_id: &str) -> ApiResult {
@@ -101,7 +108,10 @@ fn handle_delete_symbol(editor: &mut ProjectEditor, symbol_id: &str) -> ApiResul
         Err(e) => return e,
     };
     let op = EditOp::DeleteSymbol { handle, symbol_id: symbol_id.to_string() };
-    queue_result("DeleteSymbol", editor.queue(symbol_id, op))
+    publish_result(
+        "DeleteSymbol",
+        publish_edit_event(&editor.project_root, op.to_event(editor.project_root.to_string_lossy().as_ref())),
+    )
 }
 
 pub fn dispatch(editor: &mut ProjectEditor, op: &ApiOp) -> ApiResult {
@@ -109,12 +119,20 @@ pub fn dispatch(editor: &mut ProjectEditor, op: &ApiOp) -> ApiResult {
         ApiOp::RenameSymbol { old, new } => handle_rename_symbol(editor, old, new),
         ApiOp::MoveSymbol { symbol_id, new_module_path } => handle_move_symbol(editor, symbol_id, new_module_path),
         ApiOp::RenameModule { old_module_path, new_name } => {
-            editor.queue_module_rename(old_module_path, new_name);
-            api_queued("RenameModule")
+            let event = canon_types::EditEvent::RenameModule {
+                project: editor.project_root.to_string_lossy().to_string(),
+                old: old_module_path.to_string(),
+                new: new_name.to_string(),
+            };
+            publish_result("RenameModule", publish_edit_event(&editor.project_root, event))
         }
         ApiOp::RenameDir { old_dir, new_dir } => {
-            editor.queue_directory_rename(&PathBuf::from(old_dir), &PathBuf::from(new_dir));
-            api_queued("RenameDir")
+            let event = canon_types::EditEvent::RenameDir {
+                project: editor.project_root.to_string_lossy().to_string(),
+                old: PathBuf::from(old_dir),
+                new: PathBuf::from(new_dir),
+            };
+            publish_result("RenameDir", publish_edit_event(&editor.project_root, event))
         }
         ApiOp::Help | ApiOp::ListOps => {
             let ops = vec![
@@ -189,8 +207,8 @@ pub fn dispatch(editor: &mut ProjectEditor, op: &ApiOp) -> ApiResult {
                         continue;
                     }
                 };
-                let op = EditOp::MutateField { handle, mutation: FieldMutation::RenameIdent(new_ident) };
-                if let Err(e) = editor.queue(old, op) {
+                let op = EditOp::MutateField { handle, symbol_id: old.to_string(), mutation: FieldMutation::RenameIdent(new_ident) };
+                if let Err(e) = publish_edit_event(&editor.project_root, op.to_event(editor.project_root.to_string_lossy().as_ref())) {
                     failures.push(format!("{old}: {e}"));
                 }
             }

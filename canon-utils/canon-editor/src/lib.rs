@@ -7,6 +7,8 @@ pub mod git;
 pub mod verify;
 pub mod query;
 pub mod symbol_index;
+pub mod tlog;
+pub mod consumer;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -14,6 +16,7 @@ use std::sync::Arc;
 use edit::ProjectEditor;
 use crate::symbol_index::SymbolIndex;
 use structured::{EditOp, FieldMutation};
+pub use consumer::EditConsumer;
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct RenameRunReport {
@@ -66,6 +69,7 @@ pub fn rename_symbol_pairs_with_session(
         let new_ident = new_symbol.rsplit("::").next().unwrap_or(new_symbol.as_str());
         let op = EditOp::MutateField {
             handle,
+            symbol_id: old_symbol.to_string(),
             mutation: FieldMutation::RenameIdent(new_ident.to_string()),
         };
         if let Err(err) = editor.queue(old_symbol, op) {

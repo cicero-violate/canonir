@@ -1,5 +1,5 @@
 use canon_tlog_writer::CanonEvent;
-use canon_types::KernelEvent;
+use canon_types::{EditEvent, KernelEvent};
 use std::fs;
 use std::io::{BufRead, Read};
 use std::path::Path;
@@ -33,11 +33,22 @@ pub fn parse_kernel_event_value(value: &serde_json::Value) -> Option<KernelEvent
     serde_json::from_value(value.clone()).ok()
 }
 
+pub fn parse_edit_event_value(value: &serde_json::Value) -> Option<EditEvent> {
+    serde_json::from_value(value.clone()).ok()
+}
+
 pub fn extract_kernel_event(canon: &CanonEvent) -> Option<KernelEvent> {
     if canon.kind != "kernel_event" {
         return None;
     }
     parse_kernel_event_value(&canon.payload)
+}
+
+pub fn extract_edit_event(canon: &CanonEvent) -> Option<EditEvent> {
+    if canon.kind != "edit_event" {
+        return None;
+    }
+    parse_edit_event_value(&canon.payload)
 }
 
 pub fn detect_tlog_format(path: &Path) -> TlogFormat {

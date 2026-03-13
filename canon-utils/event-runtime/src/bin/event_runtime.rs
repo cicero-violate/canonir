@@ -71,12 +71,8 @@ fn main() -> Result<()> {
             processed = 0;
         }
 
-        for event in events.iter().skip(processed) {
-            if let canon_tlog_replay::AnyEvent::Canon(canon) = event {
-                if let Some(kernel) = canon_tlog_replay::extract_kernel_event(canon) {
-                    runtime.handle_kernel_event(kernel)?;
-                }
-            }
+        if processed < events.len() {
+            runtime.process_events(&events[processed..])?;
         }
         processed = events.len();
 

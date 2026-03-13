@@ -16,6 +16,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 chrono.workspace = true
 canon = { path = "../../canonir" }
+canon_tlog_writer = { package = "canon-tlog-writer", path = "../tlog-writer" }
+canon_event_log = { package = "canon-event-log", path = "../event-log" }
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -132,7 +132,7 @@ impl ProjectEditor {
         } else {
             return Err(anyhow!("no handle found for {symbol_id}"));
         };
-        let op = EditOp::MutateField { handle, mutation };
+        let op = EditOp::MutateField { handle, symbol_id: norm.clone(), mutation };
         self.queue(&norm, op)
     }
 

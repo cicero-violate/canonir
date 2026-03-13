@@ -7,7 +7,7 @@ pub enum FieldMutation {
 
 #[derive(Debug, Clone)]
 pub enum EditOp {
-    MutateField { handle: SymbolHandle, mutation: FieldMutation },
+    MutateField { handle: SymbolHandle, symbol_id: String, mutation: FieldMutation },
     MoveSymbol { handle: SymbolHandle, symbol_id: String, new_module_path: String, new_crate: Option<String> },
     DeleteSymbol { handle: SymbolHandle, symbol_id: String },
 }
@@ -30,4 +30,29 @@ pub struct SymbolHandle {
     pub module_path: String,
     pub name: String,
     pub kind: SymbolKind,
+}
+
+impl EditOp {
+    pub fn to_event(self, project: &str) -> canon_types::EditEvent {
+        match self {
+            EditOp::MutateField { symbol_id, mutation, .. } => match mutation {
+                FieldMutation::RenameIdent(new_name) => canon_types::EditEvent::RenameSymbol {
+                    project: project.to_string(),
+                    old: symbol_id,
+                    new: new_name,
+                },
+            },
+            EditOp::MoveSymbol { symbol_id, new_module_path, .. } => {
+                canon_types::EditEvent::MoveSymbol {
+                    project: project.to_string(),
+                    symbol: symbol_id,
+                    module: new_module_path,
+                }
+            }
+            EditOp::DeleteSymbol { symbol_id, .. } => canon_types::EditEvent::DeleteSymbol {
+                project: project.to_string(),
+                symbol: symbol_id,
+            },
+        }
+    }
 }

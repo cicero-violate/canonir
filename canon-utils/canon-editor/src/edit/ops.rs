@@ -24,7 +24,7 @@ impl ProjectEditor {
             let mut remaining_ops = Vec::new();
             for op in ops {
                 match &op.op {
-                    EditOp::MutateField { handle: _, mutation } => match mutation {
+                    EditOp::MutateField { handle: _, mutation, .. } => match mutation {
                         crate::structured::FieldMutation::RenameIdent(new_name) => {
                             queued_renames.push((op.symbol_id.clone(), new_name.clone()));
                         }
@@ -95,7 +95,7 @@ impl ProjectEditor {
         for (_file, ops) in &self.changesets {
             for queued in ops {
                 match &queued.op {
-                    EditOp::MutateField { handle, mutation: crate::structured::FieldMutation::RenameIdent(new_name) } => {
+                    EditOp::MutateField { handle, mutation: crate::structured::FieldMutation::RenameIdent(new_name), .. } => {
                         let module = &handle.module_path;
                         let candidate = format!("{module}::{new_name}");
                         if self.registry.handles.contains_key(&candidate) {
