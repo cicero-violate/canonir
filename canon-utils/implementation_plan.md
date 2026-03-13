@@ -482,4 +482,4 @@ deterministic system replay
 
 ---
 
-If you want, I can also show the **advanced version used in high-scale event systems** where `.tlog` becomes a **structured binary event log (similar to Kafka / Temporal history logs)** which will make replay ~50–100x faster.
+
