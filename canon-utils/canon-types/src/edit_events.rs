@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-
+//
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EditEvent {
     RenameSymbol { project: String, old: String, new: String },
