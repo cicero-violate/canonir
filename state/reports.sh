@@ -1,4 +1,6 @@
-
+cd /workspace/ai_sandbox/canon_kernel
+cargo build
+cd /workspace/ai_sandbox/canon/state
 cargo clean
 rm -rf kernel_logs/*
 cargo build
