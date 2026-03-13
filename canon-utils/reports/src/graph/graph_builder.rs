@@ -1,23 +1,20 @@
-use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::artifacts_loader::{Edge as GraphEdge, KernelGraph as LoadedGraph, Node as GraphNode};
 use crate::graph::csr::build_csr_graph;
 use crate::graph::graph_types::{EdgeRow, NodeRow};
+use canon_types::TlogEvent;
 
 pub fn apply_event_to_graph(
-    value: Value,
+    event: TlogEvent,
     nodes: &mut Vec<NodeRow>,
     edges: &mut Vec<EdgeRow>,
     files: &mut Vec<String>,
     symbol_to_id: &mut HashMap<String, u32>,
     clear_on_session: bool,
 ) -> bool {
-    let Some(tag) = value.get("t").and_then(|v| v.as_str()) else {
-        return false;
-    };
-    match tag {
-        "SESSION" => {
+    match event {
+        TlogEvent::Session { .. } => {
             if clear_on_session {
                 nodes.clear();
                 edges.clear();
@@ -26,11 +23,12 @@ pub fn apply_event_to_graph(
             }
             true
         }
-        "N" | "NODE" | "NODE_UPDATE" => {
-            let sym = value.get("sym").and_then(|v| v.as_str()).unwrap_or("");
-            let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-            let file = value.get("file").and_then(|v| v.as_str()).unwrap_or("");
-            let line = value.get("line").and_then(|v| v.as_u64()).map(|v| v as u32);
+        TlogEvent::Node { sym, kind, file, line, .. }
+        | TlogEvent::NodeUpdate { sym, kind, file, line, .. } => {
+            let sym = sym.as_str();
+            let kind = kind.as_str();
+            let file = file.as_str();
+            let line = Some(line).filter(|v| *v > 0);
             if kind.is_empty() {
                 return false;
             }
@@ -77,10 +75,10 @@ pub fn apply_event_to_graph(
             }
             true
         }
-        "E" | "EDGE" => {
-            let src_sym = value.get("src").and_then(|v| v.as_str()).unwrap_or("");
-            let dst_sym = value.get("dst").and_then(|v| v.as_str()).unwrap_or("");
-            let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        TlogEvent::Edge { src, dst, kind } => {
+            let src_sym = src.as_str();
+            let dst_sym = dst.as_str();
+            let kind = kind.as_str();
             let Some(&src) = symbol_to_id.get(src_sym) else {
                 return false;
             };
@@ -94,17 +92,17 @@ pub fn apply_event_to_graph(
             });
             true
         }
-        "NODE_REMOVE" => {
-            let sym = value.get("sym").and_then(|v| v.as_str()).unwrap_or("");
+        TlogEvent::NodeRemove { sym } => {
+            let sym = sym.as_str();
             let Some(&id) = symbol_to_id.get(sym) else {
                 return false;
             };
             delete_node(id, nodes, edges, symbol_to_id)
         }
-        "EDGE_REMOVE" => {
-            let src_sym = value.get("src").and_then(|v| v.as_str()).unwrap_or("");
-            let dst_sym = value.get("dst").and_then(|v| v.as_str()).unwrap_or("");
-            let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        TlogEvent::EdgeRemove { src, dst, kind } => {
+            let src_sym = src.as_str();
+            let dst_sym = dst.as_str();
+            let kind = kind.as_str();
             let Some(&src) = symbol_to_id.get(src_sym) else {
                 return false;
             };
@@ -115,22 +113,22 @@ pub fn apply_event_to_graph(
             edges.retain(|e| !(e.src == src && e.dst == dst && e.kind == kind));
             before != edges.len()
         }
-        "F" | "FILE" => {
-            let path = value.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        TlogEvent::File { path } => {
+            let path = path.as_str();
             if !path.is_empty() && !files.iter().any(|p| p == path) {
                 files.push(path.to_string());
             }
             true
         }
-        "PANIC" | "WARNING" => {
-            // telemetry-only events; do not affect graph reconstruction
+        TlogEvent::Warning { .. }
+        | TlogEvent::Panic { .. }
+        | TlogEvent::Callsite { .. }
+        | TlogEvent::Symbol { .. }
+        | TlogEvent::Span { .. }
+        | TlogEvent::CompilationUnitFinished { .. } => {
+            // telemetry-only or non-graph events
             true
         }
-        "SYMBOL" | "SPAN" => {
-            // symbol metadata; handled separately by artifact writers
-            true
-        }
-        _ => false,
     }
 }
 

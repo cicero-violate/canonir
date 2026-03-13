@@ -1,6 +1,5 @@
 mod reports;
 mod artifacts_loader;
-pub mod replay;
 pub mod graph;
 pub mod artifacts;
 pub mod analysis;

@@ -3,18 +3,18 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use analysis_engine::anomalies::analyze_anomalies;
-use analysis_engine::duplicates::find_duplicates;
-use analysis_engine::emit::write_json;
-use analysis_engine::invariants::analyze_invariants;
-use analysis_engine::loader::load_dir;
-use analysis_engine::refactoring::analyze_refactoring;
-use analysis_engine::augment::augment_with_errors;
-use analysis_engine::smt::equivalence::check_equivalence;
-use analysis_engine::smt::invariants::prove_invariants;
-use analysis_engine::smt::reachability::check_repair_surface;
-use analysis_engine::smt::repair::build_repair_surface_smt;
-use analysis_engine::smt::SmtSession;
+use smt_analysis_engine::anomalies::analyze_anomalies;
+use smt_analysis_engine::duplicates::find_duplicates;
+use smt_analysis_engine::emit::write_json;
+use smt_analysis_engine::invariants::analyze_invariants;
+use smt_analysis_engine::loader::load_dir;
+use smt_analysis_engine::refactoring::analyze_refactoring;
+use smt_analysis_engine::augment::augment_with_errors;
+use smt_analysis_engine::smt::equivalence::check_equivalence;
+use smt_analysis_engine::smt::invariants::prove_invariants;
+use smt_analysis_engine::smt::reachability::check_repair_surface;
+use smt_analysis_engine::smt::repair::build_repair_surface_smt;
+use smt_analysis_engine::smt::SmtSession;
 
 #[derive(Debug)]
 struct Args {
@@ -134,4 +134,4 @@ fn main() -> Result<()> {
     }
     Ok(())
 }
-use analysis_engine::reports::generate_reports;
+use smt_analysis_engine::reports::generate_reports;

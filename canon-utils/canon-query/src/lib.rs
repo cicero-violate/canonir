@@ -1,9 +1,6 @@
 mod gpu;
 mod jsonpath;
 pub mod consumer;
-pub mod tlog;
-
-pub use tlog::{TlogReader, TlogRecord};
 pub use consumer::QueryConsumer;
 use gpu::{
     device_synchronize, kernel_combined_escape_carry_newline_count_index,

@@ -1,9 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use canon_query::TlogRecord;
-
-use super::session::AnalysisSession;
+use super::session::{AnalysisSession, GraphEdgeRecord};
 
 fn query_map<K, V>(map: &HashMap<K, V>, key: &K) -> Option<V>
 where
@@ -22,10 +20,10 @@ pub fn file_modules(session: &AnalysisSession, file: &Path) -> Vec<String> {
     query_map(&session.file_modules, &file.to_path_buf()).unwrap_or_default()
 }
 
-pub fn callers_of(session: &AnalysisSession, sym: &str) -> Result<Vec<TlogRecord>> {
+pub fn callers_of(session: &AnalysisSession, sym: &str) -> Result<Vec<GraphEdgeRecord>> {
     session.callers_of(sym)
 }
 
-pub fn edges_by_kind(session: &AnalysisSession, kind: &str) -> Result<Vec<TlogRecord>> {
+pub fn edges_by_kind(session: &AnalysisSession, kind: &str) -> Result<Vec<GraphEdgeRecord>> {
     session.edges_by_kind(kind)
 }

@@ -1,6 +1,6 @@
-use serde_json::Value;
+use canon_types::TlogEvent;
 
-pub fn parse_tlog_event(line: &str) -> Option<Value> {
+pub fn parse_tlog_event(line: &str) -> Option<TlogEvent> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return None;

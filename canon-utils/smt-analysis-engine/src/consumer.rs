@@ -17,7 +17,7 @@ impl KernelEventConsumer for SmtConsumer {
     }
 
     fn on_event(&mut self, delta: &EventDelta, _state: &KernelState) {
-        if let KernelEvent::EdgeDefined { .. } = &delta.op {
+        if let KernelEvent::EdgeDefined { .. } = &delta.event {
             self.edge_count += 1;
         }
     }

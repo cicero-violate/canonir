@@ -1,11 +1,11 @@
 use anyhow::Result;
-use serde_json::Value;
 use std::fs;
 use std::io::BufRead;
 use std::path::Path;
 
-use crate::replay::session_scan::find_last_session_offset;
-use crate::replay::tlog_reader::parse_tlog_event;
+use canon_tlog_replay::find_last_session_offset;
+use canon_tlog_replay::parse_tlog_event;
+use canon_types::TlogEvent;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TlogIntegrityReport {
@@ -88,7 +88,7 @@ pub fn write_tlog_integrity_report(tlog_path: &Path, reports_dir: &Path) -> Resu
 }
 
 fn apply_tlog_integrity_record(
-    value: &Value,
+    value: &TlogEvent,
     line_start: u64,
     idx_offset: &Option<u64>,
     session_count: &mut u64,
@@ -96,15 +96,12 @@ fn apply_tlog_integrity_record(
     session_offsets_monotonic: &mut bool,
     last_session_offset_seen: &mut Option<u64>,
 ) -> bool {
-    let Some(tag) = value.get("t").and_then(|v| v.as_str()) else {
-        return false;
-    };
-    if tag != "SESSION" {
+    let TlogEvent::Session { byte_offset, .. } = value else {
         return true;
-    }
+    };
     *session_count += 1;
-    let byte_offset = value.get("byte_offset").and_then(|v| v.as_u64());
-    if let Some(offset) = byte_offset {
+    let offset = *byte_offset;
+    if offset > 0 {
         if Some(offset) == *idx_offset {
             *last_session_offset_found = true;
         }

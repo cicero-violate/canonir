@@ -19,7 +19,7 @@ impl KernelEventConsumer for GraphConsumer {
     }
 
     fn on_event(&mut self, delta: &EventDelta, _state: &KernelState) {
-        match &delta.op {
+        match &delta.event {
             KernelEvent::NodeDefined { .. } => {
                 self.node_count += 1;
             }
@@ -29,6 +29,7 @@ impl KernelEventConsumer for GraphConsumer {
             KernelEvent::FileSeen { .. } => {
                 self.file_count += 1;
             }
+            _ => {}
         }
     }
 }

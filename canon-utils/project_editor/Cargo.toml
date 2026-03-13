@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow.workspace = true
-canon_query = { path = "../canon-query" }
+csv.workspace = true
 canon_types = { path = "../canon-types" }
 prettyplease.workspace = true
 proc-macro2.workspace = true

@@ -1,14 +1,15 @@
-use serde_json::Value;
 use std::fs;
 use std::io::BufRead;
 use std::path::Path;
 
-use crate::replay::tlog_reader::parse_tlog_event;
+use canon_types::TlogEvent;
+
+use crate::reader::parse_tlog_event;
 
 pub fn find_last_session_offset(tlog_path: &Path) -> Option<u64> {
     let idx_path = tlog_path.with_extension("tlog.idx");
     let data = fs::read_to_string(idx_path).ok()?;
-    let value: Value = serde_json::from_str(&data).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&data).ok()?;
     value.get("last_session_offset").and_then(|v| v.as_u64())
 }
 
@@ -31,7 +32,7 @@ pub fn find_last_graph_session_offset(tlog_path: &Path) -> Option<u64> {
                 if idx > 0 {
                     let (prefix, suffix) = slice.split_at(idx);
                     if let Some(record) = parse_tlog_event(prefix) {
-                        if matches!(record.get("t").and_then(|v| v.as_str()), Some("N") | Some("NODE") | Some("E") | Some("EDGE")) {
+                        if matches!(record, TlogEvent::Node { .. } | TlogEvent::Edge { .. }) {
                             current_has_graph = true;
                         }
                     }
@@ -41,8 +42,8 @@ pub fn find_last_graph_session_offset(tlog_path: &Path) -> Option<u64> {
                 }
             }
             if let Some(record) = parse_tlog_event(slice) {
-                match record.get("t").and_then(|v| v.as_str()) {
-                    Some("SESSION") => {
+                match record {
+                    TlogEvent::Session { .. } => {
                         if current_has_graph {
                             if let Some(off) = current_session_offset {
                                 last_with_graph = Some(off);
@@ -51,7 +52,7 @@ pub fn find_last_graph_session_offset(tlog_path: &Path) -> Option<u64> {
                         current_session_offset = Some(slice_offset);
                         current_has_graph = false;
                     }
-                    Some("N") | Some("NODE") | Some("E") | Some("EDGE") => {
+                    TlogEvent::Node { .. } | TlogEvent::Edge { .. } => {
                         current_has_graph = true;
                     }
                     _ => {}
@@ -85,9 +86,7 @@ pub fn session_contains_module_nodes(tlog_path: &Path) -> bool {
                 if idx > 0 {
                     let (prefix, suffix) = line.split_at(idx);
                     if let Some(record) = parse_tlog_event(prefix) {
-                        if matches!(record.get("t").and_then(|v| v.as_str()), Some("N") | Some("NODE"))
-                            && matches!(record.get("kind").and_then(|v| v.as_str()), Some("MODULE"))
-                        {
+                        if matches!(record, TlogEvent::Node { ref kind, .. } if kind == "MODULE") {
                             return true;
                         }
                     }
@@ -96,9 +95,7 @@ pub fn session_contains_module_nodes(tlog_path: &Path) -> bool {
                 }
             }
             if let Some(record) = parse_tlog_event(line) {
-                if matches!(record.get("t").and_then(|v| v.as_str()), Some("N") | Some("NODE"))
-                    && matches!(record.get("kind").and_then(|v| v.as_str()), Some("MODULE"))
-                {
+                if matches!(record, TlogEvent::Node { ref kind, .. } if kind == "MODULE") {
                     return true;
                 }
             }

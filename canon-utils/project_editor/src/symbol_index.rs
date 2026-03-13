@@ -1,9 +1,8 @@
 use anyhow::{anyhow, Result};
-use serde_json::Value;
 use canon_types::SpanRange;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 pub struct SymbolIndex {
@@ -19,26 +18,46 @@ pub struct SymbolIndex {
 }
 
 impl SymbolIndex {
-    pub fn from_tlog(tlog_path: &Path) -> Result<Self> {
-        let file = File::open(tlog_path)?;
-        let tlog_offset = file.metadata().map(|m| m.len()).unwrap_or(0);
-        let reader = BufReader::new(file);
+    pub fn from_reports(out_dir: &Path) -> Result<Self> {
+        let symbols_path = out_dir.join("symbols.json");
+        let spans_path = out_dir.join("symbol_spans.jsonl");
+        if !symbols_path.exists() || !spans_path.exists() {
+            return Err(anyhow!(
+                "reports artifacts not found in {}; run canon_reports first",
+                out_dir.display()
+            ));
+        }
+        let tlog_offset = symbols_path
+            .metadata()
+            .map(|m| m.len())
+            .unwrap_or(0)
+            .saturating_add(spans_path.metadata().map(|m| m.len()).unwrap_or(0));
+        let reader = BufReader::new(File::open(&spans_path)?);
         let mut span_index: HashMap<String, HashMap<PathBuf, Vec<SpanRange>>> = HashMap::new();
-        let mut symbol_kinds: HashMap<String, String> = HashMap::new();
+        let symbol_kinds: HashMap<String, String> = load_symbol_kinds(&symbols_path)?;
         let mut module_files: HashMap<String, PathBuf> = HashMap::new();
         let mut file_modules: HashMap<PathBuf, Vec<String>> = HashMap::new();
         let mut files: HashSet<PathBuf> = HashSet::new();
 
         for line in reader.lines() {
             let line = line?;
-            apply_tlog_line(
+            apply_span_line(
                 &line,
                 &mut span_index,
-                &mut symbol_kinds,
-                &mut module_files,
-                &mut file_modules,
                 &mut files,
             )?;
+        }
+
+        for (symbol_id, kind) in &symbol_kinds {
+            if kind != "MODULE" {
+                continue;
+            }
+            if let Some(file_map) = span_index.get(symbol_id) {
+                if let Some((file, _)) = file_map.iter().next() {
+                    module_files.insert(symbol_id.clone(), file.clone());
+                    file_modules.entry(file.clone()).or_default().push(symbol_id.clone());
+                }
+            }
         }
 
         let symbol_catalog = build_symbol_catalog(&symbol_kinds);
@@ -59,64 +78,60 @@ impl SymbolIndex {
     }
 
     pub fn build(project_root: &Path) -> Result<Self> {
-        let tlog_path = project_root.join("state/kernel_logs/kernel.tlog");
-        if !tlog_path.exists() {
-            return Err(anyhow!(
-                "kernel.tlog not found at {}; run canon_kernel first",
-                tlog_path.display()
-            ));
-        }
-        Self::from_tlog(&tlog_path)
+        let out_dir = reports_out_dir(project_root)?;
+        Self::from_reports(&out_dir)
     }
 
-    pub fn is_stale(&self, tlog_path: &Path) -> bool {
+    pub fn is_stale(&self, out_dir: &Path) -> bool {
         if self.tlog_offset == 0 {
             return false;
         }
-        tlog_path
+        let symbols_path = out_dir.join("symbols.json");
+        let spans_path = out_dir.join("symbol_spans.jsonl");
+        let current = symbols_path
             .metadata()
-            .map(|m| m.len() != self.tlog_offset)
-            .unwrap_or(true)
+            .map(|m| m.len())
+            .unwrap_or(0)
+            .saturating_add(spans_path.metadata().map(|m| m.len()).unwrap_or(0));
+        current != self.tlog_offset
     }
 
-    pub fn refresh_from_tlog(&mut self, tlog_path: &Path) -> Result<bool> {
-        let new_len = tlog_path.metadata().map(|m| m.len()).unwrap_or(0);
+    pub fn refresh_from_reports(&mut self, out_dir: &Path) -> Result<bool> {
+        let symbols_path = out_dir.join("symbols.json");
+        let spans_path = out_dir.join("symbol_spans.jsonl");
+        let new_len = symbols_path
+            .metadata()
+            .map(|m| m.len())
+            .unwrap_or(0)
+            .saturating_add(spans_path.metadata().map(|m| m.len()).unwrap_or(0));
         if new_len == self.tlog_offset {
             return Ok(false);
         }
 
-        let idx_path = tlog_path.with_extension("tlog.idx");
-        let last_session_offset = if idx_path.exists() {
-            read_tlog_index(&idx_path)?
-        } else {
-            0
-        };
-        if last_session_offset > new_len {
-            return Err(anyhow!(
-                "tlog index offset {} exceeds tlog length {}",
-                last_session_offset,
-                new_len
-            ));
-        }
-
-        let mut file = File::open(tlog_path)?;
-        file.seek(SeekFrom::Start(last_session_offset))?;
-        let reader = BufReader::new(file);
+        let reader = BufReader::new(File::open(&spans_path)?);
         self.span_index.clear();
-        self.symbol_kinds.clear();
+        self.symbol_kinds = load_symbol_kinds(&symbols_path)?;
         self.module_files.clear();
         self.file_modules.clear();
         self.files.clear();
         for line in reader.lines() {
             let line = line?;
-            apply_tlog_line(
+            apply_span_line(
                 &line,
                 &mut self.span_index,
-                &mut self.symbol_kinds,
-                &mut self.module_files,
-                &mut self.file_modules,
                 &mut self.files,
             )?;
+        }
+        for (symbol_id, kind) in &self.symbol_kinds {
+            if kind != "MODULE" {
+                continue;
+            }
+            if let Some(file_map) = self.span_index.get(symbol_id) {
+                if let Some((file, _)) = file_map.iter().next() {
+                    self.module_files.insert(symbol_id.clone(), file.clone());
+                    self.file_modules.entry(file.clone()).or_default().push(symbol_id.clone());
+                }
+            }
         }
         self.symbol_catalog = build_symbol_catalog(&self.symbol_kinds);
         dedup_spans(&mut self.span_index);
@@ -169,55 +184,60 @@ fn split_module_segments(path: &str) -> Vec<&str> {
     path.split("::").filter(|s| !s.is_empty()).collect()
 }
 
-fn apply_tlog_line(
+fn apply_span_line(
     line: &str,
     span_index: &mut HashMap<String, HashMap<PathBuf, Vec<SpanRange>>>,
-    symbol_kinds: &mut HashMap<String, String>,
-    module_files: &mut HashMap<String, PathBuf>,
-    file_modules: &mut HashMap<PathBuf, Vec<String>>,
     files: &mut HashSet<PathBuf>,
 ) -> Result<()> {
     if line.trim().is_empty() {
         return Ok(());
     }
-    let value: Value = serde_json::from_str(line)?;
-    let Some(tag) = value.get("t").and_then(|v| v.as_str()) else {
+    let value: serde_json::Value = serde_json::from_str(line)?;
+    let sym = value.get("symbol_id").and_then(|v| v.as_str()).unwrap_or("");
+    let file = value.get("file").and_then(|v| v.as_str()).unwrap_or("");
+    let lo = value.get("lo").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let hi = value.get("hi").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    if sym.is_empty() || file.is_empty() {
         return Ok(());
-    };
-    match tag {
-        "SESSION" => {
-            span_index.clear();
-            symbol_kinds.clear();
-            module_files.clear();
-            file_modules.clear();
-            files.clear();
-        }
-        "N" | "NODE" => {
-            let sym = value.get("sym").and_then(|v| v.as_str()).unwrap_or("");
-            let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-            let file = value.get("file").and_then(|v| v.as_str()).unwrap_or("");
-            let lo = value.get("lo").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            let hi = value.get("hi").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            if sym.is_empty() || file.is_empty() {
-                return Ok(());
-            }
-            let pb = PathBuf::from(file);
-            files.insert(pb.clone());
-            symbol_kinds.insert(sym.to_string(), kind.to_string());
-            span_index
-                .entry(sym.to_string())
-                .or_default()
-                .entry(pb.clone())
-                .or_default()
-                .push(SpanRange { lo, hi });
-            if kind == "MODULE" {
-                module_files.insert(sym.to_string(), pb.clone());
-                file_modules.entry(pb).or_default().push(sym.to_string());
-            }
-        }
-        _ => {}
     }
+    let pb = PathBuf::from(file);
+    files.insert(pb.clone());
+    span_index
+        .entry(sym.to_string())
+        .or_default()
+        .entry(pb.clone())
+        .or_default()
+        .push(SpanRange { lo, hi });
     Ok(())
+}
+
+fn reports_out_dir(project_root: &Path) -> Result<PathBuf> {
+    if let Ok(out) = std::env::var("CANON_REPORTS_OUT") {
+        return Ok(PathBuf::from(out));
+    }
+    Ok(project_root.join("state/reports_out/kernel"))
+}
+
+fn load_symbol_kinds(path: &Path) -> Result<HashMap<String, String>> {
+    let data = std::fs::read_to_string(path)?;
+    let value: serde_json::Value = serde_json::from_str(&data)?;
+    let mut out = HashMap::new();
+    if let Some(obj) = value.as_object() {
+        for (k, v) in obj {
+            if let Some(kind) = v.as_str() {
+                out.insert(k.clone(), kind.to_string());
+            }
+        }
+        return Ok(out);
+    }
+    if let Some(arr) = value.as_array() {
+        for item in arr {
+            let Some(symbol_id) = item.get("symbol_id").and_then(|v| v.as_str()) else { continue };
+            let Some(kind) = item.get("kind").and_then(|v| v.as_str()) else { continue };
+            out.insert(symbol_id.to_string(), kind.to_string());
+        }
+    }
+    Ok(out)
 }
 
 fn build_symbol_catalog(symbol_kinds: &HashMap<String, String>) -> Vec<(String, String)> {
@@ -234,13 +254,4 @@ fn dedup_spans(span_index: &mut HashMap<String, HashMap<PathBuf, Vec<SpanRange>>
             spans.dedup_by(|a, b| a.lo == b.lo && a.hi == b.hi);
         }
     }
-}
-
-fn read_tlog_index(idx_path: &Path) -> Result<u64> {
-    let content = std::fs::read_to_string(idx_path)?;
-    let value: Value = serde_json::from_str(&content)?;
-    Ok(value
-        .get("last_session_offset")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0))
 }

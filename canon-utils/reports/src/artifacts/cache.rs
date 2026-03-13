@@ -1,13 +1,13 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::graph::graph_builder::module_prefixes;
-use crate::replay::tlog_reader::parse_tlog_event;
+use canon_tlog_replay::parse_tlog_event;
+use canon_types::TlogEvent;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GraphCache {
@@ -75,21 +75,19 @@ pub fn update_graph_cache(tlog_path: &Path, reports_dir: &Path) -> Result<GraphC
     Ok(cache)
 }
 
-fn apply_cache_event(value: Value, cache: &mut GraphCache) {
-    let Some(tag) = value.get("t").and_then(|v| v.as_str()) else {
-        return;
-    };
-    match tag {
-        "SESSION" => {
+fn apply_cache_event(event: TlogEvent, cache: &mut GraphCache) {
+    match event {
+        TlogEvent::Session { .. } => {
             cache.module_files.clear();
             cache.type_nodes.clear();
             cache.type_edges.clear();
         }
-        "N" | "NODE" | "NODE_UPDATE" => {
-            let sym = value.get("sym").and_then(|v| v.as_str()).unwrap_or("");
-            let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-            let file = value.get("file").and_then(|v| v.as_str()).unwrap_or("");
-            let line = value.get("line").and_then(|v| v.as_u64()).map(|v| v as u32);
+        TlogEvent::Node { sym, kind, file, line, .. }
+        | TlogEvent::NodeUpdate { sym, kind, file, line, .. } => {
+            let sym = sym.as_str();
+            let kind = kind.as_str();
+            let file = file.as_str();
+            let line = Some(line).filter(|v| *v > 0);
             if sym.is_empty() && kind != "MODULE" {
                 return;
             }
@@ -114,8 +112,8 @@ fn apply_cache_event(value: Value, cache: &mut GraphCache) {
                 });
             }
         }
-        "NODE_REMOVE" => {
-            let sym = value.get("sym").and_then(|v| v.as_str()).unwrap_or("");
+        TlogEvent::NodeRemove { sym } => {
+            let sym = sym.as_str();
             if sym.is_empty() {
                 return;
             }
@@ -123,14 +121,14 @@ fn apply_cache_event(value: Value, cache: &mut GraphCache) {
             cache.type_nodes.remove(sym);
             cache.type_edges.retain(|edge| edge.src != sym && edge.dst != sym);
         }
-        "E" | "EDGE" => {
+        TlogEvent::Edge { src, dst, kind } => {
             let rel_kinds = ["HAS_FIELD", "HAS_METHOD", "IMPLEMENTS", "FOR_TYPE", "USES_TYPE", "BOUNDS"];
-            let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+            let kind = kind.as_str();
             if !rel_kinds.contains(&kind) {
                 return;
             }
-            let src_sym = value.get("src").and_then(|v| v.as_str()).unwrap_or("");
-            let dst_sym = value.get("dst").and_then(|v| v.as_str()).unwrap_or("");
+            let src_sym = src.as_str();
+            let dst_sym = dst.as_str();
             if src_sym.is_empty() || dst_sym.is_empty() {
                 return;
             }
@@ -140,14 +138,14 @@ fn apply_cache_event(value: Value, cache: &mut GraphCache) {
                 rel: kind.to_string(),
             });
         }
-        "EDGE_REMOVE" => {
+        TlogEvent::EdgeRemove { src, dst, kind } => {
             let rel_kinds = ["HAS_FIELD", "HAS_METHOD", "IMPLEMENTS", "FOR_TYPE", "USES_TYPE", "BOUNDS"];
-            let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+            let kind = kind.as_str();
             if !rel_kinds.contains(&kind) {
                 return;
             }
-            let src_sym = value.get("src").and_then(|v| v.as_str()).unwrap_or("");
-            let dst_sym = value.get("dst").and_then(|v| v.as_str()).unwrap_or("");
+            let src_sym = src.as_str();
+            let dst_sym = dst.as_str();
             if src_sym.is_empty() || dst_sym.is_empty() {
                 return;
             }

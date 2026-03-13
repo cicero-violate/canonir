@@ -9,6 +9,6 @@ path = "src/lib.rs"
 [dependencies]
 canon_graph = { path = "../graph" }
 canon_query = { path = "../canon-query" }
-analysis-engine = { path = "../smt-analysis-engine" }
+analysis-engine = { package = "smt-analysis-engine", path = "../smt-analysis-engine" }
 canon_reports = { path = "../reports" }
 canon_types = { path = "../canon-types" }

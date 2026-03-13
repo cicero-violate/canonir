@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{BufRead, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use rayon::prelude::*;
-use crate::artifacts::snapshot::{SnapshotMeta, save_graph_snapshot, write_snapshot_metadata};
+use canon_tlog_replay::{SnapshotMeta, save_graph_snapshot, write_snapshot_metadata};
 use crate::artifacts::cache::{update_graph_cache};
 use crate::artifacts::artifact_writer::{
     is_graph_bin_fresh,
@@ -48,9 +48,8 @@ use crate::health::system_health::{write_system_health_report, current_timestamp
 use crate::semantics::semantic_features::extract_node_features;
 use crate::semantics::semantic_signature::compute_signatures;
 use crate::semantics::semantic_clustering::cluster_dbscan_like;
-use crate::replay::tlog_reader::parse_tlog_event;
-use crate::replay::tlog_replay::replay_graph_from_tlog_incremental;
-use crate::replay::session_scan::{find_last_graph_session_offset, find_last_session_offset, session_contains_module_nodes};
+use canon_types::TlogEvent;
+use canon_tlog_replay::{parse_tlog_event, replay_graph_from_tlog_incremental, find_last_graph_session_offset, find_last_session_offset, session_contains_module_nodes};
 use std::io::BufReader;
 
 #[derive(Debug, Serialize, Default)]
@@ -195,14 +194,15 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
     let (mut nodes, mut edges, mut files) = if graph_bin_fresh || prefer_graph_bin {
         load_graph_bin(&graph_bin_path)?
     } else {
-        replay_graph_from_tlog_incremental(tlog_path, &snapshot_path, &meta_path)?
+        let replay = replay_graph_from_tlog_incremental(tlog_path, &snapshot_path, &meta_path)?;
+        (replay.nodes, replay.edges, replay.files)
     };
     if nodes.is_empty() && edges.is_empty() {
         if find_last_graph_session_offset(tlog_path).is_some() {
             let refreshed = replay_graph_from_tlog_incremental(tlog_path, &snapshot_path, &meta_path)?;
-            nodes = refreshed.0;
-            edges = refreshed.1;
-            files = refreshed.2;
+            nodes = refreshed.nodes;
+            edges = refreshed.edges;
+            files = refreshed.files;
             force_write_graph_bin = true;
         }
     }
@@ -690,11 +690,10 @@ fn write_callsite_resolution_from_tlog(tlog_path: &Path, reports_dir: &Path) -> 
         let Some(record) = parse_tlog_event(&line) else {
             continue;
         };
-        if record.get("t").and_then(|v| v.as_str()) != Some("CALLSITE") {
+        let TlogEvent::Callsite { kind, resolved } = record else {
             continue;
-        }
-        let kind = record.get("kind").and_then(|v| v.as_str()).unwrap_or("other");
-        let resolved = record.get("resolved").and_then(|v| v.as_bool()).unwrap_or(false);
+        };
+        let kind = kind.as_str();
         report.total_callsites += 1;
         if resolved {
             report.resolved += 1;
@@ -745,31 +744,23 @@ fn write_symbol_artifacts_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<
         let Some(record) = parse_tlog_event(&line) else {
             continue;
         };
-        let Some(tag) = record.get("t").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        match tag {
-            "SYMBOL" => {
-                let sym = record.get("sym").and_then(|v| v.as_str()).unwrap_or("");
-                let kind = record.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        match record {
+            TlogEvent::Symbol { sym, kind } => {
+                let sym = sym.as_str();
+                let kind = kind.as_str();
                 if !sym.is_empty() && !kind.is_empty() {
                     symbols.insert(sym.to_string(), kind.to_string());
                 }
             }
-            "SPAN" => {
-                let sym = record.get("sym").and_then(|v| v.as_str()).unwrap_or("");
+            TlogEvent::Span { sym, file, line, col, lo, hi } => {
+                let sym = sym.as_str();
                 if sym.is_empty() {
                     continue;
                 }
-                let file = record.get("file").and_then(|v| v.as_str()).unwrap_or("");
-                let line_no = record.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
-                let col = record.get("col").and_then(|v| v.as_u64()).unwrap_or(0);
-                let lo = record.get("lo").and_then(|v| v.as_u64()).unwrap_or(0);
-                let hi = record.get("hi").and_then(|v| v.as_u64()).unwrap_or(0);
                 let span = serde_json::json!({
                     "symbol_id": sym,
                     "file": file,
-                    "line": line_no,
+                    "line": line,
                     "col": col,
                     "lo": lo,
                     "hi": hi

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::graph::graph_types::{EdgeRow, NodeRow};
+use crate::graph_types::{EdgeRow, NodeRow};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotMeta {
@@ -153,13 +153,12 @@ pub fn save_graph_snapshot(
 }
 
 pub fn estimate_snapshot_size(snapshot: &KernelSnapshot) -> u64 {
-    // Conservative estimate to avoid rkyv relative-pointer overflow (i32 offset limit).
     let mut total = 0u64;
     for n in &snapshot.nodes {
         total = total.saturating_add(n.kind.len() as u64);
         total = total.saturating_add(n.symbol.len() as u64);
         total = total.saturating_add(n.file.len() as u64);
-        total = total.saturating_add(64); // per-node overhead
+        total = total.saturating_add(64);
     }
     for e in &snapshot.edges {
         total = total.saturating_add(e.src_symbol.len() as u64);
@@ -167,11 +166,11 @@ pub fn estimate_snapshot_size(snapshot: &KernelSnapshot) -> u64 {
         total = total.saturating_add(e.dst_symbol.len() as u64);
         total = total.saturating_add(e.dst_kind.len() as u64);
         total = total.saturating_add(e.kind.len() as u64);
-        total = total.saturating_add(64); // per-edge overhead
+        total = total.saturating_add(64);
     }
     for f in &snapshot.files {
         total = total.saturating_add(f.len() as u64);
-        total = total.saturating_add(16); // per-file overhead
+        total = total.saturating_add(16);
     }
     total
 }
@@ -205,45 +204,21 @@ pub fn snapshot_into_rows(
             kind: node.kind,
             symbol: node.symbol,
             file_id,
-            line: Some(node.line),
+            line: Some(node.line).filter(|v| *v > 0),
         });
     }
 
     let mut edges: Vec<EdgeRow> = Vec::new();
     for edge in snapshot.edges {
-        let src_id = key_to_id
-            .get(&(edge.src_symbol.clone(), edge.src_kind.clone()))
-            .copied()
-            .unwrap_or_else(|| {
-                let id = nodes.len() as u32;
-                key_to_id.insert((edge.src_symbol.clone(), edge.src_kind.clone()), id);
-                nodes.push(NodeRow {
-                    id,
-                    kind: edge.src_kind.clone(),
-                    symbol: edge.src_symbol.clone(),
-                    file_id: None,
-                    line: None,
-                });
-                id
-            });
-        let dst_id = key_to_id
-            .get(&(edge.dst_symbol.clone(), edge.dst_kind.clone()))
-            .copied()
-            .unwrap_or_else(|| {
-                let id = nodes.len() as u32;
-                key_to_id.insert((edge.dst_symbol.clone(), edge.dst_kind.clone()), id);
-                nodes.push(NodeRow {
-                    id,
-                    kind: edge.dst_kind.clone(),
-                    symbol: edge.dst_symbol.clone(),
-                    file_id: None,
-                    line: None,
-                });
-                id
-            });
+        let Some(&src) = key_to_id.get(&(edge.src_symbol, edge.src_kind)) else {
+            continue;
+        };
+        let Some(&dst) = key_to_id.get(&(edge.dst_symbol, edge.dst_kind)) else {
+            continue;
+        };
         edges.push(EdgeRow {
-            src: src_id,
-            dst: dst_id,
+            src,
+            dst,
             kind: edge.kind,
         });
     }
