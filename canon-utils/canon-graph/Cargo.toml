@@ -1,0 +1,19 @@
+[package]
+name = "canon-graph"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+name = "canon_graph"
+
+[dependencies]
+anyhow = { workspace = true }
+algorithms = { path = "../../algorithms" }
+canon_tlog_replay = { package = "canon-tlog-replay", path = "../tlog-replay" }
+canon_types = { path = "../canon-types" }
+csv = { workspace = true }
+memmap2 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+canon_event_log = { package = "canon-event-log", path = "../event-log" }

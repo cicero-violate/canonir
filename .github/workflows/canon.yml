@@ -20,3 +20,7 @@ jobs:
             --json /tmp/kernel.tlog \
             --binary /tmp/kernel.tlog.d \
             --stress
+      - name: Verify Reports Layout
+        run: |
+          cargo run --bin verify_reports_layout --manifest-path canon-utils/canon-analysis/Cargo.toml -- \
+            --reports-root /tmp/reports_out

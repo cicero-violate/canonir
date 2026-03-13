@@ -1,8 +1,6 @@
 [workspace]
 members = [
-  "canon-utils/reports",
   # "algorithms",
-
   "algorithms",
   "canon-capture",
   # "canon-mutation",
@@ -14,13 +12,14 @@ members = [
   # "canon-agent",
   "canon-agent-v2",
   "canon-supervisor",
-  "canon-utils/project_editor",
-  "canon-utils/smt-analysis-engine",
+  "canon-utils/canon-editor",
   "canon-utils/canon-query",
   "canon-utils/event-consumers",
   "canon-utils/event-runtime",
+  "canon-utils/event-log",
+  "canon-utils/canon-graph",
+  "canon-utils/canon-analysis",
   "canon-utils/canon-types",
-  "canon-utils/graph",
   "canon-utils/tlog-replay",
   "canon-utils/tlog-writer",
 ]

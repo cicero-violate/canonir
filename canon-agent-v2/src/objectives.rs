@@ -720,8 +720,7 @@ pub fn maybe_regenerate_reports_if_stale() -> bool {
     let lock_path = reports_dir.join(".regen.lock");
     let tlog = Path::new("/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog");
     let tlog_idx = Path::new("/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog.idx");
-    let reports_bin = Path::new("/workspace/ai_sandbox/canon/target/debug/reports_from_tlog");
-    if !tlog.exists() || !tlog_idx.exists() || !reports_bin.exists() {
+    if !tlog.exists() || !tlog_idx.exists() {
         return false;
     }
     let reports_mtime = reports_last_modified();
@@ -759,7 +758,6 @@ pub fn maybe_regenerate_reports_if_stale() -> bool {
     }
     let tlog = tlog.to_path_buf();
     let reports_dir = reports_dir.to_path_buf();
-    let reports_bin = reports_bin.to_path_buf();
     let lock_path = lock_path.to_path_buf();
     std::thread::spawn(move || {
         if let Some(mut fh) = lock_fh {
@@ -770,13 +768,7 @@ pub fn maybe_regenerate_reports_if_stale() -> bool {
                 current_timestamp()
             );
         }
-        let status = std::process::Command::new(reports_bin)
-            .arg("--tlog")
-            .arg(tlog)
-            .arg("--out")
-            .arg(reports_dir)
-            .status();
-        let _ = status;
+        let _ = (tlog, reports_dir);
         let _ = std::fs::remove_file(&lock_path);
         IN_FLIGHT.store(false, Ordering::SeqCst);
     });

@@ -1,11 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
 use canon_types::{EventDelta, EventMask, KernelEvent, KernelEventConsumer, KernelState};
+use canon_event_log::info;
+use serde_json::json;
 
 #[derive(Debug, Default)]
 pub struct QueryConsumer {
     pub symbols: HashMap<String, String>,
     pub files: HashSet<String>,
+    logged: bool,
 }
 
 impl QueryConsumer {
@@ -29,6 +32,17 @@ impl KernelEventConsumer for QueryConsumer {
             }
             KernelEvent::EdgeDefined { .. } => {}
             _ => {}
+        }
+        if !self.logged && (!self.symbols.is_empty() || !self.files.is_empty()) {
+            self.logged = true;
+            info(
+                "query_consumer",
+                "event_stream_started",
+                json!({
+                    "symbols": self.symbols.len(),
+                    "files": self.files.len()
+                }),
+            );
         }
     }
 }

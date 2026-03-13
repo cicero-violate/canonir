@@ -8,7 +8,6 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 canon_types = { path = "../canon-types" }
-canon_graph = { path = "../graph" }
 memmap2.workspace = true
 rkyv.workspace = true
 canon_tlog_writer = { package = "canon-tlog-writer", path = "../tlog-writer" }

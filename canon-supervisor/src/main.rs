@@ -91,26 +91,48 @@ fn handle_changes(
     process_map: &HashMap<String, Vec<ProcessConfig>>,
     manager: &mut ProcessManager,
 ) -> Result<()> {
-    for crate_name in affected {
-        if build_crate(crate_name).is_ok() {
-            if let Some(procs) = process_map.get(crate_name) {
-                for proc_cfg in procs {
-                    let log_root = proc_cfg
-                        .log_root
-                        .as_ref()
-                        .map(|p| Path::new(p))
-                        .or_else(|| {
-                            if matches!(proc_cfg.restart, RestartStrategy::Drain) {
-                                Some(Path::new("/workspace/ai_sandbox/canon/agent_logs/capability"))
-                            } else {
-                                None
-                            }
-                        });
-                    manager.restart(proc_cfg, log_root)?;
-                }
+    let mut to_build: HashSet<String> = affected.iter().cloned().collect();
+    for procs in process_map.values() {
+        for proc_cfg in procs {
+            if proc_cfg.depends_on.iter().any(|dep| affected.contains(dep)) {
+                let name = proc_cfg
+                    .crate_name
+                    .clone()
+                    .unwrap_or_else(|| proc_cfg.name.clone());
+                to_build.insert(name);
             }
-        } else {
+        }
+    }
+
+    for crate_name in &to_build {
+        if build_crate(crate_name).is_err() {
             eprintln!("[supervisor] build failed for {}, keeping running process", crate_name);
+        }
+    }
+
+    for procs in process_map.values() {
+        for proc_cfg in procs {
+            let proc_name = proc_cfg
+                .crate_name
+                .clone()
+                .unwrap_or_else(|| proc_cfg.name.clone());
+            let should_restart = to_build.contains(&proc_name)
+                || proc_cfg.depends_on.iter().any(|dep| affected.contains(dep));
+            if !should_restart {
+                continue;
+            }
+            let log_root = proc_cfg
+                .log_root
+                .as_ref()
+                .map(|p| Path::new(p))
+                .or_else(|| {
+                    if matches!(proc_cfg.restart, RestartStrategy::Drain) {
+                        Some(Path::new("/workspace/ai_sandbox/canon/agent_logs/capability"))
+                    } else {
+                        None
+                    }
+                });
+            manager.restart(proc_cfg, log_root)?;
         }
     }
     Ok(())

@@ -10,14 +10,14 @@ restart = "drain"
 drain_timeout_ms = 10000
 
 [[process]]
-name = "analysis-engine"
-bin  = "target/debug/analysis-engine"
-args = []
-restart = "kill"
-drain_timeout_ms = 3000
-
-[[process]]
 name = "canon-event-runtime"
 bin  = "target/debug/event_runtime"
 args = ["--tlog", "/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog.d"]
 restart = "kill"
+crate_name = "canon-event-runtime"
+depends_on = ["canon_event_consumers", "canon-analysis", "canon-graph", "canon_query"]
+[process.env]
+CANON_REPORTS_TLOG = "/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog.d"
+CANON_REPORTS_OUT  = "/workspace/ai_sandbox/canon/state/reports_out"
+CANON_EVENT_RUNTIME_LOG = "/workspace/ai_sandbox/canon/state/event_runtime.log"
+CANON_REPORTS_VERIFY_DETERMINISM = "1"

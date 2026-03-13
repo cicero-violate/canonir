@@ -19,3 +19,6 @@ pub use kernel_types_generated::*;
 
 mod event_consumer;
 pub use event_consumer::*;
+
+mod report_layout;
+pub use report_layout::ReportLayout;

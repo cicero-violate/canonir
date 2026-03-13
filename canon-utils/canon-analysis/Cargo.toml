@@ -1,0 +1,29 @@
+[package]
+name = "canon-analysis"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "analysis-engine"
+path = "src/bin/analysis_engine.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+canon_graph = { package = "canon-graph", path = "../canon-graph" }
+canon_types = { path = "../canon-types" }
+canon_tlog_replay = { package = "canon-tlog-replay", path = "../tlog-replay" }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+algorithms = { path = "../../algorithms" }
+z3 = { workspace = true, default-features = false }
+sha2 = { workspace = true }
+hex = { workspace = true }
+canon_event_log = { package = "canon-event-log", path = "../event-log" }
+
+[features]
+default = ["cuda"]
+cuda = []

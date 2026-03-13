@@ -14,4 +14,4 @@ cargo run \
   --bin reports_from_tlog \
   -- \
   --tlog /workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog \
-  --out /workspace/ai_sandbox/canon/state/reports_out/kernel 
+  --out /workspace/ai_sandbox/canon/state/reports_out/crates/canon_kernel 

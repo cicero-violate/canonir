@@ -33,6 +33,10 @@ pub struct ProcessConfig {
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
     pub restart: RestartStrategy,
     #[serde(default = "default_drain_timeout_ms")]
     pub drain_timeout_ms: u64,

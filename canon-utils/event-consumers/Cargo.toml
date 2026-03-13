@@ -7,8 +7,7 @@ edition = "2021"
 path = "src/lib.rs"
 
 [dependencies]
-canon_graph = { path = "../graph" }
+canon_graph = { package = "canon-graph", path = "../canon-graph" }
 canon_query = { path = "../canon-query" }
-analysis-engine = { package = "smt-analysis-engine", path = "../smt-analysis-engine" }
-canon_reports = { path = "../reports" }
+canon_analysis = { package = "canon-analysis", path = "../canon-analysis" }
 canon_types = { path = "../canon-types" }

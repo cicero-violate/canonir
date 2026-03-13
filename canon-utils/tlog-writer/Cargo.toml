@@ -10,3 +10,4 @@ serde_json.workspace = true
 crc32fast = "1"
 fs2 = "0.4"
 bincode = "1"
+canon_types = { path = "../canon-types" }

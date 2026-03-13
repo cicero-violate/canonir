@@ -21,6 +21,9 @@ impl ProcessManager {
     pub fn spawn(&mut self, cfg: &ProcessConfig, resume: bool) -> Result<()> {
         let mut cmd = Command::new(&cfg.bin);
         cmd.args(&cfg.args);
+        for (key, value) in &cfg.env {
+            cmd.env(key, value);
+        }
         if resume && !cfg.args.iter().any(|arg| arg == "--resume") {
             cmd.arg("--resume");
         }

@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use canon_event_consumers::build_consumers;
 use canon_event_runtime::EventRuntime;
 use canon_tlog_replay::detect_tlog_format;
+use canon_event_log::{info, warn, error};
 use std::env;
 use std::path::PathBuf;
 use std::thread::sleep;
@@ -37,10 +38,20 @@ fn main() -> Result<()> {
     let tlog_path = tlog_path.ok_or_else(|| anyhow!("missing --tlog"))?;
     let mut runtime = EventRuntime::new(build_consumers());
     let mut processed: usize = 0;
+    info(
+        "event_runtime",
+        "runtime_start",
+        serde_json::json!({ "tlog": tlog_path.display().to_string(), "once": once }),
+    );
 
     loop {
         if !tlog_path.exists() {
             if once {
+                error(
+                    "event_runtime",
+                    "tlog_missing",
+                    serde_json::json!({ "tlog": tlog_path.display().to_string() }),
+                );
                 return Err(anyhow!("tlog not found: {}", tlog_path.display()));
             }
             sleep(Duration::from_millis(poll_ms));
@@ -51,6 +62,11 @@ fn main() -> Result<()> {
 
         let events = canon_tlog_replay::read_any_events_from_path(&tlog_path)?;
         if events.len() < processed {
+            warn(
+                "event_runtime",
+                "event_count_reset",
+                serde_json::json!({ "prev": processed, "next": events.len() }),
+            );
             runtime.reset();
             processed = 0;
         }
