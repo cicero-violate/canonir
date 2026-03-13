@@ -6,8 +6,8 @@ use std::io::{BufRead, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::graph::graph_builder::module_prefixes;
-use canon_tlog_replay::parse_tlog_event;
-use canon_types::TlogEvent;
+use canon_tlog_replay::{extract_kernel_event, parse_any_event, read_any_events_from_path, AnyEvent};
+use canon_types::KernelEvent;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GraphCache {
@@ -41,50 +41,49 @@ pub fn update_graph_cache(tlog_path: &Path, reports_dir: &Path) -> Result<GraphC
         GraphCache::default()
     };
 
-    let mut file = fs::File::open(tlog_path)?;
-    let metadata_len = file.metadata()?.len();
-    if cache.last_offset > metadata_len {
-        cache.last_offset = 0;
-    }
-    file.seek(SeekFrom::Start(cache.last_offset))?;
-    let reader = std::io::BufReader::new(file);
-
-    for raw_line in reader.lines() {
-        let raw_line = raw_line?;
-        let mut line = raw_line.as_str();
-        loop {
-            if let Some(idx) = line.find("{\"t\":\"SESSION\"") {
-                if idx > 0 {
-                    let (prefix, suffix) = line.split_at(idx);
-                    if let Some(record) = parse_tlog_event(prefix) {
-                        apply_cache_event(record, &mut cache);
-                    }
-                    line = suffix;
-                    continue;
+    if tlog_path.is_dir() {
+        for event in read_any_events_from_path(tlog_path)? {
+            if let AnyEvent::Canon(canon) = event {
+                if let Some(kernel) = extract_kernel_event(&canon) {
+                    apply_cache_event(kernel, &mut cache);
                 }
             }
-            if let Some(record) = parse_tlog_event(line) {
-                apply_cache_event(record, &mut cache);
-            }
-            break;
         }
-    }
+    } else {
+        let mut file = fs::File::open(tlog_path)?;
+        let metadata_len = file.metadata()?.len();
+        if cache.last_offset > metadata_len {
+            cache.last_offset = 0;
+        }
+        file.seek(SeekFrom::Start(cache.last_offset))?;
+        let reader = std::io::BufReader::new(file);
 
-    cache.last_offset = metadata_len;
+        for raw_line in reader.lines() {
+            let raw_line = raw_line?;
+            if let Some(event) = parse_any_event(&raw_line) {
+                if let AnyEvent::Canon(canon) = event {
+                    if let Some(kernel) = extract_kernel_event(&canon) {
+                        apply_cache_event(kernel, &mut cache);
+                    }
+                }
+            }
+        }
+        cache.last_offset = metadata_len;
+    }
     fs::write(&cache_path, serde_json::to_string(&cache)?)?;
     Ok(cache)
 }
 
-fn apply_cache_event(event: TlogEvent, cache: &mut GraphCache) {
+fn apply_cache_event(event: KernelEvent, cache: &mut GraphCache) {
     match event {
-        TlogEvent::Session { .. } => {
+        KernelEvent::SessionStart { .. } => {
             cache.module_files.clear();
             cache.type_nodes.clear();
             cache.type_edges.clear();
         }
-        TlogEvent::Node { sym, kind, file, line, .. }
-        | TlogEvent::NodeUpdate { sym, kind, file, line, .. } => {
-            let sym = sym.as_str();
+        KernelEvent::NodeDefined { symbol, kind, file, line, .. }
+        | KernelEvent::NodeUpdated { symbol, kind, file, line, .. } => {
+            let sym = symbol.as_str();
             let kind = kind.as_str();
             let file = file.as_str();
             let line = Some(line).filter(|v| *v > 0);
@@ -112,8 +111,8 @@ fn apply_cache_event(event: TlogEvent, cache: &mut GraphCache) {
                 });
             }
         }
-        TlogEvent::NodeRemove { sym } => {
-            let sym = sym.as_str();
+        KernelEvent::NodeRemoved { symbol } => {
+            let sym = symbol.as_str();
             if sym.is_empty() {
                 return;
             }
@@ -121,7 +120,7 @@ fn apply_cache_event(event: TlogEvent, cache: &mut GraphCache) {
             cache.type_nodes.remove(sym);
             cache.type_edges.retain(|edge| edge.src != sym && edge.dst != sym);
         }
-        TlogEvent::Edge { src, dst, kind } => {
+        KernelEvent::EdgeDefined { src, dst, kind } => {
             let rel_kinds = ["HAS_FIELD", "HAS_METHOD", "IMPLEMENTS", "FOR_TYPE", "USES_TYPE", "BOUNDS"];
             let kind = kind.as_str();
             if !rel_kinds.contains(&kind) {
@@ -138,7 +137,7 @@ fn apply_cache_event(event: TlogEvent, cache: &mut GraphCache) {
                 rel: kind.to_string(),
             });
         }
-        TlogEvent::EdgeRemove { src, dst, kind } => {
+        KernelEvent::EdgeRemoved { src, dst, kind } => {
             let rel_kinds = ["HAS_FIELD", "HAS_METHOD", "IMPLEMENTS", "FOR_TYPE", "USES_TYPE", "BOUNDS"];
             let kind = kind.as_str();
             if !rel_kinds.contains(&kind) {

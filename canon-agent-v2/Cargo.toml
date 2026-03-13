@@ -21,6 +21,7 @@ canon_telemetry = { path = "../canon_telemetry" }
 algorithms = { path = "../algorithms" }
 rand.workspace = true
 rayon.workspace = true
+canon_tlog_writer = { package = "canon-tlog-writer", path = "../canon-utils/tlog-writer" }
 
 [features]
 default = ["cuda"]

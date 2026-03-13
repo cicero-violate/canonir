@@ -16,3 +16,6 @@ pub use types::{
 
 mod kernel_types_generated;
 pub use kernel_types_generated::*;
+
+mod event_consumer;
+pub use event_consumer::*;

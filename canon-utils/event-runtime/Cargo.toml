@@ -1,0 +1,18 @@
+[package]
+name = "canon-event-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "event_runtime"
+path = "src/bin/event_runtime.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+canon_types = { path = "../canon-types" }
+canon_tlog_replay = { package = "canon-tlog-replay", path = "../tlog-replay" }
+canon_event_consumers = { path = "../event-consumers" }
+serde_json = { workspace = true }

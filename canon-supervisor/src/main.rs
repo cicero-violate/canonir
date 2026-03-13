@@ -1,12 +1,13 @@
 mod builder;
 mod config;
 mod process;
+mod tlog;
 mod watcher;
 
 use crate::builder::build_crate;
 use crate::config::{load_config, write_default_config, ProcessConfig, RestartStrategy};
 use crate::process::ProcessManager;
-use crate::watcher::{affected_crates, start_watcher};
+use crate::watcher::{affected_crates, crate_for_path, start_watcher};
 use anyhow::Result;
 use signal_hook::consts::signal::{SIGINT, SIGTERM};
 use signal_hook::flag;
@@ -68,6 +69,16 @@ fn main() -> Result<()> {
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(_) => break,
             }
+        }
+        for path in &paths {
+            let crate_name = crate_for_path(path);
+            tlog::emit(
+                "file_change_detected",
+                serde_json::json!({
+                    "path": path.display().to_string(),
+                    "crate": crate_name,
+                }),
+            );
         }
         let affected = affected_crates(&paths);
         handle_changes(&affected, &process_map, &mut manager)?;

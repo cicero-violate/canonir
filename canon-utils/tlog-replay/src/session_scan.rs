@@ -2,11 +2,14 @@ use std::fs;
 use std::io::BufRead;
 use std::path::Path;
 
-use canon_types::TlogEvent;
+use canon_types::KernelEvent;
 
-use crate::reader::parse_tlog_event;
+use crate::reader::{extract_kernel_event, parse_any_event, AnyEvent};
 
 pub fn find_last_session_offset(tlog_path: &Path) -> Option<u64> {
+    if tlog_path.is_dir() {
+        return None;
+    }
     let idx_path = tlog_path.with_extension("tlog.idx");
     let data = fs::read_to_string(idx_path).ok()?;
     let value: serde_json::Value = serde_json::from_str(&data).ok()?;
@@ -14,6 +17,9 @@ pub fn find_last_session_offset(tlog_path: &Path) -> Option<u64> {
 }
 
 pub fn find_last_graph_session_offset(tlog_path: &Path) -> Option<u64> {
+    if tlog_path.is_dir() {
+        return None;
+    }
     let file = fs::File::open(tlog_path).ok()?;
     let reader = std::io::BufReader::new(file);
     let mut offset: u64 = 0;
@@ -25,40 +31,26 @@ pub fn find_last_graph_session_offset(tlog_path: &Path) -> Option<u64> {
         let raw_line = raw_line.ok()?;
         let line_start = offset;
         offset = offset.saturating_add(raw_line.as_bytes().len() as u64 + 1);
-        let mut slice = raw_line.as_str();
-        let mut slice_offset = line_start;
-        loop {
-            if let Some(idx) = slice.find("{\"t\":\"SESSION\"") {
-                if idx > 0 {
-                    let (prefix, suffix) = slice.split_at(idx);
-                    if let Some(record) = parse_tlog_event(prefix) {
-                        if matches!(record, TlogEvent::Node { .. } | TlogEvent::Edge { .. }) {
+        if let Some(event) = parse_any_event(&raw_line) {
+            if let AnyEvent::Canon(canon) = event {
+                if let Some(kernel) = extract_kernel_event(&canon) {
+                    match kernel {
+                        KernelEvent::SessionStart { .. } => {
+                            if current_has_graph {
+                                if let Some(off) = current_session_offset {
+                                    last_with_graph = Some(off);
+                                }
+                            }
+                            current_session_offset = Some(line_start);
+                            current_has_graph = false;
+                        }
+                        KernelEvent::NodeDefined { .. } | KernelEvent::EdgeDefined { .. } => {
                             current_has_graph = true;
                         }
+                        _ => {}
                     }
-                    slice_offset = slice_offset.saturating_add(idx as u64);
-                    slice = suffix;
-                    continue;
                 }
             }
-            if let Some(record) = parse_tlog_event(slice) {
-                match record {
-                    TlogEvent::Session { .. } => {
-                        if current_has_graph {
-                            if let Some(off) = current_session_offset {
-                                last_with_graph = Some(off);
-                            }
-                        }
-                        current_session_offset = Some(slice_offset);
-                        current_has_graph = false;
-                    }
-                    TlogEvent::Node { .. } | TlogEvent::Edge { .. } => {
-                        current_has_graph = true;
-                    }
-                    _ => {}
-                }
-            }
-            break;
         }
     }
     if current_has_graph {
@@ -70,6 +62,9 @@ pub fn find_last_graph_session_offset(tlog_path: &Path) -> Option<u64> {
 }
 
 pub fn session_contains_module_nodes(tlog_path: &Path) -> bool {
+    if tlog_path.is_dir() {
+        return false;
+    }
     let Ok(mut file) = fs::File::open(tlog_path) else {
         return false;
     };
@@ -80,26 +75,14 @@ pub fn session_contains_module_nodes(tlog_path: &Path) -> bool {
     }
     let reader = std::io::BufReader::new(file);
     for raw_line in reader.lines().flatten() {
-        let mut line = raw_line.as_str();
-        loop {
-            if let Some(idx) = line.find("{\"t\":\"SESSION\"") {
-                if idx > 0 {
-                    let (prefix, suffix) = line.split_at(idx);
-                    if let Some(record) = parse_tlog_event(prefix) {
-                        if matches!(record, TlogEvent::Node { ref kind, .. } if kind == "MODULE") {
-                            return true;
-                        }
+        if let Some(event) = parse_any_event(&raw_line) {
+            if let AnyEvent::Canon(canon) = event {
+                if let Some(kernel) = extract_kernel_event(&canon) {
+                    if matches!(kernel, KernelEvent::NodeDefined { ref kind, .. } if kind == "MODULE") {
+                        return true;
                     }
-                    line = suffix;
-                    continue;
                 }
             }
-            if let Some(record) = parse_tlog_event(line) {
-                if matches!(record, TlogEvent::Node { ref kind, .. } if kind == "MODULE") {
-                    return true;
-                }
-            }
-            break;
         }
     }
     false

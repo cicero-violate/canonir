@@ -39,6 +39,7 @@ pub mod scheduler_state;
 pub mod state_snapshot;
 pub mod tab_management;
 pub mod telemetry;
+pub mod tlog;
 pub mod template_index;
 pub mod template_mutation;
 pub mod templates;

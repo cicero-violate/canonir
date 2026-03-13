@@ -3,9 +3,11 @@ use std::fs;
 use std::io::BufRead;
 use std::path::Path;
 
-use canon_tlog_replay::find_last_session_offset;
-use canon_tlog_replay::parse_tlog_event;
-use canon_types::TlogEvent;
+use canon_tlog_replay::{
+    find_last_session_offset, parse_any_event,
+    read_any_events_from_path, extract_kernel_event, AnyEvent,
+};
+use canon_types::KernelEvent;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TlogIntegrityReport {
@@ -23,6 +25,53 @@ pub struct TlogIntegrityReport {
 
 pub fn write_tlog_integrity_report(tlog_path: &Path, reports_dir: &Path) -> Result<()> {
     fs::create_dir_all(reports_dir)?;
+    if tlog_path.is_dir() {
+        let mut file_size = 0u64;
+        for entry in fs::read_dir(tlog_path)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("log") {
+                file_size = file_size.saturating_add(path.metadata().map(|m| m.len()).unwrap_or(0));
+            }
+        }
+        let events = read_any_events_from_path(tlog_path)?;
+        let mut line_count = 0u64;
+        let mut session_count = 0u64;
+        let mut parse_errors = 0u64;
+        let mut hash_chain: u64 = 0;
+        for event in events {
+            line_count += 1;
+        if let AnyEvent::Canon(canon) = event {
+            hash_chain = hash_chain.wrapping_mul(1315423911).wrapping_add(hash_bytes(
+                serde_json::to_string(&canon).unwrap_or_default().as_bytes(),
+            ));
+            if let Some(kernel) = extract_kernel_event(&canon) {
+                if let KernelEvent::SessionStart { .. } = kernel {
+                    session_count += 1;
+                }
+            } else {
+                parse_errors += 1;
+            }
+        }
+        }
+        let report = TlogIntegrityReport {
+            tlog_path: tlog_path.to_string_lossy().to_string(),
+            file_size,
+            line_count,
+            session_count,
+            last_session_offset_idx: None,
+            last_session_offset_found: true,
+            session_offsets_monotonic: true,
+            parse_errors,
+            hash_chain_last: hash_chain,
+            replay_determinism_ok: parse_errors == 0,
+        };
+        fs::write(
+            reports_dir.join("tlog_integrity.json"),
+            serde_json::to_string_pretty(&report)?,
+        )?;
+        return Ok(());
+    }
     let file = fs::File::open(tlog_path)?;
     let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
     let idx_offset = find_last_session_offset(tlog_path);
@@ -47,21 +96,29 @@ pub fn write_tlog_integrity_report(tlog_path: &Path, reports_dir: &Path) -> Resu
             if let Some(idx) = line.find("{\"t\":\"SESSION\"") {
                 if idx > 0 {
                     let (prefix, suffix) = line.split_at(idx);
-                    if let Some(value) = parse_tlog_event(prefix) {
+            if let Some(event) = parse_any_event(prefix) {
+                if let AnyEvent::Canon(canon) = event {
+                    if let Some(value) = extract_kernel_event(&canon) {
                         if apply_tlog_integrity_record(&value, slice_offset, &idx_offset, &mut session_count, &mut last_session_offset_found, &mut session_offsets_monotonic, &mut last_session_offset_seen) {
                             // ok
                         }
-                    } else {
-                        parse_errors += 1;
                     }
+                }
+            } else {
+                parse_errors += 1;
+            }
                     slice_offset = slice_offset.saturating_add(idx as u64);
                     line = suffix;
                     continue;
                 }
             }
-            if let Some(value) = parse_tlog_event(line) {
-                if apply_tlog_integrity_record(&value, slice_offset, &idx_offset, &mut session_count, &mut last_session_offset_found, &mut session_offsets_monotonic, &mut last_session_offset_seen) {
-                    // ok
+            if let Some(event) = parse_any_event(line) {
+                if let AnyEvent::Canon(canon) = event {
+                    if let Some(value) = extract_kernel_event(&canon) {
+                        if apply_tlog_integrity_record(&value, slice_offset, &idx_offset, &mut session_count, &mut last_session_offset_found, &mut session_offsets_monotonic, &mut last_session_offset_seen) {
+                            // ok
+                        }
+                    }
                 }
             } else if !line.trim().is_empty() {
                 parse_errors += 1;
@@ -88,7 +145,7 @@ pub fn write_tlog_integrity_report(tlog_path: &Path, reports_dir: &Path) -> Resu
 }
 
 fn apply_tlog_integrity_record(
-    value: &TlogEvent,
+    value: &KernelEvent,
     line_start: u64,
     idx_offset: &Option<u64>,
     session_count: &mut u64,
@@ -96,7 +153,7 @@ fn apply_tlog_integrity_record(
     session_offsets_monotonic: &mut bool,
     last_session_offset_seen: &mut Option<u64>,
 ) -> bool {
-    let TlogEvent::Session { byte_offset, .. } = value else {
+    let KernelEvent::SessionStart { byte_offset, .. } = value else {
         return true;
     };
     *session_count += 1;

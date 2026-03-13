@@ -1,6 +1,7 @@
 use super::capability::{capability_model_assert_class_disjoint, PipelineCapability};
 use super::dag::{ExecutionGraph, ExecutionNode, NodeStatus};
 use super::decompose::DecomposeTaskSpec;
+use crate::tlog;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -31,6 +32,19 @@ pub struct GraphPatch {
     pub rewrite_nodes: Vec<PlannerUpdateRewriteSpec>,
 }
 pub fn apply_graph_patch(graph: &mut ExecutionGraph, update: GraphPatch) -> Result<()> {
+    let new_nodes_specs = update.new_nodes.clone();
+    let new_edges_specs = update.new_edges.clone();
+    let retract_specs = update.retract_nodes.clone();
+    let rewrite_specs = update.rewrite_nodes.clone();
+    tlog::emit(
+        "graph_patch",
+        serde_json::json!({
+            "new_nodes": new_nodes_specs.iter().map(|n| n.id.clone()).collect::<Vec<_>>(),
+            "new_edges": new_edges_specs.iter().map(|e| serde_json::json!({"from": e.from, "to": e.to})).collect::<Vec<_>>(),
+            "retract_nodes": retract_specs.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
+            "rewrite_nodes": rewrite_specs.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
+        }),
+    );
     let retract_ids: HashSet<String> = update
         .retract_nodes
         .into_iter()
@@ -59,6 +73,22 @@ pub fn apply_graph_patch(graph: &mut ExecutionGraph, update: GraphPatch) -> Resu
         }
     }
     let existing: HashSet<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
+    for spec in &new_nodes_specs {
+        if !existing.contains(&spec.id) {
+            tlog::emit(
+                "task_created",
+                serde_json::json!({
+                    "id": spec.id,
+                    "description": spec.description,
+                    "deps": spec.deps,
+                    "node_type": spec.node_type,
+                    "capabilities": spec.required_capabilities,
+                    "priority": spec.priority,
+                    "budget": spec.budget,
+                }),
+            );
+        }
+    }
     graph.nodes.extend(update.new_nodes.into_iter().filter(|s| !existing.contains(&s.id)).map(|spec| ExecutionNode {
         id: spec.id,
         description: spec.description,

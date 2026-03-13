@@ -2,8 +2,13 @@ use anyhow::Result;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::thread;
+use crate::tlog;
 
 pub fn build_crate(crate_name: &str) -> Result<()> {
+    tlog::emit(
+        "build_started",
+        serde_json::json!({ "crate": crate_name }),
+    );
     let mut child = Command::new("cargo")
         .arg("build")
         .arg("-p")
@@ -52,8 +57,16 @@ pub fn build_crate(crate_name: &str) -> Result<()> {
         let _ = handle.join();
     }
     if status.success() {
+        tlog::emit(
+            "build_completed",
+            serde_json::json!({ "crate": crate_name, "status": "success" }),
+        );
         Ok(())
     } else {
+        tlog::emit(
+            "build_completed",
+            serde_json::json!({ "crate": crate_name, "status": "failure", "code": status.code() }),
+        );
         anyhow::bail!("build failed for {}", crate_name)
     }
 }

@@ -11,3 +11,5 @@ canon_types = { path = "../canon-types" }
 canon_graph = { path = "../graph" }
 memmap2.workspace = true
 rkyv.workspace = true
+canon_tlog_writer = { package = "canon-tlog-writer", path = "../tlog-writer" }
+crc32fast = "1"

@@ -2,15 +2,42 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum KernelEvent {
+    SessionStart {
+        project: String,
+        #[serde(default)]
+        schema: u64,
+        #[serde(default)]
+        byte_offset: u64,
+    },
     NodeDefined {
         symbol: String,
         kind: String,
+        #[serde(default)]
+        file: String,
+        #[serde(default)]
+        line: u32,
+        #[serde(default)]
+        col: u32,
+        #[serde(default)]
+        lo: u32,
+        #[serde(default)]
+        hi: u32,
     },
     NodeUpdated {
         symbol: String,
         kind: String,
+        #[serde(default)]
+        file: String,
+        #[serde(default)]
+        line: u32,
+        #[serde(default)]
+        col: u32,
+        #[serde(default)]
+        lo: u32,
+        #[serde(default)]
+        hi: u32,
     },
     NodeRemoved {
         symbol: String,
@@ -28,101 +55,16 @@ pub enum KernelEvent {
     FileSeen {
         path: String,
     },
-    PanicCaptured {
-        def_id: String,
-        message: String,
-    },
-    WarningCaptured {
-        message: String,
-    },
-    SessionStart {
-        project: String,
-        schema: u64,
-    },
-    CompilationUnitFinished {
-        crate_name: String,
-    },
-    InvariantViolation {
-        message: String,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-#[serde(tag = "t")]
-pub enum TlogEvent {
-    #[serde(rename = "SESSION")]
-    Session {
-        ts: u64,
-        project: String,
-        #[serde(default)]
-        schema: u64,
-        #[serde(default)]
-        byte_offset: u64,
-    },
-    #[serde(rename = "NODE", alias = "N")]
-    Node {
-        sym: String,
-        kind: String,
-        #[serde(default)]
-        file: String,
-        #[serde(default)]
-        line: u32,
-        #[serde(default)]
-        col: u32,
-        #[serde(default)]
-        lo: u32,
-        #[serde(default)]
-        hi: u32,
-    },
-    #[serde(rename = "NODE_UPDATE")]
-    NodeUpdate {
-        sym: String,
-        kind: String,
-        #[serde(default)]
-        file: String,
-        #[serde(default)]
-        line: u32,
-        #[serde(default)]
-        col: u32,
-        #[serde(default)]
-        lo: u32,
-        #[serde(default)]
-        hi: u32,
-    },
-    #[serde(rename = "NODE_REMOVE")]
-    NodeRemove {
-        sym: String,
-    },
-    #[serde(rename = "EDGE", alias = "E")]
-    Edge {
-        src: String,
-        dst: String,
-        kind: String,
-    },
-    #[serde(rename = "EDGE_REMOVE")]
-    EdgeRemove {
-        src: String,
-        dst: String,
-        kind: String,
-    },
-    #[serde(rename = "FILE", alias = "F")]
-    File {
-        path: String,
-    },
-    #[serde(rename = "CALLSITE")]
-    Callsite {
+    CallsiteObserved {
         kind: String,
         resolved: bool,
     },
-    #[serde(rename = "SYMBOL")]
-    Symbol {
-        sym: String,
+    SymbolDefined {
+        symbol: String,
         kind: String,
     },
-    #[serde(rename = "SPAN")]
-    Span {
-        sym: String,
+    SpanDefined {
+        symbol: String,
         #[serde(default)]
         file: String,
         #[serde(default)]
@@ -134,12 +76,7 @@ pub enum TlogEvent {
         #[serde(default)]
         hi: u32,
     },
-    #[serde(rename = "WARNING")]
-    Warning {
-        msg: String,
-    },
-    #[serde(rename = "PANIC")]
-    Panic {
+    PanicCaptured {
         def_id: String,
         message: String,
         #[serde(default)]
@@ -153,10 +90,14 @@ pub enum TlogEvent {
         #[serde(default)]
         frames: Vec<PanicFrame>,
     },
-    #[serde(rename = "COMPILATION_UNIT_FINISHED")]
+    WarningCaptured {
+        message: String,
+    },
     CompilationUnitFinished {
-        #[serde(rename = "crate")]
         crate_name: String,
+    },
+    InvariantViolation {
+        message: String,
     },
 }
 
@@ -165,76 +106,6 @@ pub struct EventDelta {
     pub id: u64,
     pub tick: u64,
     pub event: KernelEvent,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EventMask(u16);
-
-impl EventMask {
-    pub const NONE: EventMask = EventMask(0);
-    pub const NODE_DEFINED: EventMask = EventMask(1 << 0);
-    pub const EDGE_DEFINED: EventMask = EventMask(1 << 1);
-    pub const FILE_SEEN: EventMask = EventMask(1 << 2);
-    pub const NODE_UPDATED: EventMask = EventMask(1 << 3);
-    pub const NODE_REMOVED: EventMask = EventMask(1 << 4);
-    pub const EDGE_REMOVED: EventMask = EventMask(1 << 5);
-    pub const PANIC_CAPTURED: EventMask = EventMask(1 << 6);
-    pub const WARNING_CAPTURED: EventMask = EventMask(1 << 7);
-    pub const SESSION_START: EventMask = EventMask(1 << 8);
-    pub const COMPILATION_UNIT_FINISHED: EventMask = EventMask(1 << 9);
-    pub const INVARIANT_VIOLATION: EventMask = EventMask(1 << 10);
-    pub const ALL: EventMask = EventMask(
-        Self::NODE_DEFINED.0
-            | Self::EDGE_DEFINED.0
-            | Self::FILE_SEEN.0
-            | Self::NODE_UPDATED.0
-            | Self::NODE_REMOVED.0
-            | Self::EDGE_REMOVED.0
-            | Self::PANIC_CAPTURED.0
-            | Self::WARNING_CAPTURED.0
-            | Self::SESSION_START.0
-            | Self::COMPILATION_UNIT_FINISHED.0
-            | Self::INVARIANT_VIOLATION.0,
-    );
-
-    pub fn contains(self, other: EventMask) -> bool {
-        (self.0 & other.0) == other.0
-    }
-
-    pub fn for_event(event: &KernelEvent) -> EventMask {
-        match event {
-            KernelEvent::NodeDefined { .. } => Self::NODE_DEFINED,
-            KernelEvent::NodeUpdated { .. } => Self::NODE_UPDATED,
-            KernelEvent::NodeRemoved { .. } => Self::NODE_REMOVED,
-            KernelEvent::EdgeDefined { .. } => Self::EDGE_DEFINED,
-            KernelEvent::EdgeRemoved { .. } => Self::EDGE_REMOVED,
-            KernelEvent::FileSeen { .. } => Self::FILE_SEEN,
-            KernelEvent::PanicCaptured { .. } => Self::PANIC_CAPTURED,
-            KernelEvent::WarningCaptured { .. } => Self::WARNING_CAPTURED,
-            KernelEvent::SessionStart { .. } => Self::SESSION_START,
-            KernelEvent::CompilationUnitFinished { .. } => Self::COMPILATION_UNIT_FINISHED,
-            KernelEvent::InvariantViolation { .. } => Self::INVARIANT_VIOLATION,
-        }
-    }
-}
-
-impl std::ops::BitOr for EventMask {
-    type Output = EventMask;
-
-    fn bitor(self, rhs: EventMask) -> EventMask {
-        EventMask(self.0 | rhs.0)
-    }
-}
-
-impl std::ops::BitOrAssign for EventMask {
-    fn bitor_assign(&mut self, rhs: EventMask) {
-        self.0 |= rhs.0;
-    }
-}
-
-pub trait KernelEventConsumer: Send + Sync {
-    fn mask(&self) -> EventMask;
-    fn on_event(&mut self, delta: &EventDelta, state: &KernelState);
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -258,14 +129,12 @@ pub struct KernelState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct PanicFrame {
     pub frame_index: usize,
     pub symbols: Vec<PanicSymbol>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct PanicSymbol {
     pub symbol: String,
     pub file: Option<String>,

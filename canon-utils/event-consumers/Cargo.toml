@@ -1,5 +1,5 @@
 [package]
-name = "canon_kernel_consumers"
+name = "canon_event_consumers"
 version = "0.1.0"
 edition = "2021"
 

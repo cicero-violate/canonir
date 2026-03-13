@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::io::{BufRead, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use rayon::prelude::*;
 use canon_tlog_replay::{SnapshotMeta, save_graph_snapshot, write_snapshot_metadata};
@@ -48,9 +48,8 @@ use crate::health::system_health::{write_system_health_report, current_timestamp
 use crate::semantics::semantic_features::extract_node_features;
 use crate::semantics::semantic_signature::compute_signatures;
 use crate::semantics::semantic_clustering::cluster_dbscan_like;
-use canon_types::TlogEvent;
-use canon_tlog_replay::{parse_tlog_event, replay_graph_from_tlog_incremental, find_last_graph_session_offset, find_last_session_offset, session_contains_module_nodes};
-use std::io::BufReader;
+use canon_types::KernelEvent;
+use canon_tlog_replay::{extract_kernel_event, read_any_events_from_path, replay_graph_from_tlog_incremental, find_last_graph_session_offset, session_contains_module_nodes};
 
 #[derive(Debug, Serialize, Default)]
 struct CallsiteResolutionReport {
@@ -671,29 +670,18 @@ fn write_missing_report_placeholders(
 
 
 fn write_callsite_resolution_from_tlog(tlog_path: &Path, reports_dir: &Path) -> Result<()> {
-    let offset = find_last_graph_session_offset(tlog_path)
-        .or_else(|| find_last_session_offset(tlog_path))
-        .unwrap_or(0);
-    let file = fs::File::open(tlog_path)?;
-    let mut reader = BufReader::new(file);
-    if offset > 0 {
-        reader.seek(SeekFrom::Start(offset))?;
-    }
     let mut report = CallsiteResolutionReport::default();
-    let mut line = String::new();
-    loop {
-        line.clear();
-        let bytes = reader.read_line(&mut line)?;
-        if bytes == 0 {
-            break;
-        }
-        let Some(record) = parse_tlog_event(&line) else {
+    for event in read_any_events_from_path(tlog_path)? {
+        let canon = match event {
+            canon_tlog_replay::AnyEvent::Canon(canon) => canon,
+            _ => continue,
+        };
+        let Some(kernel) = extract_kernel_event(&canon) else {
             continue;
         };
-        let TlogEvent::Callsite { kind, resolved } = record else {
+        let KernelEvent::CallsiteObserved { kind, resolved } = kernel else {
             continue;
         };
-        let kind = kind.as_str();
         report.total_callsites += 1;
         if resolved {
             report.resolved += 1;
@@ -717,15 +705,6 @@ fn write_callsite_resolution_from_tlog(tlog_path: &Path, reports_dir: &Path) -> 
 }
 
 fn write_symbol_artifacts_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()> {
-    let offset = find_last_graph_session_offset(tlog_path)
-        .or_else(|| find_last_session_offset(tlog_path))
-        .unwrap_or(0);
-    let file = fs::File::open(tlog_path)?;
-    let mut reader = BufReader::new(file);
-    if offset > 0 {
-        reader.seek(SeekFrom::Start(offset))?;
-    }
-
     let mut symbols: BTreeMap<String, String> = BTreeMap::new();
     let spans_path = out_dir.join("symbol_spans.jsonl");
     let mut spans_file = fs::OpenOptions::new()
@@ -734,31 +713,26 @@ fn write_symbol_artifacts_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<
         .write(true)
         .open(&spans_path)?;
 
-    let mut line = String::new();
-    loop {
-        line.clear();
-        let bytes = reader.read_line(&mut line)?;
-        if bytes == 0 {
-            break;
-        }
-        let Some(record) = parse_tlog_event(&line) else {
+    for event in read_any_events_from_path(tlog_path)? {
+        let canon = match event {
+            canon_tlog_replay::AnyEvent::Canon(canon) => canon,
+            _ => continue,
+        };
+        let Some(kernel) = extract_kernel_event(&canon) else {
             continue;
         };
-        match record {
-            TlogEvent::Symbol { sym, kind } => {
-                let sym = sym.as_str();
-                let kind = kind.as_str();
-                if !sym.is_empty() && !kind.is_empty() {
-                    symbols.insert(sym.to_string(), kind.to_string());
+        match kernel {
+            KernelEvent::SymbolDefined { symbol, kind } => {
+                if !symbol.is_empty() && !kind.is_empty() {
+                    symbols.insert(symbol, kind);
                 }
             }
-            TlogEvent::Span { sym, file, line, col, lo, hi } => {
-                let sym = sym.as_str();
-                if sym.is_empty() {
+            KernelEvent::SpanDefined { symbol, file, line, col, lo, hi } => {
+                if symbol.is_empty() {
                     continue;
                 }
                 let span = serde_json::json!({
-                    "symbol_id": sym,
+                    "symbol_id": symbol,
                     "file": file,
                     "line": line,
                     "col": col,

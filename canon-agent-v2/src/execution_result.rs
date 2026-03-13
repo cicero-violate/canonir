@@ -4,6 +4,7 @@ use super::dag;
 use super::engine;
 use super::telemetry::ExecutionTelemetry;
 use super::LOG_ROOT;
+use crate::tlog;
 use anyhow::Result;
 use std::path::Path;
 #[derive(Default)]
@@ -44,6 +45,33 @@ pub fn apply_node_result(
         let success = matches!(n.status, dag::NodeStatus::Completed);
         let latency_ms = ms as f64;
         let _node_cost = capability_cost_apply_node_cost_update(cost_table, n, latency_ms, success, cost_decay_rate, cost_latency_weight, cost_failure_weight);
+    }
+    let status_value = graph
+        .get_node(&node_id)
+        .and_then(|n| serde_json::to_value(n.status).ok())
+        .unwrap_or_else(|| serde_json::json!(null));
+    tlog::emit(
+        "node_executed",
+        serde_json::json!({
+            "node": node_id,
+            "iter": iter,
+            "elapsed_ms": ms,
+            "had_error": report.had_error,
+            "repair_kind": report.repair_kind,
+            "repair_succeeded": report.repair_succeeded,
+            "status": status_value,
+        }),
+    );
+    if report.had_error && report.repair_kind.is_some() {
+        tlog::emit(
+            "repair_triggered",
+            serde_json::json!({
+                "node": node_id,
+                "iter": iter,
+                "repair_kind": report.repair_kind,
+                "repair_succeeded": report.repair_succeeded,
+            }),
+        );
     }
     Some(ms)
 }

@@ -50,6 +50,7 @@ use crate::ws_server::WsBridge;
 use anyhow::Result;
 use config::{CapabilityConfig, CapabilityConfigGoalSpec};
 use crate::goal::GoalSpec;
+use crate::tlog;
 use graph_algo::{graph_analysis_emit_planned_graph, graph_analysis_run_graph_algorithms};
 use policy::ExecutionPolicyModel;
 use std::collections::HashMap;
@@ -199,6 +200,13 @@ impl CapabilityPipeline {
             goal.raw.clone(),
             graph_algo::graph_embedding_dim(),
             selection.map(|s| s.artifact),
+        );
+        tlog::emit(
+            "goal_update",
+            serde_json::json!({
+                "goal": goal_spec.raw,
+                "artifact": goal_spec.artifact,
+            }),
         );
         if let Ok(pretty) = serde_json::to_string_pretty(&goal_spec) {
             let _ = std::fs::write(Self::log_path("goal_spec.json"), pretty);
@@ -466,6 +474,22 @@ impl CapabilityPipeline {
             graph = planner_generate_once().await?;
             eprintln!("[templates] planner returned nodes={}", graph.nodes.len());
             resume_loaded = false;
+        }
+        if !resume_loaded {
+            for node in &graph.nodes {
+                tlog::emit(
+                    "task_created",
+                    serde_json::json!({
+                        "id": node.id,
+                        "description": node.description,
+                        "deps": node.deps,
+                        "node_type": node.node_type,
+                        "capabilities": node.required_capabilities,
+                        "priority": node.priority,
+                        "budget": node.budget,
+                    }),
+                );
+            }
         }
         graph_analysis_emit_planned_graph(&graph, Path::new(LOG_ROOT), 0);
         graph_analysis_run_graph_algorithms(&graph, Path::new(LOG_ROOT), 0);

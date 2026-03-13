@@ -18,6 +18,7 @@ rustflags = [
 
 [env]
 RUST_BACKTRACE = "full"
+CANON_TLOG_DUAL_WRITE = "0"
 
 # CANON_REPORTS_TLOG = "/workspace/ai_sandbox/canon/kernel/logs/graph.tlog"
 # CANON_REPORTS_OUT = "/workspace/ai_sandbox/canon/kernel/graph"

@@ -1,4 +1,5 @@
 use crate::config::{ProcessConfig, RestartStrategy};
+use crate::tlog;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
@@ -25,21 +26,37 @@ impl ProcessManager {
         }
         let child = cmd.spawn()?;
         self.children.insert(cfg.name.clone(), child);
+        tlog::emit(
+            "process_spawned",
+            serde_json::json!({
+                "name": cfg.name,
+                "bin": cfg.bin,
+                "args": cfg.args,
+                "resume": resume,
+            }),
+        );
         Ok(())
     }
 
     pub fn restart(&mut self, cfg: &ProcessConfig, log_root: Option<&Path>) -> Result<()> {
         let resume = matches!(cfg.restart, RestartStrategy::Drain);
         if let Some(mut child) = self.children.remove(&cfg.name) {
+            tlog::emit(
+                "process_restarted",
+                serde_json::json!({
+                    "name": cfg.name,
+                    "strategy": format!("{:?}", cfg.restart),
+                }),
+            );
             match cfg.restart {
                 RestartStrategy::Kill => {
-                    terminate_child(&mut child, cfg.drain_timeout_ms)?;
+                    terminate_child(&mut child, &cfg.name, cfg.drain_timeout_ms)?;
                 }
                 RestartStrategy::Drain => {
                     if let Some(root) = log_root {
                         write_recovery_signal(root);
                     }
-                    if !wait_for_exit(&mut child, cfg.drain_timeout_ms) {
+                    if !wait_for_exit(&mut child, &cfg.name, cfg.drain_timeout_ms) {
                         let _ = child.kill();
                     }
                 }
@@ -50,24 +67,38 @@ impl ProcessManager {
     }
 
     pub fn shutdown_all(&mut self, timeout_ms: u64) {
-        for (_name, mut child) in self.children.drain() {
-            let _ = terminate_child(&mut child, timeout_ms);
+        for (name, mut child) in self.children.drain() {
+            tlog::emit(
+                "process_exit",
+                serde_json::json!({
+                    "name": name,
+                    "reason": "shutdown",
+                }),
+            );
+            let _ = terminate_child(&mut child, &name, timeout_ms);
         }
     }
 }
 
-fn terminate_child(child: &mut Child, timeout_ms: u64) -> Result<()> {
+fn terminate_child(child: &mut Child, name: &str, timeout_ms: u64) -> Result<()> {
     send_sigterm(child);
-    if !wait_for_exit(child, timeout_ms) {
+    if !wait_for_exit(child, name, timeout_ms) {
         let _ = child.kill();
     }
     Ok(())
 }
 
-fn wait_for_exit(child: &mut Child, timeout_ms: u64) -> bool {
+fn wait_for_exit(child: &mut Child, name: &str, timeout_ms: u64) -> bool {
     let start = Instant::now();
     loop {
         if let Ok(Some(_status)) = child.try_wait() {
+            tlog::emit(
+                "process_exit",
+                serde_json::json!({
+                    "name": name,
+                    "reason": "exit",
+                }),
+            );
             return true;
         }
         if start.elapsed() >= Duration::from_millis(timeout_ms) {

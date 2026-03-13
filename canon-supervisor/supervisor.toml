@@ -15,3 +15,9 @@ bin  = "target/debug/analysis-engine"
 args = []
 restart = "kill"
 drain_timeout_ms = 3000
+
+[[process]]
+name = "canon-event-runtime"
+bin  = "target/debug/event_runtime"
+args = ["--tlog", "/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog.d"]
+restart = "kill"

@@ -17,10 +17,12 @@ members = [
   "canon-utils/project_editor",
   "canon-utils/smt-analysis-engine",
   "canon-utils/canon-query",
-  "canon-utils/kernel-consumers",
+  "canon-utils/event-consumers",
+  "canon-utils/event-runtime",
   "canon-utils/canon-types",
   "canon-utils/graph",
   "canon-utils/tlog-replay",
+  "canon-utils/tlog-writer",
 ]
 exclude = [
   "test_projects",

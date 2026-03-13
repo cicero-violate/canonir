@@ -21,7 +21,7 @@ impl KernelEventConsumer for QueryConsumer {
 
     fn on_event(&mut self, delta: &EventDelta, _state: &KernelState) {
         match &delta.event {
-            KernelEvent::NodeDefined { symbol, kind } => {
+            KernelEvent::NodeDefined { symbol, kind, .. } => {
                 self.symbols.insert(symbol.clone(), kind.clone());
             }
             KernelEvent::FileSeen { path } => {

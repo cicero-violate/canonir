@@ -30,6 +30,12 @@ fn main() -> Result<()> {
 
     let tlog = tlog.ok_or_else(|| anyhow!("--tlog is required"))?;
     let out_dir = out_dir.ok_or_else(|| anyhow!("--out is required"))?;
+    if tlog.is_dir() {
+        eprintln!(
+            "[reports] binary tlog directory detected: {}",
+            tlog.display()
+        );
+    }
     let panic_log = out_dir.join("reports").join("panic_records.jsonl");
     install_panic_hook(panic_log.to_string_lossy().as_ref());
     if debug_panic_cfg {

@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use crate::artifacts_loader::{Edge as GraphEdge, KernelGraph as LoadedGraph, Node as GraphNode};
 use crate::graph::csr::build_csr_graph;
 use crate::graph::graph_types::{EdgeRow, NodeRow};
-use canon_types::TlogEvent;
+use canon_types::KernelEvent;
 
 pub fn apply_event_to_graph(
-    event: TlogEvent,
+    event: KernelEvent,
     nodes: &mut Vec<NodeRow>,
     edges: &mut Vec<EdgeRow>,
     files: &mut Vec<String>,
@@ -14,7 +14,7 @@ pub fn apply_event_to_graph(
     clear_on_session: bool,
 ) -> bool {
     match event {
-        TlogEvent::Session { .. } => {
+        KernelEvent::SessionStart { .. } => {
             if clear_on_session {
                 nodes.clear();
                 edges.clear();
@@ -23,9 +23,9 @@ pub fn apply_event_to_graph(
             }
             true
         }
-        TlogEvent::Node { sym, kind, file, line, .. }
-        | TlogEvent::NodeUpdate { sym, kind, file, line, .. } => {
-            let sym = sym.as_str();
+        KernelEvent::NodeDefined { symbol, kind, file, line, .. }
+        | KernelEvent::NodeUpdated { symbol, kind, file, line, .. } => {
+            let sym = symbol.as_str();
             let kind = kind.as_str();
             let file = file.as_str();
             let line = Some(line).filter(|v| *v > 0);
@@ -75,7 +75,7 @@ pub fn apply_event_to_graph(
             }
             true
         }
-        TlogEvent::Edge { src, dst, kind } => {
+        KernelEvent::EdgeDefined { src, dst, kind } => {
             let src_sym = src.as_str();
             let dst_sym = dst.as_str();
             let kind = kind.as_str();
@@ -92,14 +92,14 @@ pub fn apply_event_to_graph(
             });
             true
         }
-        TlogEvent::NodeRemove { sym } => {
-            let sym = sym.as_str();
+        KernelEvent::NodeRemoved { symbol } => {
+            let sym = symbol.as_str();
             let Some(&id) = symbol_to_id.get(sym) else {
                 return false;
             };
             delete_node(id, nodes, edges, symbol_to_id)
         }
-        TlogEvent::EdgeRemove { src, dst, kind } => {
+        KernelEvent::EdgeRemoved { src, dst, kind } => {
             let src_sym = src.as_str();
             let dst_sym = dst.as_str();
             let kind = kind.as_str();
@@ -113,19 +113,20 @@ pub fn apply_event_to_graph(
             edges.retain(|e| !(e.src == src && e.dst == dst && e.kind == kind));
             before != edges.len()
         }
-        TlogEvent::File { path } => {
+        KernelEvent::FileSeen { path } => {
             let path = path.as_str();
             if !path.is_empty() && !files.iter().any(|p| p == path) {
                 files.push(path.to_string());
             }
             true
         }
-        TlogEvent::Warning { .. }
-        | TlogEvent::Panic { .. }
-        | TlogEvent::Callsite { .. }
-        | TlogEvent::Symbol { .. }
-        | TlogEvent::Span { .. }
-        | TlogEvent::CompilationUnitFinished { .. } => {
+        KernelEvent::WarningCaptured { .. }
+        | KernelEvent::PanicCaptured { .. }
+        | KernelEvent::CallsiteObserved { .. }
+        | KernelEvent::SymbolDefined { .. }
+        | KernelEvent::SpanDefined { .. }
+        | KernelEvent::CompilationUnitFinished { .. }
+        | KernelEvent::InvariantViolation { .. } => {
             // telemetry-only or non-graph events
             true
         }
