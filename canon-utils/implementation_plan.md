@@ -1,252 +1,313 @@
+### Equation
+
+[
+AnalysisCapability(C_a) + Event(E_i) \rightarrow Events(E_o)
+]
+
 ### Variables
 
-(T) = capability trait
-(R) = capability registry
-(I) = capability implementations
-(E) = events
-(B) = event bus
+* (C_a) = analysis capability
+* (E_i) = incoming kernel event
+* (E_o) = emitted analysis events
+* (G) = KernelGraph
+* (R) = report artifacts
+* (t) = tick
 
 ### Equations
 
 [
-T \rightarrow I
+G = Load(GraphArtifacts)
 ]
+
+Graph loaded from kernel outputs.
 
 [
-B(E) \rightarrow Consumer \rightarrow T
+R = Analysis(G)
 ]
+
+Run structural analyses.
 
 [
-T \xrightarrow{execute} E'
+E_o = Emit(R)
 ]
 
-**Explanation:** trait defines capability interface; implementations execute actions and emit events.
+Emit events describing results.
 
 ---
 
-# Implementation Plan — Capability Trait
+# Implementation Plan — Capability Integration for `canon-analysis`
 
-## Phase 1 — Define Core Capability Interface
+## 1. Create Analysis Capability Interface Adapter
 
-Create module:
+* Implement adapter mapping `Capability` trait → analysis pipeline.
+* File:
 
 ```
-canon-utils/
-  capability/
-    mod.rs
-    trait.rs
-    registry.rs
-    context.rs
-    result.rs
+canon-analysis/src/capabilities/mod.rs
 ```
 
-### `trait.rs`
+Responsibilities:
 
-```rust
-pub trait Capability: Send + Sync {
-    fn name(&self) -> &'static str;
-
-    fn execute(
-        &self,
-        ctx: CapabilityContext,
-    ) -> Result<CapabilityResult>;
-}
-```
+* Receive `CapabilityContext`
+* Determine which analysis to run
+* Return `CapabilityResult`.
 
 ---
 
-## Phase 2 — Define Capability Context
+## 2. Implement Core Analysis Capabilities
 
-`context.rs`
+Each major analysis becomes a capability.
 
-Purpose: provide runtime inputs.
-
-```rust
-pub struct CapabilityContext {
-    pub workspace: std::path::PathBuf,
-    pub event: RuntimeEvent,
-}
-```
-
-Depends on:
+### Capabilities
 
 ```
-canon-types/runtime_event.rs
+DeadCodeCapability
+DependencyCyclesCapability
+StructuralHotspotsCapability
+CallgraphCentralityCapability
+DataflowFanoutCapability
+InvariantPipelineCapability
+SmtInvariantCapability
+RepairSurfaceCapability
+SemanticClusteringCapability
 ```
 
----
-
-## Phase 3 — Define Result Type
-
-`result.rs`
-
-```rust
-pub enum CapabilityResult {
-    Emit(RuntimeEvent),
-    EmitMany(Vec<RuntimeEvent>),
-    NoOp,
-}
-```
-
-Capabilities return **new events**, not side effects directly.
-
----
-
-## Phase 4 — Capability Registry
-
-`registry.rs`
-
-```rust
-pub struct CapabilityRegistry {
-    map: HashMap<String, Arc<dyn Capability>>,
-}
-```
-
-Functions:
+Directory:
 
 ```
-register(cap)
-lookup(name)
-execute(name, ctx)
+canon-analysis/src/capabilities/
 ```
 
-Used by consumers.
-
----
-
-## Phase 5 — Integrate With Event Runtime
-
-Modify:
+Example:
 
 ```
-event-runtime/bus.rs
-```
-
-Dispatch flow:
-
-```
-event
- ↓
-consumer
- ↓
-capability_registry.execute()
- ↓
-emit new events
+dead_code.rs
+dependency_cycles.rs
+structural_hotspots.rs
+invariants.rs
+smt.rs
+semantics.rs
+repair_surface.rs
 ```
 
 ---
 
-## Phase 6 — Add Capability Event Type
+## 3. Build Graph Loader Capability Dependency
 
-Extend:
+All capabilities require graph loading.
+
+Reuse:
 
 ```
-canon-types/runtime_event.rs
+smt/loader.rs
+AnalysisGraph
+```
+
+Shared loader:
+
+```
+capabilities/graph_context.rs
+```
+
+Purpose:
+
+```
+load_graph(ctx.workspace) → AnalysisGraph
+```
+
+---
+
+## 4. Map Events → Capability Triggers
+
+Kernel events trigger capabilities.
+
+Examples:
+
+```
+GraphUpdated
+CompilationFinished
+ErrorSurfaceUpdated
+InvariantRequested
+SmtCheckRequested
+```
+
+Dispatch layer:
+
+```
+capabilities/dispatcher.rs
+```
+
+Mapping:
+
+```
+GraphUpdated → run structural analyses
+CompilationFinished → run dead code + cycles
+ErrorSurfaceUpdated → run repair surface
+InvariantRequested → run invariant pipeline
+SmtCheckRequested → run SMT proofs
+```
+
+---
+
+## 5. Implement Capability Emitters
+
+Convert analysis results → events.
+
+Example mapping:
+
+```
+DeadCodeEntry → DeadCodeDetected event
+DependencyCycleEntry → DependencyCycleFound event
+StructuralHotspotEntry → StructuralHotspotFound event
+InvariantResult → InvariantValidated event
+```
+
+File:
+
+```
+capabilities/events.rs
+```
+
+---
+
+## 6. Register Capabilities
+
+During analysis startup:
+
+```
+CapabilityRegistry::register(...)
+```
+
+Example:
+
+```
+registry.register(Arc::new(DeadCodeCapability));
+registry.register(Arc::new(DependencyCyclesCapability));
+registry.register(Arc::new(StructuralHotspotsCapability));
+registry.register(Arc::new(InvariantPipelineCapability));
+registry.register(Arc::new(SmtInvariantCapability));
+```
+
+Location:
+
+```
+canon-analysis/src/lib.rs
+```
+
+---
+
+## 7. Integrate With Event Consumers
+
+Existing consumers:
+
+```
+ReportEventConsumer
+SmtConsumer
 ```
 
 Add:
 
 ```
-CapabilityRequested
-CapabilityCompleted
-CapabilityFailed
+CapabilityEventConsumer
 ```
 
-Example:
+Purpose:
 
 ```
-CargoBuildRequested
-CargoBuildCompleted
+on_event → dispatch capability
 ```
 
----
+File:
 
-## Phase 7 — Agent Implements Capabilities
-
-Inside **agent repo**, implement:
-
-| Capability |
-| ---------- |
-| CargoBuild |
-| CargoCheck |
-| FileRead   |
-| FileWrite  |
-| Bash       |
-| LLMCall    |
-
-Example:
-
-```rust
-struct CargoBuild;
-
-impl Capability for CargoBuild {
-    fn name(&self) -> &'static str {
-        "cargo.build"
-    }
-
-    fn execute(&self, ctx: CapabilityContext) -> Result<CapabilityResult> {
-        // run cargo build
-    }
-}
+```
+canon-analysis/src/capability_consumer.rs
 ```
 
 ---
 
-## Phase 8 — Register Capabilities
+## 8. Event → Capability Execution Flow
 
-During runtime startup:
-
-```
-event_runtime.rs
-```
-
-```rust
-registry.register(Box::new(CargoBuild));
-registry.register(Box::new(CargoCheck));
-```
-
----
-
-# Final Architecture
+Runtime pipeline:
 
 ```
-canon-utils
- ├─ capability trait
- ├─ capability registry
- ├─ capability context
- └─ capability result
-
-event-runtime
- └─ dispatch events
-
-canon-agent
- └─ capability implementations
+Kernel → .tlog
+      ↓
+KernelEventConsumer
+      ↓
+CapabilityDispatcher
+      ↓
+CapabilityRegistry.execute()
+      ↓
+Analysis Capability
+      ↓
+Emit Analysis Events
 ```
 
 ---
 
-# First Files To Implement
+## 9. Emit Analysis Events Back to Kernel Stream
 
-Start with:
+Result events written back:
 
 ```
-capability/trait.rs
-capability/context.rs
-capability/result.rs
-capability/registry.rs
+analysis.dead_code
+analysis.cycles
+analysis.hotspots
+analysis.invariants
+analysis.smt
+analysis.semantic_clusters
 ```
 
-Only ~200 lines total.
+Destination:
+
+```
+tlog writer
+```
 
 ---
 
-### English Explanation
+## 10. Capability Naming Convention
 
-canon-utils should define the capability abstraction and registry, allowing the event runtime to call capabilities without knowing their implementations. Actual capabilities like cargo commands or filesystem operations remain implemented in the agent layer.
+Capability IDs:
+
+```
+analysis.dead_code
+analysis.dependency_cycles
+analysis.structural_hotspots
+analysis.callgraph_centrality
+analysis.dataflow_fanout
+analysis.invariants
+analysis.smt_invariants
+analysis.repair_surface
+analysis.semantic_clusters
+```
 
 ---
+
+# Resulting Architecture
+
+```
+kernel
+  ↓
+.tlog events
+  ↓
+canon-analysis consumer
+  ↓
+capability dispatcher
+  ↓
+capability registry
+  ↓
+analysis capability
+  ↓
+analysis events
+  ↓
+kernel stream
+```
+
+---
+
+### Goodness
 
 [
-\text{good} =
-\max(\text{intelligence},\text{efficiency},\text{correctness},\text{alignment})
+good = \max(Intelligence, Efficiency, Correctness, Alignment, Robustness, Performance, Scalability, Determinism, Transparency, Collaboration, Empowerment, Benefit, Learning, Future\text{-}Proofing)
 ]
