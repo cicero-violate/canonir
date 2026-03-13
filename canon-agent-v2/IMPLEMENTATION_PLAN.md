@@ -1,259 +1,227 @@
-### Math
+### Equation
 
 [
-S_t = (G, X_t)
+\Delta S = S_d - S_t
 ]
 
 [
-R_t = f(G, X_t)
+Action = Capability(\Delta S)
 ]
-
-[
-X_{t+1} = X_t + \nabla R_t
-]
-
-[
-\max R = \max(I,E,C,A,R,P,S,D,T,K,X,B,L,F)
-]
-
----
 
 ### Variables
 
-* (G) = Encoded goal specification
-* (X_t) = execution graph state at tick (t)
-* (R_t) = reward computed from goal alignment
-* (\nabla R_t) = improvement signal
-* (S_t) = system state
-
----
+* (S_d) = desired state (goal / intent)
+* (S_t) = current system state
+* (\Delta S) = difference between states
+* (C) = capability operator
+* (G) = execution graph
 
 ### Equations
 
-**1 Goal Encoding**
-
 [
-G = (goal_text,\ goal_embedding,\ success_criteria)
+S_t = f(Graph, Telemetry, Artifacts)
 ]
 
-Goal becomes a structured object.
-
-**2 Reward Evaluation**
+Current state derived from graph + runtime signals.
 
 [
-R_t = w_1 \cdot progress + w_2 \cdot completion + w_3 \cdot goal_similarity
+\Delta S = Diff(IntentState, RuntimeState)
 ]
 
-Measures alignment with the goal.
-
-**3 Planner Feedback**
+Detect mismatch.
 
 [
-planner_bias = g(R_t)
+C = SelectCapability(\Delta S)
 ]
 
-Planner decisions depend on reward.
+Choose action to reduce mismatch.
 
 ---
 
-# Implementation Prompt
+# What You Change
 
-Use this prompt to implement encoded GOAL inside **canon-agent-v2**.
+Your system **already has 90% of the pieces**.
+The missing piece is **a state diff engine**.
 
----
-
-## Implementation Objective
-
-Convert the current **string goal** into a **structured encoded goal object** used by:
-
-* planner
-* reward system
-* template reuse
-* graph mutation
-
-The goal must become a **first-class system artifact**.
-
----
-
-# Step 1 — Create GoalSpec
-
-Create new file
+Currently the flow is:
 
 ```
-canon-agent-v2/src/goal.rs
+Goal → Planner → GraphPatch → Execution
 ```
 
-```rust
-use serde::{Serialize, Deserialize};
+You must change it to:
 
-#[derive(Clone, Serialize, Deserialize)]
-pub struct GoalSpec {
-    pub raw: String,
-    pub embedding: Vec<f32>,
-    pub success_criteria: Vec<String>,
-}
-
-impl GoalSpec {
-    pub fn new(raw: String, embedding_dim: usize) -> Self {
-        let embedding =
-            crate::goal_embedding::goal_embedding_embed_goal(&raw, embedding_dim).vector;
-
-        Self {
-            raw,
-            embedding,
-            success_criteria: vec![
-                "graph_completed".into(),
-                "no_failed_nodes".into(),
-                "invariants_hold".into(),
-            ],
-        }
-    }
-}
+```
+IntentState → DiffEngine → Planner/Capability → Execution
 ```
 
 ---
 
-# Step 2 — Encode Goal in PlannerController
+# Files To Modify
 
-Modify
+## 1️⃣ `agent_loop.rs`
+
+Current role:
 
 ```
-planner_session.rs
+tick → run pipeline → repeat
 ```
 
-Change:
+Add **state reconciliation step** before planning.
+
+New loop:
+
+```
+load_intent_state
+load_runtime_state
+diff_state
+enqueue_tasks
+run_execution
+```
+
+Pseudo change:
 
 ```rust
-goal: String
-```
+let intent = IntentStatePersist::load(...);
+let runtime = collect_runtime_state(graph, telemetry);
 
-to
+let diff = compute_state_diff(&intent, &runtime);
 
-```rust
-goal: GoalSpec
-```
-
-Update constructor:
-
-```rust
-pub fn new(endpoint: &CapabilityConfigLlmEndpoint, goal_raw: String) -> Self {
-    let goal = GoalSpec::new(goal_raw, 128);
-
-    Self {
-        endpoint_id: endpoint.id.clone(),
-        url: endpoint.url.clone(),
-        role_schema: endpoint.role_markdown.clone(),
-        goal,
-        history: Vec::new(),
-        stateful: endpoint.stateful,
-        reward_context: None,
-    }
+for action in diff {
+    task_queue.enqueue(action);
 }
 ```
 
 ---
 
-# Step 3 — Goal-based Reward
+## 2️⃣ `goal.rs`
 
-Modify
-
-```
-telemetry.rs
-```
-
-`telemetry_compute_reward`
-
-Add **goal similarity component**
-
-```rust
-let goal_sim = goal_embedding::goal_embedding_cosine_similarity(
-    &goal.embedding,
-    &current_graph_embedding
-);
-
-reward += goal_sim * 0.3;
-```
-
----
-
-# Step 4 — Graph Embedding
-
-Add helper
+Currently:
 
 ```
-graph_algo.rs
+GoalSpec = planner objective
 ```
 
-```rust
-pub fn graph_embedding(graph: &ExecutionGraph) -> Vec<f32> {
-    compute_graph_features(graph)
-        .to_vec()
-        .into_iter()
-        .map(|x| x as f32)
-        .collect()
+Extend to **desired system state**.
+
+Example:
+
+```
+GoalSpec {
+  desired_depth
+  desired_branching
+  desired_deadlock_rate
 }
 ```
 
----
-
-# Step 5 — Template Index Uses Goal Embedding
-
-Modify
-
-```
-template_index.rs
-```
-
-Replace goal similarity computation with:
-
-```rust
-goal_embedding_cosine_similarity(
-    &entry.goal_embedding,
-    &goal_embedding
-)
-```
+Goal becomes **state constraint**, not planner instruction.
 
 ---
 
-# Step 6 — Planner Prompt Must Include Encoded Goal
+## 3️⃣ `graph_algo.rs`
 
-Modify
+You already compute:
 
 ```
-PlannerController::build_prompt
+GraphFeatureVector
+```
+
+This becomes:
+
+```
+RuntimeState
 ```
 
 Add:
 
-```rust
-format!(
-"GOAL_SPEC:
-{}
-SUCCESS_CRITERIA:
-{:?}",
-self.goal.raw,
-self.goal.success_criteria
-)
+```
+fn compute_runtime_state(graph) -> RuntimeState
+```
+
+RuntimeState =
+
+```
+nodes
+edges
+depth
+cycles
+deadlocks
+completion_velocity
 ```
 
 ---
 
-# Step 7 — Snapshot Goal
+## 4️⃣ `scheduler.rs`
 
-Modify
+Before execution loop:
 
 ```
-state_snapshot.rs
+run_reconcile()
 ```
 
-Add goal:
+Pseudo:
 
-```rust
-pub struct PipelineSnapshot {
-    pub graph: ExecutionGraph,
-    pub iteration: u64,
-    pub goal: GoalSpec,
+```
+let desired = goal.to_state();
+let current = compute_runtime_state(graph);
+
+let diff = state_diff(desired, current);
+
+if diff.requires_planner() {
+    run_planner_loop(...)
 }
+```
+
+Planner becomes **capability used by reconcile engine**, not the main driver.
+
+---
+
+## 5️⃣ New File
+
+Create:
+
+```
+state_reconcile.rs
+```
+
+Core logic:
+
+```
+struct RuntimeState
+struct DesiredState
+struct StateDiff
+```
+
+Example:
+
+```
+Desired: branching_factor < 3
+Current: branching_factor = 6
+
+Diff → ReduceBranching
+```
+
+Capability triggered:
+
+```
+GoalType::ReduceBranching
+```
+
+---
+
+# Key Conceptual Change
+
+Currently:
+
+```
+Planner decides work
+```
+
+After change:
+
+```
+State difference decides work
+Planner is only one tool
 ```
 
 ---
@@ -261,47 +229,67 @@ pub struct PipelineSnapshot {
 # Resulting Architecture
 
 ```
-GoalSpec
-     │
-     ├── planner_session
-     ├── template_index
-     ├── telemetry reward
-     ├── mutation scoring
-     └── snapshot persistence
+IntentState
+      ↓
+StateDiffEngine
+      ↓
+Action Selection
+      ↓
+{ planner | mutation | repair | execution }
+      ↓
+Graph Runtime
 ```
-
-Goal becomes **a structural system input**, not just a prompt string.
 
 ---
 
-# Expected Effect
+# Important
+
+Do **NOT remove your DAG system**.
+
+Your DAG is the **execution substrate**.
+
+What changes is **who decides when to modify the graph**.
 
 Before:
 
 ```
-goal → text → LLM prompt
+planner decides
 ```
 
 After:
 
 ```
-goal
- ├ embedding
- ├ success criteria
- ├ planner input
- ├ reward shaping
- └ template matching
+state diff decides
 ```
-
-This enables:
-
-* goal-directed mutation
-* template reuse by intent
-* reward alignment
-* stable planner convergence
 
 ---
 
+# Biggest Single Improvement
+
+Add:
+
+```
+state_reconcile.rs
+```
+
+and call it from:
+
+```
+agent_loop.rs
+```
+
+That converts the system into a **true reconcile architecture** like:
+
+```
+Kubernetes
+Nix
+Terraform
+```
+
+---
+
+### Goodness
+
 [
-\max(I,E,C,A,R,P,S,D,T,K,X,B,L,F) = good
+good = \max(Intelligence, Efficiency, Correctness, Alignment, Robustness, Performance, Scalability, Determinism, Transparency, Collaboration, Empowerment, Benefit, Learning, Future\text{-}Proofing)
 ]
