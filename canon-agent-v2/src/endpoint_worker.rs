@@ -79,7 +79,7 @@ impl LlmWorker {
         let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, &self.url, &self.tabs, self.max_tabs).await?;
         tab_manager_mark_tab_sent(&self.tabs, tab_id).await;
         tab_manager_log_llm(format!("phase={} endpoint={} tab={} send", phase, self.endpoint_id, tab_id));
-        let raw = match self.bridge.send_turn(tab_id, full_prompt).await {
+        let raw = match self.bridge.send_turn(tab_id, &self.url, full_prompt).await {
             Ok(v) => v,
             Err(e) => {
                 tab_manager_mark_tab_in_flight(&self.tabs, tab_id, false).await;

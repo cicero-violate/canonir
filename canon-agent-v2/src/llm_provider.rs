@@ -52,7 +52,7 @@ impl From<WsBridgeError> for LlmProviderError {
 pub async fn call_llm_raw(bridge: &WsBridge, prompt: String, url: &str) -> Result<Value, LlmProviderError> {
     bridge.wait_for_connection().await;
     let tab_id = bridge.open_fresh_tab_with_url(url.to_string()).await.map_err(LlmProviderError::Transport)?;
-    let raw = bridge.send_turn(tab_id, prompt).await.map_err(LlmProviderError::Transport)?;
+    let raw = bridge.send_turn(tab_id, url, prompt).await.map_err(LlmProviderError::Transport)?;
     JsonExtractor::extract(&raw)
 }
 
@@ -70,7 +70,7 @@ pub async fn call_llm(bridge: &WsBridge, input: &AgentCallInput, url: &str) -> R
 
     // clean mode: suppress TURN routing log
 
-    let raw_response = bridge.send_turn(tab_id, prompt).await.map_err(LlmProviderError::Transport)?;
+    let raw_response = bridge.send_turn(tab_id, url, prompt).await.map_err(LlmProviderError::Transport)?;
 
     let payload = JsonExtractor::extract(&raw_response)?;
 

@@ -1,5 +1,6 @@
 use anyhow::Result;
 mod bus;
+pub mod consumers;
 
 use canon_capability::{CapabilityContext, CapabilityRegistry, CapabilityResult};
 use canon_event_log::{error, info};
@@ -20,10 +21,13 @@ use canon_types::{
     KernelEvent,
     KernelState,
     RuntimeConsumer,
+    RuntimeEmitter,
+    RuntimeEmitterHandle,
     RuntimeEvent,
 };
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use bus::EventBus;
 
 pub struct EventRuntime {
@@ -33,6 +37,8 @@ pub struct EventRuntime {
     tlog_path: Option<std::path::PathBuf>,
     next_id: u64,
     tick: u64,
+    runtime_tick: u64,
+    emitter_rx: crossbeam_channel::Receiver<RuntimeEvent>,
 }
 
 impl EventRuntime {
@@ -42,8 +48,10 @@ impl EventRuntime {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(1024);
         let mut bus = EventBus::new(queue_size);
+        let (emitter_tx, emitter_rx) = crossbeam_channel::unbounded();
+        let emitter: RuntimeEmitterHandle = Arc::new(RuntimeEmitterImpl { sender: emitter_tx });
         for (idx, consumer) in consumers.into_iter().enumerate() {
-            bus.register(format!("consumer_{idx}"), consumer);
+            bus.register(format!("consumer_{idx}"), consumer, emitter.clone());
         }
         bus.log_registry();
         Self {
@@ -53,6 +61,8 @@ impl EventRuntime {
             tlog_path: None,
             next_id: 1,
             tick: 0,
+            runtime_tick: 0,
+            emitter_rx,
         }
     }
 
@@ -72,6 +82,7 @@ impl EventRuntime {
         self.state = empty_state();
         self.next_id = 1;
         self.tick = 0;
+        self.runtime_tick = 0;
     }
 
     pub fn process_path(&mut self, tlog_path: &std::path::Path) -> Result<usize> {
@@ -85,10 +96,13 @@ impl EventRuntime {
             if let AnyEvent::Canon(canon) = event {
                 if let Some(kernel) = extract_kernel_event(canon) {
                     self.handle_kernel_event(kernel)?;
+                    self.drain_emitted_events()?;
                 } else if let Some(edit) = extract_edit_event(canon) {
                     self.handle_runtime_event(RuntimeEvent::Edit(edit))?;
+                    self.drain_emitted_events()?;
                 } else if let Some(request) = extract_capability_request(canon) {
                     self.handle_runtime_event(RuntimeEvent::CapabilityRequested(request))?;
+                    self.drain_emitted_events()?;
                 } else if let Some(supervisor_event) = extract_supervisor_event(canon) {
                     if supervisor_event.kind == "workspace.changed" {
                         if let Some(crate_name) = supervisor_event.payload.get("crate").and_then(|v| v.as_str()) {
@@ -98,6 +112,7 @@ impl EventRuntime {
                                 args: serde_json::json!({ "crate": crate_name }),
                             };
                             self.handle_runtime_event(RuntimeEvent::CapabilityRequested(request))?;
+                            self.drain_emitted_events()?;
                         }
                     }
                 }
@@ -132,13 +147,32 @@ impl EventRuntime {
         Ok(())
     }
 
+    pub fn emit_tick(&mut self) -> Result<()> {
+        self.runtime_tick = self.runtime_tick.saturating_add(1);
+        self.handle_runtime_event(RuntimeEvent::Tick {
+            tick: self.runtime_tick,
+        })?;
+        self.drain_emitted_events()?;
+        Ok(())
+    }
+
     fn handle_runtime_event(&mut self, event: RuntimeEvent) -> Result<()> {
         self.bus.dispatch(event.clone());
+        self.append_runtime_event(&event);
         match event {
             RuntimeEvent::CapabilityRequested(request) => {
-                self.handle_capability_request(request)?;
+                if self.registry.lookup(&request.name).is_some() {
+                    self.handle_capability_request(request)?;
+                }
             }
             _ => {}
+        }
+        Ok(())
+    }
+
+    fn drain_emitted_events(&mut self) -> Result<()> {
+        while let Ok(event) = self.emitter_rx.try_recv() {
+            self.handle_runtime_event(event)?;
         }
         Ok(())
     }
@@ -264,6 +298,16 @@ fn empty_state() -> KernelState {
         known_files: HashSet::new(),
         removed_symbols: HashSet::new(),
         removed_edges: Vec::new(),
+    }
+}
+
+struct RuntimeEmitterImpl {
+    sender: crossbeam_channel::Sender<RuntimeEvent>,
+}
+
+impl RuntimeEmitter for RuntimeEmitterImpl {
+    fn emit(&self, event: RuntimeEvent) {
+        let _ = self.sender.send(event);
     }
 }
 

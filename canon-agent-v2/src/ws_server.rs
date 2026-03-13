@@ -173,7 +173,7 @@ impl WsBridge {
     /// If the WS is disconnected the frame is pushed into `turn_replay_queue`
     /// and will be replayed the moment the extension reconnects, so no TURN
     /// is silently lost during the ~1 s reconnect window.
-    pub async fn send_turn(&self, tab_id: u32, text: String) -> Result<String, WsBridgeError> {
+    pub async fn send_turn(&self, tab_id: u32, url: &str, text: String) -> Result<String, WsBridgeError> {
         let (tx, rx) = oneshot::channel::<String>();
         let turn_id = self.next_turn_id.fetch_add(1, Ordering::Relaxed);
 
@@ -182,7 +182,8 @@ impl WsBridge {
             st.pending.insert(tab_id, tx);
             st.pending_turn_id.insert(tab_id, turn_id);
             if !st.tab_assemblers.contains_key(&tab_id) {
-                st.tab_assemblers.insert(tab_id, FrameAssembler::new(SiteType::Unknown));
+                let site = SiteType::from_url(url);
+                st.tab_assemblers.insert(tab_id, FrameAssembler::new(site));
             } else if let Some(asm) = st.tab_assemblers.get_mut(&tab_id) {
                 asm.reset();
             }
