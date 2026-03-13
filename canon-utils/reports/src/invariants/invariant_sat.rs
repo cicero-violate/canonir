@@ -1,4 +1,4 @@
-use crate::invariant_generator::InvariantCandidate;
+use crate::invariants::invariant_generator::InvariantCandidate;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]

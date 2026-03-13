@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize, Infallible};
+use rkyv::ser::Serializer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;

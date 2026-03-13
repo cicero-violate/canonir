@@ -1,7 +1,7 @@
 use analysis_engine::SmtConsumer;
 use canon_graph::GraphConsumer;
 use canon_query::QueryConsumer;
-use canon_reports::ReportConsumer;
+use canon_reports::ReportEventConsumer;
 pub use canon_types::*;
 
 pub fn build_consumers() -> Vec<Box<dyn canon_types::KernelEventConsumer>> {
@@ -9,6 +9,6 @@ pub fn build_consumers() -> Vec<Box<dyn canon_types::KernelEventConsumer>> {
         Box::new(GraphConsumer::new()),
         Box::new(QueryConsumer::new()),
         Box::new(SmtConsumer::new()),
-        Box::new(ReportConsumer::new()),
+        Box::new(ReportEventConsumer::new()),
     ]
 }

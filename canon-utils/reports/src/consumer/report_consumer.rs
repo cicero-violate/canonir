@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use crate::generate_reports_from_tlog;
 
 #[derive(Debug, Default)]
-pub struct ReportConsumer {
+pub struct ReportEventConsumer {
     pub last_tick: u64,
     pub event_count: usize,
     last_generated_tick: Option<u64>,
@@ -14,7 +14,7 @@ pub struct ReportConsumer {
 }
 const DEBOUNCE_TICKS: u64 = 5;
 
-impl ReportConsumer {
+impl ReportEventConsumer {
     pub fn new() -> Self {
         let tlog_path = std::env::var("CANON_REPORTS_TLOG").ok().map(PathBuf::from);
         let out_dir = std::env::var("CANON_REPORTS_OUT").ok().map(PathBuf::from);
@@ -29,7 +29,7 @@ impl ReportConsumer {
     }
 }
 
-impl KernelEventConsumer for ReportConsumer {
+impl KernelEventConsumer for ReportEventConsumer {
     fn mask(&self) -> EventMask {
         EventMask::NODE_DEFINED | EventMask::EDGE_DEFINED
     }

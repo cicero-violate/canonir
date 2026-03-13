@@ -114,7 +114,7 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
 
     let graph = Graph { nodes, edges };
 
-    let surface = compute_repair_surface(&graph);
+    let surface = build_repair_surface(&graph);
     write_repair_surface(out_dir, &surface)?;
 
     Ok(())
@@ -135,7 +135,7 @@ struct Graph {
     edges: Vec<Edge>,
 }
 
-fn compute_repair_surface(graph: &Graph) -> Vec<RepairSurfaceEntry> {
+fn build_repair_surface(graph: &Graph) -> Vec<RepairSurfaceEntry> {
     let mut error_to_fn: BTreeMap<u32, u32> = BTreeMap::new();
     for e in &graph.edges {
         if matches!(e.kind, EdgeKind::ErrorToFunction) {

@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::collections::HashMap;
 
-use crate::artifacts_loader::{CsrGraph, Edge as GraphEdge, KernelGraph as LoadedGraph, Node as GraphNode};
+use crate::artifacts_loader::{Edge as GraphEdge, KernelGraph as LoadedGraph, Node as GraphNode};
 use crate::graph::csr::build_csr_graph;
 use crate::graph::graph_types::{EdgeRow, NodeRow};
 
@@ -126,6 +126,10 @@ pub fn apply_event_to_graph(
             // telemetry-only events; do not affect graph reconstruction
             true
         }
+        "SYMBOL" | "SPAN" => {
+            // symbol metadata; handled separately by artifact writers
+            true
+        }
         _ => false,
     }
 }
@@ -219,4 +223,16 @@ pub fn rebuild_symbol_index(nodes: &[NodeRow]) -> HashMap<String, u32> {
     map
 }
 
-pub 
+pub fn module_prefixes(sym: &str) -> Vec<String> {
+    let parts: Vec<&str> = sym.split("::").collect();
+    if parts.len() <= 1 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(parts.len().saturating_sub(1));
+    let mut current = Vec::new();
+    for part in parts.iter().take(parts.len() - 1) {
+        current.push(*part);
+        out.push(current.join("::"));
+    }
+    out
+}

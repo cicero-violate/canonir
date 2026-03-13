@@ -1,4 +1,4 @@
-use crate::pattern_mining::PatternRule;
+use crate::semantics::pattern_mining::PatternRule;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]

@@ -1,25 +1,55 @@
 use anyhow::{anyhow, Result};
-use serde_json::Value;
-use csv::Writer;
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use serde::Serialize;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::io::{BufRead, Seek, SeekFrom};
+use std::io::{BufRead, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use rayon::prelude::*;
-use algorithms::graph::csr::Csr;
-#[cfg(feature = "cuda")]
-use algorithms::graph::scc_gpu::scc_gpu;
-#[cfg(feature = "cuda")]
-use algorithms::graph::reachability::{reachability_gpu, reachability_batched_gpu};
-use crate::artifacts_loader::{KernelGraph as LoadedGraph, Node as GraphNode, Edge as GraphEdge, CsrGraph};
 use crate::artifacts::snapshot::{SnapshotMeta, save_graph_snapshot, write_snapshot_metadata};
 use crate::artifacts::cache::{update_graph_cache};
-use crate::kernel_invariants::write_kernel_invariants;
-use crate::graph::graph_types::{EdgeRow, ModuleNode, NodeRow};
+use crate::artifacts::artifact_writer::{
+    is_graph_bin_fresh,
+    load_graph_bin,
+    emit_graph_bin,
+    emit_cfg_csv,
+    emit_cfg_full_csv,
+    emit_callgraph_csv,
+    emit_callgraph_full_csv,
+    emit_modulegraph_csv,
+    emit_nodes_csv,
+    emit_nodes_full_csv,
+    emit_nodes_raw_jsonl,
+    emit_edges_csv,
+    emit_edges_full_csv,
+    emit_files_txt,
+    emit_typegraph_csv,
+    emit_typegraph_full_csv,
+    emit_typegraph_csv_from_cache,
+    build_modulegraph,
+    build_modulegraph_from_cache,
+    build_typegraph_edges,
+    build_typegraph_from_cache,
+};
+use crate::invariants::kernel_invariants::write_kernel_invariants;
+use crate::graph::graph_types::{EdgeRow, NodeRow};
 use crate::graph::graph_builder::rows_to_kernel_graph;
+use crate::graph::csr::build_callgraph_csr_graph;
 use crate::graph::graph_normalize::normalize_graph;
-use crate::replay::tlog_replay::{parse_tlog_event, replay_graph_from_tlog_incremental};
+use crate::analysis::cfg::{extract_cfg_edges, build_cfg_out, build_cfg_in, build_block_owner, build_block_effect_signatures};
+use crate::analysis::callgraph::{extract_callgraph_edges, build_callgraph_centrality};
+use crate::analysis::dead_code::{detect_dead_code_gpu};
+use crate::analysis::dependency_cycles::build_dependency_cycles_gpu;
+use crate::analysis::structural_hotspots::{build_structural_hotspots, build_branch_complexity, build_branch_pressure, build_merge_candidates, build_path_redundancy, build_reachability_report_gpu};
+use crate::analysis::dataflow::build_dataflow_fanout;
+use crate::analysis::panic_report::build_panic_report;
+use crate::health::graph_health::write_graph_health_report;
+use crate::health::tlog_integrity::write_tlog_integrity_report;
+use crate::health::system_health::{write_system_health_report, current_timestamp};
+use crate::semantics::semantic_features::extract_node_features;
+use crate::semantics::semantic_signature::compute_signatures;
+use crate::semantics::semantic_clustering::cluster_dbscan_like;
+use crate::replay::tlog_reader::parse_tlog_event;
+use crate::replay::tlog_replay::replay_graph_from_tlog_incremental;
 use crate::replay::session_scan::{find_last_graph_session_offset, find_last_session_offset, session_contains_module_nodes};
 use std::io::BufReader;
 
@@ -40,96 +70,96 @@ struct CallsiteResolutionCounts {
 
 
 #[derive(Serialize)]
-struct BranchComplexityEntry {
-    symbol: String,
-    file: String,
-    line: Option<u32>,
-    branch_count: usize,
-    duplicate_block_count: usize,
-    score: usize,
+pub struct BranchComplexityEntry {
+    pub symbol: String,
+    pub file: String,
+    pub line: Option<u32>,
+    pub branch_count: usize,
+    pub duplicate_block_count: usize,
+    pub score: usize,
 }
 
 #[derive(Serialize)]
-struct CallgraphCentralityEntry {
-    symbol: String,
-    file: String,
-    caller_count: usize,
-    callee_count: usize,
-    centrality_score: usize,
+pub struct CallgraphCentralityEntry {
+    pub symbol: String,
+    pub file: String,
+    pub caller_count: usize,
+    pub callee_count: usize,
+    pub centrality_score: usize,
 }
 
 #[derive(Serialize)]
-struct DeadCodeEntry {
-    symbol: String,
-    file: String,
-    line: Option<u32>,
-    reason: String,
+pub struct DeadCodeEntry {
+    pub symbol: String,
+    pub file: String,
+    pub line: Option<u32>,
+    pub reason: String,
 }
 
 #[derive(Serialize)]
-struct DependencyCycleEntry {
-    cycle_id: usize,
-    nodes: Vec<String>,
-    files: Vec<String>,
-    cycle_length: usize,
+pub struct DependencyCycleEntry {
+    pub cycle_id: usize,
+    pub nodes: Vec<String>,
+    pub files: Vec<String>,
+    pub cycle_length: usize,
 }
 
 #[derive(Serialize)]
-struct StructuralHotspotEntry {
-    symbol: String,
-    file: String,
-    line: Option<u32>,
-    branch_count: usize,
-    duplicate_blocks: usize,
-    callers: Vec<String>,
-    score: usize,
+pub struct StructuralHotspotEntry {
+    pub symbol: String,
+    pub file: String,
+    pub line: Option<u32>,
+    pub branch_count: usize,
+    pub duplicate_blocks: usize,
+    pub callers: Vec<String>,
+    pub score: usize,
 }
 
 #[derive(Serialize)]
-struct DataflowFanoutEntry {
-    symbol: String,
-    file: String,
-    line: Option<u32>,
-    outgoing_edges: usize,
-    mutation_edges: usize,
-    io_edges: usize,
+pub struct DataflowFanoutEntry {
+    pub symbol: String,
+    pub file: String,
+    pub line: Option<u32>,
+    pub outgoing_edges: usize,
+    pub mutation_edges: usize,
+    pub io_edges: usize,
 }
 
 #[derive(Serialize)]
-struct BranchPressureEntry {
-    symbol: String,
-    file: String,
-    line: Option<u32>,
-    branch_nodes: usize,
-    branch_pressure: usize,
+pub struct BranchPressureEntry {
+    pub symbol: String,
+    pub file: String,
+    pub line: Option<u32>,
+    pub branch_nodes: usize,
+    pub branch_pressure: usize,
 }
 
 #[derive(Serialize)]
-struct MergeCandidateEntry {
-    function: String,
-    branch_block: u32,
-    successors: Vec<u32>,
-    candidate_blocks: Vec<u32>,
+pub struct MergeCandidateEntry {
+    pub function: String,
+    pub branch_block: u32,
+    pub successors: Vec<u32>,
+    pub candidate_blocks: Vec<u32>,
 }
 
 #[derive(Serialize)]
-struct ReachabilityEntry {
-    symbol: String,
-    file: String,
-    line: Option<u32>,
-    reachable_blocks: usize,
-    total_blocks: usize,
-    reachable_ratio: f64,
+pub struct ReachabilityEntry {
+    pub symbol: String,
+    pub file: String,
+    pub line: Option<u32>,
+    pub reachable_blocks: usize,
+    pub total_blocks: usize,
+    pub reachable_ratio: f64,
 }
 
 #[derive(Serialize)]
-struct PathRedundancyEntry {
-    symbol: String,
-    file: String,
-    line: Option<u32>,
-    paths_total: usize,
-    paths_unique: usize,
-    redundancy_ratio: f64,
+pub struct PathRedundancyEntry {
+    pub symbol: String,
+    pub file: String,
+    pub line: Option<u32>,
+    pub paths_total: usize,
+    pub paths_unique: usize,
+    pub redundancy_ratio: f64,
 }
 
 pub fn generate_reports(output_dir: &Path, out_dir: &Path) -> Result<()> {
@@ -140,7 +170,8 @@ pub fn generate_reports(output_dir: &Path, out_dir: &Path) -> Result<()> {
     let _symbols_json = fs::read_to_string(output_dir.join("symbols.json"))
         .map_err(|e| anyhow!("failed to read symbols.json: {e}"))?;
     let reports_dir = out_dir.join("reports");
-    generate_reports_from_parts(nodes, edges, files, out_dir, &reports_dir)
+    let _ = generate_reports_from_parts(nodes, edges, files, out_dir, &reports_dir)?;
+    Ok(())
 }
 
 pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()> {
@@ -148,6 +179,7 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
     let snapshot_path = out_dir.join("graph_snapshot.bin");
     let meta_path = out_dir.join("snapshot.meta.json");
     let graph_bin_path = out_dir.join("graph.bin");
+    let minimal = std::env::var("CANON_REPORTS_MINIMAL").ok().as_deref() == Some("1");
     let skip_snapshot = std::env::var("CANON_REPORTS_SKIP_SNAPSHOT").ok().as_deref() == Some("1");
     let graph_bin_fresh = graph_bin_path.exists() && is_graph_bin_fresh(&graph_bin_path, tlog_path);
     let tlog_has_modules = if graph_bin_fresh
@@ -176,7 +208,7 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
     }
     let (nodes, edges, files) = normalize_graph(nodes, edges, files);
     if (!graph_bin_fresh && !prefer_graph_bin) || force_write_graph_bin {
-        write_graph_bin(&graph_bin_path, &nodes, &edges, &files)?;
+        emit_graph_bin(&graph_bin_path, &nodes, &edges, &files)?;
         if skip_snapshot {
             eprintln!(
                 "canon_reports: skipping kernel snapshot write (CANON_REPORTS_SKIP_SNAPSHOT=1)"
@@ -203,24 +235,50 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
         write_snapshot_metadata(&meta_path, &meta)?;
     }
     let reports_dir = out_dir.join("reports");
-    generate_reports_from_parts(nodes, edges, files, out_dir, &reports_dir)?;
-    write_tlog_integrity_report(tlog_path, &reports_dir)?;
-    write_system_health_report(tlog_path, &reports_dir)?;
+    let parts = generate_reports_from_parts(nodes, edges, files, out_dir, &reports_dir)?;
+    if let Ok(cache) = update_graph_cache(tlog_path, &reports_dir) {
+        let (modulegraph, module_nodes) = build_modulegraph_from_cache(&cache);
+        emit_modulegraph_csv(out_dir, &modulegraph, &module_nodes)?;
+        if !cache.type_nodes.is_empty() || !cache.type_edges.is_empty() {
+            let (typegraph, type_nodes) = build_typegraph_from_cache(&cache);
+            emit_typegraph_csv_from_cache(out_dir, &typegraph, &type_nodes)?;
+        }
+    }
+    write_symbol_artifacts_from_tlog(tlog_path, out_dir)?;
     if let Err(err) = write_callsite_resolution_from_tlog(tlog_path, &reports_dir) {
         eprintln!("canon_reports: callsite resolution failed: {err:?}");
     }
-    if let Ok(cache) = load_and_update_graph_cache(tlog_path, &reports_dir) {
-        let (modulegraph, module_nodes) = build_modulegraph_from_cache(&cache);
-        write_modulegraph_csv(out_dir, &modulegraph, &module_nodes)?;
-        if !cache.type_nodes.is_empty() || !cache.type_edges.is_empty() {
-            let (typegraph, type_nodes) = build_typegraph_from_cache(&cache);
-            write_typegraph_csv_from_cache(out_dir, &typegraph, &type_nodes)?;
+    if !minimal {
+        if let Err(err) = crate::invariants::invariant_validator::run_invariant_pipeline(out_dir) {
+            eprintln!("canon_reports: invariant pipeline failed: {err:?}");
         }
     }
-    if let Err(err) = crate::invariant_validator::run_invariant_pipeline(out_dir) {
-        eprintln!("canon_reports: invariant pipeline failed: {err:?}");
+    write_graph_health_report(
+        out_dir,
+        &reports_dir,
+        &parts.nodes,
+        &parts.edges,
+        &parts.files,
+        &parts.cfg,
+        &parts.callgraph,
+    )?;
+    write_tlog_integrity_report(tlog_path, &reports_dir)?;
+    write_system_health_report(tlog_path, &reports_dir)?;
+    let panic_log = reports_dir.join("panic_records.jsonl");
+    let panic_summary = reports_dir.join("panic_summary.json");
+    if let Err(err) = build_panic_report(&panic_log, &panic_summary) {
+        eprintln!("canon_reports: panic report failed: {err:?}");
     }
+    cleanup_legacy_dirs(out_dir)?;
     Ok(())
+}
+
+struct ReportParts {
+    nodes: Vec<NodeRow>,
+    edges: Vec<EdgeRow>,
+    files: Vec<String>,
+    cfg: Vec<EdgeRow>,
+    callgraph: Vec<(u32, u32)>,
 }
 
 fn generate_reports_from_parts(
@@ -229,7 +287,7 @@ fn generate_reports_from_parts(
     files: Vec<String>,
     graph_dir: &Path,
     reports_dir: &Path,
-) -> Result<()> {
+) -> Result<ReportParts> {
     fs::create_dir_all(graph_dir)?;
     fs::create_dir_all(reports_dir)?;
     let (nodes, edges, files) = normalize_graph(nodes, edges, files);
@@ -240,11 +298,17 @@ fn generate_reports_from_parts(
     }
 
     if std::env::var("CANON_REPORTS_MINIMAL").ok().as_deref() == Some("1") {
-        write_graph_health_report(graph_dir, reports_dir, &nodes, &edges, &files, &cfg, &callgraph)?;
-        return Ok(());
+        return Ok(ReportParts { nodes, edges, files, cfg, callgraph });
     }
 
     let node_map: HashMap<u32, NodeRow> = nodes.iter().map(|n| (n.id, n.clone())).collect();
+
+    let diagnostics = build_diagnostics(&nodes, &edges);
+    write_diagnostics(reports_dir, &diagnostics)?;
+    if diagnostics.should_fail {
+        write_missing_report_placeholders(reports_dir, &diagnostics)?;
+        return Err(anyhow!(diagnostics.fail_reason));
+    }
 
     let mut file_map: HashMap<u32, String> = HashMap::new();
     for (idx, path) in files.iter().enumerate() {
@@ -253,12 +317,44 @@ fn generate_reports_from_parts(
 
     let cfg_out = build_cfg_out(&cfg);
     let cfg_in = build_cfg_in(&cfg);
+    let diagnostics = enrich_diagnostics_with_topology(diagnostics, &cfg_out);
+    write_diagnostics(reports_dir, &diagnostics)?;
+    if std::env::var("CANON_REPORTS_PANIC_ON_EMPTY_CFG").ok().as_deref() == Some("1") && cfg_out.is_empty() {
+        panic!("CFG invariant violated: no CFG edges found");
+    }
+    if std::env::var("CANON_REPORTS_PANIC_ON_EMPTY_CALLGRAPH").ok().as_deref() == Some("1") && callgraph.is_empty() {
+        panic!("Callgraph invariant violated: no call edges");
+    }
+    if std::env::var("CANON_REPORTS_PANIC_ON_CALLSITE_MISMATCH").ok().as_deref() == Some("1")
+        && diagnostics.call_edges > 0
+        && diagnostics.callsite_nodes == 0
+    {
+        panic!("Callsite invariant violated: CALL edges present but CALL_SITE nodes missing");
+    }
+    if std::env::var("CANON_REPORTS_PANIC_ON_BLOCK_MISMATCH").ok().as_deref() == Some("1")
+        && diagnostics.function_nodes > 0
+        && (diagnostics.has_block_edges == 0 || diagnostics.flow_edges == 0)
+    {
+        panic!("CFG invariant violated: functions exist but HAS_BLOCK/FLOW edges missing");
+    }
+    if std::env::var("CANON_REPORTS_PANIC_ON_NO_BRANCHES").ok().as_deref() == Some("1")
+        && diagnostics.function_nodes > 0
+        && diagnostics.branch_nodes == 0
+    {
+        panic!("CFG invariant violated: no branch nodes (fan-out > 1) detected");
+    }
+    if std::env::var("CANON_REPORTS_PANIC_ON_SPARSE_CALLGRAPH").ok().as_deref() == Some("1")
+        && diagnostics.function_nodes > 0
+        && diagnostics.calls_per_function < 0.05
+    {
+        panic!("Callgraph invariant violated: calls_per_function < 0.05");
+    }
 
     let block_owner = build_block_owner(&nodes, &edges);
     let block_effect_sig = build_block_effect_signatures(&edges, &node_map);
 
     // Build callgraph CSR once — shared by GPU SCC, GPU reachability, dead code
-    let (cg_csr, cg_id_to_local, cg_local_to_id) = build_callgraph_csr(&callgraph);
+    let (cg_csr, cg_id_to_local, cg_local_to_id) = build_callgraph_csr_graph(&callgraph);
 
     // Parallel dispatch — independent reports run concurrently
     let results: Vec<Result<()>> = [
@@ -291,7 +387,7 @@ fn generate_reports_from_parts(
             write_report(&reports_dir.join("callgraph_centrality_report.json"), &r)
         }
         "dead_code" => {
-            let r = build_dead_code_gpu(
+            let r = detect_dead_code_gpu(
                 &nodes,
                 &node_map,
                 &file_map,
@@ -304,7 +400,8 @@ fn generate_reports_from_parts(
                 &cg_id_to_local,
                 &cg_local_to_id,
             );
-            write_report(&reports_dir.join("dead_code_report.json"), &r)
+            write_report(&reports_dir.join("dead_code_report.json"), &r)?;
+            write_report(&reports_dir.join("dead_code.json"), &r)
         }
         "dependency_cycles" => {
             let r = build_dependency_cycles_gpu(
@@ -314,7 +411,8 @@ fn generate_reports_from_parts(
                 &cg_csr,
                 &cg_local_to_id,
             );
-            write_report(&reports_dir.join("dependency_cycle_report.json"), &r)
+            write_report(&reports_dir.join("dependency_cycle_report.json"), &r)?;
+            write_report(&reports_dir.join("cycles.json"), &r)
         }
         "structural_hotspots" => {
             let r = build_structural_hotspots(
@@ -327,7 +425,8 @@ fn generate_reports_from_parts(
                 &block_owner,
                 &block_effect_sig,
             );
-            write_report(&reports_dir.join("structural_hotspots_report.json"), &r)
+            write_report(&reports_dir.join("structural_hotspots_report.json"), &r)?;
+            write_report(&reports_dir.join("hotspots.json"), &r)
         }
         "dataflow_fanout" => {
             let r = build_dataflow_fanout(&nodes, &node_map, &file_map, &edges, &block_owner);
@@ -366,11 +465,210 @@ fn generate_reports_from_parts(
     }
 
     write_graph_health_report(graph_dir, reports_dir, &nodes, &edges, &files, &cfg, &callgraph)?;
-    write_semantic_signatures(graph_dir, reports_dir, &nodes, &edges, &callgraph)?;
-    write_semantic_clusters(graph_dir, reports_dir, &nodes, &edges, &callgraph)?;
+    write_semantic_signatures(graph_dir, reports_dir, &nodes, &edges, &files)?;
+    write_semantic_clusters(graph_dir, reports_dir, &nodes, &edges, &files)?;
 
+    Ok(ReportParts { nodes, edges, files, cfg, callgraph })
+}
+
+fn write_semantic_signatures(
+    graph_dir: &Path,
+    reports_dir: &Path,
+    nodes: &[NodeRow],
+    edges: &[EdgeRow],
+    files: &[String],
+) -> Result<()> {
+    let graph = rows_to_kernel_graph(nodes, edges, files);
+    let features = extract_node_features(graph_dir, &graph)?;
+    let _ = reports_dir;
+    let _ = compute_signatures(graph_dir, &features)?;
     Ok(())
 }
+
+fn write_semantic_clusters(
+    graph_dir: &Path,
+    reports_dir: &Path,
+    nodes: &[NodeRow],
+    edges: &[EdgeRow],
+    files: &[String],
+) -> Result<()> {
+    let graph = rows_to_kernel_graph(nodes, edges, files);
+    let features = extract_node_features(graph_dir, &graph)?;
+    let clustering = cluster_dbscan_like(&features, 5.0, 3);
+
+    fs::create_dir_all(reports_dir)?;
+    fs::write(
+        reports_dir.join("semantic_clusters.json"),
+        serde_json::to_string_pretty(&clustering.clusters)?,
+    )?;
+
+    let mut outliers = Vec::new();
+    let mut outlier_ids = clustering.outliers;
+    outlier_ids.sort_unstable();
+    for id in outlier_ids {
+        if let Some(node) = graph.nodes.iter().find(|n| n.id == id) {
+            outliers.push(serde_json::json!({
+                "node_id": node.id,
+                "symbol": node.symbol,
+                "file": node.file,
+                "line": node.line,
+                "kind": node.kind,
+            }));
+        }
+    }
+    fs::write(
+        reports_dir.join("semantic_outliers.json"),
+        serde_json::to_string_pretty(&outliers)?,
+    )?;
+    write_cluster_graph_bin(reports_dir, &clustering.clusters)?;
+    Ok(())
+}
+
+fn write_cluster_graph_bin(
+    reports_dir: &Path,
+    clusters: &[crate::semantics::semantic_clustering::SemanticCluster],
+) -> Result<()> {
+    let mut buf = Vec::with_capacity(8 + clusters.len() * 16);
+    buf.extend_from_slice(&(clusters.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&0u32.to_le_bytes());
+    for c in clusters {
+        buf.extend_from_slice(&(c.cluster_id as u64).to_le_bytes());
+        buf.extend_from_slice(&(c.nodes.len() as u32).to_le_bytes());
+        for id in &c.nodes {
+            buf.extend_from_slice(&id.to_le_bytes());
+        }
+    }
+    fs::write(reports_dir.join("cluster_graph.bin"), buf)?;
+    Ok(())
+}
+
+fn cleanup_legacy_dirs(out_dir: &Path) -> Result<()> {
+    let semantics_dir = out_dir.join("semantics");
+    if semantics_dir.exists() {
+        fs::remove_dir_all(&semantics_dir)?;
+    }
+    let invariants_dir = out_dir.join("invariants");
+    if invariants_dir.exists() {
+        fs::remove_dir_all(&invariants_dir)?;
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct DiagnosticsReport {
+    has_block_edges: usize,
+    flow_edges: usize,
+    call_edges: usize,
+    callsite_nodes: usize,
+    function_nodes: usize,
+    branch_nodes: usize,
+    merge_candidate_blocks: usize,
+    calls_per_function: f64,
+    should_fail: bool,
+    fail_reason: String,
+}
+
+fn build_diagnostics(nodes: &[NodeRow], edges: &[EdgeRow]) -> DiagnosticsReport {
+    let has_block_edges = edges.iter().filter(|e| e.kind == "HAS_BLOCK").count();
+    let flow_edges = edges.iter().filter(|e| e.kind == "FLOW").count();
+    let call_edges = edges.iter().filter(|e| e.kind == "CALL").count();
+    let callsite_nodes = nodes.iter().filter(|n| n.kind == "CALL_SITE").count();
+    let function_nodes = nodes
+        .iter()
+        .filter(|n| n.kind == "FUNCTION" || n.kind == "METHOD")
+        .count();
+
+    let mut reasons = Vec::new();
+    if function_nodes > 0 && has_block_edges == 0 {
+        reasons.push("missing HAS_BLOCK edges");
+    }
+    if function_nodes > 0 && flow_edges == 0 {
+        reasons.push("missing FLOW edges");
+    }
+    if call_edges > 0 && callsite_nodes == 0 {
+        reasons.push("missing CALL_SITE nodes");
+    }
+
+    let should_fail = !reasons.is_empty();
+    let fail_reason = if should_fail {
+        format!("diagnostics gate failed: {}", reasons.join(", "))
+    } else {
+        String::new()
+    };
+
+    DiagnosticsReport {
+        has_block_edges,
+        flow_edges,
+        call_edges,
+        callsite_nodes,
+        function_nodes,
+        branch_nodes: 0,
+        merge_candidate_blocks: 0,
+        calls_per_function: if function_nodes == 0 { 0.0 } else { call_edges as f64 / function_nodes as f64 },
+        should_fail,
+        fail_reason,
+    }
+}
+
+fn write_diagnostics(reports_dir: &Path, diagnostics: &DiagnosticsReport) -> Result<()> {
+    fs::create_dir_all(reports_dir)?;
+    let path = reports_dir.join("diagnostics.json");
+    fs::write(path, serde_json::to_string_pretty(diagnostics)?)?;
+    Ok(())
+}
+
+fn enrich_diagnostics_with_topology(
+    mut diagnostics: DiagnosticsReport,
+    cfg_out: &HashMap<u32, Vec<u32>>,
+) -> DiagnosticsReport {
+    let mut branch_nodes = 0usize;
+    let mut seen_succ: HashMap<Vec<u32>, usize> = HashMap::new();
+    let mut merge_candidate_blocks = 0usize;
+
+    for outs in cfg_out.values() {
+        if outs.len() > 1 {
+            branch_nodes += 1;
+        }
+        let mut key = outs.clone();
+        key.sort_unstable();
+        if key.len() > 1 {
+            let count = seen_succ.entry(key).or_insert(0);
+            *count += 1;
+            if *count > 1 {
+                merge_candidate_blocks += 1;
+            }
+        }
+    }
+
+    diagnostics.branch_nodes = branch_nodes;
+    diagnostics.merge_candidate_blocks = merge_candidate_blocks;
+    diagnostics
+}
+
+fn write_missing_report_placeholders(
+    reports_dir: &Path,
+    diagnostics: &DiagnosticsReport,
+) -> Result<()> {
+    let payload = serde_json::json!({
+        "reason": "missing required edges",
+        "diagnostics": diagnostics,
+    });
+    for name in [
+        "branch_pressure_report.json",
+        "merge_candidates_report.json",
+        "path_redundancy_report.json",
+        "reachability_report.json",
+        "dependency_cycle_report.json",
+        "cycles.json",
+        "structural_hotspots_report.json",
+        "hotspots.json",
+    ] {
+        let path = reports_dir.join(name);
+        fs::write(path, serde_json::to_string_pretty(&payload)?)?;
+    }
+    Ok(())
+}
+
 
 fn write_callsite_resolution_from_tlog(tlog_path: &Path, reports_dir: &Path) -> Result<()> {
     let offset = find_last_graph_session_offset(tlog_path)
@@ -419,6 +717,74 @@ fn write_callsite_resolution_from_tlog(tlog_path: &Path, reports_dir: &Path) -> 
     Ok(())
 }
 
+fn write_symbol_artifacts_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()> {
+    let offset = find_last_graph_session_offset(tlog_path)
+        .or_else(|| find_last_session_offset(tlog_path))
+        .unwrap_or(0);
+    let file = fs::File::open(tlog_path)?;
+    let mut reader = BufReader::new(file);
+    if offset > 0 {
+        reader.seek(SeekFrom::Start(offset))?;
+    }
+
+    let mut symbols: BTreeMap<String, String> = BTreeMap::new();
+    let spans_path = out_dir.join("symbol_spans.jsonl");
+    let mut spans_file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&spans_path)?;
+
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let bytes = reader.read_line(&mut line)?;
+        if bytes == 0 {
+            break;
+        }
+        let Some(record) = parse_tlog_event(&line) else {
+            continue;
+        };
+        let Some(tag) = record.get("t").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        match tag {
+            "SYMBOL" => {
+                let sym = record.get("sym").and_then(|v| v.as_str()).unwrap_or("");
+                let kind = record.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+                if !sym.is_empty() && !kind.is_empty() {
+                    symbols.insert(sym.to_string(), kind.to_string());
+                }
+            }
+            "SPAN" => {
+                let sym = record.get("sym").and_then(|v| v.as_str()).unwrap_or("");
+                if sym.is_empty() {
+                    continue;
+                }
+                let file = record.get("file").and_then(|v| v.as_str()).unwrap_or("");
+                let line_no = record.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
+                let col = record.get("col").and_then(|v| v.as_u64()).unwrap_or(0);
+                let lo = record.get("lo").and_then(|v| v.as_u64()).unwrap_or(0);
+                let hi = record.get("hi").and_then(|v| v.as_u64()).unwrap_or(0);
+                let span = serde_json::json!({
+                    "symbol_id": sym,
+                    "file": file,
+                    "line": line_no,
+                    "col": col,
+                    "lo": lo,
+                    "hi": hi
+                });
+                writeln!(spans_file, "{}", serde_json::to_string(&span)?)?;
+            }
+            _ => {}
+        }
+    }
+
+    let symbols_path = out_dir.join("symbols.json");
+    fs::write(symbols_path, serde_json::to_string_pretty(&symbols)?)?;
+    Ok(())
+}
+
 #[allow(dead_code)]
 fn write_graph_artifacts(
     out_dir: &Path,
@@ -426,7 +792,7 @@ fn write_graph_artifacts(
     edges: &[EdgeRow],
     files: &[String],
 ) -> Result<(Vec<EdgeRow>, Vec<(u32, u32)>)> {
-    let mut cfg = build_cfg_edges(nodes, edges);
+    let mut cfg = extract_cfg_edges(nodes, edges);
     cfg.sort_by(|a, b| {
         a.src
             .cmp(&b.src)
@@ -434,7 +800,7 @@ fn write_graph_artifacts(
             .then_with(|| a.kind.cmp(&b.kind))
     });
 
-    let mut callgraph = build_callgraph_edges(nodes, edges);
+    let mut callgraph = extract_callgraph_edges(nodes, edges);
     callgraph.sort_unstable();
 
     let (modulegraph, module_nodes) = build_modulegraph(nodes, files);
@@ -449,84 +815,89 @@ fn write_graph_artifacts(
             .then_with(|| a.2.cmp(&b.2))
     });
 
-    write_cfg_csv(out_dir, &cfg)?;
-    write_callgraph_csv(out_dir, &callgraph, nodes, files)?;
-    write_modulegraph_csv(out_dir, &modulegraph, &module_nodes)?;
-    write_typegraph_csv(out_dir, &typegraph, nodes, files)?;
+    emit_nodes_csv(out_dir, nodes)?;
+    emit_nodes_full_csv(out_dir, nodes, files)?;
+    emit_nodes_raw_jsonl(out_dir, nodes, files)?;
+    emit_edges_csv(out_dir, edges)?;
+    emit_edges_full_csv(out_dir, edges, nodes, files)?;
+    emit_files_txt(out_dir, files)?;
+    emit_cfg_csv(out_dir, &cfg)?;
+    emit_cfg_full_csv(out_dir, &cfg, nodes, files)?;
+    emit_callgraph_csv(out_dir, &callgraph, nodes, files)?;
+    emit_callgraph_full_csv(out_dir, &callgraph, nodes, files)?;
+    emit_modulegraph_csv(out_dir, &modulegraph, &module_nodes)?;
+    emit_typegraph_csv(out_dir, &typegraph, nodes, files)?;
+    emit_typegraph_full_csv(out_dir, &typegraph, nodes, files)?;
 
     Ok((cfg, callgraph))
 }
 
-fn build_cfg_edges(nodes: &[NodeRow], edges: &[EdgeRow]) -> Vec<EdgeRow> {
-    let id_to_kind: HashMap<u32, &str> = nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
+fn write_report<T: Serialize>(path: &Path, data: &T) -> Result<()> {
+    let file = fs::File::create(path)?;
+    serde_json::to_writer_pretty(file, data)?;
+    Ok(())
+}
+
+fn read_nodes_csv(path: PathBuf) -> Result<Vec<NodeRow>> {
+    let content = fs::read_to_string(path)?;
     let mut out = Vec::new();
-    for edge in edges {
-        if edge.kind != "FLOW" && edge.kind != "UNWIND" && edge.kind != "RETURN" && edge.kind != "BRANCH" {
+    for (idx, line) in content.lines().enumerate() {
+        if idx == 0 || line.trim().is_empty() {
             continue;
         }
-        let src_kind = id_to_kind.get(&edge.src);
-        let dst_kind = id_to_kind.get(&edge.dst);
-        if src_kind == Some(&"BASIC_BLOCK") {
-            if edge.kind == "RETURN" {
-                out.push(edge.clone());
-                continue;
-            }
-            if dst_kind == Some(&"BASIC_BLOCK") {
-                out.push(edge.clone());
-            }
+        let parts: Vec<&str> = line.splitn(7, ',').collect();
+        if parts.len() < 7 {
+            continue;
         }
+        let id: u32 = parts[0].parse().unwrap_or(0);
+        let kind = parts[1].to_string();
+        let symbol = parts[2].to_string();
+        let file_id = parts[3].parse::<u32>().ok();
+        let line = parts[4].parse::<u32>().ok();
+        out.push(NodeRow { id, kind, symbol, file_id, line });
     }
-    out
+    Ok(out)
 }
 
-fn build_callgraph_edges(nodes: &[NodeRow], edges: &[EdgeRow]) -> Vec<(u32, u32)> {
-    let id_to_kind: HashMap<u32, &str> = nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
-    let mut seen: BTreeSet<(u32, u32)> = BTreeSet::new();
-    let mut callsite_to_block: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
-    let mut block_to_fn: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
-    let mut has_callsite_edges = false;
-
-    for edge in edges {
-        if edge.kind != "HAS_BLOCK" {
+fn read_edges_csv(path: PathBuf) -> Result<Vec<EdgeRow>> {
+    let content = fs::read_to_string(path)?;
+    let mut out = Vec::new();
+    for (idx, line) in content.lines().enumerate() {
+        if idx == 0 || line.trim().is_empty() {
             continue;
         }
-        let src_kind = id_to_kind.get(&edge.src);
-        let dst_kind = id_to_kind.get(&edge.dst);
-        if src_kind == Some(&"BASIC_BLOCK") && dst_kind == Some(&"CALL_SITE") {
-            callsite_to_block.entry(edge.dst).or_default().insert(edge.src);
-            has_callsite_edges = true;
-        } else if matches!(src_kind, Some(&"FUNCTION" | &"METHOD")) && dst_kind == Some(&"BASIC_BLOCK") {
-            block_to_fn.entry(edge.dst).or_default().insert(edge.src);
+        let parts: Vec<&str> = line.splitn(3, ',').collect();
+        if parts.len() < 3 {
+            continue;
         }
+        let src: u32 = parts[0].parse().unwrap_or(0);
+        let dst: u32 = parts[1].parse().unwrap_or(0);
+        let kind = parts[2].to_string();
+        out.push(EdgeRow { src, dst, kind });
     }
-
-    for edge in edges {
-        if edge.kind != "CALL" {
-            continue;
-        }
-        let callee_kind = id_to_kind.get(&edge.dst);
-        if !matches!(callee_kind, Some(&"FUNCTION" | &"METHOD")) {
-            continue;
-        }
-        if has_callsite_edges {
-            if let Some(blocks) = callsite_to_block.get(&edge.src) {
-                for block in blocks {
-                    if let Some(callers) = block_to_fn.get(block) {
-                        for caller in callers {
-                            seen.insert((*caller, edge.dst));
-                        }
-                    }
-                }
-            }
-        } else {
-            let caller_kind = id_to_kind.get(&edge.src);
-            if matches!(caller_kind, Some(&"FUNCTION" | &"METHOD")) {
-                seen.insert((edge.src, edge.dst));
-            }
-        }
-    }
-
-    seen.into_iter().collect()
+    Ok(out)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+fn read_files_txt(path: PathBuf) -> Result<Vec<String>> {
+    let content = fs::read_to_string(path)?;
+    let mut files = Vec::new();
+    for (idx, line) in content.lines().enumerate() {
+        if idx == 0 || line.trim().is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let id = parts[0].parse::<usize>().unwrap_or(usize::MAX);
+        if id == usize::MAX {
+            continue;
+        }
+        let path = parts[1..].join(",");
+        if files.len() <= id {
+            files.resize(id + 1, String::new());
+        }
+        files[id] = path;
+    }
+    Ok(files)
+}

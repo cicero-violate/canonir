@@ -3,7 +3,7 @@ use std::fs;
 use std::io::BufRead;
 use std::path::Path;
 
-use crate::replay::tlog_replay::parse_tlog_event;
+use crate::replay::tlog_reader::parse_tlog_event;
 
 pub fn find_last_session_offset(tlog_path: &Path) -> Option<u64> {
     let idx_path = tlog_path.with_extension("tlog.idx");

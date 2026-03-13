@@ -1,4 +1,4 @@
-use crate::semantic_clustering::SemanticCluster;
+use crate::semantics::semantic_clustering::SemanticCluster;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]

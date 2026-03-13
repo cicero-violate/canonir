@@ -1,0 +1,5 @@
+file_id,path
+0,/workspace/ai_sandbox/canon/canon-utils/graph/src/builder.rs
+1,/workspace/ai_sandbox/canon/canon-utils/graph/src/consumer.rs
+2,/workspace/ai_sandbox/canon/canon-utils/graph/src/csr.rs
+3,/workspace/ai_sandbox/canon/canon-utils/graph/src/lib.rs

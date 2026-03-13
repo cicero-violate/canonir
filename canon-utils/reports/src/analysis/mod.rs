@@ -4,3 +4,4 @@ pub mod dead_code;
 pub mod dependency_cycles;
 pub mod structural_hotspots;
 pub mod dataflow;
+pub mod panic_report;

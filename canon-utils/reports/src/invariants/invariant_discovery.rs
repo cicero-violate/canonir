@@ -1,5 +1,5 @@
 use crate::artifacts_loader::KernelGraph;
-use crate::report_ingest::ReportFeatures;
+use crate::ingest::report_ingest::ReportFeatures;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 

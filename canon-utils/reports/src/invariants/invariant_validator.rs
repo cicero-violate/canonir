@@ -1,12 +1,12 @@
 use crate::artifacts_loader::{load_kernel_graph, KernelGraph};
-use crate::invariant_discovery::{discover_invariants, mine_candidates, InvariantResult};
-use crate::semantic_features::extract_node_features;
-use crate::semantic_signature::compute_signatures;
-use crate::semantic_clustering::cluster_dbscan_like;
-use crate::pattern_mining::mine_patterns;
-use crate::invariant_generator::generate_candidates;
-use crate::invariant_sat::validate_candidates;
-use crate::report_ingest::{ingest_reports, ReportFeatures};
+use crate::invariants::invariant_discovery::{discover_invariants, mine_candidates, InvariantResult};
+use crate::semantics::semantic_features::extract_node_features;
+use crate::semantics::semantic_signature::compute_signatures;
+use crate::semantics::semantic_clustering::cluster_dbscan_like;
+use crate::semantics::pattern_mining::mine_patterns;
+use crate::invariants::invariant_generator::generate_candidates;
+use crate::invariants::invariant_sat::validate_candidates;
+use crate::ingest::report_ingest::{ingest_reports, ReportFeatures};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -40,15 +40,16 @@ struct InvariantHistoryEntry {
 
 pub fn run_invariant_pipeline(graph_dir: &Path) -> Result<()> {
     let base_dir = graph_dir.parent().unwrap_or(graph_dir);
+    let reports_dir = base_dir.join("reports");
     let graph = load_kernel_graph(graph_dir)?;
     let features = ingest_reports(base_dir, &graph)?;
     let invariants = discover_invariants(&graph, &features);
     let report = build_report(&invariants);
-    write_report(base_dir, &report)?;
-    write_violations(base_dir, &graph, &invariants)?;
-    write_discovered(base_dir, &graph, &features)?;
-    update_history(base_dir, &invariants)?;
-    run_semantic_pipeline(base_dir, graph_dir, &graph)?;
+    write_report(&reports_dir, &report)?;
+    write_violations(&reports_dir, &graph, &invariants)?;
+    write_discovered(&reports_dir, &graph, &features)?;
+    update_history(&reports_dir, &invariants)?;
+    run_semantic_pipeline(&reports_dir, graph_dir, &graph)?;
     Ok(())
 }
 
@@ -68,26 +69,25 @@ fn build_report(invariants: &[InvariantResult]) -> InvariantReport {
     InvariantReport { ok, invariants: records }
 }
 
-fn write_report(base_dir: &Path, report: &InvariantReport) -> Result<()> {
-    let semantics_dir = base_dir.join("semantics");
-    fs::create_dir_all(&semantics_dir)?;
-    let path = semantics_dir.join("upg_invariants.json");
+fn write_report(reports_dir: &Path, report: &InvariantReport) -> Result<()> {
+    fs::create_dir_all(reports_dir)?;
+    let path = reports_dir.join("invariant_report.json");
     let payload = serde_json::to_string_pretty(report)?;
     fs::write(path, payload)?;
     Ok(())
 }
 
-fn write_discovered(graph_dir: &Path, graph: &KernelGraph, features: &ReportFeatures) -> Result<()> {
+fn write_discovered(reports_dir: &Path, graph: &KernelGraph, features: &ReportFeatures) -> Result<()> {
     let discovered = mine_candidates(graph, features);
-    let path = graph_dir.join("semantics").join("invariants_discovered.json");
-    fs::create_dir_all(path.parent().unwrap())?;
+    fs::create_dir_all(reports_dir)?;
+    let path = reports_dir.join("invariants_discovered.json");
     let payload = serde_json::to_string_pretty(&discovered)?;
     fs::write(path, payload)?;
     Ok(())
 }
 
 fn write_violations(
-    graph_dir: &Path,
+    reports_dir: &Path,
     graph: &KernelGraph,
     invariants: &[InvariantResult],
 ) -> Result<()> {
@@ -95,8 +95,8 @@ fn write_violations(
     for n in &graph.nodes {
         id_to_node.insert(n.id, n);
     }
-    let out_dir = graph_dir.join("semantics").join("invariant_violations");
-    fs::create_dir_all(&out_dir)?;
+    fs::create_dir_all(reports_dir)?;
+    let mut out = Vec::new();
     for inv in invariants {
         if inv.violations.is_empty() {
             continue;
@@ -112,16 +112,21 @@ fn write_violations(
                 }));
             }
         }
-        let path = out_dir.join(format!("{}.json", inv.name));
-        fs::write(path, serde_json::to_string_pretty(&entries)?)?;
+        out.push(serde_json::json!({
+            "invariant": inv.name,
+            "violations": entries,
+        }));
     }
+    fs::write(
+        reports_dir.join("violations.json"),
+        serde_json::to_string_pretty(&out)?,
+    )?;
     Ok(())
 }
 
-fn update_history(graph_dir: &Path, invariants: &[InvariantResult]) -> Result<()> {
-    let history_dir = graph_dir.join("invariants");
-    fs::create_dir_all(&history_dir)?;
-    let path = history_dir.join("invariant_history.json");
+fn update_history(reports_dir: &Path, invariants: &[InvariantResult]) -> Result<()> {
+    fs::create_dir_all(reports_dir)?;
+    let path = reports_dir.join("history.json");
     let mut history: Vec<InvariantHistoryEntry> = if path.exists() {
         let data = fs::read_to_string(&path)?;
         serde_json::from_str(&data).unwrap_or_default()
@@ -142,10 +147,7 @@ fn update_history(graph_dir: &Path, invariants: &[InvariantResult]) -> Result<()
     Ok(())
 }
 
-fn run_semantic_pipeline(base_dir: &Path, graph_dir: &Path, graph: &KernelGraph) -> Result<()> {
-    let semantics_dir = base_dir.join("semantics");
-    fs::create_dir_all(&semantics_dir)?;
-
+fn run_semantic_pipeline(reports_dir: &Path, graph_dir: &Path, graph: &KernelGraph) -> Result<()> {
     let features = extract_node_features(graph_dir, graph)?;
     let _signatures = compute_signatures(graph_dir, &features)?;
     let clustering = cluster_dbscan_like(&features, 5.0, 3);
@@ -153,54 +155,12 @@ fn run_semantic_pipeline(base_dir: &Path, graph_dir: &Path, graph: &KernelGraph)
     let candidates = generate_candidates(&patterns);
     let sat = validate_candidates(&candidates);
 
-    let clusters_path = semantics_dir.join("semantic_clusters.json");
-    fs::write(clusters_path, serde_json::to_string_pretty(&clustering.clusters)?)?;
-
-    let candidates_path = semantics_dir.join("invariant_candidates.json");
+    fs::create_dir_all(reports_dir)?;
+    let candidates_path = reports_dir.join("invariant_candidates.json");
     fs::write(candidates_path, serde_json::to_string_pretty(&candidates)?)?;
 
-    let sat_path = semantics_dir.join("invariant_validated.json");
+    let sat_path = reports_dir.join("invariant_validated.json");
     fs::write(sat_path, serde_json::to_string_pretty(&sat)?)?;
-
-    // Outliers: clusters with size 1
-    let mut outliers = Vec::new();
-    let mut outlier_ids = clustering.outliers;
-    outlier_ids.sort_unstable();
-    for id in outlier_ids {
-        if let Some(node) = graph.nodes.iter().find(|n| n.id == id) {
-            outliers.push(serde_json::json!({
-                "node_id": node.id,
-                "symbol": node.symbol,
-                "file": node.file,
-                "line": node.line,
-                "kind": node.kind,
-            }));
-        }
-    }
-    let out_path = semantics_dir.join("semantic_outliers.json");
-    fs::write(out_path, serde_json::to_string_pretty(&outliers)?)?;
-
-    relocate_semantic_reports(base_dir)?;
-    Ok(())
-}
-
-fn relocate_semantic_reports(base_dir: &Path) -> Result<()> {
-    let reports_dir = base_dir.join("reports");
-    let semantics_dir = base_dir.join("semantics");
-    fs::create_dir_all(&semantics_dir)?;
-    for name in [
-        "node_semantic_signatures.csv",
-        "semantic_clusters.json",
-        "invariant_candidates.json",
-        "invariant_validated.json",
-        "semantic_outliers.json",
-    ] {
-        let src = reports_dir.join(name);
-        let dst = semantics_dir.join(name);
-        if src.exists() && !dst.exists() {
-            fs::rename(&src, &dst)?;
-        }
-    }
     Ok(())
 }
 fn current_timestamp() -> u64 {
