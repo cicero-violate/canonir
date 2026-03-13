@@ -94,7 +94,7 @@ impl EventRuntime {
                         if let Some(crate_name) = supervisor_event.payload.get("crate").and_then(|v| v.as_str()) {
                             let request = CapabilityRequested {
                                 request_id: format!("build-{}-{}", crate_name, self.tick),
-                                name: "build.cargo".to_string(),
+                                name: "cargo.build".to_string(),
                                 args: serde_json::json!({ "crate": crate_name }),
                             };
                             self.handle_runtime_event(RuntimeEvent::CapabilityRequested(request))?;

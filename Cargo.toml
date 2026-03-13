@@ -21,7 +21,7 @@ members = [
   "canon-utils/canon-analysis",
   "canon-utils/canon-types",
   "canon-utils/capability",
-  "canon-utils/build-runtime",
+  "canon-utils/capabilities-runtime",
   "canon-utils/tlog-replay",
   "canon-utils/tlog-writer",
 ]

@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use canon_agent_v2::runtime_capabilities::register_capabilities;
+use canon_capability_runtime::register_build_capabilities;
 use canon_event_runtime::EventRuntime;
 use canon_tlog_replay::read_any_events_from_path;
 use canon_tlog_writer::{BinarySegmentWriter, CanonEvent};
@@ -25,7 +25,7 @@ fn main() -> Result<()> {
     let _ = writer.append_event(&canon);
 
     let mut runtime = EventRuntime::new(Vec::new());
-    register_capabilities(runtime.registry_mut());
+    register_build_capabilities(runtime.registry_mut());
     runtime.set_tlog_path(tmp_dir.clone());
     runtime.process_path(&tmp_dir)?;
 

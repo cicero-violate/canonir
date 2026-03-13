@@ -29,7 +29,7 @@ fn tlog_format_is_binary() -> bool {
 }
 
 fn emit_event(kind: &str, payload: serde_json::Value) -> Result<()> {
-    let event = CanonEvent::new("canon-build-runtime", kind, payload);
+    let event = CanonEvent::new("canon-capability-runtime", kind, payload);
     if tlog_format_is_binary() {
         let path = default_tlog_path();
         let dir = binary_dir_from_path(&path);
@@ -38,7 +38,7 @@ fn emit_event(kind: &str, payload: serde_json::Value) -> Result<()> {
         return Ok(());
     }
     let path = default_tlog_path();
-    append_event_json(&path, "canon-build-runtime", kind, event.payload)?;
+    append_event_json(&path, "canon-capability-runtime", kind, event.payload)?;
     Ok(())
 }
 
@@ -53,6 +53,38 @@ pub fn emit_build_started(crate_name: &str) -> Result<()> {
 pub fn emit_build_completed(crate_name: &str, success: bool, duration_ms: u128) -> Result<()> {
     emit_event(
         "build.completed",
+        json!({ "crate": crate_name, "success": success, "duration_ms": duration_ms }),
+    )
+}
+
+pub fn emit_run_started(crate_name: &str, bin: Option<&str>) -> Result<()> {
+    emit_event("run.started", json!({ "crate": crate_name, "bin": bin }))
+}
+
+pub fn emit_run_completed(
+    crate_name: &str,
+    bin: Option<&str>,
+    success: bool,
+    duration_ms: u128,
+) -> Result<()> {
+    emit_event(
+        "run.completed",
+        json!({
+            "crate": crate_name,
+            "bin": bin,
+            "success": success,
+            "duration_ms": duration_ms
+        }),
+    )
+}
+
+pub fn emit_check_started(crate_name: &str) -> Result<()> {
+    emit_event("check.started", json!({ "crate": crate_name }))
+}
+
+pub fn emit_check_completed(crate_name: &str, success: bool, duration_ms: u128) -> Result<()> {
+    emit_event(
+        "check.completed",
         json!({ "crate": crate_name, "success": success, "duration_ms": duration_ms }),
     )
 }
