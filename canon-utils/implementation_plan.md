@@ -1,300 +1,264 @@
-### Variables
+### Math
 
 [
-L = \text{Canonical binary log}
+System = Producer + Log + Consumers
 ]
 
-[
-E = {CanonEvent_i}
-]
+**Variables**
 
-[
-R = \text{Replay pipeline}
-]
-
-[
-T = \text{Tlog writer}
-]
-
-[
-C = \text{Consumers}
-]
-
-[
-S = \text{Segments}
-]
+* (P) = event producer (`canon_kernel`)
+* (L) = event log (`.tlog`)
+* (C_i) = consumer modules
+* (D) = dispatcher loop
+* (S) = kernel state
 
 ---
 
 ### Equations
 
-**Unified Log**
+1.
 
 [
-L = append(E_i)
+P \rightarrow L
 ]
 
-All system events append to one binary log.
+Kernel emits events into `.tlog`.
 
-*Explanation:* Kernel, supervisor, and agent share the same event history.
-
----
-
-**Segment Rotation**
+2.
 
 [
-L = \bigcup_{i=0}^{n} S_i
+C_i \leftarrow L
 ]
 
-Segments are rotated append files.
+Consumers read events from `.tlog`.
 
-*Explanation:* Enables infinite history with bounded files.
-
----
-
-**Deterministic Replay**
+3.
 
 [
-R(L) \rightarrow (Graph,State)
+S_{t+1} = S_t + Δ
 ]
 
-Replay reconstructs the system.
-
-*Explanation:* State derives from event history.
+State evolves by replaying deltas.
 
 ---
 
 # Implementation Plan for Coding Agent
 
-## Phase 1 — Remove JSONL Path Completely
+## 1. Rename workspace
 
-### Objective
+Rename:
 
-Ensure binary segments are the only log when `CANON_TLOG_FORMAT=binary`.
-
-### Tasks
-
-1. Audit writers
-
-   * `canon_kernel/src/log/tlog_writer.rs`
-   * `canon-supervisor/src/tlog.rs`
-   * `canon-agent-v2/src/tlog.rs`
-
-2. Enforce binary-only logic
-
-```rust
-if env("CANON_TLOG_FORMAT") == "binary" {
-    write_binary_segment(event);
-} else {
-    write_jsonl(event);
-}
+```
+canon-utils/kernel-consumers
 ```
 
-3. Remove JSON index writes in binary mode.
+to
 
-4. Verify no `.tlog` JSON lines appear when binary mode enabled.
+```
+canon-utils/event-consumers
+```
+
+Purpose: clarify that these are **event processors**, not kernel code.
 
 ---
 
-## Phase 2 — Retention Control
+## 2. Remove dispatcher from kernel
 
-### Objective
-
-Prevent infinite disk growth.
-
-### Environment Variable
+Delete:
 
 ```
-CANON_TLOG_RETAIN_SEGMENTS=10
+canon_kernel/src/event_stream/dispatcher.rs
+canon_kernel/src/event_stream/consumer.rs
 ```
 
-### Implementation
+Kernel becomes **pure event producer**.
 
-File:
+---
 
-```
-canon-utils/tlog-writer/src/rotate.rs
-```
+## 3. Keep kernel event model
 
-Algorithm
+Retain:
 
 ```
-segments = list_segments()
-if len(segments) > retain:
-    delete oldest
+event_stream/event.rs
+event_stream/delta.rs
+event_stream/event_engine.rs
+event_stream/event_replay.rs
+event_stream/replay_verify.rs
 ```
 
-Trigger retention on:
+These define:
 
 ```
-segment rotation
-writer open
+KernelEvent
+EventDelta
+replay semantics
+verification
 ```
 
 ---
 
-## Phase 3 — Binary Log Detection
+## 4. Move consumer trait
 
-### Objective
-
-Allow tools to read binary logs automatically.
-
-File:
+Move trait:
 
 ```
-canon-utils/reports/src/bin/reports_from_tlog.rs
+KernelEventConsumer
+EventMask
 ```
 
-Detection logic:
+from
 
 ```
-if path.is_dir():
-    use binary replay
-else:
-    use JSONL replay
+canon_kernel/event_stream
 ```
 
-Example
+to
 
 ```
-reports_from_tlog --tlog kernel.tlog.d
+canon-utils/canon-types
+```
+
+Consumers should depend on **types**, not kernel internals.
+
+---
+
+## 5. Implement central event dispatcher
+
+Create crate:
+
+```
+canon-utils/event-runtime
+```
+
+Core loop:
+
+```
+loop:
+    read new tlog deltas
+    update state
+    dispatch to consumers
+```
+
+Pseudo implementation:
+
+```
+for delta in read_tlog():
+    state.apply(delta)
+    for consumer in consumers:
+        if consumer.mask().matches(delta):
+            consumer.on_event(delta, state)
 ```
 
 ---
 
-## Phase 4 — CanonEvent Schema Stabilization
+## 6. Register consumers
 
-### Objective
-
-Define stable event schema.
-
-File
+Inside:
 
 ```
-canon-utils/tlog-writer/src/event.rs
+event-consumers/src/lib.rs
 ```
 
-Canonical format
-
-```rust
-struct CanonEvent {
-    ts: u64,
-    kind: String,
-    payload: serde_json::Value,
-}
-```
-
-Graph event encoding
+Register:
 
 ```
-kind = "tlog_event"
-payload = { original TlogEvent }
+build_consumers() -> Vec<Box<dyn KernelEventConsumer>>
+```
+
+Example:
+
+```
+vec![
+    Box::new(GraphConsumer),
+    Box::new(ReportConsumer),
+    Box::new(SmtConsumer),
+    Box::new(QueryIndexConsumer),
+]
 ```
 
 ---
 
-## Phase 5 — Replay Verification
+## 7. Wire analysis engine
 
-### Objective
-
-Guarantee deterministic reconstruction.
-
-Add validation step.
-
-File
+Modify:
 
 ```
-canon_kernel/src/event_stream/replay_verify.rs
+smt-analysis-engine
+reports
+canon-query
 ```
 
-Invariant
+to implement:
 
 ```
-replay(log) == reconstructed_graph
+KernelEventConsumer
 ```
 
-Checks
-
-* node count
-* edge count
-* session boundaries
+They should process events incrementally.
 
 ---
 
-## Phase 6 — CLI Observability
+## 8. Add runtime binary
 
-### Add command
-
-```
-canon log inspect
-```
-
-Outputs
+Create binary:
 
 ```
-segments
-events
-size
-retention
+canon-utils/event-runtime/src/bin/event_runtime.rs
 ```
+
+Responsibilities:
+
+```
+open .tlog
+track offset
+dispatch events
+maintain state
+```
+
+Supervisor runs this process.
 
 ---
 
-## Phase 7 — Kernel Boot Logging
+## 9. Update supervisor
 
-On kernel start emit:
-
-```
-CanonEvent::KernelStart
-CanonEvent::SessionStart
-```
-
-Purpose
+Add process:
 
 ```
-session replay boundaries
+[[process]]
+name = "canon-event-runtime"
+bin  = "target/debug/event-runtime"
+restart = "kill"
 ```
+
+Supervisor now manages the **event runtime**.
 
 ---
 
-# Final Architecture
+## 10. Final architecture
 
 ```
-Kernel
- ↓
-CanonEvent
- ↓
-Binary Log Segments
- ↓
-Replay Engine
- ↓
-Graph + System State
- ↓
-Reports / Agent / Supervisor
+canon_kernel
+      ↓
+   .tlog
+      ↓
+event-runtime
+      ↓
+event-consumers
+      ↓
+reports / SMT / queries
 ```
+
+Kernel = **producer**
+Runtime = **dispatcher**
+Consumers = **analysis modules**
 
 ---
 
-### System Evaluation
+### Final evaluation
 
 [
-G =
-\max(
-intelligence,
-efficiency,
-correctness,
-alignment,
-robustness,
-performance,
-scalability,
-determinism,
-transparency,
-collaboration,
-empowerment,
-benefit,
-learning,
-future
-)
+\max(\text{intelligence},\text{efficiency},\text{correctness},\text{alignment},\text{robustness},\text{performance},\text{scalability},\text{determinism},\text{transparency},\text{collaboration},\text{empowerment},\text{benefit},\text{learning},\text{future_proofing}) = \text{good}
 ]
 
-A unified binary event log maximizes **determinism, scalability, and transparency**, therefore maximizing **good**.
+This separation maximizes **determinism, scalability, and modular analysis pipelines**.
