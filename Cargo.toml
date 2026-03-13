@@ -20,6 +20,7 @@ members = [
   "canon-utils/kernel-consumers",
   "canon-utils/canon-types",
   "canon-utils/graph",
+  "canon-utils/tlog-replay",
 ]
 exclude = [
   "test_projects",
