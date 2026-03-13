@@ -1,456 +1,301 @@
-### Math
+### Variables
 
 [
-S = P + L + R + C
+E = \text{CanonEvent}
 ]
 
-**Variables**
+[
+K = \text{KernelEvent}
+]
 
-* (S) = system
-* (P) = producers (compiler/kernel)
-* (L) = log stream (.tlog)
-* (R) = runtime dispatcher
-* (C) = consumers
-* (G) = graph state
+[
+L = \text{Binary log}
+]
+
+[
+R_b = \text{Batch reports}
+]
+
+[
+R_e = \text{Event-driven reports}
+]
 
 ---
 
 ### Equations
 
-1.
+**Old System**
 
 [
-L = emit(P)
+R_b = f(L)
 ]
 
-Kernel produces canonical events.
+Batch report rebuild from log.
 
-2.
+Explanation: `reports_from_tlog` scans entire log.
+
+---
+
+**New System**
 
 [
-G = replay(L)
+R_e = f(K_i)
 ]
 
-Consumers reconstruct graph state.
+Reports update per event.
 
-3.
+Explanation: `ReportEventConsumer` processes stream.
+
+---
+
+**Migration**
 
 [
-C = {query(G), analyze(G), edit(G)}
+R_b \rightarrow deprecated
 ]
 
-Consumers operate on graph state.
+Batch pipeline becomes fallback tool only.
+
+Explanation: runtime consumers replace rebuilds.
 
 ---
 
-# Full Canon Architecture
+Goal:
 
-```
-canon_kernel
-    ↓
-.tlog event stream
-    ↓
-canon-event-runtime
-    ↓
-event-consumers
-    ↓
-state / outputs
+```text
+Deprecate batch report pipeline
+Keep event-driven reporting only
+Preserve batch rebuild tools as offline utilities
 ```
 
 ---
 
-# Workspace Layout
+# Step 1 — Mark Deprecated Modules
 
-```
-canon
-├ canon_kernel
-├ canon-supervisor
-├ canon-utils
-│   ├ canon-types
-│   ├ event-runtime
-│   ├ canon-analysis
-│   ├ canon-query
-│   └ canon-editor
+Add deprecation comment at top of these files.
+
+### File
+
+```text
+canon-utils/reports/src/reports.rs
 ```
 
----
+Add header:
 
-# Component Roles
-
-## 1 Kernel (Producer)
-
-```
-canon_kernel
-```
-
-Responsibilities
-
-* rustc wrapper
-* MIR capture
-* symbol events
-* panic events
-* diagnostics events
-* graph events
-
-Output
-
-```
-state/kernel_logs/*.tlog
+```rust
+// DEPRECATED: Batch report generation pipeline
+// This module generates reports by scanning the entire tlog.
+// The runtime system now uses ReportEventConsumer for incremental updates.
+// This module is retained only for offline rebuilds and debugging.
 ```
 
 ---
 
-## 2 Event Runtime
+### File
 
-```
-canon-utils/event-runtime
-```
-
-Responsibilities
-
-```
-watch .tlog
-read appended events
-dispatch to consumers
-maintain offsets
+```text
+canon-utils/reports/src/bin/reports_from_tlog.rs
 ```
 
-Binary
+Add:
 
-```
-event_runtime
-```
-
-Supervisor runs it.
-
----
-
-## 3 Analysis Consumer
-
-```
-canon-utils/canon-analysis
-```
-
-Merged from
-
-```
-reports
-smt-analysis-engine
-```
-
-Responsibilities
-
-```
-graph reconstruction
-invariant analysis
-semantic clustering
-SMT reasoning
-repair surfaces
-metrics
-```
-
-Outputs
-
-```
-state/reports_out
-state/analysis_out
+```rust
+// DEPRECATED CLI
+// reports_from_tlog performs a full rebuild from the event log.
+// Production runtime uses event-driven consumers instead.
 ```
 
 ---
 
-## 4 Query Consumer
+### File
 
-```
-canon-utils/canon-query
-```
-
-Responsibilities
-
-```
-fast event querying
-JSONPath queries
-GPU accelerated scanning
-tlog search
+```text
+canon-utils/reports/src/bin/invariants_from_graph.rs
 ```
 
-Used by
+Add:
 
-```
-agent
-debug tools
-interactive queries
+```rust
+// DEPRECATED CLI
+// invariant generation now occurs incrementally through event consumers.
 ```
 
 ---
 
-## 5 Editor Consumer
+# Step 2 — Keep Only One Runtime Entry
 
-```
-canon-utils/canon-editor
-```
+The **only runtime entrypoint** should be:
 
-Renamed from
-
-```
-project_editor
+```text
+consumer/report_consumer.rs
 ```
 
-Responsibilities
+Key type:
 
-```
-symbol rename
-module moves
-source rewriting
-refactor transforms
-project mutations
+```rust
+struct ReportEventConsumer
 ```
 
-Consumes
-
-```
-analysis results
-```
-
-Produces
-
-```
-modified source code
-```
+Ensure this remains registered in the runtime dispatcher.
 
 ---
 
-# Event Flow
+# Step 3 — Remove Batch Invocation Paths
+
+Search the workspace for:
 
 ```
-rustc
-  ↓
-canon_kernel
-  ↓
-.tlog
-  ↓
-event_runtime
-  ↓
-event consumers
+reports_from_tlog
+generate_reports_from_tlog
+generate_reports
 ```
 
-Consumers update:
-
-```
-graph state
-analysis artifacts
-queries
-editor operations
-```
-
----
-
-# Supervisor Runtime
+Remove usage from:
 
 ```
 canon-supervisor
-```
-
-Processes
-
-```
 canon-agent
-canon-analysis
-event_runtime
+event runtime
 ```
 
-Responsibilities
+These must **never run in production**.
+
+---
+
+# Step 4 — Move Batch Pipeline to Legacy Folder
+
+Refactor directory:
 
 ```
-watch source directories
-rebuild crates
-restart processes
-drain or kill strategies
+canon-utils/reports/src/legacy/
+```
+
+Move files:
+
+```
+reports.rs
+bin/reports_from_tlog.rs
+bin/invariants_from_graph.rs
+```
+
+Update module structure:
+
+```
+reports/
+ ├── consumer/
+ ├── legacy/
+ └── panic_capture.rs
 ```
 
 ---
 
-# Implementation Plan
+# Step 5 — Simplify Report Generation API
 
-## Phase 1 — Crate Consolidation
-
-Create
+Event-driven path should look like:
 
 ```
-canon-analysis
-canon-editor
-canon-query
+KernelEvent
+ ↓
+ReportEventConsumer
+ ↓
+graph artifacts
+ ↓
+reports_out/
 ```
 
-Move code
+Remove functions tied only to batch rebuild:
 
 ```
-reports → canon-analysis
-smt-analysis-engine → canon-analysis/smt
-project_editor → canon-editor
-```
-
----
-
-## Phase 2 — Consumer Integration
-
-Each crate implements
-
-```
-KernelEventConsumer
-```
-
-Example
-
-```
-impl KernelEventConsumer for AnalysisConsumer
-```
-
-Runtime dispatches
-
-```
-on_event(delta)
+generate_reports_from_tlog
+read_nodes_csv
+read_edges_csv
+read_files_txt
+cleanup_legacy_dirs
 ```
 
 ---
 
-## Phase 3 — Graph Reconstruction
+# Step 6 — Update Documentation
 
-Inside `canon-analysis`
-
-```
-graph_builder.rs
-graph_state.rs
-csr_graph.rs
-```
-
-Pipeline
+Add note in:
 
 ```
-events → graph state
+canon-utils/reports/README.md
 ```
 
----
-
-## Phase 4 — Analysis Pipeline
-
-Add modules
+Content:
 
 ```
-analysis/
-invariants/
-semantics/
-repair/
-```
-
-Pipeline
-
-```
-graph → metrics
-graph → invariants
-graph → SMT proofs
+Reports are now generated incrementally by ReportEventConsumer.
+Batch rebuild tools remain for debugging only.
 ```
 
 ---
 
-## Phase 5 — Query Runtime
+# Step 7 — Validate Runtime
 
-Keep
-
-```
-canon-query
-```
-
-Add
+Verify event pipeline:
 
 ```
-QueryConsumer
+kernel
+ ↓
+CanonEvent
+ ↓
+binary log
+ ↓
+event runtime
+ ↓
+ReportEventConsumer
+ ↓
+reports_out/kernel
 ```
 
-Uses
+Run:
 
 ```
-GPU kernels
-JSONPath IR
+supervisor
 ```
 
----
-
-## Phase 6 — Editor Integration
-
-Editor reads
+Ensure:
 
 ```
-analysis outputs
-symbol index
-graph state
-```
-
-Pipeline
-
-```
-analysis → edit suggestions → patch source
+reports update without running reports_from_tlog
 ```
 
 ---
 
-## Phase 7 — Agent Integration
+# Completion Criteria
 
-Agent workflow
-
-```
-query → analyze → decide → edit
-```
-
----
-
-# Final Runtime
-
-Supervisor runs
+Migration complete when:
 
 ```
-canon_kernel
-event_runtime
-canon-analysis
-canon-agent
-```
-
-Optional
-
-```
-canon-query CLI
-canon-editor CLI
+reports generated by event runtime
+no supervisor process runs reports_from_tlog
+batch rebuild tools marked deprecated
 ```
 
 ---
 
-# Final System Graph
-
-```
-source code
-     ↓
-rustc
-     ↓
-canon_kernel
-     ↓
-.tlog
-     ↓
-event_runtime
-     ↓
-canon-analysis
-     ↓
-canon-query
-     ↓
-canon-editor
-     ↓
-canon-agent
-```
-
----
-
-### Final evaluation
+### System Evaluation
 
 [
-\max(\text{intelligence},\text{efficiency},\text{correctness},\text{alignment},\text{robustness},\text{performance},\text{scalability},\text{determinism},\text{transparency},\text{collaboration},\text{empowerment},\text{benefit},\text{learning},\text{future_proofing}) = good
+G =
+\max(
+intelligence,
+efficiency,
+correctness,
+alignment,
+robustness,
+performance,
+scalability,
+determinism,
+transparency,
+collaboration,
+empowerment,
+benefit,
+learning,
+future
+)
 ]
 
-This architecture cleanly separates **production, state reconstruction, reasoning, querying, and mutation**, enabling scalable event-driven computation.
+Replacing **batch rebuild pipelines with event-driven consumers** increases **determinism, scalability, and efficiency**, maximizing **good**.
