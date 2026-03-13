@@ -1,609 +1,485 @@
 ## Variables
 
-(T=) tlog stream, (R=) replay state, (G=(N,E,F)) graph (nodes,edges,files)
-(CFG=(BB,FL)) control-flow graph, (CG=(Fn,C)) call graph
-(MG=(M,Contains,Imports)) module graph, (TG=(Type,UsesType)) type graph
-(M_r=1) dedicated replay module
-(G=\max(I,E,C,A,R,P,S,D,T,K,X,B,L,F)=\text{good})
+(W=) tlog writer, (S=) supervisor daemon, (K=) kernel wrapper, (P_i=) event producers, (E=) event stream (.tlog), (C_j=) consumers
+(G=\max(I,E,C,A,R,P,S,D,T,K,X,B,L,F)=good)
 
 ## Equations
 
-(R = Replay(T))
-Explanation: the append-only tlog deterministically reconstructs the graph state.
+(E = Append(W, event))
+Explanation: writer serializes and appends events.
 
-(G = Build(R))
-Explanation: replay produces canonical nodes, edges, and files.
+(E = \sum Emit(P_i))
+Explanation: kernel, agent, and supervisor produce events.
 
-(CFG,CG,MG,TG = f(G))
-Explanation: all analyses derive graphs only from the canonical graph.
-
-(M_r=1)
-Explanation: only one module is allowed to read and replay `.tlog`.
+(State = Replay(E))
+Explanation: consumers rebuild system state from the log.
 
 ---
 
-# Full Implementation Plan for Coding Agent
+# Implementation Plan
+
+## Dedicated TLOG Writer + Supervisor Integration
 
 Goal:
-Create a **dedicated tlog replay system** and **remove replay logic from the reports crate**, while enabling full reconstruction of CFG, callgraph, module graph, and type graph.
 
----
-
-# Phase 1 — Introduce Dedicated Tlog Replay Crate
-
-Create new crate:
-
-```
-canon-utils/tlog-replay
-```
-
-### Cargo.toml
-
-```
-[package]
-name = "canon-tlog-replay"
-edition = "2021"
-
-[dependencies]
-serde
-serde_json
-canon-types
-graph
-anyhow
+```text
+centralized event writing
+safe append
+runtime + build events unified
 ```
 
 ---
 
-# Phase 2 — Move Replay Code out of `reports`
+# 1 Create New Crate
 
-Move the following files:
-
-```
-reports/src/replay/
-  tlog_reader.rs
-  tlog_replay.rs
-  session_scan.rs
-```
-
-to:
+Location:
 
 ```
-canon-utils/tlog-replay/src/
-  reader.rs
-  replay.rs
-  session_scan.rs
+canon-utils/tlog-writer
 ```
 
-Rename modules accordingly.
-
----
-
-# Phase 3 — Implement Dedicated Tlog Reader
-
-File
+Workspace:
 
 ```
-canon-utils/tlog-replay/src/reader.rs
+canon workspace
 ```
 
-Responsibilities
+Structure:
 
 ```
-read tlog line-by-line
-deserialize TlogEvent
-handle aliases (N/E/F etc)
-validate JSON
+tlog-writer/
+    Cargo.toml
+    src/
+        lib.rs
+        writer.rs
+        event.rs
+        rotate.rs
 ```
 
-Core function
+Purpose:
 
 ```
-fn read_tlog_events(path: &Path) -> Result<Vec<TlogEvent>>
-```
-
-Implementation notes
-
-```
-BufReader
-streamed JSON parsing
-skip malformed lines with warning
+single API for writing events
 ```
 
 ---
 
-# Phase 4 — Implement Deterministic Replay Engine
+# 2 Event Type Definition
 
-File
-
-```
-canon-utils/tlog-replay/src/replay.rs
-```
-
-Responsibilities
+File:
 
 ```
-convert events → graph state
-maintain symbol → node id mapping
-maintain edge list
-maintain file registry
+src/event.rs
 ```
 
-Core struct
+Core structure:
 
-```
-pub struct ReplayGraph {
-    pub nodes: Vec<NodeRow>,
-    pub edges: Vec<EdgeRow>,
-    pub files: Vec<String>,
+```rust
+pub struct CanonEvent {
+    pub ts: u64,
+    pub source: String,
+    pub kind: String,
+    pub payload: serde_json::Value,
 }
 ```
 
-Core function
+Examples:
 
 ```
-pub fn replay_graph(path: &Path) -> Result<ReplayGraph>
-```
-
-Replay algorithm
-
-```
-for event in events:
-    match event:
-        NODE -> register node
-        NODE_UPDATE -> update node
-        NODE_REMOVE -> delete node
-        EDGE -> push edge
-        EDGE_REMOVE -> delete edge
-        FILE -> register file
-        SESSION -> optionally reset session
+build_event
+runtime_event
+supervisor_event
+analysis_event
 ```
 
 ---
 
-# Phase 5 — Implement Incremental Replay
+# 3 Writer API
 
-File
-
-```
-replay_incremental.rs
-```
-
-Function
+File:
 
 ```
-replay_graph_from_offset(
-    tlog_path,
-    start_offset,
-    existing_graph
-)
+src/writer.rs
 ```
 
-Purpose
+Primary API:
 
-```
-fast replay for large tlogs
-used by reports and query engines
-```
-
----
-
-# Phase 6 — Build Canonical KernelGraph
-
-File
-
-```
-canon-utils/tlog-replay/src/kernel_graph.rs
+```rust
+pub fn append_event(event: CanonEvent) -> Result<()>
 ```
 
-Structure
+Implementation steps:
 
 ```
-pub struct KernelGraph {
-    nodes
-    edges
-    adjacency
-    symbol_to_id
-    files
-}
+open .tlog
+seek end
+write JSON line
+flush
 ```
 
-Builder
+Example line format:
 
 ```
-fn build_kernel_graph(nodes,edges,files) -> KernelGraph
-```
-
-Also build:
-
-```
-CSR adjacency
-callgraph adjacency
-cfg adjacency
+{"ts":123,"source":"agent","kind":"node_executed","payload":{...}}
 ```
 
 ---
 
-# Phase 7 — Enforce Single Tlog Reader
+# 4 File Locking
 
-Search entire workspace for:
+Prevent concurrent write corruption.
 
-```
-rg ".tlog"
-```
-
-Rules
+Use:
 
 ```
-only canon-tlog-replay may read tlog
-all other crates depend on replay output
+fs2 crate
 ```
 
-Remove tlog reading from
+Implementation:
+
+```
+acquire file lock
+append event
+release
+```
+
+Functions:
+
+```
+lock_tlog()
+unlock_tlog()
+```
+
+---
+
+# 5 Buffered Writer (Optional Optimization)
+
+Add:
+
+```
+append_event_buffered()
+flush()
+```
+
+Purpose:
+
+```
+reduce syscall overhead
+```
+
+But default API should remain safe append.
+
+---
+
+# 6 TLOG Rotation
+
+File:
+
+```
+rotate.rs
+```
+
+Trigger conditions:
+
+```
+file size > threshold
+snapshot checkpoint
+manual rotation
+```
+
+Implementation:
+
+```
+rename tlog → tlog.1
+create new tlog
+```
+
+---
+
+# 7 Kernel Integration
+
+Kernel becomes producer.
+
+Add dependency:
+
+```
+canon-utils/tlog-writer
+```
+
+Kernel emits:
+
+```
+crate_compiled
+file_processed
+symbol_emitted
+dependency_edge
+```
+
+Example:
+
+```rust
+append_event(CanonEvent {
+    source: "kernel",
+    kind: "crate_compiled",
+    payload: {...}
+})
+```
+
+---
+
+# 8 Agent Integration
+
+Agent emits runtime events.
+
+Examples:
+
+```
+task_created
+node_executed
+repair_triggered
+graph_patch
+goal_update
+```
+
+Integration points:
+
+```
+scheduler.rs
+planner_session.rs
+execution_result.rs
+```
+
+---
+
+# 9 Supervisor Integration
+
+Supervisor becomes lifecycle event producer.
+
+Add dependency:
+
+```
+tlog-writer
+```
+
+Events emitted:
+
+```
+build_started
+build_completed
+process_spawned
+process_restarted
+process_exit
+file_change_detected
+```
+
+Implementation points:
+
+```
+process.rs
+builder.rs
+main.rs
+```
+
+Example:
+
+```rust
+append_event({
+    source: "supervisor",
+    kind: "process_restart",
+    payload: {...}
+})
+```
+
+---
+
+# 10 Consumer Model (Unchanged)
+
+Consumers read events.
+
+Examples:
 
 ```
 reports
-canon-query
-smt-analysis-engine
-project_editor
+smt-analysis
+query engine
+project editor
 ```
 
----
-
-# Phase 8 — Update Reports Crate
-
-Remove
-
-```
-reports/src/replay/*
-```
-
-Replace with dependency
+Consumers use:
 
 ```
 canon-tlog-replay
 ```
 
-Modify entrypoint
+Pipeline:
 
 ```
-reports/src/bin/reports_from_tlog.rs
-```
-
-Old
-
-```
-replay_graph_from_tlog()
-```
-
-New
-
-```
-let graph = canon_tlog_replay::replay_graph(tlog_path)?;
+tail .tlog
+parse events
+update graph
+emit artifacts
 ```
 
 ---
 
-# Phase 9 — Graph Reconstruction Pipeline
+# 11 TLOG File Format
 
-Reports pipeline becomes
+Use:
 
 ```
-tlog
- ↓
-canon-tlog-replay
- ↓
-KernelGraph
- ↓
-analysis modules
- ↓
-report artifacts
+JSONL
 ```
 
----
+Example:
 
-# Phase 10 — Graph Builders
-
-Add builder modules
-
-```
-reports/analysis/
-  cfg.rs
-  callgraph.rs
-  modulegraph.rs
-  typegraph.rs
-```
-
-Each consumes
-
-```
-KernelGraph
-```
-
----
-
-## CFG Builder
-
-Inputs
-
-```
-BasicBlock nodes
-Flow edges
-HasBlock edges
-```
-
-Output
-
-```
-cfg adjacency
-block owner mapping
-```
-
----
-
-## Callgraph Builder
-
-Inputs
-
-```
-Function nodes
-Call edges
-Callsite nodes
-```
-
-Output
-
-```
-caller → callee adjacency
-callgraph centrality
-```
-
----
-
-## Module Graph Builder
-
-Inputs
-
-```
-Module nodes
-Contains edges
-Imports edges
-```
-
-Output
-
-```
-module dependency graph
-```
-
----
-
-## Type Graph Builder
-
-Inputs
-
-```
-Type nodes
-UsesType
-ForType
-Bounds
-Implements
-```
-
-Output
-
-```
-type dependency graph
-```
-
----
-
-# Phase 11 — Replay Validation
-
-Add deterministic replay verification
-
-File
-
-```
-canon-utils/tlog-replay/src/verify.rs
-```
-
-Check
-
-```
-node ids deterministic
-edge counts stable
-hash graph signature
-```
-
-Function
-
-```
-verify_replay_determinism()
-```
-
----
-
-# Phase 12 — Panic Capture Integration
-
-Use existing event
-
-```
-TlogEvent::PANIC
-```
-
-Extend replay
-
-```
-collect panic records
-store in graph metadata
-```
-
-Expose
-
-```
-graph.panic_records
-```
-
-Reports module
-
-```
-analysis/panic_report.rs
-```
-
----
-
-# Phase 13 — Snapshot Support
-
-Add snapshot module
-
-```
-canon-utils/tlog-replay/src/snapshot.rs
-```
-
-Artifacts
-
-```
-graph_snapshot.bin
-snapshot_meta.json
-```
-
-Usage
-
-```
-replay snapshot + tail of tlog
-```
-
----
-
-# Phase 14 — Performance Optimizations
-
-Implement
-
-```
-CSR graph building
-parallel replay
-memory pooling
-```
-
-Possible future
-
-```
-GPU replay support
-```
-
----
-
-# Phase 15 — Update Canon Query
-
-Modify
-
-```
-canon-query/src/tlog.rs
-```
-
-Remove tlog reading.
-
-Instead load
-
-```
-graph_bin
-nodes.csv
-edges.csv
-```
-
-or
-
-```
-KernelGraph
-```
-
----
-
-# Phase 16 — Update SMT Engine
-
-Modify
-
-```
-smt-analysis-engine/loader.rs
-```
-
-Replace
-
-```
-tlog parsing
-```
-
-with
-
-```
-KernelGraph loader
-```
-
----
-
-# Phase 17 — Update Project Editor
-
-Modify
-
-```
-project_editor/query/session.rs
-```
-
-Use
-
-```
-KernelGraph
-symbol index
-```
-
-instead of
-
-```
-tlog
-```
-
----
-
-# Final Architecture
-
 ```
-canon_kernel
-     │
-     │ append-only
-     ▼
 .tlog
-     │
-     ▼
-canon-tlog-replay
-     │
-     ▼
-KernelGraph
-     │
- ┌──────┬─────────┬─────────┬─────────┐
- ▼      ▼         ▼         ▼
-reports canon-query smt-engine project-editor
+```
+
+Contents:
+
+```
+{"ts":1,"source":"kernel","kind":"crate_compiled",...}
+{"ts":2,"source":"supervisor","kind":"process_spawned",...}
+{"ts":3,"source":"agent","kind":"node_executed",...}
+```
+
+Advantages:
+
+```
+append-only
+stream-friendly
+human readable
 ```
 
 ---
 
-# Acceptance Criteria
+# 12 Supervisor Event Loop Update
 
-1. Only one crate reads `.tlog`
-2. Reports pipeline still generates
+Modify:
 
 ```
-CFG
-Callgraph
-Module graph
-Type graph
-Semantic clusters
-Invariant reports
+canon-supervisor/src/main.rs
 ```
 
-3. Replay deterministic
-4. Snapshot replay works
-5. All existing reports compile and run
+Emit events during:
+
+```
+file change
+build start
+build finish
+process spawn
+process restart
+process crash
+```
+
+Flow:
+
+```
+watch change
+emit file_change event
+build crate
+emit build event
+restart process
+emit process_restart event
+```
 
 ---
 
-If you send the **repomap of the whole workspace**, I can produce the **exact patch plan (file-by-file edits)** for the coding agent.
+# 13 Failure Handling
+
+Add:
+
+```
+retry append
+fallback logging
+```
+
+If write fails:
+
+```
+write to stderr
+attempt retry
+```
+
+---
+
+# 14 Performance Safety
+
+Guarantees:
+
+```
+append-only
+no partial writes
+fsync optional
+```
+
+Design:
+
+```
+line-delimited events
+crash-safe
+```
+
+---
+
+# 15 Final System Architecture
+
+```
+Producers
+---------
+kernel wrapper
+agent runtime
+supervisor
+
+        │
+        ▼
+
+tlog-writer
+        │
+        ▼
+
+.tlog event stream
+        │
+        ▼
+
+Consumers
+---------
+reports
+smt-analysis
+query engine
+editor tools
+```
+
+---
+
+# 16 Implementation Order
+
+Step sequence:
+
+```
+1 create tlog-writer crate
+2 implement append_event API
+3 integrate kernel writer
+4 integrate supervisor writer
+5 integrate agent writer
+6 validate concurrent writes
+7 update consumers
+```
+
+---
+
+# Result
+
+After implementation:
+
+```
+single canonical event log
+multi-producer architecture
+fully decoupled consumers
+deterministic system replay
+```
+
+---
+
+If you want, I can also show the **advanced version used in high-scale event systems** where `.tlog` becomes a **structured binary event log (similar to Kafka / Temporal history logs)** which will make replay ~50–100x faster.
