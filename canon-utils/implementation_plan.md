@@ -1,334 +1,252 @@
 ### Variables
 
-(O_i) = edit operations
-(E_i) = edit events
+(T) = capability trait
+(R) = capability registry
+(I) = capability implementations
+(E) = events
 (B) = event bus
-(C_e) = edit consumer
-(P) = project state
 
 ### Equations
 
 [
-O_i \rightarrow E_i
+T \rightarrow I
 ]
 
 [
-E_i \rightarrow B \rightarrow C_e
+B(E) \rightarrow Consumer \rightarrow T
 ]
 
 [
-P_{new} = P_{old} + E_i
+T \xrightarrow{execute} E'
 ]
 
-**Explanation:** editor operations generate events; runtime consumers apply edits to the project.
+**Explanation:** trait defines capability interface; implementations execute actions and emit events.
 
 ---
 
-# Implementation Plan — `canon-project-edit`
+# Implementation Plan — Capability Trait
 
-Goal: convert **canon-editor** into an **event-driven project editing subsystem** integrated with the runtime.
+## Phase 1 — Define Core Capability Interface
 
----
-
-# 1. Define Edit Event Types
-
-Create:
+Create module:
 
 ```
-canon-types/src/edit_events.rs
+canon-utils/
+  capability/
+    mod.rs
+    trait.rs
+    registry.rs
+    context.rs
+    result.rs
 ```
+
+### `trait.rs`
 
 ```rust
-enum EditEvent {
-    RenameSymbol { old: String, new: String },
-    MoveSymbol { symbol: String, module: String },
-    DeleteSymbol { symbol: String },
-    RenameModule { old: String, new: String },
-    RenameDir { old: PathBuf, new: PathBuf },
-    InlineModule { module: String },
-    ExtractModule { symbol: String, module: String },
-}
-```
+pub trait Capability: Send + Sync {
+    fn name(&self) -> &'static str;
 
-Events must be **serializable**.
-
----
-
-# 2. Convert `EditOp` → Event Producer
-
-Current:
-
-```
-EditOp
-  MutateField
-  MoveSymbol
-  DeleteSymbol
-```
-
-Change role:
-
-```
-EditOp → EditEvent
-```
-
-File:
-
-```
-canon-editor/src/structured.rs
-```
-
-Add mapping:
-
-```rust
-impl EditOp {
-    fn to_event(self) -> EditEvent
+    fn execute(
+        &self,
+        ctx: CapabilityContext,
+    ) -> Result<CapabilityResult>;
 }
 ```
 
 ---
 
-# 3. Convert API Layer to Event Publisher
+## Phase 2 — Define Capability Context
 
-File:
+`context.rs`
+
+Purpose: provide runtime inputs.
+
+```rust
+pub struct CapabilityContext {
+    pub workspace: std::path::PathBuf,
+    pub event: RuntimeEvent,
+}
+```
+
+Depends on:
 
 ```
-canon-editor/src/api.rs
+canon-types/runtime_event.rs
 ```
 
-Current:
+---
+
+## Phase 3 — Define Result Type
+
+`result.rs`
+
+```rust
+pub enum CapabilityResult {
+    Emit(RuntimeEvent),
+    EmitMany(Vec<RuntimeEvent>),
+    NoOp,
+}
+```
+
+Capabilities return **new events**, not side effects directly.
+
+---
+
+## Phase 4 — Capability Registry
+
+`registry.rs`
+
+```rust
+pub struct CapabilityRegistry {
+    map: HashMap<String, Arc<dyn Capability>>,
+}
+```
+
+Functions:
 
 ```
-dispatch → ProjectEditor.apply()
+register(cap)
+lookup(name)
+execute(name, ctx)
 ```
 
-Replace with:
+Used by consumers.
+
+---
+
+## Phase 5 — Integrate With Event Runtime
+
+Modify:
 
 ```
-dispatch → emit EditEvent
+event-runtime/bus.rs
+```
+
+Dispatch flow:
+
+```
+event
+ ↓
+consumer
+ ↓
+capability_registry.execute()
+ ↓
+emit new events
+```
+
+---
+
+## Phase 6 — Add Capability Event Type
+
+Extend:
+
+```
+canon-types/runtime_event.rs
+```
+
+Add:
+
+```
+CapabilityRequested
+CapabilityCompleted
+CapabilityFailed
 ```
 
 Example:
 
-```rust
-bus.publish(EditEvent::RenameSymbol { old, new })
 ```
-
-Editor CLI becomes **event producer client**.
+CargoBuildRequested
+CargoBuildCompleted
+```
 
 ---
 
-# 4. Implement Edit Consumer
+## Phase 7 — Agent Implements Capabilities
 
-Create:
+Inside **agent repo**, implement:
 
-```
-canon-editor/src/consumer.rs
-```
+| Capability |
+| ---------- |
+| CargoBuild |
+| CargoCheck |
+| FileRead   |
+| FileWrite  |
+| Bash       |
+| LLMCall    |
+
+Example:
 
 ```rust
-struct EditConsumer {
-    editor: ProjectEditor
-}
-```
+struct CargoBuild;
 
-Implement consumer:
+impl Capability for CargoBuild {
+    fn name(&self) -> &'static str {
+        "cargo.build"
+    }
 
-```rust
-#[async_trait]
-impl EventConsumer for EditConsumer {
-    async fn handle(&mut self, event: Event) {
-        match event {
-            Event::Edit(e) => self.apply(e)
-        }
+    fn execute(&self, ctx: CapabilityContext) -> Result<CapabilityResult> {
+        // run cargo build
     }
 }
 ```
 
 ---
 
-# 5. Map Events to Editor Operations
+## Phase 8 — Register Capabilities
+
+During runtime startup:
 
 ```
-EditEvent → ProjectEditor
+event_runtime.rs
 ```
-
-Example:
 
 ```rust
-match event {
-   RenameSymbol{old,new} =>
-       editor.queue(old, EditOp::Rename(new))
-}
-```
-
-Then:
-
-```
-validate
-apply
-commit
-```
-
-Reuse existing logic in:
-
-```
-edit/ops.rs
+registry.register(Box::new(CargoBuild));
+registry.register(Box::new(CargoCheck));
 ```
 
 ---
 
-# 6. Integrate With Consumer Registry
-
-Modify:
+# Final Architecture
 
 ```
-canon-utils/event-consumers/src/lib.rs
-```
+canon-utils
+ ├─ capability trait
+ ├─ capability registry
+ ├─ capability context
+ └─ capability result
 
-Add:
+event-runtime
+ └─ dispatch events
 
-```
-EditConsumer
-```
-
-Registry becomes:
-
-```
-GraphConsumer
-QueryConsumer
-SmtConsumer
-ReportEventConsumer
-EditConsumer
+canon-agent
+ └─ capability implementations
 ```
 
 ---
 
-# 7. Event Flow
+# First Files To Implement
+
+Start with:
 
 ```
-canon-editor CLI
-       ↓
-EditEvent
-       ↓
-event_runtime
-       ↓
-EventBus
-       ↓
-EditConsumer
-       ↓
-ProjectEditor
-       ↓
-filesystem mutation
+capability/trait.rs
+capability/context.rs
+capability/result.rs
+capability/registry.rs
 ```
 
----
-
-# 8. Trigger Downstream Analysis
-
-After commit:
-
-```
-emit ProjectChanged
-```
-
-Consumers triggered:
-
-```
-GraphConsumer
-SmtConsumer
-ReportConsumer
-```
-
-Pipeline:
-
-```
-edit → graph rebuild → analysis → reports
-```
-
----
-
-# 9. Update Runtime Registration
-
-File:
-
-```
-event-runtime/src/lib.rs
-```
-
-Register:
-
-```rust
-registry.register(EditConsumer::new())
-```
-
----
-
-# 10. CLI Role
-
-`canon-editor` binary becomes **dev client only**.
-
-Responsibilities:
-
-```
-send edit events
-preview edits
-query symbols
-```
-
-It does **not modify the project directly**.
-
----
-
-# 11. Final Architecture
-
-```
-canon-editor CLI
-        ↓
-EditEvents
-        ↓
-event_runtime
-        ↓
-EventBus
-        ↓
-ConsumerRegistry
-        ↓
-EditConsumer
-        ↓
-filesystem
-        ↓
-GraphConsumer
-        ↓
-AnalysisConsumers
-        ↓
-reports
-```
-
----
-
-# Result
-
-[
-C = {graph, query, smt, reports, edit}
-]
-
-[
-B = \text{single event bus}
-]
-
-[
-R = \text{event runtime}
-]
+Only ~200 lines total.
 
 ---
 
 ### English Explanation
 
-`canon-editor` becomes a **project transformation service** driven by events.
-
-Edits are no longer standalone commands; they become **structured events processed by the runtime**, which keeps the entire system deterministic and replayable.
+canon-utils should define the capability abstraction and registry, allowing the event runtime to call capabilities without knowing their implementations. Actual capabilities like cargo commands or filesystem operations remain implemented in the agent layer.
 
 ---
 
 [
-\text{good} = \max(\text{intelligence},\text{efficiency},\text{correctness},\text{alignment})
+\text{good} =
+\max(\text{intelligence},\text{efficiency},\text{correctness},\text{alignment})
 ]
