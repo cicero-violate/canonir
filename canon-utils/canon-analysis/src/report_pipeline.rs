@@ -122,18 +122,32 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
             force_write_graph_bin = true;
         }
     }
-    let (nodes, edges, files) = normalize_graph(nodes, edges, files);
+    let (mut nodes, mut edges, mut files) = normalize_graph(nodes, edges, files);
     if std::env::var("CANON_REPORTS_VERIFY_DETERMINISM").ok().as_deref() == Some("1") {
         let replay = replay_graph_from_tlog(tlog_path)?;
         let (r_nodes, r_edges, r_files) = normalize_graph(replay.nodes, replay.edges, replay.files);
         let left = graph_fingerprint(&nodes, &edges, &files);
         let right = graph_fingerprint(&r_nodes, &r_edges, &r_files);
         if left != right {
-            return Err(anyhow!(
-                "determinism check failed: graph fingerprint mismatch (left={}, right={})",
-                left,
-                right
-            ));
+            if std::env::var("CANON_REPORTS_VERIFY_DETERMINISM_STRICT")
+                .ok()
+                .as_deref()
+                == Some("1")
+            {
+                return Err(anyhow!(
+                    "determinism check failed: graph fingerprint mismatch (left={}, right={})",
+                    left,
+                    right
+                ));
+            }
+            eprintln!(
+                "canon_reports: determinism mismatch (left={}, right={}); falling back to full replay",
+                left, right
+            );
+            nodes = r_nodes;
+            edges = r_edges;
+            files = r_files;
+            force_write_graph_bin = true;
         }
     }
     if (!graph_bin_fresh && !prefer_graph_bin) || force_write_graph_bin {

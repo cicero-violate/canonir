@@ -62,6 +62,20 @@ pub fn extract_capability_request(canon: &CanonEvent) -> Option<CapabilityReques
     parse_capability_request_value(&canon.payload)
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct SupervisorEvent {
+    pub kind: String,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
+pub fn extract_supervisor_event(canon: &CanonEvent) -> Option<SupervisorEvent> {
+    if canon.kind != "supervisor_event" {
+        return None;
+    }
+    serde_json::from_value(canon.payload.clone()).ok()
+}
+
 pub fn detect_tlog_format(path: &Path) -> TlogFormat {
     if path.is_dir() {
         return TlogFormat::Binary;

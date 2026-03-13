@@ -1,4 +1,3 @@
-use canon_analysis::ReportEventConsumer;
 use canon_analysis::CapabilityEventConsumer;
 use canon_analysis::SmtConsumer;
 use canon_editor::EditConsumer;
@@ -34,7 +33,6 @@ pub fn build_consumers() -> Vec<Box<dyn canon_types::RuntimeConsumer>> {
         Box::new(KernelConsumerAdapter::new(Box::new(GraphConsumer::new()))),
         Box::new(KernelConsumerAdapter::new(Box::new(QueryConsumer::new()))),
         Box::new(KernelConsumerAdapter::new(Box::new(SmtConsumer::new()))),
-        Box::new(KernelConsumerAdapter::new(Box::new(ReportEventConsumer::new()))),
         Box::new(KernelConsumerAdapter::new(Box::new(CapabilityEventConsumer::new()))),
         Box::new(EditConsumer::new()),
     ]

@@ -3,21 +3,11 @@ use canon_tlog_writer::{append_event_json, BinarySegmentWriter, CanonEvent};
 use canon_types::KernelEvent;
 use std::path::Path;
 
-const ANALYSIS_CAPS: &[&str] = &[
-    "analysis.dead_code",
-    "analysis.dependency_cycles",
-    "analysis.structural_hotspots",
-    "analysis.callgraph_centrality",
-    "analysis.dataflow_fanout",
-    "analysis.invariants",
-    "analysis.smt_invariants",
-    "analysis.repair_surface",
-    "analysis.semantic_clusters",
-];
+const ANALYSIS_CAPS: &[&str] = &["analysis.run"];
 
-pub fn dispatch_for_event(event: &KernelEvent, workspace: &Path, tlog_path: &Path) -> anyhow::Result<()> {
+pub fn dispatch_for_event(event: &KernelEvent, workspace: &Path, tlog_path: &Path) -> anyhow::Result<String> {
     let KernelEvent::CompilationUnitFinished { crate_name } = event else {
-        return Ok(());
+        return Ok(String::new());
     };
     let batch_id = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -43,7 +33,7 @@ pub fn dispatch_for_event(event: &KernelEvent, workspace: &Path, tlog_path: &Pat
         "capabilities_requested",
         serde_json::json!({ "crate": crate_name, "count": ANALYSIS_CAPS.len() }),
     );
-    Ok(())
+    Ok(batch_id)
 }
 
 fn append_canon_event(tlog_path: &Path, canon: &CanonEvent) -> anyhow::Result<()> {

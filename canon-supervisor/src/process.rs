@@ -19,6 +19,16 @@ impl ProcessManager {
     }
 
     pub fn spawn(&mut self, cfg: &ProcessConfig, resume: bool) -> Result<()> {
+        if self.children.contains_key(&cfg.name) {
+            tlog::emit(
+                "process_spawn_skipped",
+                serde_json::json!({
+                    "name": cfg.name,
+                    "reason": "already_running",
+                }),
+            );
+            return Ok(());
+        }
         let mut cmd = Command::new(&cfg.bin);
         cmd.args(&cfg.args);
         for (key, value) in &cfg.env {
@@ -41,6 +51,7 @@ impl ProcessManager {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn restart(&mut self, cfg: &ProcessConfig, log_root: Option<&Path>) -> Result<()> {
         let resume = matches!(cfg.restart, RestartStrategy::Drain);
         if let Some(mut child) = self.children.remove(&cfg.name) {
@@ -118,6 +129,7 @@ fn send_sigterm(child: &Child) {
     }
 }
 
+#[allow(dead_code)]
 fn write_recovery_signal(log_root: &Path) {
     let payload = serde_json::json!({ "reason": "supervisor_restart" });
     let path = log_root.join("recovery_signal.json");

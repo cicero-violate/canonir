@@ -12,4 +12,5 @@ serde_json.workspace = true
 signal-hook.workspace = true
 toml.workspace = true
 canon_tlog_writer = { package = "canon-tlog-writer", path = "../canon-utils/tlog-writer" }
+canon_tlog_replay = { package = "canon-tlog-replay", path = "../canon-utils/tlog-replay" }
 once_cell.workspace = true

@@ -12,6 +12,7 @@ pub struct ReportEventConsumer {
     pub event_count: usize,
     last_generated_tick: Option<u64>,
     in_flight: bool,
+    pending: bool,
     tlog_path: Option<PathBuf>,
     out_root: Option<PathBuf>,
 }
@@ -24,6 +25,7 @@ impl ReportEventConsumer {
             event_count: 0,
             last_generated_tick: None,
             in_flight: false,
+            pending: false,
             tlog_path,
             out_root,
         }
@@ -61,54 +63,63 @@ impl KernelEventConsumer for ReportEventConsumer {
             }
         };
         if self.in_flight {
+            self.pending = true;
             return;
         }
         self.in_flight = true;
-        info(
-            "report_consumer",
-            "generate_reports_start",
-            serde_json::json!({
-                "tick": delta.tick,
-                "tlog": tlog_path.display().to_string(),
-                "out": out_dir.display().to_string()
-            }),
-        );
-        if let Err(err) = generate_reports_from_tlog(tlog_path, &out_dir) {
-            log_error(
+        loop {
+            info(
                 "report_consumer",
-                "generate_reports_failed",
+                "generate_reports_start",
                 serde_json::json!({
-                    "error": err.to_string(),
-                    "tick": delta.tick
+                    "tick": delta.tick,
+                    "tlog": tlog_path.display().to_string(),
+                    "out": out_dir.display().to_string()
                 }),
             );
-            self.in_flight = false;
-            return;
-        }
-        info(
-            "report_consumer",
-            "generate_reports_done",
-            serde_json::json!({
-                "tick": delta.tick,
-                "out": out_dir.display().to_string()
-            }),
-        );
-        if std::env::var("CANON_REPORTS_VERIFY_LAYOUT").ok().as_deref() == Some("1") {
-            let layout = ReportLayout::from_crate_root(out_dir.clone());
-            match verify_reports_layout(layout.root()) {
-                Ok(_) => info(
+            if let Err(err) = generate_reports_from_tlog(tlog_path, &out_dir) {
+                log_error(
                     "report_consumer",
-                    "verify_layout_ok",
-                    serde_json::json!({ "root": layout.root().display().to_string() }),
-                ),
-                Err(err) => log_error(
-                    "report_consumer",
-                    "verify_layout_failed",
-                    serde_json::json!({ "error": err.to_string(), "root": layout.root().display().to_string() }),
-                ),
+                    "generate_reports_failed",
+                    serde_json::json!({
+                        "error": err.to_string(),
+                        "tick": delta.tick
+                    }),
+                );
+                self.in_flight = false;
+                self.pending = false;
+                return;
             }
+            info(
+                "report_consumer",
+                "generate_reports_done",
+                serde_json::json!({
+                    "tick": delta.tick,
+                    "out": out_dir.display().to_string()
+                }),
+            );
+            if std::env::var("CANON_REPORTS_VERIFY_LAYOUT").ok().as_deref() == Some("1") {
+                let layout = ReportLayout::from_crate_root(out_dir.clone());
+                match verify_reports_layout(layout.root()) {
+                    Ok(_) => info(
+                        "report_consumer",
+                        "verify_layout_ok",
+                        serde_json::json!({ "root": layout.root().display().to_string() }),
+                    ),
+                    Err(err) => log_error(
+                        "report_consumer",
+                        "verify_layout_failed",
+                        serde_json::json!({ "error": err.to_string(), "root": layout.root().display().to_string() }),
+                    ),
+                }
+            }
+            self.last_generated_tick = Some(delta.tick);
+            if self.pending {
+                self.pending = false;
+                continue;
+            }
+            break;
         }
-        self.last_generated_tick = Some(delta.tick);
         self.in_flight = false;
     }
 }

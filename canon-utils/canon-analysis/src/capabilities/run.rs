@@ -2,11 +2,11 @@ use canon_capability::{Capability, CapabilityContext, CapabilityResult};
 use canon_event_log::info;
 use canon_types::RuntimeEvent;
 
-pub struct SemanticClusteringCapability;
+pub struct AnalysisRunCapability;
 
-impl Capability for SemanticClusteringCapability {
+impl Capability for AnalysisRunCapability {
     fn name(&self) -> &'static str {
-        "analysis.semantic_clusters"
+        "analysis.run"
     }
 
     fn execute(&self, ctx: CapabilityContext) -> anyhow::Result<CapabilityResult> {
@@ -15,7 +15,7 @@ impl Capability for SemanticClusteringCapability {
         };
         info(
             "analysis_capability",
-            "semantic_clusters",
+            "analysis_run",
             serde_json::json!({ "args": request.args }),
         );
         let outcome = crate::capabilities::runner::run_full_analysis(&request.args)?;
@@ -25,8 +25,21 @@ impl Capability for SemanticClusteringCapability {
         };
         crate::capabilities::events::emit_analysis_event(
             &crate::capabilities::events::resolve_tlog_path(),
-            "analysis.semantic_clusters",
-            serde_json::json!({ "status": status, "crate_root": crate_root.display().to_string() }),
+            "analysis.completed",
+            serde_json::json!({
+                "crate": request
+                    .args
+                    .get("crate")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown"),
+                "status": status,
+                "crate_root": crate_root.display().to_string(),
+                "batch_id": request
+                    .args
+                    .get("batch_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            }),
         )?;
         Ok(CapabilityResult::NoOp)
     }

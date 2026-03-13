@@ -1,21 +1,20 @@
-mod builder;
 mod config;
 mod process;
 mod tlog;
 mod watcher;
 
-use crate::builder::build_crate;
-use crate::config::{load_config, write_default_config, ProcessConfig, RestartStrategy};
+use crate::config::{load_config, write_default_config, ProcessConfig};
 use crate::process::ProcessManager;
 use crate::watcher::{affected_crates, crate_for_path, start_watcher};
 use anyhow::Result;
 use signal_hook::consts::signal::{SIGINT, SIGTERM};
 use signal_hook::flag;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 fn main() -> Result<()> {
@@ -29,7 +28,7 @@ fn main() -> Result<()> {
         );
     }
     let config = load_config(&config_path)?;
-
+    start_event_stream_tail();
     let mut manager = ProcessManager::new();
     for proc in &config.process {
         manager.spawn(proc, false)?;
@@ -89,7 +88,7 @@ fn main() -> Result<()> {
 fn handle_changes(
     affected: &HashSet<String>,
     process_map: &HashMap<String, Vec<ProcessConfig>>,
-    manager: &mut ProcessManager,
+    _manager: &mut ProcessManager,
 ) -> Result<()> {
     let mut to_build: HashSet<String> = affected.iter().cloned().collect();
     for procs in process_map.values() {
@@ -104,38 +103,91 @@ fn handle_changes(
         }
     }
 
-    for crate_name in &to_build {
-        if build_crate(crate_name).is_err() {
-            eprintln!("[supervisor] build failed for {}, keeping running process", crate_name);
+        for crate_name in &to_build {
+            tlog::emit(
+                "workspace.changed",
+                serde_json::json!({ "crate": crate_name }),
+            );
         }
-    }
+    Ok(())
+}
 
-    for procs in process_map.values() {
-        for proc_cfg in procs {
-            let proc_name = proc_cfg
-                .crate_name
-                .clone()
-                .unwrap_or_else(|| proc_cfg.name.clone());
-            let should_restart = to_build.contains(&proc_name)
-                || proc_cfg.depends_on.iter().any(|dep| affected.contains(dep));
-            if !should_restart {
+fn start_event_stream_tail() {
+    let tlog_path = crate::tlog::default_tlog_path();
+    thread::spawn(move || {
+        if let Err(err) = tail_event_stream(&tlog_path) {
+            eprintln!("[supervisor] event stream tail error: {err}");
+        }
+    });
+}
+
+fn tail_event_stream(path: &std::path::Path) -> anyhow::Result<()> {
+    use canon_tlog_replay::{read_any_events_from_path, AnyEvent};
+    let mut last_count = 0usize;
+    let mut initialized = false;
+    loop {
+        let events = match read_any_events_from_path(path) {
+            Ok(events) => events,
+            Err(_) => {
+                thread::sleep(Duration::from_millis(500));
                 continue;
             }
-            let log_root = proc_cfg
-                .log_root
-                .as_ref()
-                .map(|p| Path::new(p))
-                .or_else(|| {
-                    if matches!(proc_cfg.restart, RestartStrategy::Drain) {
-                        Some(Path::new("/workspace/ai_sandbox/canon/agent_logs/capability"))
-                    } else {
-                        None
-                    }
-                });
-            manager.restart(proc_cfg, log_root)?;
+        };
+        if !initialized {
+            last_count = events.len();
+            initialized = true;
+            thread::sleep(Duration::from_millis(500));
+            continue;
         }
+        if events.len() > last_count {
+            for event in events.iter().skip(last_count) {
+                if let AnyEvent::Canon(canon) = event {
+                    match canon.kind.as_str() {
+                        "capability_requested" => {
+                            let name = canon.payload.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                            println!("[CAPABILITY] requested {name}");
+                        }
+                        "capability_completed" => {
+                            let name = canon.payload.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                            println!("[CAPABILITY] completed {name}");
+                        }
+                        "capability_failed" => {
+                            let name = canon.payload.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                            println!("[CAPABILITY] failed {name}");
+                        }
+                        "build.started" => {
+                            let krate = canon.payload.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown");
+                            println!("[SUPERVISOR] build started: {krate}");
+                        }
+                        "build.completed" => {
+                            let krate = canon.payload.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown");
+                            let ok = canon.payload.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                            if ok {
+                                println!("[SUPERVISOR] build completed: {krate}");
+                            } else {
+                                println!("[SUPERVISOR] build failed: {krate}");
+                            }
+                        }
+                        "analysis.run" => {
+                            println!("[ANALYSIS] requested analysis.run");
+                        }
+                        "analysis.completed" => {
+                            let krate = canon.payload.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown");
+                            let status = canon.payload.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+                            println!("[ANALYSIS] completed {krate} ({status})");
+                        }
+                        "analysis.failed" => {
+                            let krate = canon.payload.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown");
+                            println!("[ANALYSIS] failed {krate}");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            last_count = events.len();
+        }
+        thread::sleep(Duration::from_millis(500));
     }
-    Ok(())
 }
 
 fn build_process_map(processes: &[ProcessConfig]) -> HashMap<String, Vec<ProcessConfig>> {

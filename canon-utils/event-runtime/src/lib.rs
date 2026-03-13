@@ -6,6 +6,7 @@ use canon_event_log::{error, info};
 use canon_tlog_writer::{append_event_json, BinarySegmentWriter, CanonEvent};
 use canon_tlog_replay::{
     extract_capability_request,
+    extract_supervisor_event,
     extract_edit_event,
     extract_kernel_event,
     read_any_events_from_path,
@@ -88,6 +89,17 @@ impl EventRuntime {
                     self.handle_runtime_event(RuntimeEvent::Edit(edit))?;
                 } else if let Some(request) = extract_capability_request(canon) {
                     self.handle_runtime_event(RuntimeEvent::CapabilityRequested(request))?;
+                } else if let Some(supervisor_event) = extract_supervisor_event(canon) {
+                    if supervisor_event.kind == "workspace.changed" {
+                        if let Some(crate_name) = supervisor_event.payload.get("crate").and_then(|v| v.as_str()) {
+                            let request = CapabilityRequested {
+                                request_id: format!("build-{}-{}", crate_name, self.tick),
+                                name: "build.cargo".to_string(),
+                                args: serde_json::json!({ "crate": crate_name }),
+                            };
+                            self.handle_runtime_event(RuntimeEvent::CapabilityRequested(request))?;
+                        }
+                    }
                 }
             }
             processed += 1;

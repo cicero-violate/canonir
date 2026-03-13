@@ -37,10 +37,13 @@ pub struct ProcessConfig {
     #[serde(default)]
     pub depends_on: Vec<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub restart: RestartStrategy,
     #[serde(default = "default_drain_timeout_ms")]
+    #[allow(dead_code)]
     pub drain_timeout_ms: u64,
     #[serde(default)]
+    #[allow(dead_code)]
     pub log_root: Option<String>,
     #[serde(default)]
     pub crate_name: Option<String>,
