@@ -130,3 +130,5 @@ chrome-dev-profile/
 **/analysis/*.lock
 **/analysis/*.txt
 *.jsonl
+
+*.tlogd/*
