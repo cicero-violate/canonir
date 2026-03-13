@@ -1,0 +1,33 @@
+use canon_capability::{Capability, CapabilityContext, CapabilityResult};
+use canon_event_log::info;
+use canon_types::RuntimeEvent;
+
+pub struct SemanticClusteringCapability;
+
+impl Capability for SemanticClusteringCapability {
+    fn name(&self) -> &'static str {
+        "analysis.semantic_clusters"
+    }
+
+    fn execute(&self, ctx: CapabilityContext) -> anyhow::Result<CapabilityResult> {
+        let RuntimeEvent::CapabilityRequested(request) = ctx.event else {
+            anyhow::bail!("capability context missing request");
+        };
+        info(
+            "analysis_capability",
+            "semantic_clusters",
+            serde_json::json!({ "args": request.args }),
+        );
+        let outcome = crate::capabilities::runner::run_full_analysis(&request.args)?;
+        let (status, crate_root) = match outcome {
+            crate::capabilities::runner::RunOutcome::Ran(root) => ("complete", root),
+            crate::capabilities::runner::RunOutcome::Skipped(root) => ("skipped", root),
+        };
+        crate::capabilities::events::emit_analysis_event(
+            &crate::capabilities::events::resolve_tlog_path(),
+            "analysis.semantic_clusters",
+            serde_json::json!({ "status": status, "crate_root": crate_root.display().to_string() }),
+        )?;
+        Ok(CapabilityResult::NoOp)
+    }
+}

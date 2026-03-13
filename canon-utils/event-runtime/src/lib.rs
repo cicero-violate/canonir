@@ -1,8 +1,26 @@
 use anyhow::Result;
 mod bus;
 
-use canon_tlog_replay::{extract_edit_event, extract_kernel_event, read_any_events_from_path, AnyEvent};
-use canon_types::{EventDelta, KernelEvent, KernelState, RuntimeConsumer, RuntimeEvent};
+use canon_capability::{CapabilityContext, CapabilityRegistry, CapabilityResult};
+use canon_event_log::{error, info};
+use canon_tlog_writer::{append_event_json, BinarySegmentWriter, CanonEvent};
+use canon_tlog_replay::{
+    extract_capability_request,
+    extract_edit_event,
+    extract_kernel_event,
+    read_any_events_from_path,
+    AnyEvent,
+};
+use canon_types::{
+    CapabilityCompleted,
+    CapabilityFailed,
+    CapabilityRequested,
+    EventDelta,
+    KernelEvent,
+    KernelState,
+    RuntimeConsumer,
+    RuntimeEvent,
+};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use bus::EventBus;
@@ -10,6 +28,8 @@ use bus::EventBus;
 pub struct EventRuntime {
     state: KernelState,
     bus: EventBus,
+    registry: CapabilityRegistry,
+    tlog_path: Option<std::path::PathBuf>,
     next_id: u64,
     tick: u64,
 }
@@ -28,9 +48,19 @@ impl EventRuntime {
         Self {
             state: empty_state(),
             bus,
+            registry: CapabilityRegistry::new(),
+            tlog_path: None,
             next_id: 1,
             tick: 0,
         }
+    }
+
+    pub fn registry_mut(&mut self) -> &mut CapabilityRegistry {
+        &mut self.registry
+    }
+
+    pub fn set_tlog_path(&mut self, path: std::path::PathBuf) {
+        self.tlog_path = Some(path);
     }
 
     pub fn state(&self) -> &KernelState {
@@ -55,7 +85,9 @@ impl EventRuntime {
                 if let Some(kernel) = extract_kernel_event(canon) {
                     self.handle_kernel_event(kernel)?;
                 } else if let Some(edit) = extract_edit_event(canon) {
-                    self.bus.dispatch(RuntimeEvent::Edit(edit));
+                    self.handle_runtime_event(RuntimeEvent::Edit(edit))?;
+                } else if let Some(request) = extract_capability_request(canon) {
+                    self.handle_runtime_event(RuntimeEvent::CapabilityRequested(request))?;
                 }
             }
             processed += 1;
@@ -84,8 +116,127 @@ impl EventRuntime {
         };
 
         apply_delta(&mut self.state, &delta)?;
-        self.bus.dispatch(RuntimeEvent::Kernel { delta, state: self.state.clone() });
+        self.handle_runtime_event(RuntimeEvent::Kernel { delta, state: self.state.clone() })?;
         Ok(())
+    }
+
+    fn handle_runtime_event(&mut self, event: RuntimeEvent) -> Result<()> {
+        self.bus.dispatch(event.clone());
+        match event {
+            RuntimeEvent::CapabilityRequested(request) => {
+                self.handle_capability_request(request)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_capability_request(&mut self, request: CapabilityRequested) -> Result<()> {
+        let request_id = request.request_id.clone();
+        let request_name = request.name.clone();
+        info(
+            "capability_runtime",
+            "capability_requested",
+            serde_json::json!({ "name": request_name, "request_id": request_id }),
+        );
+        let ctx = CapabilityContext {
+            workspace: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            event: RuntimeEvent::CapabilityRequested(request.clone()),
+        };
+        let result = match self.registry.execute(&request.name, ctx) {
+            Ok(result) => result,
+            Err(err) => {
+                error(
+                    "capability_runtime",
+                    "capability_failed",
+                    serde_json::json!({
+                        "name": request_name,
+                        "request_id": request_id,
+                        "error": err.to_string()
+                    }),
+                );
+                let failed = RuntimeEvent::CapabilityFailed(CapabilityFailed {
+                    request_id: request_id.clone(),
+                    name: request_name.clone(),
+                    error: err.to_string(),
+                });
+                self.bus.dispatch(failed.clone());
+                self.append_runtime_event(&failed);
+                return Ok(());
+            }
+        };
+
+        let mut terminal_emitted = false;
+        match result {
+            CapabilityResult::Emit(event) => {
+                terminal_emitted = matches!(
+                    event,
+                    RuntimeEvent::CapabilityCompleted(_) | RuntimeEvent::CapabilityFailed(_)
+                );
+                if terminal_emitted {
+                    self.append_runtime_event(&event);
+                }
+                self.bus.dispatch(event);
+            }
+            CapabilityResult::EmitMany(events) => {
+                for event in events {
+                    let is_terminal = matches!(
+                        event,
+                        RuntimeEvent::CapabilityCompleted(_) | RuntimeEvent::CapabilityFailed(_)
+                    );
+                    if is_terminal {
+                        terminal_emitted = true;
+                        self.append_runtime_event(&event);
+                    }
+                    self.bus.dispatch(event);
+                }
+            }
+            CapabilityResult::NoOp => {}
+        }
+
+        if !terminal_emitted {
+            let completed = RuntimeEvent::CapabilityCompleted(CapabilityCompleted {
+                request_id: request_id.clone(),
+                name: request_name.clone(),
+                result: serde_json::json!({ "status": "ok" }),
+            });
+            self.bus.dispatch(completed.clone());
+            self.append_runtime_event(&completed);
+        }
+        info(
+            "capability_runtime",
+            "capability_completed",
+            serde_json::json!({ "name": request_name, "request_id": request_id }),
+        );
+        Ok(())
+    }
+
+    fn append_runtime_event(&self, event: &RuntimeEvent) {
+        let Some(path) = self.tlog_path.as_ref() else {
+            return;
+        };
+        let canon = match event {
+            RuntimeEvent::CapabilityCompleted(payload) => {
+                let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+                CanonEvent::new("event-runtime", "capability_completed", val)
+            }
+            RuntimeEvent::CapabilityFailed(payload) => {
+                let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+                CanonEvent::new("event-runtime", "capability_failed", val)
+            }
+            _ => {
+                return;
+            }
+        };
+
+        if path.is_dir() {
+            if let Ok(writer) = BinarySegmentWriter::open(path) {
+                let _ = writer.append_event(&canon);
+            }
+            return;
+        }
+
+        let _ = append_event_json(path, "event-runtime", canon.kind, canon.payload);
     }
 }
 

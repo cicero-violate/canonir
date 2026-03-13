@@ -8,10 +8,12 @@ pub mod snapshot;
 pub use binary_reader::{is_binary_magic, read_binary_events};
 pub use graph_types::{EdgeRow, NodeRow, ReplayGraph};
 pub use reader::{
+    extract_capability_request,
     detect_tlog_format,
     extract_edit_event,
     extract_kernel_event,
     parse_any_event,
+    parse_capability_request_value,
     parse_edit_event_value,
     parse_kernel_event_value,
     read_any_events,

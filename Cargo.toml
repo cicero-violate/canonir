@@ -20,6 +20,7 @@ members = [
   "canon-utils/canon-graph",
   "canon-utils/canon-analysis",
   "canon-utils/canon-types",
+  "canon-utils/capability",
   "canon-utils/tlog-replay",
   "canon-utils/tlog-writer",
 ]

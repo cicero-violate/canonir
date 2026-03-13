@@ -18,6 +18,7 @@ chrono.workspace = true
 canon = { path = "../../canonir" }
 canon_tlog_writer = { package = "canon-tlog-writer", path = "../tlog-writer" }
 canon_event_log = { package = "canon-event-log", path = "../event-log" }
+canon_capability = { package = "canon-capability", path = "../capability" }
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -25,3 +26,7 @@ tempfile.workspace = true
 [[bin]]
 name = "canon-editor"
 path = "src/bin/canon-editor.rs"
+
+[[bin]]
+name = "editor_capability_smoke_test"
+path = "src/bin/capability_smoke_test.rs"

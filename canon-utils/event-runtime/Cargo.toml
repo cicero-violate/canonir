@@ -10,11 +10,19 @@ path = "src/lib.rs"
 name = "event_runtime"
 path = "src/bin/event_runtime.rs"
 
+[[bin]]
+name = "runtime_capability_smoke_test"
+path = "src/bin/capability_smoke_test.rs"
+
 [dependencies]
 anyhow = { workspace = true }
 canon_types = { path = "../canon-types" }
 canon_tlog_replay = { package = "canon-tlog-replay", path = "../tlog-replay" }
 canon_event_consumers = { path = "../event-consumers" }
 canon_event_log = { package = "canon-event-log", path = "../event-log" }
+canon_capability = { package = "canon-capability", path = "../capability" }
+canon_agent_v2 = { package = "canon-agent-v2", path = "../../canon-agent-v2" }
+canon_editor = { package = "canon-editor", path = "../canon-editor" }
+canon_tlog_writer = { package = "canon-tlog-writer", path = "../tlog-writer" }
 serde_json = { workspace = true }
 crossbeam-channel = { workspace = true }

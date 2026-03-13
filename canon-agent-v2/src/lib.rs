@@ -33,6 +33,7 @@ pub mod policy_engine;
 pub mod policy_train;
 pub mod response_router;
 pub mod repair_pipeline;
+pub mod runtime_capabilities;
 pub mod scheduler;
 pub mod scheduler_scoring;
 pub mod scheduler_state;

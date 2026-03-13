@@ -9,6 +9,7 @@ pub mod query;
 pub mod symbol_index;
 pub mod tlog;
 pub mod consumer;
+pub mod capabilities;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -17,6 +18,14 @@ use edit::ProjectEditor;
 use crate::symbol_index::SymbolIndex;
 use structured::{EditOp, FieldMutation};
 pub use consumer::EditConsumer;
+pub use capabilities::{
+    register_editor_capabilities,
+    CAP_DELETE_SYMBOL,
+    CAP_MOVE_SYMBOL,
+    CAP_RENAME_DIR,
+    CAP_RENAME_MODULE,
+    CAP_RENAME_SYMBOL,
+};
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct RenameRunReport {

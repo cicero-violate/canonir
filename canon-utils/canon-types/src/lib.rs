@@ -27,4 +27,11 @@ mod edit_events;
 pub use edit_events::EditEvent;
 
 mod runtime_event;
-pub use runtime_event::{RuntimeConsumer, RuntimeEvent, RuntimeEventFilter};
+pub use runtime_event::{
+    CapabilityCompleted,
+    CapabilityFailed,
+    CapabilityRequested,
+    RuntimeConsumer,
+    RuntimeEvent,
+    RuntimeEventFilter,
+};

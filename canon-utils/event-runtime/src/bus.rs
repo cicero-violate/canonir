@@ -59,6 +59,16 @@ impl EventBus {
                         continue;
                     }
                 }
+                RuntimeEventFilter::CapabilityOnly => {
+                    if !matches!(
+                        event,
+                        RuntimeEvent::CapabilityRequested(_)
+                            | RuntimeEvent::CapabilityCompleted(_)
+                            | RuntimeEvent::CapabilityFailed(_)
+                    ) {
+                        continue;
+                    }
+                }
                 RuntimeEventFilter::Kernel(mask) => {
                     let RuntimeEvent::Kernel { delta, .. } = &event else {
                         continue;

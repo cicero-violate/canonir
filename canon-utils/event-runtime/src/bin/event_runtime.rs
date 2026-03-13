@@ -3,6 +3,9 @@ use canon_event_consumers::build_consumers;
 use canon_event_runtime::EventRuntime;
 use canon_tlog_replay::detect_tlog_format;
 use canon_event_log::{info, warn, error};
+use canon_agent_v2::runtime_capabilities::register_capabilities;
+use canon_editor::register_editor_capabilities;
+use canon_analysis::register_analysis_capabilities;
 use std::env;
 use std::path::PathBuf;
 use std::thread::sleep;
@@ -37,6 +40,10 @@ fn main() -> Result<()> {
 
     let tlog_path = tlog_path.ok_or_else(|| anyhow!("missing --tlog"))?;
     let mut runtime = EventRuntime::new(build_consumers());
+    register_capabilities(runtime.registry_mut());
+    register_editor_capabilities(runtime.registry_mut());
+    register_analysis_capabilities(runtime.registry_mut());
+    runtime.set_tlog_path(tlog_path.clone());
     let mut processed: usize = 0;
     info(
         "event_runtime",
