@@ -150,6 +150,12 @@ impl AgentWorkerState {
         if let Some(snapshot) = state_snapshot::snapshot_store_load(path) {
             self.graph = snapshot.graph;
             self.graph.rebuild_index();
+            for node in self.graph.nodes.iter_mut() {
+                if node.status == NodeStatus::Running {
+                    node.status = NodeStatus::Pending;
+                }
+            }
+            self.graph.rebuild_index();
         }
     }
 
@@ -450,8 +456,10 @@ fn capability_name_for_node(node: &ExecutionNode) -> Option<&'static str> {
 
 fn build_capability_args(node: &ExecutionNode, capability: &str) -> Option<serde_json::Value> {
     if capability == "llm.call" {
+        use canon_agent_v2::decompose::DecomposeNodeType;
         let prompt = node.description.clone();
-        return Some(json!({ "prompt": prompt, "raw": false }));
+        let raw = matches!(node.node_type, DecomposeNodeType::Analysis);
+        return Some(json!({ "prompt": prompt, "raw": raw }));
     }
     if let Some(args) = parse_inline_json(&node.description) {
         return Some(args);
