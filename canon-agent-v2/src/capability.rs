@@ -158,6 +158,13 @@ impl CapabilityPipeline {
         Path::new(LOG_ROOT).join(name)
     }
     pub async fn run_capability_loop(&self, ctx: &PipelineContext) -> Result<f64> {
+        if event_execution_enabled() {
+            tlog::emit(
+                "capability_loop_skipped",
+                serde_json::json!({ "reason": "CANON_EVENT_EXECUTION enabled" }),
+            );
+            return Ok(0.0);
+        }
         Self::ensure_log_dir();
         Self::clear_capability_log_dir();
         if self.config.llm_endpoints.is_empty() {
@@ -818,6 +825,13 @@ impl CapabilityPipeline {
         )
         .await;
     }
+}
+
+fn event_execution_enabled() -> bool {
+    std::env::var("CANON_EVENT_EXECUTION")
+        .ok()
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false)
 }
 fn capability_pipeline_list_workspace_entries(root: &Path, limit: usize) -> String {
     let mut entries: Vec<String> = std::fs::read_dir(root)

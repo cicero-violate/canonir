@@ -62,6 +62,9 @@ pub async fn run_async_pipeline(
     goal_spec: &GoalSpec,
     log_root: &Path,
 ) -> Result<f64> {
+    if event_execution_enabled() {
+        anyhow::bail!("async pipeline disabled when CANON_EVENT_EXECUTION is enabled");
+    }
     let (queue, mut rx) = TaskQueue::new();
     let graph = Arc::new(Mutex::new(graph));
     let inflight = Arc::new(Mutex::new(HashSet::new()));
@@ -553,4 +556,11 @@ pub async fn run_async_pipeline(
         &snapshot,
     );
     Ok(reward)
+}
+
+fn event_execution_enabled() -> bool {
+    std::env::var("CANON_EVENT_EXECUTION")
+        .ok()
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false)
 }
