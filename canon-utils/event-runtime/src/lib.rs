@@ -78,7 +78,7 @@ impl EventRuntime {
             tick: 0,
             runtime_tick: 0,
             runtime_state: serde_json::json!({}),
-            execute_capabilities: true,
+            execute_capabilities: false,
             emitter_rx,
         }
     }
