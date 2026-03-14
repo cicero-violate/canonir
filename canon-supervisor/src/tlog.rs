@@ -1,3 +1,4 @@
+use canon_event_log::info;
 use canon_tlog_writer::{append_event_json, BinarySegmentWriter, CanonEvent};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -47,39 +48,63 @@ fn emit_human_log(kind: &str, payload: &Value) {
         "process_spawned" => {
             let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
             let pid = payload.get("pid").and_then(|v| v.as_i64()).unwrap_or(-1);
-            println!("[SUPERVISOR] spawned {name} (pid={pid})");
+            info(
+                "supervisor",
+                "process_spawned",
+                serde_json::json!({ "name": name, "pid": pid }),
+            );
         }
         "process_restarted" => {
             let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
             let strategy = payload.get("strategy").and_then(|v| v.as_str()).unwrap_or("unknown");
-            println!("[SUPERVISOR] restarting {name} ({strategy})");
+            info(
+                "supervisor",
+                "process_restarted",
+                serde_json::json!({ "name": name, "strategy": strategy }),
+            );
         }
         "process_exit" => {
             let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
             let reason = payload.get("reason").and_then(|v| v.as_str()).unwrap_or("exit");
-            println!("[SUPERVISOR] {name} exited ({reason})");
+            info(
+                "supervisor",
+                "process_exit",
+                serde_json::json!({ "name": name, "reason": reason }),
+            );
         }
         "file_change_detected" => {
             let path = payload.get("path").and_then(|v| v.as_str()).unwrap_or("unknown");
             let krate = payload.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown");
-            println!("[SUPERVISOR] file change in {krate}: {path}");
+            info(
+                "supervisor",
+                "file_change_detected",
+                serde_json::json!({ "crate": krate, "path": path }),
+            );
         }
         "build.started" => {
             let krate = payload.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown");
-            println!("[SUPERVISOR] build started: {krate}");
+            info(
+                "supervisor",
+                "build_started",
+                serde_json::json!({ "crate": krate }),
+            );
         }
         "build.completed" => {
             let krate = payload.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown");
             let ok = payload.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
-            if ok {
-                println!("[SUPERVISOR] build completed: {krate}");
-            } else {
-                println!("[SUPERVISOR] build failed: {krate}");
-            }
+            info(
+                "supervisor",
+                "build_completed",
+                serde_json::json!({ "crate": krate, "success": ok }),
+            );
         }
         "workspace.changed" => {
             let krate = payload.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown");
-            println!("[SUPERVISOR] workspace changed: {krate}");
+            info(
+                "supervisor",
+                "workspace_changed",
+                serde_json::json!({ "crate": krate }),
+            );
         }
         _ => {}
     }

@@ -7,6 +7,7 @@ use crate::config::{load_config, write_default_config, ProcessConfig};
 use crate::process::ProcessManager;
 use crate::watcher::{affected_crates, crate_for_path, start_watcher};
 use anyhow::Result;
+use canon_event_log::{error, info};
 use signal_hook::consts::signal::{SIGINT, SIGTERM};
 use signal_hook::flag;
 use std::collections::{HashMap, HashSet};
@@ -22,9 +23,10 @@ fn main() -> Result<()> {
     let config_path = root.join("supervisor.toml");
     if !config_path.exists() {
         write_default_config(&config_path)?;
-        eprintln!(
-            "[supervisor] wrote default config at {}",
-            config_path.display()
+        info(
+            "supervisor",
+            "default_config_written",
+            serde_json::json!({ "path": config_path.display().to_string() }),
         );
     }
     let config = load_config(&config_path)?;
@@ -116,7 +118,11 @@ fn start_event_stream_tail() {
     let tlog_path = crate::tlog::default_tlog_path();
     thread::spawn(move || {
         if let Err(err) = tail_event_stream(&tlog_path) {
-            eprintln!("[supervisor] event stream tail error: {err}");
+            error(
+                "supervisor",
+                "event_stream_tail_error",
+                serde_json::json!({ "error": err.to_string() }),
+            );
         }
     });
 }
@@ -145,40 +151,68 @@ fn tail_event_stream(path: &std::path::Path) -> anyhow::Result<()> {
                     match canon.kind.as_str() {
                         "capability_requested" => {
                             let name = canon.payload.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                            println!("[CAPABILITY] requested {name}");
+                            info(
+                                "supervisor",
+                                "capability_requested",
+                                serde_json::json!({ "name": name }),
+                            );
                         }
                         "capability_completed" => {
                             let name = canon.payload.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                            println!("[CAPABILITY] completed {name}");
+                            info(
+                                "supervisor",
+                                "capability_completed",
+                                serde_json::json!({ "name": name }),
+                            );
                         }
                         "capability_failed" => {
                             let name = canon.payload.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                            println!("[CAPABILITY] failed {name}");
+                            info(
+                                "supervisor",
+                                "capability_failed",
+                                serde_json::json!({ "name": name }),
+                            );
                         }
                         "build.started" => {
                             let krate = canon.payload.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown");
-                            println!("[SUPERVISOR] build started: {krate}");
+                            info(
+                                "supervisor",
+                                "build_started",
+                                serde_json::json!({ "crate": krate }),
+                            );
                         }
                         "build.completed" => {
                             let krate = canon.payload.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown");
                             let ok = canon.payload.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
-                            if ok {
-                                println!("[SUPERVISOR] build completed: {krate}");
-                            } else {
-                                println!("[SUPERVISOR] build failed: {krate}");
-                            }
+                            info(
+                                "supervisor",
+                                "build_completed",
+                                serde_json::json!({ "crate": krate, "success": ok }),
+                            );
                         }
                         "analysis.run" => {
-                            println!("[ANALYSIS] requested analysis.run");
+                            info(
+                                "supervisor",
+                                "analysis_requested",
+                                serde_json::json!({ "name": "analysis.run" }),
+                            );
                         }
                         "analysis.completed" => {
                             let krate = canon.payload.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown");
                             let status = canon.payload.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
-                            println!("[ANALYSIS] completed {krate} ({status})");
+                            info(
+                                "supervisor",
+                                "analysis_completed",
+                                serde_json::json!({ "crate": krate, "status": status }),
+                            );
                         }
                         "analysis.failed" => {
                             let krate = canon.payload.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown");
-                            println!("[ANALYSIS] failed {krate}");
+                            info(
+                                "supervisor",
+                                "analysis_failed",
+                                serde_json::json!({ "crate": krate }),
+                            );
                         }
                         _ => {}
                     }
