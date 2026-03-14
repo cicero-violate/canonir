@@ -13,7 +13,8 @@ use canon_agent_v2::objectives::{
 use canon_agent_v2::planner_update::{apply_graph_patch, GraphPatch, PlannerUpdateRewriteSpec};
 use canon_types::{
     CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventDelta, KernelState,
-    RuntimeConsumer, RuntimeEmitterHandle, RuntimeEvent, RuntimeEventFilter,
+    NodeCompleted, NodeFailed, NodeReady, NodeStarted, RuntimeConsumer, RuntimeEmitterHandle,
+    RuntimeEvent, RuntimeEventFilter,
 };
 use canon_event_log::{info, warn};
 use canon_tlog_replay::{read_any_events_from_path_with_start_seq, AnyEvent};
@@ -132,7 +133,7 @@ impl AgentWorkerState {
                 self.emit_state(emitter);
             }
             AgentWork::CapabilityResult(event) => {
-                self.apply_result(event);
+                self.apply_result(event, emitter);
                 self.schedule_next(emitter);
                 self.emit_state(emitter);
             }
@@ -225,6 +226,14 @@ impl AgentWorkerState {
         };
         let request_id = format!("node-{}-{}", node.id, self.last_tick);
         let _ = self.graph.update_status(&node.id, NodeStatus::Running);
+        emitter.emit(RuntimeEvent::NodeReady(NodeReady {
+            node_id: node.id.clone(),
+            capability: capability_name.to_string(),
+        }));
+        emitter.emit(RuntimeEvent::NodeStarted(NodeStarted {
+            node_id: node.id.clone(),
+            capability: capability_name.to_string(),
+        }));
         info(
             "agent_consumer",
             "node_started",
@@ -240,15 +249,24 @@ impl AgentWorkerState {
         ));
     }
 
-    fn apply_result(&mut self, event: RuntimeEvent) {
-        self.apply_result_with_options(event, true);
+    fn apply_result(
+        &mut self,
+        event: RuntimeEvent,
+        emitter: &Arc<Mutex<Option<RuntimeEmitterHandle>>>,
+    ) {
+        self.apply_result_with_options(event, emitter, true);
     }
 
     fn apply_result_replay(&mut self, event: RuntimeEvent) {
-        self.apply_result_with_options(event, false);
+        self.apply_result_with_options(event, &Arc::new(Mutex::new(None)), false);
     }
 
-    fn apply_result_with_options(&mut self, event: RuntimeEvent, plan_and_persist: bool) {
+    fn apply_result_with_options(
+        &mut self,
+        event: RuntimeEvent,
+        emitter: &Arc<Mutex<Option<RuntimeEmitterHandle>>>,
+        plan_and_persist: bool,
+    ) {
         let (request_id, capability_name, success, stdout, stderr, result_value) = match event {
             RuntimeEvent::CapabilityCompleted(payload) => {
                 let success = payload
@@ -313,6 +331,22 @@ impl AgentWorkerState {
                 if success { "node_completed" } else { "node_failed" },
                 serde_json::json!({ "node_id": node_id, "capability": capability_name }),
             );
+        }
+        if plan_and_persist {
+            if let Some(emitter) = emitter.lock().ok().and_then(|slot| slot.clone()) {
+                if success {
+                    emitter.emit(RuntimeEvent::NodeCompleted(NodeCompleted {
+                        node_id: node_id.clone(),
+                        capability: capability_name.clone(),
+                    }));
+                } else {
+                    emitter.emit(RuntimeEvent::NodeFailed(NodeFailed {
+                        node_id: node_id.clone(),
+                        capability: capability_name.clone(),
+                        error: Some(stderr.clone()),
+                    }));
+                }
+            }
         }
         let patch_to_apply = if success && capability_name == "llm.call" {
             result_value

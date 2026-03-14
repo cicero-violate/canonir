@@ -8,6 +8,10 @@ pub enum RuntimeEvent {
     Edit(EditEvent),
     Tick { tick: u64 },
     RuntimeStateUpdated { payload: serde_json::Value },
+    NodeReady(NodeReady),
+    NodeStarted(NodeStarted),
+    NodeCompleted(NodeCompleted),
+    NodeFailed(NodeFailed),
     CapabilityRequested(CapabilityRequested),
     CapabilityCompleted(CapabilityCompleted),
     CapabilityFailed(CapabilityFailed),
@@ -52,4 +56,29 @@ pub struct CapabilityFailed {
     pub request_id: String,
     pub name: String,
     pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeReady {
+    pub node_id: String,
+    pub capability: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeStarted {
+    pub node_id: String,
+    pub capability: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeCompleted {
+    pub node_id: String,
+    pub capability: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeFailed {
+    pub node_id: String,
+    pub capability: String,
+    pub error: Option<String>,
 }
