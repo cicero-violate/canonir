@@ -132,6 +132,10 @@ fn main() -> Result<()> {
     }
 
     let tlog_path = tlog_path.ok_or_else(|| anyhow!("missing --tlog"))?;
+    let event_execution_enabled = std::env::var("CANON_EVENT_EXECUTION")
+        .ok()
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false);
     let lock_path = env::var("CANON_EVENT_RUNTIME_LOCK")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/workspace/ai_sandbox/canon/state/event_runtime.lock"));
@@ -183,7 +187,7 @@ fn main() -> Result<()> {
     info(
         "event_runtime",
         "runtime_start",
-        serde_json::json!({ "tlog": tlog_path.display().to_string(), "once": once }),
+        serde_json::json!({ "tlog": tlog_path.display().to_string(), "once": once, "event_execution": event_execution_enabled }),
     );
 
     loop {

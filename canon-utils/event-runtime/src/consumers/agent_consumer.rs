@@ -15,6 +15,7 @@ use canon_types::{
     CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventDelta, KernelState,
     RuntimeConsumer, RuntimeEmitterHandle, RuntimeEvent, RuntimeEventFilter,
 };
+use canon_event_log::{info, warn};
 use canon_tlog_replay::{read_any_events_from_path_with_start_seq, AnyEvent};
 use serde_json::json;
 use std::sync::mpsc::{self, Sender};
@@ -203,6 +204,11 @@ impl AgentWorkerState {
             if let Some(node_mut) = self.graph.get_node_mut(&node.id) {
                 node_mut.error = Some("unsupported capability".to_string());
             }
+            warn(
+                "agent_consumer",
+                "node_failed_unsupported_capability",
+                serde_json::json!({ "node_id": node.id }),
+            );
             return;
         };
         let Some(args) = build_capability_args(&node, capability_name) else {
@@ -210,10 +216,20 @@ impl AgentWorkerState {
             if let Some(node_mut) = self.graph.get_node_mut(&node.id) {
                 node_mut.error = Some("missing capability args".to_string());
             }
+            warn(
+                "agent_consumer",
+                "node_failed_missing_args",
+                serde_json::json!({ "node_id": node.id, "capability": capability_name }),
+            );
             return;
         };
         let request_id = format!("node-{}-{}", node.id, self.last_tick);
         let _ = self.graph.update_status(&node.id, NodeStatus::Running);
+        info(
+            "agent_consumer",
+            "node_started",
+            serde_json::json!({ "node_id": node.id, "capability": capability_name }),
+        );
         self.pending.insert(request_id.clone(), node.id.clone());
         emitter.emit(RuntimeEvent::CapabilityRequested(
             canon_types::CapabilityRequested {
@@ -291,6 +307,13 @@ impl AgentWorkerState {
             NodeStatus::Failed
         };
         let _ = self.graph.update_status(&node_id, new_status);
+        if plan_and_persist {
+            info(
+                "agent_consumer",
+                if success { "node_completed" } else { "node_failed" },
+                serde_json::json!({ "node_id": node_id, "capability": capability_name }),
+            );
+        }
         let patch_to_apply = if success && capability_name == "llm.call" {
             result_value
                 .as_ref()
