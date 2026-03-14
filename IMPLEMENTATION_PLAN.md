@@ -1,182 +1,187 @@
-# Implementation Plan: Integrate rename symbol generation into analysis_capture pipeline
+I'll read the key files before evaluating the draft.Let me read the actual `agent_consumer.rs` file first before drafting the plan.I can't fetch local files directly. But I have enough from the handoff, the repomap, and the file listing to create a rigorous plan. Let me build it now.
 
-## Goal
+Here's the implementation plan.
 
-After `cargo build/check`, the full `analysis/` directory is populated automatically:
+---
 
-## Status
+## Implementation Plan: `agent_consumer.rs` — Full Wiring
 
-Implemented (Mar 8, 2026). Spans/symbols are now emitted by `analysis_capture` via `canon_capture::collect_spans_and_symbols`, and `rename` reads directly from `analysis/`.
+### Orientation
 
-## File change summary
+Before touching anything, the agent reads these files in full:
 
-| File                                | Change                                                                      |
-|-------------------------------------+-----------------------------------------------------------------------------|
-| `canon_capture/src/lib.rs`          | Add `collect_spans_and_symbols(tcx, output_dir, crate_name)`                |
-| `canon_capture/src/spans.rs`        | New file — HIR visitor + span writer (moved from rename)                    |
-| `analysis_capture/src/main.rs`      | Add `crate_name` to `MirCaptureCallbacks`, call `collect_spans_and_symbols` |
-| `analysis_capture/Cargo.toml`       | Add `canon_capture` dependency                                              |
-| `rename/src/core/rustc_session.rs`  | Replace compiler driver with direct file reader                             |
-| `rename/src/core/rustc_resolver.rs` | Delete or keep only `infer_crate_name`                                      |
-| `rename/src/runner.rs`              | Remove `RENAME_GENERATE_SYMBOLS` path, read from `analysis/`                |
-| `rename/Cargo.toml`                 | Drop rustc_* and cargo crate dependencies                                   |
-| `rename/span_file/`                 | Delete                                                                      |
-
+```bash
+bat -n canon-utils/event-runtime/src/consumers/agent_consumer.rs
+bat -n canon-agent-v2/src/capability_types.rs
+bat -n canon-agent-v2/src/planner_session.rs | head -100
+bat -n canon-agent-v2/src/dag.rs
+rg '(PipelineCapability|Llm|Analysis)' canon-agent-v2/src/capability_types.rs
 ```
-cargo build/check
-    └── analysis_capture (rustc wrapper)
-            ├── writes nodes.csv, edges.csv, metadata.json, ... → analysis/
-            ├── writes spans.jsonl → analysis/
-            ├── writes symbols.json → analysis/
-            └── spawns analysis-engine --dir analysis/ --phase all
-                        └── writes anomalies.json, semantic_duplicates.json, ... → analysis/
+
+Then confirm the `PipelineSnapshot` shape before writing any JSON parsing code:
+
+```bash
+bat -n canon-agent-v2/src/state_snapshot.rs
+python3 -c "import json; d=json.load(open('agent_logs/state_snapshot.json')); print(list(d.keys()))"
 ```
 
 ---
 
-## What produces spans.jsonl and symbols.json today
+### Change 1 — `capability_name_for_node`: Add `Llm` and `Analysis` arms
 
-`analysis_capture` runs the HIR walk inside `MirCaptureCallbacks::after_analysis` and calls
-`canon_capture::collect_spans_and_symbols`, which writes `spans.jsonl` and `symbols.json`
-to `analysis/`.
+**File**: `canon-utils/event-runtime/src/consumers/agent_consumer.rs`
 
----
+**What**: The `_` arm currently swallows `PipelineCapability::Llm` and `PipelineCapability::Analysis`. Both must map to `"llm.call"`.
 
+**How**: In the match block inside `capability_name_for_node`, replace the catch-all with explicit arms. First confirm the exact variant names:
 
-
-
-## Implementation Steps
-
-### Step 1 — Extract span and symbol collection into a shared crate
-
-**Crate:** `canon-utils/canon-editor` already contains `BulkCollectorCallbacks` and all HIR visitor
-logic in `src/core/rustc_session.rs`. Extract the pure collection logic into a new file or
-expose it as a callable function so `analysis_capture` can call it without depending on the
-full `rename` crate.
-
-**Options (pick one):**
-- A. Move `BulkCollectorCallbacks` + `write_symbols_json` into `canon_capture` (the crate
-  already used by both — confirmed by `rustc_session.rs` line 226: `canon_capture::index::build_index`)
-- B. Create a new thin crate `canon-utils/symbol-collect` that both `rename` and
-  `analysis_capture` depend on
-
-Option A is preferred — `canon_capture` is already a shared dependency of both binaries.
-
-**Deliverable:** A public function in `canon_capture`:
-```rust
-pub fn collect_spans_and_symbols(
-    tcx: TyCtxt<'_>,
-    output_dir: &Path,
-    crate_name: &str,
-) -> Result<(), Error>
+```bash
+rg '(Llm|Analysis|LlmCall)' canon-agent-v2/src/capability_types.rs
 ```
-Writes `spans.jsonl` and `symbols.json` into `output_dir`.
+
+Then apply:
+
+```
+PipelineCapability::Llm => return Some("llm.call"),
+PipelineCapability::Analysis => return Some("llm.call"),
+```
+
+Keep the `_ => {}` catch-all for all other variants that genuinely have no mapping.
 
 ---
 
-### Step 2 — Call collect_spans_and_symbols from analysis_capture
+### Change 2 — `build_capability_args`: Handle `"llm.call"` nodes
 
-In `rustc_wrapper/driver/src/main.rs`, inside `MirCaptureCallbacks::after_analysis`,
-after the existing `extract_and_write(tcx, &config)` call, add:
+**File**: same
+
+**What**: When `capability == "llm.call"`, the function currently returns `None`. It must return:
+
+```json
+{"prompt": "<node description or extracted prompt>", "raw": false}
+```
+
+**How**: In `build_capability_args`, before the existing match, add a branch:
 
 ```rust
-if let Err(err) = canon_capture::collect_spans_and_symbols(
-    tcx,
-    &self.output_dir,
-    crate_name,   // thread crate_name into MirCaptureCallbacks
-) {
-    eprintln!("analysis_capture: span/symbol collection failed: {err:?}");
+if capability == "llm.call" {
+    let prompt = node.description.clone();
+    return Some(serde_json::json!({
+        "prompt": prompt,
+        "raw": false
+    }));
 }
 ```
 
-`MirCaptureCallbacks` needs `crate_name: String` added to its fields, populated from the
-`--crate-name` flag already parsed in `main`.
+The node description is the natural source for the prompt — it contains the task the LLM node is meant to execute. Do not attempt to parse a structured prompt field out of the description at this stage; that can be a follow-up.
 
 ---
 
-### Step 3 — Gate on primary package only
+### Change 3 — `on_capability_result`: Parse `CapabilityCompleted` payload correctly
 
-`spans.jsonl` and `symbols.json` are only meaningful for the primary crate being analysed,
-not for every dependency rustc touches. Add the same primary-package guard already used for
-`should_run_analysis_engine`:
+**File**: same
 
-```rust
-if is_primary_package(crate_name.as_deref()) {
-    canon_capture::collect_spans_and_symbols(tcx, &self.output_dir, ...)?;
-}
+**What**: When a `CapabilityCompleted` event arrives for an `llm.call` node, the payload is:
+
+```json
+{"status": 0, "success": true, "duration_ms": 12161, "result": {"ok": true}}
+```
+
+The current `apply_result` impl calls `apply_result` on the graph but may not extract and store the result value into `node.result`. Confirm by reading the current `apply_result` body in the file.
+
+**What to produce**: After applying status transitions, extract `payload["result"]` and write it into the node's `result` field as `Some(serde_json::to_string(&result_val).unwrap_or_default())`. Then call `plan_if_stalled` to re-evaluate.
+
+**Shape of the event**: Confirm the `RuntimeEvent::CapabilityCompleted` variant carries `node_id`, `capability`, and `payload` fields by reading `lib.rs`. Use `rg 'CapabilityCompleted' canon-utils/event-runtime/src/lib.rs`.
+
+---
+
+### Change 4 — `seed_orchestration`: Real bootstrap when graph is empty
+
+**File**: same
+
+**What**: Currently a no-op stub. When the graph is empty (no snapshot loaded, no nodes), the agent needs to emit a minimal first node to bootstrap execution.
+
+**Approach — keep it minimal and correct**. Do not wire `PlannerController` here — that requires a live WS bridge and config. Instead produce a single bootstrap node using `GraphPatch` that requests an LLM analysis of the current system state. This is analogous to what `planner_controller_seed_orchestration_if_empty` does in `planner_session.rs` — read that function first:
+
+```bash
+rg -n 'seed_orchestration_if_empty' canon-agent-v2/src/planner_session.rs
+perl -ne 'print if /fn planner_controller_seed_orchestration_if_empty/../^fn /' \
+  canon-agent-v2/src/planner_session.rs
+```
+
+Replicate its logic without the WS dependency: construct a `DecomposeTaskSpec`-shaped `ExecutionNode` directly — id `"seed_0"`, description `"Analyse system state and produce initial task decomposition"`, `required_capabilities: vec![PipelineCapability::Llm]`, no deps, `NodeStatus::Pending`. Add it to `update.new_nodes`.
+
+---
+
+### Change 5 — `plan_if_stalled`: Real stall detection and replan trigger
+
+**File**: same
+
+**What**: Currently retries one failed node. Real stall conditions are:
+
+1. Graph is empty after snapshot load failed
+2. All nodes are `Completed` (graph done, but no new seed issued)
+3. All remaining nodes are `Failed` with no retries left
+4. All nodes are `Blocked` (deadlock)
+
+**How**:
+
+First read `graph_analysis_compute_graph_signals` signature:
+
+```bash
+rg -n 'fn graph_analysis_compute_graph_signals' canon-agent-v2/src/graph_algo.rs
+rg -n 'fn compute_graph_features_parallel' canon-agent-v2/src/graph_algo.rs
+```
+
+In `plan_if_stalled`:
+
+1. Call `compute_graph_features_parallel(&self.graph)` → `features`
+2. Call `graph_analysis_compute_graph_signals(&self.graph)` → `signals`
+3. Check stall conditions using `features.failed_fraction`, `features.ready_fraction`, `features.blocked_fraction`, and `self.graph.nodes.is_empty()`
+4. If stalled: construct a `GraphPatch` with one new `Llm` node (description derived from stall reason), call `apply_graph_patch(&mut self.graph, patch)`, return `true`
+5. If not stalled: return `false`
+
+Do not call `PlannerController::build_prompt` or make any LLM calls inside this function — this is a local graph manipulation only. The new node will be picked up on the next `Tick` and dispatched normally.
+
+Read `apply_graph_patch` signature first:
+
+```bash
+rg -n 'fn apply_graph_patch' canon-agent-v2/src/planner_update.rs
 ```
 
 ---
 
-### Step 4 — Remove manual trigger from rename
+### Import hygiene
 
-Once Step 2 is working, `RustcSession::build` no longer needs to drive a second rustc
-in-process pass for span collection. The spans and symbols will already be present in
-`analysis/` after any `cargo check`.
+After all edits, check that all newly referenced symbols are imported. The consumer file already imports from `canon_agent_v2` — confirm the crate name and module paths:
 
-`RustcSession::build` changes:
-- Remove the `cargo_rustc_args` + `run_compiler` loop
-- Remove `span_output_path` + `load_spans_from_file`
-- Replace with a direct read of `project_root/analysis/spans.jsonl` and
-  `project_root/analysis/symbols.json`
-- `RustcSession` becomes a loader, not a compiler driver
-
-`runner.rs` changes:
-- Remove `RENAME_GENERATE_SYMBOLS=1` path entirely, or keep as a forced-refresh escape hatch
-- `run_rename_self` reads from `analysis/` directly
-
----
-
-### Step 5 — Remove span_file directory
-
-`canon-utils/canon-editor/span_file/` is now dead. Delete it and remove any `.gitignore` entries.
-
----
-
-## Dependency changes
-
-`analysis_capture/Cargo.toml` gains:
-```toml
-canon_capture = { path = "../../canon_capture" }   # adjust path as needed
+```bash
+rg '^use ' canon-utils/event-runtime/src/consumers/agent_consumer.rs
+rg '^canon-agent-v2' canon-utils/event-runtime/Cargo.toml
 ```
 
-`rename/Cargo.toml` loses:
-- The `rustc_driver` / `rustc_interface` / `rustc_middle` / `rustc_hir` / `rustc_span`
-  dependencies (no longer driving rustc in-process)
-- `cargo` / `cargo_util` dependencies (no longer capturing rustc args)
+Then run:
+
+```bash
+cargo check -p event-runtime 2>&1 | head -60
+```
+
+Fix all errors before committing. Do not run `cargo build` or any other cargo subcommands.
 
 ---
 
-## File change summary
+### Commit
 
-| File                                | Change                                                                      |
-|-------------------------------------+-----------------------------------------------------------------------------|
-| `canon_capture/src/lib.rs`          | Add `collect_spans_and_symbols(tcx, output_dir, crate_name)`                |
-| `canon_capture/src/spans.rs`        | New file — HIR visitor + span writer (moved from rename)                    |
-| `analysis_capture/src/main.rs`      | Add `crate_name` to `MirCaptureCallbacks`, call `collect_spans_and_symbols` |
-| `analysis_capture/Cargo.toml`       | Add `canon_capture` dependency                                              |
-| `rename/src/core/rustc_session.rs`  | Replace compiler driver with direct file reader                             |
-| `rename/src/core/rustc_resolver.rs` | Delete or keep only `infer_crate_name`                                      |
-| `rename/src/runner.rs`              | Remove `RENAME_GENERATE_SYMBOLS` path, read from `analysis/`                |
-| `rename/Cargo.toml`                 | Drop rustc_* and cargo crate dependencies                                   |
-| `rename/span_file/`                 | Delete                                                                      |
+```bash
+git add canon-utils/event-runtime/src/consumers/agent_consumer.rs
+git commit -m "wire agent_consumer: llm.call capability mapping, result ingestion, real stall planning, seed bootstrap"
+```
 
 ---
 
-## Verification
+### What this plan explicitly defers
 
-After implementation, a single `cargo check` on `canon-agent-v2` must produce:
+- Wiring `PlannerController` into the consumer (requires config/WS bridge plumbing that doesn't exist in the consumer's thread context yet)
+- Multi-node replan via LLM (that's a follow-on after the graph can complete one round-trip)
+- Snapshot persistence from the consumer (the graph state is in-memory; persistence belongs in a separate pass)
 
-```
-canon-agent-v2/analysis/
-    nodes.csv
-    edges.csv
-    spans.jsonl          ← new, from canon_capture
-    symbols.json         ← new, from canon_capture
-    anomalies.json
-    semantic_duplicates.json
-    refactoring_candidates.json
-    ...
-```
-
-And `rename` must work without any separate `RENAME_GENERATE_SYMBOLS=1` invocation.
+These are not regressions — the smoke test path (`LlmExecutorConsumer`) is untouched. The five changes above are purely additive to the existing consumer skeleton.
