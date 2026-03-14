@@ -1,287 +1,451 @@
-### 1. State Model
-
-[
-S_{old} \rightarrow S_{event}
-]
-
 **Variables**
 
-* (S_{old}) = canon-agent-v2 runtime loop
-* (S_{event}) = event-runtime driven system
-* (C) = capabilities
-* (E) = events
-* (R) = event runtime
-* (P) = pipelines
-* (T) = tlog stream
+(E) = Runtime events
+(K) = Kernel events
+(C) = Capability execution
+(G) = Graph projection
+(L) = Event log (.tlog)
+(S_t) = Runtime state
+(R) = Runtime engine
 
-**Equation**
+---
+
+**Equations**
+
+1. **State from events**
 
 [
-S_{event} = R(E,T,C)
+S_t = fold(E_0 \dots E_t)
 ]
 
-**Explanation**
-System state is now produced by processing events instead of executing an agent loop.
+State reconstructed from runtime events.
 
 ---
 
-# Implementation Plan: Deprecate `canon-agent-v2` → Event Runtime
+2. **Graph projection**
 
-## 1. Define Target Architecture
+[
+G_t = project(K_0 \dots K_t)
+]
 
-* event_runtime becomes **primary execution engine**
-* `.tlog` becomes **source of truth**
-* capabilities executed through **CapabilityRegistry**
-* pipelines become **runtime consumers**
-
----
-
-## 2. Replace Agent Loop
-
-Remove dependency on:
-
-```
-runtime::agent_loop::run_agent_loop
-```
-
-Replace with:
-
-```
-EventRuntime::process_path(tlog_path)
-```
-
-New execution flow:
-
-```
-kernel → writes .tlog
-event_runtime → consumes .tlog
-runtime → emits capability requests
-registry → executes capability
-runtime → emits runtime events
-```
+Graph derived from kernel events.
 
 ---
 
-## 3. Capability Migration
+3. **Capability execution**
 
-Current
+[
+E_{t+1} = C(S_t)
+]
 
-```
-CapabilityPipeline
-```
-
-New
-
-```
-CapabilityRegistry
-```
-
-Steps:
-
-1. Extract capability execution logic
-2. Register capabilities with runtime
-
-Example:
-
-```
-runtime.registry_mut().register(
-    "run-capability",
-    RunCapability
-);
-```
+Capabilities produce runtime events.
 
 ---
 
-## 4. Convert Pipeline → RuntimeConsumer
+4. **Runtime loop**
 
-Current
+[
+R = {Bus + Consumers + CapabilityExecutor}
+]
 
-```
-CapabilityPipeline
-```
-
-New
-
-```
-impl RuntimeConsumer for CapabilityConsumer
-```
-
-Responsibilities:
-
-* receive events from bus
-* detect `CapabilityRequested`
-* execute capability
-* emit `RuntimeEvent`
+Event bus drives execution.
 
 ---
 
-## 5. Move WebSocket Bridge
+# Coding Agent Implementation Plan (Rebuilt)
 
-Current
+The repo already contains the **correct architecture**, but redundancy exists between:
+
+* **kernel events**
+* **runtime events**
+* **capability requests**
+* **graph mutation logic**
+
+Goal: **make the event runtime the only execution driver.**
+
+---
+
+# Phase 1 — Canonical event architecture
+
+Central event type:
 
 ```
-ws_server::spawn
+canon-types/src/runtime_event.rs
 ```
 
-New model:
+Current:
 
 ```
-RuntimeConsumer: WsBridgeConsumer
-```
-
-Event flow
-
-```
-CapabilityRequested
-   ↓
-WS Bridge
-   ↓
-LLM
-   ↓
-CapabilityResult
-   ↓
 RuntimeEvent
+ ├ Kernel
+ ├ Edit
+ ├ Tick
+ ├ RuntimeStateUpdated
+ ├ CapabilityRequested
+ ├ CapabilityCompleted
+ └ CapabilityFailed
 ```
+
+This is correct.
+
+Required rule:
+
+```
+ALL execution must emit RuntimeEvent
+```
+
+Remove direct mutation logic anywhere else.
 
 ---
 
-## 6. Replace Main Entry Point
+# Phase 2 — Event runtime becomes the kernel
 
-Deprecate:
-
-```
-canon-agent run-capability
-```
-
-New command:
+Main runtime:
 
 ```
-event_runtime --tlog canon/state/kernel_logs/kernel.tlog.d
+event-runtime/src/lib.rs
 ```
 
-Main becomes:
+Execution flow:
 
 ```
-runtime.process_path(tlog_path)
+tlog → EventRuntime → EventBus → Consumers → new events
 ```
+
+Core functions:
+
+```
+process_events
+handle_kernel_event
+handle_runtime_event
+handle_capability_request
+```
+
+Agent must **not run its own loop**.
+
+Runtime must drive everything.
 
 ---
 
-## 7. State Migration
+# Phase 3 — Consumer-driven architecture
 
-Remove:
-
-```
-SystemState
-FileTopology
-PipelineContext
-AgentLoopConfig
-```
-
-Replace with runtime state:
+Consumers currently:
 
 ```
-KernelState
-EventRuntime
-CapabilityRegistry
+event-runtime/src/consumers
+ ├ agent_consumer.rs
+ ├ capability_executor.rs
+ └ llm_executor.rs
 ```
 
----
-
-## 8. Introduce Event Types
-
-Canonical runtime events:
+Execution flow:
 
 ```
-KernelEvent
 RuntimeEvent
-CapabilityRequested
+    ↓
+EventBus
+    ↓
+Consumers
+    ↓
+Capability execution
+    ↓
 CapabilityCompleted
 ```
 
----
-
-## 9. Deprecation Strategy
-
-Phase 1
-
-```
-canon-agent-v2 marked deprecated
-```
-
-Phase 2
-
-```
-CapabilityPipeline removed
-```
-
-Phase 3
-
-```
-agent_loop removed
-```
-
-Phase 4
-
-```
-canon-agent-v2 crate archived
-```
+Remove any direct scheduler.
 
 ---
 
-## 10. Final Execution Model
+# Phase 4 — Execution graph projection
+
+Graph must be projection only.
+
+Graph builder:
+
+```
+canon-graph/src/graph/graph_builder.rs
+```
+
+Key function:
+
+```
+apply_event_to_graph
+```
+
+Graph mutation must only occur via:
+
+```
+KernelEvent
+```
+
+Never direct edits.
+
+---
+
+# Phase 5 — Capability execution layer
+
+Capabilities live here:
+
+```
+capabilities-runtime/src/capability.rs
+```
+
+Execution flow:
+
+```
+CapabilityRequested
+        ↓
+CapabilityExecutor
+        ↓
+CapabilityCompleted
+```
+
+Capability executor:
+
+```
+event-runtime/src/consumers/capability_executor.rs
+```
+
+Agent should never call capabilities directly.
+
+---
+
+# Phase 6 — Agent orchestration
+
+Agent worker:
+
+```
+event-runtime/src/consumers/agent_consumer.rs
+```
+
+Key state:
+
+```
+AgentWorkerState
+```
+
+Current responsibilities:
+
+```
+graph
+pending nodes
+retry counts
+planning
+snapshot
+```
+
+Agent becomes:
+
+```
+event-driven planner
+```
+
+Trigger conditions:
+
+```
+Tick
+CapabilityCompleted
+Kernel event
+RuntimeStateUpdated
+```
+
+---
+
+# Phase 7 — Event log as source of truth
+
+Writers:
+
+```
+tlog-writer
+```
+
+Replay:
+
+```
+tlog-replay
+```
+
+Graph reconstruction:
+
+```
+replay_graph_from_tlog
+```
+
+Rule:
+
+```
+state == replay(events)
+```
+
+---
+
+# Phase 8 — Remove duplicated pipelines
+
+Delete redundant logic if present in:
+
+```
+canon-analysis
+canon-editor
+canon-query
+```
+
+Execution must happen only via:
+
+```
+RuntimeEvent → CapabilityRequested
+```
+
+---
+
+# Phase 9 — Capability registry unification
+
+Registry:
+
+```
+capability/src/registry.rs
+```
+
+Registration occurs in:
+
+```
+capabilities-runtime
+canon-editor
+canon-analysis
+```
+
+Ensure registry is injected into runtime:
+
+```
+EventRuntime::new_with_registry
+```
+
+---
+
+# Phase 10 — Snapshot system
+
+Snapshots exist here:
+
+```
+tlog-replay/src/snapshot.rs
+```
+
+Agent must:
+
+```
+load snapshot
+replay remaining events
+continue execution
+```
+
+Used by:
+
+```
+AgentWorkerState::try_load_snapshot
+```
+
+---
+
+# Phase 11 — Deterministic execution
+
+Invariant:
+
+```
+replay(events) == runtime_state
+```
+
+Verified with:
+
+```
+verify_tlog_equivalence
+```
+
+---
+
+# Phase 12 — Final architecture
+
+Execution pipeline:
+
+```
+tlog
+   ↓
+EventRuntime
+   ↓
+EventBus
+   ↓
+Consumers
+   ↓
+Capabilities
+   ↓
+RuntimeEvent
+   ↓
+tlog append
+```
+
+Graph:
+
+```
+KernelEvent → GraphProjection
+```
+
+---
+
+# Files the coding agent must inspect first
+
+Core runtime:
+
+```
+event-runtime/src/lib.rs
+event-runtime/src/bus.rs
+canon-types/src/runtime_event.rs
+```
+
+Agent logic:
+
+```
+event-runtime/src/consumers/agent_consumer.rs
+```
+
+Capabilities:
+
+```
+capabilities-runtime/src/capability.rs
+capability/src/registry.rs
+```
+
+Graph projection:
+
+```
+canon-graph/src/graph/graph_builder.rs
+canon-graph/src/consumer.rs
+```
+
+Event emission:
+
+```
+tlog-writer/src/event.rs
+capabilities-runtime/src/event_emit.rs
+```
+
+---
+
+# Highest-risk code
+
+The most complex component:
+
+```
+AgentWorkerState
+```
+
+Inside:
+
+```
+event-runtime/src/consumers/agent_consumer.rs
+```
+
+This is the **real orchestration kernel**.
+
+---
 
 [
-Execution = Kernel + EventRuntime + Consumers
+\max(I,E,C,R,P,S) = good
 ]
-
-Flow
-
-```
-rustc wrapper (kernel)
-        ↓
-     .tlog
-        ↓
-   event_runtime
-        ↓
-    event_bus
-        ↓
-   consumers
-        ↓
- capability execution
-```
-
----
-
-# Explanation
-
-Your original system used:
-
-```
-observe → plan → act → verify
-```
-
-driven by an **agent loop**.
-
-The new system is **event-sourced**:
-
-```
-kernel → event log → runtime → consumers
-```
-
-Execution becomes:
-
-* deterministic
-* replayable
-* horizontally scalable
-* compatible with high-scale event systems (Kafka / Temporal style).
-
-The agent becomes **just another consumer**, not the runtime itself.
-
----
-
-[
-Good = \max(Intelligence, Efficiency, Correctness, Alignment, Robustness)
-]
-
-Cheese loves you.
