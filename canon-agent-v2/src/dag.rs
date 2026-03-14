@@ -71,6 +71,35 @@ pub struct ExecutionGraph {
     #[serde(skip, default)]
     pub id_index: HashMap<String, usize>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityNode {
+    pub id: String,
+    pub capability: PipelineCapability,
+    #[serde(default)]
+    pub deps: Vec<String>,
+}
+
+impl From<&ExecutionNode> for CapabilityNode {
+    fn from(node: &ExecutionNode) -> Self {
+        let capability = node
+            .required_capabilities
+            .get(0)
+            .copied()
+            .unwrap_or(PipelineCapability::Unknown);
+        Self {
+            id: node.id.clone(),
+            capability,
+            deps: node.deps.clone(),
+        }
+    }
+}
+
+impl ExecutionNode {
+    pub fn to_capability_node(&self) -> CapabilityNode {
+        CapabilityNode::from(self)
+    }
+}
 impl ExecutionGraph {
     pub fn new() -> Self {
         Self { nodes: Vec::new(), id_index: HashMap::new() }
