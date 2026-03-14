@@ -237,15 +237,6 @@ fn main() -> Result<()> {
         }
         processed = events.len();
 
-        // Advance start_seq to the latest segment so next poll skips fully-consumed segments.
-        // Reset processed to 0 since it is now relative to the new start_seq window.
-        if let Ok(new_seq) = latest_segment_seq(&tlog_path) {
-            if new_seq > start_seq {
-                start_seq = new_seq;
-                processed = 0;
-                last_len = 0;
-            }
-        }
 
         if processed != last_saved_processed && last_saved.elapsed() >= Duration::from_secs(1) {
             if let Err(err) = save_cursor(&cursor_path, &tlog_path, processed, start_seq) {

@@ -5,6 +5,7 @@ pub mod consumers;
 use canon_capability::{CapabilityContext, CapabilityRegistry, CapabilityResult};
 use canon_event_log::{error, info};
 use canon_tlog_writer::{append_event_json, BinarySegmentWriter, CanonEvent};
+use std::sync::Mutex as StdMutex;
 use canon_tlog_replay::{
     extract_capability_request,
     extract_supervisor_event,
@@ -33,16 +34,29 @@ use bus::EventBus;
 pub struct EventRuntime {
     state: KernelState,
     bus: EventBus,
-    registry: CapabilityRegistry,
+    registry: std::sync::Arc<std::sync::Mutex<CapabilityRegistry>>,
     tlog_path: Option<std::path::PathBuf>,
+    /// Persistent writer for binary tlog directories.
+    /// Held open to avoid recover_segment truncation on every append.
+    tlog_writer: Option<Arc<StdMutex<BinarySegmentWriter>>>,
     next_id: u64,
     tick: u64,
     runtime_tick: u64,
+    runtime_state: serde_json::Value,
+    execute_capabilities: bool,
     emitter_rx: crossbeam_channel::Receiver<RuntimeEvent>,
 }
 
 impl EventRuntime {
     pub fn new(consumers: Vec<Box<dyn RuntimeConsumer>>) -> Self {
+        let registry = std::sync::Arc::new(std::sync::Mutex::new(CapabilityRegistry::new()));
+        Self::new_with_registry(consumers, registry)
+    }
+
+    pub fn new_with_registry(
+        consumers: Vec<Box<dyn RuntimeConsumer>>,
+        registry: std::sync::Arc<std::sync::Mutex<CapabilityRegistry>>,
+    ) -> Self {
         let queue_size = std::env::var("CANON_EVENT_BUS_QUEUE")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
@@ -57,20 +71,41 @@ impl EventRuntime {
         Self {
             state: empty_state(),
             bus,
-            registry: CapabilityRegistry::new(),
+            registry,
             tlog_path: None,
+            tlog_writer: None,
             next_id: 1,
             tick: 0,
             runtime_tick: 0,
+            runtime_state: serde_json::json!({}),
+            execute_capabilities: true,
             emitter_rx,
         }
     }
 
-    pub fn registry_mut(&mut self) -> &mut CapabilityRegistry {
-        &mut self.registry
+    pub fn registry_mut(&self) -> std::sync::MutexGuard<'_, CapabilityRegistry> {
+        self.registry.lock().expect("capability registry lock")
+    }
+
+    pub fn registry_handle(&self) -> std::sync::Arc<std::sync::Mutex<CapabilityRegistry>> {
+        std::sync::Arc::clone(&self.registry)
+    }
+
+    pub fn set_execute_capabilities(&mut self, enabled: bool) {
+        self.execute_capabilities = enabled;
     }
 
     pub fn set_tlog_path(&mut self, path: std::path::PathBuf) {
+        if path.is_dir() {
+            match BinarySegmentWriter::open(&path) {
+                Ok(writer) => {
+                    self.tlog_writer = Some(Arc::new(StdMutex::new(writer)));
+                }
+                Err(e) => {
+                    eprintln!("[event_runtime] set_tlog_path: failed to open persistent writer: {e}");
+                }
+            }
+        }
         self.tlog_path = Some(path);
     }
 
@@ -83,6 +118,7 @@ impl EventRuntime {
         self.next_id = 1;
         self.tick = 0;
         self.runtime_tick = 0;
+        self.runtime_state = serde_json::json!({});
     }
 
     pub fn process_path(&mut self, tlog_path: &std::path::Path) -> Result<usize> {
@@ -101,7 +137,17 @@ impl EventRuntime {
                     self.handle_runtime_event(RuntimeEvent::Edit(edit))?;
                     self.drain_emitted_events()?;
                 } else if let Some(request) = extract_capability_request(canon) {
+                    info(
+                        "event_runtime",
+                        "capability_requested",
+                        serde_json::json!({ "name": request.name, "request_id": request.request_id }),
+                    );
                     self.handle_runtime_event(RuntimeEvent::CapabilityRequested(request))?;
+                    self.drain_emitted_events()?;
+                } else if canon.kind == "runtime_state.updated" {
+                    self.handle_runtime_event(RuntimeEvent::RuntimeStateUpdated {
+                        payload: canon.payload.clone(),
+                    })?;
                     self.drain_emitted_events()?;
                 } else if let Some(supervisor_event) = extract_supervisor_event(canon) {
                     if supervisor_event.kind == "workspace.changed" {
@@ -160,8 +206,13 @@ impl EventRuntime {
         self.bus.dispatch(event.clone());
         self.append_runtime_event(&event);
         match event {
+            RuntimeEvent::RuntimeStateUpdated { payload } => {
+                self.runtime_state = payload;
+            }
             RuntimeEvent::CapabilityRequested(request) => {
-                if self.registry.lookup(&request.name).is_some() {
+                if self.execute_capabilities
+                    && self.registry.lock().ok().and_then(|r| r.lookup(&request.name)).is_some()
+                {
                     self.handle_capability_request(request)?;
                 }
             }
@@ -189,7 +240,12 @@ impl EventRuntime {
             workspace: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             event: RuntimeEvent::CapabilityRequested(request.clone()),
         };
-        let result = match self.registry.execute(&request.name, ctx) {
+        let result = match self
+            .registry
+            .lock()
+            .map_err(|_| anyhow::anyhow!("capability registry lock poisoned"))?
+            .execute(&request.name, ctx)
+        {
             Ok(result) => result,
             Err(err) => {
                 error(
@@ -262,22 +318,39 @@ impl EventRuntime {
             return;
         };
         let canon = match event {
-            RuntimeEvent::CapabilityCompleted(payload) => {
-                let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
-                CanonEvent::new("event-runtime", "capability_completed", val)
-            }
-            RuntimeEvent::CapabilityFailed(payload) => {
-                let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
-                CanonEvent::new("event-runtime", "capability_failed", val)
-            }
-            _ => {
-                return;
-            }
+        RuntimeEvent::CapabilityCompleted(payload) => {
+            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+            CanonEvent::new("event-runtime", "capability_completed", val)
+        }
+        RuntimeEvent::CapabilityFailed(payload) => {
+            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+            CanonEvent::new("event-runtime", "capability_failed", val)
+        }
+        _ => {
+            return;
+        }
         };
 
         if path.is_dir() {
-            if let Ok(writer) = BinarySegmentWriter::open(path) {
-                let _ = writer.append_event(&canon);
+            if let Some(writer_arc) = self.tlog_writer.as_ref() {
+                let needs_reopen = if let Ok(w) = writer_arc.lock() {
+                    if w.append_event(&canon).is_err() {
+                        eprintln!("[event_runtime] append_runtime_event: writer stale, reopening");
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if needs_reopen {
+                    if let Ok(fresh) = BinarySegmentWriter::open(path) {
+                        if let Ok(mut w) = writer_arc.lock() {
+                            *w = fresh;
+                            let _ = w.append_event(&canon);
+                        }
+                    }
+                }
             }
             return;
         }

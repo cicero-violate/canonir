@@ -32,6 +32,8 @@ pub use runtime_event::{
     CapabilityFailed,
     CapabilityRequested,
     RuntimeConsumer,
+    RuntimeEmitter,
+    RuntimeEmitterHandle,
     RuntimeEvent,
     RuntimeEventFilter,
 };

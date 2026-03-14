@@ -14,6 +14,10 @@ path = "src/bin/event_runtime.rs"
 name = "runtime_capability_smoke_test"
 path = "src/bin/capability_smoke_test.rs"
 
+[[bin]]
+name = "llm_smoke_test"
+path = "src/bin/llm_smoke_test.rs"
+
 [dependencies]
 anyhow = { workspace = true }
 canon_types = { path = "../canon-types" }
@@ -28,3 +32,4 @@ canon_capability_runtime = { package = "canon-capability-runtime", path = "../ca
 canon_analysis = { package = "canon-analysis", path = "../canon-analysis" }
 serde_json = { workspace = true }
 crossbeam-channel = { workspace = true }
+tokio = { workspace = true }

@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use canon_tlog_writer::CanonEvent;
 use crc32fast::Hasher;
 use std::fs;
@@ -28,12 +28,13 @@ pub fn read_binary_events(path: &Path) -> Result<Vec<CanonEvent>> {
         let header = &bytes[cursor..cursor + HEADER_LEN];
         let magic = read_u32(&header[0..4]);
         if magic != MAGIC {
-            return Err(anyhow!("invalid tlog magic at offset {}", cursor));
+            // Likely a partial write at the tail; return what we have.
+            break;
         }
         let _version = read_u16(&header[4..6]);
         let header_len = read_u16(&header[6..8]) as usize;
         if header_len < HEADER_LEN {
-            return Err(anyhow!("invalid header_len {}", header_len));
+            break;
         }
         let _ts = read_u64(&header[8..16]);
         let _source_id = read_u32(&header[16..20]);
@@ -45,14 +46,14 @@ pub fn read_binary_events(path: &Path) -> Result<Vec<CanonEvent>> {
         let payload_start = cursor + header_len;
         let payload_end = payload_start + payload_len;
         if payload_end > bytes.len() {
-            return Err(anyhow!("truncated payload at offset {}", cursor));
+            break;
         }
         let payload = &bytes[payload_start..payload_end];
         let mut hasher = Hasher::new();
         hasher.update(payload);
         let computed = hasher.finalize();
         if computed != crc32 {
-            return Err(anyhow!("crc mismatch at offset {}", cursor));
+            break;
         }
         let event: CanonEvent = serde_json::from_slice(payload)?;
         events.push(event);

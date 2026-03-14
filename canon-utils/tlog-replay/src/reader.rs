@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{BufRead, Read};
 use std::path::Path;
 
-use crate::binary_reader::{is_binary_magic, read_binary_events, read_binary_events_from_segment_with_start_seq};
+use crate::binary_reader::{is_binary_magic, read_binary_events};
 
 #[derive(Debug, Clone)]
 pub enum AnyEvent {
@@ -104,7 +104,17 @@ pub fn read_any_events(path: &Path) -> anyhow::Result<Vec<AnyEvent>> {
             let reader = std::io::BufReader::new(file);
             let mut out = Vec::new();
             for line in reader.lines() {
-                let line = line?;
+                let line = match line {
+                    Ok(line) => line,
+                    Err(err) if err.kind() == std::io::ErrorKind::InvalidData => {
+                        // Fallback: file may actually be binary.
+                        if let Ok(events) = read_binary_events(path) {
+                            return Ok(events.into_iter().map(AnyEvent::Canon).collect());
+                        }
+                        return Ok(out);
+                    }
+                    Err(err) => return Err(err.into()),
+                };
                 if let Some(event) = parse_any_event(&line) {
                     out.push(event);
                 }
@@ -121,6 +131,9 @@ pub fn read_any_events_from_path(path: &Path) -> anyhow::Result<Vec<AnyEvent>> {
             let entry = entry?;
             let p = entry.path();
             if p.extension().and_then(|s| s.to_str()) != Some("log") {
+                continue;
+            }
+            if !p.is_file() {
                 continue;
             }
             if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
@@ -153,6 +166,9 @@ pub fn read_any_events_from_path_with_start_seq(
             if p.extension().and_then(|s| s.to_str()) != Some("log") {
                 continue;
             }
+            if !p.is_file() {
+                continue;
+            }
             if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
                 if let Ok(seq) = stem.parse::<u64>() {
                     entries.push((seq, p));
@@ -162,14 +178,12 @@ pub fn read_any_events_from_path_with_start_seq(
         entries.sort_by_key(|(seq, _)| *seq);
         let mut out = Vec::new();
         for (seq, p) in entries {
-            if seq < start_seq && start_seq > 0 {
-                // Use idx to skip ahead in this segment.
-                let events = read_binary_events_from_segment_with_start_seq(&p, start_seq)?;
-                out.extend(events.into_iter().map(AnyEvent::Canon));
-            } else {
-                let events = read_binary_events(&p)?;
-                out.extend(events.into_iter().map(AnyEvent::Canon));
+            if seq < start_seq {
+                // Segment is entirely before our window — skip it.
+                continue;
             }
+            let events = read_binary_events(&p)?;
+            out.extend(events.into_iter().map(AnyEvent::Canon));
         }
         Ok(out)
     } else {

@@ -25,7 +25,7 @@ fn main() -> Result<()> {
     let _ = writer.append_event(&canon);
 
     let mut runtime = EventRuntime::new(Vec::new());
-    register_build_capabilities(runtime.registry_mut());
+    register_build_capabilities(&mut runtime.registry_mut());
     runtime.set_tlog_path(tmp_dir.clone());
     runtime.process_path(&tmp_dir)?;
 

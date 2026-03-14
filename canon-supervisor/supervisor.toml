@@ -1,13 +1,6 @@
 [watcher]
 debounce_ms = 300
-watch_dirs = ["canon-utils", "canon-agent-v2", "canon-agent-prompts"]
-
-[[process]]
-name = "canon-agent-v2"
-bin  = "target/debug/canon-agent-v2"
-args = ["run-capability", "/workspace/ai_sandbox/canon"]
-restart = "drain"
-drain_timeout_ms = 10000
+watch_dirs = ["canon-utils", "canon-agent-prompts"]
 
 [[process]]
 name = "canon-event-runtime"
@@ -17,8 +10,10 @@ restart = "kill"
 crate_name = "canon-event-runtime"
 depends_on = ["canon_event_consumers", "canon-analysis", "canon-graph", "canon_query"]
 [process.env]
+CANON_LLM_BRIDGE_ADDR = "127.0.0.1:9100"
 CANON_REPORTS_TLOG = "/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog.d"
 CANON_REPORTS_OUT  = "/workspace/ai_sandbox/canon/state/reports_out"
 CANON_EVENT_RUNTIME_LOG = "/workspace/ai_sandbox/canon/state/event_runtime.log"
 CANON_REPORTS_VERIFY_DETERMINISM = "1"
 CANON_REPORTS_VERIFY_LAYOUT = "1"
+CANON_EVENT_RUNTIME_START_AT_TAIL = "1"

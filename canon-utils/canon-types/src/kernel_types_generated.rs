@@ -140,4 +140,3 @@ pub struct PanicSymbol {
     pub file: Option<String>,
     pub line: Option<u32>,
 }
-

@@ -1,5 +1,7 @@
 use canon_event_log::{error, info};
-use canon_types::{EventMask, RuntimeConsumer, RuntimeEvent, RuntimeEventFilter};
+use canon_types::{
+    EventMask, RuntimeConsumer, RuntimeEmitterHandle, RuntimeEvent, RuntimeEventFilter,
+};
 use crossbeam_channel::{bounded, Sender};
 use serde_json::json;
 use std::thread;
@@ -28,7 +30,13 @@ impl EventBus {
         }
     }
 
-    pub fn register(&mut self, name: String, consumer: Box<dyn RuntimeConsumer>) {
+    pub fn register(
+        &mut self,
+        name: String,
+        mut consumer: Box<dyn RuntimeConsumer>,
+        emitter: RuntimeEmitterHandle,
+    ) {
+        consumer.set_emitter(emitter);
         let filter = consumer.filter();
         let (tx, rx) = bounded::<EventMessage>(self.queue_size);
         let thread_name = format!("event_consumer_{name}");

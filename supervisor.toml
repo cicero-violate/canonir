@@ -1,13 +1,6 @@
 [watcher]
 debounce_ms = 300
-watch_dirs = ["canon-utils", "canon-agent-v2", "canon-agent-prompts"]
-
-[[process]]
-name = "canon-agent-v2"
-bin  = "target/debug/canon-agent-v2"
-args = ["run-capability", "/workspace/ai_sandbox/canon"]
-restart = "drain"
-drain_timeout_ms = 10000
+watch_dirs = ["canon-utils", "canon-agent-prompts"]
 
 [[process]]
 name = "canon-event-runtime"
