@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use canon_agent_v2::config::CapabilityConfig;
 use canon_tlog_replay::read_any_events_from_path;
 use canon_tlog_writer::{BinarySegmentWriter, CanonEvent};
+use canon_tlog_replay::read_any_events_from_path_with_start_seq;
 use canon_types::CapabilityRequested;
 use std::fs::File;
 use std::io::Read;
@@ -65,7 +66,10 @@ fn main() -> Result<()> {
     }
 
     let replay_path = if tlog_path.is_dir() {
-        tlog_path.clone()
+        // Only scan the segment the request was written into (and the next one).
+        // Scanning the entire tlog dir on every 250ms poll is too expensive when
+        // segments are large.
+        tlog_path.clone() // kept as dir; we'll filter in the poll loop below
     } else if tlog_path.extension().and_then(|s| s.to_str()) == Some("log") {
         tlog_path
             .parent()
@@ -100,9 +104,20 @@ fn main() -> Result<()> {
     let start = Instant::now();
     let max_wait = Duration::from_secs(30);
     let mut last_log = Instant::now();
+    // Record which segment was latest when we wrote the request, so we only
+    // scan that segment and newer ones instead of the full tlog history.
+    let scan_from_seq: u64 = if tlog_path.is_dir() {
+        latest_segment_seq_local(&tlog_path).unwrap_or(0)
+    } else {
+        0
+    };
     loop {
         std::thread::sleep(Duration::from_millis(250));
-        let events = read_any_events_from_path(&replay_path)?;
+        let events = if tlog_path.is_dir() && scan_from_seq > 0 {
+            read_any_events_from_path_with_start_seq(&replay_path, scan_from_seq)?
+        } else {
+            read_any_events_from_path(&replay_path)?
+        };
 
         let mut completed = 0usize;
         let mut failed = 0usize;
@@ -201,4 +216,23 @@ fn pid_is_alive(pid: u32) -> std::io::Result<bool> {
         .next()
         .unwrap_or(' ');
     Ok(state != 'Z')
+}
+
+fn latest_segment_seq_local(tlog_path: &std::path::Path) -> Option<u64> {
+    let mut max_seq = 0u64;
+    for entry in std::fs::read_dir(tlog_path).ok()? {
+        let entry = entry.ok()?;
+        let p = entry.path();
+        if p.extension().and_then(|s| s.to_str()) != Some("log") {
+            continue;
+        }
+        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+            if let Ok(seq) = stem.parse::<u64>() {
+                if seq > max_seq {
+                    max_seq = seq;
+                }
+            }
+        }
+    }
+    if max_seq > 0 { Some(max_seq) } else { None }
 }
