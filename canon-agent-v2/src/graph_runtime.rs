@@ -97,6 +97,7 @@ fn graph_runtime_prune_roots(kernels: &GraphRuntimeGraphKernels) -> Vec<usize> {
         .collect();
     all.into_iter().filter(|&i| !kernels.adj[i].is_empty()).collect()
 }
+#[allow(dead_code)]
 pub(crate) fn collect_execution_context(
     graph: &dag::ExecutionGraph,
     node_id: &str,
@@ -300,6 +301,7 @@ pub(crate) fn must_validate_graph_semantics(
     }
     Ok(())
 }
+#[allow(dead_code)]
 pub(crate) fn ensure_render_reachable(graph: &mut dag::ExecutionGraph) -> bool {
     let analysis_ids: Vec<String> = graph
         .nodes
@@ -364,6 +366,7 @@ fn validate_goal(graph: &dag::ExecutionGraph, goal: &GoalSpec) -> Result<()> {
     }
     Ok(())
 }
+#[allow(dead_code)]
 pub(crate) fn goal_reached(graph: &dag::ExecutionGraph, goal: &GoalSpec) -> bool {
     if !graph.all_completed() {
         return false;

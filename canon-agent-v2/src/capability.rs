@@ -28,9 +28,6 @@ pub use crate::policy;
 pub use crate::policy_engine;
 pub use crate::policy_train;
 pub use crate::response_router;
-pub use crate::scheduler;
-pub use crate::scheduler_scoring;
-pub use crate::scheduler_state;
 pub use crate::state_snapshot;
 pub use crate::telemetry;
 pub use crate::objectives;
@@ -42,22 +39,19 @@ pub use crate::capability_types::{
     capability_model_assert_class_disjoint, capability_model_dominant_class,
     CapabilityMode, PipelineCapability,
 };
-use crate::ir::{IntentStatePersist, SystemState};
+use crate::ir::SystemState;
 use crate::layout::FileTopology;
-use crate::planner_state::{PlannerStage, PlannerStagePersist};
 use crate::pipelines_core_4::{Pipeline, PipelineContext, PipelineOutcome};
+use crate::policy::ExecutionPolicyModel;
 use crate::ws_server::WsBridge;
 use anyhow::Result;
-use config::{CapabilityConfig, CapabilityConfigGoalSpec};
-use crate::goal::GoalSpec;
+use config::CapabilityConfig;
 use crate::tlog;
-use graph_algo::{graph_analysis_emit_planned_graph, graph_analysis_run_graph_algorithms};
-use policy::ExecutionPolicyModel;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use templates::GraphTemplateStore;
 pub const LOG_ROOT: &str = "/workspace/ai_sandbox/canon/agent_logs/capability";
 pub const TEMPLATE_ROOT: &str = "/workspace/ai_sandbox/canon/agent_logs/templates";
+#[allow(dead_code)]
 #[derive(Clone, Default)]
 struct TemplateMutationStats {
     add_nodes: u64,
@@ -84,6 +78,7 @@ pub enum ExecutionDelta {
     ReplaceText { path: String, find: String, replace: String },
     DeleteFile { path: String },
 }
+#[allow(dead_code)]
 pub struct CapabilityPipeline {
     bridge: WsBridge,
     config: CapabilityConfig,
@@ -102,6 +97,7 @@ impl CapabilityPipeline {
             role_rr: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
+    #[allow(dead_code)]
     fn ensure_log_dir() {
         let _ = std::fs::create_dir_all(LOG_ROOT);
         let _ = std::fs::create_dir_all("/workspace/ai_sandbox/canon/agent_logs");
@@ -110,6 +106,7 @@ impl CapabilityPipeline {
         );
         Self::ensure_agent_log_files();
     }
+    #[allow(dead_code)]
     fn clear_capability_log_dir() {
         if let Ok(entries) = std::fs::read_dir(LOG_ROOT) {
             for entry in entries.flatten() {
@@ -123,6 +120,7 @@ impl CapabilityPipeline {
         }
         let _ = std::fs::create_dir_all(LOG_ROOT);
     }
+    #[allow(dead_code)]
     fn ensure_agent_log_files() {
         Self::ensure_file(
             "/workspace/ai_sandbox/canon/agent_logs/policy_dataset.jsonl",
@@ -145,6 +143,7 @@ impl CapabilityPipeline {
             let _ = model.snapshot_store_save(weights_path);
         }
     }
+    #[allow(dead_code)]
     fn ensure_file(path: &str, contents: &str) {
         let p = Path::new(path);
         if !p.exists() {
@@ -154,17 +153,18 @@ impl CapabilityPipeline {
             let _ = std::fs::write(p, contents);
         }
     }
+    #[allow(dead_code)]
     fn log_path(name: &str) -> PathBuf {
         Path::new(LOG_ROOT).join(name)
     }
-    pub async fn run_capability_loop(&self, ctx: &PipelineContext) -> Result<f64> {
-        if event_execution_enabled() {
-            tlog::emit(
-                "capability_loop_skipped",
-                serde_json::json!({ "reason": "CANON_EVENT_EXECUTION enabled" }),
-            );
-            return Ok(0.0);
-        }
+    pub async fn run_capability_loop(&self, _ctx: &PipelineContext) -> Result<f64> {
+        tlog::emit(
+            "capability_loop_skipped",
+            serde_json::json!({ "reason": "legacy capability pipeline removed; use event runtime" }),
+        );
+        anyhow::bail!("legacy capability pipeline removed; use event runtime");
+        #[cfg(any())]
+        {
         Self::ensure_log_dir();
         Self::clear_capability_log_dir();
         if self.config.llm_endpoints.is_empty() {
@@ -824,27 +824,10 @@ impl CapabilityPipeline {
             Path::new(LOG_ROOT),
         )
         .await;
+        }
     }
 }
 
-fn event_execution_enabled() -> bool {
-    std::env::var("CANON_EVENT_EXECUTION")
-        .ok()
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(false)
-}
-fn capability_pipeline_list_workspace_entries(root: &Path, limit: usize) -> String {
-    let mut entries: Vec<String> = std::fs::read_dir(root)
-        .map(|rd| {
-            rd.filter_map(|e| e.ok())
-                .map(|e| e.file_name().to_string_lossy().to_string())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    entries.sort();
-    entries.truncate(limit);
-    entries.join(", ")
-}
 pub(crate) fn capability_pipeline_ensure_unique_node_ids(
     nodes: &mut Vec<dag::ExecutionNode>,
 ) {

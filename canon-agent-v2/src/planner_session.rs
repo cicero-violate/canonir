@@ -34,6 +34,7 @@ pub struct PlannerControllerBootstrapSeed {
     pub node_count: usize,
     pub edge_count: usize,
 }
+#[allow(dead_code)]
 pub(crate) struct PlannerControllerRepairReport {
     pub count: u64,
     pub ids: Vec<String>,
@@ -337,6 +338,7 @@ Return JSON only with schema:\n{{\n  \"new_nodes\": [{{\"id\":\"...\",\"descript
         self.history.is_empty()
     }
 }
+#[allow(dead_code)]
 pub(crate) fn planner_controller_validate_planner_update(
     graph: &ExecutionGraph,
     update: &GraphPatch,
@@ -471,6 +473,7 @@ pub(crate) fn planner_controller_validate_planner_update(
     }
     Ok(())
 }
+#[allow(dead_code)]
 fn planner_controller_check_constraint_violation(
     graph: &ExecutionGraph,
     signals: &graph_algo::GraphAnalysis,
@@ -532,6 +535,7 @@ fn planner_controller_check_constraint_violation(
         }
     }
 }
+#[allow(dead_code)]
 pub(crate) fn planner_controller_auto_repair_update(
     graph: &ExecutionGraph,
     update: &mut GraphPatch,
@@ -722,6 +726,7 @@ pub(crate) fn planner_controller_auto_repair_update(
         ids,
     }
 }
+#[allow(dead_code)]
 fn planner_controller_normalize_caps(
     caps: &mut Vec<PipelineCapability>,
     description: &str,
@@ -747,6 +752,7 @@ fn planner_controller_normalize_caps(
         }
     }
 }
+#[allow(dead_code)]
 fn planner_controller_seed_orchestration_if_empty(
     graph: &ExecutionGraph,
     update: &mut GraphPatch,
@@ -791,6 +797,7 @@ fn planner_controller_seed_orchestration_if_empty(
             ),
         });
 }
+#[allow(dead_code)]
 fn planner_controller_split_capabilities(
     caps: &[PipelineCapability],
 ) -> (Vec<PipelineCapability>, Vec<PipelineCapability>, Vec<PipelineCapability>) {
@@ -806,6 +813,7 @@ fn planner_controller_split_capabilities(
     }
     (observe, verify, mutate)
 }
+#[allow(dead_code)]
 fn planner_controller_unique_identifier(
     base: String,
     used: &mut std::collections::HashSet<String>,
@@ -824,6 +832,7 @@ fn planner_controller_unique_identifier(
         idx = idx.saturating_add(1);
     }
 }
+#[allow(dead_code)]
 fn planner_controller_require(cond: bool, msg: &str) -> Result<()> {
     cond.then_some(()).ok_or_else(|| anyhow::anyhow!("{}", msg))
 }
