@@ -2,7 +2,6 @@ use canon_types::{EventDelta, EventMask, KernelEvent, KernelEventConsumer, Kerne
 use canon_event_log::{info, error as log_error};
 use std::path::PathBuf;
 
-use crate::report_pipeline::generate_reports_from_tlog;
 use crate::verify_reports_layout;
 use canon_types::ReportLayout;
 
@@ -11,8 +10,6 @@ pub struct ReportEventConsumer {
     pub last_tick: u64,
     pub event_count: usize,
     last_generated_tick: Option<u64>,
-    in_flight: bool,
-    pending: bool,
     tlog_path: Option<PathBuf>,
     out_root: Option<PathBuf>,
 }
@@ -24,8 +21,6 @@ impl ReportEventConsumer {
             last_tick: 0,
             event_count: 0,
             last_generated_tick: None,
-            in_flight: false,
-            pending: false,
             tlog_path,
             out_root,
         }
@@ -43,6 +38,10 @@ impl KernelEventConsumer for ReportEventConsumer {
         }
         self.last_tick = delta.tick;
         self.event_count = self.event_count.saturating_add(1);
+        let crate_name = match &delta.event {
+            KernelEvent::CompilationUnitFinished { crate_name } => crate_name.as_str(),
+            _ => "unknown",
+        };
         let Some(tlog_path) = self.tlog_path.as_ref() else {
             log_error(
                 "report_consumer",
@@ -62,65 +61,63 @@ impl KernelEventConsumer for ReportEventConsumer {
                 return;
             }
         };
-        if self.in_flight {
-            self.pending = true;
+        let batch_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .to_string();
+        let reports_root = resolve_reports_root(&out_dir);
+        let workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let payload = serde_json::json!({
+            "request_id": format!("analysis-{}-analysis.run", crate_name),
+            "name": "analysis.run",
+            "args": {
+                "crate": crate_name,
+                "batch_id": batch_id,
+                "workspace": workspace.display().to_string(),
+                "reports_root": reports_root.display().to_string()
+            }
+        });
+        if let Err(err) = crate::capabilities::events::emit_analysis_event(
+            tlog_path,
+            "capability_requested",
+            payload,
+        ) {
+            log_error(
+                "report_consumer",
+                "emit_capability_failed",
+                serde_json::json!({
+                    "error": err.to_string(),
+                    "tick": delta.tick
+                }),
+            );
             return;
         }
-        self.in_flight = true;
-        loop {
-            info(
-                "report_consumer",
-                "generate_reports_start",
-                serde_json::json!({
-                    "tick": delta.tick,
-                    "tlog": tlog_path.display().to_string(),
-                    "out": out_dir.display().to_string()
-                }),
-            );
-            if let Err(err) = generate_reports_from_tlog(tlog_path, &out_dir) {
-                log_error(
+        info(
+            "report_consumer",
+            "capability_requested",
+            serde_json::json!({
+                "tick": delta.tick,
+                "tlog": tlog_path.display().to_string(),
+                "out": out_dir.display().to_string()
+            }),
+        );
+        if std::env::var("CANON_REPORTS_VERIFY_LAYOUT").ok().as_deref() == Some("1") {
+            let layout = ReportLayout::from_crate_root(out_dir.clone());
+            match verify_reports_layout(layout.root()) {
+                Ok(_) => info(
                     "report_consumer",
-                    "generate_reports_failed",
-                    serde_json::json!({
-                        "error": err.to_string(),
-                        "tick": delta.tick
-                    }),
-                );
-                self.in_flight = false;
-                self.pending = false;
-                return;
+                    "verify_layout_ok",
+                    serde_json::json!({ "root": layout.root().display().to_string() }),
+                ),
+                Err(err) => log_error(
+                    "report_consumer",
+                    "verify_layout_failed",
+                    serde_json::json!({ "error": err.to_string(), "root": layout.root().display().to_string() }),
+                ),
             }
-            info(
-                "report_consumer",
-                "generate_reports_done",
-                serde_json::json!({
-                    "tick": delta.tick,
-                    "out": out_dir.display().to_string()
-                }),
-            );
-            if std::env::var("CANON_REPORTS_VERIFY_LAYOUT").ok().as_deref() == Some("1") {
-                let layout = ReportLayout::from_crate_root(out_dir.clone());
-                match verify_reports_layout(layout.root()) {
-                    Ok(_) => info(
-                        "report_consumer",
-                        "verify_layout_ok",
-                        serde_json::json!({ "root": layout.root().display().to_string() }),
-                    ),
-                    Err(err) => log_error(
-                        "report_consumer",
-                        "verify_layout_failed",
-                        serde_json::json!({ "error": err.to_string(), "root": layout.root().display().to_string() }),
-                    ),
-                }
-            }
-            self.last_generated_tick = Some(delta.tick);
-            if self.pending {
-                self.pending = false;
-                continue;
-            }
-            break;
         }
-        self.in_flight = false;
+        self.last_generated_tick = Some(delta.tick);
     }
 }
 
@@ -179,4 +176,18 @@ fn sanitize_crate_name(name: &str) -> String {
     } else {
         out
     }
+}
+
+fn resolve_reports_root(out_dir: &PathBuf) -> PathBuf {
+    let mut cur = out_dir.as_path();
+    while let Some(name) = cur.file_name().and_then(|s| s.to_str()) {
+        if name == "crates" {
+            return cur.parent().unwrap_or(cur).to_path_buf();
+        }
+        cur = match cur.parent() {
+            Some(parent) => parent,
+            None => break,
+        };
+    }
+    out_dir.clone()
 }
