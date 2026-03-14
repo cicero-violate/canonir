@@ -270,18 +270,27 @@ impl AgentWorkerState {
             NodeStatus::Failed
         };
         let _ = self.graph.update_status(&node_id, new_status);
+        let patch_to_apply = if success && capability_name == "llm.call" {
+            result_value
+                .as_ref()
+                .and_then(extract_graph_patch_from_llm_result)
+        } else {
+            None
+        };
         if let Some(node) = self.graph.get_node_mut(&node_id) {
             if success {
                 if capability_name == "llm.call" {
-                    if let Some(value) = result_value {
-                        node.result = serde_json::to_string(&value).ok();
-                    }
+                    node.result = result_value.as_ref().and_then(|v| serde_json::to_string(v).ok());
                 } else if !stdout.is_empty() {
                     node.result = Some(stdout);
                 }
             } else if !stderr.is_empty() {
                 node.error = Some(stderr);
             }
+        }
+        if let Some(patch) = patch_to_apply {
+            let _ = apply_graph_patch(&mut self.graph, patch);
+            self.graph.rebuild_index();
         }
         let _ = self.plan_if_stalled();
         self.persist_snapshot();
@@ -326,7 +335,6 @@ impl AgentWorkerState {
                     });
                 }
             }
-            let all_completed = self.graph.all_completed();
             let all_blocked = self
                 .graph
                 .nodes
@@ -334,16 +342,13 @@ impl AgentWorkerState {
                 .all(|n| n.status == NodeStatus::Blocked);
             let all_failed = !self.graph.nodes.is_empty()
                 && failed_nodes.len() == self.graph.nodes.len();
-            let stalled = all_completed
-                || all_blocked
+            let stalled = all_blocked
                 || (all_failed && !has_retry_left)
                 || (features.ready_fraction == 0.0
                     && features.blocked_fraction > 0.0
                     && signals.has_cycle);
             if stalled {
-                let reason = if all_completed {
-                    "all nodes completed".to_string()
-                } else if all_blocked {
+                let reason = if all_blocked {
                     "all nodes blocked".to_string()
                 } else if all_failed && !has_retry_left {
                     "all nodes failed".to_string()
@@ -497,6 +502,14 @@ fn parse_inline_json(text: &str) -> Option<serde_json::Value> {
     }
     let slice = &text[start..=end];
     serde_json::from_str(slice).ok()
+}
+
+fn extract_graph_patch_from_llm_result(
+    result: &serde_json::Value,
+) -> Option<canon_agent_v2::planner_update::GraphPatch> {
+    let text = result.get("text").and_then(|v| v.as_str())?;
+    let json_val = parse_inline_json(text)?;
+    serde_json::from_value(json_val).ok()
 }
 
 fn extract_path(text: &str) -> Option<String> {
