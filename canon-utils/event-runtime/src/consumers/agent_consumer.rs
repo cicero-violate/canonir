@@ -2,7 +2,14 @@ use canon_agent_v2::dag::{task_graph_resolve_ready, ExecutionGraph, ExecutionNod
 use canon_agent_v2::state_snapshot;
 use canon_agent_v2::capability_types::PipelineCapability;
 use canon_agent_v2::decompose::{DecomposeNodeType, DecomposeTaskSpec};
-use canon_agent_v2::graph_algo::{compute_graph_features_parallel, graph_analysis_compute_graph_signals};
+use canon_agent_v2::goal::GoalSpec;
+use canon_agent_v2::graph_algo::{
+    compute_graph_features_parallel, graph_analysis_compute_graph_signals,
+};
+use canon_agent_v2::objectives::{
+    goal_raw_with_artifact, load_goal_from_reports, maybe_write_baseline,
+    objective_task_hints, ObjectiveWeights,
+};
 use canon_agent_v2::planner_update::{apply_graph_patch, GraphPatch, PlannerUpdateRewriteSpec};
 use canon_types::{
     EventDelta, KernelState, RuntimeConsumer, RuntimeEmitterHandle, RuntimeEvent, RuntimeEventFilter,
@@ -271,6 +278,7 @@ impl AgentWorkerState {
             }
         }
         let _ = self.plan_if_stalled();
+        self.persist_snapshot();
     }
 
     fn plan_if_stalled(&mut self) -> bool {
@@ -382,10 +390,25 @@ impl AgentWorkerState {
         if !update.new_nodes.is_empty() {
             return;
         }
+        let mut description =
+            "Analyse system state and produce initial task decomposition".to_string();
+        if let Some(selection) = load_goal_from_reports(ObjectiveWeights::default()) {
+            maybe_write_baseline(&selection);
+            let mut goal = goal_raw_with_artifact("", &selection.artifact);
+            let hints = objective_task_hints(&selection.artifact);
+            if !hints.is_empty() {
+                goal.push_str("\n\nTASK_HINTS:\n");
+                for hint in hints {
+                    goal.push_str("- ");
+                    goal.push_str(&hint);
+                    goal.push('\n');
+                }
+            }
+            description = format!("{description}\n\n{goal}");
+        }
         update.new_nodes.push(DecomposeTaskSpec {
             id: "seed_0".to_string(),
-            description: "Analyse system state and produce initial task decomposition"
-                .to_string(),
+            description,
             deps: Vec::new(),
             required_capabilities: vec![PipelineCapability::Llm],
             node_type: DecomposeNodeType::Analysis,
@@ -393,6 +416,18 @@ impl AgentWorkerState {
             budget: None,
             reasoning_trace: Some("AUTO_SEED: empty graph".to_string()),
         });
+    }
+
+    fn persist_snapshot(&self) {
+        let path = std::path::Path::new(
+            "/workspace/ai_sandbox/canon/agent_logs/state_snapshot.json",
+        );
+        let snapshot = state_snapshot::PipelineSnapshot {
+            graph: self.graph.clone(),
+            iteration: self.last_tick,
+            goal: GoalSpec::new(String::new(), 0),
+        };
+        state_snapshot::snapshot_store_save(path, &snapshot);
     }
 }
 

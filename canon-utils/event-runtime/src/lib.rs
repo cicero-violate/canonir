@@ -204,7 +204,9 @@ impl EventRuntime {
 
     fn handle_runtime_event(&mut self, event: RuntimeEvent) -> Result<()> {
         self.bus.dispatch(event.clone());
-        self.append_runtime_event(&event);
+        if !matches!(event, RuntimeEvent::RuntimeStateUpdated { .. }) {
+            self.append_runtime_event(&event);
+        }
         match event {
             RuntimeEvent::RuntimeStateUpdated { payload } => {
                 self.runtime_state = payload;
