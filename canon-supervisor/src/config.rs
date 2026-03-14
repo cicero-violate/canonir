@@ -77,13 +77,6 @@ debounce_ms = 300
 watch_dirs = ["canon-utils", "canon-agent-v2"]
 
 [[process]]
-name = "canon-agent-v2"
-bin  = "target/debug/canon-agent-v2"
-args = ["run-capability", "/workspace/ai_sandbox/canon"]
-restart = "drain"
-drain_timeout_ms = 10000
-
-[[process]]
 name = "analysis-engine"
 bin  = "target/debug/analysis-engine"
 args = []

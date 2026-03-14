@@ -3,6 +3,9 @@ name = "canon-agent-v2"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+path = "src/lib.rs"
+
 [dependencies]
 toml.workspace = true
 serde = { workspace = true, features = ["derive"] }

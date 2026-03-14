@@ -10,14 +10,6 @@ path = "src/lib.rs"
 name = "event_runtime"
 path = "src/bin/event_runtime.rs"
 
-[[bin]]
-name = "runtime_capability_smoke_test"
-path = "src/bin/capability_smoke_test.rs"
-
-[[bin]]
-name = "llm_smoke_test"
-path = "src/bin/llm_smoke_test.rs"
-
 [dependencies]
 anyhow = { workspace = true }
 canon_types = { path = "../canon-types" }
