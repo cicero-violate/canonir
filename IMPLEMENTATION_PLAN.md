@@ -183,3 +183,35 @@ git commit -m "wire agent_consumer: llm.call capability mapping, result ingestio
 - Snapshot persistence from the consumer (the graph state is in-memory; persistence belongs in a separate pass)
 
 These are not regressions — the smoke test path (`LlmExecutorConsumer`) is untouched. The five changes above are purely additive to the existing consumer skeleton.
+
+---
+
+## Execution Checklist (Concrete, Ordered)
+
+1. Read the orientation files and confirm `PipelineCapability` variants and `PipelineSnapshot` shape.
+2. Implement Change 1 in `canon-utils/event-runtime/src/consumers/agent_consumer.rs`.
+3. Implement Change 2 in `canon-utils/event-runtime/src/consumers/agent_consumer.rs`.
+4. Implement Change 3 in `canon-utils/event-runtime/src/consumers/agent_consumer.rs`.
+5. Implement Change 4 in `canon-utils/event-runtime/src/consumers/agent_consumer.rs`.
+6. Implement Change 5 in `canon-utils/event-runtime/src/consumers/agent_consumer.rs`.
+7. Run `cargo check -p event-runtime 2>&1 | head -60` and fix any errors.
+8. Commit with the message provided in the plan.
+
+---
+
+## Acceptance Criteria
+
+- `PipelineCapability::Llm` and `PipelineCapability::Analysis` map to `llm.call`.
+- `build_capability_args` returns a prompt payload for `llm.call`.
+- `CapabilityCompleted` payload result is persisted into `node.result` for `llm.call`.
+- `seed_orchestration` emits a single minimal LLM node when the graph is empty.
+- `plan_if_stalled` detects stalled graphs using graph features/signals and injects a new LLM node.
+- `cargo check -p event-runtime` passes (first 60 lines are clean).
+
+---
+
+## Notes / Gotchas
+
+- Do not attempt structured prompt parsing from node description in this pass.
+- Do not wire `PlannerController` inside the consumer.
+- Keep `_ => {}` catch-all for unhandled capabilities.
