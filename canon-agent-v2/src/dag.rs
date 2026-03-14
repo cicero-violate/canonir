@@ -80,13 +80,32 @@ pub struct CapabilityNode {
     pub deps: Vec<String>,
 }
 
+fn select_primary_capability(caps: &[PipelineCapability]) -> PipelineCapability {
+    if caps.is_empty() {
+        return PipelineCapability::Unknown;
+    }
+    let mut observe = None;
+    let mut verify = None;
+    let mut mutate = None;
+    for &cap in caps {
+        match cap.class() {
+            CapabilityMode::Mutate => {
+                mutate = mutate.or(Some(cap));
+            }
+            CapabilityMode::Verify => {
+                verify = verify.or(Some(cap));
+            }
+            CapabilityMode::Observe => {
+                observe = observe.or(Some(cap));
+            }
+        }
+    }
+    mutate.or(verify).or(observe).unwrap_or(caps[0])
+}
+
 impl From<&ExecutionNode> for CapabilityNode {
     fn from(node: &ExecutionNode) -> Self {
-        let capability = node
-            .required_capabilities
-            .get(0)
-            .copied()
-            .unwrap_or(PipelineCapability::Unknown);
+        let capability = select_primary_capability(&node.required_capabilities);
         Self {
             id: node.id.clone(),
             capability,
@@ -163,6 +182,9 @@ impl ExecutionGraph {
             }
         }
         for n in &self.nodes {
+            if n.required_capabilities.is_empty() {
+                return Err(format!("node {} missing required_capabilities", n.id));
+            }
             let caps: HashSet<PipelineCapability> = n.required_capabilities.iter().copied().collect();
             capability_model_assert_class_disjoint(&caps).map_err(|e| format!("node {}: {}", n.id, e))?;
         }
