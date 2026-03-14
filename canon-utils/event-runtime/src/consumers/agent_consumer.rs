@@ -229,10 +229,13 @@ impl AgentWorkerState {
         emitter.emit(RuntimeEvent::NodeReady(NodeReady {
             node_id: node.id.clone(),
             capability: capability_name.to_string(),
+            request_id: request_id.clone(),
+            args: args.clone(),
         }));
         emitter.emit(RuntimeEvent::NodeStarted(NodeStarted {
             node_id: node.id.clone(),
             capability: capability_name.to_string(),
+            request_id: request_id.clone(),
         }));
         info(
             "agent_consumer",
@@ -240,13 +243,15 @@ impl AgentWorkerState {
             serde_json::json!({ "node_id": node.id, "capability": capability_name }),
         );
         self.pending.insert(request_id.clone(), node.id.clone());
-        emitter.emit(RuntimeEvent::CapabilityRequested(
-            canon_types::CapabilityRequested {
-                request_id,
-                name: capability_name.to_string(),
-                args,
-            },
-        ));
+        if !event_execution_enabled() {
+            emitter.emit(RuntimeEvent::CapabilityRequested(
+                canon_types::CapabilityRequested {
+                    request_id,
+                    name: capability_name.to_string(),
+                    args,
+                },
+            ));
+        }
     }
 
     fn apply_result(
@@ -338,12 +343,14 @@ impl AgentWorkerState {
                     emitter.emit(RuntimeEvent::NodeCompleted(NodeCompleted {
                         node_id: node_id.clone(),
                         capability: capability_name.clone(),
+                        request_id: request_id.clone(),
                     }));
                 } else {
                     emitter.emit(RuntimeEvent::NodeFailed(NodeFailed {
                         node_id: node_id.clone(),
                         capability: capability_name.clone(),
                         error: Some(stderr.clone()),
+                        request_id: request_id.clone(),
                     }));
                 }
             }
@@ -675,6 +682,13 @@ fn parse_node_id_from_request_id(request_id: &str) -> Option<String> {
         return None;
     }
     Some(rest[..last_dash].to_string())
+}
+
+fn event_execution_enabled() -> bool {
+    std::env::var("CANON_EVENT_EXECUTION")
+        .ok()
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false)
 }
 
 fn unique_node_id(base: &str, graph: &ExecutionGraph) -> String {

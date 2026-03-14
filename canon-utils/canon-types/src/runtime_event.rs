@@ -62,18 +62,26 @@ pub struct CapabilityFailed {
 pub struct NodeReady {
     pub node_id: String,
     pub capability: String,
+    #[serde(default)]
+    pub request_id: String,
+    #[serde(default)]
+    pub args: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeStarted {
     pub node_id: String,
     pub capability: String,
+    #[serde(default)]
+    pub request_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeCompleted {
     pub node_id: String,
     pub capability: String,
+    #[serde(default)]
+    pub request_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,4 +89,6 @@ pub struct NodeFailed {
     pub node_id: String,
     pub capability: String,
     pub error: Option<String>,
+    #[serde(default)]
+    pub request_id: String,
 }

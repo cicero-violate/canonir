@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use canon_event_runtime::consumers::agent_consumer::AgentConsumer;
 use canon_event_runtime::consumers::capability_executor::CapabilityExecutor;
+use canon_event_runtime::consumers::event_loop::EventLoopConsumer;
 use canon_event_runtime::consumers::llm_executor::LlmExecutorConsumer;
 use canon_event_runtime::EventRuntime;
 use canon_tlog_replay::detect_tlog_format;
@@ -146,7 +147,7 @@ fn main() -> Result<()> {
     let registry = std::sync::Arc::new(std::sync::Mutex::new(
         canon_capability::CapabilityRegistry::new(),
     ));
-    let consumers: Vec<Box<dyn canon_types::RuntimeConsumer>> = vec![
+    let mut consumers: Vec<Box<dyn canon_types::RuntimeConsumer>> = vec![
         Box::new(AgentConsumer::new()),
         Box::new(CapabilityExecutor::new(
             registry.clone(),
@@ -154,6 +155,9 @@ fn main() -> Result<()> {
         )),
         Box::new(LlmExecutorConsumer::new()),
     ];
+    if event_execution_enabled {
+        consumers.push(Box::new(EventLoopConsumer::new()));
+    }
     let mut runtime = EventRuntime::new_with_registry(consumers, registry.clone());
     {
         let mut registry = registry.lock().expect("capability registry lock");
