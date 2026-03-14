@@ -1,6 +1,7 @@
 use canon_agent_v2::dag::{task_graph_resolve_ready, ExecutionGraph, ExecutionNode, NodeStatus};
 use canon_agent_v2::state_snapshot;
 use canon_agent_v2::capability_types::PipelineCapability;
+use canon_agent_v2::decompose::{DecomposeNodeType, DecomposeTaskSpec};
 use canon_agent_v2::graph_algo::{compute_graph_features_parallel, graph_analysis_compute_graph_signals};
 use canon_agent_v2::planner_update::{apply_graph_patch, GraphPatch, PlannerUpdateRewriteSpec};
 use canon_types::{
@@ -208,7 +209,7 @@ impl AgentWorkerState {
     }
 
     fn apply_result(&mut self, event: RuntimeEvent) {
-        let (request_id, success, stdout, stderr) = match event {
+        let (request_id, capability_name, success, stdout, stderr, result_value) = match event {
             RuntimeEvent::CapabilityCompleted(payload) => {
                 let success = payload
                     .result
@@ -227,11 +228,24 @@ impl AgentWorkerState {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                (payload.request_id, success, stdout, stderr)
+                let result_value = payload.result.get("result").cloned();
+                (
+                    payload.request_id,
+                    payload.name,
+                    success,
+                    stdout,
+                    stderr,
+                    result_value,
+                )
             }
-            RuntimeEvent::CapabilityFailed(payload) => {
-                (payload.request_id, false, String::new(), payload.error)
-            }
+            RuntimeEvent::CapabilityFailed(payload) => (
+                payload.request_id,
+                payload.name,
+                false,
+                String::new(),
+                payload.error,
+                None,
+            ),
             _ => return,
         };
         let Some(node_id) = self.pending.remove(&request_id) else {
@@ -245,18 +259,23 @@ impl AgentWorkerState {
         let _ = self.graph.update_status(&node_id, new_status);
         if let Some(node) = self.graph.get_node_mut(&node_id) {
             if success {
-                if !stdout.is_empty() {
+                if capability_name == "llm.call" {
+                    if let Some(value) = result_value {
+                        node.result = serde_json::to_string(&value).ok();
+                    }
+                } else if !stdout.is_empty() {
                     node.result = Some(stdout);
                 }
             } else if !stderr.is_empty() {
                 node.error = Some(stderr);
             }
         }
+        let _ = self.plan_if_stalled();
     }
 
     fn plan_if_stalled(&mut self) -> bool {
-        let _signals = graph_analysis_compute_graph_signals(&self.graph);
-        let _features = compute_graph_features_parallel(&self.graph);
+        let signals = graph_analysis_compute_graph_signals(&self.graph);
+        let features = compute_graph_features_parallel(&self.graph);
 
         let mut update = GraphPatch {
             new_nodes: Vec::new(),
@@ -267,20 +286,70 @@ impl AgentWorkerState {
 
         if self.graph.nodes.is_empty() {
             self.seed_orchestration(&mut update);
-        } else if let Some(node) = self
-            .graph
-            .nodes
-            .iter()
-            .find(|n| n.status == NodeStatus::Failed)
-            .cloned()
-        {
-            let retries = self.retry_counts.entry(node.id.clone()).or_insert(0);
-            if *retries < 1 {
-                *retries += 1;
-                update.rewrite_nodes.push(PlannerUpdateRewriteSpec {
-                    id: node.id,
-                    new_description: node.description,
-                    new_capabilities: node.required_capabilities,
+        } else {
+            let failed_nodes: Vec<ExecutionNode> = self
+                .graph
+                .nodes
+                .iter()
+                .filter(|n| n.status == NodeStatus::Failed)
+                .cloned()
+                .collect();
+            let has_retry_left = failed_nodes.iter().any(|n| {
+                self.retry_counts
+                    .get(&n.id)
+                    .copied()
+                    .unwrap_or(0)
+                    < 1
+            });
+            if let Some(node) = failed_nodes.first() {
+                let retries = self.retry_counts.entry(node.id.clone()).or_insert(0);
+                if *retries < 1 {
+                    *retries += 1;
+                    update.rewrite_nodes.push(PlannerUpdateRewriteSpec {
+                        id: node.id.clone(),
+                        new_description: node.description.clone(),
+                        new_capabilities: node.required_capabilities.clone(),
+                    });
+                }
+            }
+            let all_completed = self.graph.all_completed();
+            let all_blocked = self
+                .graph
+                .nodes
+                .iter()
+                .all(|n| n.status == NodeStatus::Blocked);
+            let all_failed = !self.graph.nodes.is_empty()
+                && failed_nodes.len() == self.graph.nodes.len();
+            let stalled = all_completed
+                || all_blocked
+                || (all_failed && !has_retry_left)
+                || (features.ready_fraction == 0.0
+                    && features.blocked_fraction > 0.0
+                    && signals.has_cycle);
+            if stalled {
+                let reason = if all_completed {
+                    "all nodes completed".to_string()
+                } else if all_blocked {
+                    "all nodes blocked".to_string()
+                } else if all_failed && !has_retry_left {
+                    "all nodes failed".to_string()
+                } else if self.graph.nodes.is_empty() {
+                    "empty graph".to_string()
+                } else {
+                    "deadlock detected".to_string()
+                };
+                let id = unique_node_id("stall_replan", &self.graph);
+                update.new_nodes.push(DecomposeTaskSpec {
+                    id,
+                    description: format!(
+                        "Graph stalled ({reason}). Analyze current state and propose next steps."
+                    ),
+                    deps: Vec::new(),
+                    required_capabilities: vec![PipelineCapability::Llm],
+                    node_type: DecomposeNodeType::Analysis,
+                    priority: 1,
+                    budget: None,
+                    reasoning_trace: Some("AUTO_REPLAN: stalled graph".to_string()),
                 });
             }
         }
@@ -310,9 +379,20 @@ impl AgentWorkerState {
     }
 
     fn seed_orchestration(&mut self, update: &mut GraphPatch) {
-        // No auto-seed: avoid flooding tlog with failing bash nodes when no
-        // external graph is provided. The agent is driven by external events only.
-        let _ = update;
+        if !update.new_nodes.is_empty() {
+            return;
+        }
+        update.new_nodes.push(DecomposeTaskSpec {
+            id: "seed_0".to_string(),
+            description: "Analyse system state and produce initial task decomposition"
+                .to_string(),
+            deps: Vec::new(),
+            required_capabilities: vec![PipelineCapability::Llm],
+            node_type: DecomposeNodeType::Analysis,
+            priority: 1,
+            budget: None,
+            reasoning_trace: Some("AUTO_SEED: empty graph".to_string()),
+        });
     }
 }
 
@@ -326,6 +406,7 @@ fn capability_name_for_node(node: &ExecutionNode) -> Option<&'static str> {
             PipelineCapability::Bash => return Some("bash"),
             PipelineCapability::CargoBuild => return Some("cargo.build"),
             PipelineCapability::CargoCheck => return Some("cargo.check"),
+            PipelineCapability::Llm | PipelineCapability::Analysis => return Some("llm.call"),
             _ => {}
         }
     }
@@ -333,6 +414,10 @@ fn capability_name_for_node(node: &ExecutionNode) -> Option<&'static str> {
 }
 
 fn build_capability_args(node: &ExecutionNode, capability: &str) -> Option<serde_json::Value> {
+    if capability == "llm.call" {
+        let prompt = node.description.clone();
+        return Some(json!({ "prompt": prompt, "raw": false }));
+    }
     if let Some(args) = parse_inline_json(&node.description) {
         return Some(args);
     }
@@ -391,4 +476,18 @@ fn extract_field(text: &str, key: &str) -> Option<String> {
         return Some(value.split_whitespace().next().unwrap_or("").trim().to_string());
     }
     None
+}
+
+fn unique_node_id(base: &str, graph: &ExecutionGraph) -> String {
+    if graph.nodes.iter().all(|n| n.id != base) {
+        return base.to_string();
+    }
+    let mut idx = 1u32;
+    loop {
+        let candidate = format!("{base}_{idx}");
+        if graph.nodes.iter().all(|n| n.id != candidate) {
+            return candidate;
+        }
+        idx = idx.saturating_add(1);
+    }
 }

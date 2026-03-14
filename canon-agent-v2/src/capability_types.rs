@@ -62,6 +62,10 @@ pub enum PipelineCapability {
     BoundaryGuard,
     #[serde(alias = "PromptContractEnforce")]
     PromptContractEnforce,
+    #[serde(alias = "Llm")]
+    Llm,
+    #[serde(alias = "Analysis")]
+    Analysis,
     #[serde(alias = "StatelessInvoke")]
     StatelessInvoke,
     #[serde(other)]
@@ -79,6 +83,8 @@ impl PipelineCapability {
             PipelineCapability::ComputeDelta => CapabilityMode::Observe,
             PipelineCapability::RewardSignalCompute => CapabilityMode::Observe,
             PipelineCapability::PromptContractEnforce => CapabilityMode::Observe,
+            PipelineCapability::Llm => CapabilityMode::Observe,
+            PipelineCapability::Analysis => CapabilityMode::Observe,
             PipelineCapability::GoalToSubgoals => CapabilityMode::Observe,
             PipelineCapability::ScheduleReady => CapabilityMode::Observe,
             PipelineCapability::ConstraintAttach => CapabilityMode::Observe,
