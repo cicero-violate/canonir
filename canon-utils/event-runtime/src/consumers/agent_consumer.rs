@@ -12,8 +12,10 @@ use canon_agent_v2::objectives::{
 };
 use canon_agent_v2::planner_update::{apply_graph_patch, GraphPatch, PlannerUpdateRewriteSpec};
 use canon_types::{
-    EventDelta, KernelState, RuntimeConsumer, RuntimeEmitterHandle, RuntimeEvent, RuntimeEventFilter,
+    CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventDelta, KernelState,
+    RuntimeConsumer, RuntimeEmitterHandle, RuntimeEvent, RuntimeEventFilter,
 };
+use canon_tlog_replay::{read_any_events_from_path_with_start_seq, AnyEvent};
 use serde_json::json;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
@@ -156,6 +158,7 @@ impl AgentWorkerState {
                 }
             }
             self.graph.rebuild_index();
+            self.replay_runtime_events_since(snapshot.iteration);
         }
     }
 
@@ -222,6 +225,14 @@ impl AgentWorkerState {
     }
 
     fn apply_result(&mut self, event: RuntimeEvent) {
+        self.apply_result_with_options(event, true);
+    }
+
+    fn apply_result_replay(&mut self, event: RuntimeEvent) {
+        self.apply_result_with_options(event, false);
+    }
+
+    fn apply_result_with_options(&mut self, event: RuntimeEvent, plan_and_persist: bool) {
         let (request_id, capability_name, success, stdout, stderr, result_value) = match event {
             RuntimeEvent::CapabilityCompleted(payload) => {
                 let success = payload
@@ -261,8 +272,18 @@ impl AgentWorkerState {
             ),
             _ => return,
         };
-        let Some(node_id) = self.pending.remove(&request_id) else {
-            return;
+        let node_id = match self.pending.remove(&request_id) {
+            Some(node_id) => node_id,
+            None => {
+                let Some(parsed) = parse_node_id_from_request_id(&request_id) else {
+                    return;
+                };
+                if self.graph.get_node(&parsed).is_some() {
+                    parsed
+                } else {
+                    return;
+                }
+            }
         };
         let new_status = if success {
             NodeStatus::Completed
@@ -292,8 +313,10 @@ impl AgentWorkerState {
             let _ = apply_graph_patch(&mut self.graph, patch);
             self.graph.rebuild_index();
         }
-        let _ = self.plan_if_stalled();
-        self.persist_snapshot();
+        if plan_and_persist {
+            let _ = self.plan_if_stalled();
+            self.persist_snapshot();
+        }
     }
 
     fn plan_if_stalled(&mut self) -> bool {
@@ -440,6 +463,47 @@ impl AgentWorkerState {
         };
         state_snapshot::snapshot_store_save(path, &snapshot);
     }
+
+    fn replay_runtime_events_since(&mut self, start_seq: u64) {
+        if start_seq == 0 {
+            return;
+        }
+        let tlog_path = resolve_runtime_tlog_path();
+        if !tlog_path.exists() {
+            return;
+        }
+        let events = match read_any_events_from_path_with_start_seq(&tlog_path, start_seq) {
+            Ok(events) => events,
+            Err(_) => return,
+        };
+        for event in events {
+            let AnyEvent::Canon(canon) = event else {
+                continue;
+            };
+            match canon.kind.as_str() {
+                "capability_requested" => {
+                    if let Ok(req) = serde_json::from_value::<CapabilityRequested>(canon.payload.clone()) {
+                        if let Some(node_id) = parse_node_id_from_request_id(&req.request_id) {
+                            if self.graph.get_node(&node_id).is_some() {
+                                self.pending.insert(req.request_id, node_id);
+                            }
+                        }
+                    }
+                }
+                "capability_completed" => {
+                    if let Ok(payload) = serde_json::from_value::<CapabilityCompleted>(canon.payload.clone()) {
+                        self.apply_result_replay(RuntimeEvent::CapabilityCompleted(payload));
+                    }
+                }
+                "capability_failed" => {
+                    if let Ok(payload) = serde_json::from_value::<CapabilityFailed>(canon.payload.clone()) {
+                        self.apply_result_replay(RuntimeEvent::CapabilityFailed(payload));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 fn capability_name_for_node(node: &ExecutionNode) -> Option<&'static str> {
@@ -532,6 +596,28 @@ fn extract_field(text: &str, key: &str) -> Option<String> {
         return Some(value.split_whitespace().next().unwrap_or("").trim().to_string());
     }
     None
+}
+
+fn resolve_runtime_tlog_path() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("CANON_TLOG_PATH") {
+        return std::path::PathBuf::from(path);
+    }
+    let binary = std::path::PathBuf::from(
+        "/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog.d",
+    );
+    if binary.exists() {
+        return binary;
+    }
+    std::path::PathBuf::from("/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog")
+}
+
+fn parse_node_id_from_request_id(request_id: &str) -> Option<String> {
+    let rest = request_id.strip_prefix("node-")?;
+    let last_dash = rest.rfind('-')?;
+    if last_dash == 0 {
+        return None;
+    }
+    Some(rest[..last_dash].to_string())
 }
 
 fn unique_node_id(base: &str, graph: &ExecutionGraph) -> String {
