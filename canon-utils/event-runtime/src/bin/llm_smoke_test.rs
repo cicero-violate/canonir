@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use canon_agent_v2::config::CapabilityConfig;
+use canon_agent_v3::config::CapabilityConfig;
 use canon_tlog_replay::read_any_events_from_path;
 use canon_tlog_writer::{BinarySegmentWriter, CanonEvent};
 use canon_tlog_replay::read_any_events_from_path_with_start_seq;

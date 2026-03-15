@@ -1,4 +1,7 @@
-use crate::gpu_scheduler_layout::GpuScheduleGraph;
+use crate::gpu_scheduler_layout::{
+    gpu_scheduler_layout_is_completed, gpu_scheduler_layout_is_ready_candidate, GpuScheduleGraph,
+};
+#[cfg(feature = "cuda")]
 use algorithms::graph::csr::Csr;
 #[cfg(feature = "cuda")]
 use algorithms::graph::scheduler_gpu;
@@ -17,10 +20,10 @@ pub fn graph_cpu_kernels_compute_ready(graph: &GpuScheduleGraph) -> Vec<u8> {
     ready
 }
 #[cfg(not(feature = "cuda"))]
-pub fn compute_ready(graph: &GpuGraph) -> Vec<u8> {
+pub fn compute_ready(graph: &GpuScheduleGraph) -> Vec<u8> {
     let mut ready = vec![0u8; graph.node_count as usize];
     for i in 0..graph.node_count as usize {
-        if !is_ready_candidate(graph.status[i]) {
+        if !gpu_scheduler_layout_is_ready_candidate(graph.status[i]) {
             continue;
         }
         let start = graph.deps_offset[i] as usize;
@@ -28,7 +31,7 @@ pub fn compute_ready(graph: &GpuGraph) -> Vec<u8> {
         let mut ok = true;
         for dep_idx in &graph.deps_flat[start..end] {
             let dep = *dep_idx as usize;
-            if !is_completed(graph.status[dep]) {
+            if !gpu_scheduler_layout_is_completed(graph.status[dep]) {
                 ok = false;
                 break;
             }
@@ -74,7 +77,11 @@ pub fn graph_cpu_kernels_deadlock_check(graph: &GpuScheduleGraph) -> bool {
     {
         let ready_mask = compute_ready(graph);
         let ready_sum = ready_mask.iter().map(|v| *v as u64).sum::<u64>();
-        let completed = graph.status.iter().filter(|&&s| is_completed(s)).count();
+        let completed = graph
+            .status
+            .iter()
+            .filter(|&&s| gpu_scheduler_layout_is_completed(s))
+            .count();
         ready_sum == 0 && completed < graph.status.len()
     }
 }

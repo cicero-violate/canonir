@@ -57,7 +57,7 @@ pub fn affected_crates(paths: &[PathBuf]) -> HashSet<String> {
             continue;
         }
         if path.starts_with("/workspace/ai_sandbox/canon/canon-agent-prompts") {
-            crates.insert("canon-agent-v2".to_string());
+            crates.insert("canon-agent-v3".to_string());
         }
     }
     crates

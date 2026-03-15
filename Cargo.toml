@@ -10,7 +10,7 @@ members = [
   # "canon-analyzer", 
   # "canon-projection",
   # "canon-agent",
-  "canon-agent-v2",
+  "canon-utils/canon-agent-v3",
   "canon-supervisor",
   "canon-utils/canon-editor",
   "canon-utils/canon-query",

@@ -2,7 +2,6 @@ use super::capability::PipelineCapability;
 use super::gpu_scheduler::kernels as gpu_kernels;
 use super::{dag, decompose};
 use algorithms::graph::adj_list::AdjList;
-use algorithms::graph::csr::Csr;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

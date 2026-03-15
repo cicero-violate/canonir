@@ -1,6 +1,6 @@
 RENAME_VALIDATE_UPG=1 cat <<'JSON' | cargo run --bin canon-editor
 {
-  "project": "/workspace/ai_sandbox/canon/canon-agent-v2",
+  "project": "/workspace/ai_sandbox/canon/canon-utils/canon-agent-v3",
   "verify": false,
   "check": false,
   "ops": [

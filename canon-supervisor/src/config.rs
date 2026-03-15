@@ -74,7 +74,7 @@ pub fn write_default_config(path: &Path) -> anyhow::Result<()> {
     }
     let default = r#"[watcher]
 debounce_ms = 300
-watch_dirs = ["canon-utils", "canon-agent-v2"]
+watch_dirs = ["canon-utils"]
 
 [[process]]
 name = "analysis-engine"
@@ -92,7 +92,7 @@ fn default_debounce_ms() -> u64 {
 }
 
 fn default_watch_dirs() -> Vec<String> {
-    vec!["canon-utils".to_string(), "canon-agent-v2".to_string()]
+    vec!["canon-utils".to_string()]
 }
 
 fn default_drain_timeout_ms() -> u64 {

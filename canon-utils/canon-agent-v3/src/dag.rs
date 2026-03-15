@@ -13,6 +13,8 @@ pub enum NodeStatus {
     Failed,
     Blocked,
 }
+
+pub type Status = NodeStatus;
 const PENDING_TO_READY: [NodeStatus; 6] = [NodeStatus::Ready, NodeStatus::Ready, NodeStatus::Running, NodeStatus::Completed, NodeStatus::Failed, NodeStatus::Blocked];
 const TRANSITION_TABLE: [[bool; 6]; 6] = {
     let mut t = [[false; 6]; 6];

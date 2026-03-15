@@ -10,6 +10,8 @@ pub enum DecomposeNodeType {
     Analysis,
     Render,
 }
+
+pub type NodeType = DecomposeNodeType;
 fn decompose_default_node_type() -> DecomposeNodeType {
     DecomposeNodeType::Analysis
 }
