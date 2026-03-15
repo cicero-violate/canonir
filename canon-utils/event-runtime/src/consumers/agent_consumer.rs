@@ -154,13 +154,14 @@ impl AgentWorkerState {
         if let Some(snapshot) = state_snapshot::snapshot_store_load(path) {
             self.graph = snapshot.graph;
             self.graph.rebuild_index();
+            self.last_tick = snapshot.iteration;
             for node in self.graph.nodes.iter_mut() {
                 if node.status == NodeStatus::Running {
                     node.status = NodeStatus::Pending;
                 }
             }
             self.graph.rebuild_index();
-            self.replay_runtime_events_since(snapshot.iteration);
+            self.replay_runtime_events_since(snapshot.runtime_start_seq);
         }
     }
 
@@ -324,6 +325,13 @@ impl AgentWorkerState {
                 }
             }
         };
+        if !plan_and_persist {
+            if let Some(node) = self.graph.get_node(&node_id) {
+                if matches!(node.status, NodeStatus::Completed | NodeStatus::Failed) {
+                    return;
+                }
+            }
+        }
         let new_status = if success {
             NodeStatus::Completed
         } else {
@@ -523,15 +531,13 @@ impl AgentWorkerState {
         let snapshot = state_snapshot::PipelineSnapshot {
             graph: self.graph.clone(),
             iteration: self.last_tick,
+            runtime_start_seq: latest_segment_seq(&resolve_runtime_tlog_path()).unwrap_or(0),
             goal: GoalSpec::new(String::new(), 0),
         };
         state_snapshot::snapshot_store_save(path, &snapshot);
     }
 
     fn replay_runtime_events_since(&mut self, start_seq: u64) {
-        if start_seq == 0 {
-            return;
-        }
         let tlog_path = resolve_runtime_tlog_path();
         if !tlog_path.exists() {
             return;
@@ -673,6 +679,28 @@ fn resolve_runtime_tlog_path() -> std::path::PathBuf {
         return binary;
     }
     std::path::PathBuf::from("/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog")
+}
+
+fn latest_segment_seq(tlog_path: &std::path::Path) -> anyhow::Result<u64> {
+    if !tlog_path.is_dir() {
+        return Ok(0);
+    }
+    let mut max_seq = 0u64;
+    for entry in std::fs::read_dir(tlog_path)? {
+        let entry = entry?;
+        let p = entry.path();
+        if p.extension().and_then(|s| s.to_str()) != Some("log") {
+            continue;
+        }
+        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+            if let Ok(seq) = stem.parse::<u64>() {
+                if seq > max_seq {
+                    max_seq = seq;
+                }
+            }
+        }
+    }
+    Ok(max_seq)
 }
 
 fn parse_node_id_from_request_id(request_id: &str) -> Option<String> {

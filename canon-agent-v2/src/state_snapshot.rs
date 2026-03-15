@@ -7,6 +7,8 @@ pub struct PipelineSnapshot {
     pub graph: ExecutionGraph,
     pub iteration: u64,
     #[serde(default)]
+    pub runtime_start_seq: u64,
+    #[serde(default)]
     pub goal: GoalSpec,
 }
 pub fn snapshot_store_save(path: &Path, snapshot: &PipelineSnapshot) {
