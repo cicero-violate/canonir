@@ -9,7 +9,8 @@ pub fn default_tlog_path() -> PathBuf {
     if let Ok(path) = std::env::var("CANON_TLOG_PATH") {
         return PathBuf::from(path);
     }
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/workspace/ai_sandbox/canon"));
+    let cwd =
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/workspace/ai_sandbox/canon"));
     let binary_dir = cwd.join("state/kernel_logs/kernel.tlog.d");
     if binary_dir.exists() {
         return binary_dir;
@@ -56,7 +57,10 @@ fn emit_human_log(kind: &str, payload: &Value) {
         }
         "process_restarted" => {
             let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let strategy = payload.get("strategy").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let strategy = payload
+                .get("strategy")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             info(
                 "supervisor",
                 "process_restarted",

@@ -11,7 +11,7 @@ members = [
   # "canon-projection",
   # "canon-agent",
   "canon-utils/canon-agent-v3",
-  "canon-supervisor",
+  "canon-utils/canon-supervisor",
   "canon-utils/canon-editor",
   "canon-utils/canon-query",
   "canon-utils/event-consumers",

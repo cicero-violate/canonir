@@ -105,12 +105,12 @@ fn handle_changes(
         }
     }
 
-        for crate_name in &to_build {
-            tlog::emit(
-                "workspace.changed",
-                serde_json::json!({ "crate": crate_name }),
-            );
-        }
+    for crate_name in &to_build {
+        tlog::emit(
+            "workspace.changed",
+            serde_json::json!({ "crate": crate_name }),
+        );
+    }
     Ok(())
 }
 
