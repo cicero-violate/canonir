@@ -5,9 +5,6 @@ USEFUL INFORMATION
 rustc compiler source code can be found in here, it is very useful
 /workspace/ai_sandbox/canon/other_sources/rust-source
 
-READ THIS AND USE IT (It will save you time)
-/workspace/ai_sandbox/canon/canon-utils/upg_analysis/README.md
-
 Shell Text Processing Rules
 
 General Tooling Rules
@@ -16,24 +13,6 @@ rg (ripgrep)
 - Use to search and locate patterns across files.
 - Use to identify symbols, functions, flags, or heuristic surfaces.
 - Always prefer over grep.
-
-UPG Analysis First
-- MUST use `analysis/` (UPG outputs) as the primary source of truth before any source reads.
-- Use `nodes.csv`, `edges.csv`, `files.txt`, `spans.bin`, `upg_invariants.json` for reasoning.
-- Use Python for parsing analysis outputs; avoid full-file reads for large CSVs.
-- Only open source files when analysis data is insufficient or inconsistent, and document why.
-- If analysis invariants fail, fix analysis first; do not proceed to source-driven decisions.
-
-UPG Query Patterns (use these exact patterns)
-- files.txt is a CSV with header `file_id,path`: `{r['file_id']: r['path'] for r in csv.DictReader(open('analysis/files.txt'))}`
-- node lookup: `[n for n in nodes if 'target_symbol' in n['symbol'] and n['node_kind'] == 'FUNCTION']`
-- callers of F: edges where `edge_kind == 'CALL' and dst_id in target_ids` — src_id is a BASIC_BLOCK, walk up via HAS_BLOCK to find owning FUNCTION
-- callees of F: find src FUNCTION → get its BASIC_BLOCKs via HAS_BLOCK → get CALL edges from those blocks → dst_id is callee FUNCTION
-- call graph is intra-crate only: external/stdlib callees will not appear as nodes
-- derived outputs live in `analysis/post_analysis/` — reports, invariants, anomalies, duplicates, repair_surface
-- `analysis/` is read-only source of truth — never write into it; all agent outputs go to `analysis/post_analysis/`
-- verify graph health before reasoning: `upg_invariants.json` must have `"ok": true` and zero violation counts
-- symbols.json is a list not a dict: `syms = json.load(f); syms[0].keys()` → `kind, symbol_id, rename_safe, rename_skip_reason`
 
 awk
 - Use for line-oriented processing.
