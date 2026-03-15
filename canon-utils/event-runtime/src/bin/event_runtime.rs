@@ -6,6 +6,7 @@ use canon_event_runtime::consumers::llm_executor::LlmExecutorConsumer;
 use canon_event_runtime::{register_default_capabilities, EventRuntime};
 use canon_tlog_replay::detect_tlog_format;
 use canon_tlog_replay::read_any_events_from_path_with_start_seq;
+use canon_tlog_replay::replay_graph_from_tlog;
 use canon_event_log::{info, warn, error};
 use std::env;
 use std::fs::{self, File, OpenOptions};
@@ -13,6 +14,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::collections::HashSet;
 
 struct LockGuard {
     path: PathBuf,
@@ -141,6 +143,15 @@ fn main() -> Result<()> {
         Some(guard) => guard,
         None => return Ok(()),
     };
+    if std::env::var("CANON_VERIFY_TLOG_EQUIV").ok().as_deref() == Some("1") {
+        if let Err(err) = maybe_verify_tlog_equivalence(&tlog_path) {
+            warn(
+                "event_runtime",
+                "tlog_equivalence_check_failed",
+                serde_json::json!({ "error": err.to_string() }),
+            );
+        }
+    }
     let registry = std::sync::Arc::new(std::sync::Mutex::new(
         canon_capability::CapabilityRegistry::new(),
     ));
@@ -329,4 +340,92 @@ fn now_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
+}
+
+fn maybe_verify_tlog_equivalence(tlog_path: &Path) -> Result<()> {
+    let (json_path, bin_path) = if tlog_path.is_dir() {
+        (tlog_path.with_extension("tlog"), tlog_path.to_path_buf())
+    } else {
+        (tlog_path.to_path_buf(), tlog_path.with_extension("tlog.d"))
+    };
+    if !json_path.exists() || !bin_path.exists() {
+        return Ok(());
+    }
+    let diffs = verify_tlog_equivalence(&json_path, &bin_path)?;
+    if diffs.is_empty() {
+        info(
+            "event_runtime",
+            "tlog_equivalence_ok",
+            serde_json::json!({
+                "json": json_path.display().to_string(),
+                "binary": bin_path.display().to_string()
+            }),
+        );
+        return Ok(());
+    }
+    warn(
+        "event_runtime",
+        "tlog_equivalence_mismatch",
+        serde_json::json!({
+            "json": json_path.display().to_string(),
+            "binary": bin_path.display().to_string(),
+            "diffs": diffs
+        }),
+    );
+    Ok(())
+}
+
+fn verify_tlog_equivalence(json_path: &Path, bin_path: &Path) -> Result<Vec<String>> {
+    let json_graph = replay_graph_from_tlog(json_path)?;
+    let bin_graph = replay_graph_from_tlog(bin_path)?;
+    let mut diffs = Vec::new();
+    if json_graph.nodes.len() != bin_graph.nodes.len() {
+        diffs.push(format!(
+            "node_count json={} binary={}",
+            json_graph.nodes.len(),
+            bin_graph.nodes.len()
+        ));
+    }
+    if json_graph.edges.len() != bin_graph.edges.len() {
+        diffs.push(format!(
+            "edge_count json={} binary={}",
+            json_graph.edges.len(),
+            bin_graph.edges.len()
+        ));
+    }
+    let json_nodes: HashSet<(u32, String, String, Option<u32>, Option<u32>)> = json_graph
+        .nodes
+        .iter()
+        .map(|n| (n.id, n.kind.clone(), n.symbol.clone(), n.file_id, n.line))
+        .collect();
+    let bin_nodes: HashSet<(u32, String, String, Option<u32>, Option<u32>)> = bin_graph
+        .nodes
+        .iter()
+        .map(|n| (n.id, n.kind.clone(), n.symbol.clone(), n.file_id, n.line))
+        .collect();
+    if json_nodes != bin_nodes {
+        diffs.push(format!(
+            "node_set mismatch: json_only={} binary_only={}",
+            json_nodes.difference(&bin_nodes).count(),
+            bin_nodes.difference(&json_nodes).count()
+        ));
+    }
+    let json_edges: HashSet<(u32, u32, String)> = json_graph
+        .edges
+        .iter()
+        .map(|e| (e.src, e.dst, e.kind.clone()))
+        .collect();
+    let bin_edges: HashSet<(u32, u32, String)> = bin_graph
+        .edges
+        .iter()
+        .map(|e| (e.src, e.dst, e.kind.clone()))
+        .collect();
+    if json_edges != bin_edges {
+        diffs.push(format!(
+            "edge_set mismatch: json_only={} binary_only={}",
+            json_edges.difference(&bin_edges).count(),
+            bin_edges.difference(&json_edges).count()
+        ));
+    }
+    Ok(diffs)
 }
