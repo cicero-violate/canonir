@@ -1,4 +1,6 @@
-use canon_types::{EventDelta, EventMask, KernelEvent, KernelEventConsumer, KernelState};
+use canon_types::{
+    CapabilityRequested, EventDelta, EventMask, KernelEvent, KernelEventConsumer, KernelState,
+};
 use canon_event_log::{info, error as log_error};
 use std::path::PathBuf;
 
@@ -68,16 +70,18 @@ impl KernelEventConsumer for ReportEventConsumer {
             .to_string();
         let reports_root = resolve_reports_root(&out_dir);
         let workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let payload = serde_json::json!({
-            "request_id": format!("analysis-{}-analysis.run", crate_name),
-            "name": "analysis.run",
-            "args": {
+        let request = CapabilityRequested {
+            request_id: format!("analysis-{}-analysis.run", crate_name),
+            name: "analysis.run".to_string(),
+            args: serde_json::json!({
                 "crate": crate_name,
                 "batch_id": batch_id,
                 "workspace": workspace.display().to_string(),
                 "reports_root": reports_root.display().to_string()
-            }
-        });
+            }),
+        };
+        let payload = serde_json::to_value(&request)
+            .unwrap_or_else(|_| serde_json::json!({}));
         if let Err(err) = crate::capabilities::events::emit_analysis_event(
             tlog_path,
             "capability_requested",
