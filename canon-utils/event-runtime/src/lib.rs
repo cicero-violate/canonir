@@ -337,7 +337,11 @@ impl EventRuntime {
             if let Some(writer_arc) = self.tlog_writer.as_ref() {
                 let needs_reopen = if let Ok(w) = writer_arc.lock() {
                     if w.append_event(&canon).is_err() {
-                        eprintln!("[event_runtime] append_runtime_event: writer stale, reopening");
+                        error(
+                            "event_runtime",
+                            "append_runtime_event_stale_writer",
+                            serde_json::json!({ "path": path.display().to_string() }),
+                        );
                         true
                     } else {
                         false
