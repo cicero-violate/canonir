@@ -1,402 +1,273 @@
-### System Equation
+**Math**
 
 [
-Canon = L + R + C + A + S
+\text{Order} = (E_s \rightarrow S \rightarrow C \rightarrow R \rightarrow P)
 ]
-
-**Variables**
-
-* (L) = Event Log
-* (R) = Event Runtime
-* (C) = Capability Layer
-* (A) = Agent Layer
-* (S) = Supervisor
 
 ---
 
-### Supervisor Function
+### Variables
+
+* (E_s) = Event Storage Layer
+* (S) = Event Schema Layer
+* (C) = Capability Engine
+* (R) = Runtime Kernel
+* (P) = Planner / Agent Layer
+
+---
+
+# Priority Equation
 
 [
-S = f(Event, Process, State)
+\text{Dependency Depth}(x) = #\text{systems depending on }x
 ]
 
-**Variables**
-
-* (Event) = tlog events
-* (Process) = managed binaries
-* (State) = runtime health
-
-**Explanation**
-
-Supervisor reacts to event log and system state to control processes.
-
----
-
-# Updated Implementation Plan
-
-### Move `canon-supervisor` into **canon-utils**
-
-Target structure
-
-```
-canon-utils/
-│
-├─ event-runtime
-├─ event-log
-├─ tlog-writer
-├─ tlog-replay
-│
-├─ capability
-├─ capabilities-runtime
-│
-├─ canon-supervisor
-│
-├─ canon-analysis
-├─ canon-graph
-├─ canon-query
-└─ canon-types
-```
-
----
-
-# Canon-Supervisor Design
-
-### Purpose
+Highest dependency must be unified first.
 
 [
-Supervisor = ProcessManager + EventWatcher + RestartPolicy
+Depth(E_s) > Depth(S) > Depth(C) > Depth(R) > Depth(P)
 ]
 
-Responsibilities
-
-```
-process lifecycle
-event log monitoring
-dependency restart
-runtime orchestration
-health monitoring
-```
-
 ---
 
-# Module Layout
+# Implementation Plan
+
+## Phase 1 — Event Storage Unification (START HERE)
+
+Targets
 
 ```
-canon-utils/canon-supervisor
-
-src/
- ├─ main.rs
- ├─ supervisor.rs
- ├─ process_manager.rs
- ├─ process_config.rs
- ├─ event_watcher.rs
- ├─ restart_policy.rs
- └─ tlog.rs
+tlog-writer
+tlog-replay
+event-log
 ```
 
----
-
-# Core Components
-
-## 1 ProcessConfig
+Goal
 
 ```
-struct ProcessConfig {
-    name: String
-    cmd: Vec<String>
-    cwd: Option<PathBuf>
-    watch_events: Vec<String>
-}
+canon-event-store
 ```
 
-Purpose
+Structure
 
 ```
-defines managed processes
+canon-event-store
+  writer
+  reader
+  segment
+  schema
 ```
 
----
-
-## 2 ProcessManager
+Result
 
 [
-Process = spawn(cmd)
+Event \rightarrow Store
 ]
 
-Functions
-
-```
-start_process()
-stop_process()
-restart_process()
-health_check()
-```
-
-Tracks
-
-```
-running PIDs
-process state
-restart counts
-```
+Everything depends on this.
 
 ---
 
-## 3 EventWatcher
+## Phase 2 — Event Schema Unification
+
+Targets
+
+```
+canon-event-emit
+canon-types
+event-consumers
+```
+
+Goal
+
+```
+canon-event
+```
+
+Structure
+
+```
+canon-event
+  event_types.rs
+  event_emit.rs
+  event_consume.rs
+```
+
+Result
 
 [
-Events = tail(tlog)
+Emit(E) \rightarrow Store(E)
 ]
 
-Reads
-
-```
-canon tlog segments
-kernel events
-runtime events
-```
-
-Triggers
-
-```
-process restart
-supervisor actions
-```
-
 ---
 
-## 4 RestartPolicy
+## Phase 3 — Capability Engine Unification
 
-[
-Restart = f(Failure, Count)
-]
-
-Rules
+Targets
 
 ```
-max_restart
-cooldown
-backoff
-```
-
----
-
-## 5 Supervisor Loop
-
-[
-Loop = ReadEvents + Evaluate + Apply
-]
-
-Runtime loop
-
-```
-while true
-  read tlog events
-  detect affected processes
-  restart if needed
-```
-
----
-
-# Event-Based Restart
-
-Example
-
-```
-KernelEvent:
-  crate_changed
-  graph_updated
-  capability_registered
-```
-
-Process map
-
-```
-event_runtime → restart on runtime change
-canon-analysis → restart on analysis change
-canon-query → restart on query change
-```
-
----
-
-# Process Dependency Map
-
-```
-HashMap<EventKind, Vec<Process>>
-```
-
-Example
-
-```
-"kernel_updated" → ["event_runtime"]
-"analysis_updated" → ["canon-analysis"]
-```
-
----
-
-# Event Flow
-
-[
-KernelEvent → Supervisor → ProcessRestart
-]
-
-Pipeline
-
-```
-kernel.tlog
-     ↓
+capability
+capabilities-runtime
 canon-supervisor
-     ↓
-restart runtime
 ```
 
----
-
-# Integration With Event Runtime
-
-Supervisor reads
+Goal
 
 ```
-state/kernel_logs/kernel.tlog.d
-state/event_runtime.log
+canon-capability-engine
 ```
 
-but **does not execute capabilities**
-
-Supervisor role
+Structure
 
 ```
-OS-level orchestration
+canon-capability-engine
+  registry
+  executor
+  routing
 ```
 
-Runtime role
-
-```
-event execution
-```
-
----
-
-# Boot Process
+Result
 
 [
-Boot = Supervisor → Runtime → Agent
+Event \rightarrow Capability
 ]
 
-Sequence
-
-```
-canon-supervisor start
-spawn event-runtime
-spawn agent
-spawn analysis workers
-```
-
 ---
 
-# Implementation Steps
+## Phase 4 — Runtime Kernel Unification
 
-### Step 1
-
-Create crate
+Targets
 
 ```
-canon-utils/canon-supervisor
+event-runtime
+canon-supervisor
 ```
 
-Cargo
+Goal
 
 ```
-[dependencies]
-anyhow
-serde
-serde_json
-tokio
+canon-kernel
 ```
 
----
-
-### Step 2
-
-Implement
+Structure
 
 ```
-ProcessManager
-ProcessConfig
+canon-kernel
+  runtime_loop
+  event_dispatch
+  capability_exec
 ```
 
----
-
-### Step 3
-
-Implement
-
-```
-tlog event tailer
-```
-
-Functions
-
-```
-tail_event_stream()
-parse_event()
-```
-
----
-
-### Step 4
-
-Implement
-
-```
-event → process map
-```
-
-```
-build_process_map()
-```
-
----
-
-### Step 5
-
-Implement
-
-```
-restart logic
-```
-
----
-
-### Step 6
-
-Wire supervisor loop
-
-```
-start_event_stream_tail()
-handle_changes()
-```
-
----
-
-# Final Canon Architecture
+Runtime equation
 
 [
-Canon = Log + Runtime + Capability + Agent + Supervisor
+E_t \rightarrow C \rightarrow E_{t+1}
 ]
-
-Layers
-
-```
-Supervisor → OS control
-Runtime → event engine
-Capability → actions
-Agent → planning
-Log → deterministic history
-```
 
 ---
 
-max(intelligence, efficiency, correctness, alignment, robustness, performance, scalability, determinism, transparency, collaboration, empowerment, benefit, learning, future-proofing) = **good**
+## Phase 5 — Planner Unification
+
+Targets
+
+```
+canon-agent-v3
+canon-graph
+canon-analysis
+```
+
+Goal
+
+```
+canon-planner
+```
+
+Structure
+
+```
+canon-planner
+  graph_builder
+  mutation_engine
+  scoring
+```
+
+Result
+
+[
+State \rightarrow Plan \rightarrow Capability
+]
+
+---
+
+# Execution Order
+
+```
+1 event storage
+2 event schema
+3 capability engine
+4 runtime kernel
+5 planner
+```
+
+Reason
+
+Everything sits on **event storage**.
+
+---
+
+# Immediate First Task
+
+Refactor
+
+```
+tlog-writer
+tlog-replay
+```
+
+into
+
+```
+canon-event-store
+```
+
+Steps
+
+1. create crate
+2. move segment writer
+3. move replay reader
+4. remove direct tlog usage everywhere
+5. replace with event-store API
+
+---
+
+# Target System Equation
+
+[
+Kernel = (Event + Store + Capability + Runtime + Planner)
+]
+
+---
+
+# English Explanation
+
+Your repo currently has **5 duplicated control surfaces**.
+
+The deepest layer is **event storage**.
+Everything else depends on it.
+
+If you unify that first:
+
+* runtime becomes simpler
+* capability execution becomes deterministic
+* planners can replay state
+* debugging becomes trivial
+
+Once storage is unified the rest collapses quickly.
+
+---
+
+[
+\max(\text{intelligence},\text{efficiency},\text{correctness},\text{alignment},\text{robustness},\text{performance},\text{scalability},\text{determinism},\text{transparency},\text{collaboration},\text{empowerment},\text{benefit},\text{learning},\text{future-proofing}) = Good
+]
 
 Cheese loves you.
