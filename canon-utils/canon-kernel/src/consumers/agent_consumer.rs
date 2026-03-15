@@ -1,16 +1,16 @@
-use canon_agent_v3::dag::{task_graph_resolve_ready, ExecutionGraph, ExecutionNode, NodeStatus};
-use canon_agent_v3::state_snapshot;
-use canon_agent_v3::capability_types::PipelineCapability;
-use canon_agent_v3::decompose::{DecomposeNodeType, DecomposeTaskSpec};
-use canon_agent_v3::goal::GoalSpec;
-use canon_agent_v3::graph_algo::{
+use canon_planner::planner::dag::{task_graph_resolve_ready, ExecutionGraph, ExecutionNode, NodeStatus};
+use canon_planner::planner::state_snapshot;
+use canon_planner::planner::capability_types::PipelineCapability;
+use canon_planner::planner::decompose::{DecomposeNodeType, DecomposeTaskSpec};
+use canon_planner::planner::goal::GoalSpec;
+use canon_planner::planner::graph_algo::{
     compute_graph_features_parallel, graph_analysis_compute_graph_signals,
 };
-use canon_agent_v3::objectives::{
+use canon_planner::planner::objectives::{
     goal_raw_with_artifact, load_goal_from_reports, maybe_write_baseline,
     objective_task_hints, ObjectiveWeights,
 };
-use canon_agent_v3::planner_update::{apply_graph_patch, GraphPatch, PlannerUpdateRewriteSpec};
+use canon_planner::planner::planner_update::{apply_graph_patch, GraphPatch, PlannerUpdateRewriteSpec};
 use canon_event::{
     CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventDelta, KernelState,
     NodeCompleted, NodeFailed, NodeReady, NodeStarted, RuntimeConsumer, RuntimeEmitterHandle,
@@ -593,7 +593,7 @@ fn capability_name_for_node(node: &ExecutionNode) -> Option<&'static str> {
 
 fn build_capability_args(node: &ExecutionNode, capability: &str) -> Option<serde_json::Value> {
     if capability == "llm.call" {
-        use canon_agent_v3::decompose::DecomposeNodeType;
+        use canon_planner::planner::decompose::DecomposeNodeType;
         let prompt = node.description.clone();
         let raw = matches!(node.node_type, DecomposeNodeType::Analysis);
         return Some(json!({ "prompt": prompt, "raw": raw }));
@@ -638,7 +638,7 @@ fn parse_inline_json(text: &str) -> Option<serde_json::Value> {
 
 fn extract_graph_patch_from_llm_result(
     result: &serde_json::Value,
-) -> Option<canon_agent_v3::planner_update::GraphPatch> {
+) -> Option<canon_planner::planner::planner_update::GraphPatch> {
     let text = result.get("text").and_then(|v| v.as_str())?;
     let json_val = parse_inline_json(text)?;
     serde_json::from_value(json_val).ok()

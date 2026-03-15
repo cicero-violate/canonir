@@ -1,11 +1,7 @@
-mod config;
-mod events;
-mod process;
-mod watcher;
-
-use crate::config::{load_config, write_default_config, ProcessConfig};
-use crate::process::ProcessManager;
-use crate::watcher::{affected_crates, crate_for_path, start_watcher};
+use canon_capability_engine::{
+    load_config, write_default_config, ProcessConfig, ProcessManager,
+    affected_crates, crate_for_path, start_watcher, wrap_event,
+};
 use anyhow::Result;
 use canon_event::{emit_event, resolve_tlog_path};
 use canon_event::emit_debug::{error, info};
@@ -74,7 +70,7 @@ fn main() -> Result<()> {
         }
         for path in &paths {
             let crate_name = crate_for_path(path);
-            let payload = crate::events::wrap_event(
+            let payload = wrap_event(
                 "file_change_detected",
                 serde_json::json!({
                     "path": path.display().to_string(),
@@ -109,7 +105,7 @@ fn handle_changes(
     }
 
     for crate_name in &to_build {
-        let payload = crate::events::wrap_event(
+        let payload = wrap_event(
             "workspace.changed",
             serde_json::json!({ "crate": crate_name }),
         );

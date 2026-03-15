@@ -1,8 +1,8 @@
-use canon_analysis::CapabilityEventConsumer;
-use canon_analysis::SmtConsumer;
+use canon_planner::CapabilityEventConsumer;
+use canon_planner::SmtConsumer;
+use canon_planner::GraphConsumer;
 use canon_editor::EditConsumer;
 use canon_event::{KernelEventConsumer, RuntimeConsumer, RuntimeEvent, RuntimeEventFilter};
-use canon_graph::GraphConsumer;
 use canon_query::QueryConsumer;
 
 struct KernelConsumerAdapter {

@@ -25,7 +25,7 @@ algorithms = { path = "../algorithms" }
 rand.workspace = true
 rayon.workspace = true
 canon_tlog_writer = { package = "canon-tlog-writer", path = "../canon-utils/tlog-writer" }
-canon_capability = { package = "canon-capability", path = "../canon-utils/capability" }
+canon_capability_engine = { package = "canon-capability-engine", path = "../canon-utils/canon-capability-engine" }
 canon_types = { package = "canon_types", path = "../canon-utils/canon-types" }
 
 [features]

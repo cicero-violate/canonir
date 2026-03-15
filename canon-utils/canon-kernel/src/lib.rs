@@ -2,7 +2,7 @@ use anyhow::Result;
 mod bus;
 pub mod consumers;
 
-use canon_capability::{CapabilityContext, CapabilityRegistry, CapabilityResult};
+use canon_capability_engine::{CapabilityContext, CapabilityRegistry, CapabilityResult};
 use canon_event::emit_debug::{error, info};
 use canon_event_store::writer::{append_event_json, BinarySegmentWriter, CanonEvent};
 use std::sync::Mutex as StdMutex;
@@ -49,8 +49,8 @@ pub struct EventRuntime {
 
 pub fn register_default_capabilities(registry: &mut CapabilityRegistry) {
     canon_editor::register_editor_capabilities(registry);
-    canon_analysis::register_analysis_capabilities(registry);
-    canon_capability_runtime::register_build_capabilities(registry);
+    canon_planner::register_analysis_capabilities(registry);
+    canon_capability_engine::register_build_capabilities(registry);
 }
 
 impl EventRuntime {

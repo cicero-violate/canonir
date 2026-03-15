@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use canon_capability::CapabilityRegistry;
+use canon_capability_engine::{CapabilityContext, CapabilityRegistry, CapabilityResult};
 use canon_editor::register_editor_capabilities;
 use canon_event::{CapabilityRequested, RuntimeEvent};
 
@@ -17,14 +17,14 @@ fn main() -> Result<()> {
         }),
     };
 
-    let ctx = canon_capability::CapabilityContext {
+    let ctx = CapabilityContext {
         workspace: "/workspace/ai_sandbox/canon".into(),
         event: RuntimeEvent::CapabilityRequested(request.clone()),
     };
 
     let result = registry.execute(&request.name, ctx)?;
     let event = match result {
-        canon_capability::CapabilityResult::Emit(event) => event,
+        CapabilityResult::Emit(event) => event,
         other => {
             return Err(anyhow!(
                 "unexpected capability result: expected Emit(Edit), got {:?}",

@@ -1,0 +1,21 @@
+[package]
+name = "canon-planner"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# Unified planner components
+canon_agent_v3 = { package = "canon-agent-v3", path = "../canon-agent-v3" }
+canon_graph = { package = "canon-graph", path = "../canon-graph" }
+canon_analysis = { package = "canon-analysis", path = "../canon-analysis" }
+
+# Re-export dependencies for convenience
+canon_event = { package = "canon-event", path = "../canon-event" }
+canon_capability_engine = { package = "canon-capability-engine", path = "../canon-capability-engine" }
+
+[features]
+default = ["cuda"]
+cuda = ["canon_agent_v3/cuda", "canon_analysis/cuda"]

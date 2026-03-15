@@ -1,5 +1,5 @@
 [package]
-name = "canon-capability"
+name = "canon-capability-engine"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,5 +9,10 @@ path = "src/lib.rs"
 [dependencies]
 anyhow.workspace = true
 canon_event = { package = "canon-event", path = "../canon-event" }
+canon_event_store = { package = "canon-event-store", path = "../canon-event-store" }
 serde.workspace = true
 serde_json.workspace = true
+libc.workspace = true
+notify.workspace = true
+signal-hook.workspace = true
+toml.workspace = true

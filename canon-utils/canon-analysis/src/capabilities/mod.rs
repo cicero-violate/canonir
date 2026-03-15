@@ -5,7 +5,7 @@ pub mod runner;
 
 mod run;
 
-use canon_capability::CapabilityRegistry;
+use canon_capability_engine::CapabilityRegistry;
 
 pub fn register_analysis_capabilities(registry: &mut CapabilityRegistry) {
     registry.register(std::sync::Arc::new(run::AnalysisRunCapability));

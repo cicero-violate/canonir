@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
-use canon_capability_runtime::register_build_capabilities;
-use canon_event_runtime::EventRuntime;
+use canon_capability_engine::register_build_capabilities;
+use canon_kernel::EventRuntime;
 use canon_event_store::reader::read_any_events_from_path;
 use canon_event_store::writer::{BinarySegmentWriter, CanonEvent};
 use canon_event::CapabilityRequested;

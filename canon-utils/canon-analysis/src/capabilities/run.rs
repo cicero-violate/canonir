@@ -1,4 +1,4 @@
-use canon_capability::{Capability, CapabilityContext, CapabilityResult};
+use canon_capability_engine::{Capability, CapabilityContext, CapabilityResult};
 use canon_event::emit_debug::info;
 use canon_event::RuntimeEvent;
 

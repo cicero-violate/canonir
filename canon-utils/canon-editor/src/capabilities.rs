@@ -1,4 +1,4 @@
-use canon_capability::{Capability, CapabilityContext, CapabilityRegistry, CapabilityResult};
+use canon_capability_engine::{Capability, CapabilityContext, CapabilityRegistry, CapabilityResult};
 use canon_event::emit_debug::{error, info};
 use canon_event::{EditEvent, RuntimeEvent};
 

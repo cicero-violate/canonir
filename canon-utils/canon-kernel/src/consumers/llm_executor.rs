@@ -1,6 +1,6 @@
-use canon_agent_v3::config::CapabilityConfig;
-use canon_agent_v3::engine;
-use canon_agent_v3::endpoint_worker;
+use canon_planner::planner::config::CapabilityConfig;
+use canon_planner::planner::engine;
+use canon_planner::planner::endpoint_worker;
 use canon_event::emit_debug::{error, info};
 use canon_event::{RuntimeConsumer, RuntimeEmitterHandle, RuntimeEvent, RuntimeEventFilter};
 use serde_json::json;
@@ -80,7 +80,7 @@ impl LlmExecutorConsumer {
                     serde_json::json!({ "addr": addr.to_string() }),
                 );
                 let bridge = runtime.block_on(async {
-                    canon_agent_v3::ws_server::spawn(addr, config.response_timeout_secs)
+                    canon_planner::planner::ws_server::spawn(addr, config.response_timeout_secs)
                 });
                 runtime.block_on(async {
                     let wait = bridge.wait_for_connection();

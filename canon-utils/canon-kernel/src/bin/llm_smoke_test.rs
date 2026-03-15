@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use canon_agent_v3::config::CapabilityConfig;
+use canon_planner::planner::config::CapabilityConfig;
 use canon_event_store::reader::read_any_events_from_path;
 use canon_event_store::reader::read_any_events_from_path_with_start_seq;
 use canon_event_store::writer::{BinarySegmentWriter, CanonEvent};

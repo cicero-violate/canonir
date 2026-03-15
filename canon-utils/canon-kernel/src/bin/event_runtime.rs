@@ -1,9 +1,9 @@
 use anyhow::{anyhow, Result};
-use canon_event_runtime::consumers::agent_consumer::AgentConsumer;
-use canon_event_runtime::consumers::capability_executor::CapabilityExecutor;
-use canon_event_runtime::consumers::event_loop::EventLoopConsumer;
-use canon_event_runtime::consumers::llm_executor::LlmExecutorConsumer;
-use canon_event_runtime::{register_default_capabilities, EventRuntime};
+use canon_kernel::consumers::agent_consumer::AgentConsumer;
+use canon_kernel::consumers::capability_executor::CapabilityExecutor;
+use canon_kernel::consumers::event_loop::EventLoopConsumer;
+use canon_kernel::consumers::llm_executor::LlmExecutorConsumer;
+use canon_kernel::{register_default_capabilities, EventRuntime};
 use canon_event_store::reader::detect_tlog_format;
 use canon_event_store::reader::read_any_events_from_path_with_start_seq;
 use canon_event_store::reader::replay_graph_from_tlog;
@@ -153,7 +153,7 @@ fn main() -> Result<()> {
         }
     }
     let registry = std::sync::Arc::new(std::sync::Mutex::new(
-        canon_capability::CapabilityRegistry::new(),
+        canon_capability_engine::CapabilityRegistry::new(),
     ));
     let mut consumers: Vec<Box<dyn canon_event::RuntimeConsumer>> = vec![
         Box::new(AgentConsumer::new()),

@@ -19,7 +19,7 @@ z3 = { workspace = true, default-features = false }
 sha2 = { workspace = true }
 hex = { workspace = true }
 canon_event = { package = "canon-event", path = "../canon-event" }
-canon_capability = { package = "canon-capability", path = "../capability" }
+canon_capability_engine = { package = "canon-capability-engine", path = "../canon-capability-engine" }
 once_cell = { workspace = true }
 
 [dev-dependencies]
