@@ -115,12 +115,6 @@ Goal
 
 ```
 canon-capability-engine
-```
-
-Structure
-
-```
-canon-capability-engine
   registry
   executor
   routing
@@ -144,12 +138,6 @@ canon-supervisor
 ```
 
 Goal
-
-```
-canon-kernel
-```
-
-Structure
 
 ```
 canon-kernel
@@ -177,12 +165,6 @@ canon-analysis
 ```
 
 Goal
-
-```
-canon-planner
-```
-
-Structure
 
 ```
 canon-planner
