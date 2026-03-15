@@ -47,6 +47,12 @@ pub struct EventRuntime {
     emitter_rx: crossbeam_channel::Receiver<RuntimeEvent>,
 }
 
+pub fn register_default_capabilities(registry: &mut CapabilityRegistry) {
+    canon_editor::register_editor_capabilities(registry);
+    canon_analysis::register_analysis_capabilities(registry);
+    canon_capability_runtime::register_build_capabilities(registry);
+}
+
 impl EventRuntime {
     pub fn new(consumers: Vec<Box<dyn RuntimeConsumer>>) -> Self {
         let registry = std::sync::Arc::new(std::sync::Mutex::new(CapabilityRegistry::new()));

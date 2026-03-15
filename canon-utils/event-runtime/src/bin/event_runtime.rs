@@ -3,13 +3,10 @@ use canon_event_runtime::consumers::agent_consumer::AgentConsumer;
 use canon_event_runtime::consumers::capability_executor::CapabilityExecutor;
 use canon_event_runtime::consumers::event_loop::EventLoopConsumer;
 use canon_event_runtime::consumers::llm_executor::LlmExecutorConsumer;
-use canon_event_runtime::EventRuntime;
+use canon_event_runtime::{register_default_capabilities, EventRuntime};
 use canon_tlog_replay::detect_tlog_format;
 use canon_tlog_replay::read_any_events_from_path_with_start_seq;
 use canon_event_log::{info, warn, error};
-use canon_editor::register_editor_capabilities;
-use canon_analysis::register_analysis_capabilities;
-use canon_capability_runtime::register_build_capabilities;
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -161,9 +158,7 @@ fn main() -> Result<()> {
     let mut runtime = EventRuntime::new_with_registry(consumers, registry.clone());
     {
         let mut registry = registry.lock().expect("capability registry lock");
-        register_editor_capabilities(&mut registry);
-        register_analysis_capabilities(&mut registry);
-        register_build_capabilities(&mut registry);
+        register_default_capabilities(&mut registry);
     }
     runtime.set_execute_capabilities(false);
     runtime.set_tlog_path(tlog_path.clone());
