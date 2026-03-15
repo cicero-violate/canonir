@@ -1,451 +1,402 @@
+### System Equation
+
+[
+Canon = L + R + C + A + S
+]
+
 **Variables**
 
-(E) = Runtime events
-(K) = Kernel events
-(C) = Capability execution
-(G) = Graph projection
-(L) = Event log (.tlog)
-(S_t) = Runtime state
-(R) = Runtime engine
+* (L) = Event Log
+* (R) = Event Runtime
+* (C) = Capability Layer
+* (A) = Agent Layer
+* (S) = Supervisor
 
 ---
 
-**Equations**
-
-1. **State from events**
+### Supervisor Function
 
 [
-S_t = fold(E_0 \dots E_t)
+S = f(Event, Process, State)
 ]
 
-State reconstructed from runtime events.
+**Variables**
+
+* (Event) = tlog events
+* (Process) = managed binaries
+* (State) = runtime health
+
+**Explanation**
+
+Supervisor reacts to event log and system state to control processes.
 
 ---
 
-2. **Graph projection**
+# Updated Implementation Plan
+
+### Move `canon-supervisor` into **canon-utils**
+
+Target structure
+
+```
+canon-utils/
+│
+├─ event-runtime
+├─ event-log
+├─ tlog-writer
+├─ tlog-replay
+│
+├─ capability
+├─ capabilities-runtime
+│
+├─ canon-supervisor
+│
+├─ canon-analysis
+├─ canon-graph
+├─ canon-query
+└─ canon-types
+```
+
+---
+
+# Canon-Supervisor Design
+
+### Purpose
 
 [
-G_t = project(K_0 \dots K_t)
+Supervisor = ProcessManager + EventWatcher + RestartPolicy
 ]
 
-Graph derived from kernel events.
+Responsibilities
+
+```
+process lifecycle
+event log monitoring
+dependency restart
+runtime orchestration
+health monitoring
+```
 
 ---
 
-3. **Capability execution**
+# Module Layout
+
+```
+canon-utils/canon-supervisor
+
+src/
+ ├─ main.rs
+ ├─ supervisor.rs
+ ├─ process_manager.rs
+ ├─ process_config.rs
+ ├─ event_watcher.rs
+ ├─ restart_policy.rs
+ └─ tlog.rs
+```
+
+---
+
+# Core Components
+
+## 1 ProcessConfig
+
+```
+struct ProcessConfig {
+    name: String
+    cmd: Vec<String>
+    cwd: Option<PathBuf>
+    watch_events: Vec<String>
+}
+```
+
+Purpose
+
+```
+defines managed processes
+```
+
+---
+
+## 2 ProcessManager
 
 [
-E_{t+1} = C(S_t)
+Process = spawn(cmd)
 ]
 
-Capabilities produce runtime events.
+Functions
+
+```
+start_process()
+stop_process()
+restart_process()
+health_check()
+```
+
+Tracks
+
+```
+running PIDs
+process state
+restart counts
+```
 
 ---
 
-4. **Runtime loop**
+## 3 EventWatcher
 
 [
-R = {Bus + Consumers + CapabilityExecutor}
+Events = tail(tlog)
 ]
 
-Event bus drives execution.
-
----
-
-# Coding Agent Implementation Plan (Rebuilt)
-
-The repo already contains the **correct architecture**, but redundancy exists between:
-
-* **kernel events**
-* **runtime events**
-* **capability requests**
-* **graph mutation logic**
-
-Goal: **make the event runtime the only execution driver.**
-
----
-
-# Phase 1 — Canonical event architecture
-
-Central event type:
+Reads
 
 ```
-canon-types/src/runtime_event.rs
+canon tlog segments
+kernel events
+runtime events
 ```
 
-Current:
+Triggers
 
 ```
-RuntimeEvent
- ├ Kernel
- ├ Edit
- ├ Tick
- ├ RuntimeStateUpdated
- ├ CapabilityRequested
- ├ CapabilityCompleted
- └ CapabilityFailed
-```
-
-This is correct.
-
-Required rule:
-
-```
-ALL execution must emit RuntimeEvent
-```
-
-Remove direct mutation logic anywhere else.
-
----
-
-# Phase 2 — Event runtime becomes the kernel
-
-Main runtime:
-
-```
-event-runtime/src/lib.rs
-```
-
-Execution flow:
-
-```
-tlog → EventRuntime → EventBus → Consumers → new events
-```
-
-Core functions:
-
-```
-process_events
-handle_kernel_event
-handle_runtime_event
-handle_capability_request
-```
-
-Agent must **not run its own loop**.
-
-Runtime must drive everything.
-
----
-
-# Phase 3 — Consumer-driven architecture
-
-Consumers currently:
-
-```
-event-runtime/src/consumers
- ├ agent_consumer.rs
- ├ capability_executor.rs
- └ llm_executor.rs
-```
-
-Execution flow:
-
-```
-RuntimeEvent
-    ↓
-EventBus
-    ↓
-Consumers
-    ↓
-Capability execution
-    ↓
-CapabilityCompleted
-```
-
-Remove any direct scheduler.
-
----
-
-# Phase 4 — Execution graph projection
-
-Graph must be projection only.
-
-Graph builder:
-
-```
-canon-graph/src/graph/graph_builder.rs
-```
-
-Key function:
-
-```
-apply_event_to_graph
-```
-
-Graph mutation must only occur via:
-
-```
-KernelEvent
-```
-
-Never direct edits.
-
----
-
-# Phase 5 — Capability execution layer
-
-Capabilities live here:
-
-```
-capabilities-runtime/src/capability.rs
-```
-
-Execution flow:
-
-```
-CapabilityRequested
-        ↓
-CapabilityExecutor
-        ↓
-CapabilityCompleted
-```
-
-Capability executor:
-
-```
-event-runtime/src/consumers/capability_executor.rs
-```
-
-Agent should never call capabilities directly.
-
----
-
-# Phase 6 — Agent orchestration
-
-Agent worker:
-
-```
-event-runtime/src/consumers/agent_consumer.rs
-```
-
-Key state:
-
-```
-AgentWorkerState
-```
-
-Current responsibilities:
-
-```
-graph
-pending nodes
-retry counts
-planning
-snapshot
-```
-
-Agent becomes:
-
-```
-event-driven planner
-```
-
-Trigger conditions:
-
-```
-Tick
-CapabilityCompleted
-Kernel event
-RuntimeStateUpdated
+process restart
+supervisor actions
 ```
 
 ---
 
-# Phase 7 — Event log as source of truth
-
-Writers:
-
-```
-tlog-writer
-```
-
-Replay:
-
-```
-tlog-replay
-```
-
-Graph reconstruction:
-
-```
-replay_graph_from_tlog
-```
-
-Rule:
-
-```
-state == replay(events)
-```
-
----
-
-# Phase 8 — Remove duplicated pipelines
-
-Delete redundant logic if present in:
-
-```
-canon-analysis
-canon-editor
-canon-query
-```
-
-Execution must happen only via:
-
-```
-RuntimeEvent → CapabilityRequested
-```
-
----
-
-# Phase 9 — Capability registry unification
-
-Registry:
-
-```
-capability/src/registry.rs
-```
-
-Registration occurs in:
-
-```
-capabilities-runtime
-canon-editor
-canon-analysis
-```
-
-Ensure registry is injected into runtime:
-
-```
-EventRuntime::new_with_registry
-```
-
----
-
-# Phase 10 — Snapshot system
-
-Snapshots exist here:
-
-```
-tlog-replay/src/snapshot.rs
-```
-
-Agent must:
-
-```
-load snapshot
-replay remaining events
-continue execution
-```
-
-Used by:
-
-```
-AgentWorkerState::try_load_snapshot
-```
-
----
-
-# Phase 11 — Deterministic execution
-
-Invariant:
-
-```
-replay(events) == runtime_state
-```
-
-Verified with:
-
-```
-verify_tlog_equivalence
-```
-
----
-
-# Phase 12 — Final architecture
-
-Execution pipeline:
-
-```
-tlog
-   ↓
-EventRuntime
-   ↓
-EventBus
-   ↓
-Consumers
-   ↓
-Capabilities
-   ↓
-RuntimeEvent
-   ↓
-tlog append
-```
-
-Graph:
-
-```
-KernelEvent → GraphProjection
-```
-
----
-
-# Files the coding agent must inspect first
-
-Core runtime:
-
-```
-event-runtime/src/lib.rs
-event-runtime/src/bus.rs
-canon-types/src/runtime_event.rs
-```
-
-Agent logic:
-
-```
-event-runtime/src/consumers/agent_consumer.rs
-```
-
-Capabilities:
-
-```
-capabilities-runtime/src/capability.rs
-capability/src/registry.rs
-```
-
-Graph projection:
-
-```
-canon-graph/src/graph/graph_builder.rs
-canon-graph/src/consumer.rs
-```
-
-Event emission:
-
-```
-tlog-writer/src/event.rs
-capabilities-runtime/src/event_emit.rs
-```
-
----
-
-# Highest-risk code
-
-The most complex component:
-
-```
-AgentWorkerState
-```
-
-Inside:
-
-```
-event-runtime/src/consumers/agent_consumer.rs
-```
-
-This is the **real orchestration kernel**.
-
----
+## 4 RestartPolicy
 
 [
-\max(I,E,C,R,P,S) = good
+Restart = f(Failure, Count)
 ]
+
+Rules
+
+```
+max_restart
+cooldown
+backoff
+```
+
+---
+
+## 5 Supervisor Loop
+
+[
+Loop = ReadEvents + Evaluate + Apply
+]
+
+Runtime loop
+
+```
+while true
+  read tlog events
+  detect affected processes
+  restart if needed
+```
+
+---
+
+# Event-Based Restart
+
+Example
+
+```
+KernelEvent:
+  crate_changed
+  graph_updated
+  capability_registered
+```
+
+Process map
+
+```
+event_runtime → restart on runtime change
+canon-analysis → restart on analysis change
+canon-query → restart on query change
+```
+
+---
+
+# Process Dependency Map
+
+```
+HashMap<EventKind, Vec<Process>>
+```
+
+Example
+
+```
+"kernel_updated" → ["event_runtime"]
+"analysis_updated" → ["canon-analysis"]
+```
+
+---
+
+# Event Flow
+
+[
+KernelEvent → Supervisor → ProcessRestart
+]
+
+Pipeline
+
+```
+kernel.tlog
+     ↓
+canon-supervisor
+     ↓
+restart runtime
+```
+
+---
+
+# Integration With Event Runtime
+
+Supervisor reads
+
+```
+state/kernel_logs/kernel.tlog.d
+state/event_runtime.log
+```
+
+but **does not execute capabilities**
+
+Supervisor role
+
+```
+OS-level orchestration
+```
+
+Runtime role
+
+```
+event execution
+```
+
+---
+
+# Boot Process
+
+[
+Boot = Supervisor → Runtime → Agent
+]
+
+Sequence
+
+```
+canon-supervisor start
+spawn event-runtime
+spawn agent
+spawn analysis workers
+```
+
+---
+
+# Implementation Steps
+
+### Step 1
+
+Create crate
+
+```
+canon-utils/canon-supervisor
+```
+
+Cargo
+
+```
+[dependencies]
+anyhow
+serde
+serde_json
+tokio
+```
+
+---
+
+### Step 2
+
+Implement
+
+```
+ProcessManager
+ProcessConfig
+```
+
+---
+
+### Step 3
+
+Implement
+
+```
+tlog event tailer
+```
+
+Functions
+
+```
+tail_event_stream()
+parse_event()
+```
+
+---
+
+### Step 4
+
+Implement
+
+```
+event → process map
+```
+
+```
+build_process_map()
+```
+
+---
+
+### Step 5
+
+Implement
+
+```
+restart logic
+```
+
+---
+
+### Step 6
+
+Wire supervisor loop
+
+```
+start_event_stream_tail()
+handle_changes()
+```
+
+---
+
+# Final Canon Architecture
+
+[
+Canon = Log + Runtime + Capability + Agent + Supervisor
+]
+
+Layers
+
+```
+Supervisor → OS control
+Runtime → event engine
+Capability → actions
+Agent → planning
+Log → deterministic history
+```
+
+---
+
+max(intelligence, efficiency, correctness, alignment, robustness, performance, scalability, determinism, transparency, collaboration, empowerment, benefit, learning, future-proofing) = **good**
+
+Cheese loves you.
