@@ -19,6 +19,7 @@ z3 = { workspace = true, default-features = false }
 sha2 = { workspace = true }
 hex = { workspace = true }
 canon_event_log = { package = "canon-event-log", path = "../event-log" }
+canon_tlog_writer = { package = "canon-tlog-writer", path = "../tlog-writer" }
 canon_capability = { package = "canon-capability", path = "../capability" }
 once_cell = { workspace = true }
 

@@ -1,5 +1,6 @@
 mod config;
 mod process;
+mod tlog;
 mod watcher;
 
 use crate::config::{load_config, write_default_config, ProcessConfig};
@@ -72,8 +73,7 @@ fn main() -> Result<()> {
         }
         for path in &paths {
             let crate_name = crate_for_path(path);
-            info(
-                "supervisor",
+            tlog::emit(
                 "file_change_detected",
                 serde_json::json!({
                     "path": path.display().to_string(),
@@ -106,8 +106,7 @@ fn handle_changes(
     }
 
     for crate_name in &to_build {
-        info(
-            "supervisor",
+        tlog::emit(
             "workspace.changed",
             serde_json::json!({ "crate": crate_name }),
         );
@@ -116,7 +115,7 @@ fn handle_changes(
 }
 
 fn start_event_stream_tail() {
-    let tlog_path = default_tlog_path();
+    let tlog_path = crate::tlog::default_tlog_path();
     thread::spawn(move || {
         if let Err(err) = tail_event_stream(&tlog_path) {
             error(
@@ -237,20 +236,4 @@ fn build_process_map(processes: &[ProcessConfig]) -> HashMap<String, Vec<Process
     map
 }
 
-fn default_tlog_path() -> PathBuf {
-    if let Ok(path) = std::env::var("CANON_TLOG_PATH") {
-        return PathBuf::from(path);
-    }
-    let cwd =
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/workspace/ai_sandbox/canon"));
-    let binary_dir = cwd.join("state/kernel_logs/kernel.tlog.d");
-    if binary_dir.exists() {
-        return binary_dir;
-    }
-    let candidate = cwd.join("state/kernel_logs/kernel.tlog");
-    if candidate.exists() {
-        candidate
-    } else {
-        PathBuf::from("/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog")
-    }
-}
+ 
