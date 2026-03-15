@@ -24,9 +24,5 @@ canon_capability = { package = "canon-capability", path = "../capability" }
 tempfile.workspace = true
 
 [[bin]]
-name = "canon-editor"
-path = "src/bin/canon-editor.rs"
-
-[[bin]]
 name = "editor_capability_smoke_test"
 path = "src/bin/capability_smoke_test.rs"
