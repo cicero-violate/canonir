@@ -133,3 +133,5 @@ chrome-dev-profile/
 
 state/kernel_logs/
 state/reports_out/
+
+state/event_runtime.lock
