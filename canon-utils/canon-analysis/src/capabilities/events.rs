@@ -1,19 +1,13 @@
 use anyhow::Result;
-use canon_tlog_writer::{append_event_json, BinarySegmentWriter, CanonEvent};
+use canon_event_log::info;
 use std::path::{Path, PathBuf};
 
 pub fn emit_analysis_event(
-    tlog_path: &Path,
+    _tlog_path: &Path,
     kind: &str,
     payload: serde_json::Value,
 ) -> Result<()> {
-    let canon = CanonEvent::new("canon-analysis", kind, payload);
-    if tlog_path.is_dir() {
-        let writer = BinarySegmentWriter::open(tlog_path)?;
-        let _ = writer.append_event(&canon);
-        return Ok(());
-    }
-    append_event_json(tlog_path, "canon-analysis", kind, canon.payload)?;
+    info("canon-analysis", kind, payload);
     Ok(())
 }
 

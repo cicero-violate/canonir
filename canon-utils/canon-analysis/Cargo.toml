@@ -20,7 +20,6 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 canon_event_log = { package = "canon-event-log", path = "../event-log" }
 canon_capability = { package = "canon-capability", path = "../capability" }
-canon_tlog_writer = { package = "canon-tlog-writer", path = "../tlog-writer" }
 once_cell = { workspace = true }
 
 [dev-dependencies]

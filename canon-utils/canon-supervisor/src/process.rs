@@ -1,6 +1,6 @@
 use crate::config::{ProcessConfig, RestartStrategy};
-use crate::tlog;
 use anyhow::Result;
+use canon_event_log::info;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::{Child, Command};
@@ -20,7 +20,8 @@ impl ProcessManager {
 
     pub fn spawn(&mut self, cfg: &ProcessConfig, resume: bool) -> Result<()> {
         if self.children.contains_key(&cfg.name) {
-            tlog::emit(
+            info(
+                "supervisor",
                 "process_spawn_skipped",
                 serde_json::json!({
                     "name": cfg.name,
@@ -39,7 +40,8 @@ impl ProcessManager {
         }
         let child = cmd.spawn()?;
         self.children.insert(cfg.name.clone(), child);
-        tlog::emit(
+        info(
+            "supervisor",
             "process_spawned",
             serde_json::json!({
                 "name": cfg.name,
@@ -55,7 +57,8 @@ impl ProcessManager {
     pub fn restart(&mut self, cfg: &ProcessConfig, log_root: Option<&Path>) -> Result<()> {
         let resume = matches!(cfg.restart, RestartStrategy::Drain);
         if let Some(mut child) = self.children.remove(&cfg.name) {
-            tlog::emit(
+            info(
+                "supervisor",
                 "process_restarted",
                 serde_json::json!({
                     "name": cfg.name,
@@ -82,7 +85,8 @@ impl ProcessManager {
 
     pub fn shutdown_all(&mut self, timeout_ms: u64) {
         for (name, mut child) in self.children.drain() {
-            tlog::emit(
+            info(
+                "supervisor",
                 "process_exit",
                 serde_json::json!({
                     "name": name,
@@ -106,7 +110,8 @@ fn wait_for_exit(child: &mut Child, name: &str, timeout_ms: u64) -> bool {
     let start = Instant::now();
     loop {
         if let Ok(Some(_status)) = child.try_wait() {
-            tlog::emit(
+            info(
+                "supervisor",
                 "process_exit",
                 serde_json::json!({
                     "name": name,

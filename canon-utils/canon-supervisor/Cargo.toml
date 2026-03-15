@@ -11,7 +11,5 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 signal-hook.workspace = true
 toml.workspace = true
-canon_tlog_writer = { package = "canon-tlog-writer", path = "../tlog-writer" }
 canon_tlog_replay = { package = "canon-tlog-replay", path = "../tlog-replay" }
 canon_event_log = { package = "canon-event-log", path = "../event-log" }
-once_cell.workspace = true
