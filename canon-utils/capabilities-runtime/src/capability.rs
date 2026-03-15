@@ -1,7 +1,7 @@
 use crate::{run_cargo_build, run_cargo_check, run_cargo_run, BuildRequest, CheckRequest, RunRequest};
 use canon_capability::{Capability, CapabilityContext, CapabilityRegistry, CapabilityResult};
-use canon_event_log::info;
-use canon_types::{CapabilityCompleted, CapabilityFailed, CapabilityRequested, RuntimeEvent};
+use canon_event::emit_debug::info;
+use canon_event::{CapabilityCompleted, CapabilityFailed, CapabilityRequested, RuntimeEvent};
 use serde_json::json;
 use std::process::Command;
 

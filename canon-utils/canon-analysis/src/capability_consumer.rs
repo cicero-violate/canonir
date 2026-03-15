@@ -1,5 +1,6 @@
-use canon_event_log::{error, info};
-use canon_types::{EventDelta, EventMask, KernelEvent, KernelEventConsumer, KernelState};
+use canon_event::emit_debug::{error, info};
+use canon_event::{EventMask, KernelEventConsumer};
+use canon_types::{EventDelta, KernelEvent, KernelState};
 use std::path::PathBuf;
 
 pub struct CapabilityEventConsumer {
@@ -11,7 +12,7 @@ pub struct CapabilityEventConsumer {
 impl CapabilityEventConsumer {
     pub fn new() -> Self {
         let workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let tlog_path = canon_event_emit::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG"));
+        let tlog_path = canon_event::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG"));
         let reports_root = std::env::var("CANON_REPORTS_OUT").ok().map(PathBuf::from);
         Self {
             workspace,

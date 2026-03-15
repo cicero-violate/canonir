@@ -1,5 +1,5 @@
-use canon_event_log::{info, warn};
-use canon_types::{
+use canon_event::emit_debug::{info, warn};
+use canon_event::{
     CapabilityRequested, NodeReady, RuntimeConsumer, RuntimeEmitterHandle, RuntimeEvent,
     RuntimeEventFilter,
 };

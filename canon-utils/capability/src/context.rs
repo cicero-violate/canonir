@@ -1,4 +1,4 @@
-use canon_types::RuntimeEvent;
+use canon_event::RuntimeEvent;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]

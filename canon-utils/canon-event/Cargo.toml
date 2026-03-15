@@ -1,14 +1,11 @@
 [package]
-name = "canon-tlog-replay"
+name = "canon-event"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 anyhow.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-canon_event = { package = "canon-event", path = "../canon-event" }
-memmap2.workspace = true
-rkyv.workspace = true
+canon_types = { path = "../canon-types" }
 canon_tlog_writer = { package = "canon-tlog-writer", path = "../tlog-writer" }
-crc32fast = "1"

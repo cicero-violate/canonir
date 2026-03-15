@@ -1,5 +1,5 @@
 use anyhow::Result;
-use canon_types::KernelEvent;
+use canon_event::KernelEvent;
 use memmap2::Mmap;
 use std::collections::HashMap;
 use std::fs;

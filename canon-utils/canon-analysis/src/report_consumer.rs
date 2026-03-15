@@ -1,7 +1,6 @@
-use canon_types::{
-    CapabilityRequested, EventDelta, EventMask, KernelEvent, KernelEventConsumer, KernelState,
-};
-use canon_event_log::{info, error as log_error};
+use canon_event::emit_debug::{info, error as log_error};
+use canon_event::{CapabilityRequested, EventMask, KernelEventConsumer};
+use canon_types::{EventDelta, KernelEvent, KernelState};
 use std::path::PathBuf;
 
 use crate::verify_reports_layout;

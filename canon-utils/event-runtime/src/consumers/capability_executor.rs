@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use canon_capability::{CapabilityContext, CapabilityRegistry, CapabilityResult};
-use canon_event_log::error;
-use canon_types::{
+use canon_event::emit_debug::error;
+use canon_event::{
     CapabilityFailed, RuntimeConsumer, RuntimeEmitterHandle, RuntimeEvent, RuntimeEventFilter,
 };
 use std::path::PathBuf;

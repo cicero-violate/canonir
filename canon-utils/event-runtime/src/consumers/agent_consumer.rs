@@ -11,12 +11,12 @@ use canon_agent_v3::objectives::{
     objective_task_hints, ObjectiveWeights,
 };
 use canon_agent_v3::planner_update::{apply_graph_patch, GraphPatch, PlannerUpdateRewriteSpec};
-use canon_types::{
+use canon_event::{
     CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventDelta, KernelState,
     NodeCompleted, NodeFailed, NodeReady, NodeStarted, RuntimeConsumer, RuntimeEmitterHandle,
     RuntimeEvent, RuntimeEventFilter,
 };
-use canon_event_log::{info, warn};
+use canon_event::emit_debug::{info, warn};
 use canon_event_store::reader::{read_any_events_from_path_with_start_seq, AnyEvent};
 use serde_json::json;
 use std::sync::mpsc::{self, Sender};
@@ -245,7 +245,7 @@ impl AgentWorkerState {
         );
         self.pending.insert(request_id.clone(), node.id.clone());
         emitter.emit(RuntimeEvent::CapabilityRequested(
-            canon_types::CapabilityRequested {
+            canon_event::CapabilityRequested {
                 request_id,
                 name: capability_name.to_string(),
                 args,

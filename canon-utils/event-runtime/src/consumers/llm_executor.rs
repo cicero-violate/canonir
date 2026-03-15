@@ -1,8 +1,8 @@
 use canon_agent_v3::config::CapabilityConfig;
 use canon_agent_v3::engine;
 use canon_agent_v3::endpoint_worker;
-use canon_event_log::{error, info};
-use canon_types::{RuntimeConsumer, RuntimeEmitterHandle, RuntimeEvent, RuntimeEventFilter};
+use canon_event::emit_debug::{error, info};
+use canon_event::{RuntimeConsumer, RuntimeEmitterHandle, RuntimeEvent, RuntimeEventFilter};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -131,7 +131,7 @@ impl LlmExecutorConsumer {
                                 config.llm_endpoints.first()
                             }) else {
                                 emitter.emit(RuntimeEvent::CapabilityFailed(
-                                    canon_types::CapabilityFailed {
+                                    canon_event::CapabilityFailed {
                                         request_id,
                                         name,
                                         error: "no llm endpoints configured".to_string(),
@@ -203,7 +203,7 @@ impl LlmExecutorConsumer {
                             match result {
                                 Ok(payload) => {
                                     emitter.emit(RuntimeEvent::CapabilityCompleted(
-                                        canon_types::CapabilityCompleted {
+                                        canon_event::CapabilityCompleted {
                                             request_id,
                                             name,
                                             result: json!({
@@ -222,7 +222,7 @@ impl LlmExecutorConsumer {
                                 }
                                 Err(err) => {
                                     emitter.emit(RuntimeEvent::CapabilityFailed(
-                                        canon_types::CapabilityFailed {
+                                        canon_event::CapabilityFailed {
                                             request_id,
                                             name,
                                             error: err.to_string(),

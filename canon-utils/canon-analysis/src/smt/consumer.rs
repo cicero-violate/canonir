@@ -1,5 +1,6 @@
-use canon_types::{EventDelta, EventMask, KernelEvent, KernelEventConsumer, KernelState};
-use canon_event_log::info;
+use canon_event::{EventMask, KernelEventConsumer};
+use canon_types::{EventDelta, KernelEvent, KernelState};
+use canon_event::emit_debug::info;
 use serde_json::json;
 
 #[derive(Debug, Default)]

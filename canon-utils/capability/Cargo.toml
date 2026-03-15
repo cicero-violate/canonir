@@ -8,6 +8,6 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow.workspace = true
-canon_types = { path = "../canon-types" }
+canon_event = { package = "canon-event", path = "../canon-event" }
 serde.workspace = true
 serde_json.workspace = true

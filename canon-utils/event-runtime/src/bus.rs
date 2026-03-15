@@ -1,7 +1,5 @@
-use canon_event_log::{error, info};
-use canon_types::{
-    EventMask, RuntimeConsumer, RuntimeEmitterHandle, RuntimeEvent, RuntimeEventFilter,
-};
+use canon_event::emit_debug::{error, info};
+use canon_event::{EventMask, RuntimeConsumer, RuntimeEmitterHandle, RuntimeEvent, RuntimeEventFilter};
 use crossbeam_channel::{bounded, Sender};
 use serde_json::json;
 use std::thread;

@@ -1,5 +1,5 @@
-use canon_event_emit::emit_event;
-use canon_event_log::info;
+use canon_event::emit_debug::info;
+use canon_event::emit_event;
 use canon_types::KernelEvent;
 use std::path::Path;
 

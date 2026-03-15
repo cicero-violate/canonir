@@ -11,4 +11,4 @@ canon_graph = { package = "canon-graph", path = "../canon-graph" }
 canon_query = { path = "../canon-query" }
 canon_analysis = { package = "canon-analysis", path = "../canon-analysis" }
 canon_editor = { package = "canon-editor", path = "../canon-editor" }
-canon_types = { path = "../canon-types" }
+canon_event = { package = "canon-event", path = "../canon-event" }

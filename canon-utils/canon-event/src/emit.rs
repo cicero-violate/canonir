@@ -1,5 +1,5 @@
 use anyhow::Result;
-use canon_event_store::writer::{append_event_json, BinarySegmentWriter, CanonEvent};
+use canon_tlog_writer::{append_event_json, BinarySegmentWriter, CanonEvent};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 

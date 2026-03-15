@@ -1,6 +1,6 @@
 use canon_capability::{Capability, CapabilityContext, CapabilityResult};
-use canon_event_log::info;
-use canon_types::RuntimeEvent;
+use canon_event::emit_debug::info;
+use canon_event::RuntimeEvent;
 
 pub struct AnalysisRunCapability;
 
@@ -24,7 +24,7 @@ impl Capability for AnalysisRunCapability {
             crate::capabilities::runner::RunOutcome::Skipped(root) => ("skipped", root),
         };
         crate::capabilities::events::emit_analysis_event(
-            &canon_event_emit::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG")),
+            &canon_event::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG")),
             "analysis.completed",
             serde_json::json!({
                 "crate": request

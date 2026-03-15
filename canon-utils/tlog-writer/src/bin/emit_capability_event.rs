@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Result};
 use canon_tlog_writer::{append_event_json, BinarySegmentWriter, CanonEvent};
-use canon_types::CapabilityRequested;
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -67,14 +66,12 @@ fn main() -> Result<()> {
     let args_value: serde_json::Value = serde_json::from_str(&args_json)?;
     let request_id = request_id.unwrap_or_else(generate_request_id);
 
-    let request = CapabilityRequested {
-        request_id,
-        name,
-        args: args_value,
-    };
-
-    let payload = serde_json::to_value(&request)?;
-    let canon = CanonEvent::new("event-runtime", "capability_requested", payload);
+    let payload = serde_json::json!({
+        "request_id": request_id,
+        "name": name,
+        "args": args_value,
+    });
+    let canon = CanonEvent::new("event-runtime", "capability_requested", payload.clone());
 
     if tlog_format_is_binary(&tlog_path) {
         let dir = if tlog_path.is_dir() {
@@ -87,6 +84,6 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    append_event_json(&tlog_path, "event-runtime", "capability_requested", serde_json::to_value(&request)?)?;
+    append_event_json(&tlog_path, "event-runtime", "capability_requested", payload)?;
     Ok(())
 }

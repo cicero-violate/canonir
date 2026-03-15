@@ -15,6 +15,6 @@ cuda = []
 [dependencies]
 serde_json.workspace = true
 canon_types = { path = "../canon-types" }
-canon_event_log = { package = "canon-event-log", path = "../event-log" }
+canon_event = { package = "canon-event", path = "../canon-event" }
 
 [dev-dependencies]

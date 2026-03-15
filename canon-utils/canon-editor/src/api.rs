@@ -119,7 +119,7 @@ pub fn dispatch(editor: &mut ProjectEditor, op: &ApiOp) -> ApiResult {
         ApiOp::RenameSymbol { old, new } => handle_rename_symbol(editor, old, new),
         ApiOp::MoveSymbol { symbol_id, new_module_path } => handle_move_symbol(editor, symbol_id, new_module_path),
         ApiOp::RenameModule { old_module_path, new_name } => {
-            let event = canon_types::EditEvent::RenameModule {
+            let event = canon_event::EditEvent::RenameModule {
                 project: editor.project_root.to_string_lossy().to_string(),
                 old: old_module_path.to_string(),
                 new: new_name.to_string(),
@@ -127,7 +127,7 @@ pub fn dispatch(editor: &mut ProjectEditor, op: &ApiOp) -> ApiResult {
             publish_result("RenameModule", publish_edit_event(&editor.project_root, event))
         }
         ApiOp::RenameDir { old_dir, new_dir } => {
-            let event = canon_types::EditEvent::RenameDir {
+            let event = canon_event::EditEvent::RenameDir {
                 project: editor.project_root.to_string_lossy().to_string(),
                 old: PathBuf::from(old_dir),
                 new: PathBuf::from(new_dir),

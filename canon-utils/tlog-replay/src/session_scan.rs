@@ -2,7 +2,7 @@ use std::fs;
 use std::io::BufRead;
 use std::path::Path;
 
-use canon_types::KernelEvent;
+use canon_event::KernelEvent;
 
 use crate::reader::{extract_kernel_event, parse_any_event, AnyEvent};
 

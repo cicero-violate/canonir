@@ -1,5 +1,5 @@
 use canon_tlog_writer::CanonEvent;
-use canon_types::{CapabilityRequested, EditEvent, KernelEvent};
+use canon_event::{CapabilityRequested, EditEvent, KernelEvent};
 use std::fs;
 use std::io::{BufRead, Read};
 use std::path::Path;

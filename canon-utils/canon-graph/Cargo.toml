@@ -16,4 +16,4 @@ csv = { workspace = true }
 memmap2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-canon_event_log = { package = "canon-event-log", path = "../event-log" }
+canon_event = { package = "canon-event", path = "../canon-event" }

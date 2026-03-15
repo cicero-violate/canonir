@@ -8,7 +8,7 @@ bin  = "target/debug/event_runtime"
 args = ["--tlog", "/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog.d"]
 restart = "kill"
 crate_name = "canon-event-runtime"
-depends_on = ["canon_event_consumers", "canon-analysis", "canon-graph", "canon_query"]
+depends_on = ["canon-event", "canon-analysis", "canon-graph", "canon_query"]
 [process.env]
 CANON_LLM_BRIDGE_ADDR = "127.0.0.1:9100"
 CANON_REPORTS_TLOG = "/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog.d"

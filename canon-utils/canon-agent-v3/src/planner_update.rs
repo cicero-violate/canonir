@@ -1,7 +1,7 @@
 use super::capability::{capability_model_assert_class_disjoint, PipelineCapability};
 use super::dag::{ExecutionGraph, ExecutionNode, NodeStatus};
 use super::decompose::DecomposeTaskSpec;
-use canon_event_log::info;
+use canon_event::emit_debug::info;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

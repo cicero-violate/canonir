@@ -3,7 +3,7 @@ use canon_capability_runtime::register_build_capabilities;
 use canon_event_runtime::EventRuntime;
 use canon_event_store::reader::read_any_events_from_path;
 use canon_event_store::writer::{BinarySegmentWriter, CanonEvent};
-use canon_types::CapabilityRequested;
+use canon_event::CapabilityRequested;
 
 fn main() -> Result<()> {
     let tmp_dir = std::env::temp_dir().join(format!("canon-capability-smoke-{}", std::process::id()));

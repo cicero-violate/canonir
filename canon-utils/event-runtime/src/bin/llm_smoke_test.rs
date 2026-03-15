@@ -3,7 +3,7 @@ use canon_agent_v3::config::CapabilityConfig;
 use canon_event_store::reader::read_any_events_from_path;
 use canon_event_store::reader::read_any_events_from_path_with_start_seq;
 use canon_event_store::writer::{BinarySegmentWriter, CanonEvent};
-use canon_types::CapabilityRequested;
+use canon_event::CapabilityRequested;
 use std::fs::File;
 use std::io::Read;
 use std::time::{Duration, Instant};

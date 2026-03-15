@@ -33,23 +33,23 @@ pub struct SymbolHandle {
 }
 
 impl EditOp {
-    pub fn to_event(self, project: &str) -> canon_types::EditEvent {
+    pub fn to_event(self, project: &str) -> canon_event::EditEvent {
         match self {
             EditOp::MutateField { symbol_id, mutation, .. } => match mutation {
-                FieldMutation::RenameIdent(new_name) => canon_types::EditEvent::RenameSymbol {
+                FieldMutation::RenameIdent(new_name) => canon_event::EditEvent::RenameSymbol {
                     project: project.to_string(),
                     old: symbol_id,
                     new: new_name,
                 },
             },
             EditOp::MoveSymbol { symbol_id, new_module_path, .. } => {
-                canon_types::EditEvent::MoveSymbol {
+                canon_event::EditEvent::MoveSymbol {
                     project: project.to_string(),
                     symbol: symbol_id,
                     module: new_module_path,
                 }
             }
-            EditOp::DeleteSymbol { symbol_id, .. } => canon_types::EditEvent::DeleteSymbol {
+            EditOp::DeleteSymbol { symbol_id, .. } => canon_event::EditEvent::DeleteSymbol {
                 project: project.to_string(),
                 symbol: symbol_id,
             },

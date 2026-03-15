@@ -1,6 +1,6 @@
 use canon_capability::{Capability, CapabilityContext, CapabilityRegistry, CapabilityResult};
-use canon_event_log::{error, info};
-use canon_types::{EditEvent, RuntimeEvent};
+use canon_event::emit_debug::{error, info};
+use canon_event::{EditEvent, RuntimeEvent};
 
 pub const CAP_RENAME_SYMBOL: &str = "edit.rename_symbol";
 pub const CAP_MOVE_SYMBOL: &str = "edit.move_symbol";

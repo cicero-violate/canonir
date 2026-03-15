@@ -3,7 +3,7 @@ mod bus;
 pub mod consumers;
 
 use canon_capability::{CapabilityContext, CapabilityRegistry, CapabilityResult};
-use canon_event_log::{error, info};
+use canon_event::emit_debug::{error, info};
 use canon_event_store::writer::{append_event_json, BinarySegmentWriter, CanonEvent};
 use std::sync::Mutex as StdMutex;
 use canon_event_store::reader::{
@@ -14,7 +14,7 @@ use canon_event_store::reader::{
     read_any_events_from_path,
     AnyEvent,
 };
-use canon_types::{
+use canon_event::{
     CapabilityCompleted,
     CapabilityFailed,
     CapabilityRequested,

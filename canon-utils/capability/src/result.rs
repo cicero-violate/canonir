@@ -1,4 +1,4 @@
-use canon_types::RuntimeEvent;
+use canon_event::RuntimeEvent;
 
 #[derive(Debug, Clone)]
 pub enum CapabilityResult {

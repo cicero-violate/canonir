@@ -7,7 +7,7 @@ use canon_event_runtime::{register_default_capabilities, EventRuntime};
 use canon_event_store::reader::detect_tlog_format;
 use canon_event_store::reader::read_any_events_from_path_with_start_seq;
 use canon_event_store::reader::replay_graph_from_tlog;
-use canon_event_log::{info, warn, error};
+use canon_event::emit_debug::{info, warn, error};
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -155,7 +155,7 @@ fn main() -> Result<()> {
     let registry = std::sync::Arc::new(std::sync::Mutex::new(
         canon_capability::CapabilityRegistry::new(),
     ));
-    let mut consumers: Vec<Box<dyn canon_types::RuntimeConsumer>> = vec![
+    let mut consumers: Vec<Box<dyn canon_event::RuntimeConsumer>> = vec![
         Box::new(AgentConsumer::new()),
         Box::new(CapabilityExecutor::new(
             registry.clone(),

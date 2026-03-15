@@ -2,8 +2,8 @@ use crate::edit::ProjectEditor;
 use crate::structured::{EditOp, FieldMutation};
 use crate::symbol_index::SymbolIndex;
 use anyhow::{anyhow, Result};
-use canon_event_log::{error, info};
-use canon_types::{EditEvent, RuntimeConsumer, RuntimeEvent, RuntimeEventFilter};
+use canon_event::emit_debug::{error, info};
+use canon_event::{EditEvent, RuntimeConsumer, RuntimeEvent, RuntimeEventFilter};
 use std::path::PathBuf;
 use std::sync::Arc;
 

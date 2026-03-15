@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use canon_capability::CapabilityRegistry;
 use canon_editor::register_editor_capabilities;
-use canon_types::{CapabilityRequested, RuntimeEvent};
+use canon_event::{CapabilityRequested, RuntimeEvent};
 
 fn main() -> Result<()> {
     let mut registry = CapabilityRegistry::new();
@@ -37,7 +37,7 @@ fn main() -> Result<()> {
     };
 
     match edit {
-        canon_types::EditEvent::RenameSymbol { project, old, new } => {
+        canon_event::EditEvent::RenameSymbol { project, old, new } => {
             if project != "/workspace/ai_sandbox/canon" || old != "crate::dummy" || new != "dummy_renamed" {
                 return Err(anyhow!("rename symbol event mismatch"));
             }

@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use canon_tlog_replay::{
     extract_kernel_event, read_any_events_from_path, replay_graph_from_tlog, AnyEvent,
 };
-use canon_types::KernelEvent;
+use canon_event::KernelEvent;
 use std::collections::HashSet;
 use std::env;
 use std::io::Write;

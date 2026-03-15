@@ -16,8 +16,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 chrono.workspace = true
 canon = { path = "../../canonir" }
-canon_event_emit = { package = "canon-event-emit", path = "../canon-event-emit" }
-canon_event_log = { package = "canon-event-log", path = "../event-log" }
+canon_event = { package = "canon-event", path = "../canon-event" }
 canon_capability = { package = "canon-capability", path = "../capability" }
 
 [dev-dependencies]

@@ -11,6 +11,5 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 signal-hook.workspace = true
 toml.workspace = true
-canon_event_log = { package = "canon-event-log", path = "../event-log" }
-canon_event_emit = { package = "canon-event-emit", path = "../canon-event-emit" }
+canon_event = { package = "canon-event", path = "../canon-event" }
 canon_event_store = { package = "canon-event-store", path = "../canon-event-store" }

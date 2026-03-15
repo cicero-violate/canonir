@@ -1,7 +1,7 @@
 use crate::config::{ProcessConfig, RestartStrategy};
 use crate::events::wrap_event;
 use anyhow::Result;
-use canon_event_emit::{emit_event, resolve_tlog_path};
+use canon_event::{emit_event, resolve_tlog_path};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::{Child, Command};

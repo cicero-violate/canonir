@@ -1,9 +1,0 @@
-[package]
-name = "canon-event-emit"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-anyhow.workspace = true
-serde_json.workspace = true
-canon_event_store = { package = "canon-event-store", path = "../canon-event-store" }
