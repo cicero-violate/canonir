@@ -1,0 +1,8 @@
+[package]
+name = "canon-event-store"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+canon_tlog_writer = { package = "canon-tlog-writer", path = "../tlog-writer" }
+canon_tlog_replay = { package = "canon-tlog-replay", path = "../tlog-replay" }

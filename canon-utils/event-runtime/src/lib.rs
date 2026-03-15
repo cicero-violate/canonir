@@ -4,9 +4,9 @@ pub mod consumers;
 
 use canon_capability::{CapabilityContext, CapabilityRegistry, CapabilityResult};
 use canon_event_log::{error, info};
-use canon_tlog_writer::{append_event_json, BinarySegmentWriter, CanonEvent};
+use canon_event_store::writer::{append_event_json, BinarySegmentWriter, CanonEvent};
 use std::sync::Mutex as StdMutex;
-use canon_tlog_replay::{
+use canon_event_store::reader::{
     extract_capability_request,
     extract_supervisor_event,
     extract_edit_event,

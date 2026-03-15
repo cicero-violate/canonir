@@ -10,7 +10,7 @@ path = "src/lib.rs"
 anyhow = { workspace = true }
 canon_graph = { package = "canon-graph", path = "../canon-graph" }
 canon_types = { path = "../canon-types" }
-canon_tlog_replay = { package = "canon-tlog-replay", path = "../tlog-replay" }
+canon_event_store = { package = "canon-event-store", path = "../canon-event-store" }
 rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -19,7 +19,7 @@ z3 = { workspace = true, default-features = false }
 sha2 = { workspace = true }
 hex = { workspace = true }
 canon_event_log = { package = "canon-event-log", path = "../event-log" }
-canon_tlog_writer = { package = "canon-tlog-writer", path = "../tlog-writer" }
+canon_event_emit = { package = "canon-event-emit", path = "../canon-event-emit" }
 canon_capability = { package = "canon-capability", path = "../capability" }
 once_cell = { workspace = true }
 

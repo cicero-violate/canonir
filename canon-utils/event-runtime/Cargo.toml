@@ -13,13 +13,12 @@ path = "src/bin/event_runtime.rs"
 [dependencies]
 anyhow = { workspace = true }
 canon_types = { path = "../canon-types" }
-canon_tlog_replay = { package = "canon-tlog-replay", path = "../tlog-replay" }
+canon_event_store = { package = "canon-event-store", path = "../canon-event-store" }
 canon_event_consumers = { path = "../event-consumers" }
 canon_event_log = { package = "canon-event-log", path = "../event-log" }
 canon_capability = { package = "canon-capability", path = "../capability" }
 canon_agent_v3 = { package = "canon-agent-v3", path = "../canon-agent-v3" }
 canon_editor = { package = "canon-editor", path = "../canon-editor" }
-canon_tlog_writer = { package = "canon-tlog-writer", path = "../tlog-writer" }
 canon_capability_runtime = { package = "canon-capability-runtime", path = "../capabilities-runtime" }
 canon_analysis = { package = "canon-analysis", path = "../canon-analysis" }
 serde_json = { workspace = true }

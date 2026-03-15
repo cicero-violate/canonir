@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use rayon::prelude::*;
-use canon_tlog_replay::{SnapshotMeta, save_graph_snapshot, write_snapshot_metadata};
+use canon_event_store::reader::{save_graph_snapshot, write_snapshot_metadata, SnapshotMeta};
 use canon_graph::artifacts::cache::{update_graph_cache};
 use canon_graph::artifacts::artifact_writer::{
     is_graph_bin_fresh,
@@ -50,7 +50,10 @@ use crate::semantics::semantic_features::extract_node_features;
 use crate::semantics::semantic_signature::compute_signatures;
 use crate::semantics::semantic_clustering::cluster_dbscan_like;
 use canon_types::{KernelEvent, ReportLayout};
-use canon_tlog_replay::{extract_kernel_event, read_any_events_from_path, replay_graph_from_tlog, replay_graph_from_tlog_incremental, find_last_graph_session_offset, session_contains_module_nodes};
+use canon_event_store::reader::{
+    extract_kernel_event, find_last_graph_session_offset, read_any_events_from_path,
+    replay_graph_from_tlog, replay_graph_from_tlog_incremental, session_contains_module_nodes,
+};
 
 #[derive(Debug, Serialize, Default)]
 struct CallsiteResolutionReport {
@@ -632,7 +635,7 @@ fn write_callsite_resolution_from_tlog(tlog_path: &Path, reports_dir: &Path) -> 
     let mut report = CallsiteResolutionReport::default();
     for event in read_any_events_from_path(tlog_path)? {
         let canon = match event {
-            canon_tlog_replay::AnyEvent::Canon(canon) => canon,
+            canon_event_store::reader::AnyEvent::Canon(canon) => canon,
             _ => continue,
         };
         let Some(kernel) = extract_kernel_event(&canon) else {
@@ -674,7 +677,7 @@ fn write_symbol_artifacts_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<
 
     for event in read_any_events_from_path(tlog_path)? {
         let canon = match event {
-            canon_tlog_replay::AnyEvent::Canon(canon) => canon,
+            canon_event_store::reader::AnyEvent::Canon(canon) => canon,
             _ => continue,
         };
         let Some(kernel) = extract_kernel_event(&canon) else {

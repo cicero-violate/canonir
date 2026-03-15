@@ -6,7 +6,9 @@ use std::io::{BufRead, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::graph::graph_builder::module_prefixes;
-use canon_tlog_replay::{extract_kernel_event, parse_any_event, read_any_events_from_path, AnyEvent};
+use canon_event_store::reader::{
+    extract_kernel_event, parse_any_event, read_any_events_from_path, AnyEvent,
+};
 use canon_types::KernelEvent;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

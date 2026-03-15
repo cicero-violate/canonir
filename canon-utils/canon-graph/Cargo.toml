@@ -10,7 +10,7 @@ name = "canon_graph"
 [dependencies]
 anyhow = { workspace = true }
 algorithms = { path = "../../algorithms" }
-canon_tlog_replay = { package = "canon-tlog-replay", path = "../tlog-replay" }
+canon_event_store = { package = "canon-event-store", path = "../canon-event-store" }
 canon_types = { path = "../canon-types" }
 csv = { workspace = true }
 memmap2 = { workspace = true }

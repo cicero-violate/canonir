@@ -11,7 +11,7 @@ pub struct CapabilityEventConsumer {
 impl CapabilityEventConsumer {
     pub fn new() -> Self {
         let workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let tlog_path = crate::capabilities::events::resolve_tlog_path();
+        let tlog_path = canon_event_emit::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG"));
         let reports_root = std::env::var("CANON_REPORTS_OUT").ok().map(PathBuf::from);
         Self {
             workspace,

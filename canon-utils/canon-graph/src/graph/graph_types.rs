@@ -1,4 +1,4 @@
-pub use canon_tlog_replay::{NodeRow, EdgeRow};
+pub use canon_event_store::reader::{EdgeRow, NodeRow};
 
 #[derive(Clone)]
 pub struct ModuleNode {

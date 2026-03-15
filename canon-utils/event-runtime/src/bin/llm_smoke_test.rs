@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 use canon_agent_v3::config::CapabilityConfig;
-use canon_tlog_replay::read_any_events_from_path;
-use canon_tlog_writer::{BinarySegmentWriter, CanonEvent};
-use canon_tlog_replay::read_any_events_from_path_with_start_seq;
+use canon_event_store::reader::read_any_events_from_path;
+use canon_event_store::reader::read_any_events_from_path_with_start_seq;
+use canon_event_store::writer::{BinarySegmentWriter, CanonEvent};
 use canon_types::CapabilityRequested;
 use std::fs::File;
 use std::io::Read;
@@ -61,7 +61,7 @@ fn main() -> Result<()> {
         let writer = BinarySegmentWriter::open(&tlog_path)?;
         writer.append_event(&canon)?;
     } else {
-        let writer = canon_tlog_writer::BinaryTlogWriter::open(&tlog_path)?;
+        let writer = canon_event_store::writer::BinaryTlogWriter::open(&tlog_path)?;
         writer.append_event(&canon)?;
     }
 
@@ -83,7 +83,7 @@ fn main() -> Result<()> {
     let mut visible = false;
     if let Ok(events) = read_any_events_from_path(&replay_path) {
         for event in events {
-            if let canon_tlog_replay::AnyEvent::Canon(canon) = event {
+            if let canon_event_store::reader::AnyEvent::Canon(canon) = event {
                 if canon.kind == "capability_requested"
                     && canon
                         .payload
@@ -123,7 +123,7 @@ fn main() -> Result<()> {
         let mut failed = 0usize;
         let mut matched = false;
         for event in events {
-            if let canon_tlog_replay::AnyEvent::Canon(canon) = event {
+            if let canon_event_store::reader::AnyEvent::Canon(canon) = event {
                 match canon.kind.as_str() {
                     "capability_completed" => {
                         completed += 1;

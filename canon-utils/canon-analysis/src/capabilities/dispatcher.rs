@@ -1,5 +1,5 @@
+use canon_event_emit::emit_event;
 use canon_event_log::info;
-use canon_tlog_writer::{append_event_json, BinarySegmentWriter, CanonEvent};
 use canon_types::KernelEvent;
 use std::path::Path;
 
@@ -29,8 +29,7 @@ pub fn dispatch_for_event(
                 "reports_root": workspace.join("state").join("reports_out").display().to_string()
             }
         });
-        let canon = CanonEvent::new("canon-analysis", "capability_requested", payload.clone());
-        append_canon_event(tlog_path, &canon)?;
+        emit_event("canon-analysis", "capability_requested", payload.clone(), tlog_path)?;
         info("canon-analysis", "capability_requested", payload);
     }
     info(
@@ -39,14 +38,4 @@ pub fn dispatch_for_event(
         serde_json::json!({ "crate": crate_name, "count": ANALYSIS_CAPS.len() }),
     );
     Ok(batch_id)
-}
-
-fn append_canon_event(tlog_path: &Path, canon: &CanonEvent) -> anyhow::Result<()> {
-    if tlog_path.is_dir() {
-        let writer = BinarySegmentWriter::open(tlog_path)?;
-        let _ = writer.append_event(canon);
-        return Ok(());
-    }
-    append_event_json(tlog_path, &canon.source, &canon.kind, canon.payload.clone())?;
-    Ok(())
 }

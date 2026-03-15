@@ -1,12 +1,13 @@
 mod config;
+mod events;
 mod process;
-mod tlog;
 mod watcher;
 
 use crate::config::{load_config, write_default_config, ProcessConfig};
 use crate::process::ProcessManager;
 use crate::watcher::{affected_crates, crate_for_path, start_watcher};
 use anyhow::Result;
+use canon_event_emit::{emit_event, resolve_tlog_path};
 use canon_event_log::{error, info};
 use signal_hook::consts::signal::{SIGINT, SIGTERM};
 use signal_hook::flag;
@@ -73,13 +74,15 @@ fn main() -> Result<()> {
         }
         for path in &paths {
             let crate_name = crate_for_path(path);
-            tlog::emit(
+            let payload = crate::events::wrap_event(
                 "file_change_detected",
                 serde_json::json!({
                     "path": path.display().to_string(),
                     "crate": crate_name,
                 }),
             );
+            let tlog_path = resolve_tlog_path(None, None);
+            let _ = emit_event("canon-supervisor", "supervisor_event", payload, &tlog_path);
         }
         let affected = affected_crates(&paths);
         handle_changes(&affected, &process_map, &mut manager)?;
@@ -106,16 +109,18 @@ fn handle_changes(
     }
 
     for crate_name in &to_build {
-        tlog::emit(
+        let payload = crate::events::wrap_event(
             "workspace.changed",
             serde_json::json!({ "crate": crate_name }),
         );
+        let tlog_path = resolve_tlog_path(None, None);
+        let _ = emit_event("canon-supervisor", "supervisor_event", payload, &tlog_path);
     }
     Ok(())
 }
 
 fn start_event_stream_tail() {
-    let tlog_path = crate::tlog::default_tlog_path();
+    let tlog_path = resolve_tlog_path(None, None);
     thread::spawn(move || {
         if let Err(err) = tail_event_stream(&tlog_path) {
             error(
@@ -128,7 +133,7 @@ fn start_event_stream_tail() {
 }
 
 fn tail_event_stream(path: &std::path::Path) -> anyhow::Result<()> {
-    use canon_tlog_replay::{read_any_events_from_path, AnyEvent};
+    use canon_event_store::reader::{read_any_events_from_path, AnyEvent};
     let mut last_count = 0usize;
     let mut initialized = false;
     loop {

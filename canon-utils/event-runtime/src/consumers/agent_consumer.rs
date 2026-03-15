@@ -17,7 +17,7 @@ use canon_types::{
     RuntimeEvent, RuntimeEventFilter,
 };
 use canon_event_log::{info, warn};
-use canon_tlog_replay::{read_any_events_from_path_with_start_seq, AnyEvent};
+use canon_event_store::reader::{read_any_events_from_path_with_start_seq, AnyEvent};
 use serde_json::json;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};

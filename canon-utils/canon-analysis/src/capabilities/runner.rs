@@ -106,7 +106,7 @@ pub fn run_full_analysis(args: &serde_json::Value) -> Result<RunOutcome> {
     };
 
     let crate_root = reports_root.join("crates").join(crate_name);
-    let tlog_path = crate::capabilities::events::resolve_tlog_path();
+    let tlog_path = canon_event_emit::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG"));
     let cursor_path = tlog_cursor_path(&crate_root);
     if let (Some(current), Some(last)) =
         (current_tlog_cursor(&tlog_path), read_tlog_cursor(&cursor_path))

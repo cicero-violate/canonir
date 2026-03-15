@@ -24,7 +24,7 @@ impl Capability for AnalysisRunCapability {
             crate::capabilities::runner::RunOutcome::Skipped(root) => ("skipped", root),
         };
         crate::capabilities::events::emit_analysis_event(
-            &crate::capabilities::events::resolve_tlog_path(),
+            &canon_event_emit::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG")),
             "analysis.completed",
             serde_json::json!({
                 "crate": request

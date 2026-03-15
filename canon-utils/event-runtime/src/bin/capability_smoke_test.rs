@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 use canon_capability_runtime::register_build_capabilities;
 use canon_event_runtime::EventRuntime;
-use canon_tlog_replay::read_any_events_from_path;
-use canon_tlog_writer::{BinarySegmentWriter, CanonEvent};
+use canon_event_store::reader::read_any_events_from_path;
+use canon_event_store::writer::{BinarySegmentWriter, CanonEvent};
 use canon_types::CapabilityRequested;
 
 fn main() -> Result<()> {
@@ -33,7 +33,7 @@ fn main() -> Result<()> {
     let mut completed = 0usize;
     let mut failed = 0usize;
     for event in events {
-        if let canon_tlog_replay::AnyEvent::Canon(canon) = event {
+        if let canon_event_store::reader::AnyEvent::Canon(canon) = event {
             match canon.kind.as_str() {
                 "capability_completed" => completed += 1,
                 "capability_failed" => failed += 1,

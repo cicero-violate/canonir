@@ -3,9 +3,9 @@ use std::fs;
 use std::io::BufRead;
 use std::path::Path;
 
-use canon_tlog_replay::{
-    find_last_session_offset, parse_any_event,
-    read_any_events_from_path, extract_kernel_event, AnyEvent,
+use canon_event_store::reader::{
+    extract_kernel_event, find_last_session_offset, parse_any_event, read_any_events_from_path,
+    AnyEvent,
 };
 use canon_types::KernelEvent;
 

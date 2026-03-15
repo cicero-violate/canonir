@@ -1,6 +1,7 @@
 use crate::config::{ProcessConfig, RestartStrategy};
-use crate::tlog;
+use crate::events::wrap_event;
 use anyhow::Result;
+use canon_event_emit::{emit_event, resolve_tlog_path};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::{Child, Command};
@@ -20,13 +21,15 @@ impl ProcessManager {
 
     pub fn spawn(&mut self, cfg: &ProcessConfig, resume: bool) -> Result<()> {
         if self.children.contains_key(&cfg.name) {
-            tlog::emit(
+            let payload = wrap_event(
                 "process_spawn_skipped",
                 serde_json::json!({
                     "name": cfg.name,
                     "reason": "already_running",
                 }),
             );
+            let tlog_path = resolve_tlog_path(None, None);
+            let _ = emit_event("canon-supervisor", "supervisor_event", payload, &tlog_path);
             return Ok(());
         }
         let mut cmd = Command::new(&cfg.bin);
@@ -39,7 +42,7 @@ impl ProcessManager {
         }
         let child = cmd.spawn()?;
         self.children.insert(cfg.name.clone(), child);
-        tlog::emit(
+        let payload = wrap_event(
             "process_spawned",
             serde_json::json!({
                 "name": cfg.name,
@@ -48,6 +51,8 @@ impl ProcessManager {
                 "resume": resume,
             }),
         );
+        let tlog_path = resolve_tlog_path(None, None);
+        let _ = emit_event("canon-supervisor", "supervisor_event", payload, &tlog_path);
         Ok(())
     }
 
@@ -55,13 +60,15 @@ impl ProcessManager {
     pub fn restart(&mut self, cfg: &ProcessConfig, log_root: Option<&Path>) -> Result<()> {
         let resume = matches!(cfg.restart, RestartStrategy::Drain);
         if let Some(mut child) = self.children.remove(&cfg.name) {
-            tlog::emit(
+            let payload = wrap_event(
                 "process_restarted",
                 serde_json::json!({
                     "name": cfg.name,
                     "strategy": format!("{:?}", cfg.restart),
                 }),
             );
+            let tlog_path = resolve_tlog_path(None, None);
+            let _ = emit_event("canon-supervisor", "supervisor_event", payload, &tlog_path);
             match cfg.restart {
                 RestartStrategy::Kill => {
                     terminate_child(&mut child, &cfg.name, cfg.drain_timeout_ms)?;
@@ -82,13 +89,15 @@ impl ProcessManager {
 
     pub fn shutdown_all(&mut self, timeout_ms: u64) {
         for (name, mut child) in self.children.drain() {
-            tlog::emit(
+            let payload = wrap_event(
                 "process_exit",
                 serde_json::json!({
                     "name": name,
                     "reason": "shutdown",
                 }),
             );
+            let tlog_path = resolve_tlog_path(None, None);
+            let _ = emit_event("canon-supervisor", "supervisor_event", payload, &tlog_path);
             let _ = terminate_child(&mut child, &name, timeout_ms);
         }
     }
@@ -106,13 +115,15 @@ fn wait_for_exit(child: &mut Child, name: &str, timeout_ms: u64) -> bool {
     let start = Instant::now();
     loop {
         if let Ok(Some(_status)) = child.try_wait() {
-            tlog::emit(
+            let payload = wrap_event(
                 "process_exit",
                 serde_json::json!({
                     "name": name,
                     "reason": "exit",
                 }),
             );
+            let tlog_path = resolve_tlog_path(None, None);
+            let _ = emit_event("canon-supervisor", "supervisor_event", payload, &tlog_path);
             return true;
         }
         if start.elapsed() >= Duration::from_millis(timeout_ms) {
