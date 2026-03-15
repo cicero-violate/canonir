@@ -18,7 +18,7 @@ anyhow.workspace = true
 rand.workspace = true
 rayon.workspace = true
 algorithms = { path = "../../algorithms" }
-canon_tlog_writer = { package = "canon-tlog-writer", path = "../tlog-writer" }
+canon_event_log = { package = "canon-event-log", path = "../event-log" }
 
 [features]
 default = []

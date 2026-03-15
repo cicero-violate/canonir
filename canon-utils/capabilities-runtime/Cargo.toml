@@ -10,7 +10,6 @@ path = "src/lib.rs"
 anyhow = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-canon_tlog_writer = { package = "canon-tlog-writer", path = "../tlog-writer" }
 canon_capability = { package = "canon-capability", path = "../capability" }
 canon_event_log = { package = "canon-event-log", path = "../event-log" }
 canon_types = { package = "canon_types", path = "../canon-types" }

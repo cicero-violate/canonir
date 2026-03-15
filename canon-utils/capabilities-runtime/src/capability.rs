@@ -1,10 +1,6 @@
-use crate::{
-    emit_build_completed, emit_build_started, emit_check_completed, emit_check_started,
-    emit_run_completed, emit_run_started, run_cargo_build, run_cargo_check, run_cargo_run,
-    BuildRequest, CheckRequest, RunRequest,
-};
+use crate::{run_cargo_build, run_cargo_check, run_cargo_run, BuildRequest, CheckRequest, RunRequest};
 use canon_capability::{Capability, CapabilityContext, CapabilityRegistry, CapabilityResult};
-use canon_event_log::{error, info};
+use canon_event_log::info;
 use canon_types::{CapabilityCompleted, CapabilityFailed, CapabilityRequested, RuntimeEvent};
 use serde_json::json;
 use std::process::Command;
@@ -46,6 +42,25 @@ fn emit_failed(req: &CapabilityRequested, error: &str) -> CapabilityResult {
     }))
 }
 
+fn runtime_log_event(kind: &str, payload: serde_json::Value) -> RuntimeEvent {
+    RuntimeEvent::RuntimeStateUpdated {
+        payload: json!({ "kind": kind, "payload": payload }),
+    }
+}
+
+fn emit_completed_with_events(
+    req: &CapabilityRequested,
+    result: serde_json::Value,
+    mut events: Vec<RuntimeEvent>,
+) -> CapabilityResult {
+    events.push(RuntimeEvent::CapabilityCompleted(CapabilityCompleted {
+        request_id: req.request_id.clone(),
+        name: req.name.clone(),
+        result,
+    }));
+    CapabilityResult::EmitMany(events)
+}
+
 fn result_payload(status: i32, success: bool, stdout: String, stderr: String) -> serde_json::Value {
     json!({
         "status": status,
@@ -75,29 +90,25 @@ impl Capability for BuildCargoCapability {
             "build_started",
             serde_json::json!({ "crate": crate_name }),
         );
-        if let Err(err) = emit_build_started(crate_name) {
-            error(
-                "build_capability",
-                "emit_build_started_failed",
-                serde_json::json!({ "crate": crate_name, "error": err.to_string() }),
-            );
-        }
+        let mut events = vec![runtime_log_event("build.started", json!({ "crate": crate_name }))];
 
         let result = run_cargo_build(&BuildRequest {
             crate_name: crate_name.to_string(),
         })?;
 
-        if let Err(err) = emit_build_completed(&result.crate_name, result.success, result.duration_ms) {
-            error(
-                "build_capability",
-                "emit_build_completed_failed",
-                serde_json::json!({ "crate": crate_name, "error": err.to_string() }),
-            );
-        }
+        events.push(runtime_log_event(
+            "build.completed",
+            json!({
+                "crate": result.crate_name,
+                "success": result.success,
+                "duration_ms": result.duration_ms
+            }),
+        ));
 
-        Ok(emit_completed(
+        Ok(emit_completed_with_events(
             &req,
             result_payload(result.status, result.success, result.stdout, result.stderr),
+            events,
         ))
     }
 }
@@ -141,13 +152,10 @@ impl Capability for CargoRunCapability {
             "run_started",
             serde_json::json!({ "crate": crate_name, "bin": bin }),
         );
-        if let Err(err) = emit_run_started(crate_name, bin.as_deref()) {
-            error(
-                "build_capability",
-                "emit_run_started_failed",
-                serde_json::json!({ "crate": crate_name, "error": err.to_string() }),
-            );
-        }
+        let mut events = vec![runtime_log_event(
+            "run.started",
+            json!({ "crate": crate_name, "bin": bin }),
+        )];
 
         let result = run_cargo_run(&RunRequest {
             crate_name: crate_name.to_string(),
@@ -155,22 +163,20 @@ impl Capability for CargoRunCapability {
             args,
         })?;
 
-        if let Err(err) = emit_run_completed(
-            &result.crate_name,
-            bin.as_deref(),
-            result.success,
-            result.duration_ms,
-        ) {
-            error(
-                "build_capability",
-                "emit_run_completed_failed",
-                serde_json::json!({ "crate": crate_name, "error": err.to_string() }),
-            );
-        }
+        events.push(runtime_log_event(
+            "run.completed",
+            json!({
+                "crate": result.crate_name,
+                "bin": bin,
+                "success": result.success,
+                "duration_ms": result.duration_ms
+            }),
+        ));
 
-        Ok(emit_completed(
+        Ok(emit_completed_with_events(
             &req,
             result_payload(result.status, result.success, result.stdout, result.stderr),
+            events,
         ))
     }
 }
@@ -195,30 +201,26 @@ impl Capability for CargoCheckCapability {
             "check_started",
             serde_json::json!({ "crate": crate_name }),
         );
-        if let Err(err) = emit_check_started(crate_name) {
-            error(
-                "build_capability",
-                "emit_check_started_failed",
-                serde_json::json!({ "crate": crate_name, "error": err.to_string() }),
-            );
-        }
+        let mut events =
+            vec![runtime_log_event("check.started", json!({ "crate": crate_name }))];
 
         let result = run_cargo_check(&CheckRequest {
             crate_name: crate_name.to_string(),
         })?;
 
-        if let Err(err) = emit_check_completed(&result.crate_name, result.success, result.duration_ms)
-        {
-            error(
-                "build_capability",
-                "emit_check_completed_failed",
-                serde_json::json!({ "crate": crate_name, "error": err.to_string() }),
-            );
-        }
+        events.push(runtime_log_event(
+            "check.completed",
+            json!({
+                "crate": result.crate_name,
+                "success": result.success,
+                "duration_ms": result.duration_ms
+            }),
+        ));
 
-        Ok(emit_completed(
+        Ok(emit_completed_with_events(
             &req,
             result_payload(result.status, result.success, result.stdout, result.stderr),
+            events,
         ))
     }
 }

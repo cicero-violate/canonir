@@ -1,7 +1,7 @@
 use super::capability::{capability_model_assert_class_disjoint, PipelineCapability};
 use super::dag::{ExecutionGraph, ExecutionNode, NodeStatus};
 use super::decompose::DecomposeTaskSpec;
-use crate::tlog;
+use canon_event_log::info;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -36,7 +36,8 @@ pub fn apply_graph_patch(graph: &mut ExecutionGraph, update: GraphPatch) -> Resu
     let new_edges_specs = update.new_edges.clone();
     let retract_specs = update.retract_nodes.clone();
     let rewrite_specs = update.rewrite_nodes.clone();
-    tlog::emit(
+    info(
+        "agent_planner",
         "graph_patch",
         serde_json::json!({
             "new_nodes": new_nodes_specs.iter().map(|n| n.id.clone()).collect::<Vec<_>>(),
@@ -75,7 +76,8 @@ pub fn apply_graph_patch(graph: &mut ExecutionGraph, update: GraphPatch) -> Resu
     let existing: HashSet<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
     for spec in &new_nodes_specs {
         if !existing.contains(&spec.id) {
-            tlog::emit(
+            info(
+                "agent_planner",
                 "task_created",
                 serde_json::json!({
                     "id": spec.id,

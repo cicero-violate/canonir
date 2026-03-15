@@ -22,5 +22,4 @@ pub mod response_router;
 pub mod state_snapshot;
 pub mod tab_management;
 pub mod telemetry;
-pub mod tlog;
 pub mod ws_server;
