@@ -1,4 +1,4 @@
-use canon_graph::artifacts_loader::{load_kernel_graph, KernelGraph};
+use canon_graph::artifacts_loader::{load_code_graph, CodeGraph};
 use crate::invariants::invariant_discovery::{discover_invariants, mine_candidates, InvariantResult};
 use crate::semantics::semantic_features::extract_node_features;
 use crate::semantics::semantic_signature::compute_signatures;
@@ -45,7 +45,7 @@ pub fn run_invariant_pipeline(
     _analysis_dir: &Path,
     metrics_dir: &Path,
 ) -> Result<()> {
-    let graph = load_kernel_graph(graph_dir)?;
+    let graph = load_code_graph(graph_dir)?;
     let features = ingest_reports(metrics_dir, &graph)?;
     let invariants = discover_invariants(&graph, &features);
     let report = build_report(&invariants);
@@ -83,7 +83,7 @@ fn write_report(invariants_dir: &Path, report: &InvariantReport) -> Result<()> {
 
 fn write_discovered(
     invariants_dir: &Path,
-    graph: &KernelGraph,
+    graph: &CodeGraph,
     features: &ReportFeatures,
 ) -> Result<()> {
     let discovered = mine_candidates(graph, features);
@@ -96,7 +96,7 @@ fn write_discovered(
 
 fn write_violations(
     invariants_dir: &Path,
-    graph: &KernelGraph,
+    graph: &CodeGraph,
     invariants: &[InvariantResult],
 ) -> Result<()> {
     let mut id_to_node = HashMap::new();
@@ -159,7 +159,7 @@ fn run_semantic_pipeline(
     invariants_dir: &Path,
     metrics_dir: &Path,
     graph_dir: &Path,
-    graph: &KernelGraph,
+    graph: &CodeGraph,
 ) -> Result<()> {
     let features = extract_node_features(graph_dir, graph)?;
     let _signatures = compute_signatures(metrics_dir, &features)?;

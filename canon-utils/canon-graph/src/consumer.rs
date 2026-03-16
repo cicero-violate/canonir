@@ -1,5 +1,4 @@
 use canon_event::emit_debug::info;
-use canon_event::{EventMask, RustcEventConsumer};
 use canon_types::{EventDelta, RustcEvent, RustcState};
 use serde_json::json;
 
@@ -15,14 +14,8 @@ impl GraphConsumer {
     pub fn new() -> Self {
         Self::default()
     }
-}
 
-impl RustcEventConsumer for GraphConsumer {
-    fn mask(&self) -> EventMask {
-        EventMask::ALL
-    }
-
-    fn on_event(&mut self, delta: &EventDelta, _state: &RustcState) {
+    fn handle_event(&mut self, delta: &EventDelta, _state: &RustcState) {
         match &delta.event {
             RustcEvent::NodeDefined { .. } => {
                 self.node_count += 1;
@@ -49,3 +42,5 @@ impl RustcEventConsumer for GraphConsumer {
         }
     }
 }
+
+canon_event::impl_rustc_consumer!(GraphConsumer, canon_event::EventMask::ALL, handle_event);

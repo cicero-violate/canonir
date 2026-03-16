@@ -1,7 +1,7 @@
 use crate::bootstrap::PromptRegistryHandle;
-use canon_planner::planner::config::CapabilityConfig;
-use canon_planner::planner::engine;
-use canon_planner::planner::endpoint_worker;
+use canon_agent::config::CapabilityConfig;
+use canon_agent::endpoint_worker;
+use canon_agent::llm;
 use canon_event::emit_debug::{error, info};
 use canon_event::{RuntimeConsumer, RuntimeEmitterHandle, RuntimeEvent, RuntimeEventFilter};
 use serde_json::json;
@@ -82,7 +82,7 @@ impl LlmExecutorConsumer {
                     serde_json::json!({ "addr": addr.to_string() }),
                 );
                 let bridge = runtime.block_on(async {
-                    canon_planner::planner::ws_server::spawn(addr, config.response_timeout_secs)
+                    canon_agent::ws_server::spawn(addr, config.response_timeout_secs)
                 });
                 runtime.block_on(async {
                     let wait = bridge.wait_for_connection();
@@ -97,7 +97,7 @@ impl LlmExecutorConsumer {
                         );
                     }
                 });
-                let tabs = engine::llm_worker_new_tabs();
+                let tabs = endpoint_worker::llm_worker_new_tabs();
                 runtime.block_on(endpoint_worker::llm_worker_init_workers(
                     &bridge,
                     &config,
@@ -161,7 +161,7 @@ impl LlmExecutorConsumer {
                             let result = runtime.block_on(async {
                                 let call = async {
                                     if raw {
-                                        engine::module_call_llm_raw_with_retry_allow_mismatch(
+                                        llm::llm_client_call_agent_raw_with_retry_allow_mismatch(
                                             &bridge,
                                             &endpoint.id,
                                             &endpoint.url,
@@ -179,7 +179,7 @@ impl LlmExecutorConsumer {
                                         .await
                                         .map(|text| json!({ "text": text }))
                                     } else {
-                                        engine::module_call_llm_json_with_retry_allow_mismatch(
+                                        llm::llm_client_call_agent_json_with_retry_allow_mismatch(
                                             &bridge,
                                             &endpoint.id,
                                             &endpoint.url,

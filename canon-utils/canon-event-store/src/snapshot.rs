@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::graph_types::{EdgeRow, NodeRow};
+use crate::graph_types::{CodeEdge, CodeNode};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotMeta {
@@ -18,14 +18,14 @@ pub struct SnapshotMeta {
 }
 
 #[derive(Debug, Clone, Archive, RkyvSerialize, RkyvDeserialize)]
-pub struct KernelSnapshot {
-    pub nodes: Vec<KernelSnapshotNode>,
-    pub edges: Vec<KernelSnapshotEdge>,
+pub struct CodeSnapshot {
+    pub nodes: Vec<CodeSnapshotNode>,
+    pub edges: Vec<CodeSnapshotEdge>,
     pub files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Archive, RkyvSerialize, RkyvDeserialize)]
-pub struct KernelSnapshotNode {
+pub struct CodeSnapshotNode {
     pub kind: String,
     pub symbol: String,
     pub file: String,
@@ -34,7 +34,7 @@ pub struct KernelSnapshotNode {
 }
 
 #[derive(Debug, Clone, Archive, RkyvSerialize, RkyvDeserialize)]
-pub struct KernelSnapshotEdge {
+pub struct CodeSnapshotEdge {
     pub src_symbol: String,
     pub src_kind: String,
     pub dst_symbol: String,
@@ -54,16 +54,16 @@ pub fn write_snapshot_metadata(path: &Path, meta: &SnapshotMeta) -> Result<()> {
     Ok(())
 }
 
-pub fn load_graph_snapshot(path: &Path) -> Result<KernelSnapshot> {
+pub fn load_graph_snapshot(path: &Path) -> Result<CodeSnapshot> {
     let data = fs::read(path)?;
-    let archived = std::panic::catch_unwind(|| unsafe { rkyv::archived_root::<KernelSnapshot>(&data) });
+    let archived = std::panic::catch_unwind(|| unsafe { rkyv::archived_root::<CodeSnapshot>(&data) });
     let archived = match archived {
         Ok(v) => v,
         Err(_) => {
             return Err(anyhow!("snapshot deserialize failed: panic during archived_root"));
         }
     };
-    let snapshot: KernelSnapshot = archived
+    let snapshot: CodeSnapshot = archived
         .deserialize(&mut Infallible)
         .map_err(|e| anyhow!("snapshot deserialize failed: {e}"))?;
     Ok(snapshot)
@@ -71,18 +71,18 @@ pub fn load_graph_snapshot(path: &Path) -> Result<KernelSnapshot> {
 
 pub fn save_graph_snapshot(
     path: &Path,
-    nodes: &[NodeRow],
-    edges: &[EdgeRow],
+    nodes: &[CodeNode],
+    edges: &[CodeEdge],
     files: &[String],
 ) -> Result<()> {
-    let mut nodes_out: Vec<KernelSnapshotNode> = Vec::with_capacity(nodes.len());
+    let mut nodes_out: Vec<CodeSnapshotNode> = Vec::with_capacity(nodes.len());
     for node in nodes {
         let file = node
             .file_id
             .and_then(|id| files.get(id as usize))
             .cloned()
             .unwrap_or_default();
-        nodes_out.push(KernelSnapshotNode {
+        nodes_out.push(CodeSnapshotNode {
             kind: node.kind.clone(),
             symbol: node.symbol.clone(),
             file,
@@ -96,7 +96,7 @@ pub fn save_graph_snapshot(
         id_to_kind.insert(node.id, (node.symbol.as_str(), node.kind.as_str()));
     }
 
-    let mut edges_out: Vec<KernelSnapshotEdge> = Vec::with_capacity(edges.len());
+    let mut edges_out: Vec<CodeSnapshotEdge> = Vec::with_capacity(edges.len());
     for edge in edges {
         let (src_sym, src_kind) = id_to_kind
             .get(&edge.src)
@@ -106,7 +106,7 @@ pub fn save_graph_snapshot(
             .get(&edge.dst)
             .copied()
             .unwrap_or(("", "UNKNOWN"));
-        edges_out.push(KernelSnapshotEdge {
+        edges_out.push(CodeSnapshotEdge {
             src_symbol: src_sym.to_string(),
             src_kind: src_kind.to_string(),
             dst_symbol: dst_sym.to_string(),
@@ -115,7 +115,7 @@ pub fn save_graph_snapshot(
         });
     }
 
-    let snapshot = KernelSnapshot {
+    let snapshot = CodeSnapshot {
         nodes: nodes_out,
         edges: edges_out,
         files: files.to_vec(),
@@ -152,7 +152,7 @@ pub fn save_graph_snapshot(
     Ok(())
 }
 
-pub fn estimate_snapshot_size(snapshot: &KernelSnapshot) -> u64 {
+pub fn estimate_snapshot_size(snapshot: &CodeSnapshot) -> u64 {
     let mut total = 0u64;
     for n in &snapshot.nodes {
         total = total.saturating_add(n.kind.len() as u64);
@@ -176,15 +176,15 @@ pub fn estimate_snapshot_size(snapshot: &KernelSnapshot) -> u64 {
 }
 
 pub fn snapshot_into_rows(
-    snapshot: KernelSnapshot,
-) -> (Vec<NodeRow>, Vec<EdgeRow>, Vec<String>) {
+    snapshot: CodeSnapshot,
+) -> (Vec<CodeNode>, Vec<CodeEdge>, Vec<String>) {
     let mut files = snapshot.files;
     let mut file_map: HashMap<String, u32> = HashMap::new();
     for (idx, path) in files.iter().enumerate() {
         file_map.insert(path.clone(), idx as u32);
     }
 
-    let mut nodes: Vec<NodeRow> = Vec::new();
+    let mut nodes: Vec<CodeNode> = Vec::new();
     let mut key_to_id: HashMap<(String, String), u32> = HashMap::new();
     for node in snapshot.nodes {
         let file_id = if node.file.is_empty() {
@@ -199,7 +199,7 @@ pub fn snapshot_into_rows(
         };
         let id = nodes.len() as u32;
         key_to_id.insert((node.symbol.clone(), node.kind.clone()), id);
-        nodes.push(NodeRow {
+        nodes.push(CodeNode {
             id,
             kind: node.kind,
             symbol: node.symbol,
@@ -208,7 +208,7 @@ pub fn snapshot_into_rows(
         });
     }
 
-    let mut edges: Vec<EdgeRow> = Vec::new();
+    let mut edges: Vec<CodeEdge> = Vec::new();
     for edge in snapshot.edges {
         let Some(&src) = key_to_id.get(&(edge.src_symbol, edge.src_kind)) else {
             continue;
@@ -216,7 +216,7 @@ pub fn snapshot_into_rows(
         let Some(&dst) = key_to_id.get(&(edge.dst_symbol, edge.dst_kind)) else {
             continue;
         };
-        edges.push(EdgeRow {
+        edges.push(CodeEdge {
             src,
             dst,
             kind: edge.kind,

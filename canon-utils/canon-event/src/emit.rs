@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crate::tlog::{append_event_json, BinarySegmentWriter, CanonEvent};
+use crate::tlog::{emit_event_json, BinarySegmentWriter, CanonEvent};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -44,10 +44,10 @@ pub fn emit_event(source: &str, kind: &str, payload: Value, tlog_path: &Path) ->
     if tlog_format_is_binary() {
         let dir = binary_dir_from_path(tlog_path);
         let writer = BinarySegmentWriter::open(&dir)?;
-        let _ = writer.append_event(&canon);
+        let _ = writer.write_event(&canon);
         return Ok(());
     }
-    append_event_json(tlog_path, source, kind, canon.payload)?;
+    emit_event_json(tlog_path, source, kind, canon.payload)?;
     Ok(())
 }
 

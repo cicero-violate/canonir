@@ -1,4 +1,4 @@
-use canon_graph::artifacts_loader::KernelGraph;
+use canon_graph::artifacts_loader::CodeGraph;
 use canon_graph::ingest::report_ingest::ReportFeatures;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
@@ -15,10 +15,10 @@ pub struct InvariantResult {
 pub trait InvariantRule {
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str;
-    fn evaluate(&self, graph: &KernelGraph, features: &ReportFeatures) -> InvariantResult;
+    fn evaluate(&self, graph: &CodeGraph, features: &ReportFeatures) -> InvariantResult;
 }
 
-pub fn discover_invariants(graph: &KernelGraph, features: &ReportFeatures) -> Vec<InvariantResult> {
+pub fn discover_invariants(graph: &CodeGraph, features: &ReportFeatures) -> Vec<InvariantResult> {
     let rules: Vec<Box<dyn InvariantRule>> = vec![
         Box::new(ModuleOwnerRule),
         Box::new(CallEdgeRule),
@@ -38,7 +38,7 @@ pub fn discover_invariants(graph: &KernelGraph, features: &ReportFeatures) -> Ve
     out
 }
 
-pub fn mine_candidates(graph: &KernelGraph, features: &ReportFeatures) -> Vec<InvariantResult> {
+pub fn mine_candidates(graph: &CodeGraph, features: &ReportFeatures) -> Vec<InvariantResult> {
     let mut out = Vec::new();
     let invariants = discover_invariants(graph, features);
     for inv in invariants {
@@ -63,7 +63,7 @@ impl InvariantRule for ModuleOwnerRule {
     fn description(&self) -> &'static str {
         "non-module nodes must have an incoming CONTAINS edge"
     }
-    fn evaluate(&self, graph: &KernelGraph, _features: &ReportFeatures) -> InvariantResult {
+    fn evaluate(&self, graph: &CodeGraph, _features: &ReportFeatures) -> InvariantResult {
         let mut incoming_contains: HashMap<u32, usize> = HashMap::new();
         for e in &graph.edges {
             if e.kind == "CONTAINS" {
@@ -102,7 +102,7 @@ impl InvariantRule for CallEdgeRule {
     fn description(&self) -> &'static str {
         "CALL edge source must be CALL_SITE, FUNCTION, or METHOD"
     }
-    fn evaluate(&self, graph: &KernelGraph, _features: &ReportFeatures) -> InvariantResult {
+    fn evaluate(&self, graph: &CodeGraph, _features: &ReportFeatures) -> InvariantResult {
         let id_to_kind: HashMap<u32, &str> =
             graph.nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
         let mut total = 0usize;
@@ -140,7 +140,7 @@ impl InvariantRule for CfgEntryRule {
     fn description(&self) -> &'static str {
         "each function has exactly one entry basic block"
     }
-    fn evaluate(&self, graph: &KernelGraph, _features: &ReportFeatures) -> InvariantResult {
+    fn evaluate(&self, graph: &CodeGraph, _features: &ReportFeatures) -> InvariantResult {
         let mut block_to_fn: BTreeMap<u32, u32> = BTreeMap::new();
         for e in &graph.edges {
             if e.kind == "HAS_BLOCK" {
@@ -191,7 +191,7 @@ impl InvariantRule for HasBlockSrcFnRule {
     fn description(&self) -> &'static str {
         "HAS_BLOCK edge src must be FUNCTION or METHOD"
     }
-    fn evaluate(&self, graph: &KernelGraph, _features: &ReportFeatures) -> InvariantResult {
+    fn evaluate(&self, graph: &CodeGraph, _features: &ReportFeatures) -> InvariantResult {
         edge_kind_src_rule(graph, "HAS_BLOCK", &["FUNCTION", "METHOD"])
     }
 }
@@ -204,7 +204,7 @@ impl InvariantRule for HasBlockDstBlockRule {
     fn description(&self) -> &'static str {
         "HAS_BLOCK edge dst must be BASIC_BLOCK"
     }
-    fn evaluate(&self, graph: &KernelGraph, _features: &ReportFeatures) -> InvariantResult {
+    fn evaluate(&self, graph: &CodeGraph, _features: &ReportFeatures) -> InvariantResult {
         edge_kind_dst_rule(graph, "HAS_BLOCK", &["BASIC_BLOCK"])
     }
 }
@@ -217,7 +217,7 @@ impl InvariantRule for HasParamSrcFnRule {
     fn description(&self) -> &'static str {
         "HAS_PARAM edge src must be FUNCTION or METHOD"
     }
-    fn evaluate(&self, graph: &KernelGraph, _features: &ReportFeatures) -> InvariantResult {
+    fn evaluate(&self, graph: &CodeGraph, _features: &ReportFeatures) -> InvariantResult {
         edge_kind_src_rule(graph, "HAS_PARAM", &["FUNCTION", "METHOD"])
     }
 }
@@ -230,7 +230,7 @@ impl InvariantRule for HasParamDstParamRule {
     fn description(&self) -> &'static str {
         "HAS_PARAM edge dst must be PARAM"
     }
-    fn evaluate(&self, graph: &KernelGraph, _features: &ReportFeatures) -> InvariantResult {
+    fn evaluate(&self, graph: &CodeGraph, _features: &ReportFeatures) -> InvariantResult {
         edge_kind_dst_rule(graph, "HAS_PARAM", &["PARAM"])
     }
 }
@@ -243,7 +243,7 @@ impl InvariantRule for HasFieldSrcAdtRule {
     fn description(&self) -> &'static str {
         "HAS_FIELD edge src must be STRUCT or ENUM"
     }
-    fn evaluate(&self, graph: &KernelGraph, _features: &ReportFeatures) -> InvariantResult {
+    fn evaluate(&self, graph: &CodeGraph, _features: &ReportFeatures) -> InvariantResult {
         edge_kind_src_rule(graph, "HAS_FIELD", &["STRUCT", "ENUM"])
     }
 }
@@ -256,7 +256,7 @@ impl InvariantRule for HasFieldDstFieldRule {
     fn description(&self) -> &'static str {
         "HAS_FIELD edge dst must be FIELD"
     }
-    fn evaluate(&self, graph: &KernelGraph, _features: &ReportFeatures) -> InvariantResult {
+    fn evaluate(&self, graph: &CodeGraph, _features: &ReportFeatures) -> InvariantResult {
         edge_kind_dst_rule(graph, "HAS_FIELD", &["FIELD"])
     }
 }
@@ -269,12 +269,12 @@ impl InvariantRule for ContainsSrcModuleRule {
     fn description(&self) -> &'static str {
         "CONTAINS edge src must be MODULE or CRATE"
     }
-    fn evaluate(&self, graph: &KernelGraph, _features: &ReportFeatures) -> InvariantResult {
+    fn evaluate(&self, graph: &CodeGraph, _features: &ReportFeatures) -> InvariantResult {
         edge_kind_src_rule(graph, "CONTAINS", &["MODULE", "CRATE"])
     }
 }
 
-fn edge_kind_src_rule(graph: &KernelGraph, kind: &str, allowed: &[&str]) -> InvariantResult {
+fn edge_kind_src_rule(graph: &CodeGraph, kind: &str, allowed: &[&str]) -> InvariantResult {
     let id_to_kind: HashMap<u32, &str> =
         graph.nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
     let mut total = 0usize;
@@ -303,7 +303,7 @@ fn edge_kind_src_rule(graph: &KernelGraph, kind: &str, allowed: &[&str]) -> Inva
     }
 }
 
-fn edge_kind_dst_rule(graph: &KernelGraph, kind: &str, allowed: &[&str]) -> InvariantResult {
+fn edge_kind_dst_rule(graph: &CodeGraph, kind: &str, allowed: &[&str]) -> InvariantResult {
     let id_to_kind: HashMap<u32, &str> =
         graph.nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
     let mut total = 0usize;
@@ -332,7 +332,7 @@ fn edge_kind_dst_rule(graph: &KernelGraph, kind: &str, allowed: &[&str]) -> Inva
     }
 }
 
-fn mine_edge_kind_constraints(graph: &KernelGraph) -> Vec<InvariantResult> {
+fn mine_edge_kind_constraints(graph: &CodeGraph) -> Vec<InvariantResult> {
     let mut out = Vec::new();
     let candidates = vec![
         ("HAS_BLOCK", true, &["FUNCTION", "METHOD"][..]),

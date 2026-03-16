@@ -15,6 +15,8 @@ pub struct CapabilityOpNode {
     pub node_id: String,
     pub status: String, // "pending" | "completed" | "failed"
     pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -39,7 +41,7 @@ pub fn replay_capability_graph_from_tlog(tlog_path: &Path) -> anyhow::Result<Cap
                 let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 if !id.is_empty() {
                     start_times.insert(id.clone(), canon.ts);
-                    state.nodes.insert(id.clone(), CapabilityOpNode { capability_id: id, name, node_id, status: "pending".to_string(), duration_ms: None });
+                    state.nodes.insert(id.clone(), CapabilityOpNode { capability_id: id, name, node_id, status: "pending".to_string(), duration_ms: None, result: None });
                 }
             }
             "capability_completed" => {
@@ -62,7 +64,21 @@ pub fn replay_capability_graph_from_tlog(tlog_path: &Path) -> anyhow::Result<Cap
                 if !req_id.is_empty() {
                     // tool_call is a child edge from the parent capability (node_id's capability)
                     state.edges.push(CapabilityOpEdge { from: node_id, to: req_id.clone(), kind: "tool_call".to_string() });
-                    state.nodes.entry(req_id.clone()).or_insert_with(|| CapabilityOpNode { capability_id: req_id, name: kind, node_id: String::new(), status: "pending".to_string(), duration_ms: None });
+                    state.nodes.entry(req_id.clone()).or_insert_with(|| CapabilityOpNode { capability_id: req_id, name: kind, node_id: String::new(), status: "pending".to_string(), duration_ms: None, result: None });
+                }
+            }
+            "tool_result" => {
+                let req_id = payload.get("request_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let success = payload.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                let output = payload.get("output").cloned();
+                if !req_id.is_empty() {
+                    if let Some(node) = state.nodes.get_mut(&req_id) {
+                        node.status = if success { "completed" } else { "failed" }.to_string();
+                        node.result = output;
+                        if let Some(start) = start_times.get(&req_id) {
+                            node.duration_ms = Some(canon.ts.saturating_sub(*start));
+                        }
+                    }
                 }
             }
             _ => {}

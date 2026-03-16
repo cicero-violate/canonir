@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 pub const CAPABILITY_CONFIG_TOML: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts/capability_config.toml";
@@ -117,15 +117,15 @@ struct CapabilityConfigRawLlm {
     #[serde(default)]
     pub endpoints: CapabilityConfigRawEndpoints,
     #[serde(default)]
-    pub roles: HashMap<String, CapabilityConfigRawRoleConfig>,
+    pub roles: HashMap<String, RoleConfig>,
     #[serde(default = "capability_config_default_tab_cooldown_ms")]
     pub tab_cooldown_ms: u64,
 }
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum CapabilityConfigRawEndpoints {
-    List(Vec<CapabilityConfigLlmEndpoint>),
-    Map(HashMap<String, CapabilityConfigLlmEndpoint>),
+    List(Vec<LlmEndpoint>),
+    Map(HashMap<String, LlmEndpoint>),
 }
 impl Default for CapabilityConfigRawEndpoints {
     fn default() -> Self {
@@ -286,13 +286,13 @@ fn capability_config_default_tab_cooldown_ms() -> u64 {
     0
 }
 #[derive(Debug, Deserialize, Clone, Default)]
-pub struct CapabilityConfigRawRoleConfig {
+pub struct RoleConfig {
     #[serde(default)]
     pub weights: HashMap<String, u32>,
     pub burst: Option<usize>,
 }
 #[derive(Debug, Deserialize, Clone)]
-pub struct CapabilityConfigLlmEndpoint {
+pub struct LlmEndpoint {
     pub id: String,
     pub url: String,
     pub role_markdown: String,
@@ -356,9 +356,9 @@ pub struct CapabilityConfig {
     pub goal_refocus_rewrite_strength: f64,
     pub reports_disable: bool,
     pub reports_skip_snapshot: bool,
-    pub llm_endpoints: Vec<CapabilityConfigLlmEndpoint>,
-    pub planner_endpoint: Option<CapabilityConfigLlmEndpoint>,
-    pub llm_roles: HashMap<String, CapabilityConfigRawRoleConfig>,
+    pub llm_endpoints: Vec<LlmEndpoint>,
+    pub planner_endpoint: Option<LlmEndpoint>,
+    pub llm_roles: HashMap<String, RoleConfig>,
     pub tab_cooldown_ms: u64,
 }
 impl CapabilityConfig {
@@ -458,27 +458,14 @@ impl CapabilityConfig {
             );
         }
     }
-    pub fn endpoint_by_id(&self, id: &str) -> Result<&CapabilityConfigLlmEndpoint> {
+    pub fn endpoint_by_id(&self, id: &str) -> Result<&LlmEndpoint> {
         self.llm_endpoints.iter().find(|e| e.id == id).ok_or_else(|| anyhow::anyhow!("no llm endpoint for id={}", id))
     }
-    pub fn role_config(&self, role: &str) -> CapabilityConfigRawRoleConfig {
+    pub fn role_config(&self, role: &str) -> RoleConfig {
         self.llm_roles.get(role).cloned().unwrap_or_default()
     }
-    pub fn planner_endpoint(&self) -> Result<&CapabilityConfigLlmEndpoint> {
+    pub fn planner_endpoint(&self) -> Result<&LlmEndpoint> {
         self.planner_endpoint.as_ref().ok_or_else(|| anyhow::anyhow!("no planner endpoint configured"))
-    }
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CapabilityConfigGoalSpec {
-    pub raw: String,
-}
-impl CapabilityConfigGoalSpec {
-    pub fn new(raw: impl Into<String>) -> Self {
-        Self { raw: raw.into() }
-    }
-    pub fn from_file(path: &str) -> Result<Self> {
-        let raw = std::fs::read_to_string(path).with_context(|| format!("failed to read goal file: {}", path))?;
-        Ok(Self::new(raw))
     }
 }
 const CAPABILITY_POLICY_TOML: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts/capability_policy.toml";
@@ -490,17 +477,17 @@ struct CapabilityConfigRawPolicy {
     pub require_final_render: bool,
 }
 #[derive(Debug, Clone)]
-pub struct CapabilityConfigCapabilityPolicy {
+pub struct CapabilityPolicy {
     pub write_allowed_roots: Vec<PathBuf>,
     pub require_final_render: bool,
     pub max_node_retries: u32,
 }
-impl Default for CapabilityConfigCapabilityPolicy {
+impl Default for CapabilityPolicy {
     fn default() -> Self {
         Self { write_allowed_roots: Vec::new(), require_final_render: false, max_node_retries: capability_config_default_max_node_retries() }
     }
 }
-impl CapabilityConfigCapabilityPolicy {
+impl CapabilityPolicy {
     pub fn snapshot_store_load(workspace_root: &Path) -> Result<Self> {
         let raw_toml = std::fs::read_to_string(CAPABILITY_POLICY_TOML).with_context(|| format!("cannot read {}", CAPABILITY_POLICY_TOML))?;
         let raw: CapabilityConfigRawPolicy = toml::from_str(&raw_toml).context("cannot parse capability_policy.toml")?;

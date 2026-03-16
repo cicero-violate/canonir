@@ -4,14 +4,14 @@ use algorithms::graph::csr::Csr;
 #[cfg(feature = "cuda")]
 use algorithms::graph::reachability::reachability_batched_gpu;
 
-use canon_graph::graph::graph_types::NodeRow;
+use canon_graph::graph::graph_types::CodeNode;
 #[cfg(feature = "cuda")]
 use crate::analysis::callgraph::find_callgraph_roots_from_edges;
 use crate::{BranchComplexityEntry, BranchPressureEntry, StructuralHotspotEntry, MergeCandidateEntry, ReachabilityEntry, PathRedundancyEntry};
 
 pub fn build_structural_hotspots(
-    nodes: &[NodeRow],
-    node_map: &HashMap<u32, NodeRow>,
+    nodes: &[CodeNode],
+    node_map: &HashMap<u32, CodeNode>,
     file_map: &HashMap<u32, String>,
     callgraph: &[(u32, u32)],
     cfg_out: &HashMap<u32, Vec<u32>>,
@@ -63,8 +63,8 @@ pub fn build_structural_hotspots(
 }
 
 fn build_branch_complexity_with_ids(
-    nodes: &[NodeRow],
-    node_map: &HashMap<u32, NodeRow>,
+    nodes: &[CodeNode],
+    node_map: &HashMap<u32, CodeNode>,
     file_map: &HashMap<u32, String>,
     cfg_out: &HashMap<u32, Vec<u32>>,
     _cfg_in: &HashMap<u32, usize>,
@@ -110,8 +110,8 @@ fn build_branch_complexity_with_ids(
 }
 
 pub fn build_branch_complexity(
-    nodes: &[NodeRow],
-    node_map: &HashMap<u32, NodeRow>,
+    nodes: &[CodeNode],
+    node_map: &HashMap<u32, CodeNode>,
     file_map: &HashMap<u32, String>,
     cfg_out: &HashMap<u32, Vec<u32>>,
     cfg_in: &HashMap<u32, usize>,
@@ -127,7 +127,7 @@ pub fn build_branch_complexity(
 
 pub fn build_branch_pressure(
     block_owner: &HashMap<u32, u32>,
-    node_map: &HashMap<u32, NodeRow>,
+    node_map: &HashMap<u32, CodeNode>,
     file_map: &HashMap<u32, String>,
     cfg_out: &HashMap<u32, Vec<u32>>,
 ) -> Vec<BranchPressureEntry> {
@@ -166,7 +166,7 @@ pub fn build_branch_pressure(
 pub fn build_merge_candidates(
     cfg_out: &HashMap<u32, Vec<u32>>,
     block_owner: &HashMap<u32, u32>,
-    node_map: &HashMap<u32, NodeRow>,
+    node_map: &HashMap<u32, CodeNode>,
     file_map: &HashMap<u32, String>,
 ) -> Vec<MergeCandidateEntry> {
     let mut out: Vec<MergeCandidateEntry> = Vec::new();
@@ -209,7 +209,7 @@ pub fn build_merge_candidates(
 pub fn build_path_redundancy(
     cfg_out: &HashMap<u32, Vec<u32>>,
     block_owner: &HashMap<u32, u32>,
-    node_map: &HashMap<u32, NodeRow>,
+    node_map: &HashMap<u32, CodeNode>,
     file_map: &HashMap<u32, String>,
 ) -> Vec<PathRedundancyEntry> {
     let mut blocks_by_fn: HashMap<u32, Vec<u32>> = HashMap::new();
@@ -260,7 +260,7 @@ pub fn build_path_redundancy(
 fn build_reachability_report(
     cfg_out: &HashMap<u32, Vec<u32>>,
     block_owner: &HashMap<u32, u32>,
-    node_map: &HashMap<u32, NodeRow>,
+    node_map: &HashMap<u32, CodeNode>,
     file_map: &HashMap<u32, String>,
 ) -> Vec<ReachabilityEntry> {
     let mut blocks_by_fn: HashMap<u32, Vec<u32>> = HashMap::new();
@@ -325,7 +325,7 @@ fn build_reachability_report(
 pub fn build_reachability_report_gpu(
     cfg_out: &HashMap<u32, Vec<u32>>,
     block_owner: &HashMap<u32, u32>,
-    node_map: &HashMap<u32, NodeRow>,
+    node_map: &HashMap<u32, CodeNode>,
     file_map: &HashMap<u32, String>,
     _cg_csr: &Csr,
     _cg_id_to_local: &[u32],

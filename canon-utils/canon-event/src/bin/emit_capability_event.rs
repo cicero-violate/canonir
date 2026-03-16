@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use canon_event::{append_event_json, BinarySegmentWriter, CanonEvent};
+use canon_event::{emit_event_json, BinarySegmentWriter, CanonEvent};
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -80,10 +80,10 @@ fn main() -> Result<()> {
             tlog_path.with_extension("tlog.d")
         };
         let writer = BinarySegmentWriter::open(&dir)?;
-        let _ = writer.append_event(&canon);
+        let _ = writer.write_event(&canon);
         return Ok(());
     }
 
-    append_event_json(&tlog_path, "event-runtime", "capability_requested", payload)?;
+    emit_event_json(&tlog_path, "event-runtime", "capability_requested", payload)?;
     Ok(())
 }

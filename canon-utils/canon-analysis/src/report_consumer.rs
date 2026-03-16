@@ -1,5 +1,5 @@
 use canon_event::emit_debug::{info, error as log_error};
-use canon_event::{CapabilityRequested, EventMask, RustcEventConsumer};
+use canon_event::CapabilityRequested;
 use canon_types::{EventDelta, RustcEvent, RustcState};
 use std::path::PathBuf;
 
@@ -26,14 +26,8 @@ impl ReportEventConsumer {
             out_root,
         }
     }
-}
 
-impl RustcEventConsumer for ReportEventConsumer {
-    fn mask(&self) -> EventMask {
-        EventMask::COMPILATION_UNIT_FINISHED
-    }
-
-    fn on_event(&mut self, delta: &EventDelta, _state: &RustcState) {
+    fn handle_event(&mut self, delta: &EventDelta, _state: &RustcState) {
         if !matches!(delta.event, RustcEvent::CompilationUnitFinished { .. }) {
             return;
         }
@@ -123,6 +117,12 @@ impl RustcEventConsumer for ReportEventConsumer {
         self.last_generated_tick = Some(delta.tick);
     }
 }
+
+canon_event::impl_rustc_consumer!(
+    ReportEventConsumer,
+    canon_event::EventMask::COMPILATION_UNIT_FINISHED,
+    handle_event
+);
 
 fn resolve_out_dir(event: &RustcEvent, out_root: Option<&PathBuf>) -> Option<PathBuf> {
     let root = match out_root {

@@ -299,11 +299,11 @@ fn select_goal_type(score: &ObjectiveScore) -> GoalType {
     }
 }
 
-fn snapshot_features(graph: Option<&crate::dag::GoalGraph>) -> Option<graph_algo::GraphFeatureVector> {
+fn snapshot_features(graph: Option<&crate::goal_graph::GoalGraph>) -> Option<graph_algo::GraphFeatureVector> {
     Some(graph_algo::compute_graph_features_parallel(graph?))
 }
 
-fn feature_objective_candidates(weights: &ObjectiveWeights, graph: Option<&crate::dag::GoalGraph>) -> Vec<ObjectiveSelection> {
+fn feature_objective_candidates(weights: &ObjectiveWeights, graph: Option<&crate::goal_graph::GoalGraph>) -> Vec<ObjectiveSelection> {
     let mut out = Vec::new();
     let features = match snapshot_features(graph) {
         Some(f) => f,
@@ -353,7 +353,7 @@ fn feature_objective_candidates(weights: &ObjectiveWeights, graph: Option<&crate
     out
 }
 
-fn feature_objective_score(objective: GoalType, weights: &ObjectiveWeights, graph: Option<&crate::dag::GoalGraph>) -> Option<f64> {
+fn feature_objective_score(objective: GoalType, weights: &ObjectiveWeights, graph: Option<&crate::goal_graph::GoalGraph>) -> Option<f64> {
     let features = snapshot_features(graph)?;
     let score = match objective {
         GoalType::BreakDeadlock => features.deadlock_rate * weights.deadlock,
@@ -417,7 +417,7 @@ fn cycle_targets_present(targets: &[String]) -> Option<bool> {
     Some(false)
 }
 
-pub fn load_goal_from_reports(weights: ObjectiveWeights, graph: Option<&crate::dag::GoalGraph>) -> Option<ObjectiveSelection> {
+pub fn load_goal_from_reports(weights: ObjectiveWeights, graph: Option<&crate::goal_graph::GoalGraph>) -> Option<ObjectiveSelection> {
     let dir = reports_dir();
     let cycles: Vec<DependencyCycleEntry> =
         read_json(&dir.join("dependency_cycle_report.json")).unwrap_or_default();

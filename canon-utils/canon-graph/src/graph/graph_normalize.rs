@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use crate::graph::graph_types::{EdgeRow, NodeRow};
+use crate::graph::graph_types::{CodeEdge, CodeNode};
 
 pub fn normalize_graph(
-    mut nodes: Vec<NodeRow>,
-    mut edges: Vec<EdgeRow>,
+    mut nodes: Vec<CodeNode>,
+    mut edges: Vec<CodeEdge>,
     files: Vec<String>,
-) -> (Vec<NodeRow>, Vec<EdgeRow>, Vec<String>) {
+) -> (Vec<CodeNode>, Vec<CodeEdge>, Vec<String>) {
     let mut indexed_files: Vec<(u32, String)> = files
         .into_iter()
         .enumerate()

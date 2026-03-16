@@ -1,4 +1,4 @@
-use canon_graph::artifacts_loader::KernelGraph;
+use canon_graph::artifacts_loader::CodeGraph;
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -15,7 +15,7 @@ pub struct FingerprintSummary {
 }
 
 #[allow(dead_code)]
-pub fn compute_fingerprints(graph: &KernelGraph) -> Vec<FingerprintSummary> {
+pub fn compute_fingerprints(graph: &CodeGraph) -> Vec<FingerprintSummary> {
     let id_to_kind: HashMap<u32, &str> =
         graph.nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
     let mut out = Vec::new();

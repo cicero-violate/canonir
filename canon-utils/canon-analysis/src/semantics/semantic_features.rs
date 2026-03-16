@@ -1,4 +1,4 @@
-use canon_graph::artifacts_loader::KernelGraph;
+use canon_graph::artifacts_loader::CodeGraph;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
@@ -16,7 +16,7 @@ pub struct NodeFeatureVector {
     pub neighbor_kind_histogram: [u32; 16],
 }
 
-pub fn extract_node_features(graph_dir: &Path, graph: &KernelGraph) -> Result<Vec<NodeFeatureVector>> {
+pub fn extract_node_features(graph_dir: &Path, graph: &CodeGraph) -> Result<Vec<NodeFeatureVector>> {
     let mut indeg: HashMap<u32, u32> = HashMap::new();
     let mut outdeg: HashMap<u32, u32> = HashMap::new();
     let mut edge_hist: HashMap<u32, [u32; EDGE_KIND_COUNT]> = HashMap::new();

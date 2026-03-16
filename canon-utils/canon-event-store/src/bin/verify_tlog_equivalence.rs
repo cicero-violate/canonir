@@ -104,7 +104,7 @@ fn main() -> Result<()> {
 }
 
 fn node_set(
-    nodes: &[canon_event_store::NodeRow],
+    nodes: &[canon_event_store::CodeNode],
 ) -> HashSet<(u32, String, String, Option<u32>, Option<u32>)> {
     nodes
         .iter()
@@ -112,7 +112,7 @@ fn node_set(
         .collect()
 }
 
-fn edge_set(edges: &[canon_event_store::EdgeRow]) -> HashSet<(u32, u32, String)> {
+fn edge_set(edges: &[canon_event_store::CodeEdge]) -> HashSet<(u32, u32, String)> {
     edges
         .iter()
         .map(|e| (e.src, e.dst, e.kind.clone()))
@@ -164,7 +164,7 @@ fn run_stress(json_path: &Path, bin_path: &Path) -> Result<()> {
     let line = serde_json::to_string(&canon)?;
     std::io::Write::write_all(&mut json_writer, line.as_bytes())?;
     std::io::Write::write_all(&mut json_writer, b"\n")?;
-    let _ = bin_writer.append_event(&CanonEvent::new("rustc", "rustc_event", session_json));
+    let _ = bin_writer.write_event(&CanonEvent::new("rustc", "rustc_event", session_json));
 
     for i in 0..10_000u32 {
         let node = RustcEvent::NodeDefined {
@@ -181,7 +181,7 @@ fn run_stress(json_path: &Path, bin_path: &Path) -> Result<()> {
         let line = serde_json::to_string(&canon)?;
         std::io::Write::write_all(&mut json_writer, line.as_bytes())?;
         std::io::Write::write_all(&mut json_writer, b"\n")?;
-        let _ = bin_writer.append_event(&CanonEvent::new("rustc", "rustc_event", val));
+        let _ = bin_writer.write_event(&CanonEvent::new("rustc", "rustc_event", val));
     }
     for i in 0..50_000u32 {
         let src = format!("node_{}", i % 10_000);
@@ -196,7 +196,7 @@ fn run_stress(json_path: &Path, bin_path: &Path) -> Result<()> {
         let line = serde_json::to_string(&canon)?;
         std::io::Write::write_all(&mut json_writer, line.as_bytes())?;
         std::io::Write::write_all(&mut json_writer, b"\n")?;
-        let _ = bin_writer.append_event(&CanonEvent::new("rustc", "rustc_event", val));
+        let _ = bin_writer.write_event(&CanonEvent::new("rustc", "rustc_event", val));
     }
     json_writer.flush()?;
     let _ = 0;

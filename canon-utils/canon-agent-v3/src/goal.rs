@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -61,6 +62,12 @@ impl GoalSpec {
             ],
             artifact: None,
         }
+    }
+
+    pub fn from_file(path: &str, embedding_dim: usize) -> Result<Self> {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read goal file: {}", path))?;
+        Ok(Self::new(raw, embedding_dim))
     }
 
     pub fn new_with_artifact(

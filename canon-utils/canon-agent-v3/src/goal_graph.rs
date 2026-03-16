@@ -1,4 +1,4 @@
-use super::capability::{capability_model_assert_class_disjoint, CapabilityMode, PipelineCapability};
+use super::capability_types::{capability_model_assert_class_disjoint, CapabilityMode, PipelineCapability};
 use super::decompose::DecomposeNodeType;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

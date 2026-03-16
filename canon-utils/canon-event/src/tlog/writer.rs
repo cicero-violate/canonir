@@ -53,10 +53,10 @@ impl TlogWriter {
         self
     }
 
-    pub fn append_event(&self, event: &CanonEvent) -> Result<()> {
+    pub fn write_event(&self, event: &CanonEvent) -> Result<()> {
         let mut last_err: Option<anyhow::Error> = None;
         for attempt in 0..=self.retries {
-            match self.append_once(event) {
+            match self.write_once(event) {
                 Ok(()) => return Ok(()),
                 Err(err) => {
                     last_err = Some(err);
@@ -66,14 +66,14 @@ impl TlogWriter {
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("append_event failed")))
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("write_event failed")))
     }
 
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    fn append_once(&self, event: &CanonEvent) -> Result<()> {
+    fn write_once(&self, event: &CanonEvent) -> Result<()> {
         maybe_rotate(&self.path, &self.rotate).ok();
         let mut guard = self.file.lock().expect("tlog writer poisoned");
         guard.get_ref().lock_exclusive()?;
@@ -89,17 +89,13 @@ impl TlogWriter {
     }
 }
 
-pub fn append_event(path: &Path, event: &CanonEvent) -> Result<()> {
-    let writer = TlogWriter::open(path)?;
-    writer.append_event(event)
-}
-
-pub fn append_event_json(
+pub fn emit_event_json(
     path: &Path,
     source: impl Into<String>,
     kind: impl Into<String>,
     payload: serde_json::Value,
 ) -> Result<()> {
     let event = CanonEvent::new(source, kind, payload);
-    append_event(path, &event)
+    let writer = TlogWriter::open(path)?;
+    writer.write_event(&event)
 }

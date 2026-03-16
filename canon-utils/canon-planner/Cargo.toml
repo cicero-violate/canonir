@@ -8,7 +8,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # Unified planner components
-canon_agent_v3 = { package = "canon-agent-v3", path = "../canon-agent-v3" }
+canon_agent = { package = "canon-agent", path = "../canon-agent-v3" }
 canon_graph = { package = "canon-graph", path = "../canon-graph" }
 canon_analysis = { package = "canon-analysis", path = "../canon-analysis" }
 
@@ -18,4 +18,4 @@ canon_event = { package = "canon-event", path = "../canon-event" }
 
 [features]
 default = ["cuda"]
-cuda = ["canon_agent_v3/cuda", "canon_analysis/cuda"]
+cuda = ["canon_agent/cuda", "canon_analysis/cuda"]

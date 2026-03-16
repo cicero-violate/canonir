@@ -1,4 +1,4 @@
-use super::capability::PipelineCapability;
+use super::capability_types::PipelineCapability;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -269,9 +269,9 @@ fn normalize_task_node_type(_node_type: DecomposeNodeType, caps: &[PipelineCapab
 fn decompose_normalize_output(output: &mut DecomposeDecomposeOutput) {
     for t in &mut output.tasks {
         t.node_type = normalize_task_node_type(t.node_type, &t.required_capabilities, &t.description);
-        let has_verify = t.required_capabilities.iter().any(|c| c.class() == super::capability::CapabilityMode::Verify);
-        let has_observe = t.required_capabilities.iter().any(|c| c.class() == super::capability::CapabilityMode::Observe);
-        let has_mutate = t.required_capabilities.iter().any(|c| c.class() == super::capability::CapabilityMode::Mutate);
+        let has_verify = t.required_capabilities.iter().any(|c| c.class() == super::capability_types::CapabilityMode::Verify);
+        let has_observe = t.required_capabilities.iter().any(|c| c.class() == super::capability_types::CapabilityMode::Observe);
+        let has_mutate = t.required_capabilities.iter().any(|c| c.class() == super::capability_types::CapabilityMode::Mutate);
         if t.node_type == DecomposeNodeType::Analysis && has_verify && !has_observe && !has_mutate {
             if !t.required_capabilities.contains(&PipelineCapability::FileRead) {
                 t.required_capabilities.push(PipelineCapability::FileRead);

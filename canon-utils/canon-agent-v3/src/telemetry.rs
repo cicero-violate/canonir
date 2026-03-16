@@ -1,4 +1,4 @@
-use super::dag::GoalGraph;
+use super::goal_graph::GoalGraph;
 use super::goal::GoalSpec;
 use super::graph_algo;
 use super::goal_embedding;
@@ -139,7 +139,7 @@ pub fn telemetry_progress_fraction(graph: &GoalGraph) -> f64 {
     if graph.nodes.is_empty() {
         return 0.0;
     }
-    let completed = graph.nodes.iter().filter(|n| n.status == super::dag::NodeStatus::Completed).count();
+    let completed = graph.nodes.iter().filter(|n| n.status == super::goal_graph::NodeStatus::Completed).count();
     completed as f64 / graph.nodes.len() as f64
 }
 pub fn telemetry_compute_reward(graph: &GoalGraph, iterations_used: u64, max_iterations: u64, goal: &GoalSpec) -> f64 {
@@ -147,8 +147,8 @@ pub fn telemetry_compute_reward(graph: &GoalGraph, iterations_used: u64, max_ite
     if n_total == 0.0 {
         return 0.0;
     }
-    let n_completed = graph.nodes.iter().filter(|n| n.status == super::dag::NodeStatus::Completed).count() as f64;
-    let n_failed = graph.nodes.iter().filter(|n| n.status == super::dag::NodeStatus::Failed).count() as f64;
+    let n_completed = graph.nodes.iter().filter(|n| n.status == super::goal_graph::NodeStatus::Completed).count() as f64;
+    let n_failed = graph.nodes.iter().filter(|n| n.status == super::goal_graph::NodeStatus::Failed).count() as f64;
     let iter_ratio = iterations_used as f64 / max_iterations.max(1) as f64;
     let mut reward = (n_completed / n_total) - 0.2 * iter_ratio - 0.3 * (n_failed / n_total);
     let goal_sim = telemetry_goal_similarity(graph, goal);

@@ -5,7 +5,7 @@ pub mod consumers;
 
 use canon_capability::{CapabilityContext, CapabilityRegistry, CapabilityResult};
 use canon_event::emit_debug::{error, info};
-use canon_event_store::writer::{append_event_json, BinarySegmentWriter, CanonEvent};
+use canon_event::{emit_event_json, BinarySegmentWriter, CanonEvent};
 use std::sync::Mutex as StdMutex;
 use canon_event_store::{
     extract_capability_request,
@@ -50,7 +50,7 @@ pub struct EventRuntime {
 
 pub fn register_default_capabilities(registry: &mut CapabilityRegistry) {
     canon_editor::register_editor_capabilities(registry);
-    canon_planner::register_analysis_capabilities(registry);
+    canon_analysis::register_analysis_capabilities(registry);
     canon_supervisor::register_build_capabilities(registry);
 }
 
@@ -335,8 +335,17 @@ impl EventRuntime {
             let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
             CanonEvent::new("event-runtime", "capability_failed", val)
         }
-        RuntimeEvent::AgentState { payload } => {
-            CanonEvent::new("agent-consumer", "agent_state", payload.clone())
+        RuntimeEvent::NodeStarted(payload) => {
+            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+            CanonEvent::new("agent-consumer", "node_started", val)
+        }
+        RuntimeEvent::NodeCompleted(payload) => {
+            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+            CanonEvent::new("agent-consumer", "node_completed", val)
+        }
+        RuntimeEvent::NodeFailed(payload) => {
+            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+            CanonEvent::new("agent-consumer", "node_failed", val)
         }
         RuntimeEvent::PolicyBaselineUpdated { payload } => {
             CanonEvent::new("agent-consumer", "policy_baseline_updated", payload.clone())
@@ -422,7 +431,7 @@ impl EventRuntime {
         if path.is_dir() {
             if let Some(writer_arc) = self.tlog_writer.as_ref() {
                 let needs_reopen = if let Ok(w) = writer_arc.lock() {
-                    if w.append_event(&canon).is_err() {
+                    if w.write_event(&canon).is_err() {
                         error(
                             "event_runtime",
                             "append_runtime_event_stale_writer",
@@ -439,7 +448,7 @@ impl EventRuntime {
                     if let Ok(fresh) = BinarySegmentWriter::open(path) {
                         if let Ok(mut w) = writer_arc.lock() {
                             *w = fresh;
-                            let _ = w.append_event(&canon);
+                            let _ = w.write_event(&canon);
                         }
                     }
                 }
@@ -447,7 +456,7 @@ impl EventRuntime {
             return;
         }
 
-        let _ = append_event_json(path, "event-runtime", canon.kind, canon.payload);
+        let _ = emit_event_json(path, "event-runtime", canon.kind, canon.payload);
     }
 }
 

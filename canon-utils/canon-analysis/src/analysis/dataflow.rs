@@ -1,13 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
-use canon_graph::graph::graph_types::{EdgeRow, NodeRow};
+use canon_graph::graph::graph_types::{CodeEdge, CodeNode};
 use crate::DataflowFanoutEntry;
 
 pub fn build_dataflow_fanout(
-    nodes: &[NodeRow],
-    node_map: &HashMap<u32, NodeRow>,
+    nodes: &[CodeNode],
+    node_map: &HashMap<u32, CodeNode>,
     file_map: &HashMap<u32, String>,
-    edges: &[EdgeRow],
+    edges: &[CodeEdge],
     block_owner: &HashMap<u32, u32>,
 ) -> Vec<DataflowFanoutEntry> {
     let mut out = Vec::new();
@@ -21,7 +21,7 @@ pub fn build_dataflow_fanout(
     let mutation_kinds: HashSet<&str> = ["ASSIGN", "PROPAGATES", "ARG_TO_PARAM", "RETURNS"].into_iter().collect();
     let io_kinds: HashSet<&str> = ["CALL", "RETURN"].into_iter().collect();
 
-    let mut edges_by_fn: HashMap<u32, Vec<&EdgeRow>> = HashMap::new();
+    let mut edges_by_fn: HashMap<u32, Vec<&CodeEdge>> = HashMap::new();
     for e in edges {
         let owner = block_owner.get(&e.src).copied().or_else(|| block_owner.get(&e.dst).copied());
         if let Some(fid) = owner {

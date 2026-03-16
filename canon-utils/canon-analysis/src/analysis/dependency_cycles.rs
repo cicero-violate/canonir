@@ -4,7 +4,7 @@ use algorithms::graph::csr::Csr;
 #[cfg(feature = "cuda")]
 use algorithms::graph::scc_gpu::scc_gpu;
 
-use canon_graph::graph::graph_types::NodeRow;
+use canon_graph::graph::graph_types::CodeNode;
 use crate::DependencyCycleEntry;
 
 pub fn compute_scc(callgraph: &[(u32, u32)]) -> Vec<Vec<u32>> {
@@ -87,7 +87,7 @@ pub fn compute_scc(callgraph: &[(u32, u32)]) -> Vec<Vec<u32>> {
 
 pub fn build_dependency_cycles(
     callgraph: &[(u32, u32)],
-    node_map: &HashMap<u32, NodeRow>,
+    node_map: &HashMap<u32, CodeNode>,
     file_map: &HashMap<u32, String>,
 ) -> Vec<DependencyCycleEntry> {
     let sccs = compute_scc(callgraph);
@@ -126,7 +126,7 @@ pub fn build_dependency_cycles(
 
 pub fn build_dependency_cycles_gpu(
     _callgraph: &[(u32, u32)],
-    node_map: &HashMap<u32, NodeRow>,
+    node_map: &HashMap<u32, CodeNode>,
     file_map: &HashMap<u32, String>,
     _cg_csr: &Csr,
     _cg_local_to_id: &[u32],

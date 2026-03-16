@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
-use crate::graph::graph_types::{EdgeRow, NodeRow};
+use crate::graph::graph_types::{CodeEdge, CodeNode};
 use crate::health::system_health::current_timestamp;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -28,10 +28,10 @@ pub struct GraphHealthReport {
 pub fn write_graph_health_report(
     _graph_dir: &Path,
     reports_dir: &Path,
-    nodes: &[NodeRow],
-    edges: &[EdgeRow],
+    nodes: &[CodeNode],
+    edges: &[CodeEdge],
     files: &[String],
-    cfg: &[EdgeRow],
+    cfg: &[CodeEdge],
     callgraph: &[(u32, u32)],
 ) -> Result<()> {
     fs::create_dir_all(reports_dir)?;
@@ -138,7 +138,7 @@ pub fn write_graph_health_report(
     Ok(())
 }
 
-pub fn hash_graph_signature(nodes: &[NodeRow], edges: &[EdgeRow], files: &[String]) -> u64 {
+pub fn hash_graph_signature(nodes: &[CodeNode], edges: &[CodeEdge], files: &[String]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     let mut node_keys: Vec<(u32, &str, &str, Option<u32>)> = nodes

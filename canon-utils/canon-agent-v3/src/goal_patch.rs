@@ -1,5 +1,5 @@
-use super::capability::{capability_model_assert_class_disjoint, PipelineCapability};
-use super::dag::{GoalGraph, GoalNode, NodeStatus};
+use super::capability_types::{capability_model_assert_class_disjoint, PipelineCapability};
+use super::goal_graph::{GoalGraph, GoalNode, NodeStatus};
 use super::decompose::DecomposeTaskSpec;
 use canon_event::emit_debug::info;
 use anyhow::Result;

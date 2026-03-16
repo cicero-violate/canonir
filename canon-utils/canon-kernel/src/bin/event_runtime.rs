@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use canon_kernel::bootstrap::{bootstrap_config, new_prompt_registry};
-use canon_kernel::consumers::agent_consumer::AgentConsumer;
+use canon_kernel::consumers::agent::AgentConsumer;
 use canon_kernel::consumers::capability_executor::CapabilityExecutor;
 use canon_kernel::consumers::event_loop::EventLoopConsumer;
 use canon_kernel::consumers::llm_executor::LlmExecutorConsumer;

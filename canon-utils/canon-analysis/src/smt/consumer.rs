@@ -1,4 +1,3 @@
-use canon_event::{EventMask, RustcEventConsumer};
 use canon_types::{EventDelta, RustcEvent, RustcState};
 use canon_event::emit_debug::info;
 use serde_json::json;
@@ -13,14 +12,8 @@ impl SmtConsumer {
     pub fn new() -> Self {
         Self::default()
     }
-}
 
-impl RustcEventConsumer for SmtConsumer {
-    fn mask(&self) -> EventMask {
-        EventMask::EDGE_DEFINED
-    }
-
-    fn on_event(&mut self, delta: &EventDelta, _state: &RustcState) {
+    fn handle_event(&mut self, delta: &EventDelta, _state: &RustcState) {
         if let RustcEvent::EdgeDefined { .. } = &delta.event {
             self.edge_count += 1;
             if !self.logged {
@@ -34,3 +27,5 @@ impl RustcEventConsumer for SmtConsumer {
         }
     }
 }
+
+canon_event::impl_rustc_consumer!(SmtConsumer, canon_event::EventMask::EDGE_DEFINED, handle_event);

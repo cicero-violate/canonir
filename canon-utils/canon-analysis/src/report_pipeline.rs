@@ -32,8 +32,8 @@ use canon_graph::artifacts::artifact_writer::{
     build_typegraph_from_cache,
 };
 use crate::invariants::kernel_invariants::write_kernel_invariants;
-use canon_graph::graph::graph_types::{EdgeRow, NodeRow};
-use canon_graph::graph::graph_builder::rows_to_kernel_graph;
+use canon_graph::graph::graph_types::{CodeEdge, CodeNode};
+use canon_graph::graph::graph_builder::rows_to_code_graph;
 use canon_graph::graph::csr::build_callgraph_csr_graph;
 use canon_graph::graph::graph_normalize::normalize_graph;
 use crate::analysis::cfg::{extract_cfg_edges, build_cfg_out, build_cfg_in, build_block_owner, build_block_effect_signatures};
@@ -225,16 +225,16 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
 }
 
 struct ReportParts {
-    nodes: Vec<NodeRow>,
-    edges: Vec<EdgeRow>,
+    nodes: Vec<CodeNode>,
+    edges: Vec<CodeEdge>,
     files: Vec<String>,
-    cfg: Vec<EdgeRow>,
+    cfg: Vec<CodeEdge>,
     callgraph: Vec<(u32, u32)>,
 }
 
 fn generate_reports_from_parts(
-    nodes: Vec<NodeRow>,
-    edges: Vec<EdgeRow>,
+    nodes: Vec<CodeNode>,
+    edges: Vec<CodeEdge>,
     files: Vec<String>,
     layout: &ReportLayout,
     graph_dir: &Path,
@@ -248,7 +248,7 @@ fn generate_reports_from_parts(
     fs::create_dir_all(&metrics_dir)?;
     let (nodes, edges, files) = normalize_graph(nodes, edges, files);
     let (cfg, callgraph) = write_graph_artifacts(graph_dir, &graphs_dir, &nodes, &edges, &files)?;
-    let kernel_graph = rows_to_kernel_graph(&nodes, &edges, &files);
+    let kernel_graph = rows_to_code_graph(&nodes, &edges, &files);
     if let Err(err) = write_kernel_invariants(graph_dir, &metrics_dir, &kernel_graph) {
         eprintln!("[reports] kernel invariants failed: {err}");
     }
@@ -257,7 +257,7 @@ fn generate_reports_from_parts(
         return Ok(ReportParts { nodes, edges, files, cfg, callgraph });
     }
 
-    let node_map: HashMap<u32, NodeRow> = nodes.iter().map(|n| (n.id, n.clone())).collect();
+    let node_map: HashMap<u32, CodeNode> = nodes.iter().map(|n| (n.id, n.clone())).collect();
 
     let diagnostics = build_diagnostics(&nodes, &edges);
     write_diagnostics(&analysis_dir, &diagnostics)?;
@@ -430,11 +430,11 @@ fn generate_reports_from_parts(
 fn write_semantic_signatures(
     graph_dir: &Path,
     metrics_dir: &Path,
-    nodes: &[NodeRow],
-    edges: &[EdgeRow],
+    nodes: &[CodeNode],
+    edges: &[CodeEdge],
     files: &[String],
 ) -> Result<()> {
-    let graph = rows_to_kernel_graph(nodes, edges, files);
+    let graph = rows_to_code_graph(nodes, edges, files);
     let features = extract_node_features(graph_dir, &graph)?;
     let _ = compute_signatures(metrics_dir, &features)?;
     Ok(())
@@ -444,11 +444,11 @@ fn write_semantic_clusters(
     graph_dir: &Path,
     analysis_dir: &Path,
     metrics_dir: &Path,
-    nodes: &[NodeRow],
-    edges: &[EdgeRow],
+    nodes: &[CodeNode],
+    edges: &[CodeEdge],
     files: &[String],
 ) -> Result<()> {
-    let graph = rows_to_kernel_graph(nodes, edges, files);
+    let graph = rows_to_code_graph(nodes, edges, files);
     let features = extract_node_features(graph_dir, &graph)?;
     let clustering = cluster_dbscan_like(&features, 5.0, 3);
 
@@ -522,7 +522,7 @@ struct DiagnosticsReport {
     fail_reason: String,
 }
 
-fn build_diagnostics(nodes: &[NodeRow], edges: &[EdgeRow]) -> DiagnosticsReport {
+fn build_diagnostics(nodes: &[CodeNode], edges: &[CodeEdge]) -> DiagnosticsReport {
     let has_block_edges = edges.iter().filter(|e| e.kind == "HAS_BLOCK").count();
     let flow_edges = edges.iter().filter(|e| e.kind == "FLOW").count();
     let call_edges = edges.iter().filter(|e| e.kind == "CALL").count();
@@ -716,10 +716,10 @@ fn write_symbol_artifacts_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<
 fn write_graph_artifacts(
     graph_dir: &Path,
     graphs_dir: &Path,
-    nodes: &[NodeRow],
-    edges: &[EdgeRow],
+    nodes: &[CodeNode],
+    edges: &[CodeEdge],
     files: &[String],
-) -> Result<(Vec<EdgeRow>, Vec<(u32, u32)>)> {
+) -> Result<(Vec<CodeEdge>, Vec<(u32, u32)>)> {
     let mut cfg = extract_cfg_edges(nodes, edges);
     cfg.sort_by(|a, b| {
         a.src
@@ -766,7 +766,7 @@ fn write_report<T: Serialize>(path: &Path, data: &T) -> Result<()> {
     Ok(())
 }
 
-fn graph_fingerprint(nodes: &[NodeRow], edges: &[EdgeRow], files: &[String]) -> u64 {
+fn graph_fingerprint(nodes: &[CodeNode], edges: &[CodeEdge], files: &[String]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for f in files {
@@ -787,7 +787,7 @@ fn graph_fingerprint(nodes: &[NodeRow], edges: &[EdgeRow], files: &[String]) -> 
     hasher.finish()
 }
 
-fn read_nodes_csv(path: PathBuf) -> Result<Vec<NodeRow>> {
+fn read_nodes_csv(path: PathBuf) -> Result<Vec<CodeNode>> {
     let content = fs::read_to_string(path)?;
     let mut out = Vec::new();
     for (idx, line) in content.lines().enumerate() {
@@ -803,12 +803,12 @@ fn read_nodes_csv(path: PathBuf) -> Result<Vec<NodeRow>> {
         let symbol = parts[2].to_string();
         let file_id = parts[3].parse::<u32>().ok();
         let line = parts[4].parse::<u32>().ok();
-        out.push(NodeRow { id, kind, symbol, file_id, line });
+        out.push(CodeNode { id, kind, symbol, file_id, line });
     }
     Ok(out)
 }
 
-fn read_edges_csv(path: PathBuf) -> Result<Vec<EdgeRow>> {
+fn read_edges_csv(path: PathBuf) -> Result<Vec<CodeEdge>> {
     let content = fs::read_to_string(path)?;
     let mut out = Vec::new();
     for (idx, line) in content.lines().enumerate() {
@@ -822,7 +822,7 @@ fn read_edges_csv(path: PathBuf) -> Result<Vec<EdgeRow>> {
         let src: u32 = parts[0].parse().unwrap_or(0);
         let dst: u32 = parts[1].parse().unwrap_or(0);
         let kind = parts[2].to_string();
-        out.push(EdgeRow { src, dst, kind });
+        out.push(CodeEdge { src, dst, kind });
     }
     Ok(out)
 }

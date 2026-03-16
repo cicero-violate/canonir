@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use canon_supervisor::register_build_capabilities;
 use canon_kernel::EventRuntime;
 use canon_event_store::read_any_events_from_path;
-use canon_event_store::writer::{BinarySegmentWriter, CanonEvent};
+use canon_event::{BinarySegmentWriter, CanonEvent};
 use canon_event::CapabilityRequested;
 
 fn main() -> Result<()> {
@@ -22,7 +22,7 @@ fn main() -> Result<()> {
     let payload = serde_json::to_value(&request)?;
     let canon = CanonEvent::new("smoke-test", "capability_requested", payload);
     let writer = BinarySegmentWriter::open(&tmp_dir)?;
-    let _ = writer.append_event(&canon);
+    let _ = writer.write_event(&canon);
 
     let mut runtime = EventRuntime::new(Vec::new());
     register_build_capabilities(&mut runtime.registry_mut());

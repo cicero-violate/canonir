@@ -129,3 +129,5 @@ pub fn capability_model_assert_class_disjoint(
     }
     Ok(())
 }
+
+pub type CapabilityClass = CapabilityMode;

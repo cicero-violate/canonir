@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use canon_graph::graph::graph_types::{EdgeRow, NodeRow};
+use canon_graph::graph::graph_types::{CodeEdge, CodeNode};
 
-pub fn build_cfg_out(cfg: &[EdgeRow]) -> HashMap<u32, Vec<u32>> {
+pub fn build_cfg_out(cfg: &[CodeEdge]) -> HashMap<u32, Vec<u32>> {
     let mut out = HashMap::new();
     for e in cfg {
         out.entry(e.src).or_insert_with(Vec::new).push(e.dst);
@@ -10,7 +10,7 @@ pub fn build_cfg_out(cfg: &[EdgeRow]) -> HashMap<u32, Vec<u32>> {
     out
 }
 
-pub fn build_cfg_in(cfg: &[EdgeRow]) -> HashMap<u32, usize> {
+pub fn build_cfg_in(cfg: &[CodeEdge]) -> HashMap<u32, usize> {
     let mut inn = HashMap::new();
     for e in cfg {
         *inn.entry(e.dst).or_insert(0) += 1;
@@ -41,7 +41,7 @@ pub fn trace_path(start: u32, cfg_out: &HashMap<u32, Vec<u32>>, cfg_in: &HashMap
     path
 }
 
-pub fn build_block_owner(nodes: &[NodeRow], edges: &[EdgeRow]) -> HashMap<u32, u32> {
+pub fn build_block_owner(nodes: &[CodeNode], edges: &[CodeEdge]) -> HashMap<u32, u32> {
     let node_kind: HashMap<u32, &str> = nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
     let mut out = HashMap::new();
     for e in edges {
@@ -57,7 +57,7 @@ pub fn build_block_owner(nodes: &[NodeRow], edges: &[EdgeRow]) -> HashMap<u32, u
     out
 }
 
-pub fn build_block_effect_signatures(edges: &[EdgeRow], node_map: &HashMap<u32, NodeRow>) -> HashMap<u32, Vec<String>> {
+pub fn build_block_effect_signatures(edges: &[CodeEdge], node_map: &HashMap<u32, CodeNode>) -> HashMap<u32, Vec<String>> {
     let mut effects: HashMap<u32, Vec<String>> = HashMap::new();
     let ignore = ["FLOW", "UNWIND", "HAS_BLOCK"];
     for e in edges {
@@ -77,7 +77,7 @@ pub fn build_block_effect_signatures(edges: &[EdgeRow], node_map: &HashMap<u32, 
     effects
 }
 
-pub fn extract_cfg_edges(nodes: &[NodeRow], edges: &[EdgeRow]) -> Vec<EdgeRow> {
+pub fn extract_cfg_edges(nodes: &[CodeNode], edges: &[CodeEdge]) -> Vec<CodeEdge> {
     let id_to_kind: HashMap<u32, &str> = nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
     let mut out = Vec::new();
     for edge in edges {

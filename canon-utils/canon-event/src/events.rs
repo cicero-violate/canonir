@@ -106,7 +106,6 @@ pub enum RuntimeEvent {
     CapabilityRequested(CapabilityRequested),
     CapabilityCompleted(CapabilityCompleted),
     CapabilityFailed(CapabilityFailed),
-    AgentState { payload: serde_json::Value },
     PolicyBaselineUpdated { payload: serde_json::Value },
     GoalSelected { payload: serde_json::Value },
     SystemConfigLoaded { payload: serde_json::Value },

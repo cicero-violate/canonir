@@ -6,13 +6,13 @@ use std::fs;
 use std::io::BufRead;
 use std::path::Path;
 
-use crate::graph_types::{EdgeRow, NodeRow, KernelCodeGraph};
+use crate::graph_types::{CodeEdge, CodeNode, CodeGraphState};
 use crate::reader::{extract_rustc_event, parse_any_event, read_any_events_from_path, read_any_events_from_path_with_start_seq, AnyEvent, detect_tlog_format, TlogFormat};
 use crate::session_scan::{find_last_graph_session_offset, find_last_session_offset};
 
-pub fn replay_graph_from_tlog(tlog_path: &Path) -> Result<KernelCodeGraph> {
+pub fn replay_graph_from_tlog(tlog_path: &Path) -> Result<CodeGraphState> {
     if detect_tlog_format(tlog_path) == TlogFormat::Binary || tlog_path.is_dir() {
-        let mut graph = KernelCodeGraph::default();
+        let mut graph = CodeGraphState::default();
         let mut symbol_to_id: HashMap<String, u32> = HashMap::new();
         let events = read_any_events_from_path(tlog_path)?;
         for event in events {
@@ -35,7 +35,7 @@ pub fn replay_graph_from_tlog(tlog_path: &Path) -> Result<KernelCodeGraph> {
         stop_after_session = true;
     }
     let reader = std::io::BufReader::new(file);
-    let mut graph = KernelCodeGraph::default();
+    let mut graph = CodeGraphState::default();
     let mut symbol_to_id: HashMap<String, u32> = HashMap::new();
     let mut seen_session = false;
 
@@ -67,13 +67,13 @@ pub fn replay_graph_from_tlog_incremental(
     tlog_path: &Path,
     snapshot_path: &Path,
     meta_path: &Path,
-) -> Result<KernelCodeGraph> {
+) -> Result<CodeGraphState> {
     if detect_tlog_format(tlog_path) == TlogFormat::Binary || tlog_path.is_dir() {
         return replay_graph_from_tlog(tlog_path);
     }
     use crate::snapshot::{load_graph_snapshot, read_snapshot_metadata, snapshot_into_rows};
 
-    let mut graph = KernelCodeGraph::default();
+    let mut graph = CodeGraphState::default();
     let mut symbol_to_id: HashMap<String, u32> = HashMap::new();
     let mut base_offset: u64 = 0;
     let mut stop_after_session = false;
@@ -88,7 +88,7 @@ pub fn replay_graph_from_tlog_incremental(
                     graph.files = snap_files;
                     symbol_to_id = rebuild_symbol_index(&graph.nodes);
                     if graph.nodes.is_empty() && graph.edges.is_empty() {
-                        graph = KernelCodeGraph::default();
+                        graph = CodeGraphState::default();
                         symbol_to_id.clear();
                         base_offset = 0;
                     } else {
@@ -121,7 +121,7 @@ pub fn replay_graph_from_tlog_incremental(
 pub fn replay_events_from_offset(
     tlog_path: &Path,
     start_offset: u64,
-    graph: &mut KernelCodeGraph,
+    graph: &mut CodeGraphState,
     symbol_to_id: &mut HashMap<String, u32>,
     stop_after_session: bool,
 ) -> Result<(u64, u64)> {
@@ -183,7 +183,7 @@ pub fn replay_events_from_offset(
     Ok((metadata_len, events_added))
 }
 
-pub fn rebuild_symbol_index(nodes: &[NodeRow]) -> HashMap<String, u32> {
+pub fn rebuild_symbol_index(nodes: &[CodeNode]) -> HashMap<String, u32> {
     let mut map = HashMap::new();
     for node in nodes {
         map.insert(node.symbol.clone(), node.id);
@@ -193,7 +193,7 @@ pub fn rebuild_symbol_index(nodes: &[NodeRow]) -> HashMap<String, u32> {
 
 pub fn apply_rustc_event_to_graph(
     event: RustcEvent,
-    graph: &mut KernelCodeGraph,
+    graph: &mut CodeGraphState,
     symbol_to_id: &mut HashMap<String, u32>,
     clear_on_session: bool,
 ) -> bool {
@@ -252,7 +252,7 @@ pub fn apply_rustc_event_to_graph(
                 })
             };
             let id = graph.nodes.len() as u32;
-            graph.nodes.push(NodeRow {
+            graph.nodes.push(CodeNode {
                 id,
                 kind: kind.to_string(),
                 symbol: sym.to_string(),
@@ -274,7 +274,7 @@ pub fn apply_rustc_event_to_graph(
             let Some(&dst) = symbol_to_id.get(dst_sym) else {
                 return false;
             };
-            graph.edges.push(EdgeRow {
+            graph.edges.push(CodeEdge {
                 src,
                 dst,
                 kind: kind.to_string(),
@@ -321,7 +321,7 @@ pub fn apply_rustc_event_to_graph(
 
 fn delete_node(
     id: u32,
-    graph: &mut KernelCodeGraph,
+    graph: &mut CodeGraphState,
     symbol_to_id: &mut HashMap<String, u32>,
 ) -> bool {
     let idx = id as usize;

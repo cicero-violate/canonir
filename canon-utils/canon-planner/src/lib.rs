@@ -24,7 +24,7 @@ pub mod graph {
 // === Planner Module ===
 /// Agent planning, goal decomposition, DAG building, mutation engine
 pub mod planner {
-    pub use canon_agent_v3::*;
+    pub use canon_agent::*;
 }
 
 // === Analysis Module ===
@@ -34,7 +34,7 @@ pub mod analysis {
 }
 
 // Re-export commonly used types at the top level for convenience
-pub use graph::{GraphConsumer, KernelGraph, GraphNode, GraphEdge, CsrGraph};
+pub use graph::{GraphConsumer, CodeGraph, GraphNode, GraphEdge, CsrGraph};
 pub use analysis::{
     run_invariant_pipeline,
     generate_reports,

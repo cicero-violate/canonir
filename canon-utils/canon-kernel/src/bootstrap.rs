@@ -1,4 +1,4 @@
-use canon_event_store::writer::{append_event_json, BinarySegmentWriter, CanonEvent};
+use canon_event::{emit_event_json, BinarySegmentWriter, CanonEvent};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -156,9 +156,9 @@ fn write_boot_event(tlog_path: &Path, kind: &str, payload: serde_json::Value) {
     let canon = CanonEvent::new("bootstrap", kind, payload);
     if tlog_path.is_dir() {
         if let Ok(writer) = BinarySegmentWriter::open(tlog_path) {
-            let _ = writer.append_event(&canon);
+            let _ = writer.write_event(&canon);
         }
     } else {
-        let _ = append_event_json(tlog_path, "bootstrap", kind, canon.payload);
+        let _ = emit_event_json(tlog_path, "bootstrap", kind, canon.payload);
     }
 }

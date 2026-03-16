@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use crate::graph::graph_types::{EdgeRow, ModuleNode, NodeRow};
+use crate::graph::graph_types::{CodeEdge, ModuleNode, CodeNode};
 use crate::graph::graph_builder::module_prefixes;
 use crate::artifacts::cache::GraphCache;
 
@@ -20,7 +20,7 @@ pub fn is_graph_bin_fresh(graph_bin: &Path, tlog_path: &Path) -> bool {
     }
 }
 
-pub fn emit_graph_bin(path: &Path, nodes: &[NodeRow], edges: &[EdgeRow], files: &[String]) -> Result<()> {
+pub fn emit_graph_bin(path: &Path, nodes: &[CodeNode], edges: &[CodeEdge], files: &[String]) -> Result<()> {
     const MAGIC: &[u8; 4] = b"CGBN";
     const VERSION: u32 = 1;
     const HEADER_SIZE: usize = 32;
@@ -159,7 +159,7 @@ fn edge_kind_code(kind: &str) -> u8 {
     }
 }
 
-pub fn load_graph_bin(path: &Path) -> Result<(Vec<NodeRow>, Vec<EdgeRow>, Vec<String>)> {
+pub fn load_graph_bin(path: &Path) -> Result<(Vec<CodeNode>, Vec<CodeEdge>, Vec<String>)> {
     const HEADER_SIZE: usize = 32;
     const NODE_RECORD_SIZE: usize = 21;
     const EDGE_RECORD_SIZE: usize = 9;
@@ -208,7 +208,7 @@ pub fn load_graph_bin(path: &Path) -> Result<(Vec<NodeRow>, Vec<EdgeRow>, Vec<St
         cursor = cursor.saturating_add(1);
     }
 
-    let mut nodes: Vec<NodeRow> = Vec::with_capacity(n_nodes);
+    let mut nodes: Vec<CodeNode> = Vec::with_capacity(n_nodes);
     let mut pos = nodes_offset;
     for _ in 0..n_nodes {
         let id = u32::from_le_bytes(data[pos..pos + 4].try_into()?);
@@ -232,7 +232,7 @@ pub fn load_graph_bin(path: &Path) -> Result<(Vec<NodeRow>, Vec<EdgeRow>, Vec<St
             }
         };
 
-        nodes.push(NodeRow {
+        nodes.push(CodeNode {
             id,
             kind: node_kind_str(kind_code).to_string(),
             symbol,
@@ -241,14 +241,14 @@ pub fn load_graph_bin(path: &Path) -> Result<(Vec<NodeRow>, Vec<EdgeRow>, Vec<St
         });
     }
 
-    let mut edges: Vec<EdgeRow> = Vec::with_capacity(n_edges);
+    let mut edges: Vec<CodeEdge> = Vec::with_capacity(n_edges);
     let mut pos = edges_offset;
     for _ in 0..n_edges {
         let src = u32::from_le_bytes(data[pos..pos + 4].try_into()?);
         let dst = u32::from_le_bytes(data[pos + 4..pos + 8].try_into()?);
         let kind_code = data[pos + 8];
         pos += EDGE_RECORD_SIZE;
-        edges.push(EdgeRow {
+        edges.push(CodeEdge {
             src,
             dst,
             kind: edge_kind_str(kind_code).to_string(),
@@ -306,7 +306,7 @@ fn edge_kind_str(code: u8) -> &'static str {
     }
 }
 
-pub fn emit_cfg_csv(out_dir: &Path, cfg: &[EdgeRow]) -> Result<()> {
+pub fn emit_cfg_csv(out_dir: &Path, cfg: &[CodeEdge]) -> Result<()> {
     let path = out_dir.join("cfg.csv");
     let mut buf = String::with_capacity(cfg.len() * 24 + 32);
     buf.push_str("src_block,dst_block,edge_kind\n");
@@ -324,8 +324,8 @@ pub fn emit_cfg_csv(out_dir: &Path, cfg: &[EdgeRow]) -> Result<()> {
 
 pub fn emit_cfg_full_csv(
     out_dir: &Path,
-    cfg: &[EdgeRow],
-    nodes: &[NodeRow],
+    cfg: &[CodeEdge],
+    nodes: &[CodeNode],
     files: &[String],
 ) -> Result<()> {
     let path = out_dir.join("cfg_full.csv");
@@ -368,7 +368,7 @@ pub fn emit_cfg_full_csv(
 pub fn emit_callgraph_csv(
     out_dir: &Path,
     callgraph: &[(u32, u32)],
-    nodes: &[NodeRow],
+    nodes: &[CodeNode],
     files: &[String],
 ) -> Result<()> {
     let path = out_dir.join("callgraph.csv");
@@ -398,7 +398,7 @@ pub fn emit_callgraph_csv(
 pub fn emit_callgraph_full_csv(
     out_dir: &Path,
     callgraph: &[(u32, u32)],
-    nodes: &[NodeRow],
+    nodes: &[CodeNode],
     files: &[String],
 ) -> Result<()> {
     let path = out_dir.join("callgraph_full.csv");
@@ -470,7 +470,7 @@ pub fn emit_modulegraph_csv(
     Ok(())
 }
 
-pub fn emit_nodes_csv(out_dir: &Path, nodes: &[NodeRow]) -> Result<()> {
+pub fn emit_nodes_csv(out_dir: &Path, nodes: &[CodeNode]) -> Result<()> {
     let path = out_dir.join("nodes.csv");
     let mut file = fs::File::create(path)?;
     writeln!(file, "node_id,node_kind,symbol,file_id,line,column,parent")?;
@@ -493,7 +493,7 @@ pub fn emit_nodes_csv(out_dir: &Path, nodes: &[NodeRow]) -> Result<()> {
 
 pub fn emit_nodes_full_csv(
     out_dir: &Path,
-    nodes: &[NodeRow],
+    nodes: &[CodeNode],
     files: &[String],
 ) -> Result<()> {
     let path = out_dir.join("nodes_full.csv");
@@ -522,7 +522,7 @@ pub fn emit_nodes_full_csv(
 
 pub fn emit_nodes_raw_jsonl(
     out_dir: &Path,
-    nodes: &[NodeRow],
+    nodes: &[CodeNode],
     files: &[String],
 ) -> Result<()> {
     let path = out_dir.join("nodes_raw.jsonl");
@@ -546,7 +546,7 @@ pub fn emit_nodes_raw_jsonl(
     Ok(())
 }
 
-pub fn emit_edges_csv(out_dir: &Path, edges: &[EdgeRow]) -> Result<()> {
+pub fn emit_edges_csv(out_dir: &Path, edges: &[CodeEdge]) -> Result<()> {
     let path = out_dir.join("edges.csv");
     let mut file = fs::File::create(path)?;
     writeln!(file, "src_id,dst_id,edge_kind")?;
@@ -558,8 +558,8 @@ pub fn emit_edges_csv(out_dir: &Path, edges: &[EdgeRow]) -> Result<()> {
 
 pub fn emit_edges_full_csv(
     out_dir: &Path,
-    edges: &[EdgeRow],
-    nodes: &[NodeRow],
+    edges: &[CodeEdge],
+    nodes: &[CodeNode],
     files: &[String],
 ) -> Result<()> {
     let path = out_dir.join("edges_full.csv");
@@ -613,7 +613,7 @@ pub fn emit_files_txt(out_dir: &Path, files: &[String]) -> Result<()> {
 pub fn emit_typegraph_csv(
     out_dir: &Path,
     typegraph: &[(u32, u32, String)],
-    nodes: &[NodeRow],
+    nodes: &[CodeNode],
     files: &[String],
 ) -> Result<()> {
     let path = out_dir.join("typegraph.csv");
@@ -643,7 +643,7 @@ pub fn emit_typegraph_csv(
 pub fn emit_typegraph_full_csv(
     out_dir: &Path,
     typegraph: &[(u32, u32, String)],
-    nodes: &[NodeRow],
+    nodes: &[CodeNode],
     files: &[String],
 ) -> Result<()> {
     let path = out_dir.join("typegraph_full.csv");
@@ -691,7 +691,7 @@ fn sanitize_csv_field(raw: &str) -> String {
 pub fn emit_typegraph_csv_from_cache(
     out_dir: &Path,
     typegraph: &[(u32, u32, String)],
-    nodes: &[TypeNodeRow],
+    nodes: &[TypeCodeNode],
 ) -> Result<()> {
     let path = out_dir.join("typegraph.csv");
     let mut buf = String::with_capacity(typegraph.len() * 80 + 64);
@@ -710,7 +710,7 @@ pub fn emit_typegraph_csv_from_cache(
 }
 
 pub fn build_modulegraph(
-    nodes: &[NodeRow],
+    nodes: &[CodeNode],
     files: &[String],
 ) -> (Vec<(u32, u32)>, Vec<ModuleNode>) {
     let mut module_files: BTreeMap<String, String> = BTreeMap::new();
@@ -768,7 +768,7 @@ pub fn build_modulegraph(
 }
 
 #[derive(Debug, Clone)]
-pub struct TypeNodeRow {
+pub struct TypeCodeNode {
     id: u32,
     symbol: String,
     file: String,
@@ -812,7 +812,7 @@ pub fn build_modulegraph_from_cache(cache: &GraphCache) -> (Vec<(u32, u32)>, Vec
     (edges.into_iter().collect(), module_nodes)
 }
 
-pub fn build_typegraph_edges(nodes: &[NodeRow], edges: &[EdgeRow]) -> Vec<(u32, u32, String)> {
+pub fn build_typegraph_edges(nodes: &[CodeNode], edges: &[CodeEdge]) -> Vec<(u32, u32, String)> {
     let id_to_kind: HashMap<u32, &str> = nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
     let type_kinds = ["STRUCT", "ENUM", "TRAIT", "IMPL", "TYPE"];
     let rel_kinds = ["HAS_FIELD", "HAS_METHOD", "IMPLEMENTS", "FOR_TYPE", "USES_TYPE", "BOUNDS"];
@@ -842,8 +842,8 @@ pub fn build_typegraph_edges(nodes: &[NodeRow], edges: &[EdgeRow]) -> Vec<(u32, 
     seen.into_iter().collect()
 }
 
-pub fn build_typegraph_from_cache(cache: &GraphCache) -> (Vec<(u32, u32, String)>, Vec<TypeNodeRow>) {
-    let mut nodes: Vec<TypeNodeRow> = Vec::new();
+pub fn build_typegraph_from_cache(cache: &GraphCache) -> (Vec<(u32, u32, String)>, Vec<TypeCodeNode>) {
+    let mut nodes: Vec<TypeCodeNode> = Vec::new();
     let mut symbol_to_id: BTreeMap<String, u32> = BTreeMap::new();
     let mut next_id: u32 = 0;
 
@@ -851,7 +851,7 @@ pub fn build_typegraph_from_cache(cache: &GraphCache) -> (Vec<(u32, u32, String)
         let id = next_id;
         next_id += 1;
         symbol_to_id.insert(symbol.clone(), id);
-        nodes.push(TypeNodeRow {
+        nodes.push(TypeCodeNode {
             id,
             symbol: symbol.clone(),
             file: node.file.clone(),
@@ -866,7 +866,7 @@ pub fn build_typegraph_from_cache(cache: &GraphCache) -> (Vec<(u32, u32, String)
                 let id = next_id;
                 next_id += 1;
                 symbol_to_id.insert(edge.src.clone(), id);
-                nodes.push(TypeNodeRow {
+                nodes.push(TypeCodeNode {
                     id,
                     symbol: edge.src.clone(),
                     file: String::new(),
@@ -880,7 +880,7 @@ pub fn build_typegraph_from_cache(cache: &GraphCache) -> (Vec<(u32, u32, String)
                 let id = next_id;
                 next_id += 1;
                 symbol_to_id.insert(edge.dst.clone(), id);
-                nodes.push(TypeNodeRow {
+                nodes.push(TypeCodeNode {
                     id,
                     symbol: edge.dst.clone(),
                     file: String::new(),

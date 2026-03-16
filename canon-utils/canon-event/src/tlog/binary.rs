@@ -68,7 +68,7 @@ impl BinaryTlogWriter {
         self
     }
 
-    pub fn append_event(&self, event: &CanonEvent) -> Result<()> {
+    pub fn write_event(&self, event: &CanonEvent) -> Result<()> {
         let payload = serde_json::to_vec(event)?;
         let payload_len = payload.len() as u32;
         let mut hasher = Hasher::new();
@@ -278,7 +278,7 @@ impl BinarySegmentWriter {
         self
     }
 
-    pub fn append_event(&self, event: &CanonEvent) -> Result<()> {
+    pub fn write_event(&self, event: &CanonEvent) -> Result<()> {
         let kind_id = {
             let mut registry = self.registry.lock().expect("schema registry poisoned");
             registry.id_for(&event.source, &event.kind)?

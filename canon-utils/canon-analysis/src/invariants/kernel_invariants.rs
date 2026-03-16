@@ -1,4 +1,4 @@
-use canon_graph::artifacts_loader::KernelGraph;
+use canon_graph::artifacts_loader::CodeGraph;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -45,7 +45,7 @@ struct KernelInvariantReport {
 pub fn write_kernel_invariants(
     graph_dir: &Path,
     reports_dir: &Path,
-    graph: &KernelGraph,
+    graph: &CodeGraph,
 ) -> anyhow::Result<()> {
     let (report, ok) = build_report(graph_dir, graph);
     let mut report = report;
@@ -56,7 +56,7 @@ pub fn write_kernel_invariants(
     Ok(())
 }
 
-fn build_report(graph_dir: &Path, graph: &KernelGraph) -> (KernelInvariantReport, bool) {
+fn build_report(graph_dir: &Path, graph: &CodeGraph) -> (KernelInvariantReport, bool) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())

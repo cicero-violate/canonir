@@ -1,5 +1,4 @@
 use canon_event::emit_debug::{error, info};
-use canon_event::{EventMask, RustcEventConsumer};
 use canon_types::{EventDelta, RustcEvent, RustcState};
 use std::path::PathBuf;
 
@@ -20,14 +19,8 @@ impl CapabilityEventConsumer {
             reports_root,
         }
     }
-}
 
-impl RustcEventConsumer for CapabilityEventConsumer {
-    fn mask(&self) -> EventMask {
-        EventMask::COMPILATION_UNIT_FINISHED
-    }
-
-    fn on_event(&mut self, delta: &EventDelta, _state: &RustcState) {
+    fn handle_event(&mut self, delta: &EventDelta, _state: &RustcState) {
         if let RustcEvent::CompilationUnitFinished { crate_name } = &delta.event {
             match crate::capabilities::dispatcher::dispatch_for_event(
                 &delta.event,
@@ -120,3 +113,9 @@ impl RustcEventConsumer for CapabilityEventConsumer {
         }
     }
 }
+
+canon_event::impl_rustc_consumer!(
+    CapabilityEventConsumer,
+    canon_event::EventMask::COMPILATION_UNIT_FINISHED,
+    handle_event
+);

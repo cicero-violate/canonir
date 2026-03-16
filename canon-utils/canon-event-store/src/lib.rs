@@ -7,21 +7,9 @@ pub mod replay;
 pub mod session_scan;
 pub mod snapshot;
 
-// Writer side — re-exported from canon-event (which absorbed tlog-writer)
-pub mod writer {
-    pub use canon_event::{
-        append_event, append_event_json, BinarySegmentWriter, BinaryTlogWriter, CanonEvent,
-        TlogWriter,
-    };
-}
-
-pub mod schema {
-    pub use canon_event::CanonEvent;
-}
-
-// Flat re-exports for backward compatibility
+// Flat re-exports
 pub use binary_reader::{is_binary_magic, read_binary_events};
-pub use graph_types::{EdgeRow, NodeRow, KernelCodeGraph};
+pub use graph_types::{CodeEdge, CodeNode, CodeGraphState};
 pub use reader::{
     detect_tlog_format, extract_capability_request, extract_edit_event, extract_rustc_event,
     extract_supervisor_event, parse_any_event, parse_capability_request_value,
@@ -37,7 +25,7 @@ pub use session_scan::{
 };
 pub use snapshot::{
     load_graph_snapshot, read_snapshot_metadata, save_graph_snapshot, snapshot_into_rows,
-    write_snapshot_metadata, SnapshotMeta,
+    write_snapshot_metadata, SnapshotMeta, CodeSnapshot, CodeSnapshotNode, CodeSnapshotEdge,
 };
-pub use goal_graph_projector::{GoalGraphState, ProjectedGoalNode, replay_goal_graph_from_tlog, replay_goal_graph_incremental};
+pub use goal_graph_projector::{GoalGraphState, GoalNodeState, replay_goal_graph_from_tlog, replay_goal_graph_incremental};
 pub use capability_graph_projector::{CapabilityGraphState, CapabilityOpNode, CapabilityOpEdge, replay_capability_graph_from_tlog};

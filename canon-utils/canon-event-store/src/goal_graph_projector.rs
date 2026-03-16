@@ -4,13 +4,13 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct GoalGraphState {
-    pub nodes: HashMap<String, ProjectedGoalNode>,
+    pub nodes: HashMap<String, GoalNodeState>,
     pub edges: Vec<(String, String)>, // (from, to)
     pub seq_processed: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ProjectedGoalNode {
+pub struct GoalNodeState {
     pub node_id: String,
     pub description: String,
     pub deps: Vec<String>,
@@ -44,7 +44,7 @@ fn apply_planning_event(event: &AnyEvent, state: &mut GoalGraphState) {
         "goal_node_created" => {
             let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
             if node_id.is_empty() { return; }
-            state.nodes.insert(node_id.clone(), ProjectedGoalNode {
+            state.nodes.insert(node_id.clone(), GoalNodeState {
                 node_id,
                 description: payload.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 deps: payload.get("deps").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default(),

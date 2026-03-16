@@ -4,15 +4,15 @@ use algorithms::graph::csr::Csr;
 #[cfg(feature = "cuda")]
 use algorithms::graph::reachability::reachability_gpu;
 
-use canon_graph::graph::graph_types::{EdgeRow, NodeRow};
+use canon_graph::graph::graph_types::{CodeEdge, CodeNode};
 use crate::analysis::callgraph::find_callgraph_roots;
 use crate::DeadCodeEntry;
 
 pub fn detect_dead_code(
-    nodes: &[NodeRow],
-    node_map: &HashMap<u32, NodeRow>,
+    nodes: &[CodeNode],
+    node_map: &HashMap<u32, CodeNode>,
     file_map: &HashMap<u32, String>,
-    edges: &[EdgeRow],
+    edges: &[CodeEdge],
     cfg_out: &HashMap<u32, Vec<u32>>,
     cfg_in: &HashMap<u32, usize>,
     callgraph: &[(u32, u32)],
@@ -132,10 +132,10 @@ pub fn detect_dead_code(
 }
 
 pub fn detect_dead_code_gpu(
-    nodes: &[NodeRow],
-    node_map: &HashMap<u32, NodeRow>,
+    nodes: &[CodeNode],
+    node_map: &HashMap<u32, CodeNode>,
     file_map: &HashMap<u32, String>,
-    edges: &[EdgeRow],
+    edges: &[CodeEdge],
     cfg_out: &HashMap<u32, Vec<u32>>,
     cfg_in: &HashMap<u32, usize>,
     callgraph: &[(u32, u32)],

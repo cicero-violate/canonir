@@ -1,5 +1,5 @@
 use crate::analysis::callgraph::find_callgraph_roots;
-use canon_graph::graph::graph_types::{EdgeRow, NodeRow};
+use canon_graph::graph::graph_types::{CodeEdge, CodeNode};
 use crate::semantics::semantic_features::NodeFeatureVector;
 use anyhow::Result;
 use serde::Serialize;
@@ -133,8 +133,8 @@ fn distance(a: &NodeFeatureVector, b: &NodeFeatureVector) -> f64 {
 pub fn write_semantic_clusters(
     _graph_dir: &Path,
     reports_dir: &Path,
-    nodes: &[NodeRow],
-    edges: &[EdgeRow],
+    nodes: &[CodeNode],
+    edges: &[CodeEdge],
     callgraph: &[(u32, u32)],
 ) -> Result<()> {
     fs::create_dir_all(reports_dir)?;
@@ -268,7 +268,7 @@ fn label_cluster(fan_in: f64, fan_out: f64, call_depth: f64) -> String {
 fn write_cluster_graph_bin(
     path: &Path,
     clusters: &[SemanticClusterReport],
-    edges: &[EdgeRow],
+    edges: &[CodeEdge],
 ) -> Result<()> {
     const MAGIC: &[u8; 4] = b"CCGB";
     const VERSION: u32 = 1;

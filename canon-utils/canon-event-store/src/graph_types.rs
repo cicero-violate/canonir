@@ -1,5 +1,5 @@
 #[derive(Debug, Clone)]
-pub struct NodeRow {
+pub struct CodeNode {
     pub id: u32,
     pub kind: String,
     pub symbol: String,
@@ -8,15 +8,15 @@ pub struct NodeRow {
 }
 
 #[derive(Debug, Clone)]
-pub struct EdgeRow {
+pub struct CodeEdge {
     pub src: u32,
     pub dst: u32,
     pub kind: String,
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct KernelCodeGraph {
-    pub nodes: Vec<NodeRow>,
-    pub edges: Vec<EdgeRow>,
+pub struct CodeGraphState {
+    pub nodes: Vec<CodeNode>,
+    pub edges: Vec<CodeEdge>,
     pub files: Vec<String>,
 }

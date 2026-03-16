@@ -3,7 +3,10 @@ use memmap2::Mmap;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-//
+
+// Re-export CodeEdge from the event-store layer; it has the same shape.
+pub use canon_event_store::CodeEdge as Edge;
+
 #[derive(Debug, Clone)]
 pub struct Node {
     pub id: u32,
@@ -14,22 +17,13 @@ pub struct Node {
 }
 
 #[derive(Debug, Clone)]
-pub struct Edge {
-    pub src: u32,
-    pub dst: u32,
-    pub kind: String,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct CsrGraph {
     pub row_ptr: Vec<u32>,
     pub col_idx: Vec<u32>,
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct KernelGraph {
+pub struct CodeGraph {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
     pub adjacency: CsrGraph,
@@ -37,7 +31,7 @@ pub struct KernelGraph {
     pub files: Vec<String>,
 }
 
-pub fn load_kernel_graph(graph_dir: &Path) -> Result<KernelGraph> {
+pub fn load_code_graph(graph_dir: &Path) -> Result<CodeGraph> {
     let graph_bin = graph_dir.join("graph.bin");
     if !graph_bin.exists() {
         return Err(anyhow!("graph.bin not found at {}", graph_bin.display()));
@@ -49,7 +43,7 @@ pub fn load_kernel_graph(graph_dir: &Path) -> Result<KernelGraph> {
         .map(|n| (n.symbol.clone(), n.id))
         .collect::<HashMap<_, _>>();
     let adjacency = build_csr(nodes.len(), &edges);
-    Ok(KernelGraph {
+    Ok(CodeGraph {
         nodes,
         edges,
         adjacency,

@@ -5,5 +5,6 @@ pub mod health;
 pub mod ingest;
 pub mod consumer;
 
-pub use artifacts_loader::{KernelGraph, Node as GraphNode, Edge as GraphEdge, CsrGraph};
+pub use artifacts_loader::{CodeGraph, Node as GraphNode, Edge as GraphEdge, CsrGraph};
+pub use canon_event_store::{CodeEdge, CodeNode};
 pub use consumer::GraphConsumer;

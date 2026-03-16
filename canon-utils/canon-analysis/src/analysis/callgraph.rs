@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use canon_graph::graph::graph_types::{EdgeRow, NodeRow};
+use canon_graph::graph::graph_types::{CodeEdge, CodeNode};
 use crate::CallgraphCentralityEntry;
 
-pub fn extract_callgraph_edges(nodes: &[NodeRow], edges: &[EdgeRow]) -> Vec<(u32, u32)> {
+pub fn extract_callgraph_edges(nodes: &[CodeNode], edges: &[CodeEdge]) -> Vec<(u32, u32)> {
     let id_to_kind: HashMap<u32, &str> = nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
     let mut seen: BTreeSet<(u32, u32)> = BTreeSet::new();
     let mut callsite_to_block: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
@@ -91,7 +91,7 @@ pub fn find_callgraph_roots_from_edges(cg_local_to_id: &[u32]) -> Vec<u32> {
 
 pub fn build_callgraph_centrality(
     callgraph: &[(u32, u32)],
-    node_map: &HashMap<u32, NodeRow>,
+    node_map: &HashMap<u32, CodeNode>,
     file_map: &HashMap<u32, String>,
 ) -> Vec<CallgraphCentralityEntry> {
     let mut callers: HashMap<u32, BTreeSet<u32>> = HashMap::new();

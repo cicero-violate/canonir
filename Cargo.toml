@@ -20,7 +20,6 @@ members = [
   "canon-utils/canon-agent-v3",
   "canon-utils/canon-graph",
   "canon-utils/canon-analysis",
-  "canon-utils/canon-planner",
 ]
 exclude = [
   "test_projects",

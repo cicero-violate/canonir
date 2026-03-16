@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use crate::artifacts_loader::{Edge as GraphEdge, KernelGraph as LoadedGraph, Node as GraphNode};
+use crate::artifacts_loader::{CodeGraph as LoadedGraph, Node as GraphNode};
 use crate::graph::csr::build_csr_graph;
-use crate::graph::graph_types::{EdgeRow, NodeRow};
+use crate::graph::graph_types::{CodeEdge, CodeNode};
 
-pub fn rows_to_kernel_graph(
-    nodes: &[NodeRow],
-    edges: &[EdgeRow],
+pub fn rows_to_code_graph(
+    nodes: &[CodeNode],
+    edges: &[CodeEdge],
     files: &[String],
 ) -> LoadedGraph {
     let mut out_nodes = Vec::with_capacity(nodes.len());
@@ -24,14 +24,7 @@ pub fn rows_to_kernel_graph(
             line: n.line,
         });
     }
-    let out_edges = edges
-        .iter()
-        .map(|e| GraphEdge {
-            src: e.src,
-            dst: e.dst,
-            kind: e.kind.clone(),
-        })
-        .collect::<Vec<_>>();
+    let out_edges = edges.to_vec();
     let symbol_to_id = out_nodes
         .iter()
         .filter(|n| !n.symbol.is_empty())
@@ -45,14 +38,6 @@ pub fn rows_to_kernel_graph(
         symbol_to_id,
         files: files.to_vec(),
     }
-}
-
-pub fn rebuild_symbol_index(nodes: &[NodeRow]) -> HashMap<String, u32> {
-    let mut map = HashMap::new();
-    for node in nodes {
-        map.insert(node.symbol.clone(), node.id);
-    }
-    map
 }
 
 pub fn module_prefixes(sym: &str) -> Vec<String> {

@@ -1,4 +1,4 @@
-pub use canon_event_store::{EdgeRow, NodeRow};
+pub use canon_event_store::{CodeEdge, CodeNode};
 
 #[derive(Clone)]
 pub struct ModuleNode {

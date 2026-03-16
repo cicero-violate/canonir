@@ -1,7 +1,8 @@
-use super::capability::PipelineCapability;
-use super::gpu_scheduler::kernels as gpu_kernels;
-use super::{dag, decompose};
+use super::capability_types::PipelineCapability;
+use super::gpu_scheduler_kernels as gpu_kernels;
+use super::{goal_graph, decompose};
 use algorithms::graph::adj_list::AdjList;
+#[cfg(feature = "cuda")]
 use algorithms::graph::csr::Csr;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -13,7 +14,7 @@ fn graph_analysis_algo_log_path(log_dir: &Path, iter: u32, name: &str) -> PathBu
         log_dir.join(format!("iter_{:03}_{}", iter, name))
     }
 }
-pub fn graph_analysis_emit_planned_graph(graph: &dag::GoalGraph, log_dir: &Path, iter: u32) {
+pub fn graph_analysis_emit_planned_graph(graph: &goal_graph::GoalGraph, log_dir: &Path, iter: u32) {
     #[derive(serde::Serialize)]
     struct GraphSnapshot<'a> {
         nodes: Vec<GraphNode<'a>>,
@@ -43,7 +44,7 @@ pub fn graph_analysis_emit_planned_graph(graph: &dag::GoalGraph, log_dir: &Path,
         let _ = std::fs::write(path, pretty);
     }
 }
-pub fn graph_analysis_run_graph_algorithms(graph: &dag::GoalGraph, log_dir: &Path, iter: u32) {
+pub fn graph_analysis_run_graph_algorithms(graph: &goal_graph::GoalGraph, log_dir: &Path, iter: u32) {
     let signals = graph_analysis_compute_graph_signals(graph);
     let mut id_to_index: HashMap<String, usize> = HashMap::new();
     let mut index_to_id: Vec<String> = Vec::new();
@@ -93,7 +94,7 @@ impl GraphAnalysis {
         )
     }
 }
-pub fn graph_analysis_compute_graph_signals(graph: &dag::GoalGraph) -> GraphAnalysis {
+pub fn graph_analysis_compute_graph_signals(graph: &goal_graph::GoalGraph) -> GraphAnalysis {
     let n = graph.nodes.len();
     let id_to_index: HashMap<&str, usize> = graph.nodes.iter().enumerate().map(|(idx, node)| (node.id.as_str(), idx)).collect();
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
@@ -118,7 +119,7 @@ pub fn graph_analysis_compute_graph_signals(graph: &dag::GoalGraph) -> GraphAnal
 fn graph_analysis_reachability_mask(adj: &[Vec<usize>], roots: &[usize]) -> Vec<bool> {
     gpu_kernels::graph_cpu_kernels_compute_reachability(adj, roots)
 }
-pub fn graph_analysis_planner_signals_for_graph(graph: &dag::GoalGraph) -> String {
+pub fn graph_analysis_planner_signals_for_graph(graph: &goal_graph::GoalGraph) -> String {
     let signals = graph_analysis_compute_graph_signals(graph);
     let ids: Vec<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
     let to_id = |i: usize| ids.get(i).copied().unwrap_or("<unknown>");
@@ -128,7 +129,7 @@ pub fn graph_analysis_planner_signals_for_graph(graph: &dag::GoalGraph) -> Strin
     let sccs = signals.sccs.iter().map(|comp| comp.iter().map(|&i| to_id(i)).collect::<Vec<_>>().join(" -> ")).collect::<Vec<_>>().join(" | ");
     format!("roots=[{}]; unreachable=[{}]; topo_order=[{}]; sccs=[{}]; has_cycle={}", roots, unreachable, topo, sccs, signals.has_cycle)
 }
-pub fn graph_analysis_enforce_linking_constraints(graph: &dag::GoalGraph) -> Result<(), String> {
+pub fn graph_analysis_enforce_linking_constraints(graph: &goal_graph::GoalGraph) -> Result<(), String> {
     for n in &graph.nodes {
         if n.deps.iter().any(|d| d == &n.id) {
             return Err(format!("self-cycle for node {}", n.id));
@@ -206,12 +207,12 @@ impl GraphFeatureVector {
         self
     }
 }
-pub fn compute_graph_features_parallel(graph: &dag::GoalGraph) -> GraphFeatureVector {
+pub fn compute_graph_features_parallel(graph: &goal_graph::GoalGraph) -> GraphFeatureVector {
     let signals = graph_analysis_compute_graph_signals(graph);
     let nodes = graph.nodes.len();
     let edges = graph.nodes.iter().map(|n| n.deps.len()).sum();
     let depth = graph_max_depth(graph);
-    let failed = graph.nodes.iter().filter(|n| n.status == dag::NodeStatus::Failed).count();
+    let failed = graph.nodes.iter().filter(|n| n.status == goal_graph::NodeStatus::Failed).count();
     let failure_rate = if nodes == 0 { 0.0 } else { failed as f64 / nodes as f64 };
     #[cfg(feature = "cuda")]
     let (
@@ -263,16 +264,16 @@ pub fn compute_graph_features_parallel(graph: &dag::GoalGraph) -> GraphFeatureVe
             let mut o = 0u8;
             for cap in &n.required_capabilities {
                 match cap.class() {
-                    super::capability::CapabilityMode::Verify => v = 1,
-                    super::capability::CapabilityMode::Mutate => m = 1,
-                    super::capability::CapabilityMode::Observe => o = 1,
+                    super::capability_types::CapabilityMode::Verify => v = 1,
+                    super::capability_types::CapabilityMode::Mutate => m = 1,
+                    super::capability_types::CapabilityMode::Observe => o = 1,
                 }
             }
             has_verify.push(v);
             has_mutate.push(m);
             has_observe.push(o);
             node_type.push(if n.node_type == decompose::DecomposeNodeType::Analysis { 0 } else { 1 });
-            if n.status == dag::NodeStatus::Completed {
+            if n.status == goal_graph::NodeStatus::Completed {
                 completed += 1;
                 if let Some(t) = n.completed_iter {
                     max_completed_iter = max_completed_iter.max(t);
@@ -380,9 +381,9 @@ pub fn compute_graph_features_parallel(graph: &dag::GoalGraph) -> GraphFeatureVe
             }
             for cap in &n.required_capabilities {
                 match cap.class() {
-                    super::capability::CapabilityClass::Verify => verify_count += 1,
-                    super::capability::CapabilityClass::Mutate => mutate_count += 1,
-                    super::capability::CapabilityClass::Observe => observe_count += 1,
+                    super::capability_types::CapabilityClass::Verify => verify_count += 1,
+                    super::capability_types::CapabilityClass::Mutate => mutate_count += 1,
+                    super::capability_types::CapabilityClass::Observe => observe_count += 1,
                 }
             }
             priority_sum += n.priority as f64;
@@ -390,10 +391,10 @@ pub fn compute_graph_features_parallel(graph: &dag::GoalGraph) -> GraphFeatureVe
                 budget_sum += b as f64;
             }
             match n.status {
-                dag::Status::Blocked => blocked += 1,
-                dag::Status::Ready => ready += 1,
-                dag::Status::Failed => failed_count += 1,
-                dag::Status::Completed => {
+                goal_graph::Status::Blocked => blocked += 1,
+                goal_graph::Status::Ready => ready += 1,
+                goal_graph::Status::Failed => failed_count += 1,
+                goal_graph::Status::Completed => {
                     completed += 1;
                     if let Some(t) = n.completed_iter {
                         max_completed_iter = max_completed_iter.max(t);
@@ -474,7 +475,7 @@ pub fn compute_graph_features_parallel(graph: &dag::GoalGraph) -> GraphFeatureVe
     features
 }
 
-pub fn graph_embedding(graph: &dag::GoalGraph, dim: usize) -> Vec<f32> {
+pub fn graph_embedding(graph: &goal_graph::GoalGraph, dim: usize) -> Vec<f32> {
     let feats = compute_graph_features_parallel(graph).to_vec();
     let dim = dim.max(1).max(feats.len());
     let mut out = vec![0.0f32; dim];
@@ -517,20 +518,20 @@ pub fn graph_analysis_normalize_features(f: &GraphFeatureVector, max_nodes: usiz
         f.deadlock_rate,
     ]
 }
-pub fn score_node_utility(graph: &dag::GoalGraph, node_id: &str, iter: u64) -> f64 {
+pub fn score_node_utility(graph: &goal_graph::GoalGraph, node_id: &str, iter: u64) -> f64 {
     let node = match graph.nodes.iter().find(|n| n.id == node_id) {
         Some(n) => n,
         None => return 0.0,
     };
     let dependents = graph.nodes.iter().filter(|n| n.deps.iter().any(|d| d == node_id)).count();
-    let completion_value = if node.status == dag::NodeStatus::Completed && node.error.is_none() { 1.0 } else { 0.0 };
+    let completion_value = if node.status == goal_graph::NodeStatus::Completed && node.error.is_none() { 1.0 } else { 0.0 };
     let age = node.completed_iter.map(|t| iter.saturating_sub(t)).unwrap_or(0) as f64;
     0.6 * dependents as f64 + 0.3 * completion_value - 0.1 * age
 }
-pub fn graph_analysis_edge_count(graph: &dag::GoalGraph) -> usize {
+pub fn graph_analysis_edge_count(graph: &goal_graph::GoalGraph) -> usize {
     graph.nodes.iter().map(|n| n.deps.len()).sum()
 }
-pub fn hash_graph_structure(graph: &dag::GoalGraph) -> String {
+pub fn hash_graph_structure(graph: &goal_graph::GoalGraph) -> String {
     let mut nodes = graph
         .nodes
         .iter()
@@ -564,7 +565,7 @@ pub fn hash_graph_structure(graph: &dag::GoalGraph) -> String {
     }
     format!("{:016x}", hasher.finish())
 }
-fn graph_max_depth(graph: &dag::GoalGraph) -> usize {
+fn graph_max_depth(graph: &goal_graph::GoalGraph) -> usize {
     if graph.nodes.is_empty() {
         return 0;
     }

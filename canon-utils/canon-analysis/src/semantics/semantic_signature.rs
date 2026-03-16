@@ -1,5 +1,5 @@
 use crate::analysis::callgraph::find_callgraph_roots;
-use canon_graph::graph::graph_types::{EdgeRow, NodeRow};
+use canon_graph::graph::graph_types::{CodeEdge, CodeNode};
 use crate::semantics::semantic_features::NodeFeatureVector;
 use anyhow::Result;
 use serde::Serialize;
@@ -62,8 +62,8 @@ struct SemanticSignatureReport {
 pub fn write_semantic_signatures(
     _graph_dir: &Path,
     reports_dir: &Path,
-    nodes: &[NodeRow],
-    edges: &[EdgeRow],
+    nodes: &[CodeNode],
+    edges: &[CodeEdge],
     callgraph: &[(u32, u32)],
 ) -> Result<()> {
     fs::create_dir_all(reports_dir)?;

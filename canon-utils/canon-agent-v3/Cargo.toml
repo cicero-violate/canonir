@@ -1,5 +1,5 @@
 [package]
-name = "canon-agent-v3"
+name = "canon-agent"
 version = "0.1.0"
 edition = "2021"
 

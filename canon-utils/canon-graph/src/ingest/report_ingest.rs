@@ -1,4 +1,4 @@
-use crate::artifacts_loader::KernelGraph;
+use crate::artifacts_loader::CodeGraph;
 use anyhow::Result;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -47,7 +47,7 @@ struct StructuralHotspotEntry {
     score: usize,
 }
 
-pub fn ingest_reports(metrics_dir: &Path, graph: &KernelGraph) -> Result<ReportFeatures> {
+pub fn ingest_reports(metrics_dir: &Path, graph: &CodeGraph) -> Result<ReportFeatures> {
     let mut features = ReportFeatures::default();
     ingest_callgraph(metrics_dir, graph, &mut features)?;
     ingest_branch_complexity(metrics_dir, graph, &mut features)?;
@@ -60,7 +60,7 @@ pub fn ingest_reports(metrics_dir: &Path, graph: &KernelGraph) -> Result<ReportF
 
 fn ingest_callgraph(
     reports_dir: &Path,
-    graph: &KernelGraph,
+    graph: &CodeGraph,
     features: &mut ReportFeatures,
 ) -> Result<()> {
     let path = reports_dir.join("callgraph_centrality_report.json");
@@ -80,7 +80,7 @@ fn ingest_callgraph(
 
 fn ingest_branch_complexity(
     reports_dir: &Path,
-    graph: &KernelGraph,
+    graph: &CodeGraph,
     features: &mut ReportFeatures,
 ) -> Result<()> {
     let path = reports_dir.join("branch_complexity_report.json");
@@ -100,7 +100,7 @@ fn ingest_branch_complexity(
 
 fn ingest_dead_code(
     reports_dir: &Path,
-    graph: &KernelGraph,
+    graph: &CodeGraph,
     features: &mut ReportFeatures,
 ) -> Result<()> {
     let path = reports_dir.join("dead_code_report.json");
@@ -120,7 +120,7 @@ fn ingest_dead_code(
 
 fn ingest_dependency_cycles(
     reports_dir: &Path,
-    graph: &KernelGraph,
+    graph: &CodeGraph,
     features: &mut ReportFeatures,
 ) -> Result<()> {
     let path = reports_dir.join("dependency_cycle_report.json");
@@ -142,7 +142,7 @@ fn ingest_dependency_cycles(
 
 fn ingest_structural_hotspots(
     reports_dir: &Path,
-    graph: &KernelGraph,
+    graph: &CodeGraph,
     features: &mut ReportFeatures,
 ) -> Result<()> {
     let path = reports_dir.join("structural_hotspots_report.json");

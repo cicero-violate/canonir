@@ -1,4 +1,4 @@
-use crate::dag::{GoalGraph, NodeStatus};
+use crate::goal_graph::{GoalGraph, NodeStatus};
 use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct GpuScheduleGraph {
