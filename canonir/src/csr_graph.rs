@@ -10,7 +10,7 @@
 
 use crate::id::NodeId;
 use serde::{Deserialize, Serialize};
-
+//
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CsrGraph<ND, ED> {
     pub node_data: Vec<ND>,
