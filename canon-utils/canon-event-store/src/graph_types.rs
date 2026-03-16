@@ -15,7 +15,7 @@ pub struct EdgeRow {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ReplayGraph {
+pub struct KernelCodeGraph {
     pub nodes: Vec<NodeRow>,
     pub edges: Vec<EdgeRow>,
     pub files: Vec<String>,

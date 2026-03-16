@@ -6,13 +6,13 @@ use std::fs;
 use std::io::BufRead;
 use std::path::Path;
 
-use crate::graph_types::{EdgeRow, NodeRow, ReplayGraph};
+use crate::graph_types::{EdgeRow, NodeRow, KernelCodeGraph};
 use crate::reader::{extract_rustc_event, parse_any_event, read_any_events_from_path, read_any_events_from_path_with_start_seq, AnyEvent, detect_tlog_format, TlogFormat};
 use crate::session_scan::{find_last_graph_session_offset, find_last_session_offset};
 
-pub fn replay_graph_from_tlog(tlog_path: &Path) -> Result<ReplayGraph> {
+pub fn replay_graph_from_tlog(tlog_path: &Path) -> Result<KernelCodeGraph> {
     if detect_tlog_format(tlog_path) == TlogFormat::Binary || tlog_path.is_dir() {
-        let mut graph = ReplayGraph::default();
+        let mut graph = KernelCodeGraph::default();
         let mut symbol_to_id: HashMap<String, u32> = HashMap::new();
         let events = read_any_events_from_path(tlog_path)?;
         for event in events {
@@ -35,7 +35,7 @@ pub fn replay_graph_from_tlog(tlog_path: &Path) -> Result<ReplayGraph> {
         stop_after_session = true;
     }
     let reader = std::io::BufReader::new(file);
-    let mut graph = ReplayGraph::default();
+    let mut graph = KernelCodeGraph::default();
     let mut symbol_to_id: HashMap<String, u32> = HashMap::new();
     let mut seen_session = false;
 
@@ -67,13 +67,13 @@ pub fn replay_graph_from_tlog_incremental(
     tlog_path: &Path,
     snapshot_path: &Path,
     meta_path: &Path,
-) -> Result<ReplayGraph> {
+) -> Result<KernelCodeGraph> {
     if detect_tlog_format(tlog_path) == TlogFormat::Binary || tlog_path.is_dir() {
         return replay_graph_from_tlog(tlog_path);
     }
     use crate::snapshot::{load_graph_snapshot, read_snapshot_metadata, snapshot_into_rows};
 
-    let mut graph = ReplayGraph::default();
+    let mut graph = KernelCodeGraph::default();
     let mut symbol_to_id: HashMap<String, u32> = HashMap::new();
     let mut base_offset: u64 = 0;
     let mut stop_after_session = false;
@@ -88,7 +88,7 @@ pub fn replay_graph_from_tlog_incremental(
                     graph.files = snap_files;
                     symbol_to_id = rebuild_symbol_index(&graph.nodes);
                     if graph.nodes.is_empty() && graph.edges.is_empty() {
-                        graph = ReplayGraph::default();
+                        graph = KernelCodeGraph::default();
                         symbol_to_id.clear();
                         base_offset = 0;
                     } else {
@@ -121,7 +121,7 @@ pub fn replay_graph_from_tlog_incremental(
 pub fn replay_events_from_offset(
     tlog_path: &Path,
     start_offset: u64,
-    graph: &mut ReplayGraph,
+    graph: &mut KernelCodeGraph,
     symbol_to_id: &mut HashMap<String, u32>,
     stop_after_session: bool,
 ) -> Result<(u64, u64)> {
@@ -191,9 +191,9 @@ pub fn rebuild_symbol_index(nodes: &[NodeRow]) -> HashMap<String, u32> {
     map
 }
 
-fn apply_rustc_event_to_graph(
+pub fn apply_rustc_event_to_graph(
     event: RustcEvent,
-    graph: &mut ReplayGraph,
+    graph: &mut KernelCodeGraph,
     symbol_to_id: &mut HashMap<String, u32>,
     clear_on_session: bool,
 ) -> bool {
@@ -321,7 +321,7 @@ fn apply_rustc_event_to_graph(
 
 fn delete_node(
     id: u32,
-    graph: &mut ReplayGraph,
+    graph: &mut KernelCodeGraph,
     symbol_to_id: &mut HashMap<String, u32>,
 ) -> bool {
     let idx = id as usize;

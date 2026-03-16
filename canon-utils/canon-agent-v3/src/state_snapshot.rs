@@ -1,10 +1,10 @@
-use super::dag::ExecutionGraph;
+use super::dag::GoalGraph;
 use super::goal::GoalSpec;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineSnapshot {
-    pub graph: ExecutionGraph,
+    pub graph: GoalGraph,
     pub iteration: u64,
     #[serde(default)]
     pub runtime_start_seq: u64,

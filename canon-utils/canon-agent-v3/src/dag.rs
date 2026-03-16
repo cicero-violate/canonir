@@ -29,7 +29,7 @@ const TRANSITION_TABLE: [[bool; 6]; 6] = {
     t
 };
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExecutionNode {
+pub struct GoalNode {
     pub id: String,
     pub description: String,
     pub status: NodeStatus,
@@ -68,8 +68,8 @@ pub struct ContextSnapshotNode {
     pub failure_summary: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExecutionGraph {
-    pub nodes: Vec<ExecutionNode>,
+pub struct GoalGraph {
+    pub nodes: Vec<GoalNode>,
     #[serde(skip, default)]
     pub id_index: HashMap<String, usize>,
 }
@@ -105,8 +105,8 @@ fn select_primary_capability(caps: &[PipelineCapability]) -> PipelineCapability 
     mutate.or(verify).or(observe).unwrap_or(caps[0])
 }
 
-impl From<&ExecutionNode> for CapabilityNode {
-    fn from(node: &ExecutionNode) -> Self {
+impl From<&GoalNode> for CapabilityNode {
+    fn from(node: &GoalNode) -> Self {
         let capability = select_primary_capability(&node.required_capabilities);
         Self {
             id: node.id.clone(),
@@ -116,16 +116,16 @@ impl From<&ExecutionNode> for CapabilityNode {
     }
 }
 
-impl ExecutionNode {
+impl GoalNode {
     pub fn to_capability_node(&self) -> CapabilityNode {
         CapabilityNode::from(self)
     }
 }
-impl ExecutionGraph {
+impl GoalGraph {
     pub fn new() -> Self {
         Self { nodes: Vec::new(), id_index: HashMap::new() }
     }
-    pub fn add_node(&mut self, node: ExecutionNode) {
+    pub fn add_node(&mut self, node: GoalNode) {
         let idx = self.nodes.len();
         self.id_index.insert(node.id.clone(), idx);
         self.nodes.push(node);
@@ -141,17 +141,17 @@ impl ExecutionGraph {
             self.rebuild_index();
         }
     }
-    pub fn get_node(&mut self, id: &str) -> Option<&ExecutionNode> {
+    pub fn get_node(&mut self, id: &str) -> Option<&GoalNode> {
         self.ensure_index();
         let idx = *self.id_index.get(id)?;
         self.nodes.get(idx)
     }
-    pub fn get_node_mut(&mut self, id: &str) -> Option<&mut ExecutionNode> {
+    pub fn get_node_mut(&mut self, id: &str) -> Option<&mut GoalNode> {
         self.ensure_index();
         let idx = *self.id_index.get(id)?;
         self.nodes.get_mut(idx)
     }
-    pub fn ready_nodes(&self) -> Vec<&ExecutionNode> {
+    pub fn ready_nodes(&self) -> Vec<&GoalNode> {
         self.nodes.iter().filter(|n| n.status == NodeStatus::Ready).collect()
     }
     pub fn all_completed(&self) -> bool {
@@ -207,7 +207,7 @@ impl ExecutionGraph {
 fn task_graph_transition_allowed(from: NodeStatus, to: NodeStatus) -> bool {
     TRANSITION_TABLE[from as usize][to as usize]
 }
-fn task_graph_detect_cycle(graph: &ExecutionGraph) -> Result<(), String> {
+fn task_graph_detect_cycle(graph: &GoalGraph) -> Result<(), String> {
     let id_to_idx: HashMap<&str, usize> = graph.nodes.iter().enumerate().map(|(i, n)| (n.id.as_str(), i)).collect();
     let adj: Vec<Vec<usize>> = graph.nodes.iter().map(|n| n.deps.iter().filter_map(|d| id_to_idx.get(d.as_str()).copied()).collect()).collect();
     let sccs = algorithms::graph::scc::kosaraju_scc(&adj);
@@ -243,7 +243,7 @@ impl NodeAuthority {
         self.capabilities.iter().any(|c| c.class() == CapabilityMode::Mutate)
     }
 }
-pub fn task_graph_resolve_ready(graph: &mut ExecutionGraph) {
+pub fn task_graph_resolve_ready(graph: &mut GoalGraph) {
     let completed: std::collections::HashSet<String> = graph.nodes.iter().filter(|n| n.status == NodeStatus::Completed).map(|n| n.id.clone()).collect();
     for node in &mut graph.nodes {
         if node.status != NodeStatus::Pending {
@@ -255,7 +255,7 @@ pub fn task_graph_resolve_ready(graph: &mut ExecutionGraph) {
         }
     }
 }
-pub fn task_graph_grant_authority(node: &ExecutionNode) -> Result<NodeAuthority, String> {
+pub fn task_graph_grant_authority(node: &GoalNode) -> Result<NodeAuthority, String> {
     let caps: std::collections::HashSet<PipelineCapability> = node.required_capabilities.iter().copied().collect();
     NodeAuthority::new(node.id.clone(), caps)
 }

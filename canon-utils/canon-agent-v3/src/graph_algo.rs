@@ -13,7 +13,7 @@ fn graph_analysis_algo_log_path(log_dir: &Path, iter: u32, name: &str) -> PathBu
         log_dir.join(format!("iter_{:03}_{}", iter, name))
     }
 }
-pub fn graph_analysis_emit_planned_graph(graph: &dag::ExecutionGraph, log_dir: &Path, iter: u32) {
+pub fn graph_analysis_emit_planned_graph(graph: &dag::GoalGraph, log_dir: &Path, iter: u32) {
     #[derive(serde::Serialize)]
     struct GraphSnapshot<'a> {
         nodes: Vec<GraphNode<'a>>,
@@ -43,7 +43,7 @@ pub fn graph_analysis_emit_planned_graph(graph: &dag::ExecutionGraph, log_dir: &
         let _ = std::fs::write(path, pretty);
     }
 }
-pub fn graph_analysis_run_graph_algorithms(graph: &dag::ExecutionGraph, log_dir: &Path, iter: u32) {
+pub fn graph_analysis_run_graph_algorithms(graph: &dag::GoalGraph, log_dir: &Path, iter: u32) {
     let signals = graph_analysis_compute_graph_signals(graph);
     let mut id_to_index: HashMap<String, usize> = HashMap::new();
     let mut index_to_id: Vec<String> = Vec::new();
@@ -93,7 +93,7 @@ impl GraphAnalysis {
         )
     }
 }
-pub fn graph_analysis_compute_graph_signals(graph: &dag::ExecutionGraph) -> GraphAnalysis {
+pub fn graph_analysis_compute_graph_signals(graph: &dag::GoalGraph) -> GraphAnalysis {
     let n = graph.nodes.len();
     let id_to_index: HashMap<&str, usize> = graph.nodes.iter().enumerate().map(|(idx, node)| (node.id.as_str(), idx)).collect();
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
@@ -118,7 +118,7 @@ pub fn graph_analysis_compute_graph_signals(graph: &dag::ExecutionGraph) -> Grap
 fn graph_analysis_reachability_mask(adj: &[Vec<usize>], roots: &[usize]) -> Vec<bool> {
     gpu_kernels::graph_cpu_kernels_compute_reachability(adj, roots)
 }
-pub fn graph_analysis_planner_signals_for_graph(graph: &dag::ExecutionGraph) -> String {
+pub fn graph_analysis_planner_signals_for_graph(graph: &dag::GoalGraph) -> String {
     let signals = graph_analysis_compute_graph_signals(graph);
     let ids: Vec<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
     let to_id = |i: usize| ids.get(i).copied().unwrap_or("<unknown>");
@@ -128,7 +128,7 @@ pub fn graph_analysis_planner_signals_for_graph(graph: &dag::ExecutionGraph) -> 
     let sccs = signals.sccs.iter().map(|comp| comp.iter().map(|&i| to_id(i)).collect::<Vec<_>>().join(" -> ")).collect::<Vec<_>>().join(" | ");
     format!("roots=[{}]; unreachable=[{}]; topo_order=[{}]; sccs=[{}]; has_cycle={}", roots, unreachable, topo, sccs, signals.has_cycle)
 }
-pub fn graph_analysis_enforce_linking_constraints(graph: &dag::ExecutionGraph) -> Result<(), String> {
+pub fn graph_analysis_enforce_linking_constraints(graph: &dag::GoalGraph) -> Result<(), String> {
     for n in &graph.nodes {
         if n.deps.iter().any(|d| d == &n.id) {
             return Err(format!("self-cycle for node {}", n.id));
@@ -206,7 +206,7 @@ impl GraphFeatureVector {
         self
     }
 }
-pub fn compute_graph_features_parallel(graph: &dag::ExecutionGraph) -> GraphFeatureVector {
+pub fn compute_graph_features_parallel(graph: &dag::GoalGraph) -> GraphFeatureVector {
     let signals = graph_analysis_compute_graph_signals(graph);
     let nodes = graph.nodes.len();
     let edges = graph.nodes.iter().map(|n| n.deps.len()).sum();
@@ -474,7 +474,7 @@ pub fn compute_graph_features_parallel(graph: &dag::ExecutionGraph) -> GraphFeat
     features
 }
 
-pub fn graph_embedding(graph: &dag::ExecutionGraph, dim: usize) -> Vec<f32> {
+pub fn graph_embedding(graph: &dag::GoalGraph, dim: usize) -> Vec<f32> {
     let feats = compute_graph_features_parallel(graph).to_vec();
     let dim = dim.max(1).max(feats.len());
     let mut out = vec![0.0f32; dim];
@@ -517,7 +517,7 @@ pub fn graph_analysis_normalize_features(f: &GraphFeatureVector, max_nodes: usiz
         f.deadlock_rate,
     ]
 }
-pub fn score_node_utility(graph: &dag::ExecutionGraph, node_id: &str, iter: u64) -> f64 {
+pub fn score_node_utility(graph: &dag::GoalGraph, node_id: &str, iter: u64) -> f64 {
     let node = match graph.nodes.iter().find(|n| n.id == node_id) {
         Some(n) => n,
         None => return 0.0,
@@ -527,10 +527,10 @@ pub fn score_node_utility(graph: &dag::ExecutionGraph, node_id: &str, iter: u64)
     let age = node.completed_iter.map(|t| iter.saturating_sub(t)).unwrap_or(0) as f64;
     0.6 * dependents as f64 + 0.3 * completion_value - 0.1 * age
 }
-pub fn graph_analysis_edge_count(graph: &dag::ExecutionGraph) -> usize {
+pub fn graph_analysis_edge_count(graph: &dag::GoalGraph) -> usize {
     graph.nodes.iter().map(|n| n.deps.len()).sum()
 }
-pub fn hash_graph_structure(graph: &dag::ExecutionGraph) -> String {
+pub fn hash_graph_structure(graph: &dag::GoalGraph) -> String {
     let mut nodes = graph
         .nodes
         .iter()
@@ -564,7 +564,7 @@ pub fn hash_graph_structure(graph: &dag::ExecutionGraph) -> String {
     }
     format!("{:016x}", hasher.finish())
 }
-fn graph_max_depth(graph: &dag::ExecutionGraph) -> usize {
+fn graph_max_depth(graph: &dag::GoalGraph) -> usize {
     if graph.nodes.is_empty() {
         return 0;
     }

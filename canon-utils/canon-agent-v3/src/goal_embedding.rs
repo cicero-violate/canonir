@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-const CACHE_PATH: &str = "/workspace/ai_sandbox/canon/agent_logs/goal_embeddings.json";
+const CACHE_PATH: &str = "/workspace/ai_sandbox/canon/state/projections/goal_embeddings.json";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoalEmbedding {
     pub vector: Vec<f32>,

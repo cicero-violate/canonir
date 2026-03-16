@@ -1,5 +1,6 @@
 use anyhow::Result;
 mod bus;
+pub mod bootstrap;
 pub mod consumers;
 
 use canon_capability::{CapabilityContext, CapabilityRegistry, CapabilityResult};
@@ -336,6 +337,82 @@ impl EventRuntime {
         }
         RuntimeEvent::AgentState { payload } => {
             CanonEvent::new("agent-consumer", "agent_state", payload.clone())
+        }
+        RuntimeEvent::PolicyBaselineUpdated { payload } => {
+            CanonEvent::new("agent-consumer", "policy_baseline_updated", payload.clone())
+        }
+        RuntimeEvent::GoalSelected { payload } => {
+            CanonEvent::new("agent-consumer", "goal_selected", payload.clone())
+        }
+        RuntimeEvent::SystemConfigLoaded { payload } => {
+            CanonEvent::new("bootstrap", "system_config_loaded", payload.clone())
+        }
+        RuntimeEvent::AgentRegistered { payload } => {
+            CanonEvent::new("bootstrap", "agent_registered", payload.clone())
+        }
+        RuntimeEvent::PromptLoaded { payload } => {
+            CanonEvent::new("bootstrap", "prompt_loaded", payload.clone())
+        }
+        RuntimeEvent::ToolCall { node_id, request_id, kind, payload } => {
+            CanonEvent::new("agent-consumer", "tool_call", serde_json::json!({
+                "node_id": node_id,
+                "request_id": request_id,
+                "kind": kind,
+                "payload": payload,
+            }))
+        }
+        RuntimeEvent::ToolResult { node_id, request_id, kind, output, success } => {
+            CanonEvent::new("agent-consumer", "tool_result", serde_json::json!({
+                "node_id": node_id,
+                "request_id": request_id,
+                "kind": kind,
+                "output": output,
+                "success": success,
+            }))
+        }
+        RuntimeEvent::GoalNodeCreated { node_id, description, deps, caps, node_type, priority, budget } => {
+            CanonEvent::new("goal_graph", "goal_node_created", serde_json::json!({
+                "node_id": node_id,
+                "description": description,
+                "deps": deps,
+                "caps": caps,
+                "node_type": node_type,
+                "priority": priority,
+                "budget": budget,
+            }))
+        }
+        RuntimeEvent::GoalNodeRetracted { node_id } => {
+            CanonEvent::new("goal_graph", "goal_node_retracted", serde_json::json!({ "node_id": node_id }))
+        }
+        RuntimeEvent::GoalNodeRewritten { node_id, new_description, new_caps } => {
+            CanonEvent::new("goal_graph", "goal_node_rewritten", serde_json::json!({
+                "node_id": node_id,
+                "new_description": new_description,
+                "new_caps": new_caps,
+            }))
+        }
+        RuntimeEvent::GoalEdgeDefined { from_node_id, to_node_id } => {
+            CanonEvent::new("goal_graph", "goal_edge_defined", serde_json::json!({
+                "from_node_id": from_node_id,
+                "to_node_id": to_node_id,
+            }))
+        }
+        RuntimeEvent::GoalGraphCheckpointed { tlog_seq } => {
+            CanonEvent::new("goal_graph", "goal_graph_checkpointed", serde_json::json!({ "tlog_seq": tlog_seq }))
+        }
+        RuntimeEvent::CapabilityInvoked { capability_id, name, node_id } => {
+            CanonEvent::new("capability_graph", "capability_invoked", serde_json::json!({
+                "capability_id": capability_id,
+                "name": name,
+                "node_id": node_id,
+            }))
+        }
+        RuntimeEvent::CapabilityResolved { capability_id, success, duration_ms } => {
+            CanonEvent::new("capability_graph", "capability_resolved", serde_json::json!({
+                "capability_id": capability_id,
+                "success": success,
+                "duration_ms": duration_ms,
+            }))
         }
         _ => {
             return;

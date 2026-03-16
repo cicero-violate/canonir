@@ -1,4 +1,4 @@
-use super::dag::ExecutionGraph;
+use super::dag::GoalGraph;
 use super::goal::GoalSpec;
 use super::graph_algo;
 use super::goal_embedding;
@@ -128,21 +128,21 @@ pub fn telemetry_record_snapshot(path: &Path, snapshot: &TelemetryFrame) {
 pub fn telemetry_record_all_snapshots(snapshot: &TelemetryFrame, log_root: &str, template_root: &str, template_hash: &str) {
     telemetry_record_snapshot(&Path::new(log_root).join("planner_logs/metrics.json"), snapshot);
     telemetry_record_snapshot(&Path::new(log_root).join("metrics.json"), snapshot);
-    telemetry_record_snapshot(&Path::new("/workspace/ai_sandbox/canon/agent_logs/metrics.json"), snapshot);
+    telemetry_record_snapshot(&Path::new("/workspace/ai_sandbox/canon/state/projections/metrics.json"), snapshot);
     let _ = std::fs::create_dir_all(Path::new(template_root));
     telemetry_record_snapshot(&Path::new(template_root).join(format!("metrics_{}.json", template_hash)), snapshot);
 }
 pub fn telemetry_update_avg_u64(current: u64, next: u64) -> u64 {
     current.checked_add(next).map(|s| s / 2).unwrap_or(next)
 }
-pub fn telemetry_progress_fraction(graph: &ExecutionGraph) -> f64 {
+pub fn telemetry_progress_fraction(graph: &GoalGraph) -> f64 {
     if graph.nodes.is_empty() {
         return 0.0;
     }
     let completed = graph.nodes.iter().filter(|n| n.status == super::dag::NodeStatus::Completed).count();
     completed as f64 / graph.nodes.len() as f64
 }
-pub fn telemetry_compute_reward(graph: &ExecutionGraph, iterations_used: u64, max_iterations: u64, goal: &GoalSpec) -> f64 {
+pub fn telemetry_compute_reward(graph: &GoalGraph, iterations_used: u64, max_iterations: u64, goal: &GoalSpec) -> f64 {
     let n_total = graph.nodes.len() as f64;
     if n_total == 0.0 {
         return 0.0;
@@ -158,7 +158,7 @@ pub fn telemetry_compute_reward(graph: &ExecutionGraph, iterations_used: u64, ma
     reward + (OBJECTIVE_ALPHA * objective_delta)
 }
 
-pub fn telemetry_goal_similarity(graph: &ExecutionGraph, goal: &GoalSpec) -> f64 {
+pub fn telemetry_goal_similarity(graph: &GoalGraph, goal: &GoalSpec) -> f64 {
     let graph_embed = graph_algo::graph_embedding(graph, goal.embedding.len());
     goal_embedding::goal_embedding_cosine_similarity(&goal.embedding, &graph_embed)
 }

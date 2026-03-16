@@ -107,6 +107,22 @@ pub enum RuntimeEvent {
     CapabilityCompleted(CapabilityCompleted),
     CapabilityFailed(CapabilityFailed),
     AgentState { payload: serde_json::Value },
+    PolicyBaselineUpdated { payload: serde_json::Value },
+    GoalSelected { payload: serde_json::Value },
+    SystemConfigLoaded { payload: serde_json::Value },
+    AgentRegistered { payload: serde_json::Value },
+    PromptLoaded { payload: serde_json::Value },
+    ToolCall { node_id: String, request_id: String, kind: String, payload: serde_json::Value },
+    ToolResult { node_id: String, request_id: String, kind: String, output: serde_json::Value, success: bool },
+    // Goal Graph: emitted when apply_graph_patch mutates the goal graph
+    GoalNodeCreated { node_id: String, description: String, deps: Vec<String>, caps: Vec<String>, node_type: String, priority: u8, budget: Option<u32> },
+    GoalNodeRetracted { node_id: String },
+    GoalNodeRewritten { node_id: String, new_description: String, new_caps: Vec<String> },
+    GoalEdgeDefined { from_node_id: String, to_node_id: String },
+    GoalGraphCheckpointed { tlog_seq: u64 },
+    // Capability Graph: emitted around capability dispatch
+    CapabilityInvoked { capability_id: String, name: String, node_id: String },
+    CapabilityResolved { capability_id: String, success: bool, duration_ms: u64 },
 }
 
 pub trait RuntimeEmitter: Send + Sync {

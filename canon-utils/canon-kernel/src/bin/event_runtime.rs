@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use canon_kernel::bootstrap::{bootstrap_config, new_prompt_registry};
 use canon_kernel::consumers::agent_consumer::AgentConsumer;
 use canon_kernel::consumers::capability_executor::CapabilityExecutor;
 use canon_kernel::consumers::event_loop::EventLoopConsumer;
@@ -155,13 +156,15 @@ fn main() -> Result<()> {
     let registry = std::sync::Arc::new(std::sync::Mutex::new(
         canon_capability::CapabilityRegistry::new(),
     ));
+    let prompt_registry = new_prompt_registry();
+    bootstrap_config(&tlog_path, &prompt_registry);
     let mut consumers: Vec<Box<dyn canon_event::RuntimeConsumer>> = vec![
         Box::new(AgentConsumer::new()),
         Box::new(CapabilityExecutor::new(
             registry.clone(),
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
         )),
-        Box::new(LlmExecutorConsumer::new()),
+        Box::new(LlmExecutorConsumer::new(prompt_registry.clone())),
     ];
     if event_execution_enabled {
         consumers.push(Box::new(EventLoopConsumer::new()));

@@ -19,6 +19,8 @@ canon_supervisor = { package = "canon-supervisor", path = "../canon-supervisor" 
 canon_planner = { package = "canon-planner", path = "../canon-planner" }
 canon_editor = { package = "canon-editor", path = "../canon-editor" }
 serde_json = { workspace = true }
+serde = { workspace = true }
+toml = "0.8"
 crossbeam-channel = { workspace = true }
 tokio = { workspace = true }
 signal-hook = { workspace = true }

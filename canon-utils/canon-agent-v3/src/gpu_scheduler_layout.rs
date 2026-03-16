@@ -1,4 +1,4 @@
-use crate::dag::{ExecutionGraph, NodeStatus};
+use crate::dag::{GoalGraph, NodeStatus};
 use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct GpuScheduleGraph {
@@ -12,7 +12,7 @@ pub struct GpuGraphIndex {
     pub id_to_index: HashMap<String, usize>,
     pub index_to_id: Vec<String>,
 }
-pub fn gpu_scheduler_layout_from_task_graph(graph: &ExecutionGraph) -> (GpuScheduleGraph, GpuGraphIndex) {
+pub fn gpu_scheduler_layout_from_task_graph(graph: &GoalGraph) -> (GpuScheduleGraph, GpuGraphIndex) {
     let mut id_to_index = HashMap::new();
     let mut index_to_id = Vec::new();
     for (idx, node) in graph.nodes.iter().enumerate() {

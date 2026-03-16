@@ -1,4 +1,4 @@
-use canon_planner::planner::dag::{task_graph_resolve_ready, ExecutionGraph, ExecutionNode, NodeStatus};
+use canon_planner::planner::dag::{task_graph_resolve_ready, GoalGraph, GoalNode, NodeStatus};
 use canon_planner::planner::state_snapshot::PipelineSnapshot;
 use canon_planner::planner::capability_types::PipelineCapability;
 use canon_planner::planner::decompose::{DecomposeNodeType, DecomposeTaskSpec};
@@ -10,14 +10,14 @@ use canon_planner::planner::objectives::{
     goal_raw_with_artifact, load_goal_from_reports, maybe_write_baseline,
     objective_task_hints, ObjectiveWeights,
 };
-use canon_planner::planner::planner_update::{apply_graph_patch, GraphPatch, PlannerUpdateRewriteSpec};
+use canon_planner::planner::planner_update::{apply_graph_patch, GoalGraphEvent, GoalGraphPatch, PlannerUpdateRewriteSpec};
 use canon_event::{
     CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventDelta, RustcState,
     NodeCompleted, NodeFailed, NodeReady, NodeStarted, RuntimeConsumer, RuntimeEmitterHandle,
     RuntimeEvent, RuntimeEventFilter,
 };
 use canon_event::emit_debug::{info, warn};
-use canon_event_store::{read_any_events_from_path_with_start_seq, AnyEvent};
+use canon_event_store::{read_any_events_from_path_with_start_seq, replay_goal_graph_from_tlog, replay_capability_graph_from_tlog, AnyEvent};
 use serde_json::json;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
@@ -105,20 +105,32 @@ enum AgentWork {
     Kernel { delta: EventDelta, state: RustcState },
 }
 
+struct ExecutorState {
+    role: String,
+    pending_count: usize,
+    results: Vec<(usize, String)>,
+}
+
 struct AgentWorkerState {
-    graph: ExecutionGraph,
+    graph: GoalGraph,
     pending: HashMap<String, String>,
     last_tick: u64,
     retry_counts: HashMap<String, u32>,
+    /// delta_request_id → (node_id, delta_idx, delta_kind)
+    delta_to_node: HashMap<String, (String, usize, String)>,
+    /// node_id → in-flight executor context
+    executor_state: HashMap<String, ExecutorState>,
 }
 
 impl AgentWorkerState {
     fn new() -> Self {
         Self {
-            graph: ExecutionGraph::new(),
+            graph: GoalGraph::new(),
             pending: HashMap::new(),
             last_tick: 0,
             retry_counts: HashMap::new(),
+            delta_to_node: HashMap::new(),
+            executor_state: HashMap::new(),
         }
     }
 
@@ -183,7 +195,7 @@ impl AgentWorkerState {
         if !self.graph.nodes.is_empty() {
             return;
         }
-        let Ok(mut graph) = serde_json::from_value::<ExecutionGraph>(payload) else {
+        let Ok(mut graph) = serde_json::from_value::<GoalGraph>(payload) else {
             return;
         };
         graph.rebuild_index();
@@ -204,7 +216,7 @@ impl AgentWorkerState {
         task_graph_resolve_ready(&mut self.graph);
         let mut maybe_node = self.graph.ready_nodes().into_iter().next().cloned();
         if maybe_node.is_none() {
-            if self.plan_if_stalled() {
+            if self.plan_if_stalled(emitter) {
                 task_graph_resolve_ready(&mut self.graph);
                 maybe_node = self.graph.ready_nodes().into_iter().next().cloned();
             }
@@ -252,19 +264,19 @@ impl AgentWorkerState {
             capability: capability_name.to_string(),
             request_id: request_id.clone(),
         }));
+        emitter.emit(RuntimeEvent::CapabilityInvoked {
+            capability_id: request_id.clone(),
+            name: capability_name.to_string(),
+            node_id: node.id.clone(),
+        });
         info(
             "agent_consumer",
             "node_started",
             serde_json::json!({ "node_id": node.id, "capability": capability_name }),
         );
         self.pending.insert(request_id.clone(), node.id.clone());
-        emitter.emit(RuntimeEvent::CapabilityRequested(
-            canon_event::CapabilityRequested {
-                request_id,
-                name: capability_name.to_string(),
-                args,
-            },
-        ));
+        // NOTE: CapabilityRequested is emitted by EventLoopConsumer in response to NodeReady.
+        // Do NOT emit it here — doing so would cause duplicate processing in LlmExecutorConsumer.
     }
 
     fn apply_result(
@@ -324,6 +336,43 @@ impl AgentWorkerState {
             ),
             _ => return,
         };
+        // --- Delta tool-call completion ---
+        if let Some((orig_node_id, delta_idx, delta_kind)) = self.delta_to_node.remove(&request_id) {
+            let output_text = if success { stdout.clone() } else { stderr.clone() };
+            if let Some(emit) = emitter.lock().ok().and_then(|s| s.clone()) {
+                emit.emit(RuntimeEvent::ToolResult {
+                    node_id: orig_node_id.clone(),
+                    request_id: request_id.clone(),
+                    kind: delta_kind,
+                    output: serde_json::json!({ "stdout": output_text, "success": success }),
+                    success,
+                });
+            }
+            if let Some(exec) = self.executor_state.get_mut(&orig_node_id) {
+                exec.results.push((delta_idx, output_text));
+                if exec.results.len() >= exec.pending_count {
+                    // All tool calls done — build follow-up prompt and re-call LLM
+                    let mut exec = self.executor_state.remove(&orig_node_id).unwrap();
+                    exec.results.sort_by_key(|(idx, _)| *idx);
+                    let mut follow_up = String::from("[TOOL RESULTS]\n");
+                    for (i, out) in &exec.results {
+                        follow_up.push_str(&format!("\nResult {}:\n{}\n", i, out));
+                    }
+                    follow_up.push_str("\nBased on the above results, provide your final analysis and return your json block with empty deltas.");
+                    let followup_id = format!("exec-followup-{}-{}", orig_node_id, self.last_tick);
+                    self.pending.insert(followup_id.clone(), orig_node_id.clone());
+                    if let Some(emit) = emitter.lock().ok().and_then(|s| s.clone()) {
+                        emit.emit(RuntimeEvent::CapabilityRequested(canon_event::CapabilityRequested {
+                            request_id: followup_id,
+                            name: "llm.call".to_string(),
+                            args: serde_json::json!({ "prompt": follow_up, "role": exec.role, "raw": true }),
+                        }));
+                    }
+                }
+            }
+            return;
+        }
+
         let node_id = match self.pending.remove(&request_id) {
             Some(node_id) => node_id,
             None => {
@@ -337,11 +386,10 @@ impl AgentWorkerState {
                 }
             }
         };
-        if !plan_and_persist {
-            if let Some(node) = self.graph.get_node(&node_id) {
-                if matches!(node.status, NodeStatus::Completed | NodeStatus::Failed) {
-                    return;
-                }
+        // Guard against double-processing (both live and replay paths)
+        if let Some(node) = self.graph.get_node(&node_id) {
+            if matches!(node.status, NodeStatus::Completed | NodeStatus::Failed) {
+                return;
             }
         }
         let new_status = if success {
@@ -373,8 +421,60 @@ impl AgentWorkerState {
                         request_id: request_id.clone(),
                     }));
                 }
+                emitter.emit(RuntimeEvent::CapabilityResolved {
+                    capability_id: request_id.clone(),
+                    success,
+                    duration_ms: 0,
+                });
             }
         }
+        // --- Executor delta dispatch ---
+        // If the LLM returned executor-format JSON (results array with deltas), dispatch
+        // each delta as a sub-capability and keep the node Running.
+        if success && capability_name == "llm.call" {
+            if let Some(result) = result_value.as_ref() {
+                let text = result.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                if let Some(deltas) = parse_executor_deltas(text) {
+                    if !deltas.is_empty() {
+                        let _ = self.graph.update_status(&node_id, NodeStatus::Running);
+                        let role = self.graph.get_node(&node_id)
+                            .map(|n| if matches!(n.node_type, canon_planner::planner::decompose::DecomposeNodeType::Analysis) { "planner" } else { "exec" })
+                            .unwrap_or("exec")
+                            .to_string();
+                        let exec_state = ExecutorState {
+                            role,
+                            pending_count: deltas.len(),
+                            results: Vec::new(),
+                        };
+                        self.executor_state.insert(node_id.clone(), exec_state);
+                        if let Some(emit) = emitter.lock().ok().and_then(|s| s.clone()) {
+                            for (idx, delta) in deltas.iter().enumerate() {
+                                let kind = delta.get("type").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                                let delta_id = format!("delta-{}-{}-{}", node_id, idx, self.last_tick);
+                                let cap_args = delta_to_cap_args(delta);
+                                self.delta_to_node.insert(delta_id.clone(), (node_id.clone(), idx, kind.clone()));
+                                emit.emit(RuntimeEvent::ToolCall {
+                                    node_id: node_id.clone(),
+                                    request_id: delta_id.clone(),
+                                    kind,
+                                    payload: delta.clone(),
+                                });
+                                emit.emit(RuntimeEvent::CapabilityRequested(canon_event::CapabilityRequested {
+                                    request_id: delta_id,
+                                    name: "bash".to_string(),
+                                    args: cap_args,
+                                }));
+                            }
+                        }
+                        if plan_and_persist {
+                            self.persist_snapshot(emitter);
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+
         let patch_to_apply = if success && capability_name == "llm.call" {
             result_value
                 .as_ref()
@@ -386,6 +486,17 @@ impl AgentWorkerState {
             if success {
                 if capability_name == "llm.call" {
                     node.result = result_value.as_ref().and_then(|v| serde_json::to_string(v).ok());
+                    // Log the LLM response to the reports directory for observability
+                    if plan_and_persist {
+                        // raw=true: result={"text":"..."}, raw=false: result is parsed JSON directly
+                        let text = result_value.as_ref().map(|v| {
+                            v.get("text")
+                                .and_then(|t| t.as_str())
+                                .map(str::to_string)
+                                .unwrap_or_else(|| serde_json::to_string_pretty(v).unwrap_or_default())
+                        }).unwrap_or_default();
+                        append_llm_response_log(&node_id, &request_id, &text);
+                    }
                 } else if !stdout.is_empty() {
                     node.result = Some(stdout);
                 }
@@ -394,20 +505,28 @@ impl AgentWorkerState {
             }
         }
         if let Some(patch) = patch_to_apply {
-            let _ = apply_graph_patch(&mut self.graph, patch);
-            self.graph.rebuild_index();
+            if let Ok(graph_events) = apply_graph_patch(&mut self.graph, patch) {
+                self.graph.rebuild_index();
+                if plan_and_persist {
+                    if let Some(emitter_handle) = emitter.lock().ok().and_then(|s| s.clone()) {
+                        emit_goal_graph_events(&emitter_handle, graph_events);
+                    }
+                }
+            } else {
+                self.graph.rebuild_index();
+            }
         }
         if plan_and_persist {
-            let _ = self.plan_if_stalled();
+            let _ = self.plan_if_stalled(emitter);
             self.persist_snapshot(emitter);
         }
     }
 
-    fn plan_if_stalled(&mut self) -> bool {
+    fn plan_if_stalled(&mut self, emitter: &Arc<Mutex<Option<RuntimeEmitterHandle>>>) -> bool {
         let signals = graph_analysis_compute_graph_signals(&self.graph);
         let features = compute_graph_features_parallel(&self.graph);
 
-        let mut update = GraphPatch {
+        let mut update = GoalGraphPatch {
             new_nodes: Vec::new(),
             new_edges: Vec::new(),
             retract_nodes: Vec::new(),
@@ -415,9 +534,9 @@ impl AgentWorkerState {
         };
 
         if self.graph.nodes.is_empty() {
-            self.seed_orchestration(&mut update);
+            self.seed_orchestration(&mut update, emitter);
         } else {
-            let failed_nodes: Vec<ExecutionNode> = self
+            let failed_nodes: Vec<GoalNode> = self
                 .graph
                 .nodes
                 .iter()
@@ -488,7 +607,7 @@ impl AgentWorkerState {
             return false;
         }
 
-        if apply_graph_patch(&mut self.graph, update).is_ok() {
+        if let Ok(_graph_events) = apply_graph_patch(&mut self.graph, update) {
             self.graph.rebuild_index();
             return true;
         }
@@ -504,7 +623,7 @@ impl AgentWorkerState {
         }
     }
 
-    fn seed_orchestration(&mut self, update: &mut GraphPatch) {
+    fn seed_orchestration(&mut self, update: &mut GoalGraphPatch, emitter: &Arc<Mutex<Option<RuntimeEmitterHandle>>>) {
         if !update.new_nodes.is_empty() {
             return;
         }
@@ -512,6 +631,12 @@ impl AgentWorkerState {
             "Analyse system state and produce initial task decomposition".to_string();
         if let Some(selection) = load_goal_from_reports(ObjectiveWeights::default(), Some(&self.graph)) {
             maybe_write_baseline(&selection);
+            if let Ok(payload) = serde_json::to_value(&selection.artifact) {
+                if let Some(emit) = emitter.lock().ok().and_then(|slot| slot.clone()) {
+                    emit.emit(RuntimeEvent::GoalSelected { payload: payload.clone() });
+                    emit.emit(RuntimeEvent::PolicyBaselineUpdated { payload });
+                }
+            }
             let mut goal = goal_raw_with_artifact("", &selection.artifact);
             let hints = objective_task_hints(&selection.artifact);
             if !hints.is_empty() {
@@ -537,17 +662,20 @@ impl AgentWorkerState {
     }
 
     fn persist_snapshot(&self, emitter: &Arc<Mutex<Option<RuntimeEmitterHandle>>>) {
+        let tlog_seq = latest_segment_seq(&resolve_runtime_tlog_path()).unwrap_or(0);
         let snapshot = PipelineSnapshot {
             graph: self.graph.clone(),
             iteration: self.last_tick,
-            runtime_start_seq: latest_segment_seq(&resolve_runtime_tlog_path()).unwrap_or(0),
+            runtime_start_seq: tlog_seq,
             goal: GoalSpec::new(String::new(), 0),
         };
         if let Ok(payload) = serde_json::to_value(&snapshot) {
-            if let Some(emitter) = emitter.lock().ok().and_then(|slot| slot.clone()) {
-                emitter.emit(RuntimeEvent::AgentState { payload });
+            if let Some(emitter_handle) = emitter.lock().ok().and_then(|slot| slot.clone()) {
+                emitter_handle.emit(RuntimeEvent::AgentState { payload });
+                emitter_handle.emit(RuntimeEvent::GoalGraphCheckpointed { tlog_seq });
             }
         }
+        write_graph_report(&self.graph, self.last_tick);
     }
 
     fn replay_runtime_events_since(&mut self, start_seq: u64) {
@@ -589,7 +717,8 @@ impl AgentWorkerState {
     }
 }
 
-fn capability_name_for_node(node: &ExecutionNode) -> Option<&'static str> {
+fn capability_name_for_node(node: &GoalNode) -> Option<&'static str> {
+    use canon_planner::planner::decompose::DecomposeNodeType;
     for cap in &node.required_capabilities {
         match cap {
             PipelineCapability::FileRead => return Some("file.read"),
@@ -603,15 +732,26 @@ fn capability_name_for_node(node: &ExecutionNode) -> Option<&'static str> {
             _ => {}
         }
     }
+    // Fallback: analysis nodes with any unrecognised capability set are dispatched to the LLM.
+    // This covers ReadDag, ComputeDelta, StatelessInvoke, InvariantCheck, etc.
+    if matches!(node.node_type, DecomposeNodeType::Analysis) {
+        return Some("llm.call");
+    }
     None
 }
 
-fn build_capability_args(node: &ExecutionNode, capability: &str) -> Option<serde_json::Value> {
+fn build_capability_args(node: &GoalNode, capability: &str) -> Option<serde_json::Value> {
     if capability == "llm.call" {
         use canon_planner::planner::decompose::DecomposeNodeType;
         let prompt = node.description.clone();
-        let raw = matches!(node.node_type, DecomposeNodeType::Analysis);
-        return Some(json!({ "prompt": prompt, "raw": raw }));
+        // Analysis nodes go to the planner endpoint (returns graph patches).
+        // All other nodes go to the exec endpoint (returns delta tool calls).
+        let (raw, role) = if matches!(node.node_type, DecomposeNodeType::Analysis) {
+            (false, "planner")
+        } else {
+            (true, "exec")
+        };
+        return Some(json!({ "prompt": prompt, "raw": raw, "role": role }));
     }
     if let Some(args) = parse_inline_json(&node.description) {
         return Some(args);
@@ -642,21 +782,129 @@ fn build_capability_args(node: &ExecutionNode, capability: &str) -> Option<serde
 }
 
 fn parse_inline_json(text: &str) -> Option<serde_json::Value> {
+    let s = parse_inline_json_str(text)?;
+    serde_json::from_str(&s).ok()
+}
+
+/// Extract the outermost `{...}` span from text as a String without parsing.
+fn parse_inline_json_str(text: &str) -> Option<String> {
     let start = text.find('{')?;
-    let end = text.rfind('}')?;
-    if end <= start {
-        return None;
+    // Walk forward from start to find the matching closing brace
+    let mut depth = 0usize;
+    let mut end = None;
+    let chars = text[start..].char_indices();
+    for (i, c) in chars {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(start + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
     }
-    let slice = &text[start..=end];
-    serde_json::from_str(slice).ok()
+    let end = end?;
+    Some(text[start..=end].to_string())
+}
+
+/// Parse executor-format LLM response. Returns Some(deltas) if the text contains
+/// a `{"results":[{"deltas":[...]}]}` block. Returns None if it's not executor format.
+/// Returns Some(empty vec) if executor format but no tool calls (done).
+fn parse_executor_deltas(text: &str) -> Option<Vec<serde_json::Value>> {
+    // Find a fenced JSON block first; fall back to bare JSON
+    let json_str = extract_fenced_json(text).unwrap_or_else(|| text.to_string());
+    let val: serde_json::Value = serde_json::from_str(json_str.trim()).ok()?;
+    let results = val.get("results")?.as_array()?;
+    let deltas: Vec<serde_json::Value> = results
+        .iter()
+        .filter_map(|r| r.get("deltas")?.as_array().cloned())
+        .flatten()
+        .collect();
+    Some(deltas)
+}
+
+fn extract_fenced_json(text: &str) -> Option<String> {
+    let start = text.find("```json")
+        .map(|i| i + 7)
+        .or_else(|| text.find("```\n{").map(|i| i + 3))?;
+    let end = text[start..].find("```")?;
+    Some(text[start..start + end].trim().to_string())
+}
+
+/// Convert an executor delta into a bash `cmd` string.
+fn delta_to_cap_args(delta: &serde_json::Value) -> serde_json::Value {
+    let kind = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let cmd = match kind {
+        "read_file" => {
+            let path = delta.get("path").and_then(|v| v.as_str()).unwrap_or("/");
+            format!("cat {}", shell_quote(path))
+        }
+        "list_dir" => {
+            let path = delta.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+            format!("ls -la {}", shell_quote(path))
+        }
+        "read_command" => {
+            let command = delta.get("command").and_then(|v| v.as_str()).unwrap_or("echo");
+            let args = delta.get("args")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter()
+                    .filter_map(|a| a.as_str())
+                    .map(shell_quote)
+                    .collect::<Vec<_>>()
+                    .join(" "))
+                .unwrap_or_default();
+            let path = delta.get("path").and_then(|v| v.as_str());
+            if let Some(p) = path {
+                format!("cd {} && {} {}", shell_quote(p), command, args)
+            } else {
+                format!("{} {}", command, args)
+            }
+        }
+        _ => format!("echo 'unknown delta type: {}'", kind),
+    };
+    serde_json::json!({ "cmd": cmd })
+}
+
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 fn extract_graph_patch_from_llm_result(
     result: &serde_json::Value,
-) -> Option<canon_planner::planner::planner_update::GraphPatch> {
+) -> Option<canon_planner::planner::planner_update::GoalGraphPatch> {
+    use canon_planner::planner::planner_update::GoalGraphPatch;
+
+    // raw=false (analysis/planner) path: result IS the parsed JSON value directly.
+    // Try deserialising it straight into a GoalGraphPatch first.
+    if result.get("text").is_none() && result.get("results").is_none() {
+        if let Ok(patch) = serde_json::from_value::<GoalGraphPatch>(result.clone()) {
+            return Some(patch);
+        }
+    }
+
+    // raw=true (executor) path: result = {"text": "..."}. Parse the text string.
     let text = result.get("text").and_then(|v| v.as_str())?;
-    let json_val = parse_inline_json(text)?;
-    serde_json::from_value(json_val).ok()
+    // Try fenced JSON block first (```json ... ```), then fall back to brace-depth scan.
+    let json_str = extract_fenced_json(text)
+        .or_else(|| parse_inline_json_str(text))?;
+    let parsed = serde_json::from_str::<serde_json::Value>(&json_str).ok()?;
+    if parsed.get("results").is_some() {
+        return None; // executor format — not a GoalGraphPatch
+    }
+    let patch = serde_json::from_value::<GoalGraphPatch>(parsed).ok()?;
+    if patch.new_nodes.is_empty() && patch.new_edges.is_empty()
+        && patch.retract_nodes.is_empty() && patch.rewrite_nodes.is_empty()
+    {
+        canon_event::emit_debug::warn(
+            "agent_consumer",
+            "graph_patch_empty",
+            serde_json::json!({ "text_preview": &text[..text.len().min(200)] }),
+        );
+    }
+    Some(patch)
 }
 
 fn extract_path(text: &str) -> Option<String> {
@@ -725,7 +973,7 @@ fn parse_node_id_from_request_id(request_id: &str) -> Option<String> {
     Some(rest[..last_dash].to_string())
 }
 
-fn unique_node_id(base: &str, graph: &ExecutionGraph) -> String {
+fn unique_node_id(base: &str, graph: &GoalGraph) -> String {
     if graph.nodes.iter().all(|n| n.id != base) {
         return base.to_string();
     }
@@ -736,5 +984,98 @@ fn unique_node_id(base: &str, graph: &ExecutionGraph) -> String {
             return candidate;
         }
         idx = idx.saturating_add(1);
+    }
+}
+
+fn reports_out_dir() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("CANON_REPORTS_OUT") {
+        return std::path::PathBuf::from(p);
+    }
+    std::path::PathBuf::from("/workspace/ai_sandbox/canon/state/reports_out")
+}
+
+/// Overwrite graph_state.json with a human-readable summary of current node statuses.
+fn write_graph_report(graph: &GoalGraph, tick: u64) {
+    let dir = reports_out_dir();
+    let _ = std::fs::create_dir_all(&dir);
+
+    // Write graph_state.json (goal graph node statuses)
+    let path = dir.join("graph_state.json");
+    let nodes: Vec<serde_json::Value> = graph.nodes.iter().map(|n| {
+        let result_preview = n.result.as_deref()
+            .map(|r| if r.len() > 300 { format!("{}…", &r[..300]) } else { r.to_string() });
+        serde_json::json!({
+            "id": n.id,
+            "status": format!("{:?}", n.status).to_lowercase(),
+            "type": format!("{:?}", n.node_type).to_lowercase(),
+            "caps": n.required_capabilities.iter().map(|c| format!("{c:?}")).collect::<Vec<_>>(),
+            "deps": n.deps,
+            "priority": n.priority,
+            "result_preview": result_preview,
+            "error": n.error,
+        })
+    }).collect();
+    let report = serde_json::json!({ "tick": tick, "nodes": nodes });
+    if let Ok(s) = serde_json::to_string_pretty(&report) {
+        let _ = std::fs::write(&path, s);
+    }
+
+    // Write goal_graph_state.json from event log projection
+    let tlog_path = resolve_runtime_tlog_path();
+    if tlog_path.exists() {
+        if let Ok(goal_state) = replay_goal_graph_from_tlog(&tlog_path) {
+            if let Ok(s) = serde_json::to_string_pretty(&goal_state) {
+                let _ = std::fs::write(dir.join("goal_graph_state.json"), s);
+            }
+        }
+        if let Ok(cap_state) = replay_capability_graph_from_tlog(&tlog_path) {
+            if let Ok(s) = serde_json::to_string_pretty(&cap_state) {
+                let _ = std::fs::write(dir.join("capability_graph_state.json"), s);
+            }
+        }
+    }
+}
+
+/// Emit GoalGraphEvent mutations as RuntimeEvents via the emitter.
+fn emit_goal_graph_events(emitter: &canon_event::RuntimeEmitterHandle, events: Vec<GoalGraphEvent>) {
+    for event in events {
+        let runtime_event = match event {
+            GoalGraphEvent::NodeCreated { node_id, description, deps, caps, node_type, priority, budget } => {
+                RuntimeEvent::GoalNodeCreated { node_id, description, deps, caps, node_type, priority, budget }
+            }
+            GoalGraphEvent::NodeRetracted { node_id } => {
+                RuntimeEvent::GoalNodeRetracted { node_id }
+            }
+            GoalGraphEvent::NodeRewritten { node_id, new_description, new_caps } => {
+                RuntimeEvent::GoalNodeRewritten { node_id, new_description, new_caps }
+            }
+            GoalGraphEvent::EdgeDefined { from, to } => {
+                RuntimeEvent::GoalEdgeDefined { from_node_id: from, to_node_id: to }
+            }
+        };
+        emitter.emit(runtime_event);
+    }
+}
+
+/// Append one LLM response record to llm_responses.jsonl.
+fn append_llm_response_log(node_id: &str, request_id: &str, text: &str) {
+    let dir = reports_out_dir();
+    let path = dir.join("llm_responses.jsonl");
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let entry = serde_json::json!({
+        "ts_ms": ts,
+        "node_id": node_id,
+        "request_id": request_id,
+        "text": text,
+    });
+    if let Ok(mut line) = serde_json::to_string(&entry) {
+        line.push('\n');
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = f.write_all(line.as_bytes());
+        }
     }
 }

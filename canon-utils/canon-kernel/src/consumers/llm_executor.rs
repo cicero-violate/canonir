@@ -1,3 +1,4 @@
+use crate::bootstrap::PromptRegistryHandle;
 use canon_planner::planner::config::CapabilityConfig;
 use canon_planner::planner::engine;
 use canon_planner::planner::endpoint_worker;
@@ -25,10 +26,11 @@ pub struct LlmExecutorConsumer {
 }
 
 impl LlmExecutorConsumer {
-    pub fn new() -> Self {
+    pub fn new(registry: PromptRegistryHandle) -> Self {
         let (work_tx, work_rx) = std::sync::mpsc::channel();
         let emitter = Arc::new(Mutex::new(None::<RuntimeEmitterHandle>));
         let emitter_handle = Arc::clone(&emitter);
+        let registry_handle = Arc::clone(&registry);
 
         thread::Builder::new()
             .name("llm_executor_worker".to_string())
@@ -141,6 +143,12 @@ impl LlmExecutorConsumer {
                             };
                             let retries = config.llm_retry_count.max(1);
                             let delay = config.llm_retry_delay_secs;
+                            // role_markdown is a filename relative to the prompts dir; look up from registry
+                            let role_content = registry_handle
+                                .read()
+                                .ok()
+                                .and_then(|r| r.get(&endpoint.role_markdown).map(str::to_string))
+                                .unwrap_or_default();
                             info(
                                 "llm_executor",
                                 "request_dispatch",
@@ -159,7 +167,7 @@ impl LlmExecutorConsumer {
                                             &endpoint.url,
                                             endpoint.stateful,
                                             &prompt,
-                                            &endpoint.role_markdown,
+                                            &role_content,
                                             "llm_executor",
                                             None,
                                             &tabs,
@@ -177,7 +185,7 @@ impl LlmExecutorConsumer {
                                             &endpoint.url,
                                             endpoint.stateful,
                                             &prompt,
-                                            &endpoint.role_markdown,
+                                            &role_content,
                                             "llm_executor",
                                             None,
                                             &tabs,
@@ -312,3 +320,4 @@ impl RuntimeConsumer for LlmExecutorConsumer {
         }
     }
 }
+
