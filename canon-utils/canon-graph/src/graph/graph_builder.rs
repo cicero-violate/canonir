@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use crate::artifacts_loader::{Edge as GraphEdge, KernelGraph as LoadedGraph, Node as GraphNode};
 use crate::graph::csr::build_csr_graph;
 use crate::graph::graph_types::{EdgeRow, NodeRow};
-use canon_types::KernelEvent;
+use canon_types::RustcEvent;
 
 pub fn apply_event_to_graph(
-    event: KernelEvent,
+    event: RustcEvent,
     nodes: &mut Vec<NodeRow>,
     edges: &mut Vec<EdgeRow>,
     files: &mut Vec<String>,
@@ -14,7 +14,7 @@ pub fn apply_event_to_graph(
     clear_on_session: bool,
 ) -> bool {
     match event {
-        KernelEvent::SessionStart { .. } => {
+        RustcEvent::SessionStart { .. } => {
             if clear_on_session {
                 nodes.clear();
                 edges.clear();
@@ -23,8 +23,8 @@ pub fn apply_event_to_graph(
             }
             true
         }
-        KernelEvent::NodeDefined { symbol, kind, file, line, .. }
-        | KernelEvent::NodeUpdated { symbol, kind, file, line, .. } => {
+        RustcEvent::NodeDefined { symbol, kind, file, line, .. }
+        | RustcEvent::NodeUpdated { symbol, kind, file, line, .. } => {
             let sym = symbol.as_str();
             let kind = kind.as_str();
             let file = file.as_str();
@@ -75,7 +75,7 @@ pub fn apply_event_to_graph(
             }
             true
         }
-        KernelEvent::EdgeDefined { src, dst, kind } => {
+        RustcEvent::EdgeDefined { src, dst, kind } => {
             let src_sym = src.as_str();
             let dst_sym = dst.as_str();
             let kind = kind.as_str();
@@ -92,14 +92,14 @@ pub fn apply_event_to_graph(
             });
             true
         }
-        KernelEvent::NodeRemoved { symbol } => {
+        RustcEvent::NodeRemoved { symbol } => {
             let sym = symbol.as_str();
             let Some(&id) = symbol_to_id.get(sym) else {
                 return false;
             };
             delete_node(id, nodes, edges, symbol_to_id)
         }
-        KernelEvent::EdgeRemoved { src, dst, kind } => {
+        RustcEvent::EdgeRemoved { src, dst, kind } => {
             let src_sym = src.as_str();
             let dst_sym = dst.as_str();
             let kind = kind.as_str();
@@ -113,20 +113,20 @@ pub fn apply_event_to_graph(
             edges.retain(|e| !(e.src == src && e.dst == dst && e.kind == kind));
             before != edges.len()
         }
-        KernelEvent::FileSeen { path } => {
+        RustcEvent::FileSeen { path } => {
             let path = path.as_str();
             if !path.is_empty() && !files.iter().any(|p| p == path) {
                 files.push(path.to_string());
             }
             true
         }
-        KernelEvent::WarningCaptured { .. }
-        | KernelEvent::PanicCaptured { .. }
-        | KernelEvent::CallsiteObserved { .. }
-        | KernelEvent::SymbolDefined { .. }
-        | KernelEvent::SpanDefined { .. }
-        | KernelEvent::CompilationUnitFinished { .. }
-        | KernelEvent::InvariantViolation { .. } => {
+        RustcEvent::WarningCaptured { .. }
+        | RustcEvent::PanicCaptured { .. }
+        | RustcEvent::CallsiteObserved { .. }
+        | RustcEvent::SymbolDefined { .. }
+        | RustcEvent::SpanDefined { .. }
+        | RustcEvent::CompilationUnitFinished { .. }
+        | RustcEvent::InvariantViolation { .. } => {
             // telemetry-only or non-graph events
             true
         }

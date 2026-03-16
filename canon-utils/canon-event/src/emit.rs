@@ -1,5 +1,5 @@
 use anyhow::Result;
-use canon_tlog_writer::{append_event_json, BinarySegmentWriter, CanonEvent};
+use crate::tlog::{append_event_json, BinarySegmentWriter, CanonEvent};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -12,6 +12,10 @@ fn tlog_format_is_binary() -> bool {
 
 fn binary_dir_from_path(path: &Path) -> PathBuf {
     if path.is_dir() {
+        return path.to_path_buf();
+    }
+    // Already a .tlog.d dir path (not yet created); avoid adding another .d
+    if path.to_string_lossy().ends_with(".tlog.d") {
         return path.to_path_buf();
     }
     path.with_extension("tlog.d")
@@ -29,10 +33,10 @@ pub fn resolve_tlog_path(project_root: Option<&Path>, override_env: Option<&str>
     if let Some(root) = project_root {
         return root
             .join("state")
-            .join("kernel_logs")
-            .join("kernel.tlog.d");
+            .join("event_log")
+            .join("event.tlog.d");
     }
-    PathBuf::from("/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog.d")
+    PathBuf::from("/workspace/ai_sandbox/canon/state/event_log/event.tlog.d")
 }
 
 pub fn emit_event(source: &str, kind: &str, payload: Value, tlog_path: &Path) -> Result<()> {
@@ -47,8 +51,8 @@ pub fn emit_event(source: &str, kind: &str, payload: Value, tlog_path: &Path) ->
     Ok(())
 }
 
-pub fn emit_kernel_event(kind: &str, payload: Value, tlog_path: &Path) -> Result<()> {
-    emit_event("canon-kernel", kind, payload, tlog_path)
+pub fn emit_rustc_event(kind: &str, payload: Value, tlog_path: &Path) -> Result<()> {
+    emit_event("canon-rustc", kind, payload, tlog_path)
 }
 
 pub fn emit_runtime_event(kind: &str, payload: Value, tlog_path: &Path) -> Result<()> {

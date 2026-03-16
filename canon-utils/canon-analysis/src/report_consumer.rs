@@ -1,6 +1,6 @@
 use canon_event::emit_debug::{info, error as log_error};
-use canon_event::{CapabilityRequested, EventMask, KernelEventConsumer};
-use canon_types::{EventDelta, KernelEvent, KernelState};
+use canon_event::{CapabilityRequested, EventMask, RustcEventConsumer};
+use canon_types::{EventDelta, RustcEvent, RustcState};
 use std::path::PathBuf;
 
 use crate::verify_reports_layout;
@@ -28,19 +28,19 @@ impl ReportEventConsumer {
     }
 }
 
-impl KernelEventConsumer for ReportEventConsumer {
+impl RustcEventConsumer for ReportEventConsumer {
     fn mask(&self) -> EventMask {
         EventMask::COMPILATION_UNIT_FINISHED
     }
 
-    fn on_event(&mut self, delta: &EventDelta, _state: &KernelState) {
-        if !matches!(delta.event, KernelEvent::CompilationUnitFinished { .. }) {
+    fn on_event(&mut self, delta: &EventDelta, _state: &RustcState) {
+        if !matches!(delta.event, RustcEvent::CompilationUnitFinished { .. }) {
             return;
         }
         self.last_tick = delta.tick;
         self.event_count = self.event_count.saturating_add(1);
         let crate_name = match &delta.event {
-            KernelEvent::CompilationUnitFinished { crate_name } => crate_name.as_str(),
+            RustcEvent::CompilationUnitFinished { crate_name } => crate_name.as_str(),
             _ => "unknown",
         };
         let Some(tlog_path) = self.tlog_path.as_ref() else {
@@ -124,7 +124,7 @@ impl KernelEventConsumer for ReportEventConsumer {
     }
 }
 
-fn resolve_out_dir(event: &KernelEvent, out_root: Option<&PathBuf>) -> Option<PathBuf> {
+fn resolve_out_dir(event: &RustcEvent, out_root: Option<&PathBuf>) -> Option<PathBuf> {
     let root = match out_root {
         Some(path) => path.clone(),
         None => return None,
@@ -133,7 +133,7 @@ fn resolve_out_dir(event: &KernelEvent, out_root: Option<&PathBuf>) -> Option<Pa
     if root
         .file_name()
         .and_then(|s| s.to_str())
-        .map(|s| s == "kernel")
+        .map(|s| s == "rustc")
         .unwrap_or(false)
     {
         if let Some(parent) = root.parent() {
@@ -141,7 +141,7 @@ fn resolve_out_dir(event: &KernelEvent, out_root: Option<&PathBuf>) -> Option<Pa
         }
     }
     let crate_name = match event {
-        KernelEvent::CompilationUnitFinished { crate_name } => crate_name.as_str(),
+        RustcEvent::CompilationUnitFinished { crate_name } => crate_name.as_str(),
         _ => "unknown",
     };
     let crate_dir = sanitize_crate_name(crate_name);
@@ -159,7 +159,7 @@ fn resolve_out_dir(event: &KernelEvent, out_root: Option<&PathBuf>) -> Option<Pa
     if root.join("crates").exists() || root.ends_with("reports_out") {
         return Some(root.join("crates").join(crate_dir));
     }
-    if root.file_name().and_then(|s| s.to_str()) == Some("kernel") {
+    if root.file_name().and_then(|s| s.to_str()) == Some("rustc") {
         return Some(root);
     }
     Some(root.join("crates").join(crate_dir))

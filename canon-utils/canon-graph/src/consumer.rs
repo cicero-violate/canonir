@@ -1,6 +1,6 @@
 use canon_event::emit_debug::info;
-use canon_event::{EventMask, KernelEventConsumer};
-use canon_types::{EventDelta, KernelEvent, KernelState};
+use canon_event::{EventMask, RustcEventConsumer};
+use canon_types::{EventDelta, RustcEvent, RustcState};
 use serde_json::json;
 
 #[derive(Debug, Default)]
@@ -17,20 +17,20 @@ impl GraphConsumer {
     }
 }
 
-impl KernelEventConsumer for GraphConsumer {
+impl RustcEventConsumer for GraphConsumer {
     fn mask(&self) -> EventMask {
         EventMask::ALL
     }
 
-    fn on_event(&mut self, delta: &EventDelta, _state: &KernelState) {
+    fn on_event(&mut self, delta: &EventDelta, _state: &RustcState) {
         match &delta.event {
-            KernelEvent::NodeDefined { .. } => {
+            RustcEvent::NodeDefined { .. } => {
                 self.node_count += 1;
             }
-            KernelEvent::EdgeDefined { .. } => {
+            RustcEvent::EdgeDefined { .. } => {
                 self.edge_count += 1;
             }
-            KernelEvent::FileSeen { .. } => {
+            RustcEvent::FileSeen { .. } => {
                 self.file_count += 1;
             }
             _ => {}

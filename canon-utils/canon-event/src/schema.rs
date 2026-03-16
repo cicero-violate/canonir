@@ -1,1 +1,1 @@
-pub use canon_types::{EventDelta, KernelEvent, KernelState};
+pub use canon_types::{EventDelta, RustcEvent, RustcState};

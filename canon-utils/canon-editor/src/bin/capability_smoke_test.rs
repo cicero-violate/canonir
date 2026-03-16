@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use canon_capability_engine::{CapabilityContext, CapabilityRegistry, CapabilityResult};
+use canon_capability::{CapabilityContext, CapabilityRegistry, CapabilityResult};
 use canon_editor::register_editor_capabilities;
 use canon_event::{CapabilityRequested, RuntimeEvent};
 

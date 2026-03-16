@@ -3,11 +3,11 @@ use std::fs;
 use std::io::BufRead;
 use std::path::Path;
 
-use canon_event_store::reader::{
-    extract_kernel_event, find_last_session_offset, parse_any_event, read_any_events_from_path,
+use canon_event_store::{
+    extract_rustc_event, find_last_session_offset, parse_any_event, read_any_events_from_path,
     AnyEvent,
 };
-use canon_types::KernelEvent;
+use canon_types::RustcEvent;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TlogIntegrityReport {
@@ -45,8 +45,8 @@ pub fn write_tlog_integrity_report(tlog_path: &Path, reports_dir: &Path) -> Resu
             hash_chain = hash_chain.wrapping_mul(1315423911).wrapping_add(hash_bytes(
                 serde_json::to_string(&canon).unwrap_or_default().as_bytes(),
             ));
-            if let Some(kernel) = extract_kernel_event(&canon) {
-                if let KernelEvent::SessionStart { .. } = kernel {
+            if let Some(kernel) = extract_rustc_event(&canon) {
+                if let RustcEvent::SessionStart { .. } = kernel {
                     session_count += 1;
                 }
             } else {
@@ -98,7 +98,7 @@ pub fn write_tlog_integrity_report(tlog_path: &Path, reports_dir: &Path) -> Resu
                     let (prefix, suffix) = line.split_at(idx);
             if let Some(event) = parse_any_event(prefix) {
                 if let AnyEvent::Canon(canon) = event {
-                    if let Some(value) = extract_kernel_event(&canon) {
+                    if let Some(value) = extract_rustc_event(&canon) {
                         if apply_tlog_integrity_record(&value, slice_offset, &idx_offset, &mut session_count, &mut last_session_offset_found, &mut session_offsets_monotonic, &mut last_session_offset_seen) {
                             // ok
                         }
@@ -114,7 +114,7 @@ pub fn write_tlog_integrity_report(tlog_path: &Path, reports_dir: &Path) -> Resu
             }
             if let Some(event) = parse_any_event(line) {
                 if let AnyEvent::Canon(canon) = event {
-                    if let Some(value) = extract_kernel_event(&canon) {
+                    if let Some(value) = extract_rustc_event(&canon) {
                         if apply_tlog_integrity_record(&value, slice_offset, &idx_offset, &mut session_count, &mut last_session_offset_found, &mut session_offsets_monotonic, &mut last_session_offset_seen) {
                             // ok
                         }
@@ -145,7 +145,7 @@ pub fn write_tlog_integrity_report(tlog_path: &Path, reports_dir: &Path) -> Resu
 }
 
 fn apply_tlog_integrity_record(
-    value: &KernelEvent,
+    value: &RustcEvent,
     line_start: u64,
     idx_offset: &Option<u64>,
     session_count: &mut u64,
@@ -153,7 +153,7 @@ fn apply_tlog_integrity_record(
     session_offsets_monotonic: &mut bool,
     last_session_offset_seen: &mut Option<u64>,
 ) -> bool {
-    let KernelEvent::SessionStart { byte_offset, .. } = value else {
+    let RustcEvent::SessionStart { byte_offset, .. } = value else {
         return true;
     };
     *session_count += 1;

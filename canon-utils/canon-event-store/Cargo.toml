@@ -4,5 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-canon_tlog_writer = { package = "canon-tlog-writer", path = "../tlog-writer" }
-canon_tlog_replay = { package = "canon-tlog-replay", path = "../tlog-replay" }
+anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+memmap2.workspace = true
+rkyv.workspace = true
+crc32fast = "1"
+canon_event = { package = "canon-event", path = "../canon-event" }

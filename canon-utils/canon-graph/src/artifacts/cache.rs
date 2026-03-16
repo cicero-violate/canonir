@@ -6,10 +6,10 @@ use std::io::{BufRead, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::graph::graph_builder::module_prefixes;
-use canon_event_store::reader::{
-    extract_kernel_event, parse_any_event, read_any_events_from_path, AnyEvent,
+use canon_event_store::{
+    extract_rustc_event, parse_any_event, read_any_events_from_path, AnyEvent,
 };
-use canon_types::KernelEvent;
+use canon_types::RustcEvent;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GraphCache {
@@ -46,7 +46,7 @@ pub fn update_graph_cache(tlog_path: &Path, reports_dir: &Path) -> Result<GraphC
     if tlog_path.is_dir() {
         for event in read_any_events_from_path(tlog_path)? {
             if let AnyEvent::Canon(canon) = event {
-                if let Some(kernel) = extract_kernel_event(&canon) {
+                if let Some(kernel) = extract_rustc_event(&canon) {
                     apply_cache_event(kernel, &mut cache);
                 }
             }
@@ -64,7 +64,7 @@ pub fn update_graph_cache(tlog_path: &Path, reports_dir: &Path) -> Result<GraphC
             let raw_line = raw_line?;
             if let Some(event) = parse_any_event(&raw_line) {
                 if let AnyEvent::Canon(canon) = event {
-                    if let Some(kernel) = extract_kernel_event(&canon) {
+                    if let Some(kernel) = extract_rustc_event(&canon) {
                         apply_cache_event(kernel, &mut cache);
                     }
                 }
@@ -76,15 +76,15 @@ pub fn update_graph_cache(tlog_path: &Path, reports_dir: &Path) -> Result<GraphC
     Ok(cache)
 }
 
-fn apply_cache_event(event: KernelEvent, cache: &mut GraphCache) {
+fn apply_cache_event(event: RustcEvent, cache: &mut GraphCache) {
     match event {
-        KernelEvent::SessionStart { .. } => {
+        RustcEvent::SessionStart { .. } => {
             cache.module_files.clear();
             cache.type_nodes.clear();
             cache.type_edges.clear();
         }
-        KernelEvent::NodeDefined { symbol, kind, file, line, .. }
-        | KernelEvent::NodeUpdated { symbol, kind, file, line, .. } => {
+        RustcEvent::NodeDefined { symbol, kind, file, line, .. }
+        | RustcEvent::NodeUpdated { symbol, kind, file, line, .. } => {
             let sym = symbol.as_str();
             let kind = kind.as_str();
             let file = file.as_str();
@@ -113,7 +113,7 @@ fn apply_cache_event(event: KernelEvent, cache: &mut GraphCache) {
                 });
             }
         }
-        KernelEvent::NodeRemoved { symbol } => {
+        RustcEvent::NodeRemoved { symbol } => {
             let sym = symbol.as_str();
             if sym.is_empty() {
                 return;
@@ -122,7 +122,7 @@ fn apply_cache_event(event: KernelEvent, cache: &mut GraphCache) {
             cache.type_nodes.remove(sym);
             cache.type_edges.retain(|edge| edge.src != sym && edge.dst != sym);
         }
-        KernelEvent::EdgeDefined { src, dst, kind } => {
+        RustcEvent::EdgeDefined { src, dst, kind } => {
             let rel_kinds = ["HAS_FIELD", "HAS_METHOD", "IMPLEMENTS", "FOR_TYPE", "USES_TYPE", "BOUNDS"];
             let kind = kind.as_str();
             if !rel_kinds.contains(&kind) {
@@ -139,7 +139,7 @@ fn apply_cache_event(event: KernelEvent, cache: &mut GraphCache) {
                 rel: kind.to_string(),
             });
         }
-        KernelEvent::EdgeRemoved { src, dst, kind } => {
+        RustcEvent::EdgeRemoved { src, dst, kind } => {
             let rel_kinds = ["HAS_FIELD", "HAS_METHOD", "IMPLEMENTS", "FOR_TYPE", "USES_TYPE", "BOUNDS"];
             let kind = kind.as_str();
             if !rel_kinds.contains(&kind) {

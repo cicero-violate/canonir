@@ -1,6 +1,5 @@
 use crate::goal::{GoalArtifact, GoalType};
 use crate::graph_algo;
-use crate::state_snapshot;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
@@ -9,7 +8,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const REPORTS_DIR: &str = "/workspace/ai_sandbox/canon/state/graph/reports";
 const BASELINE_PATH: &str = "/workspace/ai_sandbox/canon/agent_logs/objective_baseline.json";
-const SNAPSHOT_PATH: &str = "/workspace/ai_sandbox/canon/agent_logs/state_snapshot.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObjectiveWeights {
@@ -301,14 +299,13 @@ fn select_goal_type(score: &ObjectiveScore) -> GoalType {
     }
 }
 
-fn snapshot_features() -> Option<graph_algo::GraphFeatureVector> {
-    let snapshot = state_snapshot::snapshot_store_load(Path::new(SNAPSHOT_PATH))?;
-    Some(graph_algo::compute_graph_features_parallel(&snapshot.graph))
+fn snapshot_features(graph: Option<&crate::dag::ExecutionGraph>) -> Option<graph_algo::GraphFeatureVector> {
+    Some(graph_algo::compute_graph_features_parallel(graph?))
 }
 
-fn feature_objective_candidates(weights: &ObjectiveWeights) -> Vec<ObjectiveSelection> {
+fn feature_objective_candidates(weights: &ObjectiveWeights, graph: Option<&crate::dag::ExecutionGraph>) -> Vec<ObjectiveSelection> {
     let mut out = Vec::new();
-    let features = match snapshot_features() {
+    let features = match snapshot_features(graph) {
         Some(f) => f,
         None => return out,
     };
@@ -356,8 +353,8 @@ fn feature_objective_candidates(weights: &ObjectiveWeights) -> Vec<ObjectiveSele
     out
 }
 
-fn feature_objective_score(objective: GoalType, weights: &ObjectiveWeights) -> Option<f64> {
-    let features = snapshot_features()?;
+fn feature_objective_score(objective: GoalType, weights: &ObjectiveWeights, graph: Option<&crate::dag::ExecutionGraph>) -> Option<f64> {
+    let features = snapshot_features(graph)?;
     let score = match objective {
         GoalType::BreakDeadlock => features.deadlock_rate * weights.deadlock,
         GoalType::ReduceDepth => {
@@ -420,7 +417,7 @@ fn cycle_targets_present(targets: &[String]) -> Option<bool> {
     Some(false)
 }
 
-pub fn load_goal_from_reports(weights: ObjectiveWeights) -> Option<ObjectiveSelection> {
+pub fn load_goal_from_reports(weights: ObjectiveWeights, graph: Option<&crate::dag::ExecutionGraph>) -> Option<ObjectiveSelection> {
     let dir = reports_dir();
     let cycles: Vec<DependencyCycleEntry> =
         read_json(&dir.join("dependency_cycle_report.json")).unwrap_or_default();
@@ -496,7 +493,7 @@ pub fn load_goal_from_reports(weights: ObjectiveWeights) -> Option<ObjectiveSele
             priority_score: best.priority,
         });
     }
-    candidates.extend(feature_objective_candidates(&weights));
+    candidates.extend(feature_objective_candidates(&weights, graph));
     candidates
         .into_iter()
         .max_by(|a, b| a.priority_score.partial_cmp(&b.priority_score).unwrap_or(std::cmp::Ordering::Equal))
@@ -627,7 +624,7 @@ pub fn objective_reward_delta() -> f64 {
         baseline.objective,
         GoalType::BreakDeadlock | GoalType::ReduceDepth | GoalType::ImproveCompletionVelocity
     ) {
-        if let Some(current_score) = feature_objective_score(baseline.objective, &ObjectiveWeights::default()) {
+        if let Some(current_score) = feature_objective_score(baseline.objective, &ObjectiveWeights::default(), None) {
             let delta = baseline.priority_score - current_score;
             return if delta > 0.0 { delta } else { 0.0 };
         }
@@ -671,7 +668,7 @@ pub fn objective_metrics_for_goal(goal: &crate::goal::GoalSpec) -> Option<Object
         baseline.objective,
         GoalType::BreakDeadlock | GoalType::ReduceDepth | GoalType::ImproveCompletionVelocity
     ) {
-        if let Some(score) = feature_objective_score(baseline.objective, &ObjectiveWeights::default()) {
+        if let Some(score) = feature_objective_score(baseline.objective, &ObjectiveWeights::default(), None) {
             current = score;
         }
     } else {
@@ -718,8 +715,8 @@ pub fn maybe_regenerate_reports_if_stale() -> bool {
 
     let reports_dir = reports_dir();
     let lock_path = reports_dir.join(".regen.lock");
-    let tlog = Path::new("/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog");
-    let tlog_idx = Path::new("/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog.idx");
+    let tlog = Path::new("/workspace/ai_sandbox/canon/state/event_log/event.tlog");
+    let tlog_idx = Path::new("/workspace/ai_sandbox/canon/state/event_log/event.tlog.idx");
     if !tlog.exists() || !tlog_idx.exists() {
         return false;
     }

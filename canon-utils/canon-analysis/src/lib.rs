@@ -1,4 +1,6 @@
 pub mod analysis;
+pub mod query;
+pub use query::{QueryConsumer, QueryOptions, QueryError, TlogQueryResult, query_file, query_file_single};
 // supervisor trigger: no-op change
 pub mod invariants;
 pub mod semantics;

@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use rayon::prelude::*;
-use canon_event_store::reader::{save_graph_snapshot, write_snapshot_metadata, SnapshotMeta};
+use canon_event_store::{save_graph_snapshot, write_snapshot_metadata, SnapshotMeta};
 use canon_graph::artifacts::cache::{update_graph_cache};
 use canon_graph::artifacts::artifact_writer::{
     is_graph_bin_fresh,
@@ -49,9 +49,9 @@ use canon_graph::health::system_health::{write_system_health_report, current_tim
 use crate::semantics::semantic_features::extract_node_features;
 use crate::semantics::semantic_signature::compute_signatures;
 use crate::semantics::semantic_clustering::cluster_dbscan_like;
-use canon_types::{KernelEvent, ReportLayout};
-use canon_event_store::reader::{
-    extract_kernel_event, find_last_graph_session_offset, read_any_events_from_path,
+use canon_types::{RustcEvent, ReportLayout};
+use canon_event_store::{
+    extract_rustc_event, find_last_graph_session_offset, read_any_events_from_path,
     replay_graph_from_tlog, replay_graph_from_tlog_incremental, session_contains_module_nodes,
 };
 
@@ -635,13 +635,13 @@ fn write_callsite_resolution_from_tlog(tlog_path: &Path, reports_dir: &Path) -> 
     let mut report = CallsiteResolutionReport::default();
     for event in read_any_events_from_path(tlog_path)? {
         let canon = match event {
-            canon_event_store::reader::AnyEvent::Canon(canon) => canon,
+            canon_event_store::AnyEvent::Canon(canon) => canon,
             _ => continue,
         };
-        let Some(kernel) = extract_kernel_event(&canon) else {
+        let Some(kernel) = extract_rustc_event(&canon) else {
             continue;
         };
-        let KernelEvent::CallsiteObserved { kind, resolved } = kernel else {
+        let RustcEvent::CallsiteObserved { kind, resolved } = kernel else {
             continue;
         };
         report.total_callsites += 1;
@@ -677,19 +677,19 @@ fn write_symbol_artifacts_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<
 
     for event in read_any_events_from_path(tlog_path)? {
         let canon = match event {
-            canon_event_store::reader::AnyEvent::Canon(canon) => canon,
+            canon_event_store::AnyEvent::Canon(canon) => canon,
             _ => continue,
         };
-        let Some(kernel) = extract_kernel_event(&canon) else {
+        let Some(kernel) = extract_rustc_event(&canon) else {
             continue;
         };
         match kernel {
-            KernelEvent::SymbolDefined { symbol, kind } => {
+            RustcEvent::SymbolDefined { symbol, kind } => {
                 if !symbol.is_empty() && !kind.is_empty() {
                     symbols.insert(symbol, kind);
                 }
             }
-            KernelEvent::SpanDefined { symbol, file, line, col, lo, hi } => {
+            RustcEvent::SpanDefined { symbol, file, line, col, lo, hi } => {
                 if symbol.is_empty() {
                     continue;
                 }

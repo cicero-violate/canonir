@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use canon_planner::planner::config::CapabilityConfig;
-use canon_event_store::reader::read_any_events_from_path;
-use canon_event_store::reader::read_any_events_from_path_with_start_seq;
+use canon_event_store::read_any_events_from_path;
+use canon_event_store::read_any_events_from_path_with_start_seq;
 use canon_event_store::writer::{BinarySegmentWriter, CanonEvent};
 use canon_event::CapabilityRequested;
 use std::fs::File;
@@ -32,7 +32,7 @@ fn main() -> Result<()> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
             std::path::PathBuf::from(
-                "/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog.d",
+                "/workspace/ai_sandbox/canon/state/event_log/event.tlog.d",
             )
         });
     let mut i = 1;
@@ -83,7 +83,7 @@ fn main() -> Result<()> {
     let mut visible = false;
     if let Ok(events) = read_any_events_from_path(&replay_path) {
         for event in events {
-            if let canon_event_store::reader::AnyEvent::Canon(canon) = event {
+            if let canon_event_store::AnyEvent::Canon(canon) = event {
                 if canon.kind == "capability_requested"
                     && canon
                         .payload
@@ -123,7 +123,7 @@ fn main() -> Result<()> {
         let mut failed = 0usize;
         let mut matched = false;
         for event in events {
-            if let canon_event_store::reader::AnyEvent::Canon(canon) = event {
+            if let canon_event_store::AnyEvent::Canon(canon) = event {
                 match canon.kind.as_str() {
                     "capability_completed" => {
                         completed += 1;

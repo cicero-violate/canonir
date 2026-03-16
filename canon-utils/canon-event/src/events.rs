@@ -1,4 +1,4 @@
-use canon_types::{EventDelta, KernelEvent, KernelState};
+use canon_types::{EventDelta, RustcEvent, RustcState};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -54,22 +54,22 @@ impl EventMask {
         (self.0 & other.0) == other.0
     }
 
-    pub fn for_event(event: &KernelEvent) -> EventMask {
+    pub fn for_event(event: &RustcEvent) -> EventMask {
         match event {
-            KernelEvent::NodeDefined { .. } => Self::NODE_DEFINED,
-            KernelEvent::NodeUpdated { .. } => Self::NODE_UPDATED,
-            KernelEvent::NodeRemoved { .. } => Self::NODE_REMOVED,
-            KernelEvent::EdgeDefined { .. } => Self::EDGE_DEFINED,
-            KernelEvent::EdgeRemoved { .. } => Self::EDGE_REMOVED,
-            KernelEvent::FileSeen { .. } => Self::FILE_SEEN,
-            KernelEvent::CallsiteObserved { .. } => Self::CALLSITE_OBSERVED,
-            KernelEvent::SymbolDefined { .. } => Self::SYMBOL_DEFINED,
-            KernelEvent::SpanDefined { .. } => Self::SPAN_DEFINED,
-            KernelEvent::PanicCaptured { .. } => Self::PANIC_CAPTURED,
-            KernelEvent::WarningCaptured { .. } => Self::WARNING_CAPTURED,
-            KernelEvent::SessionStart { .. } => Self::SESSION_START,
-            KernelEvent::CompilationUnitFinished { .. } => Self::COMPILATION_UNIT_FINISHED,
-            KernelEvent::InvariantViolation { .. } => Self::INVARIANT_VIOLATION,
+            RustcEvent::NodeDefined { .. } => Self::NODE_DEFINED,
+            RustcEvent::NodeUpdated { .. } => Self::NODE_UPDATED,
+            RustcEvent::NodeRemoved { .. } => Self::NODE_REMOVED,
+            RustcEvent::EdgeDefined { .. } => Self::EDGE_DEFINED,
+            RustcEvent::EdgeRemoved { .. } => Self::EDGE_REMOVED,
+            RustcEvent::FileSeen { .. } => Self::FILE_SEEN,
+            RustcEvent::CallsiteObserved { .. } => Self::CALLSITE_OBSERVED,
+            RustcEvent::SymbolDefined { .. } => Self::SYMBOL_DEFINED,
+            RustcEvent::SpanDefined { .. } => Self::SPAN_DEFINED,
+            RustcEvent::PanicCaptured { .. } => Self::PANIC_CAPTURED,
+            RustcEvent::WarningCaptured { .. } => Self::WARNING_CAPTURED,
+            RustcEvent::SessionStart { .. } => Self::SESSION_START,
+            RustcEvent::CompilationUnitFinished { .. } => Self::COMPILATION_UNIT_FINISHED,
+            RustcEvent::InvariantViolation { .. } => Self::INVARIANT_VIOLATION,
         }
     }
 }
@@ -88,14 +88,14 @@ impl std::ops::BitOrAssign for EventMask {
     }
 }
 
-pub trait KernelEventConsumer: Send + Sync {
+pub trait RustcEventConsumer: Send + Sync {
     fn mask(&self) -> EventMask;
-    fn on_event(&mut self, delta: &EventDelta, state: &KernelState);
+    fn on_event(&mut self, delta: &EventDelta, state: &RustcState);
 }
 
 #[derive(Debug, Clone)]
 pub enum RuntimeEvent {
-    Kernel { delta: EventDelta, state: KernelState },
+    Kernel { delta: EventDelta, state: RustcState },
     Edit(EditEvent),
     Tick { tick: u64 },
     RuntimeStateUpdated { payload: serde_json::Value },
@@ -106,6 +106,7 @@ pub enum RuntimeEvent {
     CapabilityRequested(CapabilityRequested),
     CapabilityCompleted(CapabilityCompleted),
     CapabilityFailed(CapabilityFailed),
+    AgentState { payload: serde_json::Value },
 }
 
 pub trait RuntimeEmitter: Send + Sync {

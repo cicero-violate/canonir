@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use canon_capability_engine::{CapabilityContext, CapabilityRegistry, CapabilityResult};
+use canon_capability::{CapabilityContext, CapabilityRegistry, CapabilityResult};
 use canon_event::emit_debug::error;
 use canon_event::{
     CapabilityFailed, RuntimeConsumer, RuntimeEmitterHandle, RuntimeEvent, RuntimeEventFilter,

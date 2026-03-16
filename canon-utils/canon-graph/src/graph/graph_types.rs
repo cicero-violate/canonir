@@ -1,4 +1,4 @@
-pub use canon_event_store::reader::{EdgeRow, NodeRow};
+pub use canon_event_store::{EdgeRow, NodeRow};
 
 #[derive(Clone)]
 pub struct ModuleNode {

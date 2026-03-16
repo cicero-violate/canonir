@@ -1,6 +1,6 @@
 use canon_event::emit_debug::{error, info};
-use canon_event::{EventMask, KernelEventConsumer};
-use canon_types::{EventDelta, KernelEvent, KernelState};
+use canon_event::{EventMask, RustcEventConsumer};
+use canon_types::{EventDelta, RustcEvent, RustcState};
 use std::path::PathBuf;
 
 pub struct CapabilityEventConsumer {
@@ -22,13 +22,13 @@ impl CapabilityEventConsumer {
     }
 }
 
-impl KernelEventConsumer for CapabilityEventConsumer {
+impl RustcEventConsumer for CapabilityEventConsumer {
     fn mask(&self) -> EventMask {
         EventMask::COMPILATION_UNIT_FINISHED
     }
 
-    fn on_event(&mut self, delta: &EventDelta, _state: &KernelState) {
-        if let KernelEvent::CompilationUnitFinished { crate_name } = &delta.event {
+    fn on_event(&mut self, delta: &EventDelta, _state: &RustcState) {
+        if let RustcEvent::CompilationUnitFinished { crate_name } = &delta.event {
             match crate::capabilities::dispatcher::dispatch_for_event(
                 &delta.event,
                 &self.workspace,

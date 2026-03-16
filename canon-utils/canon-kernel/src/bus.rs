@@ -85,10 +85,10 @@ impl EventBus {
                     }
                 }
             }
-            if let Err(err) = consumer.sender.send(EventMessage { event: event.clone() }) {
+            if let Err(err) = consumer.sender.try_send(EventMessage { event: event.clone() }) {
                 error(
                     "event_bus",
-                    "dispatch_failed",
+                    "dispatch_dropped",
                     json!({ "name": consumer.name, "error": err.to_string() }),
                 );
             }

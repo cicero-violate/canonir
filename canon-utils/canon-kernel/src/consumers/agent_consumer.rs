@@ -1,5 +1,5 @@
 use canon_planner::planner::dag::{task_graph_resolve_ready, ExecutionGraph, ExecutionNode, NodeStatus};
-use canon_planner::planner::state_snapshot;
+use canon_planner::planner::state_snapshot::PipelineSnapshot;
 use canon_planner::planner::capability_types::PipelineCapability;
 use canon_planner::planner::decompose::{DecomposeNodeType, DecomposeTaskSpec};
 use canon_planner::planner::goal::GoalSpec;
@@ -12,12 +12,12 @@ use canon_planner::planner::objectives::{
 };
 use canon_planner::planner::planner_update::{apply_graph_patch, GraphPatch, PlannerUpdateRewriteSpec};
 use canon_event::{
-    CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventDelta, KernelState,
+    CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventDelta, RustcState,
     NodeCompleted, NodeFailed, NodeReady, NodeStarted, RuntimeConsumer, RuntimeEmitterHandle,
     RuntimeEvent, RuntimeEventFilter,
 };
 use canon_event::emit_debug::{info, warn};
-use canon_event_store::reader::{read_any_events_from_path_with_start_seq, AnyEvent};
+use canon_event_store::{read_any_events_from_path_with_start_seq, AnyEvent};
 use serde_json::json;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
@@ -102,7 +102,7 @@ enum AgentWork {
     Tick(u64),
     CapabilityResult(RuntimeEvent),
     RuntimeState(serde_json::Value),
-    Kernel { delta: EventDelta, state: KernelState },
+    Kernel { delta: EventDelta, state: RustcState },
 }
 
 struct AgentWorkerState {
@@ -139,7 +139,9 @@ impl AgentWorkerState {
             }
             AgentWork::RuntimeState(payload) => {
                 self.apply_runtime_state(payload);
-                self.emit_state(emitter);
+                // Do NOT call emit_state here: emitting RuntimeStateUpdated in response to
+                // receiving one creates a feedback loop that fills AgentConsumer's bounded
+                // channel and permanently blocks the EventBus dispatch thread.
             }
             AgentWork::Kernel { delta, state } => {
                 self.observe_kernel(delta, state);
@@ -150,19 +152,31 @@ impl AgentWorkerState {
     }
 
     fn try_load_snapshot(&mut self) {
-        let path = std::path::Path::new("/workspace/ai_sandbox/canon/agent_logs/state_snapshot.json");
-        if let Some(snapshot) = state_snapshot::snapshot_store_load(path) {
-            self.graph = snapshot.graph;
-            self.graph.rebuild_index();
-            self.last_tick = snapshot.iteration;
-            for node in self.graph.nodes.iter_mut() {
-                if node.status == NodeStatus::Running {
-                    node.status = NodeStatus::Pending;
-                }
-            }
-            self.graph.rebuild_index();
-            self.replay_runtime_events_since(snapshot.runtime_start_seq);
+        let tlog_path = resolve_runtime_tlog_path();
+        if !tlog_path.exists() {
+            return;
         }
+        let events = match read_any_events_from_path_with_start_seq(&tlog_path, 0) {
+            Ok(events) => events,
+            Err(_) => return,
+        };
+        // Find the latest agent_state event in the tlog.
+        let latest = events.iter().rev().find_map(|e| {
+            let AnyEvent::Canon(canon) = e else { return None };
+            if canon.kind != "agent_state" { return None }
+            serde_json::from_value::<PipelineSnapshot>(canon.payload.clone()).ok()
+        });
+        let Some(snapshot) = latest else { return };
+        self.graph = snapshot.graph;
+        self.graph.rebuild_index();
+        self.last_tick = snapshot.iteration;
+        for node in self.graph.nodes.iter_mut() {
+            if node.status == NodeStatus::Running {
+                node.status = NodeStatus::Pending;
+            }
+        }
+        self.graph.rebuild_index();
+        self.replay_runtime_events_since(snapshot.runtime_start_seq);
     }
 
     fn apply_runtime_state(&mut self, payload: serde_json::Value) {
@@ -176,7 +190,7 @@ impl AgentWorkerState {
         self.graph = graph;
     }
 
-    fn observe_kernel(&mut self, _delta: EventDelta, state: KernelState) {
+    fn observe_kernel(&mut self, _delta: EventDelta, state: RustcState) {
         // Minimal observe: sync tick and load snapshot if graph is empty.
         if state.tick > self.last_tick {
             self.last_tick = state.tick;
@@ -385,7 +399,7 @@ impl AgentWorkerState {
         }
         if plan_and_persist {
             let _ = self.plan_if_stalled();
-            self.persist_snapshot();
+            self.persist_snapshot(emitter);
         }
     }
 
@@ -496,7 +510,7 @@ impl AgentWorkerState {
         }
         let mut description =
             "Analyse system state and produce initial task decomposition".to_string();
-        if let Some(selection) = load_goal_from_reports(ObjectiveWeights::default()) {
+        if let Some(selection) = load_goal_from_reports(ObjectiveWeights::default(), Some(&self.graph)) {
             maybe_write_baseline(&selection);
             let mut goal = goal_raw_with_artifact("", &selection.artifact);
             let hints = objective_task_hints(&selection.artifact);
@@ -522,17 +536,18 @@ impl AgentWorkerState {
         });
     }
 
-    fn persist_snapshot(&self) {
-        let path = std::path::Path::new(
-            "/workspace/ai_sandbox/canon/agent_logs/state_snapshot.json",
-        );
-        let snapshot = state_snapshot::PipelineSnapshot {
+    fn persist_snapshot(&self, emitter: &Arc<Mutex<Option<RuntimeEmitterHandle>>>) {
+        let snapshot = PipelineSnapshot {
             graph: self.graph.clone(),
             iteration: self.last_tick,
             runtime_start_seq: latest_segment_seq(&resolve_runtime_tlog_path()).unwrap_or(0),
             goal: GoalSpec::new(String::new(), 0),
         };
-        state_snapshot::snapshot_store_save(path, &snapshot);
+        if let Ok(payload) = serde_json::to_value(&snapshot) {
+            if let Some(emitter) = emitter.lock().ok().and_then(|slot| slot.clone()) {
+                emitter.emit(RuntimeEvent::AgentState { payload });
+            }
+        }
     }
 
     fn replay_runtime_events_since(&mut self, start_seq: u64) {
@@ -671,12 +686,12 @@ fn resolve_runtime_tlog_path() -> std::path::PathBuf {
         return std::path::PathBuf::from(path);
     }
     let binary = std::path::PathBuf::from(
-        "/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog.d",
+        "/workspace/ai_sandbox/canon/state/event_log/event.tlog.d",
     );
     if binary.exists() {
         return binary;
     }
-    std::path::PathBuf::from("/workspace/ai_sandbox/canon/state/kernel_logs/kernel.tlog")
+    std::path::PathBuf::from("/workspace/ai_sandbox/canon/state/event_log/event.tlog")
 }
 
 fn latest_segment_seq(tlog_path: &std::path::Path) -> anyhow::Result<u64> {

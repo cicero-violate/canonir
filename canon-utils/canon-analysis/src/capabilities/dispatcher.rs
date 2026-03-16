@@ -1,16 +1,16 @@
 use canon_event::emit_debug::info;
 use canon_event::emit_event;
-use canon_types::KernelEvent;
+use canon_types::RustcEvent;
 use std::path::Path;
 
 const ANALYSIS_CAPS: &[&str] = &["analysis.run"];
 
 pub fn dispatch_for_event(
-    event: &KernelEvent,
+    event: &RustcEvent,
     workspace: &Path,
     tlog_path: &Path,
 ) -> anyhow::Result<String> {
-    let KernelEvent::CompilationUnitFinished { crate_name } = event else {
+    let RustcEvent::CompilationUnitFinished { crate_name } = event else {
         return Ok(String::new());
     };
     let batch_id = std::time::SystemTime::now()

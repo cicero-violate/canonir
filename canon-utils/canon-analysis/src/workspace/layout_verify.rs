@@ -2,9 +2,9 @@ use anyhow::{anyhow, Result};
 use std::path::Path;
 
 pub fn verify_reports_layout(root: &Path) -> Result<()> {
-    let legacy_kernel = root.join("kernel");
-    if legacy_kernel.exists() {
-        return Err(anyhow!("legacy layout detected: {}", legacy_kernel.display()));
+    let legacy_rustc = root.join("rustc");
+    if legacy_rustc.exists() {
+        return Err(anyhow!("legacy layout detected: {}", legacy_rustc.display()));
     }
     let legacy_reports = root.join("reports");
     if legacy_reports.exists() {

@@ -4,9 +4,9 @@ use canon_kernel::consumers::capability_executor::CapabilityExecutor;
 use canon_kernel::consumers::event_loop::EventLoopConsumer;
 use canon_kernel::consumers::llm_executor::LlmExecutorConsumer;
 use canon_kernel::{register_default_capabilities, EventRuntime};
-use canon_event_store::reader::detect_tlog_format;
-use canon_event_store::reader::read_any_events_from_path_with_start_seq;
-use canon_event_store::reader::replay_graph_from_tlog;
+use canon_event_store::detect_tlog_format;
+use canon_event_store::read_any_events_from_path_with_start_seq;
+use canon_event_store::replay_graph_from_tlog;
 use canon_event::emit_debug::{info, warn, error};
 use std::env;
 use std::fs::{self, File, OpenOptions};
@@ -153,7 +153,7 @@ fn main() -> Result<()> {
         }
     }
     let registry = std::sync::Arc::new(std::sync::Mutex::new(
-        canon_capability_engine::CapabilityRegistry::new(),
+        canon_capability::CapabilityRegistry::new(),
     ));
     let mut consumers: Vec<Box<dyn canon_event::RuntimeConsumer>> = vec![
         Box::new(AgentConsumer::new()),
@@ -173,22 +173,22 @@ fn main() -> Result<()> {
     }
     runtime.set_execute_capabilities(false);
     runtime.set_tlog_path(tlog_path.clone());
+    let cursor_loaded = load_cursor(&cursor_path, &tlog_path).is_some();
     let mut start_seq: u64 = load_cursor_seq(&cursor_path, &tlog_path).unwrap_or(0);
     let mut processed: usize = load_cursor(&cursor_path, &tlog_path).unwrap_or(0);
-    // If no cursor exists or start_seq is 0, jump to the latest segment to avoid
-    // loading the entire tlog history into memory on first boot.
-    if start_seq == 0 {
+    // On fresh boot (no saved cursor for this tlog path), jump to the current tail
+    // so old capability_requested events are not re-dispatched to consumers.
+    if !cursor_loaded {
         if let Ok(latest) = latest_segment_seq(&tlog_path) {
-            if latest > 0 {
-                info(
-                    "event_runtime",
-                    "tlog_tail_start",
-                    serde_json::json!({ "start_seq": latest }),
-                );
-                start_seq = latest;
-                processed = 0;
-            }
+            start_seq = latest;
         }
+        let bootstrap_events = read_any_events_from_path_with_start_seq(&tlog_path, start_seq).unwrap_or_default();
+        processed = bootstrap_events.len();
+        info(
+            "event_runtime",
+            "tlog_tail_start",
+            serde_json::json!({ "start_seq": start_seq, "skipped": processed }),
+        );
     }
     let mut did_fast_forward = false;
     let mut last_len: usize = 0;

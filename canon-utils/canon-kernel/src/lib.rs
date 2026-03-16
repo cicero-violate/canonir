@@ -2,15 +2,15 @@ use anyhow::Result;
 mod bus;
 pub mod consumers;
 
-use canon_capability_engine::{CapabilityContext, CapabilityRegistry, CapabilityResult};
+use canon_capability::{CapabilityContext, CapabilityRegistry, CapabilityResult};
 use canon_event::emit_debug::{error, info};
 use canon_event_store::writer::{append_event_json, BinarySegmentWriter, CanonEvent};
 use std::sync::Mutex as StdMutex;
-use canon_event_store::reader::{
+use canon_event_store::{
     extract_capability_request,
     extract_supervisor_event,
     extract_edit_event,
-    extract_kernel_event,
+    extract_rustc_event,
     read_any_events_from_path,
     AnyEvent,
 };
@@ -19,8 +19,8 @@ use canon_event::{
     CapabilityFailed,
     CapabilityRequested,
     EventDelta,
-    KernelEvent,
-    KernelState,
+    RustcEvent,
+    RustcState,
     RuntimeConsumer,
     RuntimeEmitter,
     RuntimeEmitterHandle,
@@ -32,7 +32,7 @@ use std::sync::Arc;
 use bus::EventBus;
 
 pub struct EventRuntime {
-    state: KernelState,
+    state: RustcState,
     bus: EventBus,
     registry: std::sync::Arc<std::sync::Mutex<CapabilityRegistry>>,
     tlog_path: Option<std::path::PathBuf>,
@@ -50,7 +50,7 @@ pub struct EventRuntime {
 pub fn register_default_capabilities(registry: &mut CapabilityRegistry) {
     canon_editor::register_editor_capabilities(registry);
     canon_planner::register_analysis_capabilities(registry);
-    canon_capability_engine::register_build_capabilities(registry);
+    canon_supervisor::register_build_capabilities(registry);
 }
 
 impl EventRuntime {
@@ -115,7 +115,7 @@ impl EventRuntime {
         self.tlog_path = Some(path);
     }
 
-    pub fn state(&self) -> &KernelState {
+    pub fn state(&self) -> &RustcState {
         &self.state
     }
 
@@ -136,7 +136,7 @@ impl EventRuntime {
         let mut processed = 0usize;
         for event in events {
             if let AnyEvent::Canon(canon) = event {
-                if let Some(kernel) = extract_kernel_event(canon) {
+                if let Some(kernel) = extract_rustc_event(canon) {
                     self.handle_kernel_event(kernel)?;
                     self.drain_emitted_events()?;
                 } else if let Some(edit) = extract_edit_event(canon) {
@@ -174,8 +174,8 @@ impl EventRuntime {
         Ok(processed)
     }
 
-    pub fn handle_kernel_event(&mut self, event: KernelEvent) -> Result<()> {
-        let delta = if matches!(event, KernelEvent::SessionStart { .. }) {
+    pub fn handle_kernel_event(&mut self, event: RustcEvent) -> Result<()> {
+        let delta = if matches!(event, RustcEvent::SessionStart { .. }) {
             self.next_id = 1;
             self.tick = 0;
             EventDelta {
@@ -334,6 +334,9 @@ impl EventRuntime {
             let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
             CanonEvent::new("event-runtime", "capability_failed", val)
         }
+        RuntimeEvent::AgentState { payload } => {
+            CanonEvent::new("agent-consumer", "agent_state", payload.clone())
+        }
         _ => {
             return;
         }
@@ -371,8 +374,8 @@ impl EventRuntime {
     }
 }
 
-fn empty_state() -> KernelState {
-    KernelState {
+fn empty_state() -> RustcState {
+    RustcState {
         tick: 0,
         phase: "init".to_string(),
         last_event_id: 0,
@@ -404,9 +407,9 @@ fn compute_invariant_hash(node_count: u64, edge_count: u64, schema_version: u64)
     format!("{:016x}", hasher.finish())
 }
 
-fn apply_delta(state: &mut KernelState, delta: &EventDelta) -> Result<()> {
+fn apply_delta(state: &mut RustcState, delta: &EventDelta) -> Result<()> {
     if delta.id <= state.last_event_id
-        && !matches!(delta.event, KernelEvent::SessionStart { .. })
+        && !matches!(delta.event, RustcEvent::SessionStart { .. })
     {
         return Err(anyhow::anyhow!(
             "event id must be monotonic id={} last_event_id={}",
@@ -417,19 +420,19 @@ fn apply_delta(state: &mut KernelState, delta: &EventDelta) -> Result<()> {
     state.tick = delta.tick;
     state.last_event_id = delta.id;
     match &delta.event {
-        KernelEvent::NodeDefined { symbol, kind, .. } => {
+        RustcEvent::NodeDefined { symbol, kind, .. } => {
             state.known_symbols.insert(symbol.clone(), kind.clone());
             state.removed_symbols.remove(symbol);
         }
-        KernelEvent::NodeUpdated { symbol, kind, .. } => {
+        RustcEvent::NodeUpdated { symbol, kind, .. } => {
             state.known_symbols.insert(symbol.clone(), kind.clone());
             state.removed_symbols.remove(symbol);
         }
-        KernelEvent::NodeRemoved { symbol } => {
+        RustcEvent::NodeRemoved { symbol } => {
             state.known_symbols.remove(symbol);
             state.removed_symbols.insert(symbol.clone());
         }
-        KernelEvent::EdgeDefined { src, dst, kind } => {
+        RustcEvent::EdgeDefined { src, dst, kind } => {
             state
                 .known_edges
                 .push((src.clone(), dst.clone(), kind.clone()));
@@ -437,7 +440,7 @@ fn apply_delta(state: &mut KernelState, delta: &EventDelta) -> Result<()> {
                 .removed_edges
                 .retain(|e| e != &(src.clone(), dst.clone(), kind.clone()));
         }
-        KernelEvent::EdgeRemoved { src, dst, kind } => {
+        RustcEvent::EdgeRemoved { src, dst, kind } => {
             state
                 .known_edges
                 .retain(|e| e != &(src.clone(), dst.clone(), kind.clone()));
@@ -445,15 +448,15 @@ fn apply_delta(state: &mut KernelState, delta: &EventDelta) -> Result<()> {
                 .removed_edges
                 .push((src.clone(), dst.clone(), kind.clone()));
         }
-        KernelEvent::FileSeen { path } => {
+        RustcEvent::FileSeen { path } => {
             state.known_files.insert(path.clone());
         }
-        KernelEvent::CallsiteObserved { .. } => {}
-        KernelEvent::SymbolDefined { .. } => {}
-        KernelEvent::SpanDefined { .. } => {}
-        KernelEvent::PanicCaptured { .. } => {}
-        KernelEvent::WarningCaptured { .. } => {}
-        KernelEvent::SessionStart { .. } => {
+        RustcEvent::CallsiteObserved { .. } => {}
+        RustcEvent::SymbolDefined { .. } => {}
+        RustcEvent::SpanDefined { .. } => {}
+        RustcEvent::PanicCaptured { .. } => {}
+        RustcEvent::WarningCaptured { .. } => {}
+        RustcEvent::SessionStart { .. } => {
             state.last_event_id = 0;
             state.known_symbols.clear();
             state.known_edges.clear();
@@ -461,10 +464,10 @@ fn apply_delta(state: &mut KernelState, delta: &EventDelta) -> Result<()> {
             state.removed_symbols.clear();
             state.removed_edges.clear();
         }
-        KernelEvent::CompilationUnitFinished { .. } => {
+        RustcEvent::CompilationUnitFinished { .. } => {
             state.phase = "finished".to_string();
         }
-        KernelEvent::InvariantViolation { .. } => {}
+        RustcEvent::InvariantViolation { .. } => {}
     }
     let node_count = state.known_symbols.len() as u64;
     let edge_count = state.known_edges.len() as u64;

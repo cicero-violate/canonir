@@ -14,7 +14,7 @@ canon_analysis = { package = "canon-analysis", path = "../canon-analysis" }
 
 # Re-export dependencies for convenience
 canon_event = { package = "canon-event", path = "../canon-event" }
-canon_capability_engine = { package = "canon-capability-engine", path = "../canon-capability-engine" }
+
 
 [features]
 default = ["cuda"]
