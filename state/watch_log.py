@@ -4,17 +4,45 @@ import os
 
 P = "/workspace/ai_sandbox/canon/canon-utils/state/event_log/event.tlog.d/00000000000000000000.log"
 
+# ANSI COLORS
+RESET = "\033[0m"
+COLORS = {
+    "ts": "\033[90m",          # gray
+    "source": "\033[94m",      # blue
+    "kind": "\033[92m",        # green
+    "error": "\033[91m",       # red
+    "json": "\033[96m",        # cyan
+    "default": "\033[97m",     # white
+}
+
+def colorize(line: str) -> str:
+    # highlight json blocks
+    if "{" in line and "}" in line:
+        line = f"{COLORS['json']}{line}{RESET}"
+
+    # key highlights
+    line = re.sub(r'("ts":\s*\d+)', lambda m: f"{COLORS['ts']}{m.group(1)}{RESET}", line)
+    line = re.sub(r'("source":\s*"[^"]+")', lambda m: f"{COLORS['source']}{m.group(1)}{RESET}", line)
+    line = re.sub(r'("kind":\s*"[^"]+")', lambda m: f"{COLORS['kind']}{m.group(1)}{RESET}", line)
+
+    # errors / warnings
+    if "error" in line.lower() or "fail" in line.lower():
+        line = f"{COLORS['error']}{line}{RESET}"
+
+    return line
+
 def extract_strings(data):
     matches = re.findall(rb"[ -~]{8,}", data)
     for m in matches:
         try:
-            print(m.decode("ascii"))
+            line = m.decode("ascii")
+            print(colorize(line))
         except:
             pass
 
 def watch_file(path):
     with open(path, "rb") as f:
-        f.seek(0, os.SEEK_END)  # start at end (like tail -f)
+        f.seek(0, os.SEEK_END)
 
         while True:
             pos = f.tell()
