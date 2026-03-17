@@ -2,14 +2,12 @@ use anyhow::{anyhow, Result};
 use canon_kernel::bootstrap::{bootstrap_config, new_prompt_registry};
 use canon_kernel::consumers::agent::AgentConsumer;
 use canon_kernel::consumers::capability_executor::CapabilityExecutor;
-use canon_kernel::consumers::event_loop::EventLoopConsumer;
-use canon_kernel::consumers::llm_executor::LlmExecutorConsumer;
+use canon_kernel::consumers::llm_executor::LlmCapabilityHandler;
 use canon_kernel::{register_default_capabilities, EventRuntime};
 use canon_editor::EditConsumer;
 use canon_event_store::detect_tlog_format;
 use canon_event_store::read_any_events_from_path_with_start_seq;
 use canon_event_store::replay_graph_from_tlog;
-use canon_event::emit_debug::{info, warn, error};
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -146,36 +144,28 @@ fn main() -> Result<()> {
         None => return Ok(()),
     };
     if std::env::var("CANON_VERIFY_TLOG_EQUIV").ok().as_deref() == Some("1") {
-        if let Err(err) = maybe_verify_tlog_equivalence(&tlog_path) {
-            warn(
-                "event_runtime",
-                "tlog_equivalence_check_failed",
-                serde_json::json!({ "error": err.to_string() }),
-            );
-        }
+        let _ = maybe_verify_tlog_equivalence(&tlog_path);
     }
     let registry = std::sync::Arc::new(std::sync::Mutex::new(
         canon_capability::CapabilityRegistry::new(),
     ));
     let prompt_registry = new_prompt_registry();
     bootstrap_config(&tlog_path, &prompt_registry);
-    let mut consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
+    let consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
         Box::new(AgentConsumer::new()),
         Box::new(CapabilityExecutor::new(
             registry.clone(),
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
         )),
-        Box::new(LlmExecutorConsumer::new(prompt_registry.clone())),
         Box::new(EditConsumer::new()),
     ];
-    if event_execution_enabled {
-        consumers.push(Box::new(EventLoopConsumer::new()));
-    }
     let mut runtime = EventRuntime::new_with_registry(consumers, registry.clone());
     {
         let mut registry = registry.lock().expect("capability registry lock");
         register_default_capabilities(&mut registry);
+        registry.register(std::sync::Arc::new(LlmCapabilityHandler::new(prompt_registry.clone())));
     }
+    runtime.set_execute_capabilities(event_execution_enabled);
     runtime.set_tlog_path(tlog_path.clone());
     let cursor_loaded = load_cursor(&cursor_path, &tlog_path).is_some();
     let mut start_seq: u64 = load_cursor_seq(&cursor_path, &tlog_path).unwrap_or(0);
@@ -188,30 +178,15 @@ fn main() -> Result<()> {
         }
         let bootstrap_events = read_any_events_from_path_with_start_seq(&tlog_path, start_seq).unwrap_or_default();
         processed = bootstrap_events.len();
-        info(
-            "event_runtime",
-            "tlog_tail_start",
-            serde_json::json!({ "start_seq": start_seq, "skipped": processed }),
-        );
     }
     let mut did_fast_forward = false;
     let mut last_len: usize = 0;
     let mut last_saved = Instant::now();
     let mut last_saved_processed = processed;
-    info(
-        "event_runtime",
-        "runtime_start",
-        serde_json::json!({ "tlog": tlog_path.display().to_string(), "once": once, "event_execution": event_execution_enabled }),
-    );
 
     loop {
         if !tlog_path.exists() {
             if once {
-                error(
-                    "event_runtime",
-                    "tlog_missing",
-                    serde_json::json!({ "tlog": tlog_path.display().to_string() }),
-                );
                 return Err(anyhow!("tlog not found: {}", tlog_path.display()));
             }
             sleep(Duration::from_millis(poll_ms));
@@ -226,26 +201,11 @@ fn main() -> Result<()> {
         if start_at_tail && !once && !did_fast_forward && processed == 0 && !events.is_empty() {
             processed = events.len();
             did_fast_forward = true;
-            info(
-                "event_runtime",
-                "tlog_fast_forward",
-                serde_json::json!({ "skipped": processed }),
-            );
         }
         if events.len() != last_len {
-            info(
-                "event_runtime",
-                "tlog_len_changed",
-                serde_json::json!({ "prev": last_len, "next": events.len() }),
-            );
             last_len = events.len();
         }
         if events.len() < processed {
-            warn(
-                "event_runtime",
-                "event_count_reset",
-                serde_json::json!({ "prev": processed, "next": events.len() }),
-            );
             runtime.reset();
             processed = 0;
         }
@@ -257,13 +217,7 @@ fn main() -> Result<()> {
 
 
         if processed != last_saved_processed && last_saved.elapsed() >= Duration::from_secs(1) {
-            if let Err(err) = save_cursor(&cursor_path, &tlog_path, processed, start_seq) {
-                error(
-                    "event_runtime",
-                    "cursor_save_failed",
-                    serde_json::json!({ "error": err.to_string() }),
-                );
-            } else {
+            if save_cursor(&cursor_path, &tlog_path, processed, start_seq).is_ok() {
                 last_saved = Instant::now();
                 last_saved_processed = processed;
             }
@@ -355,27 +309,7 @@ fn maybe_verify_tlog_equivalence(tlog_path: &Path) -> Result<()> {
     if !json_path.exists() || !bin_path.exists() {
         return Ok(());
     }
-    let diffs = verify_tlog_equivalence(&json_path, &bin_path)?;
-    if diffs.is_empty() {
-        info(
-            "event_runtime",
-            "tlog_equivalence_ok",
-            serde_json::json!({
-                "json": json_path.display().to_string(),
-                "binary": bin_path.display().to_string()
-            }),
-        );
-        return Ok(());
-    }
-    warn(
-        "event_runtime",
-        "tlog_equivalence_mismatch",
-        serde_json::json!({
-            "json": json_path.display().to_string(),
-            "binary": bin_path.display().to_string(),
-            "diffs": diffs
-        }),
-    );
+    let _diffs = verify_tlog_equivalence(&json_path, &bin_path)?;
     Ok(())
 }
 

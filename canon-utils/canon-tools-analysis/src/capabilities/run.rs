@@ -1,5 +1,4 @@
 use canon_capability::{CapabilityHandler, CapabilityExecutionContext, CapabilityExecutionResult};
-use canon_event::emit_debug::info;
 use canon_event::CanonEvent;
 
 pub struct AnalysisRunCapability;
@@ -13,11 +12,6 @@ impl CapabilityHandler for AnalysisRunCapability {
         let CanonEvent::CapabilityRequested(request) = ctx.event else {
             anyhow::bail!("capability context missing request");
         };
-        info(
-            "analysis_capability",
-            "analysis_run",
-            serde_json::json!({ "args": request.args }),
-        );
         let outcome = crate::capabilities::runner::run_full_analysis(&request.args)?;
         let (status, crate_root) = match outcome {
             crate::capabilities::runner::RunOutcome::Ran(root) => ("complete", root),

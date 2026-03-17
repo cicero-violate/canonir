@@ -1,8 +1,9 @@
-use canon_event::CanonEvent;
+use canon_event::{CanonEvent, EventEmitterHandle};
 use std::path::PathBuf;
-//
-#[derive(Debug, Clone)]
+
+#[derive(Clone)]
 pub struct CapabilityExecutionContext {
     pub workspace: PathBuf,
     pub event: CanonEvent,
+    pub emitter: Option<EventEmitterHandle>,
 }

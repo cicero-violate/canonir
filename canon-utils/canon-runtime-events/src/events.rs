@@ -1,20 +1,26 @@
 use canon_types::{EventDelta, RustcEvent, RustcState};
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::canon_event_struct;
+use canon_macros::{canon_event_struct, canon_event_enum};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum EditEvent {
-    RenameSymbol { project: String, old: String, new: String },
-    MoveSymbol { project: String, symbol: String, module: String },
-    DeleteSymbol { project: String, symbol: String },
-    RenameModule { project: String, old: String, new: String },
-    RenameDir { project: String, old: PathBuf, new: PathBuf },
-    InlineModule { project: String, module: String },
-    ExtractModule { project: String, symbol: String, module: String },
-}
+canon_event_struct!(RenameSymbol { project: String, old: String, new: String });
+canon_event_struct!(MoveSymbol { project: String, symbol: String, module: String });
+canon_event_struct!(DeleteSymbol { project: String, symbol: String });
+canon_event_struct!(RenameModule { project: String, old: String, new: String });
+canon_event_struct!(RenameDir { project: String, old: std::path::PathBuf, new: std::path::PathBuf });
+canon_event_struct!(InlineModule { project: String, module: String });
+canon_event_struct!(ExtractModule { project: String, symbol: String, module: String });
+
+canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)]
+EditEvent {
+    RenameSymbol(RenameSymbol),
+    MoveSymbol(MoveSymbol),
+    DeleteSymbol(DeleteSymbol),
+    RenameModule(RenameModule),
+    RenameDir(RenameDir),
+    InlineModule(InlineModule),
+    ExtractModule(ExtractModule),
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EventMask(pub(crate) u16);
@@ -58,20 +64,20 @@ impl EventMask {
 
     pub fn for_event(event: &RustcEvent) -> EventMask {
         match event {
-            RustcEvent::NodeDefined { .. } => Self::NODE_DEFINED,
-            RustcEvent::NodeUpdated { .. } => Self::NODE_UPDATED,
-            RustcEvent::NodeRemoved { .. } => Self::NODE_REMOVED,
-            RustcEvent::EdgeDefined { .. } => Self::EDGE_DEFINED,
-            RustcEvent::EdgeRemoved { .. } => Self::EDGE_REMOVED,
-            RustcEvent::FileSeen { .. } => Self::FILE_SEEN,
-            RustcEvent::CallsiteObserved { .. } => Self::CALLSITE_OBSERVED,
-            RustcEvent::SymbolDefined { .. } => Self::SYMBOL_DEFINED,
-            RustcEvent::SpanDefined { .. } => Self::SPAN_DEFINED,
-            RustcEvent::PanicCaptured { .. } => Self::PANIC_CAPTURED,
-            RustcEvent::WarningCaptured { .. } => Self::WARNING_CAPTURED,
-            RustcEvent::SessionStart { .. } => Self::SESSION_START,
-            RustcEvent::CompilationUnitFinished { .. } => Self::COMPILATION_UNIT_FINISHED,
-            RustcEvent::InvariantViolation { .. } => Self::INVARIANT_VIOLATION,
+            RustcEvent::NodeDefined(_) => Self::NODE_DEFINED,
+            RustcEvent::NodeUpdated(_) => Self::NODE_UPDATED,
+            RustcEvent::NodeRemoved(_) => Self::NODE_REMOVED,
+            RustcEvent::EdgeDefined(_) => Self::EDGE_DEFINED,
+            RustcEvent::EdgeRemoved(_) => Self::EDGE_REMOVED,
+            RustcEvent::FileSeen(_) => Self::FILE_SEEN,
+            RustcEvent::CallsiteObserved(_) => Self::CALLSITE_OBSERVED,
+            RustcEvent::SymbolDefined(_) => Self::SYMBOL_DEFINED,
+            RustcEvent::SpanDefined(_) => Self::SPAN_DEFINED,
+            RustcEvent::PanicCaptured(_) => Self::PANIC_CAPTURED,
+            RustcEvent::WarningCaptured(_) => Self::WARNING_CAPTURED,
+            RustcEvent::SessionStart(_) => Self::SESSION_START,
+            RustcEvent::CompilationUnitFinished(_) => Self::COMPILATION_UNIT_FINISHED,
+            RustcEvent::InvariantViolation(_) => Self::INVARIANT_VIOLATION,
         }
     }
 }
@@ -96,11 +102,62 @@ pub trait RustcEventConsumer: Send + Sync {
 }
 
 #[derive(Debug, Clone)]
-pub enum CanonEvent {
-    Kernel { delta: EventDelta, state: RustcState },
+pub struct Code {
+    pub delta: canon_types::EventDelta,
+    pub state: canon_types::RustcState,
+}
+canon_event_struct!(DebugEvent {
+    source: String,
+    kind: String,
+    payload: serde_json::Value,
+});
+canon_event_struct!(Tick { tick: u64 });
+canon_event_struct!(RuntimeStateUpdated { payload: serde_json::Value });
+canon_event_struct!(PolicyBaselineUpdated { payload: serde_json::Value });
+canon_event_struct!(GoalSelected { payload: serde_json::Value });
+canon_event_struct!(SystemConfigLoaded { payload: serde_json::Value });
+canon_event_struct!(AgentRegistered { payload: serde_json::Value });
+canon_event_struct!(PromptLoaded { payload: serde_json::Value });
+canon_event_struct!(ToolCall {
+    node_id: String,
+    request_id: String,
+    kind: String,
+    payload: serde_json::Value,
+});
+canon_event_struct!(ToolResult {
+    node_id: String,
+    request_id: String,
+    kind: String,
+    output: serde_json::Value,
+    success: bool,
+});
+canon_event_struct!(GoalNodeCreated {
+    node_id: String,
+    description: String,
+    deps: Vec<String>,
+    caps: Vec<String>,
+    node_type: String,
+    priority: u8,
+    #[serde(default)]
+    budget: Option<u32>,
+});
+canon_event_struct!(GoalNodeRetracted { node_id: String });
+canon_event_struct!(GoalNodeRewritten {
+    node_id: String,
+    new_description: String,
+    new_caps: Vec<String>,
+});
+canon_event_struct!(GoalEdgeDefined { from_node_id: String, to_node_id: String });
+canon_event_struct!(GoalGraphCheckpointed { tlog_seq: u64 });
+canon_event_struct!(CapabilityInvoked { capability_id: String, name: String, node_id: String });
+canon_event_struct!(CapabilityResolved { capability_id: String, success: bool, duration_ms: u64 });
+
+canon_event_enum!(CanonEvent {
+    Code(Code),
+    Debug(DebugEvent),
     Edit(EditEvent),
-    Tick { tick: u64 },
-    RuntimeStateUpdated { payload: serde_json::Value },
+    Tick(Tick),
+    RuntimeStateUpdated(RuntimeStateUpdated),
     NodeReady(NodeReady),
     NodeStarted(NodeStarted),
     NodeCompleted(NodeCompleted),
@@ -108,23 +165,21 @@ pub enum CanonEvent {
     CapabilityRequested(CapabilityRequested),
     CapabilityCompleted(CapabilityCompleted),
     CapabilityFailed(CapabilityFailed),
-    PolicyBaselineUpdated { payload: serde_json::Value },
-    GoalSelected { payload: serde_json::Value },
-    SystemConfigLoaded { payload: serde_json::Value },
-    AgentRegistered { payload: serde_json::Value },
-    PromptLoaded { payload: serde_json::Value },
-    ToolCall { node_id: String, request_id: String, kind: String, payload: serde_json::Value },
-    ToolResult { node_id: String, request_id: String, kind: String, output: serde_json::Value, success: bool },
-    // Goal Graph: emitted when apply_graph_patch mutates the goal graph
-    GoalNodeCreated { node_id: String, description: String, deps: Vec<String>, caps: Vec<String>, node_type: String, priority: u8, budget: Option<u32> },
-    GoalNodeRetracted { node_id: String },
-    GoalNodeRewritten { node_id: String, new_description: String, new_caps: Vec<String> },
-    GoalEdgeDefined { from_node_id: String, to_node_id: String },
-    GoalGraphCheckpointed { tlog_seq: u64 },
-    // Capability Graph: emitted around capability dispatch
-    CapabilityInvoked { capability_id: String, name: String, node_id: String },
-    CapabilityResolved { capability_id: String, success: bool, duration_ms: u64 },
-}
+    PolicyBaselineUpdated(PolicyBaselineUpdated),
+    GoalSelected(GoalSelected),
+    SystemConfigLoaded(SystemConfigLoaded),
+    AgentRegistered(AgentRegistered),
+    PromptLoaded(PromptLoaded),
+    ToolCall(ToolCall),
+    ToolResult(ToolResult),
+    GoalNodeCreated(GoalNodeCreated),
+    GoalNodeRetracted(GoalNodeRetracted),
+    GoalNodeRewritten(GoalNodeRewritten),
+    GoalEdgeDefined(GoalEdgeDefined),
+    GoalGraphCheckpointed(GoalGraphCheckpointed),
+    CapabilityInvoked(CapabilityInvoked),
+    CapabilityResolved(CapabilityResolved),
+});
 
 pub trait EventEmitter: Send + Sync {
     fn emit(&self, event: CanonEvent);
@@ -135,7 +190,7 @@ pub type EventEmitterHandle = Arc<dyn EventEmitter>;
 #[derive(Debug, Clone, Copy)]
 pub enum EventFilter {
     All,
-    Kernel(EventMask),
+    Code(EventMask),
     EditOnly,
     CapabilityOnly,
 }

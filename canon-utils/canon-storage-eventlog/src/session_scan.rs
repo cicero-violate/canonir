@@ -35,7 +35,7 @@ pub fn find_last_graph_session_offset(tlog_path: &Path) -> Option<u64> {
             if let AnyEvent::Canon(canon) = event {
                 if let Some(kernel) = extract_rustc_event(&canon) {
                     match kernel {
-                        RustcEvent::SessionStart { .. } => {
+                        RustcEvent::SessionStart(_) => {
                             if current_has_graph {
                                 if let Some(off) = current_session_offset {
                                     last_with_graph = Some(off);
@@ -44,7 +44,7 @@ pub fn find_last_graph_session_offset(tlog_path: &Path) -> Option<u64> {
                             current_session_offset = Some(line_start);
                             current_has_graph = false;
                         }
-                        RustcEvent::NodeDefined { .. } | RustcEvent::EdgeDefined { .. } => {
+                        RustcEvent::NodeDefined(_) | RustcEvent::EdgeDefined(_) => {
                             current_has_graph = true;
                         }
                         _ => {}
@@ -78,7 +78,7 @@ pub fn session_contains_module_nodes(tlog_path: &Path) -> bool {
         if let Some(event) = parse_any_event(&raw_line) {
             if let AnyEvent::Canon(canon) = event {
                 if let Some(kernel) = extract_rustc_event(&canon) {
-                    if matches!(kernel, RustcEvent::NodeDefined { ref kind, .. } if kind == "MODULE") {
+                    if matches!(kernel, RustcEvent::NodeDefined(canon_event::NodeDefined { kind, .. }) if kind == "MODULE") {
                         return true;
                     }
                 }

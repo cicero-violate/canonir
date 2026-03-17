@@ -129,7 +129,7 @@ def print_schema_tree(path="$", prefix="", is_last=True, depth=0, max_depth=6):
 def render():
     os.system("clear")
     print("═" * 70)
-    print(f"  Live schema inference   —   {total_objects:,} objects seen")
+    print(f"  Combined Schema Tree (streaming union of event structures)   —   {total_objects:,} objects seen")
     print("═" * 70)
     if total_objects == 0 or "$" not in schema:
         print("  (waiting for data)")

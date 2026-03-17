@@ -14,8 +14,8 @@ pub use types::{
     SCHEMA_VERSION,
 };
 
-mod kernel_types_generated;
-pub use kernel_types_generated::*;
+mod kernel_types;
+pub use kernel_types::*;
 
 mod report_layout;
 pub use report_layout::ReportLayout;

@@ -641,7 +641,7 @@ fn write_callsite_resolution_from_tlog(tlog_path: &Path, reports_dir: &Path) -> 
         let Some(kernel) = extract_rustc_event(&canon) else {
             continue;
         };
-        let RustcEvent::CallsiteObserved { kind, resolved } = kernel else {
+        let RustcEvent::CallsiteObserved(canon_types::CallsiteObserved { kind, resolved }) = kernel else {
             continue;
         };
         report.total_callsites += 1;
@@ -684,12 +684,12 @@ fn write_symbol_artifacts_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<
             continue;
         };
         match kernel {
-            RustcEvent::SymbolDefined { symbol, kind } => {
+            RustcEvent::SymbolDefined(canon_types::SymbolDefined { symbol, kind }) => {
                 if !symbol.is_empty() && !kind.is_empty() {
                     symbols.insert(symbol, kind);
                 }
             }
-            RustcEvent::SpanDefined { symbol, file, line, col, lo, hi } => {
+            RustcEvent::SpanDefined(canon_types::SpanDefined { symbol, file, line, col, lo, hi }) => {
                 if symbol.is_empty() {
                     continue;
                 }

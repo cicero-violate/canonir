@@ -1,6 +1,4 @@
 use canon_types::{EventDelta, RustcEvent, RustcState};
-use canon_event::emit_debug::info;
-use serde_json::json;
 
 #[derive(Debug, Default)]
 pub struct SmtConsumer {
@@ -14,15 +12,10 @@ impl SmtConsumer {
     }
 
     fn handle_event(&mut self, delta: &EventDelta, _state: &RustcState) {
-        if let RustcEvent::EdgeDefined { .. } = &delta.event {
+        if let RustcEvent::EdgeDefined(_) = &delta.event {
             self.edge_count += 1;
             if !self.logged {
                 self.logged = true;
-                info(
-                    "smt_consumer",
-                    "edge_stream_started",
-                    json!({ "edge_count": self.edge_count }),
-                );
             }
         }
     }

@@ -72,6 +72,19 @@ pub enum PipelineCapability {
     Unknown,
 }
 impl PipelineCapability {
+    /// Returns the registered capability handler name, if one exists.
+    pub fn registry_name(self) -> Option<&'static str> {
+        match self {
+            PipelineCapability::FileRead => Some("file.read"),
+            PipelineCapability::FileWrite | PipelineCapability::ApplyPatch => Some("file.write"),
+            PipelineCapability::Bash => Some("bash"),
+            PipelineCapability::CargoBuild => Some("cargo.build"),
+            PipelineCapability::CargoCheck => Some("cargo.check"),
+            PipelineCapability::Llm | PipelineCapability::Analysis => Some("llm.call"),
+            _ => None,
+        }
+    }
+
     pub fn class(self) -> CapabilityMode {
         match self {
             PipelineCapability::FileRead => CapabilityMode::Observe,

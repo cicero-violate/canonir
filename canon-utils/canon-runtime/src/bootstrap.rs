@@ -1,4 +1,4 @@
-use canon_event::{write_event_auto, TlogEvent};
+use canon_event::canon_emit;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -153,6 +153,5 @@ fn bootstrap_agents(tlog_path: &Path) {
 // ---------------------------------------------------------------------------
 
 fn write_boot_event(tlog_path: &Path, kind: &str, payload: serde_json::Value) {
-    let event = TlogEvent::new("bootstrap", kind, payload);
-    let _ = write_event_auto(tlog_path, &event);
+    let _ = canon_emit!("bootstrap", kind, payload, tlog_path);
 }

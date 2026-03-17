@@ -125,7 +125,7 @@ fn count_sessions(path: &Path) -> Result<u64> {
         match event {
             AnyEvent::Canon(canon) => {
                 if let Some(kernel) = extract_rustc_event(&canon) {
-                    if let RustcEvent::SessionStart { .. } = kernel {
+                    if let RustcEvent::SessionStart(_) = kernel {
                         count += 1;
                     }
                 }
@@ -154,11 +154,11 @@ fn run_stress(json_path: &Path, bin_path: &Path) -> Result<()> {
     let mut json_writer = BufWriter::new(File::create(json_path)?);
     let bin_writer = BinarySegmentWriter::open(bin_path)?;
 
-    let session = RustcEvent::SessionStart {
+    let session = RustcEvent::SessionStart(canon_event::SessionStart {
         project: "stress".to_string(),
         schema: 2,
         byte_offset: 0,
-    };
+    });
     let session_json = serde_json::to_value(&session)?;
     let canon = TlogEvent::new("rustc", "rustc_event", session_json.clone());
     let line = serde_json::to_string(&canon)?;
@@ -167,7 +167,7 @@ fn run_stress(json_path: &Path, bin_path: &Path) -> Result<()> {
     let _ = bin_writer.write_event(&TlogEvent::new("rustc", "rustc_event", session_json));
 
     for i in 0..10_000u32 {
-        let node = RustcEvent::NodeDefined {
+        let node = RustcEvent::NodeDefined(canon_event::NodeDefined {
             symbol: format!("node_{i}"),
             kind: "FUNCTION".to_string(),
             file: "src/lib.rs".to_string(),
@@ -175,7 +175,7 @@ fn run_stress(json_path: &Path, bin_path: &Path) -> Result<()> {
             col: 1,
             lo: 0,
             hi: 0,
-        };
+        });
         let val = serde_json::to_value(&node)?;
         let canon = TlogEvent::new("rustc", "rustc_event", val.clone());
         let line = serde_json::to_string(&canon)?;
@@ -186,11 +186,11 @@ fn run_stress(json_path: &Path, bin_path: &Path) -> Result<()> {
     for i in 0..50_000u32 {
         let src = format!("node_{}", i % 10_000);
         let dst = format!("node_{}", (i * 7) % 10_000);
-        let edge = RustcEvent::EdgeDefined {
+        let edge = RustcEvent::EdgeDefined(canon_event::EdgeDefined {
             src,
             dst,
             kind: "CALL".to_string(),
-        };
+        });
         let val = serde_json::to_value(&edge)?;
         let canon = TlogEvent::new("rustc", "rustc_event", val.clone());
         let line = serde_json::to_string(&canon)?;

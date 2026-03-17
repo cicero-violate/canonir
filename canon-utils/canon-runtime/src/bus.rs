@@ -1,7 +1,5 @@
-use canon_event::emit_debug::{error, info};
 use canon_event::{EventMask, EventConsumer, EventEmitterHandle, CanonEvent, EventFilter};
 use crossbeam_channel::{bounded, Sender};
-use serde_json::json;
 use std::thread;
 
 #[derive(Clone)]
@@ -10,6 +8,7 @@ pub struct EventMessage {
 }
 
 pub struct ConsumerEntry {
+    #[allow(dead_code)]
     pub name: String,
     pub filter: EventFilter,
     pub sender: Sender<EventMessage>,
@@ -38,21 +37,14 @@ impl EventBus {
         let filter = consumer.filter();
         let (tx, rx) = bounded::<EventMessage>(self.queue_size);
         let thread_name = format!("event_consumer_{name}");
-        if let Err(err) = thread::Builder::new()
+        let _ = thread::Builder::new()
             .name(thread_name.clone())
             .spawn(move || {
                 let mut consumer = consumer;
                 for msg in rx.iter() {
                     consumer.on_event(&msg.event);
                 }
-            })
-        {
-            error(
-                "event_bus",
-                "consumer_spawn_failed",
-                json!({ "name": name, "error": err.to_string() }),
-            );
-        }
+            });
         self.consumers.push(ConsumerEntry { name, filter, sender: tx });
     }
 
@@ -75,8 +67,8 @@ impl EventBus {
                         continue;
                     }
                 }
-                EventFilter::Kernel(mask) => {
-                    let CanonEvent::Kernel { delta, .. } = &event else {
+                EventFilter::Code(mask) => {
+                    let CanonEvent::Code(canon_event::Code { delta, .. }) = &event else {
                         continue;
                     };
                     let event_mask = EventMask::for_event(&delta.event);
@@ -85,22 +77,10 @@ impl EventBus {
                     }
                 }
             }
-            if let Err(err) = consumer.sender.try_send(EventMessage { event: event.clone() }) {
-                error(
-                    "event_bus",
-                    "dispatch_dropped",
-                    json!({ "name": consumer.name, "error": err.to_string() }),
-                );
-            }
+            let _ = consumer.sender.try_send(EventMessage { event: event.clone() });
         }
     }
 
     pub fn log_registry(&self) {
-        let names: Vec<String> = self.consumers.iter().map(|c| c.name.clone()).collect();
-        info(
-            "event_bus",
-            "registry_ready",
-            json!({ "count": names.len(), "consumers": names }),
-        );
     }
 }

@@ -78,13 +78,13 @@ pub fn update_graph_cache(tlog_path: &Path, reports_dir: &Path) -> Result<GraphC
 
 fn apply_cache_event(event: RustcEvent, cache: &mut GraphCache) {
     match event {
-        RustcEvent::SessionStart { .. } => {
+        RustcEvent::SessionStart(_) => {
             cache.module_files.clear();
             cache.type_nodes.clear();
             cache.type_edges.clear();
         }
-        RustcEvent::NodeDefined { symbol, kind, file, line, .. }
-        | RustcEvent::NodeUpdated { symbol, kind, file, line, .. } => {
+        RustcEvent::NodeDefined(canon_types::NodeDefined { symbol, kind, file, line, .. })
+        | RustcEvent::NodeUpdated(canon_types::NodeUpdated { symbol, kind, file, line, .. }) => {
             let sym = symbol.as_str();
             let kind = kind.as_str();
             let file = file.as_str();
@@ -113,7 +113,7 @@ fn apply_cache_event(event: RustcEvent, cache: &mut GraphCache) {
                 });
             }
         }
-        RustcEvent::NodeRemoved { symbol } => {
+        RustcEvent::NodeRemoved(canon_types::NodeRemoved { symbol }) => {
             let sym = symbol.as_str();
             if sym.is_empty() {
                 return;
@@ -122,7 +122,7 @@ fn apply_cache_event(event: RustcEvent, cache: &mut GraphCache) {
             cache.type_nodes.remove(sym);
             cache.type_edges.retain(|edge| edge.src != sym && edge.dst != sym);
         }
-        RustcEvent::EdgeDefined { src, dst, kind } => {
+        RustcEvent::EdgeDefined(canon_types::EdgeDefined { src, dst, kind }) => {
             let rel_kinds = ["HAS_FIELD", "HAS_METHOD", "IMPLEMENTS", "FOR_TYPE", "USES_TYPE", "BOUNDS"];
             let kind = kind.as_str();
             if !rel_kinds.contains(&kind) {
@@ -139,7 +139,7 @@ fn apply_cache_event(event: RustcEvent, cache: &mut GraphCache) {
                 rel: kind.to_string(),
             });
         }
-        RustcEvent::EdgeRemoved { src, dst, kind } => {
+        RustcEvent::EdgeRemoved(canon_types::EdgeRemoved { src, dst, kind }) => {
             let rel_kinds = ["HAS_FIELD", "HAS_METHOD", "IMPLEMENTS", "FOR_TYPE", "USES_TYPE", "BOUNDS"];
             let kind = kind.as_str();
             if !rel_kinds.contains(&kind) {

@@ -1,29 +1,17 @@
 use canon_agent::task_graph::TaskGraph;
-use canon_agent::capability_types::PipelineCapability;
 use canon_agent::decompose::DecomposeNodeType;
 use canon_agent::task_graph::TaskNode;
 use serde_json::json;
 
 pub(super) fn capability_name_for_node(node: &TaskNode) -> Option<&'static str> {
-    for cap in &node.required_capabilities {
-        match cap {
-            PipelineCapability::FileRead => return Some("file.read"),
-            PipelineCapability::FileWrite | PipelineCapability::ApplyPatch => {
-                return Some("file.write")
+    node.required_capabilities.iter().find_map(|cap| cap.registry_name())
+        .or_else(|| {
+            if matches!(node.node_type, DecomposeNodeType::Analysis) {
+                Some("llm.call")
+            } else {
+                None
             }
-            PipelineCapability::Bash => return Some("bash"),
-            PipelineCapability::CargoBuild => return Some("cargo.build"),
-            PipelineCapability::CargoCheck => return Some("cargo.check"),
-            PipelineCapability::Llm | PipelineCapability::Analysis => return Some("llm.call"),
-            _ => {}
-        }
-    }
-    // Fallback: analysis nodes with any unrecognised capability set are dispatched to the LLM.
-    // This covers ReadDag, ComputeDelta, StatelessInvoke, InvariantCheck, etc.
-    if matches!(node.node_type, DecomposeNodeType::Analysis) {
-        return Some("llm.call");
-    }
-    None
+        })
 }
 
 pub(super) fn build_capability_args(node: &TaskNode, capability: &str) -> Option<serde_json::Value> {

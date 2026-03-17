@@ -18,7 +18,10 @@ pub fn replay_graph_from_tlog(tlog_path: &Path) -> Result<CodeGraphProjection> {
         for event in events {
             if let AnyEvent::Canon(canon) = event {
                 if let Some(kernel) = extract_rustc_event(&canon) {
-                    apply_rustc_event_to_graph(kernel, &mut graph, &mut symbol_to_id, true);
+                    // Multi-crate accumulated tlog: do NOT clear on session.
+                    // Each crate has globally-unique qualified symbol IDs; nodes update
+                    // in-place via symbol_to_id. Clearing wipes all prior crates.
+                    apply_rustc_event_to_graph(kernel, &mut graph, &mut symbol_to_id, false);
                 }
             }
         }
@@ -46,7 +49,7 @@ pub fn replay_graph_from_tlog(tlog_path: &Path) -> Result<CodeGraphProjection> {
             if let Some(event) = parse_any_event(line) {
                 if let AnyEvent::Canon(canon) = event {
                     if let Some(kernel) = extract_rustc_event(&canon) {
-                        if matches!(kernel, RustcEvent::SessionStart { .. }) {
+                        if matches!(kernel, RustcEvent::SessionStart(_)) {
                             if seen_session && stop_after_session {
                                 return Ok(graph);
                             }
@@ -131,7 +134,7 @@ pub fn replay_events_from_offset(
         for event in events {
             if let AnyEvent::Canon(canon) = event {
                 if let Some(kernel) = extract_rustc_event(&canon) {
-                    if apply_rustc_event_to_graph(kernel, graph, symbol_to_id, true) {
+                    if apply_rustc_event_to_graph(kernel, graph, symbol_to_id, false) {
                         events_added += 1;
                     }
                 }
@@ -162,7 +165,7 @@ pub fn replay_events_from_offset(
             if let Some(event) = parse_any_event(slice) {
                 if let AnyEvent::Canon(canon) = event {
                     if let Some(kernel) = extract_rustc_event(&canon) {
-                        if matches!(kernel, RustcEvent::SessionStart { .. }) {
+                        if matches!(kernel, RustcEvent::SessionStart(_)) {
                             if seen_session && stop_after_session {
                                 break 'outer;
                             }
@@ -198,7 +201,7 @@ pub fn apply_rustc_event_to_graph(
     clear_on_session: bool,
 ) -> bool {
     match event {
-        RustcEvent::SessionStart { .. } => {
+        RustcEvent::SessionStart(_) => {
             if clear_on_session {
                 graph.nodes.clear();
                 graph.edges.clear();
@@ -207,8 +210,8 @@ pub fn apply_rustc_event_to_graph(
             }
             true
         }
-        RustcEvent::NodeDefined { symbol, kind, file, line, .. }
-        | RustcEvent::NodeUpdated { symbol, kind, file, line, .. } => {
+        RustcEvent::NodeDefined(canon_event::NodeDefined { symbol, kind, file, line, .. })
+        | RustcEvent::NodeUpdated(canon_event::NodeUpdated { symbol, kind, file, line, .. }) => {
             let sym = symbol.as_str();
             let kind = kind.as_str();
             let file = file.as_str();
@@ -264,7 +267,7 @@ pub fn apply_rustc_event_to_graph(
             }
             true
         }
-        RustcEvent::EdgeDefined { src, dst, kind } => {
+        RustcEvent::EdgeDefined(canon_event::EdgeDefined { src, dst, kind }) => {
             let src_sym = src.as_str();
             let dst_sym = dst.as_str();
             let kind = kind.as_str();
@@ -281,14 +284,14 @@ pub fn apply_rustc_event_to_graph(
             });
             true
         }
-        RustcEvent::NodeRemoved { symbol } => {
+        RustcEvent::NodeRemoved(canon_event::NodeRemoved { symbol }) => {
             let sym = symbol.as_str();
             let Some(&id) = symbol_to_id.get(sym) else {
                 return false;
             };
             delete_node(id, graph, symbol_to_id)
         }
-        RustcEvent::EdgeRemoved { src, dst, kind } => {
+        RustcEvent::EdgeRemoved(canon_event::EdgeRemoved { src, dst, kind }) => {
             let src_sym = src.as_str();
             let dst_sym = dst.as_str();
             let kind = kind.as_str();
@@ -302,20 +305,20 @@ pub fn apply_rustc_event_to_graph(
             graph.edges.retain(|e| !(e.src == src && e.dst == dst && e.kind == kind));
             before != graph.edges.len()
         }
-        RustcEvent::FileSeen { path } => {
+        RustcEvent::FileSeen(canon_event::FileSeen { path }) => {
             let path = path.as_str();
             if !path.is_empty() && !graph.files.iter().any(|p| p == path) {
                 graph.files.push(path.to_string());
             }
             true
         }
-        RustcEvent::WarningCaptured { .. }
-        | RustcEvent::PanicCaptured { .. }
-        | RustcEvent::CallsiteObserved { .. }
-        | RustcEvent::SymbolDefined { .. }
-        | RustcEvent::SpanDefined { .. }
-        | RustcEvent::CompilationUnitFinished { .. }
-        | RustcEvent::InvariantViolation { .. } => true,
+        RustcEvent::WarningCaptured(_)
+        | RustcEvent::PanicCaptured(_)
+        | RustcEvent::CallsiteObserved(_)
+        | RustcEvent::SymbolDefined(_)
+        | RustcEvent::SpanDefined(_)
+        | RustcEvent::CompilationUnitFinished(_)
+        | RustcEvent::InvariantViolation(_) => true,
     }
 }
 

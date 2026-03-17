@@ -2,7 +2,6 @@ use crate::edit::ProjectEditor;
 use crate::structured::{EditOp, FieldMutation};
 use crate::symbol_index::SymbolIndex;
 use anyhow::{anyhow, Result};
-use canon_event::emit_debug::{error, info};
 use canon_event::{EditEvent, EventConsumer, CanonEvent, EventFilter};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,10 +19,10 @@ impl EditConsumer {
         let mut editor = ProjectEditor::load_with_session(&project_root, session)?;
 
         match event {
-            EditEvent::RenameSymbol { old, new, .. } => {
+            EditEvent::RenameSymbol(canon_event::RenameSymbol { old, new, .. }) => {
                 editor.queue_by_id(&old, FieldMutation::RenameIdent(new))?;
             }
-            EditEvent::MoveSymbol { symbol, module, .. } => {
+            EditEvent::MoveSymbol(canon_event::MoveSymbol { symbol, module, .. }) => {
                 let handle = editor.synthetic_handle_from_symbol_id(&symbol)?;
                 let op = EditOp::MoveSymbol {
                     handle,
@@ -33,7 +32,7 @@ impl EditConsumer {
                 };
                 editor.queue(&symbol, op)?;
             }
-            EditEvent::DeleteSymbol { symbol, .. } => {
+            EditEvent::DeleteSymbol(canon_event::DeleteSymbol { symbol, .. }) => {
                 let handle = editor.synthetic_handle_from_symbol_id(&symbol)?;
                 let op = EditOp::DeleteSymbol {
                     handle,
@@ -41,16 +40,16 @@ impl EditConsumer {
                 };
                 editor.queue(&symbol, op)?;
             }
-            EditEvent::RenameModule { old, new, .. } => {
+            EditEvent::RenameModule(canon_event::RenameModule { old, new, .. }) => {
                 editor.queue_module_rename(&old, &new);
             }
-            EditEvent::RenameDir { old, new, .. } => {
+            EditEvent::RenameDir(canon_event::RenameDir { old, new, .. }) => {
                 editor.queue_directory_rename(&old, &new);
             }
-            EditEvent::InlineModule { .. } => {
+            EditEvent::InlineModule(_) => {
                 return Err(anyhow!("InlineModule is not supported in EditConsumer yet"));
             }
-            EditEvent::ExtractModule { .. } => {
+            EditEvent::ExtractModule(_) => {
                 return Err(anyhow!("ExtractModule is not supported in EditConsumer yet"));
             }
         }
@@ -65,12 +64,7 @@ impl EditConsumer {
             return Err(anyhow!("apply conflicts: {:?}", report.conflicts));
         }
 
-        let written = editor.commit()?;
-        info(
-            "edit_consumer",
-            "edit_applied",
-            serde_json::json!({ "files": written.len() }),
-        );
+        let _written = editor.commit()?;
         Ok(())
     }
 }
@@ -84,13 +78,7 @@ impl EventConsumer for EditConsumer {
         let CanonEvent::Edit(edit) = event else {
             return;
         };
-        if let Err(err) = self.apply_event(edit.clone()) {
-            error(
-                "edit_consumer",
-                "edit_apply_failed",
-                serde_json::json!({ "error": err.to_string() }),
-            );
-        }
+        let _ = self.apply_event(edit.clone());
     }
 }
 
@@ -101,13 +89,13 @@ trait EditEventProject {
 impl EditEventProject for EditEvent {
     fn project(&self) -> &str {
         match self {
-            EditEvent::RenameSymbol { project, .. } => project,
-            EditEvent::MoveSymbol { project, .. } => project,
-            EditEvent::DeleteSymbol { project, .. } => project,
-            EditEvent::RenameModule { project, .. } => project,
-            EditEvent::RenameDir { project, .. } => project,
-            EditEvent::InlineModule { project, .. } => project,
-            EditEvent::ExtractModule { project, .. } => project,
+            EditEvent::RenameSymbol(canon_event::RenameSymbol { project, .. }) => project,
+            EditEvent::MoveSymbol(canon_event::MoveSymbol { project, .. }) => project,
+            EditEvent::DeleteSymbol(canon_event::DeleteSymbol { project, .. }) => project,
+            EditEvent::RenameModule(canon_event::RenameModule { project, .. }) => project,
+            EditEvent::RenameDir(canon_event::RenameDir { project, .. }) => project,
+            EditEvent::InlineModule(canon_event::InlineModule { project, .. }) => project,
+            EditEvent::ExtractModule(canon_event::ExtractModule { project, .. }) => project,
         }
     }
 }

@@ -1,6 +1,4 @@
-use canon_event::emit_debug::info;
 use canon_types::{EventDelta, RustcEvent, RustcState};
-use serde_json::json;
 
 #[derive(Debug, Default)]
 pub struct GraphConsumer {
@@ -17,28 +15,19 @@ impl GraphConsumer {
 
     fn handle_event(&mut self, delta: &EventDelta, _state: &RustcState) {
         match &delta.event {
-            RustcEvent::NodeDefined { .. } => {
+            RustcEvent::NodeDefined(_) => {
                 self.node_count += 1;
             }
-            RustcEvent::EdgeDefined { .. } => {
+            RustcEvent::EdgeDefined(_) => {
                 self.edge_count += 1;
             }
-            RustcEvent::FileSeen { .. } => {
+            RustcEvent::FileSeen(_) => {
                 self.file_count += 1;
             }
             _ => {}
         }
         if !self.logged && (self.node_count + self.edge_count + self.file_count) > 0 {
             self.logged = true;
-            info(
-                "graph_consumer",
-                "event_stream_started",
-                json!({
-                    "nodes": self.node_count,
-                    "edges": self.edge_count,
-                    "files": self.file_count
-                }),
-            );
         }
     }
 }

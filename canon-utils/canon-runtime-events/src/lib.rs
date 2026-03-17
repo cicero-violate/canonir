@@ -1,7 +1,6 @@
 pub mod events;
 pub mod emit;
 pub mod schema;
-pub mod emit_debug;
 pub mod tlog;
 pub mod macros;
 
@@ -32,13 +31,53 @@ macro_rules! impl_rustc_consumer {
     };
 }
 
-pub use events::*;
+pub use events::{
+    CanonEvent,
+    EditEvent,
+    EventConsumer,
+    EventEmitter,
+    EventEmitterHandle,
+    EventFilter,
+    EventMask,
+    RustcEventConsumer,
+    RenameSymbol,
+    MoveSymbol,
+    DeleteSymbol,
+    RenameModule,
+    RenameDir,
+    InlineModule,
+    ExtractModule,
+    Code,
+    DebugEvent,
+    Tick,
+    RuntimeStateUpdated,
+    PolicyBaselineUpdated,
+    GoalSelected,
+    SystemConfigLoaded,
+    AgentRegistered,
+    PromptLoaded,
+    ToolCall,
+    ToolResult,
+    GoalNodeCreated,
+    GoalNodeRetracted,
+    GoalNodeRewritten,
+    GoalEdgeDefined,
+    GoalGraphCheckpointed,
+    CapabilityInvoked,
+    CapabilityResolved,
+    CapabilityRequested,
+    CapabilityCompleted,
+    CapabilityFailed,
+    NodeReady,
+    NodeStarted,
+    NodeCompleted,
+    NodeFailed,
+};
 pub use emit::*;
 pub use schema::*;
-pub use emit_debug::*;
+pub use macros::emit::canon_emit;
 pub use tlog::{
     emit_event_json, is_binary_tlog,
     BinarySegmentWriter, BinaryTlogWriter, TlogEvent, RotateConfig, SegmentConfig, TlogWriter,
     maybe_rotate,
 };
-pub use emit::write_event_auto;

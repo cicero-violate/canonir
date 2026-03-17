@@ -1,5 +1,4 @@
 use canon_capability::{CapabilityHandler, CapabilityExecutionContext, CapabilityRegistry, CapabilityExecutionResult};
-use canon_event::emit_debug::{error, info};
 use canon_event::{EditEvent, CanonEvent};
 
 pub const CAP_RENAME_SYMBOL: &str = "edit.rename_symbol";
@@ -40,16 +39,11 @@ impl CapabilityHandler for RenameSymbolCapability {
         let project = require_arg(&request.args, "project")?;
         let old = require_arg(&request.args, "old")?;
         let new = require_arg(&request.args, "new")?;
-        info(
-            "edit_capability",
-            "rename_symbol",
-            serde_json::json!({ "project": project, "old": old, "new": new }),
-        );
-        Ok(emit_edit(EditEvent::RenameSymbol {
+        Ok(emit_edit(EditEvent::RenameSymbol(canon_event::RenameSymbol {
             project: project.to_string(),
             old: old.to_string(),
             new: new.to_string(),
-        }))
+        })))
     }
 }
 
@@ -67,16 +61,11 @@ impl CapabilityHandler for MoveSymbolCapability {
         let project = require_arg(&request.args, "project")?;
         let symbol = require_arg(&request.args, "symbol")?;
         let module = require_arg(&request.args, "module")?;
-        info(
-            "edit_capability",
-            "move_symbol",
-            serde_json::json!({ "project": project, "symbol": symbol, "module": module }),
-        );
-        Ok(emit_edit(EditEvent::MoveSymbol {
+        Ok(emit_edit(EditEvent::MoveSymbol(canon_event::MoveSymbol {
             project: project.to_string(),
             symbol: symbol.to_string(),
             module: module.to_string(),
-        }))
+        })))
     }
 }
 
@@ -93,15 +82,10 @@ impl CapabilityHandler for DeleteSymbolCapability {
         };
         let project = require_arg(&request.args, "project")?;
         let symbol = require_arg(&request.args, "symbol")?;
-        info(
-            "edit_capability",
-            "delete_symbol",
-            serde_json::json!({ "project": project, "symbol": symbol }),
-        );
-        Ok(emit_edit(EditEvent::DeleteSymbol {
+        Ok(emit_edit(EditEvent::DeleteSymbol(canon_event::DeleteSymbol {
             project: project.to_string(),
             symbol: symbol.to_string(),
-        }))
+        })))
     }
 }
 
@@ -119,16 +103,11 @@ impl CapabilityHandler for RenameModuleCapability {
         let project = require_arg(&request.args, "project")?;
         let old = require_arg(&request.args, "old")?;
         let new = require_arg(&request.args, "new")?;
-        info(
-            "edit_capability",
-            "rename_module",
-            serde_json::json!({ "project": project, "old": old, "new": new }),
-        );
-        Ok(emit_edit(EditEvent::RenameModule {
+        Ok(emit_edit(EditEvent::RenameModule(canon_event::RenameModule {
             project: project.to_string(),
             old: old.to_string(),
             new: new.to_string(),
-        }))
+        })))
     }
 }
 
@@ -146,23 +125,11 @@ impl CapabilityHandler for RenameDirCapability {
         let project = require_arg(&request.args, "project")?;
         let old = require_arg(&request.args, "old")?;
         let new = require_arg(&request.args, "new")?;
-        info(
-            "edit_capability",
-            "rename_dir",
-            serde_json::json!({ "project": project, "old": old, "new": new }),
-        );
-        Ok(emit_edit(EditEvent::RenameDir {
+        Ok(emit_edit(EditEvent::RenameDir(canon_event::RenameDir {
             project: project.to_string(),
             old: old.into(),
             new: new.into(),
-        }))
+        })))
     }
 }
 
-fn _log_error(action: &str, err: &str) {
-    error(
-        "edit_capability",
-        "capability_failed",
-        serde_json::json!({ "action": action, "error": err }),
-    );
-}

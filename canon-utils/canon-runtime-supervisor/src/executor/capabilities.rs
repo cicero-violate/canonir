@@ -1,6 +1,5 @@
 use crate::executor::{run_cargo_build, run_cargo_check, run_cargo_run, BuildRequest, CheckRequest, RunRequest};
 use canon_capability::{CapabilityHandler, CapabilityExecutionContext, CapabilityRegistry, CapabilityExecutionResult};
-use canon_event::emit_debug::info;
 use canon_event::{CapabilityCompleted, CapabilityFailed, CapabilityRequested, CanonEvent};
 use serde_json::json;
 use std::process::Command;
@@ -43,9 +42,9 @@ fn emit_failed(req: &CapabilityRequested, error: &str) -> CapabilityExecutionRes
 }
 
 fn runtime_log_event(kind: &str, payload: serde_json::Value) -> CanonEvent {
-    CanonEvent::RuntimeStateUpdated {
+    CanonEvent::RuntimeStateUpdated(canon_event::RuntimeStateUpdated {
         payload: json!({ "kind": kind, "payload": payload }),
-    }
+    })
 }
 
 fn emit_completed_with_events(
@@ -85,11 +84,6 @@ impl CapabilityHandler for BuildCargoCapability {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing crate arg"))?;
 
-        info(
-            "build_capability",
-            "build_started",
-            serde_json::json!({ "crate": crate_name }),
-        );
         let mut events = vec![runtime_log_event("build.started", json!({ "crate": crate_name }))];
 
         let result = run_cargo_build(&BuildRequest {
@@ -147,11 +141,6 @@ impl CapabilityHandler for CargoRunCapability {
             None => Vec::new(),
         };
 
-        info(
-            "build_capability",
-            "run_started",
-            serde_json::json!({ "crate": crate_name, "bin": bin }),
-        );
         let mut events = vec![runtime_log_event(
             "run.started",
             json!({ "crate": crate_name, "bin": bin }),
@@ -196,11 +185,6 @@ impl CapabilityHandler for CargoCheckCapability {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing crate arg"))?;
 
-        info(
-            "build_capability",
-            "check_started",
-            serde_json::json!({ "crate": crate_name }),
-        );
         let mut events =
             vec![runtime_log_event("check.started", json!({ "crate": crate_name }))];
 

@@ -14,6 +14,7 @@ members = [
   "canon-utils/canon-storage-eventlog",
   "canon-utils/canon-runtime-events",
   "canon-utils/canon-runtime",
+  "canon-utils/canon-macros",
   "canon-utils/canon-types",
   "canon-utils/canon-capability",
   "canon-utils/canon-runtime-supervisor",

@@ -17,11 +17,6 @@ pub fn normalize_llm_output(raw: &str) -> Value {
     if let Some(v) = try_parse_lenient_json(cleaned) {
         return v;
     }
-    canon_event::emit_debug::warn(
-        "llm_normalize",
-        "LLM_NORMALIZE_FALLBACK",
-        serde_json::json!({ "raw_preview": &raw[..raw.len().min(200)] }),
-    );
     serde_json::json!({ "text": raw })
 }
 

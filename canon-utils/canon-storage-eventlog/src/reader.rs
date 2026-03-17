@@ -8,7 +8,7 @@ use crate::binary_reader::{is_binary_magic, read_binary_events};
 #[derive(Debug, Clone)]
 pub enum AnyEvent {
     Canon(TlogEvent),
-    Kernel(RustcEvent),
+    Code(RustcEvent),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

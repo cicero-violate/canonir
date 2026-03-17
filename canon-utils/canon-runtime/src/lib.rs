@@ -4,7 +4,6 @@ pub mod bootstrap;
 pub mod consumers;
 
 use canon_capability::{CapabilityExecutionContext, CapabilityRegistry, CapabilityExecutionResult};
-use canon_event::emit_debug::{error, info};
 use canon_event::{BinarySegmentWriter, TlogEvent};
 use std::sync::Mutex as StdMutex;
 use canon_event_store::{
@@ -15,6 +14,7 @@ use canon_event_store::{
     read_any_events_from_path,
     AnyEvent,
 };
+use canon_event::{NodeDefined, NodeUpdated, NodeRemoved, EdgeDefined, EdgeRemoved, FileSeen};
 use canon_event::{
     CapabilityCompleted,
     CapabilityFailed,
@@ -26,6 +26,24 @@ use canon_event::{
     EventEmitter,
     EventEmitterHandle,
     CanonEvent,
+    Code,
+    DebugEvent,
+    Tick,
+    RuntimeStateUpdated,
+    PolicyBaselineUpdated,
+    GoalSelected,
+    SystemConfigLoaded,
+    AgentRegistered,
+    PromptLoaded,
+    ToolCall,
+    ToolResult,
+    GoalNodeCreated,
+    GoalNodeRetracted,
+    GoalNodeRewritten,
+    GoalEdgeDefined,
+    GoalGraphCheckpointed,
+    CapabilityInvoked,
+    CapabilityResolved,
 };
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -45,6 +63,7 @@ pub struct EventRuntime {
     runtime_tick: u64,
     runtime_state: serde_json::Value,
     execute_capabilities: bool,
+    emitter: EventEmitterHandle,
     emitter_rx: crossbeam_channel::Receiver<CanonEvent>,
 }
 
@@ -86,6 +105,7 @@ impl EventRuntime {
             runtime_tick: 0,
             runtime_state: serde_json::json!({}),
             execute_capabilities: false,
+            emitter,
             emitter_rx,
         }
     }
@@ -144,17 +164,12 @@ impl EventRuntime {
                     self.handle_runtime_event(CanonEvent::Edit(edit))?;
                     self.drain_emitted_events()?;
                 } else if let Some(request) = extract_capability_request(canon) {
-                    info(
-                        "event_runtime",
-                        "capability_requested",
-                        serde_json::json!({ "name": request.name, "request_id": request.request_id }),
-                    );
                     self.handle_runtime_event(CanonEvent::CapabilityRequested(request))?;
                     self.drain_emitted_events()?;
                 } else if canon.kind == "runtime_state.updated" {
-                    self.handle_runtime_event(CanonEvent::RuntimeStateUpdated {
+                    self.handle_runtime_event(CanonEvent::RuntimeStateUpdated(RuntimeStateUpdated {
                         payload: canon.payload.clone(),
-                    })?;
+                    }))?;
                     self.drain_emitted_events()?;
                 } else if let Some(supervisor_event) = extract_supervisor_event(canon) {
                     if supervisor_event.kind == "workspace.changed" {
@@ -162,6 +177,22 @@ impl EventRuntime {
                             let request = CapabilityRequested {
                                 request_id: format!("build-{}-{}", crate_name, self.tick),
                                 name: "cargo.build".to_string(),
+                                args: serde_json::json!({ "crate": crate_name }),
+                            };
+                            self.handle_runtime_event(CanonEvent::CapabilityRequested(request))?;
+                            self.drain_emitted_events()?;
+                        }
+                    }
+                } else if canon.kind == "crate_compiled" {
+                    // Old-format crate_compiled events (byte_offset/schema) from pre-CompilationUnitFinished
+                    // rustc. Trigger analysis for any crate not already handled via rustc_event.
+                    if let Some(crate_name) = canon.payload.get("crate").and_then(|v| v.as_str()) {
+                        // Skip build scripts and the new duplicate event already paired with
+                        // a CompilationUnitFinished rustc_event above.
+                        if canon.payload.get("byte_offset").is_some() && crate_name != "build_script_build" {
+                            let request = CapabilityRequested {
+                                request_id: format!("analysis-{}-{}", crate_name, self.tick),
+                                name: "analysis.run".to_string(),
                                 args: serde_json::json!({ "crate": crate_name }),
                             };
                             self.handle_runtime_event(CanonEvent::CapabilityRequested(request))?;
@@ -176,7 +207,12 @@ impl EventRuntime {
     }
 
     pub fn handle_kernel_event(&mut self, event: RustcEvent) -> Result<()> {
-        let delta = if matches!(event, RustcEvent::SessionStart { .. }) {
+        let analysis_crate = if let RustcEvent::CompilationUnitFinished(ref cu) = event {
+            Some(cu.crate_name.clone())
+        } else {
+            None
+        };
+        let delta = if matches!(event, RustcEvent::SessionStart(_)) {
             self.next_id = 1;
             self.tick = 0;
             EventDelta {
@@ -196,26 +232,34 @@ impl EventRuntime {
         };
 
         apply_delta(&mut self.state, &delta)?;
-        self.handle_runtime_event(CanonEvent::Kernel { delta, state: self.state.clone() })?;
+        self.handle_runtime_event(CanonEvent::Code(Code { delta, state: self.state.clone() }))?;
+        if let Some(crate_name) = analysis_crate {
+            let request = CapabilityRequested {
+                request_id: format!("analysis-{}-{}", crate_name, self.tick),
+                name: "analysis.run".to_string(),
+                args: serde_json::json!({ "crate": crate_name }),
+            };
+            self.handle_runtime_event(CanonEvent::CapabilityRequested(request))?;
+        }
         Ok(())
     }
 
     pub fn emit_tick(&mut self) -> Result<()> {
         self.runtime_tick = self.runtime_tick.saturating_add(1);
-        self.handle_runtime_event(CanonEvent::Tick {
+        self.handle_runtime_event(CanonEvent::Tick(Tick {
             tick: self.runtime_tick,
-        })?;
+        }))?;
         self.drain_emitted_events()?;
         Ok(())
     }
 
     fn handle_runtime_event(&mut self, event: CanonEvent) -> Result<()> {
         self.bus.dispatch(event.clone());
-        if !matches!(event, CanonEvent::RuntimeStateUpdated { .. }) {
+        if !matches!(event, CanonEvent::RuntimeStateUpdated(_)) {
             self.append_runtime_event(&event);
         }
         match event {
-            CanonEvent::RuntimeStateUpdated { payload } => {
+            CanonEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload }) => {
                 self.runtime_state = payload;
             }
             CanonEvent::CapabilityRequested(request) => {
@@ -240,14 +284,10 @@ impl EventRuntime {
     fn handle_capability_request(&mut self, request: CapabilityRequested) -> Result<()> {
         let request_id = request.request_id.clone();
         let request_name = request.name.clone();
-        info(
-            "capability_runtime",
-            "capability_requested",
-            serde_json::json!({ "name": request_name, "request_id": request_id }),
-        );
         let ctx = CapabilityExecutionContext {
             workspace: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             event: CanonEvent::CapabilityRequested(request.clone()),
+            emitter: Some(self.emitter.clone()),
         };
         let result = match self
             .registry
@@ -257,15 +297,6 @@ impl EventRuntime {
         {
             Ok(result) => result,
             Err(err) => {
-                error(
-                    "capability_runtime",
-                    "capability_failed",
-                    serde_json::json!({
-                        "name": request_name,
-                        "request_id": request_id,
-                        "error": err.to_string()
-                    }),
-                );
                 let failed = CanonEvent::CapabilityFailed(CapabilityFailed {
                     request_id: request_id.clone(),
                     name: request_name.clone(),
@@ -314,11 +345,6 @@ impl EventRuntime {
             self.bus.dispatch(completed.clone());
             self.append_runtime_event(&completed);
         }
-        info(
-            "capability_runtime",
-            "capability_completed",
-            serde_json::json!({ "name": request_name, "request_id": request_id }),
-        );
         Ok(())
     }
 
@@ -347,22 +373,22 @@ impl EventRuntime {
             let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
             TlogEvent::new("agent-consumer", "node_failed", val)
         }
-        CanonEvent::PolicyBaselineUpdated { payload } => {
+        CanonEvent::PolicyBaselineUpdated(PolicyBaselineUpdated { payload }) => {
             TlogEvent::new("agent-consumer", "policy_baseline_updated", payload.clone())
         }
-        CanonEvent::GoalSelected { payload } => {
+        CanonEvent::GoalSelected(GoalSelected { payload }) => {
             TlogEvent::new("agent-consumer", "goal_selected", payload.clone())
         }
-        CanonEvent::SystemConfigLoaded { payload } => {
+        CanonEvent::SystemConfigLoaded(SystemConfigLoaded { payload }) => {
             TlogEvent::new("bootstrap", "system_config_loaded", payload.clone())
         }
-        CanonEvent::AgentRegistered { payload } => {
+        CanonEvent::AgentRegistered(AgentRegistered { payload }) => {
             TlogEvent::new("bootstrap", "agent_registered", payload.clone())
         }
-        CanonEvent::PromptLoaded { payload } => {
+        CanonEvent::PromptLoaded(PromptLoaded { payload }) => {
             TlogEvent::new("bootstrap", "prompt_loaded", payload.clone())
         }
-        CanonEvent::ToolCall { node_id, request_id, kind, payload } => {
+        CanonEvent::ToolCall(ToolCall { node_id, request_id, kind, payload }) => {
             TlogEvent::new("agent-consumer", "tool_call", serde_json::json!({
                 "node_id": node_id,
                 "request_id": request_id,
@@ -370,7 +396,7 @@ impl EventRuntime {
                 "payload": payload,
             }))
         }
-        CanonEvent::ToolResult { node_id, request_id, kind, output, success } => {
+        CanonEvent::ToolResult(ToolResult { node_id, request_id, kind, output, success }) => {
             TlogEvent::new("agent-consumer", "tool_result", serde_json::json!({
                 "node_id": node_id,
                 "request_id": request_id,
@@ -379,7 +405,7 @@ impl EventRuntime {
                 "success": success,
             }))
         }
-        CanonEvent::GoalNodeCreated { node_id, description, deps, caps, node_type, priority, budget } => {
+        CanonEvent::GoalNodeCreated(GoalNodeCreated { node_id, description, deps, caps, node_type, priority, budget }) => {
             TlogEvent::new("goal_graph", "goal_node_created", serde_json::json!({
                 "node_id": node_id,
                 "description": description,
@@ -390,38 +416,41 @@ impl EventRuntime {
                 "budget": budget,
             }))
         }
-        CanonEvent::GoalNodeRetracted { node_id } => {
+        CanonEvent::GoalNodeRetracted(GoalNodeRetracted { node_id }) => {
             TlogEvent::new("goal_graph", "goal_node_retracted", serde_json::json!({ "node_id": node_id }))
         }
-        CanonEvent::GoalNodeRewritten { node_id, new_description, new_caps } => {
+        CanonEvent::GoalNodeRewritten(GoalNodeRewritten { node_id, new_description, new_caps }) => {
             TlogEvent::new("goal_graph", "goal_node_rewritten", serde_json::json!({
                 "node_id": node_id,
                 "new_description": new_description,
                 "new_caps": new_caps,
             }))
         }
-        CanonEvent::GoalEdgeDefined { from_node_id, to_node_id } => {
+        CanonEvent::GoalEdgeDefined(GoalEdgeDefined { from_node_id, to_node_id }) => {
             TlogEvent::new("goal_graph", "goal_edge_defined", serde_json::json!({
                 "from_node_id": from_node_id,
                 "to_node_id": to_node_id,
             }))
         }
-        CanonEvent::GoalGraphCheckpointed { tlog_seq } => {
+        CanonEvent::GoalGraphCheckpointed(GoalGraphCheckpointed { tlog_seq }) => {
             TlogEvent::new("goal_graph", "goal_graph_checkpointed", serde_json::json!({ "tlog_seq": tlog_seq }))
         }
-        CanonEvent::CapabilityInvoked { capability_id, name, node_id } => {
+        CanonEvent::CapabilityInvoked(CapabilityInvoked { capability_id, name, node_id }) => {
             TlogEvent::new("capability_graph", "capability_invoked", serde_json::json!({
                 "capability_id": capability_id,
                 "name": name,
                 "node_id": node_id,
             }))
         }
-        CanonEvent::CapabilityResolved { capability_id, success, duration_ms } => {
+        CanonEvent::CapabilityResolved(CapabilityResolved { capability_id, success, duration_ms }) => {
             TlogEvent::new("capability_graph", "capability_resolved", serde_json::json!({
                 "capability_id": capability_id,
                 "success": success,
                 "duration_ms": duration_ms,
             }))
+        }
+        CanonEvent::Debug(DebugEvent { source, kind, payload }) => {
+            TlogEvent::new(source, kind, payload.clone())
         }
         _ => {
             return;
@@ -432,11 +461,6 @@ impl EventRuntime {
             if let Some(writer_arc) = self.tlog_writer.as_ref() {
                 let needs_reopen = if let Ok(w) = writer_arc.lock() {
                     if w.write_event(&canon).is_err() {
-                        error(
-                            "event_runtime",
-                            "append_runtime_event_stale_writer",
-                            serde_json::json!({ "path": path.display().to_string() }),
-                        );
                         true
                     } else {
                         false
@@ -501,7 +525,7 @@ fn compute_invariant_hash(node_count: u64, edge_count: u64, schema_version: u64)
 
 fn apply_delta(state: &mut RustcState, delta: &EventDelta) -> Result<()> {
     if delta.id <= state.last_event_id
-        && !matches!(delta.event, RustcEvent::SessionStart { .. })
+        && !matches!(delta.event, RustcEvent::SessionStart(_))
     {
         return Err(anyhow::anyhow!(
             "event id must be monotonic id={} last_event_id={}",
@@ -512,19 +536,19 @@ fn apply_delta(state: &mut RustcState, delta: &EventDelta) -> Result<()> {
     state.tick = delta.tick;
     state.last_event_id = delta.id;
     match &delta.event {
-        RustcEvent::NodeDefined { symbol, kind, .. } => {
+        RustcEvent::NodeDefined(NodeDefined { symbol, kind, .. }) => {
             state.known_symbols.insert(symbol.clone(), kind.clone());
             state.removed_symbols.remove(symbol);
         }
-        RustcEvent::NodeUpdated { symbol, kind, .. } => {
+        RustcEvent::NodeUpdated(NodeUpdated { symbol, kind, .. }) => {
             state.known_symbols.insert(symbol.clone(), kind.clone());
             state.removed_symbols.remove(symbol);
         }
-        RustcEvent::NodeRemoved { symbol } => {
+        RustcEvent::NodeRemoved(NodeRemoved { symbol }) => {
             state.known_symbols.remove(symbol);
             state.removed_symbols.insert(symbol.clone());
         }
-        RustcEvent::EdgeDefined { src, dst, kind } => {
+        RustcEvent::EdgeDefined(EdgeDefined { src, dst, kind }) => {
             state
                 .known_edges
                 .push((src.clone(), dst.clone(), kind.clone()));
@@ -532,7 +556,7 @@ fn apply_delta(state: &mut RustcState, delta: &EventDelta) -> Result<()> {
                 .removed_edges
                 .retain(|e| e != &(src.clone(), dst.clone(), kind.clone()));
         }
-        RustcEvent::EdgeRemoved { src, dst, kind } => {
+        RustcEvent::EdgeRemoved(EdgeRemoved { src, dst, kind }) => {
             state
                 .known_edges
                 .retain(|e| e != &(src.clone(), dst.clone(), kind.clone()));
@@ -540,15 +564,15 @@ fn apply_delta(state: &mut RustcState, delta: &EventDelta) -> Result<()> {
                 .removed_edges
                 .push((src.clone(), dst.clone(), kind.clone()));
         }
-        RustcEvent::FileSeen { path } => {
+        RustcEvent::FileSeen(FileSeen { path }) => {
             state.known_files.insert(path.clone());
         }
-        RustcEvent::CallsiteObserved { .. } => {}
-        RustcEvent::SymbolDefined { .. } => {}
-        RustcEvent::SpanDefined { .. } => {}
-        RustcEvent::PanicCaptured { .. } => {}
-        RustcEvent::WarningCaptured { .. } => {}
-        RustcEvent::SessionStart { .. } => {
+        RustcEvent::CallsiteObserved(_) => {}
+        RustcEvent::SymbolDefined(_) => {}
+        RustcEvent::SpanDefined(_) => {}
+        RustcEvent::PanicCaptured(_) => {}
+        RustcEvent::WarningCaptured(_) => {}
+        RustcEvent::SessionStart(_) => {
             state.last_event_id = 0;
             state.known_symbols.clear();
             state.known_edges.clear();
@@ -556,10 +580,10 @@ fn apply_delta(state: &mut RustcState, delta: &EventDelta) -> Result<()> {
             state.removed_symbols.clear();
             state.removed_edges.clear();
         }
-        RustcEvent::CompilationUnitFinished { .. } => {
+        RustcEvent::CompilationUnitFinished(_) => {
             state.phase = "finished".to_string();
         }
-        RustcEvent::InvariantViolation { .. } => {}
+        RustcEvent::InvariantViolation(_) => {}
     }
     let node_count = state.known_symbols.len() as u64;
     let edge_count = state.known_edges.len() as u64;

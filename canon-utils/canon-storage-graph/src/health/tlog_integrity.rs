@@ -46,7 +46,7 @@ pub fn write_tlog_integrity_report(tlog_path: &Path, reports_dir: &Path) -> Resu
                 serde_json::to_string(&canon).unwrap_or_default().as_bytes(),
             ));
             if let Some(kernel) = extract_rustc_event(&canon) {
-                if let RustcEvent::SessionStart { .. } = kernel {
+                if let RustcEvent::SessionStart(_) = kernel {
                     session_count += 1;
                 }
             } else {
@@ -153,7 +153,7 @@ fn apply_tlog_integrity_record(
     session_offsets_monotonic: &mut bool,
     last_session_offset_seen: &mut Option<u64>,
 ) -> bool {
-    let RustcEvent::SessionStart { byte_offset, .. } = value else {
+    let RustcEvent::SessionStart(canon_types::SessionStart { byte_offset, .. }) = value else {
         return true;
     };
     *session_count += 1;

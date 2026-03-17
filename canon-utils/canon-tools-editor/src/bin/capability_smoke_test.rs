@@ -20,6 +20,7 @@ fn main() -> Result<()> {
     let ctx = CapabilityExecutionContext {
         workspace: "/workspace/ai_sandbox/canon".into(),
         event: CanonEvent::CapabilityRequested(request.clone()),
+        emitter: None,
     };
 
     let result = registry.execute(&request.name, ctx)?;
@@ -37,7 +38,7 @@ fn main() -> Result<()> {
     };
 
     match edit {
-        canon_event::EditEvent::RenameSymbol { project, old, new } => {
+        canon_event::EditEvent::RenameSymbol(canon_event::RenameSymbol { project, old, new }) => {
             if project != "/workspace/ai_sandbox/canon" || old != "crate::dummy" || new != "dummy_renamed" {
                 return Err(anyhow!("rename symbol event mismatch"));
             }
