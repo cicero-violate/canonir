@@ -1,13 +1,13 @@
-use canon_event::{emit_event_json, BinarySegmentWriter, TlogEvent};
+use canon_event::{write_event_auto, TlogEvent};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-
+//
 const PROMPTS_DIR: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts";
 const AGENT_CONFIG_TOML: &str =
-    "/workspace/ai_sandbox/canon/canon-agent-prompts/agent_config.toml";
+    "/workspace/ai_sandbox/canon/canon-agent-prompts/capability_config.toml";
 
 // ---------------------------------------------------------------------------
 // PromptRegistry — shared between bootstrap and LlmExecutorConsumer
@@ -36,7 +36,7 @@ pub fn new_prompt_registry() -> PromptRegistryHandle {
 }
 
 // ---------------------------------------------------------------------------
-// Agent config deserialization (agent_config.toml)
+// Agent card deserialization (agents.cards section of capability_config.toml)
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -153,12 +153,6 @@ fn bootstrap_agents(tlog_path: &Path) {
 // ---------------------------------------------------------------------------
 
 fn write_boot_event(tlog_path: &Path, kind: &str, payload: serde_json::Value) {
-    let canon = TlogEvent::new("bootstrap", kind, payload);
-    if tlog_path.is_dir() {
-        if let Ok(writer) = BinarySegmentWriter::open(tlog_path) {
-            let _ = writer.write_event(&canon);
-        }
-    } else {
-        let _ = emit_event_json(tlog_path, "bootstrap", kind, canon.payload);
-    }
+    let event = TlogEvent::new("bootstrap", kind, payload);
+    let _ = write_event_auto(tlog_path, &event);
 }
