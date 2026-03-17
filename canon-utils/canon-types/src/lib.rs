@@ -1,5 +1,5 @@
 pub mod types;
-//
+
 pub use types::{
     edge_kind_str,
     node_kind_str,
