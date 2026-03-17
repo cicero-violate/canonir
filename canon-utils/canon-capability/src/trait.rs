@@ -1,8 +1,8 @@
-use crate::{CapabilityContext, CapabilityResult};
+use crate::{CapabilityExecutionContext, CapabilityExecutionResult};
 use anyhow::Result;
 
-pub trait Capability: Send + Sync {
+pub trait CapabilityHandler: Send + Sync {
     fn name(&self) -> &'static str;
 
-    fn execute(&self, ctx: CapabilityContext) -> Result<CapabilityResult>;
+    fn execute(&self, ctx: CapabilityExecutionContext) -> Result<CapabilityExecutionResult>;
 }

@@ -98,18 +98,21 @@ Format: `CrateName` → `path::to::Item` — source file
 
 ## Graph — goal graph (task planning DAG)
 
-| Item                                   | Canonical location                                                 | Source file                            |
-|----------------------------------------+--------------------------------------------------------------------+----------------------------------------|
-| `GoalGraph`                            | `canon_agent::goal_graph::GoalGraph`                                   | `canon-agent-v3/src/goal_graph.rs`     |
-| `GoalNode`                             | `canon_agent::goal_graph::GoalNode`                                    | `canon-agent-v3/src/goal_graph.rs`     |
-| `NodeStatus`                           | `canon_agent::goal_graph::NodeStatus`                                  | `canon-agent-v3/src/goal_graph.rs`     |
-| `task_graph_resolve_ready`             | `canon_agent::goal_graph::task_graph_resolve_ready`                    | `canon-agent-v3/src/goal_graph.rs`     |
-| `GoalGraphPatch`                       | `canon_agent::goal_patch::GoalGraphPatch`                              | `canon-agent-v3/src/goal_patch.rs`     |
-| `GoalGraphEvent`                       | `canon_agent::goal_patch::GoalGraphEvent`                              | `canon-agent-v3/src/goal_patch.rs`     |
-| `apply_graph_patch`                    | `canon_agent::goal_patch::apply_graph_patch`                           | `canon-agent-v3/src/goal_patch.rs`     |
-| `DecomposeTaskSpec`                    | `canon_agent::decompose::DecomposeTaskSpec`                            | `canon-agent-v3/src/decompose.rs`      |
-| `DecomposeNodeType`                    | `canon_agent::decompose::DecomposeNodeType`                            | `canon-agent-v3/src/decompose.rs`      |
-| `graph_analysis_compute_graph_signals` | `canon_agent::graph_algo::graph_analysis_compute_graph_signals`        | `canon-agent-v3/src/graph_algo.rs`     |
+Types live in `canon-goal` (Cluster A); runtime/LLM code stays in `canon-agent` (Cluster B).
+Both `canon_goal::X` and `canon_agent::X` resolve to the same type (`canon-agent` re-exports `canon-goal`).
+
+| Item                                   | Canonical location                              | Source file                         |
+|----------------------------------------+-------------------------------------------------+-------------------------------------|
+| `GoalGraph`                            | `canon_goal::goal_graph::GoalGraph`             | `canon-goal/src/goal_graph.rs`      |
+| `GoalNode`                             | `canon_goal::goal_graph::GoalNode`              | `canon-goal/src/goal_graph.rs`      |
+| `NodeStatus`                           | `canon_goal::goal_graph::NodeStatus`            | `canon-goal/src/goal_graph.rs`      |
+| `task_graph_resolve_ready`             | `canon_goal::goal_graph::task_graph_resolve_ready` | `canon-goal/src/goal_graph.rs`   |
+| `GoalGraphPatch`                       | `canon_goal::goal_patch::GoalGraphPatch`        | `canon-goal/src/goal_patch.rs`      |
+| `GoalGraphEvent`                       | `canon_goal::goal_patch::GoalGraphEvent`        | `canon-goal/src/goal_patch.rs`      |
+| `apply_graph_patch`                    | `canon_goal::goal_patch::apply_graph_patch`     | `canon-goal/src/goal_patch.rs`      |
+| `DecomposeTaskSpec`                    | `canon_goal::decompose::DecomposeTaskSpec`      | `canon-goal/src/decompose.rs`       |
+| `DecomposeNodeType`                    | `canon_goal::decompose::DecomposeNodeType`      | `canon-goal/src/decompose.rs`       |
+| `graph_analysis_compute_graph_signals` | `canon_agent::graph_algo::graph_analysis_compute_graph_signals` | `canon-agent/src/graph_algo.rs` |
 
 ---
 
@@ -155,25 +158,25 @@ Format: `CrateName` → `path::to::Item` — source file
 
 ## Planning — goals and capabilities
 
-| Item                 | Canonical location                                     | Source file                              |
-|----------------------+--------------------------------------------------------+------------------------------------------|
-| `GoalSpec`           | `canon_agent_v3::goal::GoalSpec`                       | `canon-agent-v3/src/goal.rs`             |
-| `GoalType`           | `canon_agent_v3::goal::GoalType`                       | `canon-agent-v3/src/goal.rs`             |
-| `PipelineCapability` | `canon_agent_v3::capability_types::PipelineCapability` | `canon-agent-v3/src/capability_types.rs` |
-| `CapabilityMode`     | `canon_agent_v3::capability_types::CapabilityMode`     | `canon-agent-v3/src/capability_types.rs` |
-| `CapabilityConfig`   | `canon_agent_v3::config::CapabilityConfig`             | `canon-agent-v3/src/config.rs`           |
+| Item                 | Canonical location                              | Source file                         |
+|----------------------+-------------------------------------------------+-------------------------------------|
+| `GoalSpec`           | `canon_goal::goal::GoalSpec`                    | `canon-goal/src/goal.rs`            |
+| `GoalType`           | `canon_goal::goal::GoalType`                    | `canon-goal/src/goal.rs`            |
+| `PipelineCapability` | `canon_goal::capability_types::PipelineCapability` | `canon-goal/src/capability_types.rs` |
+| `CapabilityMode`     | `canon_goal::capability_types::CapabilityMode`  | `canon-goal/src/capability_types.rs` |
+| `CapabilityConfig`   | `canon_agent::config::CapabilityConfig`         | `canon-agent/src/config.rs`         |
 
 ---
 
 ## Planning — LLM dispatch
 
-| Item                                                   | Canonical location                                                          | Source file                                  |
-|--------------------------------------------------------+-----------------------------------------------------------------------------+----------------------------------------------|
-| `llm_worker_new_tabs`                                  | `canon_agent_v3::endpoint_worker::llm_worker_new_tabs`                      | `canon-agent-v3/src/endpoint_worker.rs`      |
-| `llm_client_call_agent_raw_with_retry_allow_mismatch`  | `canon_agent_v3::llm::llm_client_call_agent_raw_with_retry_allow_mismatch`  | `canon-agent-v3/src/llm.rs`                  |
-| `llm_client_call_agent_json_with_retry_allow_mismatch` | `canon_agent_v3::llm::llm_client_call_agent_json_with_retry_allow_mismatch` | `canon-agent-v3/src/llm.rs`                  |
-| `llm_worker_init_workers`                              | `canon_agent_v3::endpoint_worker::llm_worker_init_workers`                  | `canon-agent-v3/src/endpoint_worker.rs`      |
-| `LlmExecutorConsumer`                                  | `canon_kernel::consumers::llm_executor::LlmExecutorConsumer`                | `canon-kernel/src/consumers/llm_executor.rs` |
+| Item                                                   | Canonical location                                                         | Source file                                  |
+|--------------------------------------------------------+----------------------------------------------------------------------------+----------------------------------------------|
+| `llm_worker_new_tabs`                                  | `canon_agent::endpoint_worker::llm_worker_new_tabs`                        | `canon-agent/src/endpoint_worker.rs`         |
+| `llm_client_call_agent_raw_with_retry_allow_mismatch`  | `canon_agent::llm::llm_client_call_agent_raw_with_retry_allow_mismatch`    | `canon-agent/src/llm.rs`                     |
+| `llm_client_call_agent_json_with_retry_allow_mismatch` | `canon_agent::llm::llm_client_call_agent_json_with_retry_allow_mismatch`   | `canon-agent/src/llm.rs`                     |
+| `llm_worker_init_workers`                              | `canon_agent::endpoint_worker::llm_worker_init_workers`                    | `canon-agent/src/endpoint_worker.rs`         |
+| `LlmExecutorConsumer`                                  | `canon_kernel::consumers::llm_executor::LlmExecutorConsumer`               | `canon-kernel/src/consumers/llm_executor.rs` |
 
 ---
 
@@ -256,11 +259,18 @@ Format: `CrateName` → `path::to::Item` — source file
 
 | Item                                               | Status     | Replacement                                                            |
 |----------------------------------------------------+------------+------------------------------------------------------------------------|
-| `canon_planner::*`                                 | ✅ Deleted | Import directly from `canon_agent_v3`, `canon_graph`, `canon_analysis` |
-| `canon_agent_v3::engine`                           | ✅ Deleted | `canon_agent_v3::llm` / `canon_agent_v3::endpoint_worker`              |
+| `canon_planner::*`                                 | ✅ Deleted | Import directly from `canon_agent`, `canon_goal`, `canon_graph`, `canon_analysis` |
+| `canon_agent_v3` (crate)                           | ✅ Renamed | `canon_agent` (package name + directory)                               |
+| `canon_agent_v3::engine`                           | ✅ Deleted | `canon_agent::llm` / `canon_agent::endpoint_worker`                    |
 | `canon_agent_v3::state_snapshot::PipelineSnapshot` | ✅ Deleted | `GoalGraphCheckpointed` + event log projection                         |
 | `RuntimeEvent::AgentState`                         | ✅ Removed | `RuntimeEvent::GoalGraphCheckpointed`                                  |
-| `canon_graph::Edge` *(duplicate struct)*           | ✅ Unified | `canon_graph::GraphEdge` = `canon_event_store::EdgeRow`                |
+| `canon_graph::Edge` *(duplicate struct)*           | ✅ Unified | `canon_graph::GraphEdge` = `canon_event_store::CodeEdge`               |
 | `rebuild_symbol_index` in `canon_graph`            | ✅ Deleted | `canon_event_store::replay::rebuild_symbol_index`                      |
 | `append_event` / `append_event_json`               | ✅ Renamed | `write_event` (method) / `emit_event_json` (free fn)                   |
 | `canon_event_store::writer` shim module            | ✅ Deleted | Import `BinarySegmentWriter`, `TlogWriter`, `CanonEvent`, `emit_event_json` directly from `canon_event::` |
+| `KernelGraph` / `KernelCodeGraph`                  | ✅ Renamed | `CodeGraph` (materialised) / `CodeGraphState` (event-sourced)          |
+| `NodeRow` / `EdgeRow` *(graph_types.rs)*           | ✅ Renamed | `CodeNode` / `CodeEdge`                                                |
+| `KernelSnapshot*`                                  | ✅ Renamed | `CodeSnapshot` / `CodeSnapshotNode` / `CodeSnapshotEdge`               |
+| `ProjectedGoalNode`                                | ✅ Renamed | `GoalNodeState`                                                        |
+| `dag.rs` / `planner_update.rs`                     | ✅ Renamed | `goal_graph.rs` / `goal_patch.rs`                                      |
+| `canon_agent::goal_*` / `canon_agent::capability_types` / `canon_agent::decompose` | → moved | `canon_goal::*` (re-exported from `canon_agent`) |

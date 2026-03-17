@@ -1,4 +1,3 @@
-Scanning: .
 canon-capability/src/trait.rs:
   use crate::{CapabilityContext, CapabilityResult}  (line 1)
   use anyhow::Result  (line 2)
@@ -348,6 +347,143 @@ canon-graph/src/consumer.rs:
   pub struct  GraphConsumer  (line 6)
   struct GraphConsumer  { node_count, edge_count, file_count, logged }  (line 6)
   impl GraphConsumer  { fn new() -> Self, fn handle_event(&mut self, delta: &EventDelta, _state: &RustcState) }  (line 13)
+
+canon-goal/src/decompose.rs:
+  use super::capability_types::PipelineCapability  (line 1)
+  use anyhow::{Context, Result}  (line 2)
+  use serde::{Deserialize, Serialize}  (line 3)
+  use serde_json::Value  (line 4)
+  use std::path::Path  (line 5)
+  pub enum  DecomposeNodeType  (line 8)
+  enum DecomposeNodeType  { Analysis, Render }  (line 8)
+  pub type  NodeType  (line 14)
+  type NodeType  (line 14)
+  fn decompose_default_node_type() -> DecomposeNodeType  (line 15)
+  pub struct  DecomposeTaskSpec  (line 19)
+  struct DecomposeTaskSpec  { id, description, deps, required_capabilities, node_type, priority, budget, reasoning_trace }  (line 19)
+  pub struct  DecomposeDecomposeOutput  (line 36)
+  struct DecomposeDecomposeOutput  { tasks }  (line 36)
+  pub struct  DecomposeDecomposeRequest  (line 39)
+  struct DecomposeDecomposeRequest  { prompt, input, schema, caps, phase, log_path, min_tasks, min_tasks_message, retry_on_parse }  (line 39)
+  pub enum  DecomposeDecomposeRetry  (line 50)
+  enum DecomposeDecomposeRetry  { Retry, EnsureRender }  (line 50)
+  pub fn  build_goal_decompose_request  (line 54)
+  fn build_goal_decompose_request(goal_raw: &str, workspace_root: &Path, workspace_listing: &str, log_dir: &Path) -> DecomposeDecomposeRequest  (line 54)
+  pub fn  build_node_decompose_request  (line 119)
+  fn build_node_decompose_request(node: DecomposeTaskSpec, workspace_root: &Path, workspace_listing: &str, log_dir: &Path) -> DecomposeDecomposeRequest  (line 119)
+  pub fn  validate_decompose_payload  (line 184)
+  fn validate_decompose_payload(payload: Value, request: &DecomposeDecomposeRequest) -> Result<DecomposeDecomposeOutput, DecomposeDecomposeRetry>  (line 184)
+  pub fn  parse_decompose_payload  (line 242)
+  fn parse_decompose_payload(payload: Value) -> Result<DecomposeDecomposeOutput>  (line 242)
+  pub fn  decompose_merge_outputs  (line 247)
+  fn decompose_merge_outputs(original: DecomposeDecomposeOutput, retry: DecomposeDecomposeOutput) -> DecomposeDecomposeOutput  (line 247)
+  pub fn  decompose_write_payload_log  (line 256)
+  fn decompose_write_payload_log(log_path: &Path, payload: &Value)  (line 256)
+  fn normalize_task_node_type(_node_type: DecomposeNodeType, caps: &[PipelineCapability], _description: &str) -> DecomposeNodeType  (line 261)
+  fn decompose_normalize_output(output: &mut DecomposeDecomposeOutput)  (line 269)
+
+canon-goal/src/goal_graph.rs:
+  use super::capability_types::{capability_model_assert_class_disjoint, CapabilityMode, PipelineCapability}  (line 1)
+  use super::decompose::DecomposeNodeType  (line 2)
+  use serde::{Deserialize, Serialize}  (line 3)
+  use std::collections::{HashMap, HashSet}  (line 4)
+  pub enum  NodeStatus  (line 8)
+  enum NodeStatus  { Pending, Ready, Running, Completed, Failed, Blocked }  (line 8)
+  pub type  Status  (line 17)
+  type Status  (line 17)
+  pub struct  GoalNode  (line 32)
+  struct GoalNode  { id, description, status, deps, required_capabilities, node_type, priority, budget, reasoning_trace, result, error, readonly_fail_count, repair_attempts, completed_iter }  (line 32)
+  pub struct  ContextSnapshotNode  (line 56)
+  struct ContextSnapshotNode  { id, description, node_type, deps, required_capabilities, status, result, error, causal_summary, failure_summary }  (line 56)
+  pub struct  GoalGraph  (line 71)
+  struct GoalGraph  { nodes, id_index }  (line 71)
+  pub struct  CapabilityNode  (line 78)
+  struct CapabilityNode  { id, capability, deps }  (line 78)
+  fn select_primary_capability(caps: &[PipelineCapability]) -> PipelineCapability  (line 85)
+  impl From<&GoalNode> for CapabilityNode  { fn from(node: &GoalNode) -> Self }  (line 108)
+  impl GoalNode  { fn to_capability_node(&self) -> CapabilityNode }  (line 119)
+  impl GoalGraph  { fn new() -> Self, fn add_node(&mut self, node: GoalNode), fn rebuild_index(&mut self), fn ensure_index(&mut self), fn get_node(&mut self, id: &str) -> Option<&GoalNode>, fn get_node_mut(&mut self, id: &str) -> Option<&mut GoalNode>, fn ready_nodes(&self) -> Vec<&GoalNode>, fn all_completed(&self) -> bool, fn has_failed(&self) -> bool, fn update_status(&mut self, id: &str, status: NodeStatus) -> Result<(), String>, fn validate(&self) -> Result<(), String>, fn reset_for_execution(&mut self) }  (line 124)
+  fn task_graph_transition_allowed(from: NodeStatus, to: NodeStatus) -> bool  (line 207)
+  fn task_graph_detect_cycle(graph: &GoalGraph) -> Result<(), String>  (line 210)
+  pub struct  NodeAuthority  (line 220)
+  struct NodeAuthority  { node_id, capabilities }  (line 220)
+  impl NodeAuthority  { fn new(node_id: String, caps: HashSet<PipelineCapability>) -> Result<Self, String>, fn has(&self, cap: PipelineCapability) -> bool, fn require(&self, cap: PipelineCapability) -> Result<(), String>, fn is_verify_context(&self) -> bool, fn is_mutation_context(&self) -> bool }  (line 224)
+  pub fn  task_graph_resolve_ready  (line 246)
+  fn task_graph_resolve_ready(graph: &mut GoalGraph)  (line 246)
+  pub fn  task_graph_grant_authority  (line 258)
+  fn task_graph_grant_authority(node: &GoalNode) -> Result<NodeAuthority, String>  (line 258)
+
+canon-goal/src/goal_patch.rs:
+  use super::capability_types::{capability_model_assert_class_disjoint, PipelineCapability}  (line 1)
+  use super::goal_graph::{GoalGraph, GoalNode, NodeStatus}  (line 2)
+  use super::decompose::DecomposeTaskSpec  (line 3)
+  use canon_event::emit_debug::info  (line 4)
+  use anyhow::Result  (line 5)
+  use serde::{Deserialize, Serialize}  (line 6)
+  use std::collections::{HashMap, HashSet}  (line 7)
+  pub struct  PlannerUpdateEdgeSpec  (line 10)
+  struct PlannerUpdateEdgeSpec  { from, to }  (line 10)
+  pub struct  PlannerUpdateRetractSpec  (line 15)
+  struct PlannerUpdateRetractSpec  { id }  (line 15)
+  pub struct  PlannerUpdateRewriteSpec  (line 19)
+  struct PlannerUpdateRewriteSpec  { id, new_description, new_capabilities }  (line 19)
+  pub struct  GoalGraphPatch  (line 25)
+  struct GoalGraphPatch  { new_nodes, new_edges, retract_nodes, rewrite_nodes }  (line 25)
+  pub enum  GoalGraphEvent  (line 37)
+  enum GoalGraphEvent  { NodeCreated, NodeRetracted, NodeRewritten, EdgeDefined }  (line 37)
+  pub fn  apply_graph_patch  (line 44)
+  fn apply_graph_patch(graph: &mut GoalGraph, update: GoalGraphPatch) -> Result<Vec<GoalGraphEvent>>  (line 44)
+
+canon-goal/src/goal.rs:
+  use anyhow::{Context, Result}  (line 1)
+  use serde::{Deserialize, Serialize}  (line 2)
+  pub enum  GoalType  (line 6)
+  enum GoalType  { ReduceBranching, RemoveDeadCode, MergePaths, BreakCycle, SimplifyCallgraph, BreakDeadlock, ReduceDepth, ImproveCompletionVelocity }  (line 6)
+  impl std::fmt::Display for GoalType  { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result }  (line 17)
+  pub struct  GoalArtifact  (line 34)
+  struct GoalArtifact  { target_symbols, target_files, objective_type, success_criteria, score }  (line 34)
+  pub struct  GoalSpec  (line 43)
+  struct GoalSpec  { raw, embedding, success_criteria, artifact }  (line 43)
+  impl GoalSpec  { fn new(raw: String, embedding_dim: usize) -> Self, fn from_file(path: &str, embedding_dim: usize) -> Result<Self>, fn new_with_artifact(
+        raw: String,
+        embedding_dim: usize,
+        artifact: Option<GoalArtifact>,
+    ) -> Self }  (line 51)
+
+canon-goal/src/capability_types.rs:
+  use serde::{Deserialize, Serialize}  (line 1)
+  use std::collections::HashSet  (line 2)
+  pub enum  CapabilityMode  (line 5)
+  enum CapabilityMode  { Observe, Verify, Mutate }  (line 5)
+  pub enum  PipelineCapability  (line 12)
+  enum PipelineCapability  { CreateNode, AddEdge, UpdateStatus, ReadDag, ScheduleReady, GoalToSubgoals, ConstraintAttach, RefineNode, DependencyRewrite, RadiusBudgetEval, ApplyPatch, FileRead, FileWrite, Bash, CargoBuild, CargoCheck, StdoutCapture, ParseOrchestrationReport, DetectFailures, StatusUpdateOnly, ReadStructuralSurface, ComputeDelta, RewardSignalCompute, InvariantCheck, BoundaryGuard, PromptContractEnforce, Llm, Analysis, StatelessInvoke, Unknown }  (line 12)
+  impl PipelineCapability  { fn class(self) -> CapabilityMode }  (line 74)
+  pub fn  capability_model_dominant_class  (line 110)
+  fn capability_model_dominant_class(caps: &[PipelineCapability]) -> CapabilityMode  (line 110)
+  pub fn  capability_model_assert_class_disjoint  (line 116)
+  fn capability_model_assert_class_disjoint(
+    caps: &HashSet<PipelineCapability>,
+) -> Result<(), String>  (line 116)
+  pub type  CapabilityClass  (line 133)
+  type CapabilityClass  (line 133)
+
+canon-goal/src/goal_embedding.rs:
+  use serde::{Deserialize, Serialize}  (line 1)
+  use std::collections::HashMap  (line 2)
+  use std::path::Path  (line 3)
+  pub struct  GoalEmbedding  (line 6)
+  struct GoalEmbedding  { vector }  (line 6)
+  pub fn  goal_embedding_embed_goal  (line 9)
+  fn goal_embedding_embed_goal(goal: &str, dim: usize) -> GoalEmbedding  (line 9)
+  pub fn  goal_embedding_cosine_similarity  (line 23)
+  fn goal_embedding_cosine_similarity(a: &[f32], b: &[f32]) -> f64  (line 23)
+  pub fn  goal_embedding_load_cache  (line 41)
+  fn goal_embedding_load_cache() -> HashMap<String, Vec<f32>>  (line 41)
+  pub fn  goal_embedding_save_cache  (line 44)
+  fn goal_embedding_save_cache(cache: &HashMap<String, Vec<f32>>)  (line 44)
+  pub fn  goal_embedding_goal_hash  (line 50)
+  fn goal_embedding_goal_hash(goal: &str) -> String  (line 50)
+  fn goal_embedding_fnv64(bytes: &[u8]) -> u64  (line 53)
 
 canon-event/src/emit_debug.rs:
   use serde::Serialize  (line 1)
@@ -2250,30 +2386,31 @@ canon-kernel/src/bin/event_runtime.rs:
   use canon_kernel::consumers::event_loop::EventLoopConsumer  (line 5)
   use canon_kernel::consumers::llm_executor::LlmExecutorConsumer  (line 6)
   use canon_kernel::{register_default_capabilities, EventRuntime}  (line 7)
-  use canon_event_store::detect_tlog_format  (line 8)
-  use canon_event_store::read_any_events_from_path_with_start_seq  (line 9)
-  use canon_event_store::replay_graph_from_tlog  (line 10)
-  use canon_event::emit_debug::{info, warn, error}  (line 11)
-  use std::env  (line 12)
-  use std::fs::{self, File, OpenOptions}  (line 13)
-  use std::io::{Read, Write}  (line 14)
-  use std::path::{Path, PathBuf}  (line 15)
-  use std::thread::sleep  (line 16)
-  use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH}  (line 17)
-  use std::collections::HashSet  (line 18)
-  struct LockGuard  { path, _file }  (line 20)
-  impl Drop for LockGuard  { fn drop(&mut self) }  (line 25)
-  fn parse_pid(lock_contents: &str) -> Option<u32>  (line 31)
-  fn pid_is_alive(pid: u32) -> Result<bool>  (line 38)
-  fn acquire_lock(path: &Path) -> Result<Option<LockGuard>>  (line 59)
-  fn main() -> Result<()>  (line 101)
-  fn load_cursor(path: &Path, tlog_path: &Path) -> Option<usize>  (line 282)
-  fn load_cursor_seq(path: &Path, tlog_path: &Path) -> Option<u64>  (line 292)
-  fn save_cursor(path: &Path, tlog_path: &Path, processed: usize, start_seq: u64) -> Result<()>  (line 302)
-  fn latest_segment_seq(tlog_path: &Path) -> Result<u64>  (line 319)
-  fn now_ms() -> u128  (line 341)
-  fn maybe_verify_tlog_equivalence(tlog_path: &Path) -> Result<()>  (line 348)
-  fn verify_tlog_equivalence(json_path: &Path, bin_path: &Path) -> Result<Vec<String>>  (line 381)
+  use canon_editor::EditConsumer  (line 8)
+  use canon_event_store::detect_tlog_format  (line 9)
+  use canon_event_store::read_any_events_from_path_with_start_seq  (line 10)
+  use canon_event_store::replay_graph_from_tlog  (line 11)
+  use canon_event::emit_debug::{info, warn, error}  (line 12)
+  use std::env  (line 13)
+  use std::fs::{self, File, OpenOptions}  (line 14)
+  use std::io::{Read, Write}  (line 15)
+  use std::path::{Path, PathBuf}  (line 16)
+  use std::thread::sleep  (line 17)
+  use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH}  (line 18)
+  use std::collections::HashSet  (line 19)
+  struct LockGuard  { path, _file }  (line 21)
+  impl Drop for LockGuard  { fn drop(&mut self) }  (line 26)
+  fn parse_pid(lock_contents: &str) -> Option<u32>  (line 32)
+  fn pid_is_alive(pid: u32) -> Result<bool>  (line 39)
+  fn acquire_lock(path: &Path) -> Result<Option<LockGuard>>  (line 60)
+  fn main() -> Result<()>  (line 102)
+  fn load_cursor(path: &Path, tlog_path: &Path) -> Option<usize>  (line 283)
+  fn load_cursor_seq(path: &Path, tlog_path: &Path) -> Option<u64>  (line 293)
+  fn save_cursor(path: &Path, tlog_path: &Path, processed: usize, start_seq: u64) -> Result<()>  (line 303)
+  fn latest_segment_seq(tlog_path: &Path) -> Result<u64>  (line 320)
+  fn now_ms() -> u128  (line 342)
+  fn maybe_verify_tlog_equivalence(tlog_path: &Path) -> Result<()>  (line 349)
+  fn verify_tlog_equivalence(json_path: &Path, bin_path: &Path) -> Result<Vec<String>>  (line 382)
 
 canon-kernel/src/bin/llm_smoke_test.rs:
   use anyhow::{anyhow, Result}  (line 1)
@@ -2422,72 +2559,7 @@ canon-planner/src/lib.rs:
     register_analysis_capabilities,
 }  (line 38)
 
-canon-agent-v3/src/decompose.rs:
-  use super::capability_types::PipelineCapability  (line 1)
-  use anyhow::{Context, Result}  (line 2)
-  use serde::{Deserialize, Serialize}  (line 3)
-  use serde_json::Value  (line 4)
-  use std::path::Path  (line 5)
-  pub enum  DecomposeNodeType  (line 8)
-  enum DecomposeNodeType  { Analysis, Render }  (line 8)
-  pub type  NodeType  (line 14)
-  type NodeType  (line 14)
-  fn decompose_default_node_type() -> DecomposeNodeType  (line 15)
-  pub struct  DecomposeTaskSpec  (line 19)
-  struct DecomposeTaskSpec  { id, description, deps, required_capabilities, node_type, priority, budget, reasoning_trace }  (line 19)
-  pub struct  DecomposeDecomposeOutput  (line 36)
-  struct DecomposeDecomposeOutput  { tasks }  (line 36)
-  pub struct  DecomposeDecomposeRequest  (line 39)
-  struct DecomposeDecomposeRequest  { prompt, input, schema, caps, phase, log_path, min_tasks, min_tasks_message, retry_on_parse }  (line 39)
-  pub enum  DecomposeDecomposeRetry  (line 50)
-  enum DecomposeDecomposeRetry  { Retry, EnsureRender }  (line 50)
-  pub fn  build_goal_decompose_request  (line 54)
-  fn build_goal_decompose_request(goal_raw: &str, workspace_root: &Path, workspace_listing: &str, log_dir: &Path) -> DecomposeDecomposeRequest  (line 54)
-  pub fn  build_node_decompose_request  (line 119)
-  fn build_node_decompose_request(node: DecomposeTaskSpec, workspace_root: &Path, workspace_listing: &str, log_dir: &Path) -> DecomposeDecomposeRequest  (line 119)
-  pub fn  validate_decompose_payload  (line 184)
-  fn validate_decompose_payload(payload: Value, request: &DecomposeDecomposeRequest) -> Result<DecomposeDecomposeOutput, DecomposeDecomposeRetry>  (line 184)
-  pub fn  parse_decompose_payload  (line 242)
-  fn parse_decompose_payload(payload: Value) -> Result<DecomposeDecomposeOutput>  (line 242)
-  pub fn  decompose_merge_outputs  (line 247)
-  fn decompose_merge_outputs(original: DecomposeDecomposeOutput, retry: DecomposeDecomposeOutput) -> DecomposeDecomposeOutput  (line 247)
-  pub fn  decompose_write_payload_log  (line 256)
-  fn decompose_write_payload_log(log_path: &Path, payload: &Value)  (line 256)
-  fn normalize_task_node_type(_node_type: DecomposeNodeType, caps: &[PipelineCapability], _description: &str) -> DecomposeNodeType  (line 261)
-  fn decompose_normalize_output(output: &mut DecomposeDecomposeOutput)  (line 269)
-
-canon-agent-v3/src/goal_graph.rs:
-  use super::capability_types::{capability_model_assert_class_disjoint, CapabilityMode, PipelineCapability}  (line 1)
-  use super::decompose::DecomposeNodeType  (line 2)
-  use serde::{Deserialize, Serialize}  (line 3)
-  use std::collections::{HashMap, HashSet}  (line 4)
-  pub enum  NodeStatus  (line 8)
-  enum NodeStatus  { Pending, Ready, Running, Completed, Failed, Blocked }  (line 8)
-  pub type  Status  (line 17)
-  type Status  (line 17)
-  pub struct  GoalNode  (line 32)
-  struct GoalNode  { id, description, status, deps, required_capabilities, node_type, priority, budget, reasoning_trace, result, error, readonly_fail_count, repair_attempts, completed_iter }  (line 32)
-  pub struct  ContextSnapshotNode  (line 56)
-  struct ContextSnapshotNode  { id, description, node_type, deps, required_capabilities, status, result, error, causal_summary, failure_summary }  (line 56)
-  pub struct  GoalGraph  (line 71)
-  struct GoalGraph  { nodes, id_index }  (line 71)
-  pub struct  CapabilityNode  (line 78)
-  struct CapabilityNode  { id, capability, deps }  (line 78)
-  fn select_primary_capability(caps: &[PipelineCapability]) -> PipelineCapability  (line 85)
-  impl From<&GoalNode> for CapabilityNode  { fn from(node: &GoalNode) -> Self }  (line 108)
-  impl GoalNode  { fn to_capability_node(&self) -> CapabilityNode }  (line 119)
-  impl GoalGraph  { fn new() -> Self, fn add_node(&mut self, node: GoalNode), fn rebuild_index(&mut self), fn ensure_index(&mut self), fn get_node(&mut self, id: &str) -> Option<&GoalNode>, fn get_node_mut(&mut self, id: &str) -> Option<&mut GoalNode>, fn ready_nodes(&self) -> Vec<&GoalNode>, fn all_completed(&self) -> bool, fn has_failed(&self) -> bool, fn update_status(&mut self, id: &str, status: NodeStatus) -> Result<(), String>, fn validate(&self) -> Result<(), String>, fn reset_for_execution(&mut self) }  (line 124)
-  fn task_graph_transition_allowed(from: NodeStatus, to: NodeStatus) -> bool  (line 207)
-  fn task_graph_detect_cycle(graph: &GoalGraph) -> Result<(), String>  (line 210)
-  pub struct  NodeAuthority  (line 220)
-  struct NodeAuthority  { node_id, capabilities }  (line 220)
-  impl NodeAuthority  { fn new(node_id: String, caps: HashSet<PipelineCapability>) -> Result<Self, String>, fn has(&self, cap: PipelineCapability) -> bool, fn require(&self, cap: PipelineCapability) -> Result<(), String>, fn is_verify_context(&self) -> bool, fn is_mutation_context(&self) -> bool }  (line 224)
-  pub fn  task_graph_resolve_ready  (line 246)
-  fn task_graph_resolve_ready(graph: &mut GoalGraph)  (line 246)
-  pub fn  task_graph_grant_authority  (line 258)
-  fn task_graph_grant_authority(node: &GoalNode) -> Result<NodeAuthority, String>  (line 258)
-
-canon-agent-v3/src/llm.rs:
+canon-agent/src/llm.rs:
   use super::endpoint_worker::{self, tab_manager_log_llm, tab_manager_now_ms, TabManagerHandle}  (line 1)
   use crate::ws_server::{WsBridge, WsBridgeError}  (line 2)
   pub enum  LlmProviderError  (line 4)
@@ -2552,28 +2624,7 @@ canon-agent-v3/src/llm.rs:
   fn try_parse_lenient_json(raw: &str) -> Option<Value>  (line 225)
   fn llm_client_cache_key_for(prompt: &str, role_schema: &str) -> u64  (line 234)
 
-canon-agent-v3/src/goal_patch.rs:
-  use super::capability_types::{capability_model_assert_class_disjoint, PipelineCapability}  (line 1)
-  use super::goal_graph::{GoalGraph, GoalNode, NodeStatus}  (line 2)
-  use super::decompose::DecomposeTaskSpec  (line 3)
-  use canon_event::emit_debug::info  (line 4)
-  use anyhow::Result  (line 5)
-  use serde::{Deserialize, Serialize}  (line 6)
-  use std::collections::{HashMap, HashSet}  (line 7)
-  pub struct  PlannerUpdateEdgeSpec  (line 10)
-  struct PlannerUpdateEdgeSpec  { from, to }  (line 10)
-  pub struct  PlannerUpdateRetractSpec  (line 15)
-  struct PlannerUpdateRetractSpec  { id }  (line 15)
-  pub struct  PlannerUpdateRewriteSpec  (line 19)
-  struct PlannerUpdateRewriteSpec  { id, new_description, new_capabilities }  (line 19)
-  pub struct  GoalGraphPatch  (line 25)
-  struct GoalGraphPatch  { new_nodes, new_edges, retract_nodes, rewrite_nodes }  (line 25)
-  pub enum  GoalGraphEvent  (line 37)
-  enum GoalGraphEvent  { NodeCreated, NodeRetracted, NodeRewritten, EdgeDefined }  (line 37)
-  pub fn  apply_graph_patch  (line 44)
-  fn apply_graph_patch(graph: &mut GoalGraph, update: GoalGraphPatch) -> Result<Vec<GoalGraphEvent>>  (line 44)
-
-canon-agent-v3/src/gpu_scheduler_layout.rs:
+canon-agent/src/gpu_scheduler_layout.rs:
   use crate::goal_graph::{GoalGraph, NodeStatus}  (line 1)
   use std::collections::HashMap  (line 2)
   pub struct  GpuScheduleGraph  (line 4)
@@ -2587,7 +2638,7 @@ canon-agent-v3/src/gpu_scheduler_layout.rs:
   pub fn  gpu_scheduler_layout_is_ready_candidate  (line 40)
   fn gpu_scheduler_layout_is_ready_candidate(status: u8) -> bool  (line 40)
 
-canon-agent-v3/src/graph_algo.rs:
+canon-agent/src/graph_algo.rs:
   use super::capability_types::PipelineCapability  (line 1)
   use super::gpu_scheduler_kernels as gpu_kernels  (line 2)
   use super::{goal_graph, decompose}  (line 3)
@@ -2632,23 +2683,7 @@ canon-agent-v3/src/graph_algo.rs:
   struct GraphAnalysisFnv64  { state }  (line 584)
   impl GraphAnalysisFnv64  { fn new() -> Self, fn write(&mut self, bytes: &[u8]), fn finish(&self) -> u64 }  (line 587)
 
-canon-agent-v3/src/goal.rs:
-  use anyhow::{Context, Result}  (line 1)
-  use serde::{Deserialize, Serialize}  (line 2)
-  pub enum  GoalType  (line 6)
-  enum GoalType  { ReduceBranching, RemoveDeadCode, MergePaths, BreakCycle, SimplifyCallgraph, BreakDeadlock, ReduceDepth, ImproveCompletionVelocity }  (line 6)
-  impl std::fmt::Display for GoalType  { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result }  (line 17)
-  pub struct  GoalArtifact  (line 34)
-  struct GoalArtifact  { target_symbols, target_files, objective_type, success_criteria, score }  (line 34)
-  pub struct  GoalSpec  (line 43)
-  struct GoalSpec  { raw, embedding, success_criteria, artifact }  (line 43)
-  impl GoalSpec  { fn new(raw: String, embedding_dim: usize) -> Self, fn from_file(path: &str, embedding_dim: usize) -> Result<Self>, fn new_with_artifact(
-        raw: String,
-        embedding_dim: usize,
-        artifact: Option<GoalArtifact>,
-    ) -> Self }  (line 51)
-
-canon-agent-v3/src/objectives.rs:
+canon-agent/src/objectives.rs:
   use crate::goal::{GoalArtifact, GoalType}  (line 1)
   use crate::graph_algo  (line 2)
   use serde::{Deserialize, Serialize}  (line 3)
@@ -2714,7 +2749,7 @@ canon-agent-v3/src/objectives.rs:
   pub fn  maybe_regenerate_reports_if_stale  (line 705)
   fn maybe_regenerate_reports_if_stale() -> bool  (line 705)
 
-canon-agent-v3/src/parsers.rs:
+canon-agent/src/parsers.rs:
   use crate::llm_domains::{is_chatgpt_gg_url, is_chatgpt_url, is_gemini_url}  (line 1)
   use serde_json::Value  (line 2)
   pub enum  SiteType  (line 4)
@@ -2738,7 +2773,15 @@ canon-agent-v3/src/parsers.rs:
   pub fn  try_extract_complete_fenced_json  (line 375)
   fn try_extract_complete_fenced_json(raw: &str) -> Option<String>  (line 375)
 
-canon-agent-v3/src/gpu_scheduler_kernels.rs:
+canon-agent/src/lib.rs:
+  use pub use canon_goal::capability_types  (line 2)
+  use pub use canon_goal::decompose  (line 3)
+  use pub use canon_goal::goal  (line 4)
+  use pub use canon_goal::goal_embedding  (line 5)
+  use pub use canon_goal::goal_graph  (line 6)
+  use pub use canon_goal::goal_patch  (line 7)
+
+canon-agent/src/gpu_scheduler_kernels.rs:
   use crate::gpu_scheduler_layout::{
     gpu_scheduler_layout_is_completed, gpu_scheduler_layout_is_ready_candidate, GpuScheduleGraph,
 }  (line 1)
@@ -2768,7 +2811,7 @@ canon-agent-v3/src/gpu_scheduler_kernels.rs:
   pub fn  graph_cpu_kernels_compute_depth  (line 159)
   fn graph_cpu_kernels_compute_depth(adj: &[Vec<usize>]) -> Vec<i32>  (line 159)
 
-canon-agent-v3/src/config.rs:
+canon-agent/src/config.rs:
   use anyhow::{Context, Result}  (line 1)
   use serde::Deserialize  (line 2)
   use std::collections::HashMap  (line 3)
@@ -2842,24 +2885,7 @@ canon-agent-v3/src/config.rs:
   impl Default for CapabilityPolicy  { fn default() -> Self }  (line 485)
   impl CapabilityPolicy  { fn snapshot_store_load(workspace_root: &Path) -> Result<Self> }  (line 490)
 
-canon-agent-v3/src/capability_types.rs:
-  use serde::{Deserialize, Serialize}  (line 1)
-  use std::collections::HashSet  (line 2)
-  pub enum  CapabilityMode  (line 5)
-  enum CapabilityMode  { Observe, Verify, Mutate }  (line 5)
-  pub enum  PipelineCapability  (line 12)
-  enum PipelineCapability  { CreateNode, AddEdge, UpdateStatus, ReadDag, ScheduleReady, GoalToSubgoals, ConstraintAttach, RefineNode, DependencyRewrite, RadiusBudgetEval, ApplyPatch, FileRead, FileWrite, Bash, CargoBuild, CargoCheck, StdoutCapture, ParseOrchestrationReport, DetectFailures, StatusUpdateOnly, ReadStructuralSurface, ComputeDelta, RewardSignalCompute, InvariantCheck, BoundaryGuard, PromptContractEnforce, Llm, Analysis, StatelessInvoke, Unknown }  (line 12)
-  impl PipelineCapability  { fn class(self) -> CapabilityMode }  (line 74)
-  pub fn  capability_model_dominant_class  (line 110)
-  fn capability_model_dominant_class(caps: &[PipelineCapability]) -> CapabilityMode  (line 110)
-  pub fn  capability_model_assert_class_disjoint  (line 116)
-  fn capability_model_assert_class_disjoint(
-    caps: &HashSet<PipelineCapability>,
-) -> Result<(), String>  (line 116)
-  pub type  CapabilityClass  (line 133)
-  type CapabilityClass  (line 133)
-
-canon-agent-v3/src/response_router.rs:
+canon-agent/src/response_router.rs:
   use once_cell::sync::Lazy  (line 1)
   use std::collections::HashMap  (line 2)
   use tokio::sync::Mutex  (line 3)
@@ -2868,7 +2894,7 @@ canon-agent-v3/src/response_router.rs:
   pub fn  response_router_resolve  (line 9)
   fn response_router_resolve(req_id: u64) -> Option<String>  (line 9)
 
-canon-agent-v3/src/endpoint_worker.rs:
+canon-agent/src/endpoint_worker.rs:
   use super::config::CapabilityConfig  (line 1)
   use super::response_router  (line 2)
   use super::tab_management::{
@@ -2906,7 +2932,7 @@ canon-agent-v3/src/endpoint_worker.rs:
   fn llm_worker_stable_hash64(text: &str) -> u64  (line 239)
   fn llm_worker_response_matches_req_id(raw: &str, req_id: u64) -> bool  (line 244)
 
-canon-agent-v3/src/ws_server.rs:
+canon-agent/src/ws_server.rs:
   use std::collections::HashMap  (line 24)
   use std::fs  (line 25)
   use std::io::Write  (line 26)
@@ -2936,11 +2962,11 @@ canon-agent-v3/src/ws_server.rs:
   fn handle_connection(stream: TcpStream, state: Arc<Mutex<ServerState>>)  (line 310)
   fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>)  (line 365)
 
-canon-agent-v3/src/failure_store.rs:
+canon-agent/src/failure_store.rs:
   pub struct  FailureStoreFailureStats  (line 2)
   struct FailureStoreFailureStats  { total, cycle, deadlock, failure_pattern_rate, cycle_frequency, deadlock_rate }  (line 2)
 
-canon-agent-v3/src/llm_domains.rs:
+canon-agent/src/llm_domains.rs:
   pub fn  is_chatgpt_gg_url  (line 6)
   fn is_chatgpt_gg_url(url: &str) -> bool  (line 6)
   pub fn  is_chatgpt_url  (line 10)
@@ -2948,7 +2974,7 @@ canon-agent-v3/src/llm_domains.rs:
   pub fn  is_gemini_url  (line 14)
   fn is_gemini_url(url: &str) -> bool  (line 14)
 
-canon-agent-v3/src/telemetry.rs:
+canon-agent/src/telemetry.rs:
   use super::goal_graph::GoalGraph  (line 1)
   use super::goal::GoalSpec  (line 2)
   use super::graph_algo  (line 3)
@@ -3002,7 +3028,7 @@ canon-agent-v3/src/telemetry.rs:
   pub fn  telemetry_dec_pending  (line 179)
   fn telemetry_dec_pending()  (line 179)
 
-canon-agent-v3/src/tab_management.rs:
+canon-agent/src/tab_management.rs:
   use crate::ws_server::WsBridge  (line 1)
   use anyhow::Result  (line 2)
   use std::collections::HashMap  (line 3)
@@ -3036,24 +3062,6 @@ canon-agent-v3/src/tab_management.rs:
   fn tab_manager_now_ms() -> u128  (line 94)
   pub fn  tab_manager_log_llm  (line 97)
   fn tab_manager_log_llm(message: String)  (line 97)
-
-canon-agent-v3/src/goal_embedding.rs:
-  use serde::{Deserialize, Serialize}  (line 1)
-  use std::collections::HashMap  (line 2)
-  use std::path::Path  (line 3)
-  pub struct  GoalEmbedding  (line 6)
-  struct GoalEmbedding  { vector }  (line 6)
-  pub fn  goal_embedding_embed_goal  (line 9)
-  fn goal_embedding_embed_goal(goal: &str, dim: usize) -> GoalEmbedding  (line 9)
-  pub fn  goal_embedding_cosine_similarity  (line 23)
-  fn goal_embedding_cosine_similarity(a: &[f32], b: &[f32]) -> f64  (line 23)
-  pub fn  goal_embedding_load_cache  (line 41)
-  fn goal_embedding_load_cache() -> HashMap<String, Vec<f32>>  (line 41)
-  pub fn  goal_embedding_save_cache  (line 44)
-  fn goal_embedding_save_cache(cache: &HashMap<String, Vec<f32>>)  (line 44)
-  pub fn  goal_embedding_goal_hash  (line 50)
-  fn goal_embedding_goal_hash(goal: &str) -> String  (line 50)
-  fn goal_embedding_fnv64(bytes: &[u8]) -> u64  (line 53)
 
 canon-editor/src/tlog.rs:
   use anyhow::Result  (line 1)
@@ -3626,5 +3634,3 @@ canon-supervisor/src/watcher.rs:
   fn affected_crates(paths: &[PathBuf]) -> HashSet<String>  (line 52)
 
 
----
-173 files  |  2557 symbols  |  ~50459 tokens

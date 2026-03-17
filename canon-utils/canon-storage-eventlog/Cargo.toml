@@ -1,0 +1,17 @@
+[package]
+name = "canon-storage-eventlog"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+name = "canon_event_store"
+
+[dependencies]
+anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+memmap2.workspace = true
+rkyv.workspace = true
+crc32fast = "1"
+canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }

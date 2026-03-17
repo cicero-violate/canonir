@@ -1,0 +1,17 @@
+[package]
+name = "canon-runtime-events"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+name = "canon_event"
+
+[dependencies]
+anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+canon_types = { path = "../canon-types" }
+crc32fast = "1"
+fs2 = "0.4"
+bincode = "1"

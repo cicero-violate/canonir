@@ -1,0 +1,30 @@
+[package]
+name = "canon-tools-analysis"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+name = "canon_analysis"
+
+[dependencies]
+anyhow = { workspace = true }
+canon_graph = { package = "canon-storage-graph", path = "../canon-storage-graph" }
+canon_types = { path = "../canon-types" }
+canon_event_store = { package = "canon-storage-eventlog", path = "../canon-storage-eventlog" }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+algorithms = { path = "../../algorithms" }
+z3 = { workspace = true, default-features = false }
+sha2 = { workspace = true }
+hex = { workspace = true }
+canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
+canon_capability = { package = "canon-capability", path = "../canon-capability" }
+once_cell = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+[features]
+default = ["cuda"]
+cuda = []

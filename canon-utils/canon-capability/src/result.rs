@@ -1,8 +1,8 @@
-use canon_event::RuntimeEvent;
+use canon_event::CanonEvent;
 
 #[derive(Debug, Clone)]
-pub enum CapabilityResult {
-    Emit(RuntimeEvent),
-    EmitMany(Vec<RuntimeEvent>),
+pub enum CapabilityExecutionResult {
+    Emit(CanonEvent),
+    EmitMany(Vec<CanonEvent>),
     NoOp,
 }

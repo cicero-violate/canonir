@@ -1,0 +1,19 @@
+[package]
+name = "canon-planning"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+name = "canon_goal"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
+algorithms = { path = "../../algorithms" }
+
+[features]
+default = []
+cuda = ["algorithms/cuda"]

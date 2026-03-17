@@ -1,11 +1,11 @@
-use crate::{Capability, CapabilityContext, CapabilityResult};
+use crate::{CapabilityHandler, CapabilityExecutionContext, CapabilityExecutionResult};
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Default)]
 pub struct CapabilityRegistry {
-    map: HashMap<String, Arc<dyn Capability>>,
+    map: HashMap<String, Arc<dyn CapabilityHandler>>,
 }
 
 impl CapabilityRegistry {
@@ -13,15 +13,15 @@ impl CapabilityRegistry {
         Self { map: HashMap::new() }
     }
 
-    pub fn register(&mut self, capability: Arc<dyn Capability>) {
+    pub fn register(&mut self, capability: Arc<dyn CapabilityHandler>) {
         self.map.insert(capability.name().to_string(), capability);
     }
 
-    pub fn lookup(&self, name: &str) -> Option<Arc<dyn Capability>> {
+    pub fn lookup(&self, name: &str) -> Option<Arc<dyn CapabilityHandler>> {
         self.map.get(name).cloned()
     }
 
-    pub fn execute(&self, name: &str, ctx: CapabilityContext) -> Result<CapabilityResult> {
+    pub fn execute(&self, name: &str, ctx: CapabilityExecutionContext) -> Result<CapabilityExecutionResult> {
         let capability = self
             .map
             .get(name)

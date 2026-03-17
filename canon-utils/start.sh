@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# start.sh — run canon-kernel directly
+# start.sh — run canon-runtime directly
 #
-# NOTE: cargo run --bin canon-supervisor (or ./target/debug/canon-supervisor)
+# NOTE: cargo run --bin canon-runtime-supervisor (or ./target/debug/canon-runtime-supervisor)
 #       is intended to run in a SEPARATE terminal from the repo root
 #       (/workspace/ai_sandbox/canon). It watches for file changes and
-#       automatically rebuilds + restarts canon-kernel. Use that for
-#       active development. This script is for running the kernel standalone.
+#       automatically rebuilds + restarts canon-runtime. Use that for
+#       active development. This script is for running the runtime standalone.
 
 set -e
 
@@ -30,7 +30,7 @@ if [ -f "$LOCK" ]; then
     fi
 fi
 
-echo "[start] starting canon-kernel (tlog: $TLOG)"
+echo "[start] starting canon-runtime (tlog: $TLOG)"
 echo "[start] LLM execution enabled — browser extension must be connected on port 9100"
 echo ""
 
@@ -40,18 +40,18 @@ CANON_REPORTS_OUT="$REPO_ROOT/state/reports_out" \
 CANON_EVENT_RUNTIME_LOG="$REPO_ROOT/state/event_runtime.log" \
 CANON_REPORTS_VERIFY_DETERMINISM=1 \
 CANON_REPORTS_VERIFY_LAYOUT=1 \
-cargo run -p canon-kernel --bin canon-kernel -- --tlog "$TLOG"
+cargo run -p canon-runtime --bin canon-runtime -- --tlog "$TLOG"
 
 # ---------------------------------------------------------------------------
 # Useful one-liners (run in a separate terminal):
 #
 # Emit a test LLM capability:
-#   cargo run -p canon-event-store --bin emit_capability_event -- \
+#   cargo run -p canon-runtime-events --bin emit_capability_event -- \
 #     --tlog /workspace/ai_sandbox/canon/state/event_log/event.tlog.d \
 #     --name llm.call \
 #     --args '{"prompt":"hello","role":"exec","raw":true}'
 #
 # Read tlog events:
-#   cargo run -p canon-event-store --bin read_tlog -- \
+#   cargo run -p canon-storage-eventlog --bin read_tlog -- \
 #     /workspace/ai_sandbox/canon/state/event_log/event.tlog.d
 # ---------------------------------------------------------------------------

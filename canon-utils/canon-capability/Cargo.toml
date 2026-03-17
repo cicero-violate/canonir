@@ -7,4 +7,4 @@ edition = "2021"
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-canon_event = { package = "canon-event", path = "../canon-event" }
+canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
