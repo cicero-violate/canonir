@@ -70,8 +70,7 @@ def update_schema(v, path="$", parent=None):
 
     elif isinstance(v, list):
         for item in v:
-            item_type = classify(item)
-            entry["array_types"].add(item_type)
+            entry["array_types"].add(classify(item))
             child = f"{path}[*]"
             update_schema(item, child, path)
 
@@ -85,8 +84,7 @@ def extract_json_objects_from_buffer(buf):
 
     i = 0
     while i < len(buf):
-        b = buf[i]
-        ch = chr(b)
+        ch = chr(buf[i])
 
         if start is None:
             if ch == "{":
@@ -124,45 +122,49 @@ def extract_json_objects_from_buffer(buf):
     return out, remainder
 
 
-def format_entry(path):
+def node_name(path):
+    if path == "$":
+        return "."
+    return path.split(".")[-1]
+
+
+def render_tree(path="$", prefix="", is_last=True):
     entry = schema[path]
+    name = node_name(path)
+
     types = sorted(entry["types"])
     required = (entry["present"] == total_objects) if total_objects else False
 
-    line = f"{path}: types={types}, required={required}, seen={entry['present']}/{total_objects}"
+    meta = f"[{','.join(types)}]"
+    if required:
+        meta += " *"
 
-    if entry["array_types"]:
-        line += f", elem_types={sorted(entry['array_types'])}"
+    connector = "└── " if is_last else "├── "
+    print(prefix + connector + f"{name} {meta}")
 
-    if entry["examples"]:
-        line += f", examples={sorted(entry['examples'])}"
-
-    return line
-
-
-def render_tree(path="$", indent=0, visited=None):
-    if visited is None:
-        visited = set()
-
-    if path in visited:
-        print("  " * indent + f"{path} (cycle)")
+    children = sorted(schema[path]["children"])
+    if not children:
         return
 
-    visited.add(path)
-    print("  " * indent + format_entry(path))
+    new_prefix = prefix + ("    " if is_last else "│   ")
 
-    for child in sorted(schema[path]["children"]):
-        render_tree(child, indent + 1, visited.copy())
+    for i, child in enumerate(children):
+        render_tree(child, new_prefix, i == len(children) - 1)
 
 
 def render():
     os.system("clear")
-    print("=== INFERRED TREE SCHEMA ===")
+    print("=== TREE SCHEMA ===")
     print(f"objects_seen: {total_objects}\n")
-    if "$" in schema:
-        render_tree("$")
-    else:
-        print("(no schema yet)")
+
+    if "$" not in schema:
+        print("(no data)")
+        return
+
+    print(".")
+    children = sorted(schema["$"]["children"])
+    for i, child in enumerate(children):
+        render_tree(child, "", i == len(children) - 1)
 
 
 def watch(path):
