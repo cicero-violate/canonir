@@ -27,23 +27,26 @@ def add_example(entry, v):
         if len(entry["examples"]) < 5:
             entry["examples"].add(repr(v))
 
-def update_schema(v, path="$"):
+def update_schema(v, path="$", parent=None):
     entry = schema[path]
+
     t = classify(v)
     entry["types"].add(t)
     entry["present"] += 1
-    add_example(entry, v)
+
+    if parent:
+        schema[parent].setdefault("children", set()).add(path)
+        entry.setdefault("parents", set()).add(parent)
 
     if isinstance(v, dict):
         for k, subv in v.items():
             child = f"{path}.{k}"
-            update_schema(subv, child)
+            update_schema(subv, child, path)
 
     elif isinstance(v, list):
-        for i, item in enumerate(v):
-            it = classify(item)
-            entry["array_types"].add(it)
-            update_schema(item, f"{path}[]")
+        for item in v:
+            child = f"{path}[*]"   # normalize arrays
+            update_schema(item, child, path)
 
 def extract_json_objects_from_buffer(buf):
     out = []
