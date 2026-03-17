@@ -1,7 +1,7 @@
 use crate::structured::SymbolKind;
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
-//
+
 pub(crate) fn determine_source_root(project: &Path) -> PathBuf {
     let src = project.join("src");
     if src.is_dir() {
