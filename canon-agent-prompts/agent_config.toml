@@ -12,7 +12,8 @@ goal = "AGENT_GOAL.md"
 tool_capabilities = []
 
 [[agents.cards]]
-agent_url = "https://chatgpt.com/gg/69a32d7d1a008199948ad06498df2f4f"
+# agent_url = "https://chatgpt.com/gg/69a32d7d1a008199948ad06498df2f4f"
+agent_url = "https://chatgpt.com/?temporary-chat=true"
 agent_id = "planner"
 role = "PLANNER_ROLE.md"
 goal = "AGENT_GOAL.md"
