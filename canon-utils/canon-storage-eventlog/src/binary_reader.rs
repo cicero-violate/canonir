@@ -2,7 +2,7 @@ use anyhow::Result;
 use canon_event::TlogEvent;
 use std::fs;
 use std::path::Path;
-//
+
 const MAGIC: u32 = 0x544C4F47; // "TLOG"
 
 fn read_u32(buf: &[u8]) -> u32 {
