@@ -1,8 +1,8 @@
-use canon_event::RuntimeEvent;
+use canon_event::CanonEvent;
 use std::path::PathBuf;
-
+//
 #[derive(Debug, Clone)]
-pub struct CapabilityContext {
+pub struct CapabilityExecutionContext {
     pub workspace: PathBuf,
-    pub event: RuntimeEvent,
+    pub event: CanonEvent,
 }
