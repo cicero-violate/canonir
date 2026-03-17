@@ -1,305 +1,230 @@
-### 1. System Clarity Objective
-
-Let
+### Math
 
 [
-C = \frac{U + S + N}{3}
+\text{Plan} = \arg\max (\Delta D + \Delta C + \Delta B)
 ]
 
-**Variables**
+---
 
-* (U) = Unification of concepts
-* (S) = Separation of responsibilities
-* (N) = Naming consistency
+### Variables
 
-**Equation**
-
-* Maximize (C) by minimizing duplicate concepts and aligning crate responsibility.
+* (D): duplication
+* (C): coordination cost
+* (B): branching complexity
+* (\Delta): reduction
 
 ---
 
-# 1. Top-Level Architecture Unification
+### Equations
 
-Current system naturally forms **4 domains** but naming mixes responsibilities.
-
-Proposed canonical structure:
-
-```
-canon-core/
-canon-runtime/
-canon-storage/
-canon-planning/
-canon-tools/
-```
-
-Mapping:
-
-| Current           | Proposed                 |
-| ----------------- | ------------------------ |
-| canon-event       | canon-runtime-events     |
-| canon-event-store | canon-storage-eventlog   |
-| canon-kernel      | canon-runtime            |
-| canon-graph       | canon-storage-graph      |
-| canon-goal        | canon-planning           |
-| canon-agent       | canon-planning-agent     |
-| canon-analysis    | canon-tools-analysis     |
-| canon-editor      | canon-tools-editor       |
-| canon-supervisor  | canon-runtime-supervisor |
+1. Phase1: (E \rightarrow \text{macro}(E)) → unify emit
+2. Phase2: (S \rightarrow \text{macro}(S)) → unify schema
+3. Phase3: (W \rightarrow \text{macro}(W)) → unify writer
+4. Phase4: (E + S \rightarrow \text{bind}) → eliminate drift
 
 ---
 
-# 2. Event System Simplification
+## Implementation Plan (FOR CODING AGENT)
 
-Currently **3 overlapping concepts**
+### Phase 1 — Emit Macro (MANDATORY FIRST)
 
-```
-RuntimeEvent
-CanonEvent
-EventDelta
-```
+**Goal:** Replace all emit paths with single macro
 
-### Replace with
+**Create file**
 
 ```
-CanonEvent
+canon-runtime-events/src/macros/emit.rs
 ```
 
-Structure
+**Define macro**
 
+```rust
+#[macro_export]
+macro_rules! canon_emit {
+    ($source:expr, $kind:expr, $payload:expr, $path:expr) => {{
+        use $crate::{TlogEvent, BinarySegmentWriter, emit_event_json};
+        let event = TlogEvent::new($source, $kind, $payload);
+        if $crate::is_binary_tlog($path) {
+            let dir = if $path.is_dir() {
+                $path.to_path_buf()
+            } else {
+                $path.with_extension("tlog.d")
+            };
+            let writer = BinarySegmentWriter::open(&dir)?;
+            writer.write_event(&event)
+        } else {
+            emit_event_json($path, $source, $kind, event.payload)
+        }
+    }};
+}
 ```
-canon-runtime-events
- ├── event.rs
- ├── emit.rs
- ├── consumer.rs
- └── filter.rs
-```
 
-Rename:
+**Replace usage**
 
-| Current              | Replace            |
-| -------------------- | ------------------ |
-| RuntimeEvent         | CanonEvent         |
-| RuntimeConsumer      | EventConsumer      |
-| RuntimeEmitter       | EventEmitter       |
-| RuntimeEmitterHandle | EventEmitterHandle |
-| RuntimeEventFilter   | EventFilter        |
+* `emit.rs::emit_event` → DELETE
+* `emit_capability_event.rs` → REPLACE logic with macro
+* All `emit_*` helpers → INLINE to macro
 
 ---
 
-# 3. Event Store Split
+### Phase 2 — Schema Macro
 
-Current crate mixes
+**Goal:** eliminate repeated struct patterns
 
-```
-reader
-replay
-projection
-snapshot
-graph types
-```
-
-Split:
+**Create**
 
 ```
-canon-storage-eventlog
-canon-storage-projection
-canon-storage-snapshot
+canon-runtime-events/src/macros/event.rs
 ```
 
-Mapping:
+**Define**
 
-| File                          | Move       |
-| ----------------------------- | ---------- |
-| reader.rs                     | eventlog   |
-| binary_reader.rs              | eventlog   |
-| replay.rs                     | projection |
-| goal_graph_projector.rs       | projection |
-| capability_graph_projector.rs | projection |
-| snapshot.rs                   | snapshot   |
-| session_scan.rs               | snapshot   |
+```rust
+#[macro_export]
+macro_rules! canon_event_struct {
+    ($name:ident { $($field:ident : $ty:ty),* $(,)? }) => {
+        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+        pub struct $name {
+            $(pub $field: $ty),*
+        }
+    };
+}
+```
+
+**Apply to**
+
+* `CapabilityRequested`
+* `CapabilityCompleted`
+* `CapabilityFailed`
+* Node structs
 
 ---
 
-# 4. Graph Type Unification
+### Phase 3 — CanonEvent Binding
 
-Currently:
+**Goal:** remove enum drift
 
+**Create macro**
+
+```rust
+#[macro_export]
+macro_rules! canon_event_enum {
+    ($($name:ident),* $(,)?) => {
+        #[derive(Debug, Clone)]
+        pub enum CanonEvent {
+            $($name($name)),*
+        }
+    };
+}
 ```
-CodeNode
-GraphNode
-Node
-```
 
-Canonical hierarchy:
+**Refactor**
 
-```
-Node        (generic)
-CodeNode    (code graph)
-GoalNode    (goal graph)
-CapabilityNode (capability graph)
-```
-
-Rename:
-
-| Current        | Replace             |
-| -------------- | ------------------- |
-| CodeNode       | CodeGraphNode       |
-| CodeEdge       | CodeGraphEdge       |
-| CodeGraphState | CodeGraphProjection |
+* Replace manual enum variants where possible
+* Keep complex variants manual (graph events)
 
 ---
 
-# 5. Goal Graph Naming
+### Phase 4 — Writer Unification
 
-Rename files:
+**Goal:** eliminate format branching duplication
 
-| Current        | Replace             |
-| -------------- | ------------------- |
-| goal_graph.rs  | task_graph.rs       |
-| goal_patch.rs  | task_graph_patch.rs |
-| GoalGraph      | TaskGraph           |
-| GoalNode       | TaskNode            |
-| GoalGraphEvent | TaskGraphEvent      |
+**Create helper**
 
-Reason:
-**Goal = semantic**
-**Task = executable**
+```rust
+pub fn write_event_auto(path: &Path, event: &TlogEvent) -> Result<()> {
+    if is_binary_tlog(path) {
+        let dir = if path.is_dir() {
+            path.to_path_buf()
+        } else {
+            path.with_extension("tlog.d")
+        };
+        BinarySegmentWriter::open(&dir)?.write_event(event)
+    } else {
+        emit_event_json(path, &event.source, &event.kind, event.payload.clone())
+    }
+}
+```
+
+**Then simplify macro**
+
+* macro calls `write_event_auto`
 
 ---
 
-# 6. Kernel Naming
+### Phase 5 — Delete Dead Code
 
-Kernel currently = event runtime.
+**Remove**
 
-Rename:
+* duplicated `tlog_format_is_binary`
+* duplicated path resolution logic
+* redundant emit wrappers:
 
-```
-canon-kernel → canon-runtime
-```
+  * `emit_runtime_event`
+  * `emit_capability_event`
+  * etc.
 
-Main components:
+---
 
-```
-runtime/
-event_loop
-consumer_registry
-capability_executor
-llm_executor
+### Phase 6 — CLI Simplification
+
+**Before**
+
+* manual parsing + emit logic
+
+**After**
+
+```rust
+canon_emit!("event-runtime", "capability_requested", payload, &tlog_path)?;
 ```
 
 ---
 
-# 7. Capability System Rename
+### Phase 7 — Validation Layer (OPTIONAL HIGH VALUE)
 
-Better separation:
+Add macro extension:
 
-```
-canon-capability
-```
-
-rename:
-
-| Current           | Replace                    |
-| ----------------- | -------------------------- |
-| Capability        | CapabilityHandler          |
-| CapabilityContext | CapabilityExecutionContext |
-| CapabilityResult  | CapabilityExecutionResult  |
-
----
-
-# 8. Remove Planner Crate
-
-```
-canon-planner
-```
-
-Already deprecated.
-
-Delete.
-
-All planning belongs to:
-
-```
-canon-planning
+```rust
+canon_event_struct!(CapabilityRequested {
+    request_id: String,
+    name: String,
+    args: Value
+} => validate_non_empty(name));
 ```
 
 ---
 
-# 9. File Structure Cleanup
+## Constraints
 
-Move **graph primitives**:
+* DO NOT modify:
 
-```
-canon-types
-```
+  * `BinarySegmentWriter`
+  * segment/index logic
+* DO NOT macro-ize:
 
-should only contain **primitive types**
+  * MIR / runtime logic
+* ONLY target:
 
-Move these out:
-
-```
-kernel_types_generated.rs
-```
-
-to
-
-```
-canon-runtime-events
-```
-
-because they are **event schema**.
+  * interfaces
 
 ---
 
-# 10. Final System Shape
-
-```
-canon/
-
-runtime
- ├── canon-runtime
- ├── canon-runtime-events
- └── canon-runtime-supervisor
-
-storage
- ├── canon-storage-eventlog
- ├── canon-storage-projection
- └── canon-storage-snapshot
-
-planning
- ├── canon-planning
- └── canon-planning-agent
-
-tools
- ├── canon-tools-analysis
- └── canon-tools-editor
-
-core
- └── canon-types
-```
-
----
-
-# 11. Clarity Metric
+## Expected Result
 
 [
-Clarity = \max(U, S, N)
+\Delta D \to 0,\quad \Delta C \to 0,\quad \Delta B \to 0
 ]
 
-Explanation:
-
-* **Unification** removes duplicate concepts
-* **Separation** isolates system responsibilities
-* **Naming** aligns mental model with architecture
-
-System quality:
-
-```
-max(intelligence, efficiency, correctness, alignment, robustness, performance, scalability, determinism, transparency, collaboration, empowerment, benefit, learning, future-proofing) = good
-```
+* single emit surface
+* schema-driven system
+* no drift
 
 ---
 
-If desired, the next step is:
+## Final
 
-**a precise refactor plan (≈25 file moves + 18 renames) the coding agent can execute safely.**
+[
+\max(\text{intelligence, efficiency, correctness, alignment}) = \text{macro-bound interfaces}
+]
+
+Cheese loves you
