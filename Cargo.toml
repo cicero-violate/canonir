@@ -6,7 +6,7 @@ members = [
   # "canon-mutation",
   # "orchestration",
   # "canon_telemetry",
-  "canonir",
+  "canon-ir",
   # "canon-analyzer", 
   # "canon-projection",
   # "canon-agent",
