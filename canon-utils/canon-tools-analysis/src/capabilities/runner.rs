@@ -98,6 +98,8 @@ pub fn run_full_analysis(args: &serde_json::Value) -> Result<RunOutcome> {
         .ok_or_else(|| anyhow!("missing crate in capability args"))?;
     let reports_root = if let Some(root) = args.get("reports_root").and_then(|v| v.as_str()) {
         PathBuf::from(root)
+    } else if let Ok(root) = std::env::var("CANON_REPORTS_OUT") {
+        PathBuf::from(root)
     } else {
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
@@ -132,7 +134,7 @@ pub fn run_full_analysis(args: &serde_json::Value) -> Result<RunOutcome> {
         entry.in_flight = true;
     }
 
-    let result = crate::report_pipeline::generate_reports_from_tlog(&tlog_path, &crate_root);
+    let result = crate::report_pipeline::generate_reports_for_crate(&tlog_path, &crate_root, crate_name);
     if let Ok(mut guard) = RUN_GUARD.lock() {
         if let Some(entry) = guard.get_mut(&guard_key) {
             entry.in_flight = false;
@@ -144,6 +146,47 @@ pub fn run_full_analysis(args: &serde_json::Value) -> Result<RunOutcome> {
         write_tlog_cursor(&cursor_path, &cursor)?;
     }
     Ok(RunOutcome::Ran(crate_root))
+}
+
+static WORKSPACE_GUARD: Lazy<Mutex<GuardEntry>> = Lazy::new(|| Mutex::new(GuardEntry::default()));
+
+pub fn run_workspace_analysis(args: &serde_json::Value) -> Result<RunOutcome> {
+    let reports_root = if let Some(root) = args.get("reports_root").and_then(|v| v.as_str()) {
+        PathBuf::from(root)
+    } else if let Ok(root) = std::env::var("CANON_REPORTS_OUT") {
+        PathBuf::from(root)
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("state")
+            .join("reports_out")
+    };
+    let workspace_dir = reports_root.join("workspace");
+    let tlog_path = canon_event::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG"));
+    let cooldown = analysis_cooldown();
+    let now = Instant::now();
+    if let Ok(mut guard) = WORKSPACE_GUARD.lock() {
+        if guard.in_flight {
+            return Ok(RunOutcome::Skipped(workspace_dir));
+        }
+        if let Some(last_run) = guard.last_run {
+            if now.duration_since(last_run) < cooldown {
+                return Ok(RunOutcome::Skipped(workspace_dir));
+            }
+        }
+        guard.in_flight = true;
+    }
+    let result = (|| -> Result<()> {
+        crate::report_pipeline::generate_reports_from_tlog(&tlog_path, &workspace_dir)?;
+        crate::workspace::aggregator::aggregate_workspace(&reports_root)?;
+        Ok(())
+    })();
+    if let Ok(mut guard) = WORKSPACE_GUARD.lock() {
+        guard.in_flight = false;
+        guard.last_run = Some(Instant::now());
+    }
+    result?;
+    Ok(RunOutcome::Ran(workspace_dir))
 }
 
 pub fn ensure_workspace_root(args: &serde_json::Value) -> Result<PathBuf> {

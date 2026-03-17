@@ -18,7 +18,7 @@ pub use reader::{
 };
 pub use replay::{
     apply_rustc_event_to_graph, rebuild_symbol_index, replay_events_from_offset,
-    replay_graph_from_tlog, replay_graph_from_tlog_incremental,
+    replay_graph_for_crate, replay_graph_from_tlog, replay_graph_from_tlog_incremental,
 };
 pub use session_scan::{
     find_last_graph_session_offset, find_last_session_offset, session_contains_module_nodes,

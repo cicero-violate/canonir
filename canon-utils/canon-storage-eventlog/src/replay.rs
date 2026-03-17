@@ -10,6 +10,40 @@ use crate::graph_types::{CodeGraphEdge, CodeGraphNode, CodeGraphProjection};
 use crate::reader::{extract_rustc_event, parse_any_event, read_any_events_from_path, read_any_events_from_path_with_start_seq, AnyEvent, detect_tlog_format, TlogFormat};
 use crate::session_scan::{find_last_graph_session_offset, find_last_session_offset};
 
+/// Replay only events belonging to a specific crate (matched by SessionStart.project).
+/// When the target crate is recompiled, the later session replaces the earlier one.
+pub fn replay_graph_for_crate(tlog_path: &Path, crate_name: &str) -> Result<CodeGraphProjection> {
+    let mut graph = CodeGraphProjection::default();
+    let mut symbol_to_id: HashMap<String, u32> = HashMap::new();
+    let mut in_target = false;
+
+    let events = read_any_events_from_path(tlog_path)?;
+    for event in events {
+        let AnyEvent::Canon(canon) = event else { continue };
+        let Some(kernel) = extract_rustc_event(&canon) else { continue };
+        match &kernel {
+            RustcEvent::SessionStart(s) => {
+                if s.project == crate_name {
+                    // Fresh session for this crate — clear prior data from it.
+                    graph.nodes.clear();
+                    graph.edges.clear();
+                    graph.files.clear();
+                    symbol_to_id.clear();
+                    in_target = true;
+                } else {
+                    in_target = false;
+                }
+            }
+            _ => {
+                if in_target {
+                    apply_rustc_event_to_graph(kernel, &mut graph, &mut symbol_to_id, false);
+                }
+            }
+        }
+    }
+    Ok(graph)
+}
+
 pub fn replay_graph_from_tlog(tlog_path: &Path) -> Result<CodeGraphProjection> {
     if detect_tlog_format(tlog_path) == TlogFormat::Binary || tlog_path.is_dir() {
         let mut graph = CodeGraphProjection::default();

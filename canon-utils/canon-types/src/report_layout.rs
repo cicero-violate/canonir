@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 pub struct ReportLayout {
     base: PathBuf,
     crate_name: Option<String>,
+    /// When true, crate_root() returns base directly (no crates/{name}/ wrapping).
+    direct: bool,
 }
 
 impl ReportLayout {
@@ -23,17 +25,27 @@ impl ReportLayout {
                 }
             }
         }
-        Self { base, crate_name }
+        Self { base, crate_name, direct: false }
+    }
+
+    /// Layout whose crate_root() is exactly `root` — no crates/{name}/ wrapping.
+    /// Used for workspace-level reports written to a flat directory.
+    pub fn from_direct_root(root: impl Into<PathBuf>) -> Self {
+        Self { base: root.into(), crate_name: None, direct: true }
     }
 
     pub fn from_workspace_root(root: impl Into<PathBuf>, crate_name: impl Into<String>) -> Self {
         Self {
             base: root.into(),
             crate_name: Some(crate_name.into()),
+            direct: false,
         }
     }
 
     pub fn crate_root(&self) -> PathBuf {
+        if self.direct {
+            return self.base.clone();
+        }
         let name = self.crate_name.as_deref().unwrap_or("unknown");
         self.base.join("crates").join(name)
     }
@@ -74,7 +86,6 @@ impl ReportLayout {
             self.metrics_dir(),
             self.invariants_dir(),
             self.meta_dir(),
-            self.workspace_root(),
         ] {
             std::fs::create_dir_all(dir)?;
         }

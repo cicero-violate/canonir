@@ -63,7 +63,11 @@ pub fn find_last_graph_session_offset(tlog_path: &Path) -> Option<u64> {
 
 pub fn session_contains_module_nodes(tlog_path: &Path) -> bool {
     if tlog_path.is_dir() {
-        return false;
+        // Binary segment directory: if any .log files exist, assume module nodes are present.
+        return std::fs::read_dir(tlog_path)
+            .ok()
+            .map(|mut d| d.any(|e| e.ok().and_then(|e| e.path().extension().map(|x| x == "log")).unwrap_or(false)))
+            .unwrap_or(false);
     }
     let Ok(mut file) = fs::File::open(tlog_path) else {
         return false;

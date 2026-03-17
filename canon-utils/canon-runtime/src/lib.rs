@@ -197,6 +197,13 @@ impl EventRuntime {
                             };
                             self.handle_runtime_event(CanonEvent::CapabilityRequested(request))?;
                             self.drain_emitted_events()?;
+                            let workspace_request = CapabilityRequested {
+                                request_id: format!("analysis-workspace-{}", self.tick),
+                                name: "analysis.workspace".to_string(),
+                                args: serde_json::json!({}),
+                            };
+                            self.handle_runtime_event(CanonEvent::CapabilityRequested(workspace_request))?;
+                            self.drain_emitted_events()?;
                         }
                     }
                 }
@@ -240,6 +247,12 @@ impl EventRuntime {
                 args: serde_json::json!({ "crate": crate_name }),
             };
             self.handle_runtime_event(CanonEvent::CapabilityRequested(request))?;
+            let workspace_request = CapabilityRequested {
+                request_id: format!("analysis-workspace-{}", self.tick),
+                name: "analysis.workspace".to_string(),
+                args: serde_json::json!({}),
+            };
+            self.handle_runtime_event(CanonEvent::CapabilityRequested(workspace_request))?;
         }
         Ok(())
     }

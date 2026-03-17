@@ -52,7 +52,8 @@ use crate::semantics::semantic_clustering::cluster_dbscan_like;
 use canon_types::{RustcEvent, ReportLayout};
 use canon_event_store::{
     extract_rustc_event, find_last_graph_session_offset, read_any_events_from_path,
-    replay_graph_from_tlog, replay_graph_from_tlog_incremental, session_contains_module_nodes,
+    replay_graph_for_crate, replay_graph_from_tlog, replay_graph_from_tlog_incremental,
+    session_contains_module_nodes,
 };
 
 #[derive(Debug, Serialize, Default)]
@@ -85,7 +86,8 @@ pub fn generate_reports(output_dir: &Path, out_dir: &Path) -> Result<()> {
 }
 
 pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()> {
-    let layout = ReportLayout::from_crate_root(out_dir.to_path_buf());
+    // Use direct layout so graph writes to out_dir/graph/ not out_dir/crates/unknown/graph/
+    let layout = ReportLayout::from_direct_root(out_dir);
     layout.ensure_dirs()?;
     let graph_dir = layout.graph_dir();
     let graphs_dir = layout.graphs_dir();
@@ -219,6 +221,87 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
     let panic_summary = analysis_dir.join("panic_summary.json");
     if let Err(err) = build_panic_report(&panic_log, &panic_summary) {
         eprintln!("canon_reports: panic report failed: {err:?}");
+    }
+    cleanup_legacy_dirs(layout.root())?;
+    Ok(())
+}
+
+/// Generate reports for a single crate, replaying only its events from the tlog.
+pub fn generate_reports_for_crate(tlog_path: &Path, out_dir: &Path, crate_name: &str) -> Result<()> {
+    let layout = ReportLayout::from_crate_root(out_dir.to_path_buf());
+    layout.ensure_dirs()?;
+    let graph_dir = layout.graph_dir();
+    let graphs_dir = layout.graphs_dir();
+    let analysis_dir = layout.analysis_dir();
+    let metrics_dir = layout.metrics_dir();
+    let invariants_dir = layout.invariants_dir();
+    let meta_dir = layout.meta_dir();
+    let graph_bin_path = graph_dir.join("graph.bin");
+
+    let minimal = std::env::var("CANON_REPORTS_MINIMAL").ok().as_deref() == Some("1");
+
+    // Use graph.bin cache only when tlog hasn't changed since it was written.
+    let graph_bin_fresh = graph_bin_path.exists() && is_graph_bin_fresh(&graph_bin_path, tlog_path);
+    let (nodes, edges, files) = if graph_bin_fresh {
+        load_graph_bin(&graph_bin_path)?
+    } else {
+        let replay = replay_graph_for_crate(tlog_path, crate_name)?;
+        let (n, e, f) = (replay.nodes, replay.edges, replay.files);
+        if !n.is_empty() {
+            // Ensure graph_dir exists — emit_graph_bin uses fs::write which needs the parent.
+            let _ = fs::create_dir_all(&graph_dir);
+            if let Err(err) = emit_graph_bin(&graph_bin_path, &n, &e, &f) {
+                eprintln!("canon_reports[{crate_name}]: graph.bin write failed: {err}");
+            }
+        }
+        (n, e, f)
+    };
+
+    let (nodes, edges, files) = normalize_graph(nodes, edges, files);
+    if nodes.is_empty() {
+        return Ok(());
+    }
+
+    let parts = generate_reports_from_parts(nodes, edges, files, &layout, &graph_dir)?;
+
+    if let Ok(cache) = update_graph_cache(tlog_path, &graph_dir) {
+        let (modulegraph, module_nodes) = build_modulegraph_from_cache(&cache);
+        emit_modulegraph_csv(&graphs_dir, &modulegraph, &module_nodes)?;
+        if !cache.type_nodes.is_empty() || !cache.type_edges.is_empty() {
+            let (typegraph, type_nodes) = build_typegraph_from_cache(&cache);
+            emit_typegraph_csv_from_cache(&graphs_dir, &typegraph, &type_nodes)?;
+        }
+    }
+    write_symbol_artifacts_from_tlog(tlog_path, &graph_dir)?;
+    if let Err(err) = write_callsite_resolution_from_tlog(tlog_path, &analysis_dir) {
+        eprintln!("canon_reports[{crate_name}]: callsite resolution failed: {err:?}");
+    }
+    if !minimal {
+        if let Err(err) = crate::invariants::invariant_validator::run_invariant_pipeline(
+            &graph_dir,
+            &invariants_dir,
+            &meta_dir,
+            &analysis_dir,
+            &metrics_dir,
+        ) {
+            eprintln!("canon_reports[{crate_name}]: invariant pipeline failed: {err:?}");
+        }
+    }
+    write_graph_health_report(
+        &graph_dir,
+        &metrics_dir,
+        &parts.nodes,
+        &parts.edges,
+        &parts.files,
+        &parts.cfg,
+        &parts.callgraph,
+    )?;
+    write_tlog_integrity_report(tlog_path, &metrics_dir)?;
+    write_system_health_report(tlog_path, &metrics_dir)?;
+    let panic_log = analysis_dir.join("panic_records.jsonl");
+    let panic_summary = analysis_dir.join("panic_summary.json");
+    if let Err(err) = build_panic_report(&panic_log, &panic_summary) {
+        eprintln!("canon_reports[{crate_name}]: panic report failed: {err:?}");
     }
     cleanup_legacy_dirs(layout.root())?;
     Ok(())

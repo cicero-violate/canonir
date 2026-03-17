@@ -202,9 +202,9 @@ impl CanonIR {
 
     /// Intern a qualified path string, returning a PathId.
     #[inline]
-    pub fn intern_path(&mut self, s: &str) -> PathId {
-        let normalized = canonical_path_form(s);
-        PathId(self.path_intern.intern(normalized.as_ref()))
+    pub fn intern_path(&mut self, s: &str) -> Result<PathId, String> {
+        let normalized = canonical_path_form(s)?;
+        Ok(PathId(self.path_intern.intern(normalized.as_ref())))
     }
 
     /// Intern raw source/token text, returning its stable index.
@@ -386,7 +386,7 @@ fn validate_csr(label: &str, csr: &CanonCsr, node_count: usize) -> Result<(), St
     Ok(())
 }
 
-fn canonical_path_form(s: &str) -> std::borrow::Cow<'_, str> {
+fn canonical_path_form(s: &str) -> Result<std::borrow::Cow<'_, str>, String> {
     let trimmed = s.trim();
     let stripped = if let Some(rest) = trimmed.strip_prefix("::") { rest } else { trimmed };
     let normalized = stripped.to_string();
@@ -402,10 +402,10 @@ fn canonical_path_form(s: &str) -> std::borrow::Cow<'_, str> {
             .split("::")
             .any(|seg| seg == "_" || seg.starts_with("__"));
     if invalid {
-        panic!("invalid path for path_intern: {s}");
+        return Err(format!("invalid path for path_intern: {s}"));
     }
 
-    std::borrow::Cow::Owned(normalized)
+    Ok(std::borrow::Cow::Owned(normalized))
 }
 
 impl Default for CanonIR {
