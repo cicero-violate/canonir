@@ -5,7 +5,7 @@ pub mod consumers;
 
 use canon_capability::{CapabilityExecutionContext, CapabilityRegistry, CapabilityExecutionResult};
 use canon_event::emit_debug::{error, info};
-use canon_event::{emit_event_json, BinarySegmentWriter, TlogEvent};
+use canon_event::{BinarySegmentWriter, TlogEvent};
 use std::sync::Mutex as StdMutex;
 use canon_event_store::{
     extract_capability_request,
@@ -103,7 +103,7 @@ impl EventRuntime {
     }
 
     pub fn set_tlog_path(&mut self, path: std::path::PathBuf) {
-        if path.is_dir() {
+        if is_segment_dir_path(&path) {
             match BinarySegmentWriter::open(&path) {
                 Ok(writer) => {
                     self.tlog_writer = Some(Arc::new(StdMutex::new(writer)));
@@ -428,7 +428,7 @@ impl EventRuntime {
         }
         };
 
-        if path.is_dir() {
+        if is_segment_dir_path(path) {
             if let Some(writer_arc) = self.tlog_writer.as_ref() {
                 let needs_reopen = if let Ok(w) = writer_arc.lock() {
                     if w.write_event(&canon).is_err() {
@@ -456,8 +456,14 @@ impl EventRuntime {
             return;
         }
 
-        let _ = emit_event_json(path, "event-runtime", canon.kind, canon.payload);
+        let _ = canon_event::write_event_auto(path, &canon);
     }
+}
+
+/// Returns true for paths that should use `BinarySegmentWriter`:
+/// directories and paths ending in `.tlog.d` (even before they exist).
+fn is_segment_dir_path(p: &std::path::Path) -> bool {
+    p.is_dir() || p.to_string_lossy().ends_with(".tlog.d")
 }
 
 fn empty_state() -> RustcState {

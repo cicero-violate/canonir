@@ -1,23 +1,13 @@
 use anyhow::{anyhow, Result};
-use canon_event::{emit_event_json, BinarySegmentWriter, TlogEvent};
+use canon_event::canon_emit;
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 fn default_tlog_path() -> PathBuf {
     if let Ok(path) = env::var("CANON_TLOG_PATH") {
         return PathBuf::from(path);
     }
     PathBuf::from("/workspace/ai_sandbox/canon/state/event_log/event.tlog.d")
-}
-
-fn tlog_format_is_binary(path: &Path) -> bool {
-    if path.is_dir() {
-        return true;
-    }
-    match env::var("CANON_TLOG_FORMAT") {
-        Ok(format) => format.to_lowercase() != "jsonl",
-        Err(_) => true,
-    }
 }
 
 fn generate_request_id() -> String {
@@ -71,19 +61,5 @@ fn main() -> Result<()> {
         "name": name,
         "args": args_value,
     });
-    let canon = TlogEvent::new("event-runtime", "capability_requested", payload.clone());
-
-    if tlog_format_is_binary(&tlog_path) {
-        let dir = if tlog_path.is_dir() {
-            tlog_path.clone()
-        } else {
-            tlog_path.with_extension("tlog.d")
-        };
-        let writer = BinarySegmentWriter::open(&dir)?;
-        let _ = writer.write_event(&canon);
-        return Ok(());
-    }
-
-    emit_event_json(&tlog_path, "event-runtime", "capability_requested", payload)?;
-    Ok(())
+    canon_emit!("event-runtime", "capability_requested", payload, &tlog_path)
 }

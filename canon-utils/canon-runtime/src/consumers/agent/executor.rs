@@ -95,13 +95,10 @@ pub(super) fn parse_inline_json_str(text: &str) -> Option<String> {
     Some(text[start..=end].to_string())
 }
 
-/// Parse executor-format LLM response. Returns Some(deltas) if the text contains
-/// a `{"results":[{"deltas":[...]}]}` block. Returns None if it's not executor format.
+/// Parse executor-format LLM response. Returns Some(deltas) if the value contains
+/// a `{"results":[{"deltas":[...]}]}` structure. Returns None if not executor format.
 /// Returns Some(empty vec) if executor format but no tool calls (done).
-pub(super) fn parse_executor_deltas(text: &str) -> Option<Vec<serde_json::Value>> {
-    // Find a fenced JSON block first; fall back to bare JSON
-    let json_str = extract_fenced_json(text).unwrap_or_else(|| text.to_string());
-    let val: serde_json::Value = serde_json::from_str(json_str.trim()).ok()?;
+pub(super) fn parse_executor_deltas(val: &serde_json::Value) -> Option<Vec<serde_json::Value>> {
     let results = val.get("results")?.as_array()?;
     let deltas: Vec<serde_json::Value> = results
         .iter()
@@ -109,14 +106,6 @@ pub(super) fn parse_executor_deltas(text: &str) -> Option<Vec<serde_json::Value>
         .flatten()
         .collect();
     Some(deltas)
-}
-
-pub(super) fn extract_fenced_json(text: &str) -> Option<String> {
-    let start = text.find("```json")
-        .map(|i| i + 7)
-        .or_else(|| text.find("```\n{").map(|i| i + 3))?;
-    let end = text[start..].find("```")?;
-    Some(text[start..start + end].trim().to_string())
 }
 
 /// Convert an executor delta into a bash `cmd` string.

@@ -16,7 +16,7 @@ TLOG="$REPO_ROOT/state/event_log/event.tlog.d"
 cd "$UTILS_ROOT"
 
 echo "[start] creating state directories..."
-mkdir -p "$REPO_ROOT/state/event_log/event.tlog.d"
+mkdir -p "$REPO_ROOT/state/event_log"
 mkdir -p "$REPO_ROOT/state/reports_out"
 mkdir -p "$REPO_ROOT/state/projections"
 

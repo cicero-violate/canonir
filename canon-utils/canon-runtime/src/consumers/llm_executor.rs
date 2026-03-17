@@ -177,7 +177,6 @@ impl LlmExecutorConsumer {
                                             delay,
                                         )
                                         .await
-                                        .map(|text| json!({ "text": text }))
                                     } else {
                                         llm::llm_client_call_agent_json_with_retry_allow_mismatch(
                                             &bridge,

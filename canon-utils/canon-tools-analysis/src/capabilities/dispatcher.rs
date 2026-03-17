@@ -1,5 +1,5 @@
 use canon_event::emit_debug::info;
-use canon_event::emit_event;
+use canon_event::canon_emit;
 use canon_types::RustcEvent;
 use std::path::Path;
 
@@ -29,7 +29,7 @@ pub fn dispatch_for_event(
                 "reports_root": workspace.join("state").join("reports_out").display().to_string()
             }
         });
-        emit_event("canon-analysis", "capability_requested", payload.clone(), tlog_path)?;
+        canon_emit!("canon-analysis", "capability_requested", payload.clone(), tlog_path)?;
         info("canon-analysis", "capability_requested", payload);
     }
     info(

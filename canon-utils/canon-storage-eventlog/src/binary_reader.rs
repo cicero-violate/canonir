@@ -1,15 +1,9 @@
 use anyhow::Result;
 use canon_event::TlogEvent;
-use crc32fast::Hasher;
 use std::fs;
 use std::path::Path;
 
 const MAGIC: u32 = 0x544C4F47; // "TLOG"
-const HEADER_LEN: usize = 40;
-
-fn read_u16(buf: &[u8]) -> u16 {
-    u16::from_le_bytes([buf[0], buf[1]])
-}
 
 fn read_u32(buf: &[u8]) -> u32 {
     u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]])
@@ -21,45 +15,22 @@ fn read_u64(buf: &[u8]) -> u64 {
 
 pub fn read_binary_events(path: &Path) -> Result<Vec<TlogEvent>> {
     let bytes = fs::read(path)?;
-    let mut cursor = 0usize;
-    let mut events = Vec::new();
-
-    while cursor + HEADER_LEN <= bytes.len() {
-        let header = &bytes[cursor..cursor + HEADER_LEN];
-        let magic = read_u32(&header[0..4]);
-        if magic != MAGIC {
-            // Likely a partial write at the tail; return what we have.
-            break;
-        }
-        let _version = read_u16(&header[4..6]);
-        let header_len = read_u16(&header[6..8]) as usize;
-        if header_len < HEADER_LEN {
-            break;
-        }
-        let _ts = read_u64(&header[8..16]);
-        let _source_id = read_u32(&header[16..20]);
-        let _kind_id = read_u32(&header[20..24]);
-        let _seq = read_u64(&header[24..32]);
-        let payload_len = read_u32(&header[32..36]) as usize;
-        let crc32 = read_u32(&header[36..40]);
-
-        let payload_start = cursor + header_len;
-        let payload_end = payload_start + payload_len;
-        if payload_end > bytes.len() {
-            break;
-        }
-        let payload = &bytes[payload_start..payload_end];
-        let mut hasher = Hasher::new();
-        hasher.update(payload);
-        let computed = hasher.finalize();
-        if computed != crc32 {
-            break;
-        }
-        let event: TlogEvent = serde_json::from_slice(payload)?;
-        events.push(event);
-        cursor = payload_end;
+    // Legacy binary segment — skip silently.
+    if is_binary_magic(&bytes) {
+        return Ok(Vec::new());
     }
-
+    let mut events = Vec::new();
+    let content = std::str::from_utf8(&bytes).unwrap_or("");
+    for raw_line in content.split('\n') {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<TlogEvent>(trimmed) {
+            Ok(e) => events.push(e),
+            Err(_) => break,
+        }
+    }
     Ok(events)
 }
 
@@ -89,38 +60,22 @@ pub fn read_binary_events_from_segment_with_start_seq(
     }
 
     let bytes = fs::read(log_path)?;
-    let mut cursor = start_pos as usize;
-    let mut events = Vec::new();
+    if is_binary_magic(&bytes) {
+        return Ok(Vec::new());
+    }
 
-    while cursor + HEADER_LEN <= bytes.len() {
-        let header = &bytes[cursor..cursor + HEADER_LEN];
-        let magic = read_u32(&header[0..4]);
-        if magic != MAGIC {
-            break;
+    let relevant = bytes.get(start_pos as usize..).unwrap_or(&bytes);
+    let content = std::str::from_utf8(relevant).unwrap_or("");
+    let mut events = Vec::new();
+    for raw_line in content.split('\n') {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            continue;
         }
-        let header_len = read_u16(&header[6..8]) as usize;
-        if header_len < HEADER_LEN {
-            break;
+        match serde_json::from_str::<TlogEvent>(trimmed) {
+            Ok(e) => events.push(e),
+            Err(_) => break,
         }
-        let seq = read_u64(&header[24..32]);
-        let payload_len = read_u32(&header[32..36]) as usize;
-        let crc32 = read_u32(&header[36..40]);
-        let payload_start = cursor + header_len;
-        let payload_end = payload_start + payload_len;
-        if payload_end > bytes.len() {
-            break;
-        }
-        let payload = &bytes[payload_start..payload_end];
-        let mut hasher = Hasher::new();
-        hasher.update(payload);
-        if hasher.finalize() != crc32 {
-            break;
-        }
-        if seq >= start_seq {
-            let event: TlogEvent = serde_json::from_slice(payload)?;
-            events.push(event);
-        }
-        cursor = payload_end;
     }
     Ok(events)
 }

@@ -430,8 +430,7 @@ impl AgentWorkerState {
         // each delta as a sub-capability and keep the node Running.
         if success && capability_name == "llm.call" {
             if let Some(result) = result_value.as_ref() {
-                let text = result.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                if let Some(deltas) = parse_executor_deltas(text) {
+                if let Some(deltas) = parse_executor_deltas(result) {
                     if !deltas.is_empty() {
                         let _ = self.graph.update_status(&node_id, NodeStatus::Running);
                         let role = self.graph.get_node(&node_id)
@@ -485,13 +484,9 @@ impl AgentWorkerState {
                     node.result = result_value.as_ref().and_then(|v| serde_json::to_string(v).ok());
                     // Log the LLM response to the reports directory for observability
                     if plan_and_persist {
-                        // raw=true: result={"text":"..."}, raw=false: result is parsed JSON directly
-                        let text = result_value.as_ref().map(|v| {
-                            v.get("text")
-                                .and_then(|t| t.as_str())
-                                .map(str::to_string)
-                                .unwrap_or_else(|| serde_json::to_string_pretty(v).unwrap_or_default())
-                        }).unwrap_or_default();
+                        let text = result_value.as_ref()
+                            .map(|v| serde_json::to_string_pretty(v).unwrap_or_default())
+                            .unwrap_or_default();
                         append_llm_response_log(&node_id, &request_id, &text);
                     }
                 } else if !stdout.is_empty() {

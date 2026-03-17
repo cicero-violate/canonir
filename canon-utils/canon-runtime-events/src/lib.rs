@@ -3,6 +3,7 @@ pub mod emit;
 pub mod schema;
 pub mod emit_debug;
 pub mod tlog;
+pub mod macros;
 
 /// Generate a [`RustcEventConsumer`] impl for a concrete type.
 ///
@@ -40,3 +41,4 @@ pub use tlog::{
     BinarySegmentWriter, BinaryTlogWriter, TlogEvent, RotateConfig, SegmentConfig, TlogWriter,
     maybe_rotate,
 };
+pub use emit::write_event_auto;

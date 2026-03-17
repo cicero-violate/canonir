@@ -1,53 +1,46 @@
 use super::endpoint_worker::{self, tab_manager_log_llm, tab_manager_now_ms, TabManagerHandle};
-use crate::ws_server::{WsBridge, WsBridgeError};
-#[derive(Debug)]
-pub enum LlmProviderError {
-    Transport(WsBridgeError),
-    MissingJsonFence,
-    JsonDecodeFailure(String),
+use crate::ws_server::WsBridge;
+
+/// Normalize raw LLM output into a structured `Value`.
+///
+/// Steps:
+/// 1. Fix escape sequences (`\n`, `\"`)
+/// 2. Strip markdown fences (` ```json ... ``` `)
+/// 3. Parse as JSON → return `Value` on success
+/// 4. Fallback: log `LLM_NORMALIZE_FALLBACK` and return `{"text": <raw>}`
+pub fn normalize_llm_output(raw: &str) -> Value {
+    let s = raw.replace("\\n", "\n").replace("\\\"", "\"");
+    let cleaned = strip_json_fence(s.trim()).trim();
+    if let Ok(v) = serde_json::from_str::<Value>(cleaned) {
+        return v;
+    }
+    if let Some(v) = try_parse_lenient_json(cleaned) {
+        return v;
+    }
+    canon_event::emit_debug::warn(
+        "llm_normalize",
+        "LLM_NORMALIZE_FALLBACK",
+        serde_json::json!({ "raw_preview": &raw[..raw.len().min(200)] }),
+    );
+    serde_json::json!({ "text": raw })
 }
 
-impl std::fmt::Display for LlmProviderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Transport(e) => write!(f, "transport error: {e}"),
-            Self::MissingJsonFence => write!(f, "no fenced json block found"),
-            Self::JsonDecodeFailure(e) => write!(f, "invalid json payload: {e}"),
+fn strip_json_fence(s: &str) -> &str {
+    for prefix in [
+        "```json\n", "```json\r\n", "```json ", "```json",
+        "```JSON\n", "```JSON\r\n", "```JSON ", "```JSON",
+        "```\n",     "```\r\n",     "```",
+    ] {
+        if let Some(inner) = s.strip_prefix(prefix) {
+            if let Some(close) = inner.rfind("```") {
+                return inner[..close].trim();
+            }
         }
     }
+    s
 }
 
-impl std::error::Error for LlmProviderError {}
 
-impl From<WsBridgeError> for LlmProviderError {
-    fn from(e: WsBridgeError) -> Self {
-        Self::Transport(e)
-    }
-}
-
-struct JsonExtractor;
-
-impl JsonExtractor {
-    fn extract(text: &str) -> Result<Value, LlmProviderError> {
-        let start = Self::find_open(text)?;
-        let content = &text[start..];
-        let json_str = Self::slice_json(content)?;
-        serde_json::from_str(json_str)
-            .map_err(|e| LlmProviderError::JsonDecodeFailure(e.to_string()))
-    }
-
-    fn find_open(text: &str) -> Result<usize, LlmProviderError> {
-        text.find("```json")
-            .or_else(|| text.find("```JSON"))
-            .map(|i| i + 7)
-            .ok_or(LlmProviderError::MissingJsonFence)
-    }
-
-    fn slice_json(text: &str) -> Result<&str, LlmProviderError> {
-        let end = text.rfind("```").ok_or(LlmProviderError::MissingJsonFence)?;
-        Ok(text[..end].trim())
-    }
-}
 use anyhow::Result;
 use serde_json::Value;
 use std::hash::{Hash, Hasher};
@@ -70,19 +63,7 @@ async fn llm_client_call_agent_json_inner(
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let raw_path = format!("{}/llm_raw_full_{}_{}.txt", log_dir, endpoint_id, ts);
     let _ = std::fs::write(&raw_path, &raw);
-    let payload = match JsonExtractor::extract(&raw) {
-        Ok(v) => v,
-        Err(_) => {
-            if let Some(v) = try_parse_lenient_json(&raw) {
-                v
-            } else {
-                let path = format!("{}/llm_raw_{}_{}.txt", log_dir, endpoint_id, ts);
-                let _ = std::fs::write(&path, &raw);
-                return Err(anyhow::anyhow!("json extract error"));
-            }
-        }
-    };
-    Ok(payload)
+    Ok(normalize_llm_output(&raw))
 }
 async fn llm_client_call_agent_json_inner_with_req_id(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle, max_tabs: usize,
@@ -97,19 +78,7 @@ async fn llm_client_call_agent_json_inner_with_req_id(
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let raw_path = format!("{}/llm_raw_full_{}_{}.txt", log_dir, endpoint_id, ts);
     let _ = std::fs::write(&raw_path, &raw);
-    let payload = match JsonExtractor::extract(&raw) {
-        Ok(v) => v,
-        Err(_) => {
-            if let Some(v) = try_parse_lenient_json(&raw) {
-                v
-            } else {
-                let path = format!("{}/llm_raw_{}_{}.txt", log_dir, endpoint_id, ts);
-                let _ = std::fs::write(&path, &raw);
-                return Err(anyhow::anyhow!("json extract error"));
-            }
-        }
-    };
-    Ok((payload, req_id))
+    Ok((normalize_llm_output(&raw), req_id))
 }
 pub async fn llm_client_call_agent_json_with_retry(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle, max_tabs: usize,
@@ -132,7 +101,7 @@ pub async fn llm_client_call_agent_json_with_retry_allow_mismatch_with_req_id(
 pub async fn llm_client_call_agent_raw_with_retry_allow_mismatch(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle, max_tabs: usize,
     tab_cooldown_ms: u64, max_retries: u32, delay_secs: u64,
-) -> Result<String> {
+) -> Result<Value> {
     llm_client_call_agent_raw_with_retry_inner(bridge, endpoint_id, url, stateful, prompt, role_schema, phase, node_id, tabs, max_tabs, tab_cooldown_ms, max_retries, delay_secs, true).await
 }
 async fn llm_client_call_agent_json_with_retry_inner(
@@ -186,7 +155,7 @@ async fn llm_client_call_agent_json_with_retry_inner_with_req_id(
 async fn llm_client_call_agent_raw_with_retry_inner(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle, max_tabs: usize,
     tab_cooldown_ms: u64, max_retries: u32, delay_secs: u64, allow_req_id_mismatch: bool,
-) -> Result<String> {
+) -> Result<Value> {
     let mut last_err: Option<anyhow::Error> = None;
     for attempt in 0..max_retries {
         let start = tab_manager_now_ms();
@@ -210,7 +179,7 @@ async fn llm_client_call_agent_raw_with_retry_inner(
 async fn llm_client_call_agent_raw_inner(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle, max_tabs: usize,
     tab_cooldown_ms: u64, allow_req_id_mismatch: bool,
-) -> Result<String> {
+) -> Result<Value> {
     let cache_key = llm_client_cache_key_for(prompt, role_schema);
     let raw =
         endpoint_worker::llm_worker_send_request(bridge, endpoint_id, url, stateful, prompt, role_schema, node_id, Some(cache_key), allow_req_id_mismatch, phase, tabs, max_tabs, tab_cooldown_ms)
@@ -220,7 +189,7 @@ async fn llm_client_call_agent_raw_inner(
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let raw_path = format!("{}/llm_raw_full_{}_{}.txt", log_dir, endpoint_id, ts);
     let _ = std::fs::write(&raw_path, &raw);
-    Ok(raw)
+    Ok(normalize_llm_output(&raw))
 }
 fn try_parse_lenient_json(raw: &str) -> Option<Value> {
     let start = raw.find('{').or_else(|| raw.find('['))?;

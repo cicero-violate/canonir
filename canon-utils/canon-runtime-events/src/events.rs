@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::canon_event_struct;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EditEvent {
     RenameSymbol { project: String, old: String, new: String },
@@ -144,58 +146,51 @@ pub trait EventConsumer: Send + Sync {
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CapabilityRequested {
-    pub request_id: String,
-    pub name: String,
-    pub args: serde_json::Value,
-}
+canon_event_struct!(CapabilityRequested {
+    request_id: String,
+    name: String,
+    args: serde_json::Value,
+});
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CapabilityCompleted {
-    pub request_id: String,
-    pub name: String,
-    pub result: serde_json::Value,
-}
+canon_event_struct!(CapabilityCompleted {
+    request_id: String,
+    name: String,
+    result: serde_json::Value,
+});
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CapabilityFailed {
-    pub request_id: String,
-    pub name: String,
-    pub error: String,
-}
+canon_event_struct!(CapabilityFailed {
+    request_id: String,
+    name: String,
+    error: String,
+});
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeReady {
-    pub node_id: String,
-    pub capability: String,
+canon_event_struct!(NodeReady {
+    node_id: String,
+    capability: String,
     #[serde(default)]
-    pub request_id: String,
+    request_id: String,
     #[serde(default)]
-    pub args: serde_json::Value,
-}
+    args: serde_json::Value,
+});
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeStarted {
-    pub node_id: String,
-    pub capability: String,
+canon_event_struct!(NodeStarted {
+    node_id: String,
+    capability: String,
     #[serde(default)]
-    pub request_id: String,
-}
+    request_id: String,
+});
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeCompleted {
-    pub node_id: String,
-    pub capability: String,
+canon_event_struct!(NodeCompleted {
+    node_id: String,
+    capability: String,
     #[serde(default)]
-    pub request_id: String,
-}
+    request_id: String,
+});
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeFailed {
-    pub node_id: String,
-    pub capability: String,
-    pub error: Option<String>,
+canon_event_struct!(NodeFailed {
+    node_id: String,
+    capability: String,
+    error: Option<String>,
     #[serde(default)]
-    pub request_id: String,
-}
+    request_id: String,
+});

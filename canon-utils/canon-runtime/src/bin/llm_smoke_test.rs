@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use canon_agent::config::CapabilityConfig;
 use canon_event_store::read_any_events_from_path;
 use canon_event_store::read_any_events_from_path_with_start_seq;
-use canon_event::{BinarySegmentWriter, TlogEvent};
+use canon_event::canon_emit;
 use canon_event::CapabilityRequested;
 use std::fs::File;
 use std::io::Read;
@@ -55,15 +55,8 @@ fn main() -> Result<()> {
         }),
     };
     let payload = serde_json::to_value(&request)?;
-    let canon = TlogEvent::new("smoke-test", "capability_requested", payload);
     println!("llm_smoke_test: writing request to {}", tlog_path.display());
-    if tlog_path.is_dir() {
-        let writer = BinarySegmentWriter::open(&tlog_path)?;
-        writer.write_event(&canon)?;
-    } else {
-        let writer = canon_event::BinaryTlogWriter::open(&tlog_path)?;
-        writer.write_event(&canon)?;
-    }
+    canon_emit!("smoke-test", "capability_requested", payload, &tlog_path)?;
 
     let replay_path = if tlog_path.is_dir() {
         // Only scan the segment the request was written into (and the next one).

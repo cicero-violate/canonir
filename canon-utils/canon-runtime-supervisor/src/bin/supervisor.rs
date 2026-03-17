@@ -3,7 +3,7 @@ use canon_supervisor::{
     affected_crates, crate_for_path, start_watcher, wrap_event,
 };
 use anyhow::Result;
-use canon_event::{emit_event, resolve_tlog_path};
+use canon_event::{canon_emit, resolve_tlog_path};
 use canon_event::emit_debug::{error, info};
 use signal_hook::consts::signal::{SIGINT, SIGTERM};
 use signal_hook::flag;
@@ -78,7 +78,7 @@ fn main() -> Result<()> {
                 }),
             );
             let tlog_path = resolve_tlog_path(None, None);
-            let _ = emit_event("canon-supervisor", "supervisor_event", payload, &tlog_path);
+            let _ = canon_emit!("canon-supervisor", "supervisor_event", payload, &tlog_path);
         }
         let affected = affected_crates(&paths);
         handle_changes(&affected, &process_map, &mut manager)?;
@@ -110,7 +110,7 @@ fn handle_changes(
             serde_json::json!({ "crate": crate_name }),
         );
         let tlog_path = resolve_tlog_path(None, None);
-        let _ = emit_event("canon-supervisor", "supervisor_event", payload, &tlog_path);
+        let _ = canon_emit!("canon-supervisor", "supervisor_event", payload, &tlog_path);
     }
     Ok(())
 }

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use canon_event::emit_debug::info;
-use canon_event::emit_event;
+use canon_event::canon_emit;
 use std::path::Path;
 
 pub fn emit_analysis_event(
@@ -8,7 +8,7 @@ pub fn emit_analysis_event(
     kind: &str,
     payload: serde_json::Value,
 ) -> Result<()> {
-    emit_event("canon-analysis", kind, payload.clone(), tlog_path)?;
+    canon_emit!("canon-analysis", kind, payload.clone(), tlog_path)?;
     info("canon-analysis", kind, payload);
     Ok(())
 }

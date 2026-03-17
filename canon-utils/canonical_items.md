@@ -34,17 +34,17 @@ Format: `CrateName` → `path::to::Item` — source file
 
 ## Tlog — writing
 
-| Item                     | Canonical location                                             | Source file                      |
-|--------------------------+----------------------------------------------------------------+----------------------------------|
-| `BinarySegmentWriter`    | `canon_event::BinarySegmentWriter`                             | `canon-event/src/tlog/binary.rs` |
-| `BinaryTlogWriter`       | `canon_event::BinaryTlogWriter`                                | `canon-event/src/tlog/binary.rs` |
-| `TlogWriter`             | `canon_event::TlogWriter`                                      | `canon-event/src/tlog/writer.rs` |
-| `write_event` *(method)* | `BinarySegmentWriter::write_event` / `TlogWriter::write_event` | `canon-event/src/tlog/`          |
-| `emit_event_json`        | `canon_event::emit_event_json`                                 | `canon-event/src/tlog/writer.rs` |
-| `emit_event`             | `canon_event::emit_event`                                      | `canon-event/src/emit.rs`        |
-| `emit_rustc_event`       | `canon_event::emit_rustc_event`                                | `canon-event/src/emit.rs`        |
-| `emit_capability_event`  | `canon_event::emit_capability_event`                           | `canon-event/src/emit.rs`        |
-| `resolve_tlog_path`      | `canon_event::resolve_tlog_path`                               | `canon-event/src/emit.rs`        |
+| Item                     | Canonical location                                             | Source file                               |
+|--------------------------+----------------------------------------------------------------+-------------------------------------------|
+| `canon_emit!`            | `canon_event::canon_emit`                                      | `canon-event/src/macros/emit.rs` ✅ **USE THIS** |
+| `write_event_auto`       | `canon_event::write_event_auto`                                | `canon-event/src/emit.rs` *(when TlogEvent already constructed)* |
+| `resolve_tlog_path`      | `canon_event::resolve_tlog_path`                               | `canon-event/src/emit.rs`                 |
+| `canon_event_struct!`    | `canon_event::canon_event_struct`                              | `canon-event/src/macros/event.rs`         |
+| `canon_event_enum!`      | `canon_event::canon_event_enum`                                | `canon-event/src/macros/event.rs`         |
+| `BinarySegmentWriter`    | `canon_event::BinarySegmentWriter`                             | `canon-event/src/tlog/binary.rs` *(internal / batch only)* |
+| `TlogWriter`             | `canon_event::TlogWriter`                                      | `canon-event/src/tlog/writer.rs` *(internal)* |
+| `emit_event_json`        | `canon_event::emit_event_json`                                 | `canon-event/src/tlog/writer.rs` *(internal)* |
+| `emit_event`             | `canon_event::emit_event`                                      | `canon-event/src/emit.rs` *(use `canon_emit!` instead)* |
 
 ---
 
@@ -268,6 +268,10 @@ Both `canon_goal::X` and `canon_agent::X` resolve to the same type (`canon-agent
 | `rebuild_symbol_index` in `canon_graph`            | ✅ Deleted | `canon_event_store::replay::rebuild_symbol_index`                      |
 | `append_event` / `append_event_json`               | ✅ Renamed | `write_event` (method) / `emit_event_json` (free fn)                   |
 | `canon_event_store::writer` shim module            | ✅ Deleted | Import `BinarySegmentWriter`, `TlogWriter`, `CanonEvent`, `emit_event_json` directly from `canon_event::` |
+| `emit_rustc_event`                                 | ✅ Deleted | `canon_emit!("canon-rustc", kind, payload, path)`                      |
+| `emit_capability_event`                            | ✅ Deleted | `canon_emit!("canon-runtime", kind, payload, path)`                    |
+| `emit_edit_event`                                  | ✅ Deleted | `canon_emit!("canon-editor", "edit_event", payload, &resolve_tlog_path(Some(root), None))` |
+| `BinaryTlogWriter`                                 | ✅ Superseded | `canon_emit!` / `write_event_auto` handle format selection            |
 | `KernelGraph` / `KernelCodeGraph`                  | ✅ Renamed | `CodeGraph` (materialised) / `CodeGraphState` (event-sourced)          |
 | `NodeRow` / `EdgeRow` *(graph_types.rs)*           | ✅ Renamed | `CodeNode` / `CodeEdge`                                                |
 | `KernelSnapshot*`                                  | ✅ Renamed | `CodeSnapshot` / `CodeSnapshotNode` / `CodeSnapshotEdge`               |
