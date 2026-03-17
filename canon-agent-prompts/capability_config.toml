@@ -82,7 +82,8 @@ max_tabs = 4
 
 [llm.endpoints.exec_chatgpt_c]
 id = "exec_chatgpt_c"
-url = "https://chatgpt.com/gg/69a32d7d1a008199948ad06498df2f4f"
+# url = "https://chatgpt.com/gg/69a32d7d1a008199948ad06498df2f4f"
+url = "https://chatgpt.com/?temporary-chat=true"
 role_markdown = "EXECUTOR_AGENT_ROLE.md"
 role = "exec"
 stateful = true
