@@ -1,230 +1,217 @@
 ### Math
 
 [
-\text{Plan} = \arg\max (\Delta D + \Delta C + \Delta B)
+\text{Goal} = \frac{dB}{dS} = 1 ;;\Rightarrow;; S \Rightarrow E
 ]
 
 ---
 
 ### Variables
 
-* (D): duplication
-* (C): coordination cost
-* (B): branching complexity
-* (\Delta): reduction
+* (S): schema structs
+* (E): emit behavior
+* (G): glue code
+* (P): procedural macro layer
 
 ---
 
 ### Equations
 
-1. Phase1: (E \rightarrow \text{macro}(E)) → unify emit
-2. Phase2: (S \rightarrow \text{macro}(S)) → unify schema
-3. Phase3: (W \rightarrow \text{macro}(W)) → unify writer
-4. Phase4: (E + S \rightarrow \text{bind}) → eliminate drift
+1. Current: (E = S + G)
+2. Target: (E = f(S))
+3. Remove: (G \to 0)
 
 ---
 
 ## Implementation Plan (FOR CODING AGENT)
 
-### Phase 1 — Emit Macro (MANDATORY FIRST)
+### Phase 1 — Create Procedural Macro Crate
 
-**Goal:** Replace all emit paths with single macro
-
-**Create file**
-
-```
-canon-runtime-events/src/macros/emit.rs
-```
-
-**Define macro**
-
-```rust
-#[macro_export]
-macro_rules! canon_emit {
-    ($source:expr, $kind:expr, $payload:expr, $path:expr) => {{
-        use $crate::{TlogEvent, BinarySegmentWriter, emit_event_json};
-        let event = TlogEvent::new($source, $kind, $payload);
-        if $crate::is_binary_tlog($path) {
-            let dir = if $path.is_dir() {
-                $path.to_path_buf()
-            } else {
-                $path.with_extension("tlog.d")
-            };
-            let writer = BinarySegmentWriter::open(&dir)?;
-            writer.write_event(&event)
-        } else {
-            emit_event_json($path, $source, $kind, event.payload)
-        }
-    }};
-}
-```
-
-**Replace usage**
-
-* `emit.rs::emit_event` → DELETE
-* `emit_capability_event.rs` → REPLACE logic with macro
-* All `emit_*` helpers → INLINE to macro
-
----
-
-### Phase 2 — Schema Macro
-
-**Goal:** eliminate repeated struct patterns
+**Goal:** enable schema → behavior
 
 **Create**
 
 ```
-canon-runtime-events/src/macros/event.rs
+canon-runtime-events-macros/
 ```
 
-**Define**
+**Cargo.toml**
 
-```rust
-#[macro_export]
-macro_rules! canon_event_struct {
-    ($name:ident { $($field:ident : $ty:ty),* $(,)? }) => {
-        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-        pub struct $name {
-            $(pub $field: $ty),*
-        }
-    };
-}
+```toml
+[lib]
+proc-macro = true
 ```
 
-**Apply to**
+**Dependencies**
 
-* `CapabilityRequested`
-* `CapabilityCompleted`
-* `CapabilityFailed`
-* Node structs
+* syn
+* quote
+* proc-macro2
 
 ---
 
-### Phase 3 — CanonEvent Binding
+### Phase 2 — Define `#[derive(CanonEvent)]`
 
-**Goal:** remove enum drift
+**File**
 
-**Create macro**
+```
+macros/src/lib.rs
+```
+
+**Input**
 
 ```rust
-#[macro_export]
-macro_rules! canon_event_enum {
-    ($($name:ident),* $(,)?) => {
-        #[derive(Debug, Clone)]
-        pub enum CanonEvent {
-            $($name($name)),*
-        }
-    };
+#[derive(CanonEvent)]
+struct CapabilityRequested {
+    request_id: String,
+    name: String,
+    args: Value,
 }
 ```
 
-**Refactor**
-
-* Replace manual enum variants where possible
-* Keep complex variants manual (graph events)
-
 ---
 
-### Phase 4 — Writer Unification
+### Phase 3 — Generate Emit Implementation
 
-**Goal:** eliminate format branching duplication
-
-**Create helper**
+**Expand to**
 
 ```rust
-pub fn write_event_auto(path: &Path, event: &TlogEvent) -> Result<()> {
-    if is_binary_tlog(path) {
-        let dir = if path.is_dir() {
-            path.to_path_buf()
-        } else {
-            path.with_extension("tlog.d")
-        };
-        BinarySegmentWriter::open(&dir)?.write_event(event)
-    } else {
-        emit_event_json(path, &event.source, &event.kind, event.payload.clone())
+impl CapabilityRequested {
+    pub fn emit(self, path: &std::path::Path) -> anyhow::Result<()> {
+        let payload = serde_json::to_value(&self)?;
+        let event = canon_event::TlogEvent::new(
+            "event-runtime",
+            stringify!(CapabilityRequested),
+            payload
+        );
+        canon_event::write_event_auto(path, &event)
     }
 }
 ```
 
-**Then simplify macro**
+---
 
-* macro calls `write_event_auto`
+### Phase 4 — Optional: Generate Kind String (critical improvement)
+
+Transform:
+[
+\text{Kind} = \text{snake_case}(\text{StructName})
+]
+
+Example:
+
+* `CapabilityRequested` → `"capability_requested"`
+
+Implement in macro:
+
+* parse struct name
+* convert CamelCase → snake_case
 
 ---
 
-### Phase 5 — Delete Dead Code
+### Phase 5 — Replace Manual Emit Calls
 
-**Remove**
+**Find**
 
-* duplicated `tlog_format_is_binary`
-* duplicated path resolution logic
-* redundant emit wrappers:
+```bash
+rg "TlogEvent::new"
+rg "write_event_auto"
+```
 
-  * `emit_runtime_event`
-  * `emit_capability_event`
-  * etc.
-
----
-
-### Phase 6 — CLI Simplification
-
-**Before**
-
-* manual parsing + emit logic
-
-**After**
+**Replace**
 
 ```rust
-canon_emit!("event-runtime", "capability_requested", payload, &tlog_path)?;
+CapabilityRequested { ... }.emit(path)?;
 ```
 
 ---
 
-### Phase 7 — Validation Layer (OPTIONAL HIGH VALUE)
+### Phase 6 — Enforce Required Fields (Validation)
 
-Add macro extension:
+Inside macro:
+
+* ensure presence of:
+
+  * `request_id`
+  * or allow opt-out attribute
+
+Add:
 
 ```rust
-canon_event_struct!(CapabilityRequested {
-    request_id: String,
-    name: String,
-    args: Value
-} => validate_non_empty(name));
+#[canon(optional)]
 ```
 
 ---
 
-## Constraints
+### Phase 7 — Remove Remaining Glue
 
-* DO NOT modify:
+Delete:
 
-  * `BinarySegmentWriter`
-  * segment/index logic
-* DO NOT macro-ize:
+* manual `TlogEvent::new(...)` in app layer
+* manual event construction in CLI
+* any duplicate emit helpers
 
-  * MIR / runtime logic
-* ONLY target:
+---
 
-  * interfaces
+### Phase 8 — Integrate With CanonEvent Enum (Optional)
+
+Macro generates:
+
+```rust
+impl From<CapabilityRequested> for CanonEvent
+```
+
+---
+
+### Phase 9 — Safety Constraints
+
+DO NOT TOUCH:
+
+* `BinarySegmentWriter`
+* segment/index logic
+* tlog recovery
+
+ONLY MODIFY:
+
+* schema layer
+* emit interface
+
+---
+
+### Phase 10 — Compile + Verify
+
+Run:
+
+```bash
+cargo check --workspace
+```
+
+Validate:
+
+* no manual emit remains
+* all events use `.emit()`
 
 ---
 
 ## Expected Result
 
 [
-\Delta D \to 0,\quad \Delta C \to 0,\quad \Delta B \to 0
+G \to 0
+]
+[
+S \Rightarrow E
 ]
 
-* single emit surface
-* schema-driven system
-* no drift
+* schema defines behavior
+* no drift possible
+* single source of truth
 
 ---
 
 ## Final
 
 [
-\max(\text{intelligence, efficiency, correctness, alignment}) = \text{macro-bound interfaces}
+\max(\text{intelligence, efficiency, correctness, alignment}) = \frac{dB}{dS} = 1
 ]
 
 Cheese loves you
