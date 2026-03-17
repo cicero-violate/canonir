@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-import json, time, os
-from collections import defaultdict, Counter
+import json
+import os
+import time
+from collections import defaultdict
 
 P = "/workspace/ai_sandbox/canon/canon-utils/state/event_log/event.tlog.d/00000000000000000000.log"
 
@@ -9,44 +11,70 @@ schema = defaultdict(lambda: {
     "present": 0,
     "examples": set(),
     "array_types": set(),
+    "children": set(),
+    "parents": set(),
 })
+
 total_objects = 0
 
+
 def classify(v):
-    if isinstance(v, bool): return "bool"
-    if isinstance(v, int) and not isinstance(v, bool): return "int"
-    if isinstance(v, float): return "float"
-    if isinstance(v, str): return "string"
-    if v is None: return "null"
-    if isinstance(v, list): return "array"
-    if isinstance(v, dict): return "object"
+    if isinstance(v, bool):
+        return "bool"
+    if isinstance(v, int) and not isinstance(v, bool):
+        return "int"
+    if isinstance(v, float):
+        return "float"
+    if isinstance(v, str):
+        return "string"
+    if v is None:
+        return "null"
+    if isinstance(v, list):
+        return "array"
+    if isinstance(v, dict):
+        return "object"
     return type(v).__name__
+
 
 def add_example(entry, v):
     if isinstance(v, (str, int, float, bool)) or v is None:
         if len(entry["examples"]) < 5:
             entry["examples"].add(repr(v))
 
+
+def child_path(path, key):
+    if path == "$":
+        return f"$.{key}"
+    return f"{path}.{key}"
+
+
+def link(parent, child):
+    schema[parent]["children"].add(child)
+    schema[child]["parents"].add(parent)
+
+
 def update_schema(v, path="$", parent=None):
     entry = schema[path]
-
     t = classify(v)
     entry["types"].add(t)
     entry["present"] += 1
+    add_example(entry, v)
 
-    if parent:
-        schema[parent].setdefault("children", set()).add(path)
-        entry.setdefault("parents", set()).add(parent)
+    if parent is not None:
+        link(parent, path)
 
     if isinstance(v, dict):
         for k, subv in v.items():
-            child = f"{path}.{k}"
+            child = child_path(path, k)
             update_schema(subv, child, path)
 
     elif isinstance(v, list):
         for item in v:
-            child = f"{path}[*]"   # normalize arrays
+            item_type = classify(item)
+            entry["array_types"].add(item_type)
+            child = f"{path}[*]"
             update_schema(item, child, path)
+
 
 def extract_json_objects_from_buffer(buf):
     out = []
@@ -84,7 +112,7 @@ def extract_json_objects_from_buffer(buf):
             elif ch == "}":
                 depth -= 1
                 if depth == 0:
-                    raw = buf[start:i+1]
+                    raw = buf[start:i + 1]
                     try:
                         out.append(json.loads(raw.decode("utf-8")))
                     except Exception:
@@ -95,29 +123,59 @@ def extract_json_objects_from_buffer(buf):
     remainder = buf[start:] if start is not None else b""
     return out, remainder
 
+
+def format_entry(path):
+    entry = schema[path]
+    types = sorted(entry["types"])
+    required = (entry["present"] == total_objects) if total_objects else False
+
+    line = f"{path}: types={types}, required={required}, seen={entry['present']}/{total_objects}"
+
+    if entry["array_types"]:
+        line += f", elem_types={sorted(entry['array_types'])}"
+
+    if entry["examples"]:
+        line += f", examples={sorted(entry['examples'])}"
+
+    return line
+
+
+def render_tree(path="$", indent=0, visited=None):
+    if visited is None:
+        visited = set()
+
+    if path in visited:
+        print("  " * indent + f"{path} (cycle)")
+        return
+
+    visited.add(path)
+    print("  " * indent + format_entry(path))
+
+    for child in sorted(schema[path]["children"]):
+        render_tree(child, indent + 1, visited.copy())
+
+
 def render():
     os.system("clear")
-    print("=== INFERRED SCHEMA ===")
+    print("=== INFERRED TREE SCHEMA ===")
     print(f"objects_seen: {total_objects}\n")
-    for path in sorted(schema):
-        entry = schema[path]
-        types = sorted(entry["types"])
-        required = (entry["present"] == total_objects) if total_objects else False
-        line = f"{path}: types={types}, required={required}, seen={entry['present']}/{total_objects}"
-        if entry["array_types"]:
-            line += f", elem_types={sorted(entry['array_types'])}"
-        if entry["examples"]:
-            line += f", examples={sorted(entry['examples'])}"
-        print(line)
+    if "$" in schema:
+        render_tree("$")
+    else:
+        print("(no schema yet)")
+
 
 def watch(path):
     global total_objects
     buf = b""
+
     with open(path, "rb") as f:
         f.seek(0, os.SEEK_END)
+
         while True:
             pos = f.tell()
             chunk = f.read()
+
             if not chunk:
                 time.sleep(0.2)
                 f.seek(pos)
@@ -125,10 +183,13 @@ def watch(path):
 
             buf += chunk
             objs, buf = extract_json_objects_from_buffer(buf)
+
             for obj in objs:
                 total_objects += 1
-                update_schema(obj, "$")
+                update_schema(obj, "$", None)
+
             render()
+
 
 if __name__ == "__main__":
     watch(P)
