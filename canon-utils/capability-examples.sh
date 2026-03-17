@@ -236,4 +236,10 @@ emit "bash" '{
   "cmd": "cd /workspace/ai_sandbox/canon && git diff HEAD -- canon-utils/start.sh | head -20"
 }'
 
+cargo run -p canon-runtime-events --bin emit_capability_event -- \
+  --tlog /workspace/ai_sandbox/canon/state/event_log/event.tlog.d \
+  --capability llm.call \
+  --args '{"prompt":"hello","raw":true}'
+
+
 echo "done."
