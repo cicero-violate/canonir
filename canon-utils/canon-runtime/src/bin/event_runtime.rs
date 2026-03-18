@@ -1,9 +1,9 @@
 use anyhow::{anyhow, Result};
-use canon_kernel::bootstrap::{bootstrap_config, new_prompt_registry};
-use canon_kernel::consumers::agent::AgentConsumer;
-use canon_kernel::consumers::capability_executor::CapabilityExecutor;
-use canon_kernel::consumers::llm_executor::LlmCapabilityHandler;
-use canon_kernel::{register_default_capabilities, EventRuntime};
+use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry};
+use canon_runtime::consumers::agent::AgentConsumer;
+use canon_runtime::consumers::capability_executor::CapabilityExecutor;
+use canon_runtime::consumers::llm_executor::LlmCapabilityHandler;
+use canon_runtime::{register_default_capabilities, EventRuntime};
 use canon_editor::EditConsumer;
 use canon_event_store::detect_tlog_format;
 use canon_event_store::read_any_events_from_path_with_start_seq;
