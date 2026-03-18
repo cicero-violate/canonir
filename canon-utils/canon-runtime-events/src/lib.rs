@@ -13,7 +13,7 @@ pub mod macros;
 /// ```ignore
 /// impl_rustc_consumer!(MyConsumer, EventMask::ALL, handle_event);
 /// ```
-#[macro_export]
+#[macro_export] // TODO() need to remove this
 macro_rules! impl_rustc_consumer {
     ($type:ty, $mask:expr, $handler:ident) => {
         impl $crate::RustcEventConsumer for $type {
