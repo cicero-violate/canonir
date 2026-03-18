@@ -8,8 +8,6 @@ pub struct EventMessage {
 }
 
 pub struct ConsumerEntry {
-    #[allow(dead_code)]
-    pub name: String,
     pub filter: EventFilter,
     pub sender: Sender<EventMessage>,
 }
