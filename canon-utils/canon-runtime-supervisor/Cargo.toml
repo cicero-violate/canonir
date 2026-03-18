@@ -7,9 +7,9 @@ edition = "2021"
 path = "src/lib.rs"
 name = "canon_supervisor"
 
-[[bin]]
-name = "supervisor"
-path = "src/bin/supervisor.rs"
+# [[bin]]
+# name = "supervisor"
+# path = "src/bin/supervisor.rs"
 
 [dependencies]
 anyhow.workspace = true
