@@ -2,6 +2,7 @@ use crate::bootstrap::PromptRegistryHandle;
 use canon_agent::config::CapabilityConfig;
 use canon_llm::endpoint_worker;
 use canon_llm::llm;
+use canon_llm::ws_server
 use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityHandler};
 use canon_event::{CanonEvent, EventEmitterHandle, canon_emit};
 use serde_json::json;
