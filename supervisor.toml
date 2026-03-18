@@ -8,7 +8,7 @@ bin  = "target/debug/canon-runtime"
 args = ["--tlog", "/workspace/ai_sandbox/canon/state/event_log/event.tlog.d"]
 restart = "kill"
 crate_name = "canon-runtime"
-# depends_on = ["canon-event", "canon-planner"]
+depends_on = ["canon-event", "canon-planner"]
 [process.env]
 CANON_REPORTS_TLOG = "/workspace/ai_sandbox/canon/state/event_log/event.tlog.d"
 CANON_REPORTS_OUT  = "/workspace/ai_sandbox/canon/state/reports_out"
