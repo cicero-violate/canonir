@@ -2,7 +2,7 @@ use anyhow::Result;
 use canon_event::TlogEvent;
 use std::fs;
 use std::path::Path;
-
+//
 const MAGIC: u32 = 0x544C4F47; // "TLOG"
 
 fn read_u32(buf: &[u8]) -> u32 {
@@ -28,7 +28,7 @@ pub fn read_binary_events(path: &Path) -> Result<Vec<TlogEvent>> {
         }
         match serde_json::from_str::<TlogEvent>(trimmed) {
             Ok(e) => events.push(e),
-            Err(_) => break,
+            Err(_) => continue,
         }
     }
     Ok(events)
@@ -74,7 +74,7 @@ pub fn read_binary_events_from_segment_with_start_seq(
         }
         match serde_json::from_str::<TlogEvent>(trimmed) {
             Ok(e) => events.push(e),
-            Err(_) => break,
+            Err(_) => continue,
         }
     }
     Ok(events)
