@@ -18,6 +18,7 @@ canon_event = { package = "canon-runtime-events", path = "../canon-runtime-event
 canon_event_store = { package = "canon-storage-eventlog", path = "../canon-storage-eventlog" }
 canon_capability = { package = "canon-capability", path = "../canon-capability" }
 canon_supervisor = { package = "canon-runtime-supervisor", path = "../canon-runtime-supervisor" }
+canon_llm = { package = "canon-runtime-supervisor", path = "../canon-runtime-supervisor" }
 canon_agent = { package = "canon-agent", path = "../canon-agent" }
 canon_analysis = { package = "canon-tools-analysis", path = "../canon-tools-analysis" }
 canon_editor = { package = "canon-tools-editor", path = "../canon-tools-editor" }
