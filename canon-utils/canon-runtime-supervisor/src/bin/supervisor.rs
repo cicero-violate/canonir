@@ -1,5 +1,5 @@
 use anyhow::Result;
-// use canon_builder::run_binary_supervisor;
+use canon_runtime_supervisor::binary_supervisor::run_binary_supervisor;
 use std::path::Path;
 
 fn main() -> Result<()> {
