@@ -1,7 +1,7 @@
 use crate::bootstrap::PromptRegistryHandle;
 use canon_agent::config::CapabilityConfig;
-use canon_agent::endpoint_worker;
-use canon_agent::llm;
+use canon_llm::endpoint_worker;
+use canon_llm::llm;
 use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityHandler};
 use canon_event::{CanonEvent, EventEmitterHandle, canon_emit};
 use serde_json::json;
@@ -195,6 +195,6 @@ impl CapabilityHandler for LlmCapabilityHandler {
         }).is_err() {
             return Err(anyhow::anyhow!("llm executor worker channel closed"));
         }
-        Ok(CapabilityExecutionResult::NoOp)
+        Ok(CapabilityExecutionResult::Deferred)
     }
 }
