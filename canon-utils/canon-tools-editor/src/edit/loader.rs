@@ -5,6 +5,7 @@ use crate::edit::oracle::StructuralEditOracleApi;
 use crate::symbol_index::SymbolIndex;
 use crate::edit::symbol_id::normalize_symbol_id;
 use crate::structured::{EditOp, FieldMutation, SymbolHandle, SymbolKind};
+use canon_event::canon_emit;
 use anyhow::{anyhow, Result};
 use proc_macro2::Span;
 use std::collections::{HashMap, HashSet};
@@ -59,17 +60,30 @@ impl ProjectEditor {
 
         let module_files: HashMap<String, PathBuf> = analysis.module_files.clone();
 
+        // Rebuild module file mapping from AST (missing stage)
+        let mut rebuilt_module_files = module_files.clone();
+        for (file, ast) in &parsed_files {
+            index_module_files(ast, file, "crate", &mut rebuilt_module_files);
+        }
+
         // Rebuild handles + module_files using best module path per file.
         registry.handles.clear();
         registry.module_files.clear();
-        registry.module_files = module_files.clone();
+        registry.module_files = rebuilt_module_files;
         for (file, ast) in &parsed_files {
             let candidates = analysis.file_modules.get(file).cloned().unwrap_or_default();
-            let module_path = if candidates.is_empty() {
-                module_path_from_file(&source_root, file)?
-            } else {
-                select_best_module_path(&candidates)
-            };
+            if candidates.is_empty() {
+                canon_emit!(
+                    emitter;
+                    "editor.loader",
+                    "no_candidates",
+                    serde_json::json!({
+                        "file": file,
+                        "reason": "no modules found"
+                    })
+                );
+            }
+            let module_path = module_path_for_file(&registry.module_files, &source_root, file)?;
             if ast.items.is_empty() {
                 if let Some(content) = registry.sources.get(file) {
                     index_file_symbols_by_text(content, file, &module_path, &mut registry.handles);
@@ -268,7 +282,6 @@ pub(crate) fn insert_handle(file: &Path, module_path: &str, ident: &syn::Ident, 
     handles.insert(symbol_id, SymbolHandle { file: file.to_path_buf(), module_path: module_path.to_string(), name: ident.to_string(), kind });
 }
 
-#[allow(dead_code)]
 fn index_module_files(ast: &syn::File, file: &Path, module_path: &str, module_files: &mut HashMap<String, PathBuf>) {
     let base_dir = file.parent().unwrap_or_else(|| Path::new(""));
     for item in &ast.items {
@@ -322,7 +335,6 @@ fn index_module_files(ast: &syn::File, file: &Path, module_path: &str, module_fi
     }
 }
 
-#[allow(dead_code)]
 fn module_path_attr_value(item_mod: &ItemMod) -> Option<String> {
     for attr in &item_mod.attrs {
         if !attr.path().is_ident("path") {
@@ -336,7 +348,6 @@ fn module_path_attr_value(item_mod: &ItemMod) -> Option<String> {
     None
 }
 
-#[allow(dead_code)]
 fn module_path_for_file(module_files: &HashMap<String, PathBuf>, source_root: &Path, file: &Path) -> Result<String> {
     let candidates = module_paths_for_file(module_files, file);
     if candidates.is_empty() {
@@ -345,7 +356,6 @@ fn module_path_for_file(module_files: &HashMap<String, PathBuf>, source_root: &P
     Ok(select_best_module_path(&candidates))
 }
 
-#[allow(dead_code)]
 fn module_paths_for_file(module_files: &HashMap<String, PathBuf>, file: &Path) -> Vec<String> {
     let file_canon = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
     module_files
