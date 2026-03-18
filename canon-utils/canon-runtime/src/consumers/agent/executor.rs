@@ -2,7 +2,7 @@ use canon_agent::task_graph::TaskGraph;
 use canon_agent::decompose::DecomposeNodeType;
 use canon_agent::task_graph::TaskNode;
 use serde_json::json;
-//
+
 pub(super) fn capability_name_for_node(node: &TaskNode) -> Option<&'static str> {
     node.required_capabilities.iter().find_map(|cap| cap.registry_name())
         .or_else(|| {
