@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use canon_agent::config::CapabilityConfig;
+use canon_llm::config::CapabilityConfig;
 use canon_event_store::read_any_events_from_path;
 use canon_event_store::read_any_events_from_path_with_start_seq;
 use canon_event::canon_emit;
