@@ -56,37 +56,6 @@ impl ProcessManager {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub fn restart(&mut self, cfg: &ProcessConfig, log_root: Option<&Path>) -> Result<()> {
-        let resume = matches!(cfg.restart, RestartStrategy::Drain);
-        if let Some(mut child) = self.children.remove(&cfg.name) {
-            let payload = wrap_event(
-                "process_restarted",
-                serde_json::json!({
-                    "name": cfg.name,
-                    "strategy": format!("{:?}", cfg.restart),
-                }),
-            );
-            let tlog_path = resolve_tlog_path(None, None);
-            let _ = canon_emit!("canon-supervisor", "supervisor_event", payload, &tlog_path);
-            match cfg.restart {
-                RestartStrategy::Kill => {
-                    terminate_child(&mut child, &cfg.name, cfg.drain_timeout_ms)?;
-                }
-                RestartStrategy::Drain => {
-                    if let Some(root) = log_root {
-                        write_recovery_signal(root);
-                    }
-                    if !wait_for_exit(&mut child, &cfg.name, cfg.drain_timeout_ms) {
-                        let _ = child.kill();
-                    }
-                }
-            }
-        }
-        self.spawn(cfg, resume)?;
-        Ok(())
-    }
-
     pub fn shutdown_all(&mut self, timeout_ms: u64) {
         for (name, mut child) in self.children.drain() {
             let payload = wrap_event(
@@ -137,17 +106,5 @@ fn send_sigterm(child: &Child) {
     let pid = child.id() as i32;
     unsafe {
         libc::kill(pid, libc::SIGTERM);
-    }
-}
-
-#[allow(dead_code)]
-fn write_recovery_signal(log_root: &Path) {
-    let payload = serde_json::json!({ "reason": "supervisor_restart" });
-    let path = log_root.join("recovery_signal.json");
-    if let Ok(text) = serde_json::to_string_pretty(&payload) {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(path, text);
     }
 }
