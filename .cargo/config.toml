@@ -1,12 +1,15 @@
 [build]
-rustc-wrapper = "/workspace/ai_sandbox/canon_rustc/target/debug/canon-rustc"
+rustc-wrapper = "/workspace/ai_sandbox/canon_rustc/target/release/canon-rustc"
 # rustflags = ["-Awarnings"]
 rustflags = [
 "-Dwarnings",
 "-Dunused",
 "-Dunused-attributes",
 "-Dunused-imports",
-"-Dunused-variables"
+"-Dunused-variables",
+"-Ddead-code",
+"-Dclippy::allow_attributes",
+"-Dclippy::allow_attributes_without_reason"
 ]
 
 [target.'cfg(all())']
