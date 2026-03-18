@@ -1,14 +1,14 @@
-[watcher]
+0;2501;1c[watcher]
 debounce_ms = 300
 watch_dirs = ["canon-utils", "canon-agent-prompts"]
 
 [[process]]
-name = "canon-kernel"
-bin  = "target/debug/canon-kernel"
+name = "canon-runtime"
+bin  = "target/debug/canon-runtime"
 args = ["--tlog", "/workspace/ai_sandbox/canon/state/event_log/event.tlog.d"]
 restart = "kill"
-crate_name = "canon-kernel"
-depends_on = ["canon-event", "canon-planner"]
+crate_name = "canon-runtime"
+# depends_on = ["canon-event", "canon-planner"]
 [process.env]
 CANON_REPORTS_TLOG = "/workspace/ai_sandbox/canon/state/event_log/event.tlog.d"
 CANON_REPORTS_OUT  = "/workspace/ai_sandbox/canon/state/reports_out"
