@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 anyhow.workspace = true
 # canon_builder = { package = "canon-builder", path = "../canon-builder" }
+notify = "6"
+signal-hook = "0.3"
 
 [[bin]]
 name = "canon-runtime-supervisor"
