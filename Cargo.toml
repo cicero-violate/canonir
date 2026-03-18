@@ -18,10 +18,10 @@ members = [
   "canon-utils/canon-types",
   "canon-utils/canon-capability",
   "canon-utils/canon-runtime-supervisor",
-  "canon-utils/canon-planning-agent",
+  "canon-utils/canon-agent",
   "canon-utils/canon-planning",
   "canon-utils/canon-storage-graph",
-  "canon-utils/canon-tools-analysis",
+  "canon-utils/canon-tools-analysis", "canon-utils/canon-llm-runtime",
 ]
 exclude = [
   "test_projects",
