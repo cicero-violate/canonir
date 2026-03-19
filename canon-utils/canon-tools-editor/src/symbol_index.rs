@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-
+//
 pub struct SymbolIndex {
     span_index: HashMap<String, HashMap<PathBuf, Vec<SpanRange>>>,
     symbol_kinds: HashMap<String, String>,
