@@ -1,5 +1,5 @@
 use canon_types::{EventDelta, RustcEvent, RustcState};
-
+//
 #[derive(Debug, Default)]
 pub struct GraphConsumer {
     pub node_count: usize,
