@@ -1,27 +1,17 @@
 # Agent Goal
 
-Diagnose and fix **one** concrete build error in emitted sources so that the next run shows **fewer** errors.
+Create a new test Rust project in `/workspace/ai_sandbox/canon`.
 
-Primary command:
-```
-cargo run --bin orchestration -- --all
-```
+## Target
+- Project path: `/workspace/ai_sandbox/canon/test_rust_project`
+- Type: binary crate
 
-## Constraints
-- You may modify code under:
-  - `/workspace/ai_sandbox/canon/canon-capture`
-  - `/workspace/ai_sandbox/canon/canon-projection`
-  - `/workspace/ai_sandbox/canon/canon`
-- Do not edit files outside those roots.
-- Focus on `emit/repomap/src/*.rs` errors first.
+## Requirements
+- Use `cargo new` to initialize the crate.
+- Ensure `cargo build` succeeds in the new project directory.
+- Add a short `README.md` describing how to build and run the project.
 
-## Required execution order
-1. Run the orchestration command and capture diagnostics.
-2. Read at least one failing emitted file directly.
-3. Apply a single targeted fix (write_file or apply_patch) that addresses a specific diagnostic.
-4. Re-run orchestration and confirm the **error count decreases**.
-
-## Structural requirements
-- The first node must be the orchestration command.
-- The second node must read a failing emitted file.
-- The third node must be a mutate node (apply_patch or write_file) tied to a specific error message.
+## Execution order
+1. Create the crate with `cargo new`.
+2. Build the crate (`cargo build`) in that directory.
+3. Write the `README.md`.
