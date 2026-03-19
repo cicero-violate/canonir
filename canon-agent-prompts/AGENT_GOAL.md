@@ -1,6 +1,6 @@
 # Agent Goal
 
-Create a new test Rust project in `/workspace/ai_sandbox/canon`.
+Create another new test Rust project in `/workspace/ai_sandbox/canon`.
 
 ## Target
 - Project path: `/workspace/ai_sandbox/canon/test_rust_project`
