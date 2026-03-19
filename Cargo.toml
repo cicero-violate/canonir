@@ -18,8 +18,11 @@ members = [
   "canon-utils/canon-types",
   "canon-utils/canon-capability",
   "canon-utils/canon-runtime-supervisor",
-  "canon-utils/canon-agent",
-  "canon-utils/canon-planning",
+  "canon-utils/canon-observe",
+  "canon-utils/canon-plan",
+  "canon-utils/canon-act",
+  "canon-utils/canon-verify",
+  "canon-utils/canon-reward",
   "canon-utils/canon-storage-graph",
   "canon-utils/canon-tools-analysis", "canon-utils/canon-llm-runtime",
   "canon-utils/canon-builder",
@@ -60,3 +63,4 @@ tokio-tungstenite = "0.20"
 toml = "0.8"
 walkdir = "2.5"
 z3 = { version = "0.12", default-features = false }
+uuid = { version = "1", features = ["v4"] }
