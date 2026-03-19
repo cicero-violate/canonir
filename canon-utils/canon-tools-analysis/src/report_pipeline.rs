@@ -47,6 +47,8 @@ use canon_graph::health::system_health::{write_system_health_report, current_tim
 use crate::semantics::semantic_features::extract_node_features;
 use crate::semantics::semantic_signature::compute_signatures;
 use crate::semantics::semantic_clustering::cluster_dbscan_like;
+use crate::infer_schema_event::write_event_schema_report;
+use crate::llm_report::write_llm_reports_from_tlog;
 use canon_types::{RustcEvent, ReportLayout};
 use canon_event_store::{
     apply_rustc_event_to_graph, extract_rustc_event, read_any_events_from_path,
@@ -199,6 +201,16 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
     }
     if let Err(err) = write_tlog_integrity_report(tlog_path, &metrics_dir) {
         write_error_json(&metrics_dir.join("tlog_integrity.json"), "tlog_integrity", &err)?;
+    }
+    if let Err(err) = write_event_schema_report(tlog_path, &analysis_dir) {
+        write_error_json(&analysis_dir.join("event_schema.json"), "event_schema", &err)?;
+    }
+    let reports_root = std::env::var("CANON_REPORTS_OUT")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/workspace/ai_sandbox/canon/state/reports_out"));
+    if let Err(err) = write_llm_reports_from_tlog(tlog_path, &reports_root) {
+        write_error_json(&analysis_dir.join("llm_reports.json"), "llm_reports", &err)?;
     }
     if let Err(err) = write_system_health_report(tlog_path, &metrics_dir) {
         write_error_json(&metrics_dir.join("system_health.json"), "system_health", &err)?;
@@ -544,10 +556,15 @@ fn generate_reports_from_parts(
     })
     .collect();
 
+    let mut had_errors = false;
     for result in results {
         if let Err(err) = result {
+            had_errors = true;
             write_error_json(&analysis_dir.join("analysis_errors.json"), "analysis_pipeline", &err)?;
         }
+    }
+    if !had_errors {
+        let _ = fs::remove_file(analysis_dir.join("analysis_errors.json"));
     }
 
     if let Err(err) = write_graph_health_report(graph_dir, &metrics_dir, &nodes, &edges, &files, &cfg, &callgraph) {
@@ -812,6 +829,12 @@ fn write_graph_artifacts(
     edges: &[CodeGraphEdge],
     files: &[String],
 ) -> Result<(Vec<CodeGraphEdge>, Vec<(u32, u32)>)> {
+    let minimal = std::env::var("CANON_REPORTS_MINIMAL").ok().as_deref() == Some("1");
+    let emit_full = std::env::var("CANON_REPORTS_FULL_CSV")
+        .ok()
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    let emit_full = emit_full && !minimal;
     let mut cfg = extract_cfg_edges(nodes, edges);
     cfg.sort_by(|a, b| {
         a.src
@@ -836,18 +859,28 @@ fn write_graph_artifacts(
     });
 
     emit_nodes_csv(graph_dir, nodes)?;
-    emit_nodes_full_csv(graph_dir, nodes, files)?;
+    if emit_full {
+        emit_nodes_full_csv(graph_dir, nodes, files)?;
+    }
     emit_nodes_raw_jsonl(graph_dir, nodes, files)?;
     emit_edges_csv(graph_dir, edges)?;
-    emit_edges_full_csv(graph_dir, edges, nodes, files)?;
+    if emit_full {
+        emit_edges_full_csv(graph_dir, edges, nodes, files)?;
+    }
     emit_files_txt(graph_dir, files)?;
     emit_cfg_csv(graphs_dir, &cfg)?;
-    emit_cfg_full_csv(graphs_dir, &cfg, nodes, files)?;
+    if emit_full {
+        emit_cfg_full_csv(graphs_dir, &cfg, nodes, files)?;
+    }
     emit_callgraph_csv(graphs_dir, &callgraph, nodes, files)?;
-    emit_callgraph_full_csv(graphs_dir, &callgraph, nodes, files)?;
+    if emit_full {
+        emit_callgraph_full_csv(graphs_dir, &callgraph, nodes, files)?;
+    }
     emit_modulegraph_csv(graphs_dir, &modulegraph, &module_nodes)?;
     emit_typegraph_csv(graphs_dir, &typegraph, nodes, files)?;
-    emit_typegraph_full_csv(graphs_dir, &typegraph, nodes, files)?;
+    if emit_full {
+        emit_typegraph_full_csv(graphs_dir, &typegraph, nodes, files)?;
+    }
 
     Ok((cfg, callgraph))
 }

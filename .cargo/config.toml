@@ -26,7 +26,7 @@ CANON_TLOG_DUAL_WRITE = "0"
 
 CANON_REPORTS_TLOG="/workspace/ai_sandbox/canon/state/event_log/event.tlog.d"
 CANON_REPORTS_OUT="/workspace/ai_sandbox/canon/state/reports_out"
-
+CANON_EVENT_EXECUTION="1"
 
 # CANON_REPORTS_TLOG = "/workspace/ai_sandbox/canon/kernel/logs/graph.tlog"
 # CANON_REPORTS_OUT = "/workspace/ai_sandbox/canon/kernel/graph"

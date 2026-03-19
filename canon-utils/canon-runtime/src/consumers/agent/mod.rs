@@ -156,6 +156,9 @@ impl AgentWorkerState {
                     if let Some(content) = payload.get("content").and_then(|v| v.as_str()) {
                         self.agent_goal = Some(content.to_string());
                     }
+                    let _ = self.plan_if_stalled();
+                    self.schedule_next();
+                    self.emit_state();
                 }
             }
         }
@@ -257,7 +260,7 @@ impl AgentWorkerState {
     }
 
     fn apply_result_with_options(&mut self, event: CanonEvent, plan_and_persist: bool) {
-        let (request_id, capability_name, success, stdout, stderr, result_value) = match event {
+        let (request_id, capability_name, mut success, stdout, mut stderr, mut result_value) = match event {
             CanonEvent::CapabilityCompleted(payload) => {
                 let success = payload.result.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
                 let stdout = payload.result.get("stdout").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -270,6 +273,14 @@ impl AgentWorkerState {
             ),
             _ => return,
         };
+        if capability_name == "llm.call" && success {
+            Self::maybe_parse_text_payload(&mut result_value);
+        }
+        let parse_failed = capability_name == "llm.call" && success && Self::is_llm_parse_failed(result_value.as_ref());
+        if parse_failed {
+            success = false;
+            stderr = "llm_response_parse_failed".to_string();
+        }
 
         // --- Delta tool-call completion ---
         if let Some((orig_node_id, delta_idx, delta_kind)) = self.delta_to_node.remove(&request_id) {
@@ -324,6 +335,9 @@ impl AgentWorkerState {
             if matches!(node.status, NodeStatus::Completed | NodeStatus::Failed) {
                 return;
             }
+        }
+        if capability_name == "llm.call" && !success {
+            self.handle_llm_parse_failed(&node_id, &request_id, &capability_name, result_value.as_ref());
         }
 
         // --- Executor delta dispatch (check BEFORE emitting completion events) ---
@@ -477,6 +491,163 @@ impl AgentWorkerState {
         }
     }
 
+    fn is_llm_parse_failed(val: Option<&serde_json::Value>) -> bool {
+        let Some(v) = val else { return true };
+        if let Some(obj) = v.as_object() {
+            return obj.len() == 1 && obj.contains_key("text");
+        }
+        false
+    }
+
+    fn maybe_parse_text_payload(result_value: &mut Option<serde_json::Value>) {
+        let Some(v) = result_value.as_ref() else { return };
+        let Some(obj) = v.as_object() else { return };
+        let text = match obj.get("text").and_then(|t| t.as_str()) {
+            Some(t) => t,
+            None => return,
+        };
+        if let Some(parsed) = Self::parse_json_from_text(text) {
+            *result_value = Some(parsed);
+        }
+    }
+
+    fn parse_json_from_text(text: &str) -> Option<serde_json::Value> {
+        let s = Self::strip_json_fence_local(text.trim());
+        serde_json::from_str::<serde_json::Value>(s).ok()
+    }
+
+    fn strip_json_fence_local(s: &str) -> &str {
+        let trimmed = s.trim_start();
+        let mut ticks = 0usize;
+        for ch in trimmed.chars() {
+            if ch == '`' {
+                ticks += 1;
+            } else {
+                break;
+            }
+        }
+        if ticks >= 3 {
+            let fence = "`".repeat(ticks);
+            let mut inner = trimmed.strip_prefix(&fence).unwrap_or(trimmed).trim_start();
+            if inner.starts_with("json") || inner.starts_with("JSON") {
+                inner = inner[4..].trim_start_matches(['\n', '\r', ' ']).trim_start();
+            }
+            if let Some(close) = inner.rfind(&fence) {
+                return inner[..close].trim();
+            }
+        }
+        for prefix in [
+            "```json\n", "```json\r\n", "```json ", "```json",
+            "```JSON\n", "```JSON\r\n", "```JSON ", "```JSON",
+            "```\n",     "```\r\n",     "```",
+        ] {
+            if let Some(inner) = s.strip_prefix(prefix) {
+                if let Some(close) = inner.rfind("```") {
+                    return inner[..close].trim();
+                }
+            }
+        }
+        s
+    }
+
+    fn handle_llm_parse_failed(
+        &mut self,
+        node_id: &str,
+        request_id: &str,
+        capability_name: &str,
+        result_value: Option<&serde_json::Value>,
+    ) {
+        if let Some(emitter) = &self.emitter {
+            let summary = result_value
+                .and_then(|v| serde_json::to_string(v).ok())
+                .map(|s| truncate_message(&s, 1000))
+                .unwrap_or_else(|| "missing llm result payload".to_string());
+            emitter.emit(CanonEvent::ErrorOccurred(ErrorOccurred {
+                kind: "llm_parse_failed".to_string(),
+                source: "agent-consumer".to_string(),
+                message: "LLM response did not parse as JSON".to_string(),
+                severity: "error".to_string(),
+                context: serde_json::json!({
+                    "request_id": request_id,
+                    "capability": capability_name,
+                    "result_snippet": summary,
+                }),
+                trace_id: None,
+            }));
+        }
+
+        // Retry once with an executor-style prompt (deltas).
+        let retries = self.retry_counts.entry(node_id.to_string()).or_insert(0);
+        if *retries < 1 {
+            *retries += 1;
+            let prompt = if let Some(node) = self.graph.get_node(node_id) {
+                format!(
+                    "Return exactly one fenced ```json block with executor results + deltas. Use read_file/list_dir/read_command/write_file/replace_text/delete_file only.\n\nTASK:\n{}",
+                    node.description
+                )
+            } else {
+                "Return exactly one fenced ```json block with executor results + deltas.".to_string()
+            };
+            let retry_id = format!("retry-{}-{}", node_id, self.last_tick);
+            self.pending.insert(retry_id.clone(), node_id.to_string());
+            if let Some(emit) = &self.emitter {
+                emit.emit(CanonEvent::CapabilityRequested(CapabilityRequested {
+                    request_id: retry_id,
+                    name: "llm.call".to_string(),
+                    args: serde_json::json!({ "prompt": prompt, "raw": true, "role": "exec" }),
+                }));
+            }
+        }
+
+        // Fallback minimal actions: ls, read AGENT_GOAL, run tests.
+        self.dispatch_fallback_tools(node_id);
+    }
+
+    fn dispatch_fallback_tools(&mut self, node_id: &str) {
+        let project_root = "/workspace/ai_sandbox/canon";
+        let goal_path = std::env::var("CANON_AGENT_GOAL_PATH")
+            .ok()
+            .unwrap_or_else(|| "/workspace/ai_sandbox/canon/canon-agent-prompts/AGENT_GOAL.md".to_string());
+        let deltas = vec![
+            serde_json::json!({ "type": "list_dir", "path": project_root }),
+            serde_json::json!({ "type": "read_file", "path": goal_path }),
+            serde_json::json!({ "type": "read_file", "path": format!("{}/Cargo.toml", project_root) }),
+        ];
+
+        let mut idx = 0usize;
+        if !self.executor_state.contains_key(node_id) {
+            let task_description = self.graph.get_node(node_id)
+                .map(|n| n.description.clone())
+                .unwrap_or_default();
+            self.executor_state.insert(node_id.to_string(), ExecutorState {
+                role: "exec".to_string(),
+                task_description,
+                pending_count: deltas.len(),
+                results: Vec::new(),
+            });
+        }
+        for delta in deltas {
+            let kind = delta.get("type").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+            let delta_id = format!("fallback-{}-{}-{}", node_id, idx, self.last_tick);
+            idx += 1;
+            let cap_args = delta_to_cap_args(&delta);
+            self.delta_to_node.insert(delta_id.clone(), (node_id.to_string(), idx - 1, kind.clone()));
+            if let Some(emit) = &self.emitter {
+                emit.emit(CanonEvent::ToolCall(ToolCall {
+                    node_id: node_id.to_string(),
+                    request_id: delta_id.clone(),
+                    kind,
+                    payload: delta.clone(),
+                }));
+                emit.emit(CanonEvent::CapabilityRequested(CapabilityRequested {
+                    request_id: delta_id,
+                    name: "bash".to_string(),
+                    args: cap_args,
+                }));
+            }
+        }
+    }
+
     fn plan_if_stalled(&mut self) -> bool {
         let signals = graph_analysis_compute_graph_signals(&self.graph);
         let features = compute_graph_features_parallel(&self.graph);
@@ -525,7 +696,7 @@ impl AgentWorkerState {
                     description: format!("Graph stalled ({reason}). Analyze current state and propose next steps."),
                     deps: Vec::new(),
                     required_capabilities: vec![PipelineCapability::Llm],
-                    node_type: DecomposeNodeType::Analysis,
+                    node_type: DecomposeNodeType::Render,
                     priority: 1,
                     budget: None,
                     reasoning_trace: Some("AUTO_REPLAN: stalled graph".to_string()),
@@ -556,40 +727,44 @@ impl AgentWorkerState {
         if !update.new_nodes.is_empty() {
             return;
         }
+        let goal_from_fs = read_agent_goal_from_fs();
         let mut description = self.agent_goal.clone()
-            .or_else(|| read_agent_goal_from_fs())
+            .or_else(|| goal_from_fs.clone())
             .unwrap_or_else(|| "Analyse system state and produce initial task decomposition".to_string());
-        if let Some(selection) = load_goal_from_reports(ObjectiveWeights::default(), Some(&self.graph)) {
-            maybe_write_baseline(&selection);
-            if let Ok(payload) = serde_json::to_value(&selection.artifact) {
-                if let Some(emit) = &self.emitter {
-                    emit.emit(CanonEvent::GoalSelected(GoalSelected { payload: payload.clone() }));
-                    emit.emit(CanonEvent::PolicyBaselineUpdated(PolicyBaselineUpdated { payload }));
+        let allow_objectives = self.agent_goal.is_none() && goal_from_fs.is_none();
+        if allow_objectives {
+            if let Some(selection) = load_goal_from_reports(ObjectiveWeights::default(), Some(&self.graph)) {
+                maybe_write_baseline(&selection);
+                if let Ok(payload) = serde_json::to_value(&selection.artifact) {
+                    if let Some(emit) = &self.emitter {
+                        emit.emit(CanonEvent::GoalSelected(GoalSelected { payload: payload.clone() }));
+                        emit.emit(CanonEvent::PolicyBaselineUpdated(PolicyBaselineUpdated { payload }));
+                    }
                 }
-            }
-            let mut goal = goal_raw_with_artifact("", &selection.artifact);
-            let hints = objective_task_hints(&selection.artifact);
-            if !hints.is_empty() {
-                goal.push_str("\n\nTASK_HINTS:\n");
-                for hint in hints {
-                    goal.push_str("- ");
-                    goal.push_str(&hint);
-                    goal.push('\n');
+                let mut goal = goal_raw_with_artifact("", &selection.artifact);
+                let hints = objective_task_hints(&selection.artifact);
+                if !hints.is_empty() {
+                    goal.push_str("\n\nTASK_HINTS:\n");
+                    for hint in hints {
+                        goal.push_str("- ");
+                        goal.push_str(&hint);
+                        goal.push('\n');
+                    }
                 }
+                let report_ctx = report_context_for_artifact(&selection.artifact);
+                if !report_ctx.is_empty() {
+                    goal.push_str("\n\n");
+                    goal.push_str(&report_ctx);
+                }
+                description = format!("{description}\n\n{goal}");
             }
-            let report_ctx = report_context_for_artifact(&selection.artifact);
-            if !report_ctx.is_empty() {
-                goal.push_str("\n\n");
-                goal.push_str(&report_ctx);
-            }
-            description = format!("{description}\n\n{goal}");
         }
         update.new_nodes.push(DecomposeTaskSpec {
             id: "seed_0".to_string(),
             description,
             deps: Vec::new(),
             required_capabilities: vec![PipelineCapability::Llm],
-            node_type: DecomposeNodeType::Analysis,
+            node_type: DecomposeNodeType::Render,
             priority: 1,
             budget: None,
             reasoning_trace: Some("AUTO_SEED: empty graph".to_string()),

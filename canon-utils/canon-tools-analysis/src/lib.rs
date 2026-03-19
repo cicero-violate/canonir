@@ -9,6 +9,8 @@ pub mod report_pipeline;
 pub mod panic_capture;
 pub mod workspace;
 pub mod capabilities;
+pub mod infer_schema_event;
+pub mod llm_report;
 mod report_types;
 mod panic_types;
 

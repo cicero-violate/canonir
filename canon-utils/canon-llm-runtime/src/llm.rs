@@ -21,6 +21,25 @@ pub fn normalize_llm_output(raw: &str) -> Value {
 }
 
 fn strip_json_fence(s: &str) -> &str {
+    let trimmed = s.trim_start();
+    let mut tick_count = 0usize;
+    for ch in trimmed.chars() {
+        if ch == '`' {
+            tick_count += 1;
+        } else {
+            break;
+        }
+    }
+    if tick_count >= 3 {
+        let fence = "`".repeat(tick_count);
+        let mut inner = trimmed.strip_prefix(&fence).unwrap_or(trimmed).trim_start();
+        if inner.starts_with("json") || inner.starts_with("JSON") {
+            inner = inner[4..].trim_start_matches(['\n', '\r', ' ']).trim_start();
+        }
+        if let Some(close) = inner.rfind(&fence) {
+            return inner[..close].trim();
+        }
+    }
     for prefix in [
         "```json\n", "```json\r\n", "```json ", "```json",
         "```JSON\n", "```JSON\r\n", "```JSON ", "```JSON",

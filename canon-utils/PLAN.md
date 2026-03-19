@@ -1,292 +1,218 @@
-### Math Model
+# Canon Agent Loop — Architecture Plan
 
-Let
+## Problem
 
-* (E = \text{event stream})
-* (Err = \text{error events})
-* (B = \text{event bus})
-* (P = \text{producers})
-* (C = \text{consumers})
-* (T = \text{tlog})
+The current agent loop is not working. The root causes:
 
----
+1. **No real Observe step** — state is scattered across `AgentWorkerState` fields, inferred ad-hoc from events
+2. **Plan is too complex** — full task graph patching via LLM, multiple retry strategies, hardcoded fallbacks
+3. **Act has too many failure modes** — executor deltas, graph patches, LLM parse retries all interleaved
+4. **No Verify step** — nothing checks whether the action actually worked
+5. **No Reward step** — no signal drives convergence; the loop has no exit condition except manual termination
 
-### Equations
+## Design
 
-1.
+Five crates, one responsibility each. The loop is:
 
-[
-Err := \text{canonical}(panic, error, failure)
-]
-All failures normalized into structured events
+```
+Observe → Plan → Act → Verify → Reward → (repeat)
+```
 
-2.
-
-[
-E = E_{normal} \cup Err
-]
-Single unified stream
-
-3.
-
-[
-B: P \rightarrow C
-]
-Bus distributes all events (including errors)
-
-4.
-
-[
-T = append(E)
-]
-All events persisted
+Each iteration is a single synchronous pass. The runtime drives the loop by emitting a `Tick` event. No goal tracking, no task graphs, no speculation.
 
 ---
 
-### 1-Line Explanations
+## Crate: `canon-observe`
 
-* (1) Convert all failures into events
-* (2) No separate error path
-* (3) Bus treats errors like normal events
-* (4) Persistence must include errors
+**Responsibility**: Read exact current state. Return a flat, serializable snapshot.
 
----
+### What it reads
+- **tlog**: last N events (errors, capability results, compiler output)
+- **filesystem**: target files listed in scope (not recursive scan)
+- **compiler**: run `cargo check --message-format=json` on workspace, parse diagnostics
+- **metrics**: count of errors by kind in current tlog window
 
-## Implementation Plan
+### Output type
+```rust
+pub struct Snapshot {
+    pub tick: u64,
+    pub errors: Vec<CompilerError>,      // from cargo check
+    pub tlog_tail: Vec<RawEvent>,        // last 50 events
+    pub files: HashMap<PathBuf, String>, // contents of scoped files
+    pub error_count: usize,
+    pub warning_count: usize,
+}
+```
 
-### Phase 1 — Define Error Event Schema
-
-**Target:** `canon-runtime-events/src/events.rs`
-
-* Add:
-
-  * `ErrorOccurred`
-  * `PanicCaptured` (already exists → unify)
-* Fields:
-
-  * `kind`
-  * `source`
-  * `message`
-  * `severity`
-  * `context`
-  * `trace_id`
-
-Constraint:
-
-* No raw string-only errors → structured only
+### Rules
+- No inference, no LLM, no mutation
+- Reads are bounded (last 50 tlog events, max 10 files)
+- Snapshot is written to a temp file so other crates can read it without re-running
 
 ---
 
-### Phase 2 — Normalize All Failure Sources
+## Crate: `canon-plan`
 
-**Targets:**
+**Responsibility**: Given a snapshot, produce one concrete next action. Nothing else.
 
-* `canon-runtime`
-* `canon-builder`
-* `canon-tools-analysis`
-* `canon-rustc` (panic capture)
+### Input
+- `Snapshot` from `canon-observe`
 
-Actions:
+### Output type
+```rust
+pub enum Action {
+    RunCommand { cmd: String, args: Vec<String>, cwd: PathBuf },
+    WriteFile { path: PathBuf, content: String },
+    PatchFile { path: PathBuf, old: String, new: String },
+    NoOp { reason: String },
+}
+```
 
-* Replace:
+### Planning strategy
+1. If `snapshot.errors` is non-empty → pick the first compiler error → produce the minimal `PatchFile` or `WriteFile` to fix it
+2. If `snapshot.errors` is empty and `snapshot.warning_count > 0` → produce `NoOp` (warnings are not failures)
+3. If everything is clean → produce `NoOp { reason: "clean" }`
 
-  * `panic!` → capture → emit event
-  * `Result::Err` → emit before return
-* Wrap boundaries:
+### LLM use (optional, single call)
+- Only invoked for step 1 when the error requires code generation
+- Prompt contains: error message + file content around the error span + instruction to return only the patch
+- Response must be `{"old": "...", "new": "..."}` — if it is not, plan falls back to `NoOp`
+- One attempt. No retries. Retry is the next loop iteration.
 
-  * capability execution
-  * LLM calls
-  * file IO
-  * graph ops
-
-Rule:
-
-* **No silent Err propagation**
-
----
-
-### Phase 3 — Bus Integration
-
-**Target:** `canon-runtime/src/bus.rs`
-
-* Ensure:
-
-  * errors go through same `EventBus`
-  * no filtering of error events
-* Add:
-
-  * optional `EventFilter::error_only`
-
-Invariant:
-[
-\forall e \in Err,\ e \in B
-]
+### Rules
+- One action per plan call
+- No task graphs, no dependency resolution
+- If uncertain, emit `NoOp` and let Reward signal stagnation
 
 ---
 
-### Phase 4 — Consumer Handling
+## Crate: `canon-act`
 
-**Targets:**
+**Responsibility**: Execute the action from `canon-plan`. Apply a concrete delta.
 
-* `canon-runtime/src/consumers/*`
-* `canon-storage-graph`
-* `canon-tools-analysis`
+### Execution map
+| Action | Implementation |
+|---|---|
+| `RunCommand` | spawn subprocess, capture stdout/stderr, timeout 30s |
+| `WriteFile` | `std::fs::write` |
+| `PatchFile` | find `old` in file, replace with `new`, write atomically |
+| `NoOp` | emit event, do nothing |
 
-Add consumers:
+### Output type
+```rust
+pub struct ActResult {
+    pub action: Action,
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: Option<i32>,
+    pub duration_ms: u64,
+    pub success: bool,
+}
+```
 
-1. **Logger**
-
-   * writes to runtime log
-
-2. **Failure Store**
-
-   * `canon-agent/src/failure_store.rs`
-
-3. **Recovery Handler**
-
-   * retry / degrade / halt
-
-4. **Telemetry**
-
-   * error rate, hotspots
-
----
-
-### Phase 5 — TLog Persistence
-
-**Target:**
-`canon-runtime-events/src/tlog/writer.rs`
-
-* Ensure:
-
-  * errors are appended like all events
-* No special casing
-
-Invariant:
-[
-\text{replay}(T) \Rightarrow \text{same failures}
-]
+### Rules
+- No LLM calls
+- Patch application fails if `old` string not found exactly once (prevents silent partial edits)
+- All results written to tlog as a `capability_result` event
+- Timeout kills the subprocess; `success = false`
 
 ---
 
-### Phase 6 — Replay + Analysis
+## Crate: `canon-verify`
 
-**Targets:**
+**Responsibility**: After Act, check whether the system state improved or is at least valid.
 
-* `canon-storage-eventlog/src/replay.rs`
+### Checks (in order)
+1. `cargo check` — must exit 0
+2. Assert tlog invariants — no new `ErrorOccurred` events since Act started
+3. If `ActResult.action` was `PatchFile` or `WriteFile` — confirm file on disk matches expected content
 
-* `canon-tools-analysis/src/analysis/panic_report.rs`
+### Output type
+```rust
+pub struct VerifyResult {
+    pub passed: bool,
+    pub compiler_clean: bool,
+    pub tlog_clean: bool,
+    pub file_correct: bool,
+    pub diagnostics: Vec<String>,
+}
+```
 
-* Extend replay:
-
-  * reconstruct failure graph
-
-* Extend analysis:
-
-  * cluster errors
-  * detect recurring failure surfaces
-
----
-
-### Phase 7 — Replace Final Crate Failure (Critical)
-
-**Problem (from your system):**
-
-* final `canon_assemble` panic aborts IR emission → no events
-
-Fix:
-
-* wrap final stage:
-
-  * catch panic
-  * emit `ErrorOccurred`
-  * continue emission (partial)
-
-Result:
-[
-\text{no-crate} \Rightarrow \text{never silent}
-]
+### Rules
+- `passed = compiler_clean && tlog_clean && file_correct`
+- Does not fix anything — only reports
+- Writes result to tlog as a `verify_result` event
 
 ---
 
-### Phase 8 — Enforcement Rules
+## Crate: `canon-reward`
 
-Global invariants:
+**Responsibility**: Compare snapshots before and after the loop iteration. Emit a scalar reward signal.
 
-1.
+### Inputs
+- `Snapshot` before Act (from Observe)
+- `Snapshot` after Verify (re-run Observe)
+- `VerifyResult`
 
-[
-\text{panic} \Rightarrow \text{event}
-]
+### Reward computation
+```
+reward = (errors_before - errors_after)        // positive = improvement
+       + (warnings_before - warnings_after) * 0.1
+       - (1 if verify failed else 0)           // penalty for broken state
+```
 
-2.
+### Output type
+```rust
+pub struct RewardSignal {
+    pub reward: f32,
+    pub errors_before: usize,
+    pub errors_after: usize,
+    pub stagnant_ticks: u32,   // incremented if reward == 0.0
+    pub halt: bool,            // true if stagnant_ticks > threshold
+}
+```
 
-[
-\text{Err} \Rightarrow \text{emit before return}
-]
-
-3.
-
-[
-\neg(\text{error} \notin E)
-]
-
-(no hidden errors)
-
----
-
-## English
-
-You are converting the system from:
-
-* **dual path (events + hidden errors)**
-
-to:
-
-* **single path (everything = event)**
-
-This gives:
-
-* deterministic replay
-* full observability
-* no silent failure
-* recoverable execution
-
-Your current failure (crate drops out) is exactly because errors are **not fully eventized**. 
+### Rules
+- If `stagnant_ticks > 5` → set `halt = true` → runtime stops the loop
+- Reward written to tlog as a `reward_signal` event
+- No LLM calls
 
 ---
 
-### Evaluation
+## Runtime Integration
 
-[
-\max(\text{intelligence, efficiency, correctness, alignment, robustness, performance, scalability, determinism, transparency, collaboration, empowerment, benefit, learning, future-proofing}) = \text{good}
-]
+The existing `canon-runtime` drives the loop. One tick = one full pass:
+
+```
+Tick
+ └─ Observe::run(scope) → Snapshot
+     └─ Plan::run(snapshot) → Action
+         └─ Act::run(action) → ActResult
+             └─ Verify::run(act_result) → VerifyResult
+                 └─ Reward::run(before, after, verify) → RewardSignal
+                     └─ if halt → stop; else → wait for next Tick
+```
+
+The `AgentConsumer` in `canon-runtime/src/consumers/agent/mod.rs` is replaced with a single `LoopConsumer` that calls these five crates in sequence on each `Tick`. No task graph, no LLM parse retries, no executor delta tracking.
 
 ---
 
-## Execution Plan (Current)
+## What Gets Deleted
 
-### Objective
-Regenerate reports into `canon-utils/state/reports_out/workspace` from the canonical event log, and ensure error events are properly captured.
+| Current code | Reason |
+|---|---|
+| `TaskGraph` / `TaskGraphPatch` | Replaced by single `Action` enum |
+| `handle_llm_parse_failed()` retry logic | Single LLM call in Plan; failure = NoOp |
+| `executor_delta` / `delta_to_node` | Replaced by `canon-act` RunCommand |
+| `plan_if_stalled()` stall detection | Replaced by `canon-reward` stagnation counter |
+| `AgentGoal` / AGENT_GOAL.md watcher | Scope is the workspace; no goal file needed |
+| `schedule_next()` / `apply_result()` | Replaced by sequential loop in LoopConsumer |
 
-### Steps
-1. **Verify inputs**
-   - Confirm canonical tlog exists and is non-empty: `canon-utils/state/event_log/event.tlog.d`.
-   - Confirm analysis runtime capabilities are available.
+---
 
-2. **Run analysis pipeline**
-   - Execute the analysis capability (or equivalent CLI) that reads the canonical tlog and writes to `canon-utils/state/reports_out/workspace`.
-   - Ensure it targets the canonical tlog path and workspace output directory.
+## Constraints
 
-3. **Validate outputs**
-   - Check `canon-utils/state/reports_out/workspace` for populated `analysis/`, `graph/`, `graphs/`, `metrics/`.
-   - Inspect `analysis/analysis_errors.json` for failures.
-
-4. **Verify error stream**
-   - Ensure `canon-utils/state/event_log/errors.jsonl` contains recent error entries.
-   - Ensure errors remain in canonical tlog as `error_occurred`.
-
-### Success Criteria
-- `reports_out/workspace` contains analysis outputs.
-- `analysis_errors.json` empty or explains remaining blockers.
-- Errors are present in canonical tlog; error JSONL is populated.
+- No crate imports another loop crate (observe, plan, act, verify, reward are peers)
+- All crates expose a single `run()` function
+- All inter-crate data is plain serializable structs (no Arc, no channels)
+- The loop is synchronous within a tick; async only at the `canon-runtime` boundary

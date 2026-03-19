@@ -11,13 +11,7 @@ pub fn build_runtime_reachability_report(
     callgraph: &[(u32, u32)],
 ) -> anyhow::Result<RuntimeReachabilityReport> {
     let entry_override = std::env::var("CANON_RUNTIME_ENTRY_SYMBOL").ok();
-    let entry_match = entry_override
-        .as_deref()
-        .unwrap_or("event_runtime::main");
-
-    let adj = build_callgraph_adj(callgraph);
-    let entry_node_id = find_entry_node(node_map, entry_match)
-        .ok_or_else(|| anyhow::anyhow!("runtime entry symbol not found: {}", entry_match))?;
+    let entry_match = entry_override.as_deref();
 
     let fn_nodes: Vec<u32> = node_map
         .iter()
@@ -29,6 +23,40 @@ pub fn build_runtime_reachability_report(
             }
         })
         .collect();
+    let total_functions = fn_nodes.len();
+
+    let adj = build_callgraph_adj(callgraph);
+    let (entry_node_id, entry_symbol, note) = if let Some(sym) = entry_match {
+        match find_entry_node(node_map, sym) {
+            Some(id) => (Some(id), sym.to_string(), None),
+            None => {
+                let msg = format!("runtime entry symbol not found: {sym}");
+                (None, sym.to_string(), Some(msg))
+            }
+        }
+    } else {
+        // Default to the canon-runtime event runtime binary main symbol, by file path.
+        match find_entry_node_by_file_main(node_map, file_map, "canon-runtime/src/bin/event_runtime.rs") {
+            Some((id, sym)) => (Some(id), sym, None),
+            None => {
+                let msg = "runtime entry symbol not found: set CANON_RUNTIME_ENTRY_SYMBOL to a concrete symbol".to_string();
+                (None, "main".to_string(), Some(msg))
+            }
+        }
+    };
+
+    if entry_node_id.is_none() {
+        return Ok(RuntimeReachabilityReport {
+            entry_symbol,
+            entry_node_id: None,
+            total_functions,
+            reachable_functions: 0,
+            coverage_ratio: 0.0,
+            unreachable: Vec::new(),
+            note,
+        });
+    }
+    let entry_node_id = entry_node_id.expect("entry_node_id guarded above");
 
     let mut reachable = HashSet::new();
     let mut queue = VecDeque::from([entry_node_id]);
@@ -58,7 +86,6 @@ pub fn build_runtime_reachability_report(
         unreachable.push(RuntimeReachabilityEntry { symbol, file, line });
     }
 
-    let total_functions = fn_nodes.len();
     let reachable_functions = reachable.len();
     let coverage_ratio = if total_functions == 0 {
         0.0
@@ -67,13 +94,13 @@ pub fn build_runtime_reachability_report(
     };
 
     Ok(RuntimeReachabilityReport {
-        entry_symbol: entry_match.to_string(),
+        entry_symbol,
         entry_node_id: Some(entry_node_id),
         total_functions,
         reachable_functions,
         coverage_ratio,
         unreachable,
-        note: None,
+        note,
     })
 }
 
@@ -91,4 +118,34 @@ fn find_entry_node(
         }
     }
     None
+}
+
+fn find_entry_node_by_file_main(
+    node_map: &HashMap<u32, CodeGraphNode>,
+    file_map: &HashMap<u32, String>,
+    file_suffix: &str,
+) -> Option<(u32, String)> {
+    let mut found: Option<(u32, String)> = None;
+    for (id, node) in node_map {
+        if node.kind != "FUNCTION" && node.kind != "METHOD" {
+            continue;
+        }
+        let sym = node.symbol.as_str();
+        if sym != "main" && !sym.starts_with("main#") {
+            continue;
+        }
+        let file = node
+            .file_id
+            .and_then(|fid| file_map.get(&fid))
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        if !file.ends_with(file_suffix) {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = Some((*id, sym.to_string()));
+    }
+    found
 }

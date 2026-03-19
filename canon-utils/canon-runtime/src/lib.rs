@@ -2,6 +2,7 @@ use anyhow::Result;
 mod bus;
 pub mod bootstrap;
 pub mod consumers;
+pub mod prompt_watcher;
 
 use canon_capability::{CapabilityExecutionContext, CapabilityRegistry, CapabilityExecutionResult};
 use canon_event::{BinarySegmentWriter, TlogEvent};

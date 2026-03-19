@@ -6,6 +6,7 @@ use canon_runtime::consumers::error_logger::ErrorLogger;
 use canon_runtime::consumers::failure_store::FailureStoreConsumer;
 use canon_runtime::consumers::llm_executor::LlmCapabilityHandler;
 use canon_runtime::{register_default_capabilities, EventRuntime};
+use canon_runtime::prompt_watcher::PromptWatcher;
 use canon_editor::EditConsumer;
 use canon_event_store::read_any_events_from_path_with_start_seq;
 use canon_event_store::replay_graph_from_tlog;
@@ -162,8 +163,8 @@ fn main() -> Result<()> {
     let tlog_path = tlog_path.ok_or_else(|| anyhow!("missing --tlog"))?;
     let event_execution_enabled = std::env::var("CANON_EVENT_EXECUTION")
         .ok()
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(false);
+        .map(|v| v != "0" && v.to_lowercase() != "false")
+        .unwrap_or(true);
     let lock_path = env::var("CANON_EVENT_RUNTIME_LOCK")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
@@ -196,6 +197,7 @@ fn main() -> Result<()> {
         Box::new(EditConsumer::new()),
     ];
     let mut runtime = EventRuntime::new_with_registry(consumers, registry.clone());
+    let _prompt_watcher = PromptWatcher::start(&tlog_path)?;
     {
         let mut reg = registry.lock().expect("capability registry lock");
         register_default_capabilities(&mut reg);
@@ -204,6 +206,8 @@ fn main() -> Result<()> {
     runtime.set_execute_capabilities(event_execution_enabled);
     // set_tlog_path tells W where to append (L).  Only W calls this; only W writes L.
     runtime.set_tlog_path(tlog_path.clone());
+    // Kick the agent loop immediately so it doesn't wait for external ticks.
+    let _ = runtime.emit_tick();
 
     // --- Determine start offset from persisted cursor ---
     let cursor_loaded = load_cursor(&cursor_path, &tlog_path).is_some();

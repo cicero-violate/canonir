@@ -16,6 +16,7 @@ struct GuardEntry {
 
 static RUN_GUARD: Lazy<Mutex<HashMap<String, GuardEntry>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static REPORTS_ROOT_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 pub enum RunOutcome {
     Ran(PathBuf),
@@ -134,10 +135,11 @@ fn invalidate_reports_if_stale(reports_root: &Path, tlog_path: &Path) -> Result<
         .map(|meta| meta.tlog_cursor != cursor)
         .unwrap_or(true);
     if stale {
-        if reports_root.exists() {
-            fs::remove_dir_all(reports_root)?;
+        // Keep existing reports so a failed rebuild doesn't leave an empty tree.
+        if !reports_root.exists() {
+            fs::create_dir_all(reports_root)?;
         }
-        fs::create_dir_all(reports_root)?;
+        let _ = fs::remove_file(&meta_path);
     }
     Ok(())
 }
@@ -162,6 +164,7 @@ fn collect_crate_names_from_tlog(tlog_path: &Path) -> Result<Vec<String>> {
 }
 
 pub fn run_full_analysis(args: &serde_json::Value) -> Result<RunOutcome> {
+    let _root_guard = REPORTS_ROOT_GUARD.lock().ok();
     let crate_name = args
         .get("crate")
         .and_then(|v| v.as_str())
@@ -242,6 +245,7 @@ pub fn run_full_analysis(args: &serde_json::Value) -> Result<RunOutcome> {
 static WORKSPACE_GUARD: Lazy<Mutex<GuardEntry>> = Lazy::new(|| Mutex::new(GuardEntry::default()));
 
 pub fn run_workspace_analysis(args: &serde_json::Value) -> Result<RunOutcome> {
+    let _root_guard = REPORTS_ROOT_GUARD.lock().ok();
     let reports_root = if let Some(root) = args.get("reports_root").and_then(|v| v.as_str()) {
         PathBuf::from(root)
     } else if let Ok(root) = std::env::var("CANON_REPORTS_OUT") {

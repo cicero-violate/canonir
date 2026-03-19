@@ -43,7 +43,10 @@ fn resolve_canonical_tlog_path() -> PathBuf {
 }
 
 fn resolve_error_jsonl_path() -> PathBuf {
-    PathBuf::from("/workspace/ai_sandbox/canon/canon-utils/state/reports_out/workspace/errors.jsonl")
+    if let Ok(p) = std::env::var("CANON_REPORTS_OUT") {
+        return PathBuf::from(p).join("workspace").join("errors.jsonl");
+    }
+    PathBuf::from("/workspace/ai_sandbox/canon/state/reports_out/workspace/errors.jsonl")
 }
 
 fn event_to_payload(event: &CanonEvent) -> Option<(String, serde_json::Value)> {
