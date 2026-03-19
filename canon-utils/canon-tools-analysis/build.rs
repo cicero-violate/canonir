@@ -51,9 +51,13 @@ fn main() {
                 "assert.h",
             ])
             .status()
-            .unwrap_or_else(|_| panic!("nvcc failed to start for {}", src));
+            .unwrap_or_else(|err| {
+                eprintln!("nvcc failed to start for {}: {}", src, err);
+                std::process::exit(1);
+            });
         if !status.success() {
-            panic!("nvcc compilation failed for {}", src);
+            eprintln!("nvcc compilation failed for {}", src);
+            std::process::exit(1);
         }
 
         obj_paths.push(obj);
@@ -66,9 +70,16 @@ fn main() {
     for obj in &obj_paths {
         ar_cmd.arg(obj);
     }
-    let status = ar_cmd.status().expect("ar failed to start");
+    let status = match ar_cmd.status() {
+        Ok(status) => status,
+        Err(err) => {
+            eprintln!("ar failed to start: {}", err);
+            std::process::exit(1);
+        }
+    };
     if !status.success() {
-        panic!("ar failed");
+        eprintln!("ar failed");
+        std::process::exit(1);
     }
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());

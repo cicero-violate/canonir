@@ -11,7 +11,21 @@ Fix:         per-kind, per-variant shape — never merged across variants.
 import json, os, sys, time
 from collections import defaultdict
 
-LOG_PATH = "/workspace/ai_sandbox/canon/canon-utils/state/event_log/event.tlog.d/00000000000000000000.log"
+DIR = "/workspace/ai_sandbox/canon/canon-utils/state/event_log/event.tlog.d"
+
+def latest_log():
+    files = [f for f in os.listdir(DIR) if f.endswith(".log")]
+    if not files:
+        return None
+    return os.path.join(DIR, max(files))
+
+def stable_latest(wait_sec=0.5):
+    first = latest_log()
+    time.sleep(wait_sec)
+    second = latest_log()
+    if first == second:
+        return first
+    return None
 
 # ── data model ───────────────────────────────────────────────────────────────
 #
@@ -29,6 +43,17 @@ variants_by_kind  = defaultdict(lambda: defaultdict(lambda: defaultdict(_new_fie
 variant_counts    = defaultdict(lambda: defaultdict(int))
 kind_counts       = defaultdict(int)
 total_objects     = 0
+
+# ── render throttle ───────────────────────────────────────────────────────────
+LAST_RENDER = 0.0
+RENDER_INTERVAL = 0.5  # seconds
+
+def maybe_render():
+    global LAST_RENDER
+    now = time.time()
+    if now - LAST_RENDER >= RENDER_INTERVAL:
+        render()
+        LAST_RENDER = now
 
 
 def _classify(v):
@@ -146,45 +171,70 @@ def render():
 
 # ── streaming tail ────────────────────────────────────────────────────────────
 
-def tail_and_parse(path, from_start=False):
-    if not os.path.exists(path):
-        print(f"  file not found: {path}")
+def tail_and_parse(from_start=False):
+    path = stable_latest() or latest_log()
+    if not path:
+        print("no logs found")
         return
-    with open(path, "rb") as f:
-        if not from_start:
-            f.seek(0, os.SEEK_END)
-        remainder = b""
+
+    f = open(path, "rb")
+    if not from_start:
+        f.seek(0, os.SEEK_END)
+
+    remainder = b""
+
+    while True:
+        new_path = stable_latest()
+        if new_path and new_path != path:
+            f.close()
+            path = new_path
+            f = open(path, "rb")
+            if not from_start:
+                f.seek(0, os.SEEK_END)
+            print(f"\n--- switched to {path} ---\n")
+
+        chunk = f.readline()
+        if not chunk:
+            continue
+
+        # process multiple lines per tick
+        lines = [chunk]
         while True:
-            chunk = f.readline()
-            if not chunk:
-                time.sleep(0.1)
-                continue
+            nxt = f.readline()
+            if not nxt:
+                break
+            lines.append(nxt)
+
+        for chunk in lines:
             buf = remainder + chunk
             remainder = b""
+
             try:
                 text = buf.decode("utf-8", errors="replace").rstrip("\r\n")
                 if not text.strip():
                     continue
+
                 start = text.find("{")
                 if start == -1:
                     continue
+
                 obj = json.loads(text[start:])
                 ingest(obj)
-                render()
+
             except json.JSONDecodeError:
                 remainder = buf
             except Exception as e:
                 print(f"  error: {e.__class__.__name__}  {str(e)[:80]}")
 
+        maybe_render()
+
 
 if __name__ == "__main__":
     args      = sys.argv[1:]
     from_start = "--from-start" in args
-    paths      = [a for a in args if not a.startswith("--")]
-    path       = paths[0] if paths else LOG_PATH
-    print(f"Watching: {path}  ({'from start' if from_start else 'tail'})")
+    print(f"Watching latest log ({'from start' if from_start else 'tail'})")
     try:
-        tail_and_parse(path, from_start)
+        tail_and_parse(from_start)
     except KeyboardInterrupt:
         print("\nStopped.")
         render()

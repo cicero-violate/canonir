@@ -12,7 +12,7 @@ use canon_agent::task_graph_patch::{apply_graph_patch, TaskGraphPatch, PlannerUp
 use canon_event::{
     EventDelta, RustcState,
     NodeCompleted, NodeFailed, NodeStarted, CapabilityRequested, EventConsumer, EventEmitterHandle,
-    CanonEvent, EventFilter, canon_emit,
+    CanonEvent, ErrorOccurred, EventFilter, canon_emit,
     Code, Tick, RuntimeStateUpdated, CapabilityInvoked, CapabilityResolved,
     GoalSelected, PolicyBaselineUpdated, GoalGraphCheckpointed,
     ToolCall, ToolResult, PromptLoaded,
@@ -399,11 +399,49 @@ impl AgentWorkerState {
             }
         }
 
+        let mut patch_err: Option<String> = None;
         let patch_to_apply = if success && capability_name == "llm.call" {
-            result_value.as_ref().and_then(extract_graph_patch_from_llm_result)
+            match result_value
+                .as_ref()
+                .map(extract_graph_patch_from_llm_result)
+            {
+                Some(Ok(patch)) => Some(patch),
+                Some(Err(err)) => {
+                    patch_err = Some(err);
+                    None
+                }
+                None => {
+                    patch_err = Some("missing llm result payload".to_string());
+                    None
+                }
+            }
         } else {
             None
         };
+        if success && capability_name == "llm.call" && patch_to_apply.is_none() {
+            if let Some(emitter) = &self.emitter {
+                let summary = result_value
+                    .as_ref()
+                    .and_then(|v| serde_json::to_string(v).ok())
+                    .map(|s| truncate_message(&s, 1000))
+                    .unwrap_or_else(|| "missing llm result payload".to_string());
+                let reason = patch_err.unwrap_or_else(|| "unknown parse failure".to_string());
+                emitter.emit(CanonEvent::ErrorOccurred(ErrorOccurred {
+                    kind: "llm_graph_patch_parse".to_string(),
+                    source: "agent-consumer".to_string(),
+                    message: format!("LLM result did not parse as TaskGraphPatch: {reason}"),
+                    severity: "error".to_string(),
+                    context: serde_json::json!({
+                        "node_id": node_id,
+                        "request_id": request_id,
+                        "capability": capability_name,
+                        "parse_error": reason,
+                        "result_snippet": summary,
+                    }),
+                    trace_id: Some(request_id.clone()),
+                }));
+            }
+        }
         if let Some(node) = self.graph.get_node_mut(&node_id) {
             if success {
                 if capability_name == "llm.call" {
@@ -564,6 +602,14 @@ impl AgentWorkerState {
             emitter.emit(CanonEvent::GoalGraphCheckpointed(GoalGraphCheckpointed { tlog_seq }));
         }
         write_graph_report(&self.graph, self.last_tick);
+    }
+}
+
+fn truncate_message(s: &str, limit: usize) -> String {
+    if s.len() <= limit {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..limit])
     }
 }
 

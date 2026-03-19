@@ -2,6 +2,8 @@ use anyhow::{anyhow, Result};
 use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry};
 use canon_runtime::consumers::agent::AgentConsumer;
 use canon_runtime::consumers::capability_executor::CapabilityExecutor;
+use canon_runtime::consumers::error_logger::ErrorLogger;
+use canon_runtime::consumers::failure_store::FailureStoreConsumer;
 use canon_runtime::consumers::llm_executor::LlmCapabilityHandler;
 use canon_runtime::{register_default_capabilities, EventRuntime};
 use canon_editor::EditConsumer;
@@ -189,6 +191,8 @@ fn main() -> Result<()> {
             registry.clone(),
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
         )),
+        Box::new(ErrorLogger::new(None)),
+        Box::new(FailureStoreConsumer::new(None)),
         Box::new(EditConsumer::new()),
     ];
     let mut runtime = EventRuntime::new_with_registry(consumers, registry.clone());

@@ -111,6 +111,17 @@ canon_event_struct!(DebugEvent {
     kind: String,
     payload: serde_json::Value,
 });
+canon_event_struct!(ErrorOccurred {
+    kind: String,
+    source: String,
+    message: String,
+    #[serde(default)]
+    severity: String,
+    #[serde(default)]
+    context: serde_json::Value,
+    #[serde(default)]
+    trace_id: Option<String>,
+});
 canon_event_struct!(Tick { tick: u64 });
 canon_event_struct!(RuntimeStateUpdated { payload: serde_json::Value });
 canon_event_struct!(PolicyBaselineUpdated { payload: serde_json::Value });
@@ -155,6 +166,7 @@ canon_event_struct!(CapabilityResolved { capability_id: String, success: bool, d
 canon_event_enum!(CanonEvent {
     Code(Code),
     Debug(DebugEvent),
+    ErrorOccurred(ErrorOccurred),
     Edit(EditEvent),
     Tick(Tick),
     RuntimeStateUpdated(RuntimeStateUpdated),
@@ -190,6 +202,7 @@ pub type EventEmitterHandle = Arc<dyn EventEmitter>;
 #[derive(Debug, Clone, Copy)]
 pub enum EventFilter {
     All,
+    ErrorOnly,
     Code(EventMask),
     EditOnly,
     CapabilityOnly,

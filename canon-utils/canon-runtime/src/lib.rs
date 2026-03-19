@@ -28,6 +28,7 @@ use canon_event::{
     CanonEvent,
     Code,
     DebugEvent,
+    ErrorOccurred,
     Tick,
     RuntimeStateUpdated,
     PolicyBaselineUpdated,
@@ -226,6 +227,11 @@ impl EventRuntime {
                         self.handle_runtime_event(CanonEvent::CapabilityFailed(payload))?;
                         self.drain_emitted_events()?;
                     }
+                } else if canon.kind == "error_occurred" && canon.source != "event-runtime" {
+                    if let Ok(payload) = serde_json::from_value::<ErrorOccurred>(canon.payload.clone()) {
+                        self.handle_runtime_event(CanonEvent::ErrorOccurred(payload))?;
+                        self.drain_emitted_events()?;
+                    }
                 }
             }
             processed += 1;
@@ -292,6 +298,72 @@ impl EventRuntime {
             self.append_runtime_event(&event);
         }
         match event {
+            CanonEvent::CapabilityFailed(payload) => {
+                let error_event = CanonEvent::ErrorOccurred(ErrorOccurred {
+                    kind: "capability_failed".to_string(),
+                    source: "event-runtime".to_string(),
+                    message: payload.error.clone(),
+                    severity: "error".to_string(),
+                    context: serde_json::json!({
+                        "request_id": payload.request_id,
+                        "capability": payload.name,
+                    }),
+                    trace_id: None,
+                });
+                self.bus.dispatch(error_event.clone());
+                self.append_runtime_event(&error_event);
+            }
+            CanonEvent::NodeFailed(payload) => {
+                let error_event = CanonEvent::ErrorOccurred(ErrorOccurred {
+                    kind: "node_failed".to_string(),
+                    source: "agent-consumer".to_string(),
+                    message: payload.error.clone().unwrap_or_else(|| "node_failed".to_string()),
+                    severity: "error".to_string(),
+                    context: serde_json::json!({
+                        "node_id": payload.node_id,
+                        "capability": payload.capability,
+                        "request_id": payload.request_id,
+                    }),
+                    trace_id: None,
+                });
+                self.bus.dispatch(error_event.clone());
+                self.append_runtime_event(&error_event);
+            }
+            CanonEvent::Code(Code { delta, .. }) => {
+                match &delta.event {
+                    RustcEvent::PanicCaptured(payload) => {
+                        let error_event = CanonEvent::ErrorOccurred(ErrorOccurred {
+                            kind: "panic_captured".to_string(),
+                            source: "rustc".to_string(),
+                            message: payload.message.clone(),
+                            severity: "error".to_string(),
+                            context: serde_json::json!({
+                                "def_id": payload.def_id,
+                                "mir_variant": payload.mir_variant,
+                                "lowering_stage": payload.lowering_stage,
+                                "file": payload.file,
+                                "span": payload.span,
+                            }),
+                            trace_id: None,
+                        });
+                        self.bus.dispatch(error_event.clone());
+                        self.append_runtime_event(&error_event);
+                    }
+                    RustcEvent::InvariantViolation(payload) => {
+                        let error_event = CanonEvent::ErrorOccurred(ErrorOccurred {
+                            kind: "invariant_violation".to_string(),
+                            source: "rustc".to_string(),
+                            message: payload.message.clone(),
+                            severity: "error".to_string(),
+                            context: serde_json::json!({}),
+                            trace_id: None,
+                        });
+                        self.bus.dispatch(error_event.clone());
+                        self.append_runtime_event(&error_event);
+                    }
+                    _ => {}
+                }
+            }
             CanonEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload }) => {
                 self.runtime_state = payload;
             }
@@ -335,6 +407,19 @@ impl EventRuntime {
         {
             Ok(result) => result,
             Err(err) => {
+                let error_event = CanonEvent::ErrorOccurred(ErrorOccurred {
+                    kind: "capability_execution".to_string(),
+                    source: "event-runtime".to_string(),
+                    message: err.to_string(),
+                    severity: "error".to_string(),
+                    context: serde_json::json!({
+                        "request_id": request_id.clone(),
+                        "capability": request_name.clone(),
+                    }),
+                    trace_id: Some(request_id.clone()),
+                });
+                self.bus.dispatch(error_event.clone());
+                self.append_runtime_event(&error_event);
                 let failed = CanonEvent::CapabilityFailed(CapabilityFailed {
                     request_id: request_id.clone(),
                     name: request_name.clone(),
@@ -495,6 +580,11 @@ impl EventRuntime {
         }
         CanonEvent::Debug(DebugEvent { source, kind, payload }) => {
             TlogEvent::new(source, kind, payload.clone())
+        }
+        CanonEvent::ErrorOccurred(payload) => {
+            let source = payload.source.clone();
+            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+            TlogEvent::new(source, "error_occurred", val)
         }
         _ => {
             return;

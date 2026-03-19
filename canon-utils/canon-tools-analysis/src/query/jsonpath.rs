@@ -115,12 +115,13 @@ impl IRBuilder {
         self.num_result_stores += 1;
     }
 
-    pub fn end(&mut self) {
+    pub fn end(&mut self) -> Result<(), JSONPathError> {
         if self.ended {
-            panic!("IR has already been ended");
+            return Err(JSONPathError::Message("IR has already been ended".to_string()));
         }
         self.ended = true;
         self.buffer.write_opcode(Opcode::End);
+        Ok(())
     }
 
     pub fn expression_string_equals(&mut self, s: &str) {
@@ -140,18 +141,20 @@ impl IRBuilder {
         self.num_result_stores
     }
 
-    pub fn into_result(self) -> JSONPathResult {
+    pub fn into_result(self) -> Result<JSONPathResult, JSONPathError> {
         if !self.ended {
-            panic!("Cannot convert to byte array until end() has been called");
+            return Err(JSONPathError::Message(
+                "Cannot convert to byte array until end() has been called".to_string(),
+            ));
         }
         // force usage of internal metrics to avoid dead-code elimination
         let _len = self.buffer.len();
         let _stores = self.num_result_stores;
-        JSONPathResult {
+        Ok(JSONPathResult {
             ir: self.buffer.to_vec(),
             max_depth: 0,
             num_results: self.num_result_stores as usize,
-        }
+        })
     }
 
     pub fn buffer(&self) -> &IRByteOutputBuffer {
@@ -292,13 +295,13 @@ impl JSONPathParser {
         if !self.skip_terminal_store {
             self.ir.store_result();
         }
-        self.ir.end();
+        self.ir.end()?;
 
         // DEAD-CODE FIX: must occur before move
         let _ = self.ir.num_result_stores();
         let _ = self.ir.buffer().len();
 
-        let result = self.ir.into_result();
+        let result = self.ir.into_result()?;
         let _ = result.num_results;
         // also touch builder accessors indirectly
         let _ = result.ir.len();

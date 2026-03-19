@@ -3,8 +3,13 @@ import re
 import time
 import os
 
-P = "/workspace/ai_sandbox/canon/canon-utils/state/event_log/event.tlog.d/00000000000000000000.log"
+DIR = "/workspace/ai_sandbox/canon/canon-utils/state/event_log/event.tlog.d"
 
+def latest_log():
+    files = [f for f in os.listdir(DIR) if f.endswith(".log")]
+    if not files:
+        return None
+    return os.path.join(DIR, max(files))
 # ANSI COLORS
 RESET = "\033[0m"
 COLORS = {
@@ -41,19 +46,32 @@ def extract_strings(data):
         except:
             pass
 
-def watch_file(path):
-    with open(path, "rb") as f:
-        f.seek(0, os.SEEK_END)
+def watch_file():
+    current = latest_log()
+    if not current:
+        print("no logs found")
+        return
 
-        while True:
-            pos = f.tell()
-            chunk = f.read()
+    f = open(current, "rb")
+    f.seek(0, os.SEEK_END)
 
-            if not chunk:
-                time.sleep(0.2)
-                f.seek(pos)
-            else:
-                extract_strings(chunk)
+    while True:
+        new_latest = latest_log()
+        if new_latest and new_latest != current:
+            f.close()
+            current = new_latest
+            f = open(current, "rb")
+            f.seek(0, os.SEEK_END)
+            print(f"\n--- switched to {current} ---\n")
+
+        pos = f.tell()
+        chunk = f.read()
+
+        if not chunk:
+            time.sleep(0.2)
+            f.seek(pos)
+        else:
+            extract_strings(chunk)
 
 if __name__ == "__main__":
-    watch_file(P)
+    watch_file()

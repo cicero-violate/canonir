@@ -3,7 +3,6 @@ use anyhow::{anyhow, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use rayon::prelude::*;
 use canon_event_store::{save_graph_snapshot, write_snapshot_metadata, SnapshotMeta};
@@ -37,6 +36,7 @@ use canon_graph::graph::graph_normalize::normalize_graph;
 use crate::analysis::cfg::{extract_cfg_edges, build_cfg_out, build_cfg_in, build_block_owner, build_block_effect_signatures};
 use crate::analysis::callgraph::{extract_callgraph_edges, build_callgraph_centrality};
 use crate::analysis::dead_code::{detect_dead_code_gpu};
+use crate::analysis::runtime_reachability::build_runtime_reachability_report;
 use crate::analysis::dependency_cycles::build_dependency_cycles_gpu;
 use crate::analysis::structural_hotspots::{build_structural_hotspots, build_branch_complexity, build_branch_pressure, build_merge_candidates, build_path_redundancy, build_reachability_report_gpu};
 use crate::analysis::dataflow::build_dataflow_fanout;
@@ -169,9 +169,10 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
             emit_typegraph_csv_from_cache(&graphs_dir, &typegraph, &type_nodes)?;
         }
     }
-    write_symbol_artifacts_from_tlog(tlog_path, &graph_dir)?;
+    // Deprecated: symbols.json and symbol_spans.jsonl are no longer emitted.
     if let Err(err) = write_callsite_resolution_from_tlog(tlog_path, &analysis_dir) {
         eprintln!("canon_reports: callsite resolution failed: {err:?}");
+        write_error_json(&analysis_dir.join("callsite_resolution.json"), "callsite_resolution", &err)?;
     }
     if !minimal {
         if let Err(err) = crate::invariants::invariant_validator::run_invariant_pipeline(
@@ -182,9 +183,10 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
             &metrics_dir,
         ) {
             eprintln!("canon_reports: invariant pipeline failed: {err:?}");
+            write_error_json(&invariants_dir.join("error.json"), "invariant_pipeline", &err)?;
         }
     }
-    write_graph_health_report(
+    if let Err(err) = write_graph_health_report(
         &graph_dir,
         &metrics_dir,
         &parts.nodes,
@@ -192,13 +194,20 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
         &parts.files,
         &parts.cfg,
         &parts.callgraph,
-    )?;
-    write_tlog_integrity_report(tlog_path, &metrics_dir)?;
-    write_system_health_report(tlog_path, &metrics_dir)?;
+    ) {
+        write_error_json(&metrics_dir.join("graph_health.json"), "graph_health", &err)?;
+    }
+    if let Err(err) = write_tlog_integrity_report(tlog_path, &metrics_dir) {
+        write_error_json(&metrics_dir.join("tlog_integrity.json"), "tlog_integrity", &err)?;
+    }
+    if let Err(err) = write_system_health_report(tlog_path, &metrics_dir) {
+        write_error_json(&metrics_dir.join("system_health.json"), "system_health", &err)?;
+    }
     let panic_log = analysis_dir.join("panic_records.jsonl");
     let panic_summary = analysis_dir.join("panic_summary.json");
     if let Err(err) = build_panic_report(&panic_log, &panic_summary) {
         eprintln!("canon_reports: panic report failed: {err:?}");
+        write_error_json(&panic_summary, "panic_report", &err)?;
     }
     cleanup_legacy_dirs(layout.root())?;
     Ok(())
@@ -244,9 +253,10 @@ pub fn generate_reports_for_crate(tlog_path: &Path, out_dir: &Path, crate_name: 
             emit_typegraph_csv_from_cache(&graphs_dir, &typegraph, &type_nodes)?;
         }
     }
-    write_symbol_artifacts_from_tlog(tlog_path, &graph_dir)?;
+    // Deprecated: symbols.json and symbol_spans.jsonl are no longer emitted.
     if let Err(err) = write_callsite_resolution_from_tlog(tlog_path, &analysis_dir) {
         eprintln!("canon_reports[{crate_name}]: callsite resolution failed: {err:?}");
+        write_error_json(&analysis_dir.join("callsite_resolution.json"), "callsite_resolution", &err)?;
     }
     if !minimal {
         if let Err(err) = crate::invariants::invariant_validator::run_invariant_pipeline(
@@ -257,9 +267,10 @@ pub fn generate_reports_for_crate(tlog_path: &Path, out_dir: &Path, crate_name: 
             &metrics_dir,
         ) {
             eprintln!("canon_reports[{crate_name}]: invariant pipeline failed: {err:?}");
+            write_error_json(&invariants_dir.join("error.json"), "invariant_pipeline", &err)?;
         }
     }
-    write_graph_health_report(
+    if let Err(err) = write_graph_health_report(
         &graph_dir,
         &metrics_dir,
         &parts.nodes,
@@ -267,13 +278,20 @@ pub fn generate_reports_for_crate(tlog_path: &Path, out_dir: &Path, crate_name: 
         &parts.files,
         &parts.cfg,
         &parts.callgraph,
-    )?;
-    write_tlog_integrity_report(tlog_path, &metrics_dir)?;
-    write_system_health_report(tlog_path, &metrics_dir)?;
+    ) {
+        write_error_json(&metrics_dir.join("graph_health.json"), "graph_health", &err)?;
+    }
+    if let Err(err) = write_tlog_integrity_report(tlog_path, &metrics_dir) {
+        write_error_json(&metrics_dir.join("tlog_integrity.json"), "tlog_integrity", &err)?;
+    }
+    if let Err(err) = write_system_health_report(tlog_path, &metrics_dir) {
+        write_error_json(&metrics_dir.join("system_health.json"), "system_health", &err)?;
+    }
     let panic_log = analysis_dir.join("panic_records.jsonl");
     let panic_summary = analysis_dir.join("panic_summary.json");
     if let Err(err) = build_panic_report(&panic_log, &panic_summary) {
         eprintln!("canon_reports[{crate_name}]: panic report failed: {err:?}");
+        write_error_json(&panic_summary, "panic_report", &err)?;
     }
     cleanup_legacy_dirs(layout.root())?;
     Ok(())
@@ -315,10 +333,16 @@ fn generate_reports_from_parts(
     let node_map: HashMap<u32, CodeGraphNode> = nodes.iter().map(|n| (n.id, n.clone())).collect();
 
     let diagnostics = build_diagnostics(&nodes, &edges);
-    write_diagnostics(&analysis_dir, &diagnostics)?;
+    if let Err(err) = write_diagnostics(&analysis_dir, &diagnostics) {
+        write_error_json(&analysis_dir.join("diagnostics.json"), "diagnostics", &err)?;
+    }
     if diagnostics.should_fail {
         write_missing_report_placeholders(&analysis_dir, &metrics_dir, &diagnostics)?;
-        return Err(anyhow!(diagnostics.fail_reason));
+        write_error_json(
+            &analysis_dir.join("analysis_errors.json"),
+            "diagnostics_gate",
+            &anyhow!(diagnostics.fail_reason.clone()),
+        )?;
     }
 
     let mut file_map: HashMap<u32, String> = HashMap::new();
@@ -329,36 +353,38 @@ fn generate_reports_from_parts(
     let cfg_out = build_cfg_out(&cfg);
     let cfg_in = build_cfg_in(&cfg);
     let diagnostics = enrich_diagnostics_with_topology(diagnostics, &cfg_out);
-    write_diagnostics(&analysis_dir, &diagnostics)?;
+    if let Err(err) = write_diagnostics(&analysis_dir, &diagnostics) {
+        write_error_json(&analysis_dir.join("diagnostics.json"), "diagnostics", &err)?;
+    }
     if std::env::var("CANON_REPORTS_PANIC_ON_EMPTY_CFG").ok().as_deref() == Some("1") && cfg_out.is_empty() {
-        panic!("CFG invariant violated: no CFG edges found");
+        return Err(anyhow!("CFG invariant violated: no CFG edges found"));
     }
     if std::env::var("CANON_REPORTS_PANIC_ON_EMPTY_CALLGRAPH").ok().as_deref() == Some("1") && callgraph.is_empty() {
-        panic!("Callgraph invariant violated: no call edges");
+        return Err(anyhow!("Callgraph invariant violated: no call edges"));
     }
     if std::env::var("CANON_REPORTS_PANIC_ON_CALLSITE_MISMATCH").ok().as_deref() == Some("1")
         && diagnostics.call_edges > 0
         && diagnostics.callsite_nodes == 0
     {
-        panic!("Callsite invariant violated: CALL edges present but CALL_SITE nodes missing");
+        return Err(anyhow!("Callsite invariant violated: CALL edges present but CALL_SITE nodes missing"));
     }
     if std::env::var("CANON_REPORTS_PANIC_ON_BLOCK_MISMATCH").ok().as_deref() == Some("1")
         && diagnostics.function_nodes > 0
         && (diagnostics.has_block_edges == 0 || diagnostics.flow_edges == 0)
     {
-        panic!("CFG invariant violated: functions exist but HAS_BLOCK/FLOW edges missing");
+        return Err(anyhow!("CFG invariant violated: functions exist but HAS_BLOCK/FLOW edges missing"));
     }
     if std::env::var("CANON_REPORTS_PANIC_ON_NO_BRANCHES").ok().as_deref() == Some("1")
         && diagnostics.function_nodes > 0
         && diagnostics.branch_nodes == 0
     {
-        panic!("CFG invariant violated: no branch nodes (fan-out > 1) detected");
+        return Err(anyhow!("CFG invariant violated: no branch nodes (fan-out > 1) detected"));
     }
     if std::env::var("CANON_REPORTS_PANIC_ON_SPARSE_CALLGRAPH").ok().as_deref() == Some("1")
         && diagnostics.function_nodes > 0
         && diagnostics.calls_per_function < 0.05
     {
-        panic!("Callgraph invariant violated: calls_per_function < 0.05");
+        return Err(anyhow!("Callgraph invariant violated: calls_per_function < 0.05"));
     }
 
     let block_owner = build_block_owner(&nodes, &edges);
@@ -379,6 +405,7 @@ fn generate_reports_from_parts(
         "merge_candidates",
         "reachability",
         "path_redundancy",
+        "runtime_reachability",
     ]
     .into_par_iter()
     .map(|report| match report {
@@ -391,11 +418,17 @@ fn generate_reports_from_parts(
                 &cfg_in,
                 &block_effect_sig,
             );
-            write_report(&metrics_dir.join("branch_complexity_report.json"), &r)
+            if let Err(err) = write_report(&metrics_dir.join("branch_complexity_report.json"), &r) {
+                write_error_json(&metrics_dir.join("branch_complexity_report.json"), "branch_complexity", &err)?;
+            }
+            Ok(())
         }
         "callgraph_centrality" => {
             let r = build_callgraph_centrality(&callgraph, &node_map, &file_map);
-            write_report(&metrics_dir.join("callgraph_centrality_report.json"), &r)
+            if let Err(err) = write_report(&metrics_dir.join("callgraph_centrality_report.json"), &r) {
+                write_error_json(&metrics_dir.join("callgraph_centrality_report.json"), "callgraph_centrality", &err)?;
+            }
+            Ok(())
         }
         "dead_code" => {
             let r = detect_dead_code_gpu(
@@ -411,8 +444,13 @@ fn generate_reports_from_parts(
                 &cg_id_to_local,
                 &cg_local_to_id,
             );
-            write_report(&analysis_dir.join("dead_code_report.json"), &r)?;
-            write_report(&analysis_dir.join("dead_code.json"), &r)
+            if let Err(err) = write_report(&analysis_dir.join("dead_code_report.json"), &r) {
+                write_error_json(&analysis_dir.join("dead_code_report.json"), "dead_code", &err)?;
+            }
+            if let Err(err) = write_report(&analysis_dir.join("dead_code.json"), &r) {
+                write_error_json(&analysis_dir.join("dead_code.json"), "dead_code", &err)?;
+            }
+            Ok(())
         }
         "dependency_cycles" => {
             let r = build_dependency_cycles_gpu(
@@ -422,8 +460,13 @@ fn generate_reports_from_parts(
                 &cg_csr,
                 &cg_local_to_id,
             );
-            write_report(&analysis_dir.join("dependency_cycle_report.json"), &r)?;
-            write_report(&analysis_dir.join("cycles.json"), &r)
+            if let Err(err) = write_report(&analysis_dir.join("dependency_cycle_report.json"), &r) {
+                write_error_json(&analysis_dir.join("dependency_cycle_report.json"), "dependency_cycles", &err)?;
+            }
+            if let Err(err) = write_report(&analysis_dir.join("cycles.json"), &r) {
+                write_error_json(&analysis_dir.join("cycles.json"), "dependency_cycles", &err)?;
+            }
+            Ok(())
         }
         "structural_hotspots" => {
             let r = build_structural_hotspots(
@@ -436,20 +479,34 @@ fn generate_reports_from_parts(
                 &block_owner,
                 &block_effect_sig,
             );
-            write_report(&metrics_dir.join("structural_hotspots_report.json"), &r)?;
-            write_report(&analysis_dir.join("hotspots.json"), &r)
+            if let Err(err) = write_report(&metrics_dir.join("structural_hotspots_report.json"), &r) {
+                write_error_json(&metrics_dir.join("structural_hotspots_report.json"), "structural_hotspots", &err)?;
+            }
+            if let Err(err) = write_report(&analysis_dir.join("hotspots.json"), &r) {
+                write_error_json(&analysis_dir.join("hotspots.json"), "structural_hotspots", &err)?;
+            }
+            Ok(())
         }
         "dataflow_fanout" => {
             let r = build_dataflow_fanout(&nodes, &node_map, &file_map, &edges, &block_owner);
-            write_report(&metrics_dir.join("dataflow_fanout_report.json"), &r)
+            if let Err(err) = write_report(&metrics_dir.join("dataflow_fanout_report.json"), &r) {
+                write_error_json(&metrics_dir.join("dataflow_fanout_report.json"), "dataflow_fanout", &err)?;
+            }
+            Ok(())
         }
         "branch_pressure" => {
             let r = build_branch_pressure(&block_owner, &node_map, &file_map, &cfg_out);
-            write_report(&metrics_dir.join("branch_pressure_report.json"), &r)
+            if let Err(err) = write_report(&metrics_dir.join("branch_pressure_report.json"), &r) {
+                write_error_json(&metrics_dir.join("branch_pressure_report.json"), "branch_pressure", &err)?;
+            }
+            Ok(())
         }
         "merge_candidates" => {
             let r = build_merge_candidates(&cfg_out, &block_owner, &node_map, &file_map);
-            write_report(&metrics_dir.join("merge_candidates_report.json"), &r)
+            if let Err(err) = write_report(&metrics_dir.join("merge_candidates_report.json"), &r) {
+                write_error_json(&metrics_dir.join("merge_candidates_report.json"), "merge_candidates", &err)?;
+            }
+            Ok(())
         }
         "reachability" => {
             let r = build_reachability_report_gpu(
@@ -461,23 +518,49 @@ fn generate_reports_from_parts(
                 &cg_id_to_local,
                 &cg_local_to_id,
             );
-            write_report(&metrics_dir.join("reachability_report.json"), &r)
+            if let Err(err) = write_report(&metrics_dir.join("reachability_report.json"), &r) {
+                write_error_json(&metrics_dir.join("reachability_report.json"), "reachability", &err)?;
+            }
+            Ok(())
         }
         "path_redundancy" => {
             let r = build_path_redundancy(&cfg_out, &block_owner, &node_map, &file_map);
-            write_report(&metrics_dir.join("path_redundancy_report.json"), &r)
+            if let Err(err) = write_report(&metrics_dir.join("path_redundancy_report.json"), &r) {
+                write_error_json(&metrics_dir.join("path_redundancy_report.json"), "path_redundancy", &err)?;
+            }
+            Ok(())
+        }
+        "runtime_reachability" => {
+            let r = build_runtime_reachability_report(&node_map, &file_map, &callgraph)?;
+            if let Err(err) = write_report(&analysis_dir.join("runtime_reachability_report.json"), &r) {
+                write_error_json(&analysis_dir.join("runtime_reachability_report.json"), "runtime_reachability", &err)?;
+            }
+            if let Err(err) = write_report(&analysis_dir.join("runtime_reachability.json"), &r) {
+                write_error_json(&analysis_dir.join("runtime_reachability.json"), "runtime_reachability", &err)?;
+            }
+            Ok(())
         }
         _ => Ok(()),
     })
     .collect();
 
     for result in results {
-        result?;
+        if let Err(err) = result {
+            write_error_json(&analysis_dir.join("analysis_errors.json"), "analysis_pipeline", &err)?;
+        }
     }
 
-    write_graph_health_report(graph_dir, &metrics_dir, &nodes, &edges, &files, &cfg, &callgraph)?;
-    write_semantic_signatures(graph_dir, &metrics_dir, &nodes, &edges, &files)?;
-    write_semantic_clusters(graph_dir, &analysis_dir, &metrics_dir, &nodes, &edges, &files)?;
+    if let Err(err) = write_graph_health_report(graph_dir, &metrics_dir, &nodes, &edges, &files, &cfg, &callgraph) {
+        write_error_json(&metrics_dir.join("graph_health.json"), "graph_health", &err)?;
+    }
+    if let Err(err) = write_semantic_signatures(graph_dir, &metrics_dir, &nodes, &edges, &files) {
+        write_error_csv(&metrics_dir.join("semantic_signatures.csv"), "semantic_signatures", &err)?;
+    }
+    if let Err(err) = write_semantic_clusters(graph_dir, &analysis_dir, &metrics_dir, &nodes, &edges, &files) {
+        write_error_json(&analysis_dir.join("semantic_clusters.json"), "semantic_clusters", &err)?;
+        write_error_json(&analysis_dir.join("semantic_outliers.json"), "semantic_outliers", &err)?;
+        write_error_cluster_graph_bin(&metrics_dir.join("cluster_graph.bin"));
+    }
 
     Ok(ReportParts { nodes, edges, files, cfg, callgraph })
 }
@@ -721,51 +804,6 @@ fn write_callsite_resolution_from_tlog(tlog_path: &Path, reports_dir: &Path) -> 
     Ok(())
 }
 
-fn write_symbol_artifacts_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()> {
-    let mut symbols: BTreeMap<String, String> = BTreeMap::new();
-    let spans_path = out_dir.join("symbol_spans.jsonl");
-    let mut spans_file = fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&spans_path)?;
-
-    for event in read_any_events_from_path(tlog_path)? {
-        let canon = match event {
-            canon_event_store::AnyEvent::Canon(canon) => canon,
-            _ => continue,
-        };
-        let Some(kernel) = extract_rustc_event(&canon) else {
-            continue;
-        };
-        match kernel {
-            RustcEvent::SymbolDefined(canon_types::SymbolDefined { symbol, kind }) => {
-                if !symbol.is_empty() && !kind.is_empty() {
-                    symbols.insert(symbol, kind);
-                }
-            }
-            RustcEvent::SpanDefined(canon_types::SpanDefined { symbol, file, line, col, lo, hi }) => {
-                if symbol.is_empty() {
-                    continue;
-                }
-                let span = serde_json::json!({
-                    "symbol_id": symbol,
-                    "file": file,
-                    "line": line,
-                    "col": col,
-                    "lo": lo,
-                    "hi": hi
-                });
-                writeln!(spans_file, "{}", serde_json::to_string(&span)?)?;
-            }
-            _ => {}
-        }
-    }
-
-    let symbols_path = out_dir.join("symbols.json");
-    fs::write(symbols_path, serde_json::to_string_pretty(&symbols)?)?;
-    Ok(())
-}
 
 fn write_graph_artifacts(
     graph_dir: &Path,
@@ -818,6 +856,36 @@ fn write_report<T: Serialize>(path: &Path, data: &T) -> Result<()> {
     let file = fs::File::create(path)?;
     serde_json::to_writer_pretty(file, data)?;
     Ok(())
+}
+
+fn write_error_json(path: &Path, report: &str, err: &anyhow::Error) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let payload = serde_json::json!({
+        "report": report,
+        "status": "error",
+        "error": err.to_string(),
+    });
+    fs::write(path, serde_json::to_string_pretty(&payload)?)?;
+    Ok(())
+}
+
+fn write_error_csv(path: &Path, report: &str, err: &anyhow::Error) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let payload = format!(
+        "report,error\n{},\"{}\"\n",
+        report,
+        err.to_string().replace('\"', "\"\"")
+    );
+    fs::write(path, payload)?;
+    Ok(())
+}
+
+fn write_error_cluster_graph_bin(path: &Path) {
+    let _ = fs::write(path, vec![0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8]);
 }
 
 fn graph_fingerprint(nodes: &[CodeGraphNode], edges: &[CodeGraphEdge], files: &[String]) -> u64 {

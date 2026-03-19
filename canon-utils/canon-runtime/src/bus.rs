@@ -1,4 +1,4 @@
-use canon_event::{EventMask, EventConsumer, EventEmitterHandle, CanonEvent, EventFilter};
+use canon_event::{EventMask, EventConsumer, EventEmitterHandle, CanonEvent, EventFilter, RustcEvent};
 use crossbeam_channel::{bounded, Sender};
 use std::thread;
 
@@ -15,6 +15,19 @@ pub struct ConsumerEntry {
 pub struct EventBus {
     consumers: Vec<ConsumerEntry>,
     queue_size: usize,
+}
+
+fn is_error_event(event: &CanonEvent) -> bool {
+    match event {
+        CanonEvent::ErrorOccurred(_) => true,
+        CanonEvent::CapabilityFailed(_) => true,
+        CanonEvent::NodeFailed(_) => true,
+        CanonEvent::Code(canon_event::Code { delta, .. }) => matches!(
+            delta.event,
+            RustcEvent::PanicCaptured(_) | RustcEvent::InvariantViolation(_)
+        ),
+        _ => false,
+    }
 }
 
 impl EventBus {
@@ -50,6 +63,11 @@ impl EventBus {
         for consumer in &self.consumers {
             match consumer.filter {
                 EventFilter::All => {}
+                EventFilter::ErrorOnly => {
+                    if !is_error_event(&event) {
+                        continue;
+                    }
+                }
                 EventFilter::EditOnly => {
                     if !matches!(event, CanonEvent::Edit(_)) {
                         continue;

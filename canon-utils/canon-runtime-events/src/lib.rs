@@ -49,6 +49,7 @@ pub use events::{
     ExtractModule,
     Code,
     DebugEvent,
+    ErrorOccurred,
     Tick,
     RuntimeStateUpdated,
     PolicyBaselineUpdated,

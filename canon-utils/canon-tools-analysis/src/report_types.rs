@@ -92,3 +92,22 @@ pub struct PathRedundancyEntry {
     pub paths_unique: usize,
     pub redundancy_ratio: f64,
 }
+
+#[derive(Serialize)]
+pub struct RuntimeReachabilityEntry {
+    pub symbol: String,
+    pub file: String,
+    pub line: Option<u32>,
+}
+
+#[derive(Serialize)]
+pub struct RuntimeReachabilityReport {
+    pub entry_symbol: String,
+    pub entry_node_id: Option<u32>,
+    pub total_functions: usize,
+    pub reachable_functions: usize,
+    pub coverage_ratio: f64,
+    pub unreachable: Vec<RuntimeReachabilityEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}

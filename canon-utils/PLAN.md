@@ -261,3 +261,32 @@ Your current failure (crate drops out) is exactly because errors are **not fully
 [
 \max(\text{intelligence, efficiency, correctness, alignment, robustness, performance, scalability, determinism, transparency, collaboration, empowerment, benefit, learning, future-proofing}) = \text{good}
 ]
+
+---
+
+## Execution Plan (Current)
+
+### Objective
+Regenerate reports into `canon-utils/state/reports_out/workspace` from the canonical event log, and ensure error events are properly captured.
+
+### Steps
+1. **Verify inputs**
+   - Confirm canonical tlog exists and is non-empty: `canon-utils/state/event_log/event.tlog.d`.
+   - Confirm analysis runtime capabilities are available.
+
+2. **Run analysis pipeline**
+   - Execute the analysis capability (or equivalent CLI) that reads the canonical tlog and writes to `canon-utils/state/reports_out/workspace`.
+   - Ensure it targets the canonical tlog path and workspace output directory.
+
+3. **Validate outputs**
+   - Check `canon-utils/state/reports_out/workspace` for populated `analysis/`, `graph/`, `graphs/`, `metrics/`.
+   - Inspect `analysis/analysis_errors.json` for failures.
+
+4. **Verify error stream**
+   - Ensure `canon-utils/state/event_log/errors.jsonl` contains recent error entries.
+   - Ensure errors remain in canonical tlog as `error_occurred`.
+
+### Success Criteria
+- `reports_out/workspace` contains analysis outputs.
+- `analysis_errors.json` empty or explains remaining blockers.
+- Errors are present in canonical tlog; error JSONL is populated.

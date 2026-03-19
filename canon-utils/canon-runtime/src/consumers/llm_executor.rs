@@ -4,7 +4,7 @@ use canon_llm::endpoint_worker;
 use canon_llm::llm;
 use canon_llm::ws_server;
 use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityHandler};
-use canon_event::{CanonEvent, EventEmitterHandle, canon_emit};
+use canon_event::{CanonEvent, ErrorOccurred, EventEmitterHandle, canon_emit};
 use serde_json::json;
 use std::sync::{Arc, OnceLock};
 use std::thread;
@@ -89,6 +89,17 @@ impl LlmCapabilityHandler {
                         } else {
                             config.llm_endpoints.first()
                         }) else {
+                            emitter.emit(CanonEvent::ErrorOccurred(ErrorOccurred {
+                                kind: "llm_config".to_string(),
+                                source: "llm_executor".to_string(),
+                                message: "no llm endpoints configured".to_string(),
+                                severity: "error".to_string(),
+                                context: json!({
+                                    "request_id": request_id.clone(),
+                                    "capability": name.clone(),
+                                }),
+                                trace_id: None,
+                            }));
                             emitter.emit(CanonEvent::CapabilityFailed(canon_event::CapabilityFailed {
                                 request_id,
                                 name,
@@ -170,6 +181,17 @@ impl LlmCapabilityHandler {
                                     json!({ "request_id": request_id }));
                             }
                             Err(err) => {
+                                emitter.emit(CanonEvent::ErrorOccurred(ErrorOccurred {
+                                    kind: "llm_call".to_string(),
+                                    source: "llm_executor".to_string(),
+                                    message: err.to_string(),
+                                    severity: "error".to_string(),
+                                    context: json!({
+                                        "request_id": request_id.clone(),
+                                        "capability": name.clone(),
+                                    }),
+                                    trace_id: None,
+                                }));
                                 emitter.emit(CanonEvent::CapabilityFailed(
                                     canon_event::CapabilityFailed {
                                         request_id: request_id.clone(),
