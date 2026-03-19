@@ -7,59 +7,60 @@ Format: `CrateName` → `path::to::Item` — source file
 
 ## Events
 
-| Item                   | Canonical location                      | Source file                                 |
-|------------------------+-----------------------------------------+---------------------------------------------|
-| `RuntimeEvent`         | `canon_event::RuntimeEvent`             | `canon-event/src/events.rs`                 |
-| `RuntimeConsumer`      | `canon_event::RuntimeConsumer`          | `canon-event/src/events.rs`                 |
-| `RuntimeEmitter`       | `canon_event::RuntimeEmitter`           | `canon-event/src/events.rs`                 |
-| `RuntimeEmitterHandle` | `canon_event::RuntimeEmitterHandle`     | `canon-event/src/events.rs`                 |
-| `RuntimeEventFilter`   | `canon_event::RuntimeEventFilter`       | `canon-event/src/events.rs`                 |
-| `CapabilityRequested`  | `canon_event::CapabilityRequested`      | `canon-event/src/events.rs`                 |
-| `CapabilityCompleted`  | `canon_event::CapabilityCompleted`      | `canon-event/src/events.rs`                 |
-| `CapabilityFailed`     | `canon_event::CapabilityFailed`         | `canon-event/src/events.rs`                 |
-| `NodeReady`            | `canon_event::NodeReady`                | `canon-event/src/events.rs`                 |
-| `NodeStarted`          | `canon_event::NodeStarted`              | `canon-event/src/events.rs`                 |
-| `NodeCompleted`        | `canon_event::NodeCompleted`            | `canon-event/src/events.rs`                 |
-| `NodeFailed`           | `canon_event::NodeFailed`               | `canon-event/src/events.rs`                 |
-| `EditEvent`            | `canon_event::EditEvent`                | `canon-event/src/events.rs`                 |
-| `RustcEventConsumer`   | `canon_event::RustcEventConsumer`       | `canon-event/src/events.rs`                 |
-| `impl_rustc_consumer!` | `canon_event::impl_rustc_consumer`      | `canon-event/src/lib.rs` (macro)            |
-| `RustcEvent`           | `canon_event::RustcEvent`               | `canon-types/src/kernel_types_generated.rs` |
-| `RustcState`           | `canon_event::RustcState`               | `canon-types/src/kernel_types_generated.rs` |
-| `EventDelta`           | `canon_event::EventDelta`               | `canon-types/src/kernel_types_generated.rs` |
-| `SupervisorEvent`      | `canon_event_store::SupervisorEvent`    | `canon-event-store/src/reader.rs`           |
-| `CanonEvent`           | `canon_event::CanonEvent`               | `canon-event/src/tlog/event.rs`             |
+| Item                   | Canonical location                   | Source file                                      |
+|------------------------+--------------------------------------+--------------------------------------------------|
+| `CanonEvent`           | `canon_event::CanonEvent`            | `canon-runtime-events/src/events.rs`             |
+| `EventConsumer`        | `canon_event::EventConsumer`         | `canon-runtime-events/src/events.rs`             |
+| `EventEmitter`         | `canon_event::EventEmitter`          | `canon-runtime-events/src/events.rs`             |
+| `EventEmitterHandle`   | `canon_event::EventEmitterHandle`    | `canon-runtime-events/src/events.rs`             |
+| `EventFilter`          | `canon_event::EventFilter`           | `canon-runtime-events/src/events.rs`             |
+| `EventMask`            | `canon_event::EventMask`             | `canon-runtime-events/src/events.rs`             |
+| `ErrorOccurred`        | `canon_event::ErrorOccurred`         | `canon-runtime-events/src/events.rs`             |
+| `CapabilityRequested`  | `canon_event::CapabilityRequested`   | `canon-runtime-events/src/events.rs`             |
+| `CapabilityCompleted`  | `canon_event::CapabilityCompleted`   | `canon-runtime-events/src/events.rs`             |
+| `CapabilityFailed`     | `canon_event::CapabilityFailed`      | `canon-runtime-events/src/events.rs`             |
+| `NodeReady`            | `canon_event::NodeReady`             | `canon-runtime-events/src/events.rs`             |
+| `NodeStarted`          | `canon_event::NodeStarted`           | `canon-runtime-events/src/events.rs`             |
+| `NodeCompleted`        | `canon_event::NodeCompleted`         | `canon-runtime-events/src/events.rs`             |
+| `NodeFailed`           | `canon_event::NodeFailed`            | `canon-runtime-events/src/events.rs`             |
+| `EditEvent`            | `canon_event::EditEvent`             | `canon-runtime-events/src/events.rs`             |
+| `RustcEventConsumer`   | `canon_event::RustcEventConsumer`    | `canon-runtime-events/src/events.rs`             |
+| `impl_rustc_consumer!` | `canon_event::impl_rustc_consumer`   | `canon-runtime-events/src/lib.rs` (macro)         |
+| `RustcEvent`           | `canon_event::RustcEvent`            | `canon-types/src/kernel_types.rs`                |
+| `RustcState`           | `canon_event::RustcState`            | `canon-types/src/kernel_types.rs`                |
+| `EventDelta`           | `canon_event::EventDelta`            | `canon-types/src/kernel_types.rs`                |
+| `SupervisorEvent`      | `canon_event_store::SupervisorEvent` | `canon-storage-eventlog/src/reader.rs`           |
 
 ---
 
 ## Tlog — writing
 
-| Item                     | Canonical location                                             | Source file                               |
-|--------------------------+----------------------------------------------------------------+-------------------------------------------|
-| `canon_emit!`            | `canon_event::canon_emit`                                      | `canon-event/src/macros/emit.rs` ✅ **USE THIS** |
-| `write_event_auto`       | `canon_event::write_event_auto`                                | `canon-event/src/emit.rs` *(when TlogEvent already constructed)* |
-| `resolve_tlog_path`      | `canon_event::resolve_tlog_path`                               | `canon-event/src/emit.rs`                 |
-| `canon_event_struct!`    | `canon_event::canon_event_struct`                              | `canon-event/src/macros/event.rs`         |
-| `canon_event_enum!`      | `canon_event::canon_event_enum`                                | `canon-event/src/macros/event.rs`         |
-| `BinarySegmentWriter`    | `canon_event::BinarySegmentWriter`                             | `canon-event/src/tlog/binary.rs` *(internal / batch only)* |
-| `TlogWriter`             | `canon_event::TlogWriter`                                      | `canon-event/src/tlog/writer.rs` *(internal)* |
-| `emit_event_json`        | `canon_event::emit_event_json`                                 | `canon-event/src/tlog/writer.rs` *(internal)* |
-| `emit_event`             | `canon_event::emit_event`                                      | `canon-event/src/emit.rs` *(use `canon_emit!` instead)* |
+| Item                  | Canonical location                 | Source file                                                               |
+|-----------------------+------------------------------------+---------------------------------------------------------------------------|
+| `canon_emit!`         | `canon_event::canon_emit`          | `canon-runtime-events/src/macros/emit.rs` ✅ **USE THIS**                 |
+| `write_event_auto`    | `canon_event::write_event_auto`    | `canon-runtime-events/src/emit.rs` *(when TlogEvent already constructed)* |
+| `resolve_tlog_path`   | `canon_event::resolve_tlog_path`   | `canon-runtime-events/src/emit.rs`                                        |
+| `canon_event_struct!` | `canon_event::canon_event_struct`  | `canon-runtime-events/src/macros/event.rs`                                |
+| `canon_event_enum!`   | `canon_event::canon_event_enum`    | `canon-runtime-events/src/macros/event.rs`                                |
+| `BinarySegmentWriter` | `canon_event::BinarySegmentWriter` | `canon-runtime-events/src/tlog/binary.rs` *(internal / batch only)*       |
+| `TlogWriter`          | `canon_event::TlogWriter`          | `canon-runtime-events/src/tlog/writer.rs` *(internal)*                    |
+| `emit_event_json`     | `canon_event::emit_event_json`     | `canon-runtime-events/src/tlog/writer.rs` *(internal)*                    |
+| `emit_event`          | `canon_event::emit_event`          | `canon-runtime-events/src/emit.rs` *(use `canon_emit!` instead)*          |
 
 ---
 
 ## Tlog — reading
 
-| Item                                       | Canonical location                                            | Source file                       |
-|--------------------------------------------+---------------------------------------------------------------+-----------------------------------|
-| `AnyEvent`                                 | `canon_event_store::AnyEvent`                                 | `canon-event-store/src/reader.rs` |
-| `read_any_events_from_path`                | `canon_event_store::read_any_events_from_path`                | `canon-event-store/src/reader.rs` |
-| `read_any_events_from_path_with_start_seq` | `canon_event_store::read_any_events_from_path_with_start_seq` | `canon-event-store/src/reader.rs` |
-| `extract_rustc_event`                      | `canon_event_store::extract_rustc_event`                      | `canon-event-store/src/reader.rs` |
-| `extract_capability_request`               | `canon_event_store::extract_capability_request`               | `canon-event-store/src/reader.rs` |
-| `extract_edit_event`                       | `canon_event_store::extract_edit_event`                       | `canon-event-store/src/reader.rs` |
-| `extract_supervisor_event`                 | `canon_event_store::extract_supervisor_event`                 | `canon-event-store/src/reader.rs` |
-| `detect_tlog_format`                       | `canon_event_store::detect_tlog_format`                       | `canon-event-store/src/reader.rs` |
+| Item                                       | Canonical location                                            | Source file                            |
+|--------------------------------------------+---------------------------------------------------------------+----------------------------------------|
+| `AnyEvent`                                 | `canon_event_store::AnyEvent`                                 | `canon-storage-eventlog/src/reader.rs` |
+| `read_any_events_from_path`                | `canon_event_store::read_any_events_from_path`                | `canon-storage-eventlog/src/reader.rs` |
+| `read_any_events_from_path_with_start_seq` | `canon_event_store::read_any_events_from_path_with_start_seq` | `canon-storage-eventlog/src/reader.rs` |
+| `extract_rustc_event`                      | `canon_event_store::extract_rustc_event`                      | `canon-storage-eventlog/src/reader.rs` |
+| `extract_capability_request`               | `canon_event_store::extract_capability_request`               | `canon-storage-eventlog/src/reader.rs` |
+| `extract_edit_event`                       | `canon_event_store::extract_edit_event`                       | `canon-storage-eventlog/src/reader.rs` |
+| `extract_supervisor_event`                 | `canon_event_store::extract_supervisor_event`                 | `canon-storage-eventlog/src/reader.rs` |
+| `detect_tlog_format`                       | `canon_event_store::detect_tlog_format`                       | `canon-storage-eventlog/src/reader.rs` |
 
 ---
 
@@ -79,20 +80,20 @@ Format: `CrateName` → `path::to::Item` — source file
 
 ## Graph — code graph (Rust AST)
 
-| Item                                 | Canonical location                                      | Source file                            |
-|--------------------------------------+---------------------------------------------------------+----------------------------------------|
-| `CodeNode`                           | `canon_event_store::CodeNode`                           | `canon-event-store/src/graph_types.rs` |
-| `CodeEdge`                           | `canon_event_store::CodeEdge`                           | `canon-event-store/src/graph_types.rs` |
-| `CodeGraphState`                     | `canon_event_store::CodeGraphState`                     | `canon-event-store/src/graph_types.rs` |
-| `apply_rustc_event_to_graph`         | `canon_event_store::apply_rustc_event_to_graph`         | `canon-event-store/src/replay.rs`      |
-| `replay_graph_from_tlog`             | `canon_event_store::replay_graph_from_tlog`             | `canon-event-store/src/replay.rs`      |
-| `replay_graph_from_tlog_incremental` | `canon_event_store::replay_graph_from_tlog_incremental` | `canon-event-store/src/replay.rs`      |
-| `CodeGraph` *(materialised)*         | `canon_graph::CodeGraph`                                | `canon-graph/src/artifacts_loader.rs`  |
-| `CsrGraph`                           | `canon_graph::CsrGraph`                                 | `canon-graph/src/artifacts_loader.rs`  |
-| `load_code_graph`                    | `canon_graph::load_code_graph`                          | `canon-graph/src/artifacts_loader.rs`  |
-| `GraphConsumer`                      | `canon_graph::GraphConsumer`                            | `canon-graph/src/consumer.rs`          |
+| Item                                 | Canonical location                                       | Source file                            |
+|--------------------------------------+----------------------------------------------------------+----------------------------------------|
+| `CodeNode`                           | `canon_event_store::CodeNode`                            | `canon-event-store/src/graph_types.rs` |
+| `CodeEdge`                           | `canon_event_store::CodeEdge`                            | `canon-event-store/src/graph_types.rs` |
+| `CodeGraphState`                     | `canon_event_store::CodeGraphState`                      | `canon-event-store/src/graph_types.rs` |
+| `apply_rustc_event_to_graph`         | `canon_event_store::apply_rustc_event_to_graph`          | `canon-event-store/src/replay.rs`      |
+| `replay_graph_from_tlog`             | `canon_event_store::replay_graph_from_tlog`              | `canon-event-store/src/replay.rs`      |
+| `replay_graph_from_tlog_incremental` | `canon_event_store::replay_graph_from_tlog_incremental`  | `canon-event-store/src/replay.rs`      |
+| `CodeGraph` *(materialised)*         | `canon_graph::CodeGraph`                                 | `canon-graph/src/artifacts_loader.rs`  |
+| `CsrGraph`                           | `canon_graph::CsrGraph`                                  | `canon-graph/src/artifacts_loader.rs`  |
+| `load_code_graph`                    | `canon_graph::load_code_graph`                           | `canon-graph/src/artifacts_loader.rs`  |
+| `GraphConsumer`                      | `canon_graph::GraphConsumer`                             | `canon-graph/src/consumer.rs`          |
 | `GraphEdge` *(alias)*                | `canon_graph::GraphEdge` = `canon_event_store::CodeEdge` | `canon-graph/src/artifacts_loader.rs`  |
-| `GraphNode`                          | `canon_graph::GraphNode`                                | `canon-graph/src/artifacts_loader.rs`  |
+| `GraphNode`                          | `canon_graph::GraphNode`                                 | `canon-graph/src/artifacts_loader.rs`  |
 
 ---
 
@@ -101,17 +102,17 @@ Format: `CrateName` → `path::to::Item` — source file
 Types live in `canon-goal` (Cluster A); runtime/LLM code stays in `canon-agent` (Cluster B).
 Both `canon_goal::X` and `canon_agent::X` resolve to the same type (`canon-agent` re-exports `canon-goal`).
 
-| Item                                   | Canonical location                              | Source file                         |
-|----------------------------------------+-------------------------------------------------+-------------------------------------|
-| `GoalGraph`                            | `canon_goal::goal_graph::GoalGraph`             | `canon-goal/src/goal_graph.rs`      |
-| `GoalNode`                             | `canon_goal::goal_graph::GoalNode`              | `canon-goal/src/goal_graph.rs`      |
-| `NodeStatus`                           | `canon_goal::goal_graph::NodeStatus`            | `canon-goal/src/goal_graph.rs`      |
-| `task_graph_resolve_ready`             | `canon_goal::goal_graph::task_graph_resolve_ready` | `canon-goal/src/goal_graph.rs`   |
-| `GoalGraphPatch`                       | `canon_goal::goal_patch::GoalGraphPatch`        | `canon-goal/src/goal_patch.rs`      |
-| `GoalGraphEvent`                       | `canon_goal::goal_patch::GoalGraphEvent`        | `canon-goal/src/goal_patch.rs`      |
-| `apply_graph_patch`                    | `canon_goal::goal_patch::apply_graph_patch`     | `canon-goal/src/goal_patch.rs`      |
-| `DecomposeTaskSpec`                    | `canon_goal::decompose::DecomposeTaskSpec`      | `canon-goal/src/decompose.rs`       |
-| `DecomposeNodeType`                    | `canon_goal::decompose::DecomposeNodeType`      | `canon-goal/src/decompose.rs`       |
+| Item                                   | Canonical location                                              | Source file                     |
+|----------------------------------------+-----------------------------------------------------------------+---------------------------------|
+| `GoalGraph`                            | `canon_goal::goal_graph::GoalGraph`                             | `canon-goal/src/goal_graph.rs`  |
+| `GoalNode`                             | `canon_goal::goal_graph::GoalNode`                              | `canon-goal/src/goal_graph.rs`  |
+| `NodeStatus`                           | `canon_goal::goal_graph::NodeStatus`                            | `canon-goal/src/goal_graph.rs`  |
+| `task_graph_resolve_ready`             | `canon_goal::goal_graph::task_graph_resolve_ready`              | `canon-goal/src/goal_graph.rs`  |
+| `GoalGraphPatch`                       | `canon_goal::goal_patch::GoalGraphPatch`                        | `canon-goal/src/goal_patch.rs`  |
+| `GoalGraphEvent`                       | `canon_goal::goal_patch::GoalGraphEvent`                        | `canon-goal/src/goal_patch.rs`  |
+| `apply_graph_patch`                    | `canon_goal::goal_patch::apply_graph_patch`                     | `canon-goal/src/goal_patch.rs`  |
+| `DecomposeTaskSpec`                    | `canon_goal::decompose::DecomposeTaskSpec`                      | `canon-goal/src/decompose.rs`   |
+| `DecomposeNodeType`                    | `canon_goal::decompose::DecomposeNodeType`                      | `canon-goal/src/decompose.rs`   |
 | `graph_analysis_compute_graph_signals` | `canon_agent::graph_algo::graph_analysis_compute_graph_signals` | `canon-agent/src/graph_algo.rs` |
 
 ---
@@ -158,13 +159,13 @@ Both `canon_goal::X` and `canon_agent::X` resolve to the same type (`canon-agent
 
 ## Planning — goals and capabilities
 
-| Item                 | Canonical location                              | Source file                         |
-|----------------------+-------------------------------------------------+-------------------------------------|
-| `GoalSpec`           | `canon_goal::goal::GoalSpec`                    | `canon-goal/src/goal.rs`            |
-| `GoalType`           | `canon_goal::goal::GoalType`                    | `canon-goal/src/goal.rs`            |
+| Item                 | Canonical location                                 | Source file                          |
+|----------------------+----------------------------------------------------+--------------------------------------|
+| `GoalSpec`           | `canon_goal::goal::GoalSpec`                       | `canon-goal/src/goal.rs`             |
+| `GoalType`           | `canon_goal::goal::GoalType`                       | `canon-goal/src/goal.rs`             |
 | `PipelineCapability` | `canon_goal::capability_types::PipelineCapability` | `canon-goal/src/capability_types.rs` |
-| `CapabilityMode`     | `canon_goal::capability_types::CapabilityMode`  | `canon-goal/src/capability_types.rs` |
-| `CapabilityConfig`   | `canon_agent::config::CapabilityConfig`         | `canon-agent/src/config.rs`         |
+| `CapabilityMode`     | `canon_goal::capability_types::CapabilityMode`     | `canon-goal/src/capability_types.rs` |
+| `CapabilityConfig`   | `canon_agent::config::CapabilityConfig`            | `canon-agent/src/config.rs`          |
 
 ---
 
@@ -182,17 +183,18 @@ Both `canon_goal::X` and `canon_agent::X` resolve to the same type (`canon-agent
 
 ## Runtime — kernel and consumers
 
-| Item                            | Canonical location                              | Source file                                         |
-|---------------------------------+-------------------------------------------------+-----------------------------------------------------|
-| `EventRuntime`                  | `canon_kernel::EventRuntime`                    | `canon-kernel/src/lib.rs`                           |
-| `register_default_capabilities` | `canon_kernel::register_default_capabilities`   | `canon-kernel/src/lib.rs`                           |
-| `PromptRegistry`                | `canon_kernel::bootstrap::PromptRegistry`       | `canon-kernel/src/bootstrap.rs`                     |
-| `PromptRegistryHandle`          | `canon_kernel::bootstrap::PromptRegistryHandle` | `canon-kernel/src/bootstrap.rs`                     |
-| `bootstrap_config`              | `canon_kernel::bootstrap::bootstrap_config`     | `canon-kernel/src/bootstrap.rs`                     |
-| `AgentConsumer` *(private)*     | `canon_kernel::consumers::agent::AgentConsumer` | `canon-kernel/src/consumers/agent/mod.rs`           |
-| `LlmExecutorConsumer`           | `canon_kernel::consumers::llm_executor`         | `canon-kernel/src/consumers/llm_executor.rs`        |
-| `EventLoopConsumer`             | `canon_kernel::consumers::event_loop`           | `canon-kernel/src/consumers/event_loop.rs`          |
-| `CapabilityExecutorConsumer`    | `canon_kernel::consumers::capability_executor`  | `canon-kernel/src/consumers/capability_executor.rs` |
+| Item                            | Canonical location                                                  | Source file                                          |
+|---------------------------------+---------------------------------------------------------------------+------------------------------------------------------|
+| `EventRuntime`                  | `canon_runtime::EventRuntime`                                       | `canon-runtime/src/lib.rs`                           |
+| `register_default_capabilities` | `canon_runtime::register_default_capabilities`                      | `canon-runtime/src/lib.rs`                           |
+| `PromptRegistry`                | `canon_runtime::bootstrap::PromptRegistry`                          | `canon-runtime/src/bootstrap.rs`                     |
+| `PromptRegistryHandle`          | `canon_runtime::bootstrap::PromptRegistryHandle`                    | `canon-runtime/src/bootstrap.rs`                     |
+| `bootstrap_config`              | `canon_runtime::bootstrap::bootstrap_config`                        | `canon-runtime/src/bootstrap.rs`                     |
+| `AgentConsumer`                 | `canon_runtime::consumers::agent::AgentConsumer`                    | `canon-runtime/src/consumers/agent/mod.rs`           |
+| `LlmCapabilityHandler`          | `canon_runtime::consumers::llm_executor::LlmCapabilityHandler`      | `canon-runtime/src/consumers/llm_executor.rs`        |
+| `CapabilityExecutor`            | `canon_runtime::consumers::capability_executor::CapabilityExecutor` | `canon-runtime/src/consumers/capability_executor.rs` |
+| `ErrorLogger`                   | `canon_runtime::consumers::error_logger::ErrorLogger`               | `canon-runtime/src/consumers/error_logger.rs`        |
+| `FailureStoreConsumer`          | `canon_runtime::consumers::failure_store::FailureStoreConsumer`     | `canon-runtime/src/consumers/failure_store.rs`       |
 
 ---
 
@@ -220,16 +222,27 @@ Both `canon_goal::X` and `canon_agent::X` resolve to the same type (`canon-agent
 | `ReportEventConsumer`        | `canon_analysis::ReportEventConsumer`        | `canon-analysis/src/report_consumer.rs`                |
 | `CapabilityEventConsumer`    | `canon_analysis::CapabilityEventConsumer`    | `canon-analysis/src/capability_consumer.rs`            |
 | `SmtConsumer`                | `canon_analysis::SmtConsumer`                | `canon-analysis/src/smt/consumer.rs`                   |
+| `RuntimeReachabilityReport`  | `canon_analysis::RuntimeReachabilityReport`  | `canon-analysis/src/report_types.rs`                   |
 
 ---
 
 ## Logging / debug output
 
-| Item    | Canonical location               | Source file                     |
-|---------+----------------------------------+---------------------------------|
-| `info`  | `canon_event::emit_debug::info`  | `canon-event/src/emit_debug.rs` |
-| `warn`  | `canon_event::emit_debug::warn`  | `canon-event/src/emit_debug.rs` |
-| `error` | `canon_event::emit_debug::error` | `canon-event/src/emit_debug.rs` |
+| Item         | Canonical location                  | Source file                                      |
+|--------------+-------------------------------------+--------------------------------------------------|
+| `DebugEvent` | `canon_event::DebugEvent`           | `canon-runtime-events/src/events.rs`             |
+| `canon_emit!` | `canon_event::canon_emit`          | `canon-runtime-events/src/macros/emit.rs`        |
+
+---
+
+## Errors — eventized + logs
+
+| Item                       | Canonical location                                            | Source file                                       |
+|----------------------------+---------------------------------------------------------------+---------------------------------------------------|
+| `ErrorOccurred`            | `canon_event::ErrorOccurred`                                  | `canon-runtime-events/src/events.rs`              |
+| `error_occurred` tlog kind | `CanonEvent::ErrorOccurred` → `TlogEvent`                     | `canon-runtime/src/lib.rs` (append_runtime_event) |
+| Error log JSONL (default)  | `CANON_ERROR_LOG_PATH` → reports_out `error_log/errors.jsonl` | `canon-runtime/src/consumers/error_logger.rs`     |
+| Failure stats JSON         | `CANON_FAILURE_STORE_PATH` → reports_out `failure_store.json` | `canon-runtime/src/consumers/failure_store.rs`    |
 
 ---
 
@@ -246,8 +259,8 @@ Both `canon_goal::X` and `canon_agent::X` resolve to the same type (`canon-agent
 
 ## Supervisor / build
 
-| Item               | Canonical location                   | Source file                       |
-|--------------------+--------------------------------------+-----------------------------------|
+| Item               | Canonical location                | Source file                    |
+|--------------------+-----------------------------------+--------------------------------|
 | `SupervisorConfig` | `canon_builder::SupervisorConfig` | `canon-builder/src/config.rs`  |
 | `ProcessManager`   | `canon_builder::ProcessManager`   | `canon-builder/src/process.rs` |
 | `start_watcher`    | `canon_builder::start_watcher`    | `canon-builder/src/watcher.rs` |
@@ -257,24 +270,16 @@ Both `canon_goal::X` and `canon_agent::X` resolve to the same type (`canon-agent
 
 ## Deprecated / removed
 
-| Item                                               | Status     | Replacement                                                            |
-|----------------------------------------------------+------------+------------------------------------------------------------------------|
-| `canon_planner::*`                                 | ✅ Deleted | Import directly from `canon_agent`, `canon_goal`, `canon_graph`, `canon_analysis` |
-| `canon_agent_v3` (crate)                           | ✅ Renamed | `canon_agent` (package name + directory)                               |
-| `canon_agent_v3::engine`                           | ✅ Deleted | `canon_agent::llm` / `canon_agent::endpoint_worker`                    |
-| `canon_agent_v3::state_snapshot::PipelineSnapshot` | ✅ Deleted | `GoalGraphCheckpointed` + event log projection                         |
-| `RuntimeEvent::AgentState`                         | ✅ Removed | `RuntimeEvent::GoalGraphCheckpointed`                                  |
-| `canon_graph::Edge` *(duplicate struct)*           | ✅ Unified | `canon_graph::GraphEdge` = `canon_event_store::CodeEdge`               |
-| `rebuild_symbol_index` in `canon_graph`            | ✅ Deleted | `canon_event_store::replay::rebuild_symbol_index`                      |
-| `append_event` / `append_event_json`               | ✅ Renamed | `write_event` (method) / `emit_event_json` (free fn)                   |
-| `canon_event_store::writer` shim module            | ✅ Deleted | Import `BinarySegmentWriter`, `TlogWriter`, `CanonEvent`, `emit_event_json` directly from `canon_event::` |
-| `emit_rustc_event`                                 | ✅ Deleted | `canon_emit!("canon-rustc", kind, payload, path)`                      |
-| `emit_capability_event`                            | ✅ Deleted | `canon_emit!("canon-runtime", kind, payload, path)`                    |
-| `emit_edit_event`                                  | ✅ Deleted | `canon_emit!("canon-editor", "edit_event", payload, &resolve_tlog_path(Some(root), None))` |
-| `BinaryTlogWriter`                                 | ✅ Superseded | `canon_emit!` / `write_event_auto` handle format selection            |
-| `KernelGraph` / `KernelCodeGraph`                  | ✅ Renamed | `CodeGraph` (materialised) / `CodeGraphState` (event-sourced)          |
-| `NodeRow` / `EdgeRow` *(graph_types.rs)*           | ✅ Renamed | `CodeNode` / `CodeEdge`                                                |
-| `KernelSnapshot*`                                  | ✅ Renamed | `CodeSnapshot` / `CodeSnapshotNode` / `CodeSnapshotEdge`               |
-| `ProjectedGoalNode`                                | ✅ Renamed | `GoalNodeState`                                                        |
-| `dag.rs` / `planner_update.rs`                     | ✅ Renamed | `goal_graph.rs` / `goal_patch.rs`                                      |
-| `canon_agent::goal_*` / `canon_agent::capability_types` / `canon_agent::decompose` | → moved | `canon_goal::*` (re-exported from `canon_agent`) |
+| Item                                                                               | Status        | Replacement                                                                                               |
+|------------------------------------------------------------------------------------+---------------+-----------------------------------------------------------------------------------------------------------|
+| `canon_agent_v3` (crate)                                                           | ✅ Renamed    | `canon_agent` (package name + directory)                                                                  |
+| `RuntimeEvent::AgentState`                                                         | ✅ Removed    | `RuntimeEvent::GoalGraphCheckpointed`                                                                     |
+| `canon_graph::Edge` *(duplicate struct)*                                           | ✅ Unified    | `canon_graph::GraphEdge` = `canon_event_store::CodeEdge`                                                  |
+| `append_event` / `append_event_json`                                               | ✅ Renamed    | `write_event` (method) / `emit_event_json` (free fn)                                                      |
+| `BinaryTlogWriter`                                                                 | ✅ Superseded | `canon_emit!` / `write_event_auto` handle format selection                                                |
+| `KernelGraph` / `KernelCodeGraph`                                                  | ✅ Renamed    | `CodeGraph` (materialised) / `CodeGraphState` (event-sourced)                                             |
+| `NodeRow` / `EdgeRow` *(graph_types.rs)*                                           | ✅ Renamed    | `CodeNode` / `CodeEdge`                                                                                   |
+| `KernelSnapshot*`                                                                  | ✅ Renamed    | `CodeSnapshot` / `CodeSnapshotNode` / `CodeSnapshotEdge`                                                  |
+| `ProjectedGoalNode`                                                                | ✅ Renamed    | `GoalNodeState`                                                                                           |
+| `dag.rs` / `planner_update.rs`                                                     | ✅ Renamed    | `goal_graph.rs` / `goal_patch.rs`                                                                         |
+| `canon_agent::goal_*` / `canon_agent::capability_types` / `canon_agent::decompose` | → moved       | `canon_goal::*` (re-exported from `canon_agent`)                                                          |
