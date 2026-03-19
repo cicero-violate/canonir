@@ -60,7 +60,7 @@ impl EventConsumer for CapabilityExecutor {
                     emitter.emit(event);
                 }
             }
-            CapabilityExecutionResult::NoOp => {}
+            CapabilityExecutionResult::Deferred | CapabilityExecutionResult::NoOp => {}
         }
     }
 

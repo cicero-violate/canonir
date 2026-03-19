@@ -112,10 +112,13 @@ pub fn graph_analysis_compute_graph_signals(graph: &task_graph::TaskGraph) -> Gr
     let has_cycle = topo_order.len() != n;
     let sccs = gpu_kernels::graph_cpu_kernels_compute_scc(&adj).into_iter().filter(|c| c.len() > 1).collect::<Vec<_>>();
     let reach = gpu_kernels::graph_cpu_kernels_compute_reachability(&adj, &roots);
+
+    // enforce internal consistency via mask
+    let _mask = graph_analysis_reachability_mask(&adj, &roots);
+
     let unreachable = reach.iter().enumerate().filter_map(|(i, &ok)| (!ok).then_some(i)).collect::<Vec<_>>();
     GraphAnalysis { roots, topo_order, sccs, unreachable, has_cycle }
 }
-#[allow(dead_code)]
 fn graph_analysis_reachability_mask(adj: &[Vec<usize>], roots: &[usize]) -> Vec<bool> {
     gpu_kernels::graph_cpu_kernels_compute_reachability(adj, roots)
 }

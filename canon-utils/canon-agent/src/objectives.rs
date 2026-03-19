@@ -1,12 +1,12 @@
 use crate::goal::{GoalArtifact, GoalType};
 use crate::graph_algo;
 use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const REPORTS_DIR: &str = "/workspace/ai_sandbox/canon/state/graph/reports";
 const BASELINE_PATH: &str = "/workspace/ai_sandbox/canon/state/projections/objective_baseline.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,7 +35,6 @@ impl Default for ObjectiveWeights {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 struct BranchComplexityEntry {
     symbol: String,
     file: String,
@@ -47,7 +46,6 @@ struct BranchComplexityEntry {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 struct CallgraphCentralityEntry {
     symbol: String,
     file: String,
@@ -59,7 +57,6 @@ struct CallgraphCentralityEntry {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 struct PathRedundancyEntry {
     symbol: String,
     file: String,
@@ -71,7 +68,6 @@ struct PathRedundancyEntry {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 struct StructuralHotspotEntry {
     symbol: String,
     file: String,
@@ -83,7 +79,6 @@ struct StructuralHotspotEntry {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 struct MergeCandidateEntry {
     function: String,
     #[serde(default)]
@@ -95,7 +90,6 @@ struct MergeCandidateEntry {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 struct DependencyCycleEntry {
     cycle_id: u64,
     cycle_length: u64,
@@ -141,29 +135,39 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<Vec<T>> {
     serde_json::from_str(&text).ok()
 }
 
+fn reports_out_root() -> PathBuf {
+    if let Ok(p) = std::env::var("CANON_REPORTS_OUT") {
+        PathBuf::from(p)
+    } else {
+        PathBuf::from("/workspace/ai_sandbox/canon/state/reports_out")
+    }
+}
+
 fn reports_dir() -> PathBuf {
-    PathBuf::from(REPORTS_DIR)
+    reports_out_root().join("workspace").join("metrics")
+}
+
+fn analysis_dir() -> PathBuf {
+    reports_out_root().join("workspace").join("analysis")
 }
 
 pub fn reports_last_modified() -> Option<SystemTime> {
-    let dir = reports_dir();
-    let mut latest = None;
-    for name in [
+    let metrics = reports_dir();
+    let analysis = analysis_dir();
+    let mut latest: Option<SystemTime> = None;
+    let metrics_files = [
         "branch_complexity_report.json",
         "callgraph_centrality_report.json",
         "path_redundancy_report.json",
         "structural_hotspots_report.json",
         "merge_candidates_report.json",
-        "dependency_cycle_report.json",
-    ] {
-        let path = dir.join(name);
-        let meta = std::fs::metadata(path).ok()?;
-        let modified = meta.modified().ok()?;
-        latest = Some(match latest {
-            None => modified,
-            Some(prev) => if modified > prev { modified } else { prev },
-        });
+    ];
+    for name in metrics_files {
+        let modified = std::fs::metadata(metrics.join(name)).ok()?.modified().ok()?;
+        latest = Some(latest.map_or(modified, |prev| if modified > prev { modified } else { prev }));
     }
+    let cycle_modified = std::fs::metadata(analysis.join("dependency_cycle_report.json")).ok()?.modified().ok()?;
+    latest = Some(latest.map_or(cycle_modified, |prev| if cycle_modified > prev { cycle_modified } else { prev }));
     latest
 }
 
@@ -195,7 +199,10 @@ fn collect_scores(
     let mut hotspot_map = HashMap::new();
 
     for entry in branch {
-        branch_map.insert(entry.symbol.clone(), entry.score);
+        let enriched = entry.score
+            + (entry.branch_count as f64 * 0.01)
+            + (entry.duplicate_block_count as f64 * 0.02);
+        branch_map.insert(entry.symbol.clone(), enriched);
         let score = by_symbol.entry(entry.symbol.clone()).or_insert(ObjectiveScore {
             symbol: entry.symbol.clone(),
             file: entry.file.clone(),
@@ -210,7 +217,10 @@ fn collect_scores(
         }
     }
     for entry in centrality {
-        centrality_map.insert(entry.symbol.clone(), entry.centrality_score);
+        let enriched = entry.centrality_score
+            + (entry.caller_count as f64 * 0.01)
+            + (entry.callee_count as f64 * 0.01);
+        centrality_map.insert(entry.symbol.clone(), enriched);
         let score = by_symbol.entry(entry.symbol.clone()).or_insert(ObjectiveScore {
             symbol: entry.symbol.clone(),
             file: entry.file.clone(),
@@ -225,7 +235,9 @@ fn collect_scores(
         }
     }
     for entry in redundancy {
-        let redundancy_score = (1.0 - entry.redundancy_ratio).max(0.0);
+        let redundancy_score =
+            (1.0 - entry.redundancy_ratio).max(0.0)
+            + ((entry.paths_total.saturating_sub(entry.paths_unique)) as f64 * 0.01);
         redundancy_map.insert(entry.symbol.clone(), redundancy_score);
         let score = by_symbol.entry(entry.symbol.clone()).or_insert(ObjectiveScore {
             symbol: entry.symbol.clone(),
@@ -241,7 +253,10 @@ fn collect_scores(
         }
     }
     for entry in hotspots {
-        hotspot_map.insert(entry.symbol.clone(), entry.score);
+        let enriched = entry.score
+            + (entry.branch_count as f64 * 0.01)
+            + (entry.duplicate_blocks as f64 * 0.02);
+        hotspot_map.insert(entry.symbol.clone(), enriched);
         let score = by_symbol.entry(entry.symbol.clone()).or_insert(ObjectiveScore {
             symbol: entry.symbol.clone(),
             file: entry.file.clone(),
@@ -401,9 +416,8 @@ fn split_targets(raw: &str) -> Vec<String> {
 }
 
 fn cycle_targets_present(targets: &[String]) -> Option<bool> {
-    let dir = reports_dir();
     let cycles: Vec<DependencyCycleEntry> =
-        read_json(&dir.join("dependency_cycle_report.json"))?;
+        read_json(&analysis_dir().join("dependency_cycle_report.json"))?;
     if cycles.is_empty() {
         return Some(false);
     }
@@ -418,9 +432,8 @@ fn cycle_targets_present(targets: &[String]) -> Option<bool> {
 }
 
 pub fn load_goal_from_reports(weights: ObjectiveWeights, graph: Option<&crate::task_graph::TaskGraph>) -> Option<ObjectiveSelection> {
-    let dir = reports_dir();
     let cycles: Vec<DependencyCycleEntry> =
-        read_json(&dir.join("dependency_cycle_report.json")).unwrap_or_default();
+        read_json(&analysis_dir().join("dependency_cycle_report.json")).unwrap_or_default();
     if let Some(cycle) = cycles.first() {
         let target_symbols = cycle.nodes.clone();
         let target_files = cycle.files.clone();
@@ -430,7 +443,7 @@ pub fn load_goal_from_reports(weights: ObjectiveWeights, graph: Option<&crate::t
             target_files,
             objective_type: GoalType::BreakCycle,
             success_criteria: success,
-            score: 1.0,
+            score: cycle.cycle_length as f64 + cycle.cycle_id as f64 * 0.001,
         };
         return Some(ObjectiveSelection {
             artifact,
@@ -439,7 +452,7 @@ pub fn load_goal_from_reports(weights: ObjectiveWeights, graph: Option<&crate::t
     }
 
     let merges: Vec<MergeCandidateEntry> =
-        read_json(&dir.join("merge_candidates_report.json")).unwrap_or_default();
+        read_json(&reports_dir().join("merge_candidates_report.json")).unwrap_or_default();
 
     let scores = compute_scores(&weights);
     let mut best = scores
@@ -457,7 +470,9 @@ pub fn load_goal_from_reports(weights: ObjectiveWeights, graph: Option<&crate::t
                 target_files: Vec::new(),
                 objective_type: GoalType::MergePaths,
                 success_criteria: "path_redundancy ↓".to_string(),
-                score: entry.candidate_blocks.len() as f64,
+                score: entry.candidate_blocks.len() as f64
+                    + entry.successors.len() as f64 * 0.5
+                    + entry.branch_block as f64 * 0.01,
             };
             let priority_score = artifact.score;
             return Some(ObjectiveSelection {
@@ -518,6 +533,89 @@ pub fn goal_raw_with_artifact(base: &str, artifact: &GoalArtifact) -> String {
     }
     out.push_str(&format!("Success: {}\n", artifact.success_criteria));
     out.push_str(&format!("Priority score: {:.4}\n", artifact.score));
+    out
+}
+
+/// Read the report most relevant to `artifact` and return a formatted text
+/// block suitable for inclusion in an LLM prompt (top N entries by score).
+pub fn report_context_for_artifact(artifact: &GoalArtifact) -> String {
+    const TOP_N: usize = 10;
+    let metrics = reports_dir();
+    let analysis = analysis_dir();
+    let mut out = String::new();
+
+    match artifact.objective_type {
+        GoalType::ReduceBranching => {
+            let entries: Vec<BranchComplexityEntry> =
+                read_json(&metrics.join("branch_complexity_report.json")).unwrap_or_default();
+            if entries.is_empty() { return out; }
+            out.push_str("REPORT: branch_complexity (top by score)\n");
+            let mut sorted = entries;
+            sorted.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            for e in sorted.iter().take(TOP_N) {
+                out.push_str(&format!(
+                    "  symbol={} file={} score={:.3} branches={} dups={}\n",
+                    e.symbol, e.file, e.score, e.branch_count, e.duplicate_block_count,
+                ));
+            }
+        }
+        GoalType::SimplifyCallgraph => {
+            let entries: Vec<CallgraphCentralityEntry> =
+                read_json(&metrics.join("callgraph_centrality_report.json")).unwrap_or_default();
+            if entries.is_empty() { return out; }
+            out.push_str("REPORT: callgraph_centrality (top by score)\n");
+            let mut sorted = entries;
+            sorted.sort_by(|a, b| b.centrality_score.partial_cmp(&a.centrality_score).unwrap_or(std::cmp::Ordering::Equal));
+            for e in sorted.iter().take(TOP_N) {
+                out.push_str(&format!(
+                    "  symbol={} file={} centrality={:.3} callers={} callees={}\n",
+                    e.symbol, e.file, e.centrality_score, e.caller_count, e.callee_count,
+                ));
+            }
+        }
+        GoalType::MergePaths => {
+            let entries: Vec<PathRedundancyEntry> =
+                read_json(&metrics.join("path_redundancy_report.json")).unwrap_or_default();
+            let merges: Vec<MergeCandidateEntry> =
+                read_json(&metrics.join("merge_candidates_report.json")).unwrap_or_default();
+            if !entries.is_empty() {
+                out.push_str("REPORT: path_redundancy (top by redundancy)\n");
+                let mut sorted = entries;
+                sorted.sort_by(|a, b| b.redundancy_ratio.partial_cmp(&a.redundancy_ratio).unwrap_or(std::cmp::Ordering::Equal));
+                for e in sorted.iter().take(TOP_N) {
+                    out.push_str(&format!(
+                        "  symbol={} file={} redundancy={:.3} paths_total={} paths_unique={}\n",
+                        e.symbol, e.file, e.redundancy_ratio, e.paths_total, e.paths_unique,
+                    ));
+                }
+            }
+            if !merges.is_empty() {
+                out.push_str("REPORT: merge_candidates (top by candidate blocks)\n");
+                let mut sorted = merges;
+                sorted.sort_by_key(|m| Reverse(m.candidate_blocks.len()));
+                for m in sorted.iter().take(TOP_N) {
+                    out.push_str(&format!(
+                        "  function={} candidate_blocks={} successors={}\n",
+                        m.function, m.candidate_blocks.len(), m.successors.len(),
+                    ));
+                }
+            }
+        }
+        GoalType::BreakCycle => {
+            let cycles: Vec<DependencyCycleEntry> =
+                read_json(&analysis.join("dependency_cycle_report.json")).unwrap_or_default();
+            if cycles.is_empty() { return out; }
+            out.push_str("REPORT: dependency_cycles\n");
+            for c in cycles.iter().take(TOP_N) {
+                out.push_str(&format!(
+                    "  cycle_id={} length={} nodes=[{}] files=[{}]\n",
+                    c.cycle_id, c.cycle_length,
+                    c.nodes.join(", "), c.files.join(", "),
+                ));
+            }
+        }
+        _ => {}
+    }
     out
 }
 
@@ -715,8 +813,17 @@ pub fn maybe_regenerate_reports_if_stale() -> bool {
 
     let reports_dir = reports_dir();
     let lock_path = reports_dir.join(".regen.lock");
-    let tlog = Path::new("/workspace/ai_sandbox/canon/state/event_log/event.tlog");
-    let tlog_idx = Path::new("/workspace/ai_sandbox/canon/state/event_log/event.tlog.idx");
+    let tlog_base = std::env::var("CANON_REPORTS_TLOG")
+        .unwrap_or_else(|_| "/workspace/ai_sandbox/canon/state/event_log/event.tlog".to_string());
+    let tlog = Path::new(&tlog_base);
+    let tlog_idx_buf;
+    let tlog_idx = if tlog.extension().is_none() {
+        // it's a directory (.tlog.d); use the dir mtime directly
+        tlog
+    } else {
+        tlog_idx_buf = format!("{}.idx", tlog_base);
+        Path::new(&tlog_idx_buf)
+    };
     if !tlog.exists() || !tlog_idx.exists() {
         return false;
     }

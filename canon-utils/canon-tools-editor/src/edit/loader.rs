@@ -73,14 +73,16 @@ impl ProjectEditor {
         for (file, ast) in &parsed_files {
             let candidates = analysis.file_modules.get(file).cloned().unwrap_or_default();
             if candidates.is_empty() {
-                canon_emit!(
-                    emitter;
+                let _ = canon_emit!(
                     "editor.loader",
                     "no_candidates",
                     serde_json::json!({
                         "file": file,
                         "reason": "no modules found"
-                    })
+                    }),
+                    &std::env::var("CANON_TLOG_PATH")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|_| std::path::PathBuf::from("/workspace/ai_sandbox/canon/state/event_log/event.tlog.d"))
                 );
             }
             let module_path = module_path_for_file(&registry.module_files, &source_root, file)?;

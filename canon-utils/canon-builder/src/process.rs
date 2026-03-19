@@ -1,9 +1,8 @@
-use crate::config::{ProcessConfig, RestartStrategy};
+use crate::config::ProcessConfig;
 use crate::events::wrap_event;
 use anyhow::Result;
 use canon_event::{canon_emit, resolve_tlog_path};
 use std::collections::HashMap;
-use std::path::Path;
 use std::process::{Child, Command};
 use std::thread;
 use std::time::{Duration, Instant};

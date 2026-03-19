@@ -3,7 +3,6 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 #[derive(Debug, Serialize)]
-#[allow(dead_code)]
 pub struct FingerprintSummary {
     pub kind: String,
     pub has_block: usize,
@@ -14,7 +13,6 @@ pub struct FingerprintSummary {
     pub blocks_unwind: usize,
 }
 
-#[allow(dead_code)]
 pub fn compute_fingerprints(graph: &CodeGraph) -> Vec<FingerprintSummary> {
     let id_to_kind: HashMap<u32, &str> =
         graph.nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();

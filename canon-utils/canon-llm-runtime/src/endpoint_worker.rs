@@ -3,8 +3,8 @@ use super::response_router;
 use super::tab_management::{
     tab_manager_drop_tab, tab_manager_get_or_open_tab, tab_manager_mark_tab_cooldown, tab_manager_mark_tab_in_flight, tab_manager_mark_tab_response, tab_manager_mark_tab_sent,
 };
+
 pub use super::tab_management::{tab_manager_log_llm, tab_manager_now_ms, TabManagerHandle};
-use super::telemetry;
 use crate::llm_domains::{is_chatgpt_url, is_gemini_url};
 use crate::ws_server::WsBridge;
 use anyhow::Result;
@@ -41,10 +41,10 @@ struct LlmWorker {
 }
 impl LlmWorker {
     async fn handle_request(&mut self, req: LlmWorkItem) {
-        telemetry::telemetry_inc_pending();
+        // telemetry removed
         if let Some(key) = req.cache_key {
             if let Some(hit) = self.cache.get(&key) {
-                telemetry::telemetry_dec_pending();
+                // telemetry removed
                 let _ = req.response.send(Ok(hit.clone()));
                 return;
             }
@@ -72,7 +72,7 @@ impl LlmWorker {
                 self.cache.insert(key, raw.clone());
             }
         }
-        telemetry::telemetry_dec_pending();
+        // telemetry removed
         let _ = req.response.send(result);
     }
     async fn send_turn(&mut self, phase: &str, req_id: u64, allow_req_id_mismatch: bool, full_prompt: String) -> Result<String> {

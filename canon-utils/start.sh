@@ -3,9 +3,9 @@
 #
 # NOTE: cargo run --bin canon-runtime-supervisor (or ./target/debug/canon-runtime-supervisor)
 #       is intended to run in a SEPARATE terminal from the repo root
-#       (/workspace/ai_sandbox/canon). It watches for file changes and
-#       automatically rebuilds + restarts canon-runtime. Use that for
-#       active development. This script is for running the runtime standalone.
+#       (/workspace/ai_sandbox/canon). It watches the canon-runtime binary and
+#       restarts it when that binary changes. Use that for active development.
+#       This script is for running the runtime standalone.
 
 set -e
 

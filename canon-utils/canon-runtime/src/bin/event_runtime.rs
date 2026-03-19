@@ -5,16 +5,22 @@ use canon_runtime::consumers::capability_executor::CapabilityExecutor;
 use canon_runtime::consumers::llm_executor::LlmCapabilityHandler;
 use canon_runtime::{register_default_capabilities, EventRuntime};
 use canon_editor::EditConsumer;
-use canon_event_store::detect_tlog_format;
 use canon_event_store::read_any_events_from_path_with_start_seq;
 use canon_event_store::replay_graph_from_tlog;
+use canon_event_store::AnyEvent;
+use crossbeam_channel as cc;
+use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::thread::sleep;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::collections::HashSet;
+
+// ---------------------------------------------------------------------------
+// Lock guard — ensures only one instance runs against a given tlog path.
+// ---------------------------------------------------------------------------
 
 struct LockGuard {
     path: PathBuf,
@@ -97,10 +103,34 @@ fn acquire_lock(path: &Path) -> Result<Option<LockGuard>> {
     }))
 }
 
+// ---------------------------------------------------------------------------
+// Queue message type — P → Q
+//
+// Producers push Msg variants into the unbounded MPMC channel Q.
+// W=1 (the main loop) is the sole receiver; it defines commit order and is
+// the only writer to L (log/tlog).  Consumers (C ≥ 1) are driven from W
+// via bus dispatch and track their own offsets; they never mutate L.
+// ---------------------------------------------------------------------------
+
+enum Msg {
+    /// New inbound event delivered directly in memory — no filesystem poll.
+    /// Produced by the notify-watcher thread (P2) and the bootstrap replayer (P1).
+    Event(AnyEvent),
+    /// Tlog was truncated/recreated (observed by P2).
+    /// W must reset its state and replay the provided events from scratch
+    /// to maintain deterministic order (Rule 10).
+    Reset(Vec<AnyEvent>),
+    /// Periodic housekeeping tick from the timer producer (P3).
+    Tick,
+}
+
+// ---------------------------------------------------------------------------
+// main
+// ---------------------------------------------------------------------------
+
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     let mut tlog_path: Option<PathBuf> = None;
-    let mut poll_ms: u64 = 500;
     let mut once = false;
     let start_at_tail = env::var("CANON_EVENT_RUNTIME_START_AT_TAIL")
         .ok()
@@ -108,7 +138,11 @@ fn main() -> Result<()> {
         .unwrap_or(false);
     let cursor_path = env::var("CANON_EVENT_RUNTIME_CURSOR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/workspace/ai_sandbox/canon/state/event_runtime.cursor.json"));
+        .unwrap_or_else(|_| {
+            PathBuf::from(
+                "/workspace/ai_sandbox/canon/state/event_runtime.cursor.json",
+            )
+        });
 
     let mut i = 1;
     while i < args.len() {
@@ -117,15 +151,7 @@ fn main() -> Result<()> {
                 i += 1;
                 tlog_path = args.get(i).map(PathBuf::from);
             }
-            "--poll-ms" => {
-                i += 1;
-                if let Some(val) = args.get(i) {
-                    poll_ms = val.parse().unwrap_or(poll_ms);
-                }
-            }
-            "--once" => {
-                once = true;
-            }
+            "--once" => once = true,
             _ => {}
         }
         i += 1;
@@ -138,19 +164,25 @@ fn main() -> Result<()> {
         .unwrap_or(false);
     let lock_path = env::var("CANON_EVENT_RUNTIME_LOCK")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/workspace/ai_sandbox/canon/state/event_runtime.lock"));
+        .unwrap_or_else(|_| {
+            PathBuf::from("/workspace/ai_sandbox/canon/state/event_runtime.lock")
+        });
     let _lock_guard = match acquire_lock(&lock_path)? {
         Some(guard) => guard,
         None => return Ok(()),
     };
+
     if std::env::var("CANON_VERIFY_TLOG_EQUIV").ok().as_deref() == Some("1") {
         let _ = maybe_verify_tlog_equivalence(&tlog_path);
     }
+
+    // --- Build runtime (W owns this exclusively) ---
     let registry = std::sync::Arc::new(std::sync::Mutex::new(
         canon_capability::CapabilityRegistry::new(),
     ));
     let prompt_registry = new_prompt_registry();
     bootstrap_config(&tlog_path, &prompt_registry);
+
     let consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
         Box::new(AgentConsumer::new()),
         Box::new(CapabilityExecutor::new(
@@ -161,78 +193,190 @@ fn main() -> Result<()> {
     ];
     let mut runtime = EventRuntime::new_with_registry(consumers, registry.clone());
     {
-        let mut registry = registry.lock().expect("capability registry lock");
-        register_default_capabilities(&mut registry);
-        registry.register(std::sync::Arc::new(LlmCapabilityHandler::new(prompt_registry.clone())));
+        let mut reg = registry.lock().expect("capability registry lock");
+        register_default_capabilities(&mut reg);
+        reg.register(Arc::new(LlmCapabilityHandler::new(prompt_registry.clone())));
     }
     runtime.set_execute_capabilities(event_execution_enabled);
+    // set_tlog_path tells W where to append (L).  Only W calls this; only W writes L.
     runtime.set_tlog_path(tlog_path.clone());
+
+    // --- Determine start offset from persisted cursor ---
     let cursor_loaded = load_cursor(&cursor_path, &tlog_path).is_some();
-    let mut start_seq: u64 = load_cursor_seq(&cursor_path, &tlog_path).unwrap_or(0);
+    let start_seq: u64 = load_cursor_seq(&cursor_path, &tlog_path).unwrap_or(0);
     let mut processed: usize = load_cursor(&cursor_path, &tlog_path).unwrap_or(0);
-    // On fresh boot (no saved cursor for this tlog path), jump to the current tail
-    // so old capability_requested events are not re-dispatched to consumers.
-    if !cursor_loaded {
-        if let Ok(latest) = latest_segment_seq(&tlog_path) {
-            start_seq = latest;
-        }
-        let bootstrap_events = read_any_events_from_path_with_start_seq(&tlog_path, start_seq).unwrap_or_default();
+
+    // Read events that already exist in L at startup (in-memory after this point).
+    let bootstrap_events: Vec<AnyEvent> = if tlog_path.exists() {
+        read_any_events_from_path_with_start_seq(&tlog_path, start_seq).unwrap_or_default()
+    } else {
+        vec![]
+    };
+
+    // On fresh boot (no cursor) or start-at-tail: skip existing events to avoid
+    // re-dispatching stale capability_requested entries to consumers.
+    if !cursor_loaded || (start_at_tail && processed == 0 && !bootstrap_events.is_empty()) {
         processed = bootstrap_events.len();
     }
-    let mut did_fast_forward = false;
-    let mut last_len: usize = 0;
+
+    // --- Once mode: W processes the current snapshot of L, then exits ---
+    if once {
+        if !tlog_path.exists() {
+            return Err(anyhow!("tlog not found: {}", tlog_path.display()));
+        }
+        if processed < bootstrap_events.len() {
+            runtime.process_events(&bootstrap_events[processed..])?;
+        }
+        processed = bootstrap_events.len();
+        let _ = save_cursor(&cursor_path, &tlog_path, processed, start_seq);
+        return Ok(());
+    }
+
+    // =========================================================================
+    // P → Q → W=1 → L
+    //
+    // Q  is an unbounded MPMC crossbeam channel.
+    //    Multiple producers push concurrently without blocking each other.
+    //
+    // W=1  is the loop below.  It is the sole receiver of Q, the sole caller
+    //    of process_events/emit_tick, and the sole appender to L.
+    //    Order = arrival at W (Rule 5).  Determinism = single commit path (Rule 9).
+    //
+    // C ≥ 1  are the EventRuntime bus consumers.  They receive events dispatched
+    //    by W, track their own state (offsets), and never write L (Rule 7).
+    // =========================================================================
+    let (q_tx, q_rx) = cc::unbounded::<Msg>();
+
+    // --- P1: bootstrap replayer ---
+    // Unprocessed events already in memory — push directly into Q, no file re-read.
+    for event in bootstrap_events.into_iter().skip(processed) {
+        q_tx.send(Msg::Event(event)).ok();
+    }
+
+    // --- P2: notify watcher ---
+    // Uses OS-level inotify/kqueue to detect tlog changes.
+    // On notification: reads new entries into memory, delivers each as Msg::Event
+    // directly into Q.  Zero polling, zero sleep — events arrive in real time.
+    // File is L (durable log); Q is the live in-memory delivery pipe.
+    {
+        let watcher_tlog = tlog_path.clone();
+        let watcher_tx = q_tx.clone();
+        let watcher_start_seq = start_seq;
+        // watcher_seen tracks how many events from L this producer has already forwarded.
+        let mut watcher_seen: usize = processed;
+
+        let (fs_tx, fs_rx) = cc::unbounded::<notify::Result<notify::Event>>();
+        let mut fs_watcher = RecommendedWatcher::new(
+            move |res| {
+                let _ = fs_tx.send(res);
+            },
+            NotifyConfig::default(),
+        )?;
+
+        // For a segmented binary tlog (dir) watch the dir itself; otherwise watch
+        // the parent so we also catch the file being created for the first time.
+        let watch_target = if watcher_tlog.is_dir() {
+            watcher_tlog.clone()
+        } else {
+            watcher_tlog
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("."))
+        };
+        if watch_target.exists() {
+            fs_watcher.watch(&watch_target, RecursiveMode::NonRecursive)?;
+        }
+
+        std::thread::spawn(move || {
+            let _watcher = fs_watcher; // keep alive for thread lifetime
+            while let Ok(res) = fs_rx.recv() {
+                if res.is_err() {
+                    continue;
+                }
+                let all = match read_any_events_from_path_with_start_seq(
+                    &watcher_tlog,
+                    watcher_start_seq,
+                ) {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                if all.len() < watcher_seen {
+                    // L was truncated or recreated — W must reset (Rule 10).
+                    watcher_seen = 0;
+                    if watcher_tx.send(Msg::Reset(all)).is_err() {
+                        break;
+                    }
+                } else {
+                    // Deliver only the new suffix: each event enters Q individually
+                    // so W can interleave other message types between them.
+                    for event in all.into_iter().skip(watcher_seen) {
+                        watcher_seen += 1;
+                        if watcher_tx.send(Msg::Event(event)).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // --- P3: tick timer ---
+    // A lightweight background producer that sends a housekeeping Tick into Q
+    // every second.  W dispatches emit_tick(); consumers never see this as a
+    // log entry (Tick is not appended to L).
+    {
+        let tick_tx = q_tx.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_secs(1));
+            if tick_tx.send(Msg::Tick).is_err() {
+                break;
+            }
+        });
+    }
+
+    // =========================================================================
+    // W = 1 — single writer loop
+    //
+    // Sole receiver of Q.  Order is defined by arrival here (Rule 5).
+    // All appends to L happen inside runtime.process_events / emit_tick via
+    // append_runtime_event — never from any producer thread (Rule 4, 8).
+    // =========================================================================
     let mut last_saved = Instant::now();
     let mut last_saved_processed = processed;
 
     loop {
-        if !tlog_path.exists() {
-            if once {
-                return Err(anyhow!("tlog not found: {}", tlog_path.display()));
+        match q_rx.recv()? {
+            Msg::Event(event) => {
+                // W processes and commits; consumers (C) receive via bus dispatch.
+                runtime.process_events(std::slice::from_ref(&event))?;
+                processed += 1;
+                // Persist cursor periodically so replay can resume from offset.
+                if processed != last_saved_processed
+                    && last_saved.elapsed() >= Duration::from_secs(1)
+                {
+                    if save_cursor(&cursor_path, &tlog_path, processed, start_seq).is_ok() {
+                        last_saved = Instant::now();
+                        last_saved_processed = processed;
+                    }
+                }
             }
-            sleep(Duration::from_millis(poll_ms));
-            continue;
-        }
-
-        let _format = detect_tlog_format(&tlog_path);
-
-        // Only read from start_seq forward to avoid re-scanning the entire tlog every tick.
-        let events = read_any_events_from_path_with_start_seq(&tlog_path, start_seq)?;
-
-        if start_at_tail && !once && !did_fast_forward && processed == 0 && !events.is_empty() {
-            processed = events.len();
-            did_fast_forward = true;
-        }
-        if events.len() != last_len {
-            last_len = events.len();
-        }
-        if events.len() < processed {
-            runtime.reset();
-            processed = 0;
-        }
-
-        if processed < events.len() {
-            runtime.process_events(&events[processed..])?;
-        }
-        processed = events.len();
-
-
-        if processed != last_saved_processed && last_saved.elapsed() >= Duration::from_secs(1) {
-            if save_cursor(&cursor_path, &tlog_path, processed, start_seq).is_ok() {
-                last_saved = Instant::now();
-                last_saved_processed = processed;
+            Msg::Reset(events) => {
+                // L was recreated — W resets state and replays from the beginning
+                // to ensure deterministic order (Rule 10).
+                runtime.reset();
+                runtime.process_events(&events)?;
+                processed = events.len();
+            }
+            Msg::Tick => {
+                runtime.emit_tick()?;
             }
         }
-        runtime.emit_tick()?;
-
-        if once {
-            break;
-        }
-
-        sleep(Duration::from_millis(poll_ms));
     }
-
-    Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Cursor helpers — track W's read offset into L for crash recovery / replay.
+// ---------------------------------------------------------------------------
 
 fn load_cursor(path: &Path, tlog_path: &Path) -> Option<usize> {
     let text = std::fs::read_to_string(path).ok()?;
@@ -265,32 +409,9 @@ fn save_cursor(path: &Path, tlog_path: &Path, processed: usize, start_seq: u64) 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let text = serde_json::to_string(&state)?;
-    std::fs::write(&tmp_path, text)?;
+    std::fs::write(&tmp_path, serde_json::to_string(&state)?)?;
     std::fs::rename(&tmp_path, path)?;
     Ok(())
-}
-
-fn latest_segment_seq(tlog_path: &Path) -> Result<u64> {
-    if !tlog_path.is_dir() {
-        return Ok(0);
-    }
-    let mut max_seq = 0u64;
-    for entry in std::fs::read_dir(tlog_path)? {
-        let entry = entry?;
-        let p = entry.path();
-        if p.extension().and_then(|s| s.to_str()) != Some("log") {
-            continue;
-        }
-        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-            if let Ok(seq) = stem.parse::<u64>() {
-                if seq > max_seq {
-                    max_seq = seq;
-                }
-            }
-        }
-    }
-    Ok(max_seq)
 }
 
 fn now_ms() -> u128 {
@@ -299,6 +420,10 @@ fn now_ms() -> u128 {
         .unwrap_or_default()
         .as_millis()
 }
+
+// ---------------------------------------------------------------------------
+// Tlog equivalence verification (optional, debug mode only)
+// ---------------------------------------------------------------------------
 
 fn maybe_verify_tlog_equivalence(tlog_path: &Path) -> Result<()> {
     let (json_path, bin_path) = if tlog_path.is_dir() {
@@ -309,7 +434,7 @@ fn maybe_verify_tlog_equivalence(tlog_path: &Path) -> Result<()> {
     if !json_path.exists() || !bin_path.exists() {
         return Ok(());
     }
-    let _diffs = verify_tlog_equivalence(&json_path, &bin_path)?;
+    let _diffs = verify_tlog_equivalence(json_path.as_path(), bin_path.as_path())?;
     Ok(())
 }
 

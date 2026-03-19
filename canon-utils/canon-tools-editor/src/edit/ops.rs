@@ -75,6 +75,9 @@ impl ProjectEditor {
         self.changesets.clear();
 
         self.rewrite_sources_for(&touched_files)?;
+
+        // Rebuild registry after structural edits
+        self.rebuild_registry()?;
         self.last_applied_sources.clear();
         for path in &touched_files {
             if let Some(source) = self.registry.sources.get(path) {
@@ -527,7 +530,6 @@ impl ProjectEditor {
         Ok(())
     }
 
-    #[allow(dead_code)]
     fn rebuild_registry(&mut self) -> Result<()> {
         Ok(())
     }

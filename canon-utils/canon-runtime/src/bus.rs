@@ -43,7 +43,7 @@ impl EventBus {
                     consumer.on_event(&msg.event);
                 }
             });
-        self.consumers.push(ConsumerEntry { name, filter, sender: tx });
+        self.consumers.push(ConsumerEntry { filter, sender: tx });
     }
 
     pub fn dispatch(&self, event: CanonEvent) {

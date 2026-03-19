@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use canon_supervisor::register_build_capabilities;
+use canon_builder::register_build_capabilities;
 use canon_runtime::EventRuntime;
 use canon_event_store::read_any_events_from_path;
 use canon_event::canon_emit;

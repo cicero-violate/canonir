@@ -59,10 +59,10 @@ pub fn apply_graph_patch(graph: &mut TaskGraph, update: TaskGraphPatch) -> Resul
         graph.rebuild_index();
     }
     for spec in update.rewrite_nodes {
+        let caps: HashSet<_> = spec.new_capabilities.iter().copied().collect();
+        capability_model_assert_class_disjoint(&caps).map_err(|e| anyhow::anyhow!(e))?;
         if let Some(node) = graph.get_node_mut(&spec.id) {
             if matches!(node.status, NodeStatus::Pending | NodeStatus::Failed) {
-                let caps: HashSet<_> = spec.new_capabilities.iter().copied().collect();
-                capability_model_assert_class_disjoint(&caps).map_err(|e| anyhow::anyhow!(e))?;
                 let new_caps: Vec<String> = spec.new_capabilities.iter().map(|c| format!("{c:?}")).collect();
                 node.description = spec.new_description.clone();
                 node.required_capabilities = spec.new_capabilities;
@@ -77,6 +77,34 @@ pub fn apply_graph_patch(graph: &mut TaskGraph, update: TaskGraphPatch) -> Resul
                     new_caps,
                 });
             }
+        } else {
+            // Node doesn't exist yet — create it as a new pending Analysis node.
+            let new_caps: Vec<String> = spec.new_capabilities.iter().map(|c| format!("{c:?}")).collect();
+            events.push(TaskGraphEvent::NodeCreated {
+                node_id: spec.id.clone(),
+                description: spec.new_description.clone(),
+                deps: Vec::new(),
+                caps: new_caps,
+                node_type: "Analysis".to_string(),
+                priority: 0,
+                budget: None,
+            });
+            graph.nodes.push(TaskNode {
+                id: spec.id,
+                description: spec.new_description,
+                status: NodeStatus::Pending,
+                deps: Vec::new(),
+                required_capabilities: spec.new_capabilities,
+                node_type: super::decompose::DecomposeNodeType::default(),
+                priority: 0,
+                budget: None,
+                reasoning_trace: None,
+                result: None,
+                error: None,
+                readonly_fail_count: 0,
+                repair_attempts: 0,
+                completed_iter: None,
+            });
         }
     }
     let existing: HashSet<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();

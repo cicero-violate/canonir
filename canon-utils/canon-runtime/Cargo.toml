@@ -17,7 +17,7 @@ anyhow = { workspace = true }
 canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
 canon_event_store = { package = "canon-storage-eventlog", path = "../canon-storage-eventlog" }
 canon_capability = { package = "canon-capability", path = "../canon-capability" }
-canon_supervisor = { package = "canon-runtime-supervisor", path = "../canon-runtime-supervisor" }
+canon_builder = { package = "canon-builder", path = "../canon-builder" }
 canon_llm = { package = "canon-llm-runtime", path = "../canon-llm-runtime" }
 canon_agent = { package = "canon-agent", path = "../canon-agent" }
 canon_analysis = { package = "canon-tools-analysis", path = "../canon-tools-analysis" }
@@ -26,5 +26,6 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 toml = "0.8"
 crossbeam-channel = { workspace = true }
+notify = { workspace = true }
 tokio = { workspace = true }
 signal-hook = { workspace = true }

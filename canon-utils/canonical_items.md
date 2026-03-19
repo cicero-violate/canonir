@@ -206,7 +206,7 @@ Both `canon_goal::X` and `canon_agent::X` resolve to the same type (`canon-agent
 | `Capability` *(trait)*           | `canon_capability::Capability`                   | `canon-capability/src/trait.rs`      |
 | `register_editor_capabilities`   | `canon_editor::register_editor_capabilities`     | `canon-editor/src/capabilities.rs`   |
 | `register_analysis_capabilities` | `canon_analysis::register_analysis_capabilities` | `canon-analysis/src/capabilities.rs` |
-| `register_build_capabilities`    | `canon_supervisor::register_build_capabilities`  | `canon-supervisor/src/executor.rs`   |
+| `register_build_capabilities`    | `canon_builder::register_build_capabilities`     | `canon-builder/src/executor.rs`      |
 
 ---
 
@@ -248,10 +248,10 @@ Both `canon_goal::X` and `canon_agent::X` resolve to the same type (`canon-agent
 
 | Item               | Canonical location                   | Source file                       |
 |--------------------+--------------------------------------+-----------------------------------|
-| `SupervisorConfig` | `canon_supervisor::SupervisorConfig` | `canon-supervisor/src/config.rs`  |
-| `ProcessManager`   | `canon_supervisor::ProcessManager`   | `canon-supervisor/src/process.rs` |
-| `start_watcher`    | `canon_supervisor::start_watcher`    | `canon-supervisor/src/watcher.rs` |
-| `affected_crates`  | `canon_supervisor::affected_crates`  | `canon-supervisor/src/watcher.rs` |
+| `SupervisorConfig` | `canon_builder::SupervisorConfig` | `canon-builder/src/config.rs`  |
+| `ProcessManager`   | `canon_builder::ProcessManager`   | `canon-builder/src/process.rs` |
+| `start_watcher`    | `canon_builder::start_watcher`    | `canon-builder/src/watcher.rs` |
+| `affected_crates`  | `canon_builder::affected_crates`  | `canon-builder/src/watcher.rs` |
 
 ---
 

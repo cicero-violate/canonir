@@ -72,7 +72,6 @@ pub fn dfs_callgraph(adj: &HashMap<u32, Vec<u32>>, start: u32, visited: &mut Has
     }
 }
 
-#[allow(dead_code)]
 pub fn find_callgraph_roots(callgraph: &[(u32, u32)]) -> Vec<u32> {
     let mut incoming = HashSet::new();
     let mut nodes = HashSet::new();
@@ -84,7 +83,6 @@ pub fn find_callgraph_roots(callgraph: &[(u32, u32)]) -> Vec<u32> {
     nodes.into_iter().filter(|n| !incoming.contains(n)).collect()
 }
 
-#[allow(dead_code)]
 pub fn find_callgraph_roots_from_edges(cg_local_to_id: &[u32]) -> Vec<u32> {
     cg_local_to_id.iter().copied().collect()
 }

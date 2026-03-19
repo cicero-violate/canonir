@@ -1,12 +1,12 @@
 use crate::bootstrap::PromptRegistryHandle;
-use canon_agent::config::CapabilityConfig;
+use canon_llm::config::CapabilityConfig;
 use canon_llm::endpoint_worker;
 use canon_llm::llm;
 use canon_llm::ws_server;
 use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityHandler};
 use canon_event::{CanonEvent, EventEmitterHandle, canon_emit};
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Instant;
 use std::env;
@@ -28,6 +28,12 @@ impl LlmCapabilityHandler {
     pub fn new(registry: PromptRegistryHandle) -> Self {
         let (work_tx, work_rx) = std::sync::mpsc::channel::<LlmWork>();
         let registry_handle = Arc::clone(&registry);
+
+        // Shared emitter cell: populated from the first LLM job so ws_server
+        // can emit bridge-level events (connection, tab lifecycle) as P→Q
+        // producers independent of any single capability request.
+        let ws_emitter: Arc<OnceLock<EventEmitterHandle>> = Arc::new(OnceLock::new());
+        let ws_emitter_thread = Arc::clone(&ws_emitter);
 
         thread::Builder::new()
             .name("llm_executor_worker".to_string())
@@ -58,7 +64,7 @@ impl LlmCapabilityHandler {
                         }
                     };
                     let bridge = runtime.block_on(async {
-                        canon_agent::ws_server::spawn(addr, config.response_timeout_secs)
+                        ws_server::spawn(addr, config.response_timeout_secs, Arc::clone(&ws_emitter_thread))
                     });
                     runtime.block_on(async {
                         let wait = bridge.wait_for_connection();
@@ -72,6 +78,9 @@ impl LlmCapabilityHandler {
                     ));
                     for job in work_rx.iter() {
                         let LlmWork { request_id, name, prompt, role, raw, emitter } = job;
+                        // Capture emitter on first job; ws_server uses it for
+                        // bridge-level events for the rest of the process lifetime.
+                        let _ = ws_emitter_thread.set(emitter.clone());
                         let start = Instant::now();
                         canon_emit!(emitter; "llm_executor", "request_start",
                             json!({ "request_id": request_id, "name": name }));
@@ -129,6 +138,22 @@ impl LlmCapabilityHandler {
 
                         match result {
                             Ok(payload) => {
+                                // E_in → L → E_out boundary: emit exactly once per LLM
+                                // response arrival, before the capability result is sealed.
+                                // Gives real-time visibility into: which endpoint replied,
+                                // how long it took, response size, and whether JSON parsed.
+                                let elapsed_ms = start.elapsed().as_millis() as u64;
+                                let parse_ok = !payload.as_object()
+                                    .map(|o| o.len() == 1 && o.contains_key("text"))
+                                    .unwrap_or(false);
+                                canon_emit!(emitter; "llm_executor", "llm_response",
+                                    json!({
+                                        "request_id": request_id,
+                                        "endpoint":   endpoint.id,
+                                        "duration_ms": elapsed_ms,
+                                        "bytes":      payload.to_string().len(),
+                                        "parse_ok":   parse_ok,
+                                    }));
                                 emitter.emit(CanonEvent::CapabilityCompleted(
                                     canon_event::CapabilityCompleted {
                                         request_id: request_id.clone(),
@@ -136,7 +161,7 @@ impl LlmCapabilityHandler {
                                         result: json!({
                                             "status": 0,
                                             "success": true,
-                                            "duration_ms": start.elapsed().as_millis(),
+                                            "duration_ms": elapsed_ms,
                                             "result": payload,
                                         }),
                                     },

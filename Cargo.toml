@@ -22,6 +22,7 @@ members = [
   "canon-utils/canon-planning",
   "canon-utils/canon-storage-graph",
   "canon-utils/canon-tools-analysis", "canon-utils/canon-llm-runtime",
+  "canon-utils/canon-builder",
 ]
 exclude = [
   "test_projects",

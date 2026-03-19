@@ -70,7 +70,7 @@ pub struct EventRuntime {
 pub fn register_default_capabilities(registry: &mut CapabilityRegistry) {
     canon_editor::register_editor_capabilities(registry);
     canon_analysis::register_analysis_capabilities(registry);
-    canon_supervisor::register_build_capabilities(registry);
+    canon_builder::register_build_capabilities(registry);
 }
 
 impl EventRuntime {
@@ -206,6 +206,26 @@ impl EventRuntime {
                             self.drain_emitted_events()?;
                         }
                     }
+                } else if canon.kind == "prompt_loaded" && canon.source != "event-runtime" {
+                    // Guard mirrors capability_completed: skip W's own re-emission
+                    // (source="event-runtime") to break the write-back feedback loop.
+                    self.handle_runtime_event(CanonEvent::PromptLoaded(PromptLoaded {
+                        payload: canon.payload.clone(),
+                    }))?;
+                    self.drain_emitted_events()?;
+                } else if canon.kind == "capability_completed" && canon.source != "event-runtime" {
+                    // External capability result written directly to tlog (e.g. by an external executor).
+                    // Internal results already flow through the emitter path — skip those to avoid
+                    // double-dispatch.
+                    if let Ok(payload) = serde_json::from_value::<CapabilityCompleted>(canon.payload.clone()) {
+                        self.handle_runtime_event(CanonEvent::CapabilityCompleted(payload))?;
+                        self.drain_emitted_events()?;
+                    }
+                } else if canon.kind == "capability_failed" && canon.source != "event-runtime" {
+                    if let Ok(payload) = serde_json::from_value::<CapabilityFailed>(canon.payload.clone()) {
+                        self.handle_runtime_event(CanonEvent::CapabilityFailed(payload))?;
+                        self.drain_emitted_events()?;
+                    }
                 }
             }
             processed += 1;
@@ -276,7 +296,12 @@ impl EventRuntime {
                 self.runtime_state = payload;
             }
             CanonEvent::CapabilityRequested(request) => {
+                // execute_capabilities provides a direct synchronous execution path for
+                // capabilities NOT handled asynchronously by bus consumers (e.g. CapabilityExecutor).
+                // Skip "llm.call" here: it is always handled asynchronously by LlmCapabilityHandler
+                // via the consumer bus. Running it here too would double-enqueue every LLM request.
                 if self.execute_capabilities
+                    && request.name != "llm.call"
                     && self.registry.lock().ok().and_then(|r| r.lookup(&request.name)).is_some()
                 {
                     self.handle_capability_request(request)?;
@@ -322,6 +347,7 @@ impl EventRuntime {
         };
 
         let mut terminal_emitted = false;
+        let mut deferred = false;
         match result {
             CapabilityExecutionResult::Emit(event) => {
                 terminal_emitted = matches!(
@@ -346,10 +372,13 @@ impl EventRuntime {
                     self.bus.dispatch(event);
                 }
             }
+            CapabilityExecutionResult::Deferred => {
+                deferred = true;
+            }
             CapabilityExecutionResult::NoOp => {}
         }
 
-        if !terminal_emitted {
+        if !terminal_emitted && !deferred {
             let completed = CanonEvent::CapabilityCompleted(CapabilityCompleted {
                 request_id: request_id.clone(),
                 name: request_name.clone(),
@@ -399,7 +428,9 @@ impl EventRuntime {
             TlogEvent::new("bootstrap", "agent_registered", payload.clone())
         }
         CanonEvent::PromptLoaded(PromptLoaded { payload }) => {
-            TlogEvent::new("bootstrap", "prompt_loaded", payload.clone())
+            // Use "event-runtime" source so process_events can distinguish W's
+            // re-emission from the original bootstrap write and skip it (Rule 9).
+            TlogEvent::new("event-runtime", "prompt_loaded", payload.clone())
         }
         CanonEvent::ToolCall(ToolCall { node_id, request_id, kind, payload }) => {
             TlogEvent::new("agent-consumer", "tool_call", serde_json::json!({

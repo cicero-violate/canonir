@@ -7,7 +7,7 @@ rustflags = [
 "-Dunused-attributes",
 "-Dunused-imports",
 "-Dunused-variables",
-"-Ddead-code",
+"-Fdead-code",
 "-Dclippy::allow_attributes",
 "-Dclippy::allow_attributes_without_reason"
 ]
@@ -15,6 +15,7 @@ rustflags = [
 [target.'cfg(all())']
 rustflags = [
   "-Dwarnings",
+  "-Fdead-code",
   "-Dclippy::allow_attributes",
   "-Dclippy::allow_attributes_without_reason"
 ]

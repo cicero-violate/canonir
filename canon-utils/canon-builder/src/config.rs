@@ -36,9 +36,8 @@ pub struct ProcessConfig {
     pub env: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub depends_on: Vec<String>,
-    #[serde(default)]
     #[serde(default = "default_drain_timeout_ms")]
-    #[serde(default)]
+    pub drain_timeout_ms: u64,
     #[serde(default)]
     pub crate_name: Option<String>,
 }

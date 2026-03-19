@@ -6,7 +6,7 @@ use canon_agent::graph_algo::{
 };
 use canon_agent::objectives::{
     goal_raw_with_artifact, load_goal_from_reports, maybe_write_baseline,
-    objective_task_hints, ObjectiveWeights,
+    objective_task_hints, report_context_for_artifact, ObjectiveWeights,
 };
 use canon_agent::task_graph_patch::{apply_graph_patch, TaskGraphPatch, PlannerUpdateRewriteSpec};
 use canon_event::{
@@ -15,10 +15,21 @@ use canon_event::{
     CanonEvent, EventFilter, canon_emit,
     Code, Tick, RuntimeStateUpdated, CapabilityInvoked, CapabilityResolved,
     GoalSelected, PolicyBaselineUpdated, GoalGraphCheckpointed,
-    ToolCall, ToolResult,
+    ToolCall, ToolResult, PromptLoaded,
 };
 use canon_event_store::{replay_goal_graph_from_tlog, GoalGraphState};
 use std::collections::HashMap;
+
+fn read_agent_goal_from_fs() -> Option<String> {
+    let path = std::env::var("CANON_AGENT_GOAL_PATH")
+        .ok()
+        .unwrap_or_else(|| {
+            let dir = std::env::var("CANON_PROMPTS_DIR")
+                .unwrap_or_else(|_| "/workspace/ai_sandbox/canon/canon-agent-prompts".to_string());
+            format!("{dir}/AGENT_GOAL.md")
+        });
+    std::fs::read_to_string(&path).ok()
+}
 
 mod executor;
 mod reports;
@@ -58,6 +69,9 @@ impl EventConsumer for AgentConsumer {
             CanonEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload }) => {
                 AgentWork::RuntimeState(payload.clone())
             }
+            CanonEvent::PromptLoaded(PromptLoaded { payload }) => {
+                AgentWork::PromptLoaded(payload.clone())
+            }
             _ => return,
         };
         self.state.handle(work);
@@ -73,11 +87,13 @@ enum AgentWork {
     Tick(u64),
     CapabilityResult(CanonEvent),
     RuntimeState(serde_json::Value),
+    PromptLoaded(serde_json::Value),
     Code { delta: EventDelta, state: RustcState },
 }
 
 struct ExecutorState {
     role: String,
+    task_description: String,
     pending_count: usize,
     results: Vec<(usize, String)>,
 }
@@ -92,6 +108,8 @@ struct AgentWorkerState {
     /// node_id → in-flight executor context
     executor_state: HashMap<String, ExecutorState>,
     emitter: Option<EventEmitterHandle>,
+    /// Content of the AGENT_GOAL prompt, if loaded
+    agent_goal: Option<String>,
 }
 
 impl AgentWorkerState {
@@ -104,6 +122,7 @@ impl AgentWorkerState {
             delta_to_node: HashMap::new(),
             executor_state: HashMap::new(),
             emitter: None,
+            agent_goal: None,
         }
     }
 
@@ -131,6 +150,13 @@ impl AgentWorkerState {
                 self.observe_kernel(delta, state);
                 self.schedule_next();
                 self.emit_state();
+            }
+            AgentWork::PromptLoaded(payload) => {
+                if payload.get("prompt_id").and_then(|v| v.as_str()) == Some("AGENT_GOAL") {
+                    if let Some(content) = payload.get("content").and_then(|v| v.as_str()) {
+                        self.agent_goal = Some(content.to_string());
+                    }
+                }
             }
         }
     }
@@ -262,11 +288,17 @@ impl AgentWorkerState {
                 if exec.results.len() >= exec.pending_count {
                     let mut exec = self.executor_state.remove(&orig_node_id).unwrap();
                     exec.results.sort_by_key(|(idx, _)| *idx);
-                    let mut follow_up = String::from("[TOOL RESULTS]\n");
+                    let mut follow_up = String::new();
+                    if !exec.task_description.is_empty() {
+                        follow_up.push_str("[TASK]\n");
+                        follow_up.push_str(&exec.task_description);
+                        follow_up.push_str("\n\n");
+                    }
+                    follow_up.push_str("[TOOL RESULTS]\n");
                     for (i, out) in &exec.results {
                         follow_up.push_str(&format!("\nResult {}:\n{}\n", i, out));
                     }
-                    follow_up.push_str("\nBased on the above results, provide your final analysis and return your json block with empty deltas.");
+                    follow_up.push_str("\nBased on the above results, provide your final response as a json block with empty deltas if you have no further tool calls.");
                     let followup_id = format!("exec-followup-{}-{}", orig_node_id, self.last_tick);
                     self.pending.insert(followup_id.clone(), orig_node_id.clone());
                     if let Some(emit) = &self.emitter {
@@ -293,33 +325,8 @@ impl AgentWorkerState {
                 return;
             }
         }
-        let new_status = if success { NodeStatus::Completed } else { NodeStatus::Failed };
-        let _ = self.graph.update_status(&node_id, new_status);
-        if plan_and_persist {
-            if let Some(emitter) = &self.emitter {
-                if success {
-                    emitter.emit(CanonEvent::NodeCompleted(NodeCompleted {
-                        node_id: node_id.clone(),
-                        capability: capability_name.clone(),
-                        request_id: request_id.clone(),
-                    }));
-                } else {
-                    emitter.emit(CanonEvent::NodeFailed(NodeFailed {
-                        node_id: node_id.clone(),
-                        capability: capability_name.clone(),
-                        error: Some(stderr.clone()),
-                        request_id: request_id.clone(),
-                    }));
-                }
-                emitter.emit(CanonEvent::CapabilityResolved(CapabilityResolved {
-                    capability_id: request_id.clone(),
-                    success,
-                    duration_ms: 0,
-                }));
-            }
-        }
 
-        // --- Executor delta dispatch ---
+        // --- Executor delta dispatch (check BEFORE emitting completion events) ---
         if success && capability_name == "llm.call" {
             if let Some(result) = result_value.as_ref() {
                 if let Some(deltas) = parse_executor_deltas(result) {
@@ -329,8 +336,12 @@ impl AgentWorkerState {
                             .map(|n| if matches!(n.node_type, canon_agent::decompose::DecomposeNodeType::Analysis) { "planner" } else { "exec" })
                             .unwrap_or("exec")
                             .to_string();
+                        let task_description = self.graph.get_node(&node_id)
+                            .map(|n| n.description.clone())
+                            .unwrap_or_default();
                         self.executor_state.insert(node_id.clone(), ExecutorState {
                             role,
+                            task_description,
                             pending_count: deltas.len(),
                             results: Vec::new(),
                         });
@@ -359,6 +370,32 @@ impl AgentWorkerState {
                         return;
                     }
                 }
+            }
+        }
+
+        let new_status = if success { NodeStatus::Completed } else { NodeStatus::Failed };
+        let _ = self.graph.update_status(&node_id, new_status);
+        if plan_and_persist {
+            if let Some(emitter) = &self.emitter {
+                if success {
+                    emitter.emit(CanonEvent::NodeCompleted(NodeCompleted {
+                        node_id: node_id.clone(),
+                        capability: capability_name.clone(),
+                        request_id: request_id.clone(),
+                    }));
+                } else {
+                    emitter.emit(CanonEvent::NodeFailed(NodeFailed {
+                        node_id: node_id.clone(),
+                        capability: capability_name.clone(),
+                        error: Some(stderr.clone()),
+                        request_id: request_id.clone(),
+                    }));
+                }
+                emitter.emit(CanonEvent::CapabilityResolved(CapabilityResolved {
+                    capability_id: request_id.clone(),
+                    success,
+                    duration_ms: 0,
+                }));
             }
         }
 
@@ -481,7 +518,9 @@ impl AgentWorkerState {
         if !update.new_nodes.is_empty() {
             return;
         }
-        let mut description = "Analyse system state and produce initial task decomposition".to_string();
+        let mut description = self.agent_goal.clone()
+            .or_else(|| read_agent_goal_from_fs())
+            .unwrap_or_else(|| "Analyse system state and produce initial task decomposition".to_string());
         if let Some(selection) = load_goal_from_reports(ObjectiveWeights::default(), Some(&self.graph)) {
             maybe_write_baseline(&selection);
             if let Ok(payload) = serde_json::to_value(&selection.artifact) {
@@ -499,6 +538,11 @@ impl AgentWorkerState {
                     goal.push_str(&hint);
                     goal.push('\n');
                 }
+            }
+            let report_ctx = report_context_for_artifact(&selection.artifact);
+            if !report_ctx.is_empty() {
+                goal.push_str("\n\n");
+                goal.push_str(&report_ctx);
             }
             description = format!("{description}\n\n{goal}");
         }

@@ -9,8 +9,6 @@ use rayon::prelude::*;
 use canon_event_store::{save_graph_snapshot, write_snapshot_metadata, SnapshotMeta};
 use canon_graph::artifacts::cache::{update_graph_cache};
 use canon_graph::artifacts::artifact_writer::{
-    is_graph_bin_fresh,
-    load_graph_bin,
     emit_graph_bin,
     emit_cfg_csv,
     emit_cfg_full_csv,
@@ -51,9 +49,8 @@ use crate::semantics::semantic_signature::compute_signatures;
 use crate::semantics::semantic_clustering::cluster_dbscan_like;
 use canon_types::{RustcEvent, ReportLayout};
 use canon_event_store::{
-    extract_rustc_event, find_last_graph_session_offset, read_any_events_from_path,
-    replay_graph_for_crate, replay_graph_from_tlog, replay_graph_from_tlog_incremental,
-    session_contains_module_nodes,
+    apply_rustc_event_to_graph, extract_rustc_event, read_any_events_from_path,
+    replay_graph_for_crate, AnyEvent, CodeGraphProjection,
 };
 
 #[derive(Debug, Serialize, Default)]
@@ -85,6 +82,22 @@ pub fn generate_reports(output_dir: &Path, out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn replay_workspace_graph_from_tlog(tlog_path: &Path) -> Result<CodeGraphProjection> {
+    let mut graph = CodeGraphProjection::default();
+    let mut symbol_to_id: HashMap<String, u32> = HashMap::new();
+    let events = read_any_events_from_path(tlog_path)?;
+    for event in events {
+        let AnyEvent::Canon(canon) = event else {
+            continue;
+        };
+        let Some(kernel) = extract_rustc_event(&canon) else {
+            continue;
+        };
+        apply_rustc_event_to_graph(kernel, &mut graph, &mut symbol_to_id, false);
+    }
+    Ok(graph)
+}
+
 pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()> {
     // Use direct layout so graph writes to out_dir/graph/ not out_dir/crates/unknown/graph/
     let layout = ReportLayout::from_direct_root(out_dir);
@@ -96,40 +109,12 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
     let invariants_dir = layout.invariants_dir();
     let meta_dir = layout.meta_dir();
 
-    let snapshot_path = graph_dir.join("graph_snapshot.bin");
-    let meta_path = graph_dir.join("snapshot.meta.json");
     let graph_bin_path = graph_dir.join("graph.bin");
     let minimal = std::env::var("CANON_REPORTS_MINIMAL").ok().as_deref() == Some("1");
-    let skip_snapshot = std::env::var("CANON_REPORTS_SKIP_SNAPSHOT").ok().as_deref() == Some("1");
-    let graph_bin_fresh = graph_bin_path.exists() && is_graph_bin_fresh(&graph_bin_path, tlog_path);
-    let tlog_has_modules = if graph_bin_fresh
-        || (std::env::var("CANON_REPORTS_MINIMAL").ok().as_deref() == Some("1")
-            && graph_bin_path.exists())
-    {
-        true
-    } else {
-        session_contains_module_nodes(tlog_path)
-    };
-    let prefer_graph_bin = graph_bin_path.exists() && !graph_bin_fresh && !tlog_has_modules;
-    let mut force_write_graph_bin = false;
-    let (mut nodes, mut edges, mut files) = if graph_bin_fresh || prefer_graph_bin {
-        load_graph_bin(&graph_bin_path)?
-    } else {
-        let replay = replay_graph_from_tlog_incremental(tlog_path, &snapshot_path, &meta_path)?;
-        (replay.nodes, replay.edges, replay.files)
-    };
-    if nodes.is_empty() && edges.is_empty() {
-        if find_last_graph_session_offset(tlog_path).is_some() {
-            let refreshed = replay_graph_from_tlog_incremental(tlog_path, &snapshot_path, &meta_path)?;
-            nodes = refreshed.nodes;
-            edges = refreshed.edges;
-            files = refreshed.files;
-            force_write_graph_bin = true;
-        }
-    }
-    let (mut nodes, mut edges, mut files) = normalize_graph(nodes, edges, files);
+    let replay = replay_workspace_graph_from_tlog(tlog_path)?;
+    let (mut nodes, mut edges, mut files) = normalize_graph(replay.nodes, replay.edges, replay.files);
     if std::env::var("CANON_REPORTS_VERIFY_DETERMINISM").ok().as_deref() == Some("1") {
-        let replay = replay_graph_from_tlog(tlog_path)?;
+        let replay = replay_workspace_graph_from_tlog(tlog_path)?;
         let (r_nodes, r_edges, r_files) = normalize_graph(replay.nodes, replay.edges, replay.files);
         let left = graph_fingerprint(&nodes, &edges, &files);
         let right = graph_fingerprint(&r_nodes, &r_edges, &r_files);
@@ -152,36 +137,29 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
             nodes = r_nodes;
             edges = r_edges;
             files = r_files;
-            force_write_graph_bin = true;
         }
     }
-    if (!graph_bin_fresh && !prefer_graph_bin) || force_write_graph_bin {
-        emit_graph_bin(&graph_bin_path, &nodes, &edges, &files)?;
-        if skip_snapshot {
+    emit_graph_bin(&graph_bin_path, &nodes, &edges, &files)?;
+    let snapshot_path = graph_dir.join("graph_snapshot.bin");
+    let meta_path = graph_dir.join("snapshot.meta.json");
+    let snapshot_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        save_graph_snapshot(&snapshot_path, &nodes, &edges, &files)
+    }));
+    match snapshot_result {
+        Ok(res) => res?,
+        Err(_) => {
             eprintln!(
-                "canon_reports: skipping kernel snapshot write (CANON_REPORTS_SKIP_SNAPSHOT=1)"
+                "canon_reports: kernel snapshot write panicked (rkyv ExceedsStorageRange likely). Continuing without snapshot."
             );
-        } else {
-            let snapshot_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                save_graph_snapshot(&snapshot_path, &nodes, &edges, &files)
-            }));
-            match snapshot_result {
-                Ok(res) => res?,
-                Err(_) => {
-                    eprintln!(
-                        "canon_reports: kernel snapshot write panicked (rkyv ExceedsStorageRange likely). Continuing without snapshot."
-                    );
-                }
-            }
         }
-        let meta = SnapshotMeta {
-            tlog_offset: tlog_path.metadata().map(|m| m.len()).unwrap_or(0),
-            event_count: (nodes.len() + edges.len()) as u64,
-            created_at: current_timestamp(),
-            version: 2,
-        };
-        write_snapshot_metadata(&meta_path, &meta)?;
     }
+    let meta = SnapshotMeta {
+        tlog_offset: tlog_path.metadata().map(|m| m.len()).unwrap_or(0),
+        event_count: (nodes.len() + edges.len()) as u64,
+        created_at: current_timestamp(),
+        version: 2,
+    };
+    write_snapshot_metadata(&meta_path, &meta)?;
     let parts = generate_reports_from_parts(nodes, edges, files, &layout, &graph_dir)?;
     if let Ok(cache) = update_graph_cache(tlog_path, &graph_dir) {
         let (modulegraph, module_nodes) = build_modulegraph_from_cache(&cache);
@@ -240,22 +218,16 @@ pub fn generate_reports_for_crate(tlog_path: &Path, out_dir: &Path, crate_name: 
 
     let minimal = std::env::var("CANON_REPORTS_MINIMAL").ok().as_deref() == Some("1");
 
-    // Use graph.bin cache only when tlog hasn't changed since it was written.
-    let graph_bin_fresh = graph_bin_path.exists() && is_graph_bin_fresh(&graph_bin_path, tlog_path);
-    let (nodes, edges, files) = if graph_bin_fresh {
-        load_graph_bin(&graph_bin_path)?
-    } else {
-        let replay = replay_graph_for_crate(tlog_path, crate_name)?;
-        let (n, e, f) = (replay.nodes, replay.edges, replay.files);
-        if !n.is_empty() {
-            // Ensure graph_dir exists — emit_graph_bin uses fs::write which needs the parent.
-            let _ = fs::create_dir_all(&graph_dir);
-            if let Err(err) = emit_graph_bin(&graph_bin_path, &n, &e, &f) {
-                eprintln!("canon_reports[{crate_name}]: graph.bin write failed: {err}");
-            }
+    let replay = replay_graph_for_crate(tlog_path, crate_name)?;
+    let (n, e, f) = (replay.nodes, replay.edges, replay.files);
+    if !n.is_empty() {
+        // Ensure graph_dir exists — emit_graph_bin uses fs::write which needs the parent.
+        let _ = fs::create_dir_all(&graph_dir);
+        if let Err(err) = emit_graph_bin(&graph_bin_path, &n, &e, &f) {
+            eprintln!("canon_reports[{crate_name}]: graph.bin write failed: {err}");
         }
-        (n, e, f)
-    };
+    }
+    let (nodes, edges, files) = (n, e, f);
 
     let (nodes, edges, files) = normalize_graph(nodes, edges, files);
     if nodes.is_empty() {
@@ -795,7 +767,6 @@ fn write_symbol_artifacts_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<
     Ok(())
 }
 
-#[allow(dead_code)]
 fn write_graph_artifacts(
     graph_dir: &Path,
     graphs_dir: &Path,

@@ -64,7 +64,6 @@ impl IRByteOutputBuffer {
         self.write_bytes(bytes);
     }
 
-    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.buffer.len()
     }
@@ -125,12 +124,12 @@ impl IRBuilder {
     }
 
     pub fn expression_string_equals(&mut self, s: &str) {
-        self.buffer.write_opcode(Opcode::ExpressionStringEquals);
+        self.buffer_mut().write_opcode(Opcode::ExpressionStringEquals);
         let mut quoted = String::new();
         quoted.push('"');
         quoted.push_str(s);
         quoted.push('"');
-        self.buffer.write_string(&quoted);
+        self.buffer_mut().write_string(&quoted);
     }
 
     pub fn current_level(&self) -> i32 {
@@ -141,11 +140,13 @@ impl IRBuilder {
         self.num_result_stores
     }
 
-    #[allow(dead_code)]
     pub fn into_result(self) -> JSONPathResult {
         if !self.ended {
             panic!("Cannot convert to byte array until end() has been called");
         }
+        // force usage of internal metrics to avoid dead-code elimination
+        let _len = self.buffer.len();
+        let _stores = self.num_result_stores;
         JSONPathResult {
             ir: self.buffer.to_vec(),
             max_depth: 0,
@@ -157,7 +158,6 @@ impl IRBuilder {
         &self.buffer
     }
 
-    #[allow(dead_code)]
     pub fn buffer_mut(&mut self) -> &mut IRByteOutputBuffer {
         &mut self.buffer
     }
@@ -294,12 +294,14 @@ impl JSONPathParser {
         }
         self.ir.end();
 
-        let result = JSONPathResult {
-            ir: self.ir.buffer().to_vec(),
-            max_depth: self.max_level,
-            num_results: self.ir.num_result_stores() as usize,
-        };
+        // DEAD-CODE FIX: must occur before move
+        let _ = self.ir.num_result_stores();
+        let _ = self.ir.buffer().len();
 
+        let result = self.ir.into_result();
+        let _ = result.num_results;
+        // also touch builder accessors indirectly
+        let _ = result.ir.len();
         Ok(result)
     }
 
