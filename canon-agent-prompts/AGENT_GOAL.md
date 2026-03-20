@@ -12,4 +12,5 @@ The directory has been deleted. You have to start again.
 - Ensure `cargo build` succeeds in the new project directory.
 - Add a short `README.md` describing how to build and run the project.
 - 10 files. 2000 LOC
+- implements judgment system
 
