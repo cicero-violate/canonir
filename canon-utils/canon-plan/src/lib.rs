@@ -16,6 +16,8 @@ pub struct PlanConsumer {
     /// Result of the most recent action — included in the next LLM prompt so
     /// the planner can react to failures (e.g. command not found, dir exists).
     last_acted: Option<LoopActed>,
+    /// Last goal text that was fully inlined into the planner prompt.
+    last_prompted_goal: Option<String>,
 }
 
 struct PendingPlan {
@@ -39,6 +41,7 @@ impl PlanConsumer {
             last_planned_observed_tick: None,
             last_done_goal: None,
             last_acted: None,
+            last_prompted_goal: None,
         }
     }
 }
@@ -136,6 +139,7 @@ impl PlanConsumer {
         if is_goal {
             // New goal arrived — clear the done-guard so the LLM gets called.
             self.last_done_goal = None;
+            self.last_prompted_goal = None;
             // Also cancel any in-flight pending so we don't wait for the old LLM call.
             self.pending = None;
         }
@@ -192,7 +196,8 @@ impl PlanConsumer {
         let execution_id = Uuid::new_v4().to_string();
         let span_id = Uuid::new_v4().to_string();
         let plan_id = Uuid::new_v4().to_string();
-        let prompt = build_prompt(observed, self.last_acted.as_ref());
+        let include_full_goal = observed.goal_text != self.last_prompted_goal;
+        let prompt = build_prompt(observed, self.last_acted.as_ref(), include_full_goal);
         let request = CapabilityRequested {
             request_id: request_id.clone(),
             name: "llm.call".to_string(),
@@ -212,6 +217,9 @@ impl PlanConsumer {
             span_id,
             plan_id,
         });
+        if include_full_goal {
+            self.last_prompted_goal = observed.goal_text.clone();
+        }
         self.last_planned_observed_tick = Some(observed.tick);
 
         if let Some(emitter) = self.emitter.as_ref() {
@@ -446,10 +454,11 @@ fn parse_llm_actions(result: &Value) -> Vec<LlmAction> {
     parse_value_to_action(value).into_iter().collect()
 }
 
-fn build_prompt(observed: &LoopObserved, last_acted: Option<&LoopActed>) -> String {
-    let goal_section = match &observed.goal_text {
-        Some(text) => format!("## Active Goal\n{text}\n\n"),
-        None => String::new(),
+fn build_prompt(observed: &LoopObserved, last_acted: Option<&LoopActed>, include_full_goal: bool) -> String {
+    let goal_section = match (observed.goal_text.as_ref(), include_full_goal) {
+        (Some(text), true) => format!("## Active Goal\n{text}\n\n"),
+        (Some(_), false) => "## Active Goal\n(unchanged from previous planner request)\n\n".to_string(),
+        (None, _) => String::new(),
     };
     let error_section = if observed.error_count > 0 {
         let first = observed
@@ -491,7 +500,7 @@ fn build_prompt(observed: &LoopObserved, last_acted: Option<&LoopActed>) -> Stri
         }
     };
     format!(
-        "{goal}{last_action}{errors}Return exactly one JSON object. Allowed schemas:\n- Run a command:  {{\"cmd\": \"cargo new foo\", \"cwd\": \"/path\"}}\n- Write a file:   {{\"write\": \"/abs/path\", \"content\": \"full content\"}}\n- Patch a file:   {{\"path\": \"/abs/path\", \"old\": \"exact text\", \"new\": \"replacement\"}}\n- Signal done:    {{\"done\": true, \"reason\": \"...\"}}\nNo explanation. JSON only.",
+        "{goal}{last_action}{errors}Return one or more fenced ```json code blocks (no prose outside code blocks). Each block must be one action object using one schema:\n- Run a command:  {{\"cmd\": \"cargo new foo\", \"cwd\": \"/path\"}}\n- Write a file:   {{\"write\": \"/abs/path\", \"content\": \"full content\"}}\n- Patch a file:   {{\"path\": \"/abs/path\", \"old\": \"exact text\", \"new\": \"replacement\"}}\n- Signal done:    {{\"done\": true, \"reason\": \"...\"}}",
         goal = goal_section,
         last_action = last_action_section,
         errors = error_section,

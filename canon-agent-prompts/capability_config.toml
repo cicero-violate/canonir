@@ -59,7 +59,7 @@ tab_cooldown_ms = 4000
 [llm.endpoints.planner]
 id = "planner_chatgpt_group"
 url = "https://chatgpt.com/gg/69bb5d85449481959470422b599305bb"
-role_markdown = "PLANNER_ROLE.md"
+role_markdown = "builtin:planner"
 role = "planner"
 stateful = true
 max_tabs = 1
@@ -67,7 +67,7 @@ max_tabs = 1
 [llm.endpoints.exec_chatgpt_a]
 id = "exec_chatgpt_a"
 url = "https://chatgpt.com/gg/699c50e06bc881a3aa5ac1866bf15679"
-role_markdown = "EXECUTOR_AGENT_ROLE.md"
+role_markdown = "builtin:exec"
 role = "exec"
 stateful = true
 max_tabs = 4
@@ -75,7 +75,7 @@ max_tabs = 4
 [llm.endpoints.exec_chatgpt_b]
 id = "exec_chatgpt_b"
 url = "https://chatgpt.com/gg/699c50e06bc881a3aa5ac1866bf15679"
-role_markdown = "EXECUTOR_AGENT_ROLE.md"
+role_markdown = "builtin:exec"
 role = "exec"
 stateful = true
 max_tabs = 4
@@ -84,7 +84,7 @@ max_tabs = 4
 id = "exec_chatgpt_c"
 # url = "https://chatgpt.com/gg/69a32d7d1a008199948ad06498df2f4f"
 url = "https://chatgpt.com/?temporary-chat=true"
-role_markdown = "EXECUTOR_AGENT_ROLE.md"
+role_markdown = "builtin:exec"
 role = "exec"
 stateful = true
 max_tabs = 4
@@ -92,7 +92,7 @@ max_tabs = 4
 [llm.endpoints.exec_chatgpt_d]
 id = "exec_chatgpt_d"
 url = "https://chatgpt.com/gg/699d3878fbd0819a9d73741b03e8128e"
-role_markdown = "EXECUTOR_AGENT_ROLE.md"
+role_markdown = "builtin:exec"
 role = "exec"
 stateful = true
 max_tabs = 4
@@ -128,27 +128,27 @@ burst = 4
 [[agents.cards]]
 agent_url = "https://chatgpt.com/gg/69bb5d85449481959470422b599305bb"
 agent_id = "decompose"
-role = "PLANNER_ROLE.md"
+role = "builtin:planner"
 goal = "AGENT_GOAL.md"
 tool_capabilities = []
 
 [[agents.cards]]
 agent_url = "https://chatgpt.com/gg/69bb5dbc591c819cb924366acba795bd"
 agent_id = "planner"
-role = "PLANNER_ROLE.md"
+role = "builtin:planner"
 goal = "AGENT_GOAL.md"
 tool_capabilities = []
 
 [[agents.cards]]
 agent_url = "https://chatgpt.com/gg/699c50e06bc881a3aa5ac1866bf15679"
 agent_id = "executor"
-role = "EXECUTOR_AGENT_ROLE.md"
+role = "builtin:exec"
 goal = "AGENT_GOAL.md"
 tool_capabilities = ["apply_patch", "bash"]
 
 [[agents.cards]]
 agent_url = "https://chatgpt.com/gg/6992c359272881a19d30c226925f575d"
 agent_id = "verifier"
-role = "EXECUTOR_AGENT_ROLE.md"
+role = "builtin:exec"
 goal = "AGENT_GOAL.md"
 tool_capabilities = []

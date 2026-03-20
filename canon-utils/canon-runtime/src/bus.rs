@@ -33,6 +33,22 @@ fn is_error_event(event: &CanonEvent) -> bool {
     }
 }
 
+fn is_control_event(event: &CanonEvent) -> bool {
+    matches!(
+        event,
+        CanonEvent::Tick(_)
+            | CanonEvent::PromptLoaded(_)
+            | CanonEvent::CapabilityRequested(_)
+            | CanonEvent::CapabilityCompleted(_)
+            | CanonEvent::CapabilityFailed(_)
+            | CanonEvent::LoopObserved(_)
+            | CanonEvent::LoopPlanned(_)
+            | CanonEvent::LoopActed(_)
+            | CanonEvent::LoopVerified(_)
+            | CanonEvent::LoopRewarded(_)
+    )
+}
+
 impl EventBus {
     pub fn new(queue_size: usize) -> Self {
         Self {
@@ -63,6 +79,7 @@ impl EventBus {
     }
 
     pub fn dispatch(&self, event: CanonEvent) {
+        let reliable = is_control_event(&event);
         for consumer in &self.consumers {
             match consumer.filter {
                 EventFilter::All => {}
@@ -96,7 +113,11 @@ impl EventBus {
                     }
                 }
             }
-            let _ = consumer.sender.try_send(EventMessage { event: event.clone() });
+            if reliable {
+                let _ = consumer.sender.send(EventMessage { event: event.clone() });
+            } else {
+                let _ = consumer.sender.try_send(EventMessage { event: event.clone() });
+            }
         }
     }
 

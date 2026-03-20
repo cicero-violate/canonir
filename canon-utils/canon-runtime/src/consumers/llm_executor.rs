@@ -10,6 +10,7 @@ use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Instant;
 use std::env;
+use std::path::Path;
 
 struct LlmWork {
     request_id: String,
@@ -25,9 +26,8 @@ pub struct LlmCapabilityHandler {
 }
 
 impl LlmCapabilityHandler {
-    pub fn new(registry: PromptRegistryHandle) -> Self {
+    pub fn new(_registry: PromptRegistryHandle) -> Self {
         let (work_tx, work_rx) = std::sync::mpsc::channel::<LlmWork>();
-        let registry_handle = Arc::clone(&registry);
 
         // Shared emitter cell: populated from the first LLM job so ws_server
         // can emit bridge-level events (connection, tab lifecycle) as P→Q
@@ -76,7 +76,10 @@ impl LlmCapabilityHandler {
                         &config,
                         &tabs,
                     ));
-                    let mut llm_call_counter: u32 = 0;
+                    let llm_log_dir = env::var("CANON_LLM_LOG_DIR")
+                        .unwrap_or_else(|_| "/workspace/ai_sandbox/canon/canon-utils/state/reports_out/llm".to_string());
+                    let _ = std::fs::create_dir_all(&llm_log_dir);
+                    let mut llm_call_counter: u32 = next_llm_call_counter(&llm_log_dir);
                     for job in work_rx.iter() {
                         let LlmWork { request_id, name, prompt, role, raw, emitter } = job;
                         // Capture emitter on first job; ws_server uses it for
@@ -112,19 +115,15 @@ impl LlmCapabilityHandler {
                         };
                         let retries = config.llm_retry_count.max(1);
                         let delay = config.llm_retry_delay_secs;
-                        let role_content = registry_handle
-                            .read()
-                            .ok()
-                            .and_then(|r| r.get(&endpoint.role_markdown).map(str::to_string))
-                            .unwrap_or_default();
+                        let role_content = default_role_content(
+                            role.as_deref().or(endpoint.role.as_deref()),
+                        );
                         canon_emit!(emitter; "llm_executor", "request_dispatch",
                             json!({
                                 "request_id": request_id,
                                 "endpoint": endpoint.id,
                                 "url": endpoint.url
                             }));
-                        let llm_log_dir = "/workspace/ai_sandbox/canon/state/reports_out/llm";
-                        let _ = std::fs::create_dir_all(llm_log_dir);
                         let call_n = llm_call_counter;
                         llm_call_counter += 1;
                         let req_path = format!("{}/{:04}_request.json", llm_log_dir, call_n);
@@ -244,6 +243,37 @@ impl LlmCapabilityHandler {
             .expect("llm executor worker thread");
 
         Self { work_tx }
+    }
+}
+
+fn next_llm_call_counter(log_dir: &str) -> u32 {
+    let mut max_seen: Option<u32> = None;
+    let Ok(entries) = std::fs::read_dir(Path::new(log_dir)) else {
+        return 0;
+    };
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(|s| s.to_string()) else {
+            continue;
+        };
+        let Some((prefix, suffix)) = name.split_once('_') else {
+            continue;
+        };
+        if suffix != "request.json" && suffix != "response.json" {
+            continue;
+        }
+        let Ok(n) = prefix.parse::<u32>() else {
+            continue;
+        };
+        max_seen = Some(max_seen.map_or(n, |m| m.max(n)));
+    }
+    max_seen.map_or(0, |m| m.saturating_add(1))
+}
+
+fn default_role_content(role: Option<&str>) -> String {
+    match role.unwrap_or("exec") {
+        "planner" => "You are a planning agent. Return only JSON inside fenced ```json code block(s) with no prose.".to_string(),
+        "router" => "You are a routing selector. Choose exactly one next route and return only one fenced ```json code block with no prose.".to_string(),
+        _ => "You are an execution agent. Return only JSON inside fenced ```json code block(s) with no prose.".to_string(),
     }
 }
 

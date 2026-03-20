@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use canon_event::EVENT_SCHEMA_VERSION;
+use canon_event::{EVENT_SCHEMA_VERSION, CanonEvent, CapabilityRequested, EventEmitter, EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified};
 use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry, prompts_dir, reload_prompt_file};
 use canon_runtime::consumers::capability_executor::CapabilityExecutor;
 use canon_runtime::consumers::error_logger::ErrorLogger;
@@ -16,6 +16,7 @@ use canon_event_store::AnyEvent;
 use canon_decision::{JournalLine, RouteKind};
 use canon_judgment::{GuardConfig, RuntimeSignals};
 use canon_runtime_supervisor::judgment_loop::RouteController;
+use canon_goal::{GoalSpec, parse_agent_goal_markdown, summarize_goal};
 use crossbeam_channel as cc;
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use std::env;
@@ -26,6 +27,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::collections::HashSet;
 use uuid::Uuid;
+use canon_capability::CapabilityExecutionContext;
 
 // ---------------------------------------------------------------------------
 // Lock guard — ensures only one instance runs against a given tlog path.
@@ -113,15 +115,15 @@ fn acquire_lock(path: &Path) -> Result<Option<LockGuard>> {
 }
 
 // ---------------------------------------------------------------------------
-// Queue message type — P → Q
+// Queue message type — P → Q_e / Q_c
 //
-// Producers push Msg variants into the unbounded MPMC channel Q.
-// W=1 (the main loop) is the sole receiver; it defines commit order and is
+// Producers push EventMsg into Q_e and ControlMsg into Q_c.
+// W=1 (the main loop) is the sole receiver of both; it defines commit order and is
 // the only writer to L (log/tlog).  Consumers (C ≥ 1) are driven from W
 // via bus dispatch and track their own offsets; they never mutate L.
 // ---------------------------------------------------------------------------
 
-enum Msg {
+enum EventMsg {
     /// New inbound event delivered directly in memory — no filesystem poll.
     /// Produced by the notify-watcher thread (P2) and the bootstrap replayer (P1).
     Event(AnyEvent),
@@ -129,6 +131,9 @@ enum Msg {
     /// W must reset its state and replay the provided events from scratch
     /// to maintain deterministic order (Rule 10).
     Reset(Vec<AnyEvent>),
+}
+
+enum ControlMsg {
     /// Periodic housekeeping tick from the timer producer (P3).
     Tick,
 }
@@ -136,7 +141,9 @@ enum Msg {
 #[derive(Default)]
 struct RouteRuntimeState {
     scheduler_tick: u64,
-    mission: String,
+    mission_raw: String,
+    mission_summary: String,
+    mission_goal_spec: Option<GoalSpec>,
     context_ready: bool,
     planned_pending: usize,
     acted_unverified: bool,
@@ -145,10 +152,21 @@ struct RouteRuntimeState {
     journal: Vec<JournalLine>,
 }
 
+struct DirectEventEmitter {
+    tx: cc::Sender<CanonEvent>,
+}
+
+impl EventEmitter for DirectEventEmitter {
+    fn emit(&self, event: CanonEvent) {
+        let _ = self.tx.send(event);
+    }
+}
+
 impl RouteRuntimeState {
     fn signals(&self) -> RuntimeSignals {
         RuntimeSignals {
             context_ready: self.context_ready,
+            has_queued_plan: self.planned_pending > 0,
             performed_recently: self.acted_unverified,
             finish_ready: self.finish_ready,
         }
@@ -179,7 +197,7 @@ impl RouteRuntimeState {
     }
 }
 
-fn propose_route_json(state: &RouteRuntimeState) -> String {
+fn heuristic_route_json(state: &RouteRuntimeState) -> String {
     let route = if state.finish_ready {
         RouteKind::Conclude
     } else if state.acted_unverified {
@@ -205,78 +223,323 @@ fn propose_route_json(state: &RouteRuntimeState) -> String {
     .to_string()
 }
 
-fn update_route_runtime_state(route_state: &mut RouteRuntimeState, event: &AnyEvent) {
-    let AnyEvent::Canon(canon) = event else {
-        return;
+fn request_route_via_llm_call(
+    registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>,
+    workspace: &Path,
+    prompt: String,
+    timeout: Duration,
+) -> Result<String> {
+    let request_id = format!("route-{}", Uuid::new_v4());
+    let request = CapabilityRequested {
+        request_id: request_id.clone(),
+        name: "llm.call".to_string(),
+        args: serde_json::json!({
+            "prompt": prompt,
+            "role": "planner",
+        }),
     };
-    match canon.kind.as_str() {
-        "loop_observed" => {
-            let goal_present = canon
-                .payload
-                .get("goal_text")
-                .and_then(|v| v.as_str())
+    let (tx, rx) = cc::unbounded::<CanonEvent>();
+    let emitter: EventEmitterHandle = Arc::new(DirectEventEmitter { tx });
+    let ctx = CapabilityExecutionContext {
+        workspace: workspace.to_path_buf(),
+        event: CanonEvent::CapabilityRequested(request.clone()),
+        emitter: Some(emitter),
+    };
+
+    {
+        let guard = registry
+            .lock()
+            .map_err(|_| anyhow!("capability registry lock poisoned"))?;
+        guard.execute("llm.call", ctx)?;
+    }
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(anyhow!("route llm.call timed out"));
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let event = rx
+            .recv_timeout(remaining)
+            .map_err(|_| anyhow!("route llm.call timed out"))?;
+        match event {
+            CanonEvent::CapabilityCompleted(done)
+                if done.request_id == request_id && done.name == "llm.call" =>
+            {
+                let value = done.result.get("result").cloned().unwrap_or(done.result);
+                if let Some(text) = value.get("text").and_then(|v| v.as_str()) {
+                    return Ok(text.to_string());
+                }
+                return Ok(value.to_string());
+            }
+            CanonEvent::CapabilityFailed(failed)
+                if failed.request_id == request_id && failed.name == "llm.call" =>
+            {
+                return Err(anyhow!("route llm.call failed: {}", failed.error));
+            }
+            _ => {}
+        }
+    }
+}
+
+fn evaluate_goal_satisfied(spec: Option<&GoalSpec>, workspace: &Path) -> bool {
+    let Some(spec) = spec else {
+        return false;
+    };
+    let target = spec
+        .target_path
+        .clone()
+        .unwrap_or_else(|| workspace.join("test_rust_project_v3"));
+    if !target.is_dir() {
+        return false;
+    }
+
+    let readme = target.join("README.md");
+    let readme_non_empty = std::fs::metadata(&readme)
+        .ok()
+        .map(|m| m.is_file() && m.len() > 0)
+        .unwrap_or(false);
+    if !readme_non_empty {
+        return false;
+    }
+
+    std::process::Command::new("cargo")
+        .arg("build")
+        .current_dir(&target)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn update_route_runtime_state(route_state: &mut RouteRuntimeState, event: &CanonEvent, workspace: &Path) {
+    match event {
+        CanonEvent::LoopObserved(LoopObserved { goal_text, error_count, .. }) => {
+            let goal_present = goal_text
+                .as_ref()
                 .map(|v| !v.trim().is_empty())
                 .unwrap_or(false);
-            let errors = canon
-                .payload
-                .get("error_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            route_state.context_ready = goal_present || errors > 0;
-            if let Some(goal_text) = canon.payload.get("goal_text").and_then(|v| v.as_str()) {
+            route_state.context_ready = goal_present || *error_count > 0;
+            if let Some(goal_text) = goal_text {
                 if !goal_text.trim().is_empty() {
-                    route_state.mission = goal_text.to_string();
+                    route_state.mission_raw = goal_text.clone();
+                    route_state.mission_summary = summarize_goal(&parse_agent_goal_markdown(goal_text));
+                    route_state.mission_goal_spec = Some(parse_agent_goal_markdown(goal_text));
                 }
             }
-            route_state.push_journal("observe", "snapshot refreshed");
+            route_state.push_journal("observe", format!("tick={} goal_present={} errors={}", route_state.scheduler_tick, goal_present, error_count));
         }
-        "loop_planned" => {
+        CanonEvent::LoopPlanned(LoopPlanned { action_kind, plan_id, action_id, llm_request_id, .. }) => {
             route_state.planned_pending = route_state.planned_pending.saturating_add(1);
-            let action = canon
-                .payload
-                .get("action_kind")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            route_state.push_journal("plan", format!("planned action={action}"));
+            let mut summary = format!("planned action={action_kind}");
+            if let Some(plan_id) = plan_id {
+                summary.push_str(&format!(" plan_id={plan_id}"));
+            }
+            if let Some(action_id) = action_id {
+                summary.push_str(&format!(" action_id={action_id}"));
+            }
+            if let Some(llm_request_id) = llm_request_id {
+                summary.push_str(&format!(" llm_request_id={llm_request_id}"));
+            }
+            route_state.push_journal("plan", summary);
         }
-        "loop_acted" => {
+        CanonEvent::LoopActed(LoopActed { action_kind, capability_request_id, tool_call_id, tool_result_id, success, .. }) => {
             route_state.planned_pending = route_state.planned_pending.saturating_sub(1);
             route_state.acted_unverified = true;
-            route_state.last_action_kind = canon
-                .payload
-                .get("action_kind")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
+            route_state.last_action_kind = action_kind.clone();
+            let mut summary = format!("executed action={} success={} capability_request_id={}", route_state.last_action_kind, success, capability_request_id);
+            if let Some(tool_call_id) = tool_call_id {
+                summary.push_str(&format!(" tool_call_id={tool_call_id}"));
+            }
+            if let Some(tool_result_id) = tool_result_id {
+                summary.push_str(&format!(" tool_result_id={tool_result_id}"));
+            }
+            route_state.push_journal("act", summary);
+        }
+        CanonEvent::LoopVerified(LoopVerified { passed, diagnostics, .. }) => {
+            route_state.acted_unverified = false;
+            let system_satisfied = evaluate_goal_satisfied(route_state.mission_goal_spec.as_ref(), workspace);
+            route_state.finish_ready = *passed && system_satisfied;
             route_state.push_journal(
-                "act",
-                format!("executed action={}", route_state.last_action_kind),
+                "verify",
+                format!("passed={} system_satisfied={} diagnostics={}", passed, system_satisfied, diagnostics.join("|")),
             );
         }
-        "loop_verified" => {
-            route_state.acted_unverified = false;
-            let passed = canon
-                .payload
-                .get("passed")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            route_state.finish_ready =
-                route_state.last_action_kind == "done" && passed;
-            route_state.push_journal("verify", format!("passed={passed}"));
-        }
-        "loop_rewarded" => {
-            let halt = canon
-                .payload
-                .get("halt")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if halt {
+        CanonEvent::LoopRewarded(LoopRewarded { halt, .. }) => {
+            if *halt {
                 route_state.finish_ready = true;
             }
             route_state.push_journal("reward", format!("halt={halt}"));
         }
         _ => {}
     }
+}
+
+fn handle_event_msg(
+    msg: EventMsg,
+    runtime: &mut EventRuntime,
+    route_state: &mut RouteRuntimeState,
+    workspace: &Path,
+    processed: &mut usize,
+    cursor_path: &Path,
+    tlog_path: &Path,
+    start_seq: u64,
+    session_id: &str,
+    last_saved: &mut Instant,
+    last_saved_processed: &mut usize,
+) -> Result<()> {
+    match msg {
+        EventMsg::Event(event) => {
+            runtime.process_events(std::slice::from_ref(&event))?;
+            for emitted in runtime.take_observed_events() {
+                update_route_runtime_state(route_state, &emitted, workspace);
+            }
+            *processed = processed.saturating_add(1);
+            if *processed != *last_saved_processed
+                && last_saved.elapsed() >= Duration::from_secs(1)
+                && save_cursor(
+                    cursor_path,
+                    tlog_path,
+                    *processed,
+                    start_seq,
+                    session_id,
+                    runtime.next_id(),
+                )
+                .is_ok()
+            {
+                *last_saved = Instant::now();
+                *last_saved_processed = *processed;
+            }
+        }
+        EventMsg::Reset(events) => {
+            runtime.reset();
+            runtime.process_events(&events)?;
+            for emitted in runtime.take_observed_events() {
+                update_route_runtime_state(route_state, &emitted, workspace);
+            }
+            *processed = events.len();
+        }
+    }
+    Ok(())
+}
+
+fn handle_control_msg(
+    msg: ControlMsg,
+    runtime: &mut EventRuntime,
+    route_controller: &mut RouteController,
+    route_state: &mut RouteRuntimeState,
+    registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>,
+    workspace: &Path,
+    cursor_path: &Path,
+    tlog_path: &Path,
+    processed: usize,
+    start_seq: u64,
+    session_id: &str,
+) -> Result<bool> {
+    match msg {
+        ControlMsg::Tick => {
+            route_state.scheduler_tick = route_state.scheduler_tick.saturating_add(1);
+            let snapshot = route_state.snapshot_text();
+            let prompt = route_controller.build_prompt(
+                &route_state.mission_summary,
+                &snapshot,
+                &route_state.journal,
+            );
+            let model_json = match request_route_via_llm_call(
+                registry,
+                workspace,
+                prompt.clone(),
+                Duration::from_secs(90),
+            ) {
+                Ok(json) => json,
+                Err(err) => {
+                    runtime.emit_debug_event(
+                        "supervisor".to_string(),
+                        "route_llm_fallback".to_string(),
+                        serde_json::json!({
+                            "tick": route_state.scheduler_tick,
+                            "error": err.to_string(),
+                        }),
+                    )?;
+                    heuristic_route_json(route_state)
+                }
+            };
+            let signals = route_state.signals();
+            let (selection, gate) = match route_controller.evaluate_model_output(&model_json, &signals) {
+                Ok(v) => v,
+                Err(err) => {
+                    runtime.emit_debug_event(
+                        "supervisor".to_string(),
+                        "route_error".to_string(),
+                        serde_json::json!({
+                            "tick": route_state.scheduler_tick,
+                            "error": err,
+                            "fallback": "heuristic",
+                        }),
+                    )?;
+                    let fallback_json = heuristic_route_json(route_state);
+                    match route_controller.evaluate_model_output(&fallback_json, &signals) {
+                        Ok(v) => v,
+                        Err(fallback_err) => {
+                            runtime.emit_debug_event(
+                                "supervisor".to_string(),
+                                "route_error".to_string(),
+                                serde_json::json!({
+                                    "tick": route_state.scheduler_tick,
+                                    "error": fallback_err,
+                                    "fallback": "failed",
+                                }),
+                            )?;
+                            return Ok(false);
+                        }
+                    }
+                }
+            };
+
+            let lane = gate.lane.as_str();
+            runtime.emit_debug_event(
+                "supervisor".to_string(),
+                "route_selected".to_string(),
+                serde_json::json!({
+                    "tick": route_state.scheduler_tick,
+                    "suggested_route": selection.route.as_str(),
+                    "approved_route": lane,
+                    "rationale": selection.rationale,
+                    "confidence": selection.confidence,
+                    "changed": gate.changed,
+                    "note": gate.note,
+                    "prompt": prompt,
+                }),
+            )?;
+
+            if gate.should_stop {
+                for emitted in runtime.take_observed_events() {
+                    update_route_runtime_state(route_state, &emitted, workspace);
+                }
+                let _ = save_cursor(
+                    cursor_path,
+                    tlog_path,
+                    processed,
+                    start_seq,
+                    session_id,
+                    runtime.next_id(),
+                );
+                return Ok(true);
+            }
+
+            if matches!(gate.lane, RouteKind::Scan) {
+                runtime.emit_tick()?;
+                for emitted in runtime.take_observed_events() {
+                    update_route_runtime_state(route_state, &emitted, workspace);
+                }
+            } else {
+                let _ = runtime.take_observed_events();
+            }
+        }
+    }
+    Ok(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -443,22 +706,30 @@ fn main() -> Result<()> {
     // C ≥ 1  are the EventRuntime bus consumers.  They receive events dispatched
     //    by W, track their own state (offsets), and never write L (Rule 7).
     // =========================================================================
-    let (q_tx, q_rx) = cc::unbounded::<Msg>();
+    // Q_c: control-plane queue (ticks/routing cadence).
+    // Q_e: event-plane queue (tlog events/replay/reset).
+    let (q_control_tx, q_control_rx) = cc::unbounded::<ControlMsg>();
+    let (q_event_tx, q_event_rx) = cc::unbounded::<EventMsg>();
+    let event_budget_per_cycle = std::env::var("CANON_EVENT_RUNTIME_EVENT_BUDGET")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(256);
 
     // --- P1: bootstrap replayer ---
     // Unprocessed events already in memory — push directly into Q, no file re-read.
     for event in bootstrap_events.into_iter().skip(processed) {
-        q_tx.send(Msg::Event(event)).ok();
+        q_event_tx.send(EventMsg::Event(event)).ok();
     }
 
     // --- P2: notify watcher ---
     // Uses OS-level inotify/kqueue to detect tlog changes.
-    // On notification: reads new entries into memory, delivers each as Msg::Event
+    // On notification: reads new entries into memory, delivers each as EventMsg::Event
     // directly into Q.  Zero polling, zero sleep — events arrive in real time.
     // File is L (durable log); Q is the live in-memory delivery pipe.
     {
         let watcher_tlog = tlog_path.clone();
-        let watcher_tx = q_tx.clone();
+        let watcher_tx = q_event_tx.clone();
         let mut watcher_start_seq = start_seq;
         // watcher_seen tracks how many events from L this producer has already forwarded.
         let mut watcher_seen: usize = processed;
@@ -503,7 +774,7 @@ fn main() -> Result<()> {
                 if all.len() < watcher_seen {
                     // L was truncated or recreated — W must reset (Rule 10).
                     watcher_seen = 0;
-                    if watcher_tx.send(Msg::Reset(all)).is_err() {
+                    if watcher_tx.send(EventMsg::Reset(all)).is_err() {
                         break;
                     }
                 } else {
@@ -511,7 +782,7 @@ fn main() -> Result<()> {
                     // so W can interleave other message types between them.
                     for event in all.into_iter().skip(watcher_seen) {
                         watcher_seen += 1;
-                        if watcher_tx.send(Msg::Event(event)).is_err() {
+                        if watcher_tx.send(EventMsg::Event(event)).is_err() {
                             break;
                         }
                     }
@@ -539,12 +810,12 @@ fn main() -> Result<()> {
     // every second.  W dispatches emit_tick(); consumers never see this as a
     // log entry (Tick is not appended to L).
     {
-        let tick_tx = q_tx.clone();
+        let tick_tx = q_control_tx.clone();
         std::thread::Builder::new()
             .name("canon-p3-tick".to_string())
             .spawn(move || loop {
             std::thread::sleep(Duration::from_secs(1));
-            if tick_tx.send(Msg::Tick).is_err() {
+            if tick_tx.send(ControlMsg::Tick).is_err() {
                 break;
             }
         })?;
@@ -554,7 +825,7 @@ fn main() -> Result<()> {
     // Watches canon-agent-prompts/ for .md file changes. On change: re-reads
     // the file, updates the in-memory PromptRegistry (so LlmCapabilityHandler
     // picks up the new content immediately), and writes a prompt_loaded event
-    // directly to the tlog. P2 then delivers it as Msg::Event to W, which
+    // directly to the tlog. P2 then delivers it as EventMsg::Event to W, which
     // dispatches CanonEvent::PromptLoaded to all consumers (including ObserveConsumer).
     {
         let prompts_path = PathBuf::from(prompts_dir());
@@ -614,111 +885,141 @@ fn main() -> Result<()> {
     }
     let mut route_controller = RouteController::new(GuardConfig::default());
     let mut route_state = RouteRuntimeState::default();
-    route_state.mission = std::fs::read_to_string(
+    route_state.mission_raw = std::fs::read_to_string(
         "/workspace/ai_sandbox/canon/canon-agent-prompts/AGENT_GOAL.md",
     )
     .unwrap_or_default();
+    let initial_spec = parse_agent_goal_markdown(&route_state.mission_raw);
+    route_state.mission_summary = summarize_goal(&initial_spec);
+    route_state.mission_goal_spec = Some(initial_spec);
+    for emitted in runtime.take_observed_events() {
+        update_route_runtime_state(&mut route_state, &emitted, &workspace);
+    }
 
     // =========================================================================
     // W = 1 — single writer loop
     //
-    // Sole receiver of Q.  Order is defined by arrival here (Rule 5).
-    // All appends to L happen inside runtime.process_events / emit_tick via
-    // append_runtime_event — never from any producer thread (Rule 4, 8).
+    // Interleaved schedule with guarantees:
+    // 1) Process at most one control message each cycle (Q_c).
+    // 2) Then process at most N event messages (Q_e).
+    //
+    // This bounds control latency under bursty event load while preserving
+    // eventual event convergence.
     // =========================================================================
     let mut last_saved = Instant::now();
     let mut last_saved_processed = processed;
 
     loop {
-        match q_rx.recv()? {
-            Msg::Event(event) => {
-                // W processes and commits; consumers (C) receive via bus dispatch.
-                runtime.process_events(std::slice::from_ref(&event))?;
-                update_route_runtime_state(&mut route_state, &event);
-                processed += 1;
-                // Persist cursor periodically so replay can resume from offset.
-                if processed != last_saved_processed
-                    && last_saved.elapsed() >= Duration::from_secs(1)
-                {
-                    if save_cursor(
-                        &cursor_path,
-                        &tlog_path,
-                        processed,
-                        start_seq,
-                        &session_id,
-                        runtime.next_id(),
-                    )
-                    .is_ok()
-                    {
-                        last_saved = Instant::now();
-                        last_saved_processed = processed;
-                    }
-                }
-            }
-            Msg::Reset(events) => {
-                // L was recreated — W resets state and replays from the beginning
-                // to ensure deterministic order (Rule 10).
-                runtime.reset();
-                runtime.process_events(&events)?;
-                processed = events.len();
-            }
-            Msg::Tick => {
-                route_state.scheduler_tick = route_state.scheduler_tick.saturating_add(1);
-                let snapshot = route_state.snapshot_text();
-                let prompt = route_controller.build_prompt(
-                    &route_state.mission,
-                    &snapshot,
-                    &route_state.journal,
-                );
-                let model_json = propose_route_json(&route_state);
-                let signals = route_state.signals();
-                let (selection, gate) = match route_controller
-                    .evaluate_model_output(&model_json, &signals)
-                {
-                    Ok(v) => v,
-                    Err(err) => {
-                        runtime.emit_debug_event(
-                            "supervisor".to_string(),
-                            "route_error".to_string(),
-                            serde_json::json!({
-                                "tick": route_state.scheduler_tick,
-                                "error": err,
-                            }),
-                        )?;
-                        continue;
-                    }
-                };
-
-                let lane = gate.lane.as_str();
-                runtime.emit_debug_event(
-                    "supervisor".to_string(),
-                    "route_selected".to_string(),
-                    serde_json::json!({
-                        "tick": route_state.scheduler_tick,
-                        "suggested_route": selection.route.as_str(),
-                        "approved_route": lane,
-                        "rationale": selection.rationale,
-                        "confidence": selection.confidence,
-                        "changed": gate.changed,
-                        "note": gate.note,
-                        "prompt": prompt,
-                    }),
-                )?;
-
-                if gate.should_stop {
-                    let _ = save_cursor(
-                        &cursor_path,
-                        &tlog_path,
-                        processed,
-                        start_seq,
-                        &session_id,
-                        runtime.next_id(),
-                    );
+        // Step 1: process one control message when available.
+        let mut processed_control = false;
+        match q_control_rx.try_recv() {
+            Ok(control_msg) => {
+                processed_control = true;
+                if handle_control_msg(
+                    control_msg,
+                    &mut runtime,
+                    &mut route_controller,
+                    &mut route_state,
+                    &registry,
+                    &workspace,
+                    &cursor_path,
+                    &tlog_path,
+                    processed,
+                    start_seq,
+                    &session_id,
+                )? {
                     return Ok(());
                 }
+            }
+            Err(cc::TryRecvError::Empty) => {
+                // If no control is immediately ready, block for one item from either
+                // queue so we don't spin when idle.
+                cc::select! {
+                    recv(q_control_rx) -> msg => {
+                        if let Ok(control_msg) = msg {
+                            processed_control = true;
+                            if handle_control_msg(
+                                control_msg,
+                                &mut runtime,
+                                &mut route_controller,
+                                &mut route_state,
+                                &registry,
+                                &workspace,
+                                &cursor_path,
+                                &tlog_path,
+                                processed,
+                                start_seq,
+                                &session_id,
+                            )? {
+                                return Ok(());
+                            }
+                        }
+                    }
+                    recv(q_event_rx) -> msg => {
+                        if let Ok(event_msg) = msg {
+                            handle_event_msg(
+                                event_msg,
+                                &mut runtime,
+                                &mut route_state,
+                                &workspace,
+                                &mut processed,
+                                &cursor_path,
+                                &tlog_path,
+                                start_seq,
+                                &session_id,
+                                &mut last_saved,
+                                &mut last_saved_processed,
+                            )?;
+                        }
+                    }
+                }
+            }
+            Err(cc::TryRecvError::Disconnected) => {}
+        }
 
-                if matches!(gate.lane, RouteKind::Scan) {
-                    runtime.emit_tick()?;
+        // Step 2: bounded event processing.
+        let mut handled_events = 0usize;
+        while handled_events < event_budget_per_cycle {
+            match q_event_rx.try_recv() {
+                Ok(event_msg) => {
+                    handle_event_msg(
+                        event_msg,
+                        &mut runtime,
+                        &mut route_state,
+                        &workspace,
+                        &mut processed,
+                        &cursor_path,
+                        &tlog_path,
+                        start_seq,
+                        &session_id,
+                        &mut last_saved,
+                        &mut last_saved_processed,
+                    )?;
+                    handled_events = handled_events.saturating_add(1);
+                }
+                Err(cc::TryRecvError::Empty) => break,
+                Err(cc::TryRecvError::Disconnected) => break,
+            }
+        }
+
+        // If we did not process control and had no event work, block on control
+        // so routing cadence remains responsive.
+        if !processed_control && handled_events == 0 {
+            if let Ok(control_msg) = q_control_rx.recv() {
+                if handle_control_msg(
+                    control_msg,
+                    &mut runtime,
+                    &mut route_controller,
+                    &mut route_state,
+                    &registry,
+                    &workspace,
+                    &cursor_path,
+                    &tlog_path,
+                    processed,
+                    start_seq,
+                    &session_id,
+                )? {
+                    return Ok(());
                 }
             }
         }
@@ -941,4 +1242,105 @@ fn verify_tlog_equivalence(json_path: &Path, bin_path: &Path) -> Result<Vec<Stri
         ));
     }
     Ok(diffs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn route_state_transitions_after_loop_events() {
+        let mut state = RouteRuntimeState::default();
+        let workspace = PathBuf::from("/tmp");
+
+        update_route_runtime_state(
+            &mut state,
+            &CanonEvent::LoopObserved(LoopObserved {
+                tick: 1,
+                error_count: 1,
+                warning_count: 0,
+                compiler_errors: vec![],
+                goal_text: Some("# Agent Goal\n- Project path: `/tmp/nope`\n".to_string()),
+            }),
+            &workspace,
+        );
+        assert!(state.context_ready);
+
+        update_route_runtime_state(
+            &mut state,
+            &CanonEvent::LoopPlanned(LoopPlanned {
+                tick: 1,
+                action_kind: "run_command".to_string(),
+                action_payload: serde_json::json!({}),
+                reason: "test".to_string(),
+                llm_request_id: Some("llm-1".to_string()),
+                trace_id: None,
+                execution_id: None,
+                span_id: None,
+                parent_span_id: None,
+                plan_id: Some("plan-1".to_string()),
+                plan_step_id: None,
+                action_id: Some("action-1".to_string()),
+            }),
+            &workspace,
+        );
+        assert_eq!(state.planned_pending, 1);
+
+        update_route_runtime_state(
+            &mut state,
+            &CanonEvent::LoopActed(LoopActed {
+                tick: 1,
+                action_kind: "run_command".to_string(),
+                capability_request_id: "cap-1".to_string(),
+                tool_call_id: Some("tool-call-1".to_string()),
+                tool_result_id: Some("tool-result-1".to_string()),
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: Some(0),
+                duration_ms: 10,
+                success: true,
+                trace_id: None,
+                execution_id: None,
+                span_id: None,
+                parent_span_id: None,
+                plan_id: Some("plan-1".to_string()),
+                plan_step_id: None,
+                action_id: Some("action-1".to_string()),
+            }),
+            &workspace,
+        );
+        assert_eq!(state.planned_pending, 0);
+        assert!(state.acted_unverified);
+        assert_eq!(state.last_action_kind, "run_command");
+
+        update_route_runtime_state(
+            &mut state,
+            &CanonEvent::LoopVerified(LoopVerified {
+                tick: 1,
+                passed: true,
+                compiler_clean: true,
+                tlog_clean: true,
+                error_count: 0,
+                diagnostics: vec!["ok".to_string()],
+                trace_id: None,
+                execution_id: None,
+                span_id: None,
+                parent_span_id: None,
+            }),
+            &workspace,
+        );
+        assert!(!state.acted_unverified);
+        assert!(!state.finish_ready);
+        assert!(!state.journal.is_empty());
+    }
+
+    #[test]
+    fn journal_is_bounded_to_32_lines() {
+        let mut state = RouteRuntimeState::default();
+        for i in 0..64 {
+            state.push_journal("test", format!("line-{i}"));
+        }
+        assert_eq!(state.journal.len(), 32);
+        assert_eq!(state.journal[0].summary, "line-32");
+    }
 }

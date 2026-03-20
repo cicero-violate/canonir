@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -78,9 +78,9 @@ Mission:\n{mission}\n\n\
 Snapshot:\n{snapshot}\n\n\
 Recent Journal:\n{recent}\n\n\
 Allowed Routes: {routes}\n\n\
-Return JSON only with schema:\n\
+Return exactly one JSON object in one fenced ```json code block with schema:\n\
 {{\n  \"route\": \"scan|shape|execute|validate|conclude\",\n  \"rationale\": \"short reason\",\n  \"confidence\": 0.0,\n  \"signals\": {{}}\n}}\n\
-No markdown. No extra text.",
+No prose outside the code block.",
         mission = input.mission,
         snapshot = input.snapshot,
         recent = recent,
@@ -89,55 +89,69 @@ No markdown. No extra text.",
 }
 
 pub fn parse_route_selection(raw: &str, allowed: &[RouteKind]) -> Result<RouteSelection> {
-    let parsed = parse_json(raw).context("route selection is not valid JSON")?;
-    let mut selection: RouteSelection =
-        serde_json::from_value(parsed).context("route selection schema mismatch")?;
+    let mut last_err: Option<anyhow::Error> = None;
+    for parsed in parse_json_candidates(raw) {
+        match serde_json::from_value::<RouteSelection>(parsed) {
+            Ok(mut selection) => {
+                if selection.rationale.trim().is_empty() {
+                    last_err = Some(anyhow!("route selection rationale is empty"));
+                    continue;
+                }
 
-    if selection.rationale.trim().is_empty() {
-        bail!("route selection rationale is empty");
-    }
+                if !allowed.contains(&selection.route) {
+                    last_err = Some(anyhow!(
+                        "route '{}' is not in current allowed set",
+                        selection.route.as_str()
+                    ));
+                    continue;
+                }
 
-    if !allowed.contains(&selection.route) {
-        return Err(anyhow!(
-            "route '{}' is not in current allowed set",
-            selection.route.as_str()
-        ));
-    }
+                if let Some(confidence) = selection.confidence {
+                    if !(0.0..=1.0).contains(&confidence) {
+                        last_err = Some(anyhow!("confidence must be in [0.0, 1.0]"));
+                        continue;
+                    }
+                }
 
-    if let Some(confidence) = selection.confidence {
-        if !(0.0..=1.0).contains(&confidence) {
-            bail!("confidence must be in [0.0, 1.0]");
+                if selection.signals.is_null() {
+                    selection.signals = Value::Object(serde_json::Map::new());
+                }
+
+                return Ok(selection);
+            }
+            Err(err) => {
+                last_err = Some(err.into());
+            }
         }
     }
 
-    if selection.signals.is_null() {
-        selection.signals = Value::Object(serde_json::Map::new());
-    }
-
-    Ok(selection)
+    Err(last_err.unwrap_or_else(|| anyhow!("route selection is not valid JSON")))
 }
 
-fn parse_json(raw: &str) -> Result<Value> {
+fn parse_json_candidates(raw: &str) -> Vec<Value> {
+    let mut out = Vec::new();
     let trimmed = raw.trim();
     if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
-        return Ok(value);
+        out.push(value);
     }
-    if let Some(unfenced) = strip_fence(trimmed) {
-        return serde_json::from_str::<Value>(unfenced).context("failed to parse fenced JSON");
+    for block in extract_fenced_blocks(trimmed) {
+        if let Ok(value) = serde_json::from_str::<Value>(block) {
+            out.push(value);
+        }
     }
-    serde_json::from_str::<Value>(trimmed).context("failed to parse JSON")
+    out
 }
 
-fn strip_fence(input: &str) -> Option<&str> {
-    if !input.starts_with("```") {
-        return None;
+fn extract_fenced_blocks(text: &str) -> Vec<&str> {
+    let mut blocks = Vec::new();
+    let mut remaining = text;
+    while let Some(start) = remaining.find("```") {
+        let after_fence = &remaining[start + 3..];
+        let content_start = after_fence.find('\n').map(|i| i + 1).unwrap_or(0);
+        let content = &after_fence[content_start..];
+        let Some(end) = content.find("```") else { break; };
+        blocks.push(content[..end].trim());
+        remaining = &content[end + 3..];
     }
-    let rest = &input[3..];
-    let rest = rest
-        .strip_prefix("json")
-        .or_else(|| rest.strip_prefix("JSON"))
-        .unwrap_or(rest)
-        .trim_start_matches(['\n', '\r', ' ']);
-    let end = rest.rfind("```")?;
-    Some(rest[..end].trim())
+    blocks
 }

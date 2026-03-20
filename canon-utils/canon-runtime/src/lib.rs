@@ -67,6 +67,7 @@ pub struct EventRuntime {
     execute_capabilities: bool,
     emitter: EventEmitterHandle,
     emitter_rx: crossbeam_channel::Receiver<CanonEvent>,
+    observed_events: Vec<CanonEvent>,
 }
 
 pub fn register_default_capabilities(registry: &mut CapabilityRegistry) {
@@ -109,6 +110,7 @@ impl EventRuntime {
             execute_capabilities: false,
             emitter,
             emitter_rx,
+            observed_events: Vec::new(),
         }
     }
 
@@ -155,6 +157,11 @@ impl EventRuntime {
         self.tick = 0;
         self.runtime_tick = 0;
         self.runtime_state = serde_json::json!({});
+        self.observed_events.clear();
+    }
+
+    pub fn take_observed_events(&mut self) -> Vec<CanonEvent> {
+        std::mem::take(&mut self.observed_events)
     }
 
     pub fn process_path(&mut self, tlog_path: &std::path::Path) -> Result<usize> {
@@ -182,15 +189,13 @@ impl EventRuntime {
                     self.drain_emitted_events()?;
                 } else if let Some(supervisor_event) = extract_supervisor_event(canon) {
                     if supervisor_event.kind == "workspace.changed" {
-                        if let Some(crate_name) = supervisor_event.payload.get("crate").and_then(|v| v.as_str()) {
-                            let request = CapabilityRequested {
-                                request_id: format!("build-{}-{}", crate_name, self.tick),
-                                name: "cargo.build".to_string(),
-                                args: serde_json::json!({ "crate": crate_name }),
-                            };
-                            self.handle_runtime_event(CanonEvent::CapabilityRequested(request))?;
-                            self.drain_emitted_events()?;
-                        }
+                        let payload = serde_json::json!({
+                            "workspace_dirty": true,
+                            "crate": supervisor_event.payload.get("crate").cloned().unwrap_or(serde_json::Value::Null),
+                            "reason": "workspace_changed",
+                        });
+                        self.handle_runtime_event(CanonEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload }))?;
+                        self.drain_emitted_events()?;
                     }
                 } else if canon.kind == "crate_compiled" {
                     // Old-format crate_compiled events (byte_offset/schema) from pre-CompilationUnitFinished
@@ -311,6 +316,7 @@ impl EventRuntime {
     }
 
     fn handle_runtime_event(&mut self, event: CanonEvent) -> Result<()> {
+        self.observed_events.push(event.clone());
         self.bus.dispatch(event.clone());
         if !matches!(event, CanonEvent::RuntimeStateUpdated(_)) {
             self.append_runtime_event(&event);

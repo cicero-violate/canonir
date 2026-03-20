@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 //
 const PROMPTS_DIR: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts";
+const GOAL_PROMPT_FILE: &str = "AGENT_GOAL.md";
 const AGENT_CONFIG_TOML: &str =
     "/workspace/ai_sandbox/canon/canon-agent-prompts/capability_config.toml";
 
@@ -19,8 +20,7 @@ pub struct PromptRegistry {
 }
 
 impl PromptRegistry {
-    /// Look up prompt content by id. Accepts both "EXECUTOR_AGENT_ROLE" and
-    /// "EXECUTOR_AGENT_ROLE.md".
+    /// Look up prompt content by id. Supports ids with or without ".md".
     pub fn get(&self, prompt_id: &str) -> Option<&str> {
         let key = prompt_id.strip_suffix(".md").unwrap_or(prompt_id);
         self.prompts.get(key).map(String::as_str)
@@ -85,42 +85,28 @@ fn content_hash(s: &str) -> String {
 }
 
 fn bootstrap_prompts(tlog_path: &Path, registry: &PromptRegistryHandle) {
-    let dir = Path::new(PROMPTS_DIR);
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let goal_path = Path::new(PROMPTS_DIR).join(GOAL_PROMPT_FILE);
+    if !goal_path.exists() {
+        return;
+    }
     let mut reg = match registry.write() {
         Ok(r) => r,
         Err(_) => return,
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("md") {
-            continue;
-        }
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let stem = match path.file_stem().and_then(|s| s.to_str()) {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
-        let filename = match path.file_name().and_then(|s| s.to_str()) {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
-        let hash = content_hash(&content);
-        reg.prompts.insert(stem.clone(), content.clone());
-        let payload = serde_json::json!({
-            "prompt_id": stem,
-            "path": filename,
-            "hash": hash,
-            "content": content,
-        });
-        write_boot_event(tlog_path, "prompt_loaded", payload);
-    }
+    let content = match std::fs::read_to_string(&goal_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let stem = "AGENT_GOAL".to_string();
+    let hash = content_hash(&content);
+    reg.prompts.insert(stem.clone(), content.clone());
+    let payload = serde_json::json!({
+        "prompt_id": stem,
+        "path": GOAL_PROMPT_FILE,
+        "hash": hash,
+        "content": content,
+    });
+    write_boot_event(tlog_path, "prompt_loaded", payload);
 }
 
 // ---------------------------------------------------------------------------
@@ -170,7 +156,7 @@ pub fn reload_prompt_file(
     tlog_path: &Path,
     registry: &PromptRegistryHandle,
 ) {
-    if path.extension().and_then(|s| s.to_str()) != Some("md") {
+    if path.file_name().and_then(|s| s.to_str()) != Some(GOAL_PROMPT_FILE) {
         return;
     }
     let content = match std::fs::read_to_string(path) {

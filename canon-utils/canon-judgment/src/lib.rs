@@ -23,6 +23,8 @@ impl Default for GuardConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RuntimeSignals {
     pub context_ready: bool,
+    pub has_queued_plan: bool,
+    pub workspace_dirty: bool,
     pub performed_recently: bool,
     pub finish_ready: bool,
 }
@@ -114,16 +116,16 @@ impl Gatekeeper {
             notes.push("repeat limit reached");
         }
 
-        if lane == RouteKind::Execute && !signals.context_ready {
+        if lane == RouteKind::Execute && !(signals.context_ready || signals.has_queued_plan) {
             lane = RouteKind::Scan;
             changed = true;
-            notes.push("execute requires context_ready");
+            notes.push("execute requires context_ready or queued plan");
         }
 
-        if lane == RouteKind::Validate && !signals.performed_recently {
+        if lane == RouteKind::Validate && !(signals.performed_recently || signals.workspace_dirty) {
             lane = RouteKind::Shape;
             changed = true;
-            notes.push("validate requires performed_recently");
+            notes.push("validate requires performed_recently or workspace_dirty");
         }
 
         if lane == RouteKind::Conclude && !signals.finish_ready {
