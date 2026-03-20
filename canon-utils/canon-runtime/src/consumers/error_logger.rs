@@ -1,8 +1,9 @@
-use canon_event::{canon_emit, CanonEvent, EventConsumer, EventEmitterHandle, EventFilter, RustcEvent};
+use canon_event::{canon_emit, new_error_occurred, CanonEvent, EventConsumer, EventEmitterHandle, EventFilter, RustcEvent};
 use serde_json::json;
 use std::fs::{create_dir_all, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 pub struct ErrorLogger {
     tlog_path: PathBuf,
@@ -51,38 +52,99 @@ fn resolve_error_jsonl_path() -> PathBuf {
 
 fn event_to_payload(event: &CanonEvent) -> Option<(String, serde_json::Value)> {
     match event {
-        CanonEvent::ErrorOccurred(payload) => Some((
-            payload.source.clone(),
-            serde_json::to_value(payload).unwrap_or_else(|_| json!({})),
-        )),
+        CanonEvent::ErrorOccurred(payload) => {
+            let mut value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));
+            if value.get("error_id").and_then(|v| v.as_str()).is_none() {
+                value["error_id"] = json!(Uuid::new_v4().to_string());
+            }
+            Some((payload.source.clone(), value))
+        }
         CanonEvent::CapabilityFailed(payload) => Some((
             "event-runtime".to_string(),
-            json!({
-                "kind": "capability_failed",
-                "source": "event-runtime",
-                "message": payload.error,
-                "severity": "error",
-                "context": {
-                    "request_id": payload.request_id,
-                    "capability": payload.name,
-                },
-                "trace_id": null,
-            }),
+            serde_json::to_value(new_error_occurred(
+                "capability_failed",
+                "event-runtime",
+                payload.error.clone(),
+                "error",
+                json!({
+                    "request_id": payload.request_id.clone(),
+                    "capability": payload.name.clone(),
+                }),
+                Some(payload.request_id.clone()),
+            ))
+            .unwrap_or_else(|_| json!({})),
         )),
         CanonEvent::NodeFailed(payload) => Some((
             "agent-consumer".to_string(),
-            json!({
-                "kind": "node_failed",
-                "source": "agent-consumer",
-                "message": payload.error.as_deref().unwrap_or("node_failed"),
-                "severity": "error",
-                "context": {
-                    "node_id": payload.node_id,
-                    "capability": payload.capability,
-                    "request_id": payload.request_id,
+            serde_json::to_value(new_error_occurred(
+                "node_failed",
+                "agent-consumer",
+                payload.error.as_deref().unwrap_or("node_failed"),
+                "error",
+                json!({
+                    "node_id": payload.node_id.clone(),
+                    "capability": payload.capability.clone(),
+                    "request_id": payload.request_id.clone(),
+                }),
+                if payload.request_id.is_empty() {
+                    None
+                } else {
+                    Some(payload.request_id.clone())
                 },
-                "trace_id": null,
-            }),
+            ))
+            .unwrap_or_else(|_| json!({})),
+        )),
+        CanonEvent::LoopActed(payload) if !payload.success => Some((
+            "act".to_string(),
+            serde_json::to_value(new_error_occurred(
+                "loop_acted_failed",
+                "act",
+                payload.stderr.clone(),
+                "error",
+                json!({
+                    "tick": payload.tick,
+                    "action_kind": payload.action_kind.clone(),
+                    "capability_request_id": payload.capability_request_id.clone(),
+                    "exit_code": payload.exit_code,
+                }),
+                payload.trace_id.clone(),
+            ))
+            .unwrap_or_else(|_| json!({})),
+        )),
+        CanonEvent::LoopVerified(payload) if !payload.passed => Some((
+            "verify".to_string(),
+            serde_json::to_value(new_error_occurred(
+                "loop_verified_failed",
+                "verify",
+                payload.diagnostics.join("; "),
+                "error",
+                json!({
+                    "tick": payload.tick,
+                    "compiler_clean": payload.compiler_clean,
+                    "tlog_clean": payload.tlog_clean,
+                    "error_count": payload.error_count,
+                }),
+                payload.trace_id.clone(),
+            ))
+            .unwrap_or_else(|_| json!({})),
+        )),
+        CanonEvent::LoopRewarded(payload) if payload.halt => Some((
+            "reward".to_string(),
+            serde_json::to_value(new_error_occurred(
+                "loop_rewarded_halt",
+                "reward",
+                "stagnant:halt",
+                "error",
+                json!({
+                    "tick": payload.tick,
+                    "reward": payload.reward,
+                    "errors_before": payload.errors_before,
+                    "errors_after": payload.errors_after,
+                    "stagnant_ticks": payload.stagnant_ticks,
+                }),
+                payload.trace_id.clone(),
+            ))
+            .unwrap_or_else(|_| json!({})),
         )),
         CanonEvent::Code(code) => match &code.delta.event {
             RustcEvent::PanicCaptured(payload) => Some((
@@ -100,6 +162,7 @@ fn event_to_payload(event: &CanonEvent) -> Option<(String, serde_json::Value)> {
                         "span": payload.span,
                     },
                     "trace_id": null,
+                    "error_id": Uuid::new_v4().to_string(),
                 }),
             )),
             RustcEvent::InvariantViolation(payload) => Some((
@@ -111,6 +174,7 @@ fn event_to_payload(event: &CanonEvent) -> Option<(String, serde_json::Value)> {
                     "severity": "error",
                     "context": {},
                     "trace_id": null,
+                    "error_id": Uuid::new_v4().to_string(),
                 }),
             )),
             _ => None,

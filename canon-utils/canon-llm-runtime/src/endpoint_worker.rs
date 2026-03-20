@@ -22,6 +22,7 @@ pub struct LlmWorkItem {
     pub req_id: u64,
     pub node_id: Option<String>,
     pub cache_key: Option<u64>,
+    pub bust_cache: bool,
     pub allow_req_id_mismatch: bool,
     pub prompt: String,
     pub role_schema: String,
@@ -42,6 +43,11 @@ struct LlmWorker {
 impl LlmWorker {
     async fn handle_request(&mut self, req: LlmWorkItem) {
         // telemetry removed
+        if req.bust_cache {
+            if let Some(key) = req.cache_key {
+                self.cache.remove(&key);
+            }
+        }
         if let Some(key) = req.cache_key {
             if let Some(hit) = self.cache.get(&key) {
                 // telemetry removed
@@ -144,7 +150,7 @@ impl LlmWorker {
     }
 }
 pub async fn llm_worker_send_request(
-    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, allow_req_id_mismatch: bool, phase: &str,
+    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool, phase: &str,
     tabs: &TabManagerHandle, max_tabs: usize, tab_cooldown_ms: u64,
 ) -> Result<String> {
     let (req_id, raw) = llm_worker_send_request_with_req_id(
@@ -156,6 +162,7 @@ pub async fn llm_worker_send_request(
         role_schema,
         node_id,
         cache_key,
+        bust_cache,
         allow_req_id_mismatch,
         phase,
         tabs,
@@ -168,7 +175,7 @@ pub async fn llm_worker_send_request(
 }
 
 pub async fn llm_worker_send_request_with_req_id(
-    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, allow_req_id_mismatch: bool, phase: &str,
+    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool, phase: &str,
     tabs: &TabManagerHandle, max_tabs: usize, tab_cooldown_ms: u64,
 ) -> Result<(u64, String)> {
     let req_id = NEXT_REQ_ID.fetch_add(1, Ordering::Relaxed);
@@ -198,6 +205,7 @@ pub async fn llm_worker_send_request_with_req_id(
         req_id,
         node_id: node_id.map(|v| v.to_string()),
         cache_key,
+        bust_cache,
         allow_req_id_mismatch,
         prompt: prompt.to_string(),
         role_schema: role_schema.to_string(),

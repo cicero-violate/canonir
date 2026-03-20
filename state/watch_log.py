@@ -37,11 +37,21 @@ def colorize(line: str) -> str:
 
     return line
 
+def truncate_values(line: str) -> str:
+    # Truncate any JSON string value longer than 20 chars
+    def _trunc(m):
+        key, val = m.group(1), m.group(2)
+        if len(val) > 20:
+            val = val[:20] + "..."
+        return f'"{key}": "{val}"'
+    return re.sub(r'"(\w+)":\s*"([^"]{21,})"', _trunc, line)
+
 def extract_strings(data):
     matches = re.findall(rb"[ -~]{8,}", data)
     for m in matches:
         try:
             line = m.decode("ascii")
+            line = truncate_values(line)
             print(colorize(line))
         except:
             pass

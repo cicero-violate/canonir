@@ -4,7 +4,7 @@ use canon_llm::endpoint_worker;
 use canon_llm::llm;
 use canon_llm::ws_server;
 use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityHandler};
-use canon_event::{CanonEvent, ErrorOccurred, EventEmitterHandle, canon_emit};
+use canon_event::{new_error_occurred, CanonEvent, EventEmitterHandle, canon_emit};
 use serde_json::json;
 use std::sync::{Arc, OnceLock};
 use std::thread;
@@ -76,6 +76,7 @@ impl LlmCapabilityHandler {
                         &config,
                         &tabs,
                     ));
+                    let mut llm_call_counter: u32 = 0;
                     for job in work_rx.iter() {
                         let LlmWork { request_id, name, prompt, role, raw, emitter } = job;
                         // Capture emitter on first job; ws_server uses it for
@@ -84,22 +85,24 @@ impl LlmCapabilityHandler {
                         let start = Instant::now();
                         canon_emit!(emitter; "llm_executor", "request_start",
                             json!({ "request_id": request_id, "name": name }));
+                        let is_planner_role = role.as_deref() == Some("planner");
+                        let bust_cache = config.planner_refine_on_cache && is_planner_role;
                         let Some(endpoint) = (if let Some(role) = role.as_deref() {
                             config.llm_endpoints.iter().find(|e| e.role.as_deref() == Some(role))
                         } else {
                             config.llm_endpoints.first()
                         }) else {
-                            emitter.emit(CanonEvent::ErrorOccurred(ErrorOccurred {
-                                kind: "llm_config".to_string(),
-                                source: "llm_executor".to_string(),
-                                message: "no llm endpoints configured".to_string(),
-                                severity: "error".to_string(),
-                                context: json!({
+                            emitter.emit(CanonEvent::ErrorOccurred(new_error_occurred(
+                                "llm_config",
+                                "llm_executor",
+                                "no llm endpoints configured",
+                                "error",
+                                json!({
                                     "request_id": request_id.clone(),
                                     "capability": name.clone(),
                                 }),
-                                trace_id: None,
-                            }));
+                                Some(request_id.clone()),
+                            )));
                             emitter.emit(CanonEvent::CapabilityFailed(canon_event::CapabilityFailed {
                                 request_id,
                                 name,
@@ -120,6 +123,21 @@ impl LlmCapabilityHandler {
                                 "endpoint": endpoint.id,
                                 "url": endpoint.url
                             }));
+                        let llm_log_dir = "/workspace/ai_sandbox/canon/state/reports_out/llm";
+                        let _ = std::fs::create_dir_all(llm_log_dir);
+                        let call_n = llm_call_counter;
+                        llm_call_counter += 1;
+                        let req_path = format!("{}/{:04}_request.json", llm_log_dir, call_n);
+                        let res_path = format!("{}/{:04}_response.json", llm_log_dir, call_n);
+                        let req_obj = json!({
+                            "n": call_n,
+                            "request_id": request_id,
+                            "endpoint": endpoint.id,
+                            "url": endpoint.url,
+                            "role": role_content,
+                            "prompt": prompt,
+                        });
+                        let _ = std::fs::write(&req_path, serde_json::to_string_pretty(&req_obj).unwrap_or_default());
                         let result = runtime.block_on(async {
                             let call = async {
                                 if raw {
@@ -127,14 +145,14 @@ impl LlmCapabilityHandler {
                                         &bridge, &endpoint.id, &endpoint.url,
                                         endpoint.stateful, &prompt, &role_content,
                                         "llm_executor", None, &tabs, endpoint.max_tabs,
-                                        config.tab_cooldown_ms, retries, delay,
+                                        config.tab_cooldown_ms, retries, delay, bust_cache,
                                     ).await
                                 } else {
                                     llm::llm_client_call_agent_json_with_retry_allow_mismatch(
                                         &bridge, &endpoint.id, &endpoint.url,
                                         endpoint.stateful, &prompt, &role_content,
                                         "llm_executor", None, &tabs, endpoint.max_tabs,
-                                        config.tab_cooldown_ms, retries, delay,
+                                        config.tab_cooldown_ms, retries, delay, bust_cache,
                                     ).await
                                 }
                             };
@@ -157,6 +175,15 @@ impl LlmCapabilityHandler {
                                 let parse_ok = !payload.as_object()
                                     .map(|o| o.len() == 1 && o.contains_key("text"))
                                     .unwrap_or(false);
+                                let res_obj = json!({
+                                    "n": call_n,
+                                    "request_id": request_id,
+                                    "endpoint": endpoint.id,
+                                    "duration_ms": elapsed_ms,
+                                    "parse_ok": parse_ok,
+                                    "response": payload,
+                                });
+                                let _ = std::fs::write(&res_path, serde_json::to_string_pretty(&res_obj).unwrap_or_default());
                                 canon_emit!(emitter; "llm_executor", "llm_response",
                                     json!({
                                         "request_id": request_id,
@@ -181,17 +208,24 @@ impl LlmCapabilityHandler {
                                     json!({ "request_id": request_id }));
                             }
                             Err(err) => {
-                                emitter.emit(CanonEvent::ErrorOccurred(ErrorOccurred {
-                                    kind: "llm_call".to_string(),
-                                    source: "llm_executor".to_string(),
-                                    message: err.to_string(),
-                                    severity: "error".to_string(),
-                                    context: json!({
+                                let res_obj = json!({
+                                    "n": call_n,
+                                    "request_id": request_id,
+                                    "endpoint": endpoint.id,
+                                    "error": err.to_string(),
+                                });
+                                let _ = std::fs::write(&res_path, serde_json::to_string_pretty(&res_obj).unwrap_or_default());
+                                emitter.emit(CanonEvent::ErrorOccurred(new_error_occurred(
+                                    "llm_call",
+                                    "llm_executor",
+                                    err.to_string(),
+                                    "error",
+                                    json!({
                                         "request_id": request_id.clone(),
                                         "capability": name.clone(),
                                     }),
-                                    trace_id: None,
-                                }));
+                                    Some(request_id.clone()),
+                                )));
                                 emitter.emit(CanonEvent::CapabilityFailed(
                                     canon_event::CapabilityFailed {
                                         request_id: request_id.clone(),

@@ -4,6 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TlogEvent {
+    #[serde(default)]
+    pub event_id: Option<u64>,
     pub ts: u64,
     pub source: String,
     pub kind: String,
@@ -18,6 +20,7 @@ impl TlogEvent {
             .unwrap_or_default()
             .as_millis() as u64;
         Self {
+            event_id: None,
             ts,
             source: source.into(),
             kind: kind.into(),

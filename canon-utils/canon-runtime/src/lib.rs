@@ -2,7 +2,6 @@ use anyhow::Result;
 mod bus;
 pub mod bootstrap;
 pub mod consumers;
-pub mod prompt_watcher;
 
 use canon_capability::{CapabilityExecutionContext, CapabilityRegistry, CapabilityExecutionResult};
 use canon_event::{BinarySegmentWriter, TlogEvent};
@@ -20,6 +19,8 @@ use canon_event::{
     CapabilityCompleted,
     CapabilityFailed,
     CapabilityRequested,
+    new_error_occurred,
+    ErrorOccurred,
     EventDelta,
     RustcEvent,
     RustcState,
@@ -29,7 +30,6 @@ use canon_event::{
     CanonEvent,
     Code,
     DebugEvent,
-    ErrorOccurred,
     Tick,
     RuntimeStateUpdated,
     PolicyBaselineUpdated,
@@ -102,7 +102,7 @@ impl EventRuntime {
             registry,
             tlog_path: None,
             tlog_writer: None,
-            next_id: 1,
+            next_id: 0,
             tick: 0,
             runtime_tick: 0,
             runtime_state: serde_json::json!({}),
@@ -122,6 +122,14 @@ impl EventRuntime {
 
     pub fn set_execute_capabilities(&mut self, enabled: bool) {
         self.execute_capabilities = enabled;
+    }
+
+    pub fn set_next_id(&mut self, next_id: u64) {
+        self.next_id = next_id;
+    }
+
+    pub fn next_id(&self) -> u64 {
+        self.next_id
     }
 
     pub fn set_tlog_path(&mut self, path: std::path::PathBuf) {
@@ -144,7 +152,6 @@ impl EventRuntime {
 
     pub fn reset(&mut self) {
         self.state = empty_state();
-        self.next_id = 1;
         self.tick = 0;
         self.runtime_tick = 0;
         self.runtime_state = serde_json::json!({});
@@ -247,7 +254,6 @@ impl EventRuntime {
             None
         };
         let delta = if matches!(event, RustcEvent::SessionStart(_)) {
-            self.next_id = 1;
             self.tick = 0;
             EventDelta {
                 id: 0,
@@ -293,6 +299,17 @@ impl EventRuntime {
         Ok(())
     }
 
+    pub fn emit_debug_event(
+        &mut self,
+        source: String,
+        kind: String,
+        payload: serde_json::Value,
+    ) -> Result<()> {
+        self.handle_runtime_event(CanonEvent::Debug(DebugEvent { source, kind, payload }))?;
+        self.drain_emitted_events()?;
+        Ok(())
+    }
+
     fn handle_runtime_event(&mut self, event: CanonEvent) -> Result<()> {
         self.bus.dispatch(event.clone());
         if !matches!(event, CanonEvent::RuntimeStateUpdated(_)) {
@@ -300,65 +317,65 @@ impl EventRuntime {
         }
         match event {
             CanonEvent::CapabilityFailed(payload) => {
-                let error_event = CanonEvent::ErrorOccurred(ErrorOccurred {
-                    kind: "capability_failed".to_string(),
-                    source: "event-runtime".to_string(),
-                    message: payload.error.clone(),
-                    severity: "error".to_string(),
-                    context: serde_json::json!({
+                let error_event = CanonEvent::ErrorOccurred(new_error_occurred(
+                    "capability_failed",
+                    "event-runtime",
+                    payload.error.clone(),
+                    "error",
+                    serde_json::json!({
                         "request_id": payload.request_id,
                         "capability": payload.name,
                     }),
-                    trace_id: None,
-                });
+                    None,
+                ));
                 self.bus.dispatch(error_event.clone());
                 self.append_runtime_event(&error_event);
             }
             CanonEvent::NodeFailed(payload) => {
-                let error_event = CanonEvent::ErrorOccurred(ErrorOccurred {
-                    kind: "node_failed".to_string(),
-                    source: "agent-consumer".to_string(),
-                    message: payload.error.clone().unwrap_or_else(|| "node_failed".to_string()),
-                    severity: "error".to_string(),
-                    context: serde_json::json!({
+                let error_event = CanonEvent::ErrorOccurred(new_error_occurred(
+                    "node_failed",
+                    "agent-consumer",
+                    payload.error.clone().unwrap_or_else(|| "node_failed".to_string()),
+                    "error",
+                    serde_json::json!({
                         "node_id": payload.node_id,
                         "capability": payload.capability,
                         "request_id": payload.request_id,
                     }),
-                    trace_id: None,
-                });
+                    None,
+                ));
                 self.bus.dispatch(error_event.clone());
                 self.append_runtime_event(&error_event);
             }
             CanonEvent::Code(Code { delta, .. }) => {
                 match &delta.event {
                     RustcEvent::PanicCaptured(payload) => {
-                        let error_event = CanonEvent::ErrorOccurred(ErrorOccurred {
-                            kind: "panic_captured".to_string(),
-                            source: "rustc".to_string(),
-                            message: payload.message.clone(),
-                            severity: "error".to_string(),
-                            context: serde_json::json!({
+                        let error_event = CanonEvent::ErrorOccurred(new_error_occurred(
+                            "panic_captured",
+                            "rustc",
+                            payload.message.clone(),
+                            "error",
+                            serde_json::json!({
                                 "def_id": payload.def_id,
                                 "mir_variant": payload.mir_variant,
                                 "lowering_stage": payload.lowering_stage,
                                 "file": payload.file,
                                 "span": payload.span,
                             }),
-                            trace_id: None,
-                        });
+                            None,
+                        ));
                         self.bus.dispatch(error_event.clone());
                         self.append_runtime_event(&error_event);
                     }
                     RustcEvent::InvariantViolation(payload) => {
-                        let error_event = CanonEvent::ErrorOccurred(ErrorOccurred {
-                            kind: "invariant_violation".to_string(),
-                            source: "rustc".to_string(),
-                            message: payload.message.clone(),
-                            severity: "error".to_string(),
-                            context: serde_json::json!({}),
-                            trace_id: None,
-                        });
+                        let error_event = CanonEvent::ErrorOccurred(new_error_occurred(
+                            "invariant_violation",
+                            "rustc",
+                            payload.message.clone(),
+                            "error",
+                            serde_json::json!({}),
+                            None,
+                        ));
                         self.bus.dispatch(error_event.clone());
                         self.append_runtime_event(&error_event);
                     }
@@ -400,25 +417,27 @@ impl EventRuntime {
             event: CanonEvent::CapabilityRequested(request.clone()),
             emitter: Some(self.emitter.clone()),
         };
-        let result = match self
-            .registry
-            .lock()
-            .map_err(|_| anyhow::anyhow!("capability registry lock poisoned"))?
-            .execute(&request.name, ctx)
-        {
+        let execute_result = {
+            let registry = self
+                .registry
+                .lock()
+                .map_err(|_| anyhow::anyhow!("capability registry lock poisoned"))?;
+            registry.execute(&request.name, ctx)
+        };
+        let result = match execute_result {
             Ok(result) => result,
             Err(err) => {
-                let error_event = CanonEvent::ErrorOccurred(ErrorOccurred {
-                    kind: "capability_execution".to_string(),
-                    source: "event-runtime".to_string(),
-                    message: err.to_string(),
-                    severity: "error".to_string(),
-                    context: serde_json::json!({
+                let error_event = CanonEvent::ErrorOccurred(new_error_occurred(
+                    "capability_execution",
+                    "event-runtime",
+                    err.to_string(),
+                    "error",
+                    serde_json::json!({
                         "request_id": request_id.clone(),
                         "capability": request_name.clone(),
                     }),
-                    trace_id: Some(request_id.clone()),
-                });
+                    Some(request_id.clone()),
+                ));
                 self.bus.dispatch(error_event.clone());
                 self.append_runtime_event(&error_event);
                 let failed = CanonEvent::CapabilityFailed(CapabilityFailed {
@@ -476,11 +495,11 @@ impl EventRuntime {
         Ok(())
     }
 
-    fn append_runtime_event(&self, event: &CanonEvent) {
-        let Some(path) = self.tlog_path.as_ref() else {
+    fn append_runtime_event(&mut self, event: &CanonEvent) {
+        let Some(path) = self.tlog_path.clone() else {
             return;
         };
-        let canon = match event {
+        let mut canon = match event {
         CanonEvent::CapabilityCompleted(payload) => {
             let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
             TlogEvent::new("event-runtime", "capability_completed", val)
@@ -579,6 +598,26 @@ impl EventRuntime {
                 "duration_ms": duration_ms,
             }))
         }
+        CanonEvent::LoopObserved(payload) => {
+            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+            TlogEvent::new("observe", "loop_observed", val)
+        }
+        CanonEvent::LoopPlanned(payload) => {
+            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+            TlogEvent::new("plan", "loop_planned", val)
+        }
+        CanonEvent::LoopActed(payload) => {
+            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+            TlogEvent::new("act", "loop_acted", val)
+        }
+        CanonEvent::LoopVerified(payload) => {
+            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+            TlogEvent::new("verify", "loop_verified", val)
+        }
+        CanonEvent::LoopRewarded(payload) => {
+            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+            TlogEvent::new("reward", "loop_rewarded", val)
+        }
         CanonEvent::Debug(DebugEvent { source, kind, payload }) => {
             TlogEvent::new(source, kind, payload.clone())
         }
@@ -591,8 +630,10 @@ impl EventRuntime {
             return;
         }
         };
+        canon.event_id = Some(self.next_id);
+        self.next_id = self.next_id.saturating_add(1);
 
-        if is_segment_dir_path(path) {
+        if is_segment_dir_path(&path) {
             if let Some(writer_arc) = self.tlog_writer.as_ref() {
                 let needs_reopen = if let Ok(w) = writer_arc.lock() {
                     if w.write_event(&canon).is_err() {
@@ -604,7 +645,7 @@ impl EventRuntime {
                     false
                 };
                 if needs_reopen {
-                    if let Ok(fresh) = BinarySegmentWriter::open(path) {
+                    if let Ok(fresh) = BinarySegmentWriter::open(&path) {
                         if let Ok(mut w) = writer_arc.lock() {
                             *w = fresh;
                             let _ = w.write_event(&canon);
@@ -615,7 +656,7 @@ impl EventRuntime {
             return;
         }
 
-        let _ = canon_event::write_event_auto(path, &canon);
+        let _ = canon_event::write_event_auto(&path, &canon);
     }
 }
 

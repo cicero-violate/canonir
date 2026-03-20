@@ -155,3 +155,45 @@ fn bootstrap_agents(tlog_path: &Path) {
 fn write_boot_event(tlog_path: &Path, kind: &str, payload: serde_json::Value) {
     let _ = canon_emit!("bootstrap", kind, payload, tlog_path);
 }
+
+// ---------------------------------------------------------------------------
+// Hot-reload: re-read one prompt file, update registry, write tlog event.
+// Called by the prompt-directory watcher (P4) at runtime.
+// ---------------------------------------------------------------------------
+
+pub fn prompts_dir() -> &'static str {
+    PROMPTS_DIR
+}
+
+pub fn reload_prompt_file(
+    path: &Path,
+    tlog_path: &Path,
+    registry: &PromptRegistryHandle,
+) {
+    if path.extension().and_then(|s| s.to_str()) != Some("md") {
+        return;
+    }
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let stem = match path.file_stem().and_then(|s| s.to_str()) {
+        Some(s) => s.to_string(),
+        None => return,
+    };
+    let filename = match path.file_name().and_then(|s| s.to_str()) {
+        Some(s) => s.to_string(),
+        None => return,
+    };
+    let hash = content_hash(&content);
+    if let Ok(mut reg) = registry.write() {
+        reg.prompts.insert(stem.clone(), content.clone());
+    }
+    let payload = serde_json::json!({
+        "prompt_id": stem,
+        "path": filename,
+        "hash": hash,
+        "content": content,
+    });
+    let _ = canon_emit!("prompt-watcher", "prompt_loaded", payload, tlog_path);
+}

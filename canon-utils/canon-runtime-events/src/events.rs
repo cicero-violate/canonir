@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use canon_macros::{canon_event_struct, canon_event_enum};
 
+pub const EVENT_SCHEMA_VERSION: &str = "1";
+
 canon_event_struct!(RenameSymbol { project: String, old: String, new: String });
 canon_event_struct!(MoveSymbol { project: String, symbol: String, module: String });
 canon_event_struct!(DeleteSymbol { project: String, symbol: String });
@@ -121,8 +123,113 @@ canon_event_struct!(ErrorOccurred {
     context: serde_json::Value,
     #[serde(default)]
     trace_id: Option<String>,
+    #[serde(default)]
+    error_id: Option<String>,
 });
+
+pub fn new_error_occurred(
+    kind: impl Into<String>,
+    source: impl Into<String>,
+    message: impl Into<String>,
+    severity: impl Into<String>,
+    context: serde_json::Value,
+    trace_id: Option<String>,
+) -> ErrorOccurred {
+    ErrorOccurred {
+        kind: kind.into(),
+        source: source.into(),
+        message: message.into(),
+        severity: severity.into(),
+        context,
+        trace_id,
+        error_id: Some(uuid::Uuid::new_v4().to_string()),
+    }
+}
 canon_event_struct!(Tick { tick: u64 });
+canon_event_struct!(LoopObserved {
+    tick: u64,
+    error_count: usize,
+    warning_count: usize,
+    compiler_errors: Vec<serde_json::Value>,
+    goal_text: Option<String>,
+});
+canon_event_struct!(LoopPlanned {
+    tick: u64,
+    action_kind: String,
+    action_payload: serde_json::Value,
+    reason: String,
+    llm_request_id: Option<String>,
+    #[serde(default)]
+    trace_id: Option<String>,
+    #[serde(default)]
+    execution_id: Option<String>,
+    #[serde(default)]
+    span_id: Option<String>,
+    #[serde(default)]
+    parent_span_id: Option<String>,
+    #[serde(default)]
+    plan_id: Option<String>,
+    #[serde(default)]
+    plan_step_id: Option<String>,
+    #[serde(default)]
+    action_id: Option<String>,
+});
+canon_event_struct!(LoopActed {
+    tick: u64,
+    action_kind: String,
+    capability_request_id: String,
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    duration_ms: u64,
+    success: bool,
+    #[serde(default)]
+    trace_id: Option<String>,
+    #[serde(default)]
+    execution_id: Option<String>,
+    #[serde(default)]
+    span_id: Option<String>,
+    #[serde(default)]
+    parent_span_id: Option<String>,
+    #[serde(default)]
+    plan_id: Option<String>,
+    #[serde(default)]
+    plan_step_id: Option<String>,
+    #[serde(default)]
+    action_id: Option<String>,
+});
+canon_event_struct!(LoopVerified {
+    tick: u64,
+    passed: bool,
+    compiler_clean: bool,
+    tlog_clean: bool,
+    error_count: usize,
+    diagnostics: Vec<String>,
+    #[serde(default)]
+    trace_id: Option<String>,
+    #[serde(default)]
+    execution_id: Option<String>,
+    #[serde(default)]
+    span_id: Option<String>,
+    #[serde(default)]
+    parent_span_id: Option<String>,
+});
+canon_event_struct!(LoopRewarded {
+    tick: u64,
+    reward: f32,
+    errors_before: usize,
+    errors_after: usize,
+    stagnant_ticks: u32,
+    halt: bool,
+    #[serde(default)]
+    trace_id: Option<String>,
+    #[serde(default)]
+    execution_id: Option<String>,
+    #[serde(default)]
+    span_id: Option<String>,
+    #[serde(default)]
+    parent_span_id: Option<String>,
+});
 canon_event_struct!(RuntimeStateUpdated { payload: serde_json::Value });
 canon_event_struct!(PolicyBaselineUpdated { payload: serde_json::Value });
 canon_event_struct!(GoalSelected { payload: serde_json::Value });
@@ -169,6 +276,11 @@ canon_event_enum!(CanonEvent {
     ErrorOccurred(ErrorOccurred),
     Edit(EditEvent),
     Tick(Tick),
+    LoopObserved(LoopObserved),
+    LoopPlanned(LoopPlanned),
+    LoopActed(LoopActed),
+    LoopVerified(LoopVerified),
+    LoopRewarded(LoopRewarded),
     RuntimeStateUpdated(RuntimeStateUpdated),
     NodeReady(NodeReady),
     NodeStarted(NodeStarted),

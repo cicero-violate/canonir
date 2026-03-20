@@ -13,7 +13,7 @@ pub mod macros;
 /// ```ignore
 /// impl_rustc_consumer!(MyConsumer, EventMask::ALL, handle_event);
 /// ```
-#[macro_export] // TODO() need to remove this
+#[macro_export]
 macro_rules! impl_rustc_consumer {
     ($type:ty, $mask:expr, $handler:ident) => {
         impl $crate::RustcEventConsumer for $type {
@@ -32,6 +32,7 @@ macro_rules! impl_rustc_consumer {
 }
 
 pub use events::{
+    EVENT_SCHEMA_VERSION,
     CanonEvent,
     EditEvent,
     EventConsumer,
@@ -50,7 +51,13 @@ pub use events::{
     Code,
     DebugEvent,
     ErrorOccurred,
+    new_error_occurred,
     Tick,
+    LoopObserved,
+    LoopPlanned,
+    LoopActed,
+    LoopVerified,
+    LoopRewarded,
     RuntimeStateUpdated,
     PolicyBaselineUpdated,
     GoalSelected,

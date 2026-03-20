@@ -22,6 +22,9 @@ fn is_error_event(event: &CanonEvent) -> bool {
         CanonEvent::ErrorOccurred(_) => true,
         CanonEvent::CapabilityFailed(_) => true,
         CanonEvent::NodeFailed(_) => true,
+        CanonEvent::LoopActed(payload) => !payload.success,
+        CanonEvent::LoopVerified(payload) => !payload.passed,
+        CanonEvent::LoopRewarded(payload) => payload.halt,
         CanonEvent::Code(canon_event::Code { delta, .. }) => matches!(
             delta.event,
             RustcEvent::PanicCaptured(_) | RustcEvent::InvariantViolation(_)

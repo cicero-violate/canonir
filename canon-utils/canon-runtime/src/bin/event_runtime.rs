@@ -1,14 +1,16 @@
 use anyhow::{anyhow, Result};
-use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry};
-use canon_runtime::consumers::agent::AgentConsumer;
+use canon_event::EVENT_SCHEMA_VERSION;
+use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry, prompts_dir, reload_prompt_file};
 use canon_runtime::consumers::capability_executor::CapabilityExecutor;
 use canon_runtime::consumers::error_logger::ErrorLogger;
-use canon_runtime::consumers::failure_store::FailureStoreConsumer;
 use canon_runtime::consumers::llm_executor::LlmCapabilityHandler;
 use canon_runtime::{register_default_capabilities, EventRuntime};
-use canon_runtime::prompt_watcher::PromptWatcher;
-use canon_editor::EditConsumer;
-use canon_event_store::read_any_events_from_path_with_start_seq;
+use canon_act::ActConsumer;
+use canon_observe::ObserveConsumer;
+use canon_plan::PlanConsumer;
+use canon_reward::RewardConsumer;
+use canon_verify::VerifyConsumer;
+use canon_event_store::{read_any_events_from_path, read_any_events_from_path_with_start_seq};
 use canon_event_store::replay_graph_from_tlog;
 use canon_event_store::AnyEvent;
 use crossbeam_channel as cc;
@@ -20,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::collections::HashSet;
+use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Lock guard — ensures only one instance runs against a given tlog path.
@@ -174,9 +177,45 @@ fn main() -> Result<()> {
         Some(guard) => guard,
         None => return Ok(()),
     };
+    let system_id = load_or_create_system_id();
 
     if std::env::var("CANON_VERIFY_TLOG_EQUIV").ok().as_deref() == Some("1") {
         let _ = maybe_verify_tlog_equivalence(&tlog_path);
+    }
+
+    // Use the cursor's start_seq to skip reading old tlog segments, but always
+    // start processing from the tail — consumers rebuild from scratch on each run.
+    // Goal is recovered via scan_tlog_for_goal() on first tick. This prevents
+    // stale CapabilityRequested events from being re-dispatched and avoids
+    // orphaned-pending deadlocks when the process was killed mid LLM call.
+    let _ = (start_at_tail,);
+    let mut cursor_state = load_cursor_state(&cursor_path, &tlog_path);
+    let latest_tlog_session_id = find_last_runtime_started_session_id(&tlog_path);
+    if let (Some(cursor), Some(tlog_session_id)) = (&cursor_state, &latest_tlog_session_id) {
+        if let Some(cursor_session_id) = &cursor.session_id {
+            if cursor_session_id != tlog_session_id {
+                eprintln!(
+                    "[event_runtime] cursor session_id mismatch; ignoring stale cursor (cursor={} tlog={})",
+                    cursor_session_id, tlog_session_id
+                );
+                cursor_state = None;
+            }
+        }
+    }
+    let start_seq: u64 = cursor_state.as_ref().map(|c| c.start_seq).unwrap_or(0);
+    let resumed_next_id: u64 = cursor_state.as_ref().map(|c| c.next_id).unwrap_or(0);
+    let session_id = cursor_state
+        .as_ref()
+        .and_then(|c| c.session_id.clone())
+        .or(latest_tlog_session_id)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    if let Some(schema_id) = find_last_runtime_started_schema_id(&tlog_path) {
+        if schema_id != EVENT_SCHEMA_VERSION {
+            eprintln!(
+                "[event_runtime] unsupported schema_id in tlog: {} (runtime supports {})",
+                schema_id, EVENT_SCHEMA_VERSION
+            );
+        }
     }
 
     // --- Build runtime (W owns this exclusively) ---
@@ -186,33 +225,31 @@ fn main() -> Result<()> {
     let prompt_registry = new_prompt_registry();
     bootstrap_config(&tlog_path, &prompt_registry);
 
-    let consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
-        Box::new(AgentConsumer::new()),
-        Box::new(CapabilityExecutor::new(
-            registry.clone(),
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-        )),
+    let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mut consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
+        Box::new(ObserveConsumer::new(workspace.clone(), tlog_path.clone())),
+        Box::new(PlanConsumer::new()),
+        Box::new(ActConsumer::new()),
+        Box::new(VerifyConsumer::new(workspace.clone(), tlog_path.clone())),
+        Box::new(RewardConsumer::new()),
         Box::new(ErrorLogger::new(None)),
-        Box::new(FailureStoreConsumer::new(None)),
-        Box::new(EditConsumer::new()),
     ];
+    if event_execution_enabled {
+        consumers.push(Box::new(CapabilityExecutor::new(
+            registry.clone(),
+            workspace.clone(),
+        )));
+    }
     let mut runtime = EventRuntime::new_with_registry(consumers, registry.clone());
-    let _prompt_watcher = PromptWatcher::start(&tlog_path)?;
     {
         let mut reg = registry.lock().expect("capability registry lock");
         register_default_capabilities(&mut reg);
         reg.register(Arc::new(LlmCapabilityHandler::new(prompt_registry.clone())));
     }
-    runtime.set_execute_capabilities(event_execution_enabled);
+    runtime.set_execute_capabilities(false);
     // set_tlog_path tells W where to append (L).  Only W calls this; only W writes L.
     runtime.set_tlog_path(tlog_path.clone());
-    // Kick the agent loop immediately so it doesn't wait for external ticks.
-    let _ = runtime.emit_tick();
-
-    // --- Determine start offset from persisted cursor ---
-    let cursor_loaded = load_cursor(&cursor_path, &tlog_path).is_some();
-    let start_seq: u64 = load_cursor_seq(&cursor_path, &tlog_path).unwrap_or(0);
-    let mut processed: usize = load_cursor(&cursor_path, &tlog_path).unwrap_or(0);
+    runtime.set_next_id(resumed_next_id);
 
     // Read events that already exist in L at startup (in-memory after this point).
     let bootstrap_events: Vec<AnyEvent> = if tlog_path.exists() {
@@ -221,11 +258,8 @@ fn main() -> Result<()> {
         vec![]
     };
 
-    // On fresh boot (no cursor) or start-at-tail: skip existing events to avoid
-    // re-dispatching stale capability_requested entries to consumers.
-    if !cursor_loaded || (start_at_tail && processed == 0 && !bootstrap_events.is_empty()) {
-        processed = bootstrap_events.len();
-    }
+    // Always start at tail — never replay into consumers.
+    let mut processed: usize = bootstrap_events.len();
 
     // --- Once mode: W processes the current snapshot of L, then exits ---
     if once {
@@ -236,7 +270,14 @@ fn main() -> Result<()> {
             runtime.process_events(&bootstrap_events[processed..])?;
         }
         processed = bootstrap_events.len();
-        let _ = save_cursor(&cursor_path, &tlog_path, processed, start_seq);
+        let _ = save_cursor(
+            &cursor_path,
+            &tlog_path,
+            processed,
+            start_seq,
+            &session_id,
+            runtime.next_id(),
+        );
         return Ok(());
     }
 
@@ -269,7 +310,7 @@ fn main() -> Result<()> {
     {
         let watcher_tlog = tlog_path.clone();
         let watcher_tx = q_tx.clone();
-        let watcher_start_seq = start_seq;
+        let mut watcher_start_seq = start_seq;
         // watcher_seen tracks how many events from L this producer has already forwarded.
         let mut watcher_seen: usize = processed;
 
@@ -295,7 +336,9 @@ fn main() -> Result<()> {
             fs_watcher.watch(&watch_target, RecursiveMode::NonRecursive)?;
         }
 
-        std::thread::spawn(move || {
+        std::thread::Builder::new()
+            .name("canon-p2-watcher".to_string())
+            .spawn(move || {
             let _watcher = fs_watcher; // keep alive for thread lifetime
             while let Ok(res) = fs_rx.recv() {
                 if res.is_err() {
@@ -323,9 +366,23 @@ fn main() -> Result<()> {
                             break;
                         }
                     }
+                    // Advance start_seq to the latest segment so future reads
+                    // only scan the current segment instead of the full history.
+                    if let Some(latest_seq) = latest_segment_seq(&watcher_tlog) {
+                        if latest_seq > watcher_start_seq {
+                            let from_latest = read_any_events_from_path_with_start_seq(
+                                &watcher_tlog,
+                                latest_seq,
+                            )
+                            .unwrap_or_default()
+                            .len();
+                            watcher_start_seq = latest_seq;
+                            watcher_seen = from_latest;
+                        }
+                    }
                 }
             }
-        });
+        })?;
     }
 
     // --- P3: tick timer ---
@@ -334,13 +391,80 @@ fn main() -> Result<()> {
     // log entry (Tick is not appended to L).
     {
         let tick_tx = q_tx.clone();
-        std::thread::spawn(move || loop {
+        std::thread::Builder::new()
+            .name("canon-p3-tick".to_string())
+            .spawn(move || loop {
             std::thread::sleep(Duration::from_secs(1));
             if tick_tx.send(Msg::Tick).is_err() {
                 break;
             }
-        });
+        })?;
     }
+
+    // --- P4: prompt-directory watcher ---
+    // Watches canon-agent-prompts/ for .md file changes. On change: re-reads
+    // the file, updates the in-memory PromptRegistry (so LlmCapabilityHandler
+    // picks up the new content immediately), and writes a prompt_loaded event
+    // directly to the tlog. P2 then delivers it as Msg::Event to W, which
+    // dispatches CanonEvent::PromptLoaded to all consumers (including ObserveConsumer).
+    {
+        let prompts_path = PathBuf::from(prompts_dir());
+        let tlog_for_prompts = tlog_path.clone();
+        let registry_for_prompts = prompt_registry.clone();
+
+        if prompts_path.exists() {
+            let (prompt_fs_tx, prompt_fs_rx) =
+                cc::unbounded::<notify::Result<notify::Event>>();
+            let mut prompt_watcher = RecommendedWatcher::new(
+                move |res| { let _ = prompt_fs_tx.send(res); },
+                NotifyConfig::default(),
+            )?;
+            prompt_watcher.watch(&prompts_path, RecursiveMode::NonRecursive)?;
+
+            std::thread::Builder::new()
+                .name("canon-p4-prompts".to_string())
+                .spawn(move || {
+                let _watcher = prompt_watcher;
+                let mut last_reload: std::collections::HashMap<PathBuf, Instant> =
+                    std::collections::HashMap::new();
+                while let Ok(Ok(event)) = prompt_fs_rx.recv() {
+                    for path in &event.paths {
+                        // Debounce: skip if same file reloaded within 500ms
+                        let now = Instant::now();
+                        if last_reload.get(path).map_or(false, |t| now.duration_since(*t) < Duration::from_millis(500)) {
+                            continue;
+                        }
+                        last_reload.insert(path.clone(), now);
+                        reload_prompt_file(path, &tlog_for_prompts, &registry_for_prompts);
+                    }
+                }
+            })?;
+        }
+    }
+
+    // Emit runtime_started so watch_log.py and the tlog show when a new
+    // process begins. Written after P2 watcher_seen is fixed so P2 delivers it.
+    runtime.emit_debug_event(
+        "event-runtime".to_string(),
+        "runtime_started".to_string(),
+        serde_json::json!({
+            "pid": std::process::id(),
+            "tlog": tlog_path.display().to_string(),
+            "event_stream_id": tlog_path.display().to_string(),
+            "session_id": session_id.clone(),
+            "schema_id": EVENT_SCHEMA_VERSION,
+            "build_id": env!("CANON_BUILD_ID"),
+            "commit_id": env!("CANON_COMMIT_ID"),
+            "system_id": system_id,
+        }),
+    )?;
+    if env!("CANON_COMMIT_ID").starts_with("unknown") {
+        eprintln!(
+            "[event_runtime] warning: CANON_COMMIT_ID is unknown; build metadata is incomplete"
+        );
+    }
+    // Kick the agent loop immediately so it doesn't wait for external ticks.
+    let _ = runtime.emit_tick();
 
     // =========================================================================
     // W = 1 — single writer loop
@@ -362,7 +486,16 @@ fn main() -> Result<()> {
                 if processed != last_saved_processed
                     && last_saved.elapsed() >= Duration::from_secs(1)
                 {
-                    if save_cursor(&cursor_path, &tlog_path, processed, start_seq).is_ok() {
+                    if save_cursor(
+                        &cursor_path,
+                        &tlog_path,
+                        processed,
+                        start_seq,
+                        &session_id,
+                        runtime.next_id(),
+                    )
+                    .is_ok()
+                    {
                         last_saved = Instant::now();
                         last_saved_processed = processed;
                     }
@@ -386,31 +519,64 @@ fn main() -> Result<()> {
 // Cursor helpers — track W's read offset into L for crash recovery / replay.
 // ---------------------------------------------------------------------------
 
-fn load_cursor(path: &Path, tlog_path: &Path) -> Option<usize> {
+
+/// Returns the base sequence number of the latest `.log` segment in `dir`.
+/// Used by the P2 watcher to advance `watcher_start_seq` after each batch so
+/// that subsequent reads only scan the current segment rather than full history.
+fn latest_segment_seq(dir: &Path) -> Option<u64> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) != Some("log") {
+                return None;
+            }
+            p.file_stem()
+                .and_then(|s| s.to_str())
+                .and_then(|s| s.parse::<u64>().ok())
+        })
+        .max()
+}
+
+struct CursorState {
+    start_seq: u64,
+    session_id: Option<String>,
+    next_id: u64,
+}
+
+fn load_cursor_state(path: &Path, tlog_path: &Path) -> Option<CursorState> {
     let text = std::fs::read_to_string(path).ok()?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
     let stored_path = value.get("tlog_path")?.as_str()?;
     if stored_path != tlog_path.display().to_string() {
         return None;
     }
-    value.get("processed")?.as_u64().map(|v| v as usize)
+    Some(CursorState {
+        start_seq: value.get("start_seq")?.as_u64()?,
+        session_id: value
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        next_id: value.get("next_id").and_then(|v| v.as_u64()).unwrap_or(0),
+    })
 }
 
-fn load_cursor_seq(path: &Path, tlog_path: &Path) -> Option<u64> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let stored_path = value.get("tlog_path")?.as_str()?;
-    if stored_path != tlog_path.display().to_string() {
-        return None;
-    }
-    value.get("start_seq")?.as_u64()
-}
-
-fn save_cursor(path: &Path, tlog_path: &Path, processed: usize, start_seq: u64) -> Result<()> {
+fn save_cursor(
+    path: &Path,
+    tlog_path: &Path,
+    state_version: usize,
+    start_seq: u64,
+    session_id: &str,
+    next_id: u64,
+) -> Result<()> {
     let state = serde_json::json!({
         "tlog_path": tlog_path.display().to_string(),
-        "processed": processed,
+        "state_version": state_version,
+        "processed": state_version,
         "start_seq": start_seq,
+        "session_id": session_id,
+        "next_id": next_id,
         "updated_ms": now_ms(),
     });
     let tmp_path = path.with_extension("tmp");
@@ -420,6 +586,72 @@ fn save_cursor(path: &Path, tlog_path: &Path, processed: usize, start_seq: u64) 
     std::fs::write(&tmp_path, serde_json::to_string(&state)?)?;
     std::fs::rename(&tmp_path, path)?;
     Ok(())
+}
+
+fn load_or_create_system_id() -> String {
+    if let Ok(system_id) = std::env::var("CANON_SYSTEM_ID") {
+        if !system_id.trim().is_empty() {
+            return system_id;
+        }
+    }
+    let path = system_id_path();
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let trimmed = existing.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    let system_id = Uuid::new_v4().to_string();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, &system_id);
+    system_id
+}
+
+fn system_id_path() -> PathBuf {
+    if let Ok(path) = std::env::var("CANON_SYSTEM_ID_PATH") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    if let Ok(workspace) = std::env::var("CANON_WORKSPACE") {
+        let trimmed = workspace.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed).join("state").join("system_id");
+        }
+    }
+    PathBuf::from("/workspace/ai_sandbox/canon/state/system_id")
+}
+
+fn find_last_runtime_started_session_id(tlog_path: &Path) -> Option<String> {
+    find_last_runtime_started_payload(tlog_path).and_then(|payload| {
+        payload
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    })
+}
+
+fn find_last_runtime_started_schema_id(tlog_path: &Path) -> Option<String> {
+    find_last_runtime_started_payload(tlog_path).and_then(|payload| {
+        payload
+            .get("schema_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    })
+}
+
+fn find_last_runtime_started_payload(tlog_path: &Path) -> Option<serde_json::Value> {
+    let events = read_any_events_from_path(tlog_path).ok()?;
+    events.into_iter().rev().find_map(|event| {
+        let AnyEvent::Canon(canon) = event else { return None; };
+        if canon.kind != "runtime_started" {
+            return None;
+        }
+        Some(canon.payload)
+    })
 }
 
 fn now_ms() -> u128 {

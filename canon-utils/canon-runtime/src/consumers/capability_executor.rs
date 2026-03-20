@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use canon_capability::{CapabilityExecutionContext, CapabilityRegistry, CapabilityExecutionResult};
-use canon_event::{CapabilityFailed, ErrorOccurred, EventConsumer, EventEmitterHandle, CanonEvent, EventFilter};
+use canon_event::{new_error_occurred, CapabilityFailed, EventConsumer, EventEmitterHandle, CanonEvent, EventFilter};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -42,17 +42,17 @@ impl EventConsumer for CapabilityExecutor {
         let outcome = match result {
             Ok(result) => result,
             Err(err) => {
-                let error_event = CanonEvent::ErrorOccurred(ErrorOccurred {
-                    kind: "capability_execution".to_string(),
-                    source: "capability_executor".to_string(),
-                    message: err.to_string(),
-                    severity: "error".to_string(),
-                    context: serde_json::json!({
+                let error_event = CanonEvent::ErrorOccurred(new_error_occurred(
+                    "capability_execution",
+                    "capability_executor",
+                    err.to_string(),
+                    "error",
+                    serde_json::json!({
                         "request_id": request.request_id.clone(),
                         "capability": request.name.clone(),
                     }),
-                    trace_id: Some(request.request_id.clone()),
-                });
+                    Some(request.request_id.clone()),
+                ));
                 let failed_event = CanonEvent::CapabilityFailed(CapabilityFailed {
                     request_id: request.request_id.clone(),
                     name: request.name.clone(),
