@@ -8,15 +8,7 @@ pub struct GraphContext {
 }
 
 pub fn resolve_graph_context(workspace: &Path, crate_name: &str) -> GraphContext {
-    let reports_root = workspace
-        .join("state")
-        .join("reports_out")
-        .join("crates")
-        .join(crate_name);
+    let reports_root = workspace.join("state").join("reports_out").join("crates").join(crate_name);
     let layout = ReportLayout::from_crate_root(reports_root.clone());
-    GraphContext {
-        crate_name: crate_name.to_string(),
-        graph_dir: layout.graph_dir(),
-        reports_root,
-    }
+    GraphContext { crate_name: crate_name.to_string(), graph_dir: layout.graph_dir(), reports_root }
 }

@@ -31,8 +31,4 @@ impl QueryConsumer {
     }
 }
 
-canon_event::impl_rustc_consumer!(
-    QueryConsumer,
-    canon_event::EventMask::NODE_DEFINED | canon_event::EventMask::FILE_SEEN,
-    handle_event
-);
+canon_event::impl_rustc_consumer!(QueryConsumer, canon_event::EventMask::NODE_DEFINED | canon_event::EventMask::FILE_SEEN, handle_event);

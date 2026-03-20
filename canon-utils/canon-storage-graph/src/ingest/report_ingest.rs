@@ -58,11 +58,7 @@ pub fn ingest_reports(metrics_dir: &Path, graph: &CodeGraph) -> Result<ReportFea
     Ok(features)
 }
 
-fn ingest_callgraph(
-    reports_dir: &Path,
-    graph: &CodeGraph,
-    features: &mut ReportFeatures,
-) -> Result<()> {
+fn ingest_callgraph(reports_dir: &Path, graph: &CodeGraph, features: &mut ReportFeatures) -> Result<()> {
     let path = reports_dir.join("callgraph_centrality_report.json");
     if !path.exists() {
         return Ok(());
@@ -78,11 +74,7 @@ fn ingest_callgraph(
     Ok(())
 }
 
-fn ingest_branch_complexity(
-    reports_dir: &Path,
-    graph: &CodeGraph,
-    features: &mut ReportFeatures,
-) -> Result<()> {
+fn ingest_branch_complexity(reports_dir: &Path, graph: &CodeGraph, features: &mut ReportFeatures) -> Result<()> {
     let path = reports_dir.join("branch_complexity_report.json");
     if !path.exists() {
         return Ok(());
@@ -98,11 +90,7 @@ fn ingest_branch_complexity(
     Ok(())
 }
 
-fn ingest_dead_code(
-    reports_dir: &Path,
-    graph: &CodeGraph,
-    features: &mut ReportFeatures,
-) -> Result<()> {
+fn ingest_dead_code(reports_dir: &Path, graph: &CodeGraph, features: &mut ReportFeatures) -> Result<()> {
     let path = reports_dir.join("dead_code_report.json");
     if !path.exists() {
         return Ok(());
@@ -118,11 +106,7 @@ fn ingest_dead_code(
     Ok(())
 }
 
-fn ingest_dependency_cycles(
-    reports_dir: &Path,
-    graph: &CodeGraph,
-    features: &mut ReportFeatures,
-) -> Result<()> {
+fn ingest_dependency_cycles(reports_dir: &Path, graph: &CodeGraph, features: &mut ReportFeatures) -> Result<()> {
     let path = reports_dir.join("dependency_cycle_report.json");
     if !path.exists() {
         return Ok(());
@@ -140,11 +124,7 @@ fn ingest_dependency_cycles(
     Ok(())
 }
 
-fn ingest_structural_hotspots(
-    reports_dir: &Path,
-    graph: &CodeGraph,
-    features: &mut ReportFeatures,
-) -> Result<()> {
+fn ingest_structural_hotspots(reports_dir: &Path, graph: &CodeGraph, features: &mut ReportFeatures) -> Result<()> {
     let path = reports_dir.join("structural_hotspots_report.json");
     if !path.exists() {
         return Ok(());

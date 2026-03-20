@@ -35,11 +35,7 @@ impl ReportLayout {
     }
 
     pub fn from_workspace_root(root: impl Into<PathBuf>, crate_name: impl Into<String>) -> Self {
-        Self {
-            base: root.into(),
-            crate_name: Some(crate_name.into()),
-            direct: false,
-        }
+        Self { base: root.into(), crate_name: Some(crate_name.into()), direct: false }
     }
 
     pub fn crate_root(&self) -> PathBuf {
@@ -79,14 +75,7 @@ impl ReportLayout {
     }
 
     pub fn ensure_dirs(&self) -> std::io::Result<()> {
-        for dir in [
-            self.graph_dir(),
-            self.graphs_dir(),
-            self.analysis_dir(),
-            self.metrics_dir(),
-            self.invariants_dir(),
-            self.meta_dir(),
-        ] {
+        for dir in [self.graph_dir(), self.graphs_dir(), self.analysis_dir(), self.metrics_dir(), self.invariants_dir(), self.meta_dir()] {
             std::fs::create_dir_all(dir)?;
         }
         Ok(())

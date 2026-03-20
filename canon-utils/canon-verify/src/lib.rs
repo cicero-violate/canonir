@@ -18,16 +18,7 @@ pub struct VerifyConsumer {
 
 impl VerifyConsumer {
     pub fn new(workspace: PathBuf, tlog_path: PathBuf) -> Self {
-        Self {
-            workspace,
-            tlog_path,
-            emitter: None,
-            last_trace_id: None,
-            last_execution_id: None,
-            last_act_span_id: None,
-            last_acted: None,
-            last_verified_action_key: None,
-        }
+        Self { workspace, tlog_path, emitter: None, last_trace_id: None, last_execution_id: None, last_act_span_id: None, last_acted: None, last_verified_action_key: None }
     }
 }
 
@@ -46,12 +37,7 @@ impl EventConsumer for VerifyConsumer {
                 self.last_acted = Some(acted.clone());
             }
             CanonEvent::Debug(debug) if debug.kind == "route_selected" => {
-                let lane = debug
-                    .payload
-                    .get("approved_route")
-                    .or_else(|| debug.payload.get("lane"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let lane = debug.payload.get("approved_route").or_else(|| debug.payload.get("lane")).and_then(|v| v.as_str()).unwrap_or("");
                 if lane != "validate" {
                     return;
                 }
@@ -213,19 +199,11 @@ struct CommandOutput {
 
 fn run_cargo_check(workspace: &Path, timeout: Duration) -> CommandOutput {
     let mut cmd = Command::new("cargo");
-    cmd.arg("check")
-        .arg("--message-format=json")
-        .current_dir(workspace)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+    cmd.arg("check").arg("--message-format=json").current_dir(workspace).stdout(Stdio::piped()).stderr(Stdio::null());
 
     let start = Instant::now();
     let Ok(mut child) = cmd.spawn() else {
-        return CommandOutput {
-            stdout: String::new(),
-            exit_code: None,
-            timed_out: false,
-        };
+        return CommandOutput { stdout: String::new(), exit_code: None, timed_out: false };
     };
 
     let stdout = child.stdout.take();
@@ -248,11 +226,7 @@ fn run_cargo_check(workspace: &Path, timeout: Duration) -> CommandOutput {
         match child.try_wait() {
             Ok(Some(status)) => {
                 let stdout = stdout_rx.recv_timeout(Duration::from_millis(200)).unwrap_or_default();
-                return CommandOutput {
-                    stdout,
-                    exit_code: status.code(),
-                    timed_out: false,
-                };
+                return CommandOutput { stdout, exit_code: status.code(), timed_out: false };
             }
             Ok(None) => {
                 if start.elapsed() > timeout {
@@ -270,18 +244,10 @@ fn run_cargo_check(workspace: &Path, timeout: Duration) -> CommandOutput {
     }
 
     let stdout = stdout_rx.recv_timeout(Duration::from_millis(200)).unwrap_or_default();
-    CommandOutput {
-        stdout,
-        exit_code: None,
-        timed_out,
-    }
+    CommandOutput { stdout, exit_code: None, timed_out }
 }
 
-fn parse_compiler_messages(
-    stdout: &str,
-    exit_code: Option<i32>,
-    timed_out: bool,
-) -> (Vec<Value>, usize) {
+fn parse_compiler_messages(stdout: &str, exit_code: Option<i32>, timed_out: bool) -> (Vec<Value>, usize) {
     let mut compiler_errors = Vec::new();
     let mut error_count = 0usize;
 
@@ -317,33 +283,19 @@ fn read_tlog_tail(tlog_path: &Path, max_lines: usize) -> Vec<Value> {
     let content = std::fs::read_to_string(log_path).unwrap_or_default();
     let lines: Vec<&str> = content.lines().collect();
     let start = lines.len().saturating_sub(max_lines);
-    lines[start..]
-        .iter()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .collect()
+    lines[start..].iter().filter_map(|line| serde_json::from_str::<Value>(line).ok()).collect()
 }
 
 fn latest_log_file(tlog_path: &Path) -> Option<PathBuf> {
-    let dir = if tlog_path.is_dir() {
-        tlog_path.to_path_buf()
-    } else {
-        tlog_path.with_extension("tlog.d")
-    };
-    let mut logs: Vec<PathBuf> = std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|s| s.to_str()) == Some("log"))
-        .collect();
+    let dir = if tlog_path.is_dir() { tlog_path.to_path_buf() } else { tlog_path.with_extension("tlog.d") };
+    let mut logs: Vec<PathBuf> =
+        std::fs::read_dir(dir).ok()?.filter_map(|entry| entry.ok()).map(|entry| entry.path()).filter(|path| path.extension().and_then(|s| s.to_str()) == Some("log")).collect();
     logs.sort();
     logs.pop()
 }
 
 fn check_tlog_clean(tlog_tail: &[Value], duration_ms: u64) -> (bool, Option<String>) {
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0))
-        .as_millis() as u64;
+    let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_else(|_| Duration::from_secs(0)).as_millis() as u64;
     let start_ts = now_ms.saturating_sub(duration_ms);
 
     for entry in tlog_tail {
@@ -369,16 +321,14 @@ fn check_file_written(tlog_tail: &[Value], acted: &LoopActed) -> (bool, Option<S
         if kind != "capability_requested" {
             continue;
         }
-        let Some(payload) = entry.get("payload") else { continue; };
+        let Some(payload) = entry.get("payload") else {
+            continue;
+        };
         let request_id = payload.get("request_id").and_then(|v| v.as_str());
         if request_id != Some(acted.capability_request_id.as_str()) {
             continue;
         }
-        path = payload
-            .get("args")
-            .and_then(|args| args.get("path"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        path = payload.get("args").and_then(|args| args.get("path")).and_then(|v| v.as_str()).map(|s| s.to_string());
         break;
     }
     let Some(path) = path else {

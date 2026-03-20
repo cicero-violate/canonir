@@ -22,10 +22,7 @@ pub fn install_panic_hook(log_path: &str) {
             "panic"
         };
 
-        let record = PanicRecord {
-            message: msg.to_string(),
-            backtrace: format!("{:?}", bt),
-        };
+        let record = PanicRecord { message: msg.to_string(), backtrace: format!("{:?}", bt) };
 
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
             if let Ok(json) = serde_json::to_string(&record) {

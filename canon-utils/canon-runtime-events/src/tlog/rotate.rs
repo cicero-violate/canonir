@@ -9,10 +9,7 @@ pub struct RotateConfig {
 
 impl Default for RotateConfig {
     fn default() -> Self {
-        Self {
-            max_bytes: 0,
-            max_files: 5,
-        }
+        Self { max_bytes: 0, max_files: 5 }
     }
 }
 

@@ -66,16 +66,7 @@ impl<'ctx> EncodedGraph<'ctx> {
             }
         }
 
-        Self {
-            ctx,
-            bb,
-            var,
-            err,
-            flow_imps,
-            assign_eqs,
-            prop_eqs,
-            err_imps,
-        }
+        Self { ctx, bb, var, err, flow_imps, assign_eqs, prop_eqs, err_imps }
     }
 
     pub fn build_scoped(graph: &AnalysisGraph, ctx: &'ctx Context, fn_id: u32) -> Self {
@@ -143,16 +134,7 @@ impl<'ctx> EncodedGraph<'ctx> {
             }
         }
 
-        Self {
-            ctx,
-            bb,
-            var,
-            err,
-            flow_imps,
-            assign_eqs,
-            prop_eqs,
-            err_imps,
-        }
+        Self { ctx, bb, var, err, flow_imps, assign_eqs, prop_eqs, err_imps }
     }
 
     pub fn assert_all(&self, solver: &z3::Solver<'ctx>) {

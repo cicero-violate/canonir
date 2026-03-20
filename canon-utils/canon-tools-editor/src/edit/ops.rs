@@ -1,8 +1,8 @@
 use super::helper::{build_full_path, canonicalize_relative, join_module_path, module_path_for_dir, split_module_path};
-use crate::symbol_index::SymbolIndex;
 use crate::edit::syn_patcher;
 use crate::edit::syn_patcher::SpanReplacement;
 use crate::structured::{EditOp, SymbolHandle, SymbolKind};
+use crate::symbol_index::SymbolIndex;
 use anyhow::{anyhow, Result};
 use proc_macro2::Span;
 use std::collections::HashSet;
@@ -174,80 +174,42 @@ impl ProjectEditor {
     }
 
     fn collect_symbol_replacements(
-        &self,
-        session: &SymbolIndex,
-        renames: &[(String, String)],
-    ) -> Result<(
-        std::collections::HashMap<PathBuf, Vec<SpanReplacement>>,
-        std::collections::HashMap<PathBuf, Vec<(String, String)>>,
-    )> {
+        &self, session: &SymbolIndex, renames: &[(String, String)],
+    ) -> Result<(std::collections::HashMap<PathBuf, Vec<SpanReplacement>>, std::collections::HashMap<PathBuf, Vec<(String, String)>>)> {
         let mut per_file: std::collections::HashMap<PathBuf, Vec<SpanReplacement>> = std::collections::HashMap::new();
         let mut per_file_attr_pairs: std::collections::HashMap<PathBuf, Vec<(String, String)>> = std::collections::HashMap::new();
         for (symbol_id, new_name) in renames {
-            let old_ident = symbol_id
-                .rsplit_once("::")
-                .map(|(_, s)| s)
-                .unwrap_or(symbol_id.as_str())
-                .to_string();
+            let old_ident = symbol_id.rsplit_once("::").map(|(_, s)| s).unwrap_or(symbol_id.as_str()).to_string();
             let norm = crate::edit::symbol_id::normalize_symbol_id(symbol_id);
-            let occurrences = session
-                .spans_for(&norm)
-                .ok_or_else(|| anyhow!("symbol not found via kernel index: {symbol_id}"))?;
+            let occurrences = session.spans_for(&norm).ok_or_else(|| anyhow!("symbol not found via kernel index: {symbol_id}"))?;
             for (path, spans) in occurrences {
                 let entry = per_file.entry(path.clone()).or_default();
                 for span in spans {
-                    entry.push(SpanReplacement {
-                        span: span.clone(),
-                        replacement: new_name.clone(),
-                    });
+                    entry.push(SpanReplacement { span: span.clone(), replacement: new_name.clone() });
                 }
-                per_file_attr_pairs
-                    .entry(path.clone())
-                    .or_default()
-                    .push((old_ident.clone(), new_name.clone()));
+                per_file_attr_pairs.entry(path.clone()).or_default().push((old_ident.clone(), new_name.clone()));
             }
         }
         Ok((per_file, per_file_attr_pairs))
     }
 
     fn apply_replacements_for_file(
-        &mut self,
-        session: &SymbolIndex,
-        path: &PathBuf,
-        replacements: &mut Vec<SpanReplacement>,
-        attr_pairs: &[(String, String)],
-        touched: &mut HashSet<PathBuf>,
+        &mut self, session: &SymbolIndex, path: &PathBuf, replacements: &mut Vec<SpanReplacement>, attr_pairs: &[(String, String)], touched: &mut HashSet<PathBuf>,
     ) -> Result<()> {
-        replacements.sort_by(|a, b| {
-            a.span
-                .lo
-                .cmp(&b.span.lo)
-                .then_with(|| a.span.hi.cmp(&b.span.hi))
-                .then_with(|| a.replacement.cmp(&b.replacement))
-        });
-        replacements.dedup_by(|a, b| {
-            a.span.lo == b.span.lo && a.span.hi == b.span.hi && a.replacement == b.replacement
-        });
+        replacements.sort_by(|a, b| a.span.lo.cmp(&b.span.lo).then_with(|| a.span.hi.cmp(&b.span.hi)).then_with(|| a.replacement.cmp(&b.replacement)));
+        replacements.dedup_by(|a, b| a.span.lo == b.span.lo && a.span.hi == b.span.hi && a.replacement == b.replacement);
         remove_nested_spans(replacements);
         for window in replacements.windows(2) {
             let a = &window[0];
             let b = &window[1];
             if a.span.lo == b.span.lo && a.span.hi == b.span.hi && a.replacement != b.replacement {
-                return Err(anyhow!(
-                    "conflicting replacements at {}..{} in {}",
-                    a.span.lo,
-                    a.span.hi,
-                    path.display()
-                ));
+                return Err(anyhow!("conflicting replacements at {}..{} in {}", a.span.lo, a.span.hi, path.display()));
             }
         }
         let Some(source) = self.registry.sources.get(path).cloned() else {
             return Ok(());
         };
-        let source = session
-            .normalized_source(path)
-            .cloned()
-            .unwrap_or(source);
+        let source = session.normalized_source(path).cloned().unwrap_or(source);
         let mut updated = syn_patcher::patch_file(&source, replacements)?;
         let mut changed = updated != source;
         if let Ok(ast) = syn::parse_file(&updated) {
@@ -281,11 +243,7 @@ impl ProjectEditor {
     fn apply_delete_symbol(&mut self, handle: &SymbolHandle, symbol_id: &str) -> Result<HashSet<PathBuf>> {
         let mut touched = HashSet::new();
         let file = handle.file.clone();
-        let ast = self
-            .registry
-            .asts
-            .get_mut(&file)
-            .ok_or_else(|| anyhow!("missing AST for {}", file.display()))?;
+        let ast = self.registry.asts.get_mut(&file).ok_or_else(|| anyhow!("missing AST for {}", file.display()))?;
         let removed = remove_top_level_item(ast, &handle.name, &handle.kind);
         if removed.is_some() {
             touched.insert(file);
@@ -314,13 +272,7 @@ impl ProjectEditor {
         }
         let old_full = build_full_path(&old_module_path, &symbol_name);
         let new_full = build_full_path(new_module_path, &symbol_name);
-        self.rewrite_paths(
-            RewriteMode::Full {
-                old_full,
-                new_full,
-            },
-            &mut touched,
-        );
+        self.rewrite_paths(RewriteMode::Full { old_full, new_full }, &mut touched);
         Ok(touched)
     }
 
@@ -338,14 +290,7 @@ impl ProjectEditor {
         new_segments.push(new_name.to_string());
         let module_file = self.resolve_module_file(&normalized)?;
         let module_move = self.compute_module_move(&module_file, new_name)?;
-        let plan = ModuleRenamePlan {
-            old_segments,
-            new_segments,
-            parent_module_path,
-            old_name,
-            new_name: new_name.to_string(),
-            module_move: Some(module_move),
-        };
+        let plan = ModuleRenamePlan { old_segments, new_segments, parent_module_path, old_name, new_name: new_name.to_string(), module_move: Some(module_move) };
         self.apply_module_path_rename(plan)
     }
 
@@ -367,13 +312,7 @@ impl ProjectEditor {
         Ok((module_file.to_path_buf(), module_file.with_file_name(new_file_name)))
     }
 
-    fn update_parent_mod_decl(
-        &mut self,
-        parent_file: &Path,
-        old_name: &str,
-        new_name: Option<&str>,
-        new_path: Option<&str>,
-    ) -> bool {
+    fn update_parent_mod_decl(&mut self, parent_file: &Path, old_name: &str, new_name: Option<&str>, new_path: Option<&str>) -> bool {
         let Some(ast) = self.registry.asts.get_mut(parent_file) else {
             return false;
         };
@@ -393,19 +332,11 @@ impl ProjectEditor {
         changed
     }
 
-    fn rewrite_paths(
-        &mut self,
-        mode: RewriteMode,
-        touched: &mut HashSet<PathBuf>,
-    ) {
+    fn rewrite_paths(&mut self, mode: RewriteMode, touched: &mut HashSet<PathBuf>) {
         for (path, ast) in self.registry.asts.iter_mut() {
             let mut rewriter = match &mode {
-                RewriteMode::Prefix { old_segments, new_segments } => {
-                    PathRewriter::replace_prefix(old_segments, new_segments)
-                }
-                RewriteMode::Full { old_full, new_full } => {
-                    PathRewriter::replace_full(old_full, new_full)
-                }
+                RewriteMode::Prefix { old_segments, new_segments } => PathRewriter::replace_prefix(old_segments, new_segments),
+                RewriteMode::Full { old_full, new_full } => PathRewriter::replace_full(old_full, new_full),
             };
             if rewriter.visit_file(ast) {
                 touched.insert(path.clone());
@@ -417,12 +348,7 @@ impl ProjectEditor {
         let mut touched = HashSet::new();
         let mut file_moves = Vec::new();
 
-        let parent_file = self
-            .registry
-            .module_files
-            .get(&plan.parent_module_path)
-            .cloned()
-            .ok_or_else(|| anyhow!("no file for parent module path {}", plan.parent_module_path))?;
+        let parent_file = self.registry.module_files.get(&plan.parent_module_path).cloned().ok_or_else(|| anyhow!("no file for parent module path {}", plan.parent_module_path))?;
 
         if self.update_parent_mod_decl(&parent_file, &plan.old_name, Some(&plan.new_name), None) {
             touched.insert(parent_file.clone());
@@ -444,24 +370,9 @@ impl ProjectEditor {
         Ok((touched, file_moves))
     }
 
-    fn rewrite_paths_and_collect(
-        &mut self,
-        old_segments: &[String],
-        new_segments: &[String],
-        touched: &mut HashSet<PathBuf>,
-    ) {
-        self.rewrite_paths(
-            RewriteMode::Prefix {
-                old_segments: old_segments.to_vec(),
-                new_segments: new_segments.to_vec(),
-            },
-            touched,
-        );
-        let uses_crate_prefix = self
-            .registry
-            .module_files
-            .keys()
-            .any(|k| k.starts_with("crate::"));
+    fn rewrite_paths_and_collect(&mut self, old_segments: &[String], new_segments: &[String], touched: &mut HashSet<PathBuf>) {
+        self.rewrite_paths(RewriteMode::Prefix { old_segments: old_segments.to_vec(), new_segments: new_segments.to_vec() }, touched);
+        let uses_crate_prefix = self.registry.module_files.keys().any(|k| k.starts_with("crate::"));
         if !uses_crate_prefix {
             let mut old_prefixed = Vec::with_capacity(old_segments.len() + 1);
             old_prefixed.push("crate".to_string());
@@ -469,21 +380,11 @@ impl ProjectEditor {
             let mut new_prefixed = Vec::with_capacity(new_segments.len() + 1);
             new_prefixed.push("crate".to_string());
             new_prefixed.extend_from_slice(new_segments);
-            self.rewrite_paths(
-                RewriteMode::Prefix {
-                    old_segments: old_prefixed,
-                    new_segments: new_prefixed,
-                },
-                touched,
-            );
+            self.rewrite_paths(RewriteMode::Prefix { old_segments: old_prefixed, new_segments: new_prefixed }, touched);
         }
 
         if let Some(crate_name) = crate::edit::helper::infer_crate_name(&self.project_root) {
-            let (old_tail, new_tail) = if old_segments.first().map(|s| s.as_str()) == Some("crate") {
-                (&old_segments[1..], &new_segments[1..])
-            } else {
-                (old_segments, new_segments)
-            };
+            let (old_tail, new_tail) = if old_segments.first().map(|s| s.as_str()) == Some("crate") { (&old_segments[1..], &new_segments[1..]) } else { (old_segments, new_segments) };
             if old_tail.first().map(|s| s.as_str()) != Some(crate_name.as_str()) {
                 let mut old_prefixed = Vec::with_capacity(old_tail.len() + 1);
                 old_prefixed.push(crate_name.clone());
@@ -491,13 +392,7 @@ impl ProjectEditor {
                 let mut new_prefixed = Vec::with_capacity(new_tail.len() + 1);
                 new_prefixed.push(crate_name);
                 new_prefixed.extend_from_slice(new_tail);
-                self.rewrite_paths(
-                    RewriteMode::Prefix {
-                        old_segments: old_prefixed,
-                        new_segments: new_prefixed,
-                    },
-                    touched,
-                );
+                self.rewrite_paths(RewriteMode::Prefix { old_segments: old_prefixed, new_segments: new_prefixed }, touched);
             }
         }
     }
@@ -509,14 +404,7 @@ impl ProjectEditor {
         let new_name = new_segments.last().unwrap().to_string();
         let parent_segments = &old_segments[..old_segments.len() - 1];
         let parent_module_path = join_module_path(parent_segments);
-        let plan = ModuleRenamePlan {
-            old_segments,
-            new_segments,
-            parent_module_path,
-            old_name,
-            new_name,
-            module_move: Some((old_dir.to_path_buf(), new_dir.to_path_buf())),
-        };
+        let plan = ModuleRenamePlan { old_segments, new_segments, parent_module_path, old_name, new_name, module_move: Some((old_dir.to_path_buf(), new_dir.to_path_buf())) };
         self.apply_module_path_rename(plan)
     }
 
@@ -557,7 +445,6 @@ enum RewriteMode {
     Prefix { old_segments: Vec<String>, new_segments: Vec<String> },
     Full { old_full: Vec<String>, new_full: Vec<String> },
 }
-
 
 fn remove_nested_spans(replacements: &mut Vec<SpanReplacement>) {
     if replacements.len() < 2 {

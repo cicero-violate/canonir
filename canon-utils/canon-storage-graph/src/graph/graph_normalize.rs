@@ -2,16 +2,8 @@ use std::collections::HashMap;
 
 use crate::graph::graph_types::{CodeGraphEdge, CodeGraphNode};
 
-pub fn normalize_graph(
-    mut nodes: Vec<CodeGraphNode>,
-    mut edges: Vec<CodeGraphEdge>,
-    files: Vec<String>,
-) -> (Vec<CodeGraphNode>, Vec<CodeGraphEdge>, Vec<String>) {
-    let mut indexed_files: Vec<(u32, String)> = files
-        .into_iter()
-        .enumerate()
-        .map(|(idx, path)| (idx as u32, path))
-        .collect();
+pub fn normalize_graph(mut nodes: Vec<CodeGraphNode>, mut edges: Vec<CodeGraphEdge>, files: Vec<String>) -> (Vec<CodeGraphNode>, Vec<CodeGraphEdge>, Vec<String>) {
+    let mut indexed_files: Vec<(u32, String)> = files.into_iter().enumerate().map(|(idx, path)| (idx as u32, path)).collect();
     indexed_files.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
 
     let mut file_id_map: HashMap<u32, u32> = HashMap::new();
@@ -30,14 +22,7 @@ pub fn normalize_graph(
     }
 
     nodes.sort_by_key(|n| n.id);
-    edges.sort_by(|a, b| {
-        a.src
-            .cmp(&b.src)
-            .then_with(|| a.dst.cmp(&b.dst))
-            .then_with(|| a.kind.cmp(&b.kind))
-    });
+    edges.sort_by(|a, b| a.src.cmp(&b.src).then_with(|| a.dst.cmp(&b.dst)).then_with(|| a.kind.cmp(&b.kind)));
 
     (nodes, edges, normalized_files)
 }
-
-

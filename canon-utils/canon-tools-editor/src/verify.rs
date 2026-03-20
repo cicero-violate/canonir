@@ -1,6 +1,6 @@
-use crate::symbol_index::SymbolIndex;
-use crate::edit::ProjectEditor;
 use crate::edit::normalize_symbol_id;
+use crate::edit::ProjectEditor;
+use crate::symbol_index::SymbolIndex;
 
 #[derive(serde::Serialize)]
 pub struct VerifySummary {
@@ -9,32 +9,18 @@ pub struct VerifySummary {
     pub pairs_changed: usize,
 }
 
-pub fn verify_renames_applied(
-    session: &SymbolIndex,
-    editor: &ProjectEditor,
-    renames: &[(String, String)],
-) -> VerifySummary {
+pub fn verify_renames_applied(session: &SymbolIndex, editor: &ProjectEditor, renames: &[(String, String)]) -> VerifySummary {
     let mut pairs_checked = 0usize;
     let mut pairs_changed = 0usize;
     let sources = &editor.last_applied_sources;
     if sources.is_empty() || renames.is_empty() {
-        return VerifySummary {
-            applied: false,
-            pairs_checked,
-            pairs_changed,
-        };
+        return VerifySummary { applied: false, pairs_checked, pairs_changed };
     }
 
     for (old_symbol, new_symbol) in renames {
         let old_norm = normalize_symbol_id(old_symbol);
-        let old_ident = old_symbol
-            .rsplit_once("::")
-            .map(|(_, s)| s)
-            .unwrap_or(old_symbol.as_str());
-        let new_ident = new_symbol
-            .rsplit_once("::")
-            .map(|(_, s)| s)
-            .unwrap_or(new_symbol.as_str());
+        let old_ident = old_symbol.rsplit_once("::").map(|(_, s)| s).unwrap_or(old_symbol.as_str());
+        let new_ident = new_symbol.rsplit_once("::").map(|(_, s)| s).unwrap_or(new_symbol.as_str());
         pairs_checked += 1;
 
         let Some(spans_by_file) = session.spans_for(&old_norm) else {
@@ -71,9 +57,5 @@ pub fn verify_renames_applied(
         }
     }
 
-    VerifySummary {
-        applied: pairs_checked > 0,
-        pairs_checked,
-        pairs_changed,
-    }
+    VerifySummary { applied: pairs_checked > 0, pairs_checked, pairs_changed }
 }

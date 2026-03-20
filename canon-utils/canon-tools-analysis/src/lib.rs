@@ -1,28 +1,28 @@
 pub mod analysis;
 pub mod query;
-pub use query::{QueryConsumer, QueryOptions, QueryError, TlogQueryResult, query_file, query_file_single};
+pub use query::{query_file, query_file_single, QueryConsumer, QueryError, QueryOptions, TlogQueryResult};
 // supervisor trigger: no-op change
-pub mod invariants;
-pub mod semantics;
-pub mod repair;
-pub mod report_pipeline;
-pub mod panic_capture;
-pub mod workspace;
 pub mod capabilities;
 pub mod infer_schema_event;
+pub mod invariants;
 pub mod llm_report;
-mod report_types;
+pub mod panic_capture;
 mod panic_types;
+pub mod repair;
+pub mod report_pipeline;
+mod report_types;
+pub mod semantics;
+pub mod workspace;
 
+pub use capabilities::register_analysis_capabilities;
 pub use invariants::invariant_validator::run_invariant_pipeline;
+pub use panic_types::PanicRecord;
 pub use repair::error_surface::{augment_with_errors, write_repair_surface};
 pub use report_pipeline::{generate_reports, generate_reports_for_crate, generate_reports_from_tlog};
-pub use capabilities::register_analysis_capabilities;
+pub use report_types::*;
 pub use workspace::aggregator::aggregate_workspace;
 pub use workspace::layout_verify::verify_reports_layout;
 pub use workspace::migrate::migrate_reports_layout;
-pub use report_types::*;
-pub use panic_types::PanicRecord;
 pub mod smt;
 
 pub use smt::consumer::SmtConsumer;

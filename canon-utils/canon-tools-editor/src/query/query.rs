@@ -1,7 +1,7 @@
+use super::session::{AnalysisSession, GraphEdgeRecord};
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use super::session::{AnalysisSession, GraphEdgeRecord};
 
 fn query_map<K, V>(map: &HashMap<K, V>, key: &K) -> Option<V>
 where
@@ -12,8 +12,7 @@ where
 }
 
 pub fn module_file(session: &AnalysisSession, module_path: &str) -> Result<PathBuf> {
-    query_map(&session.module_files, &module_path.to_string())
-        .ok_or_else(|| anyhow!("analysis missing module path {module_path}"))
+    query_map(&session.module_files, &module_path.to_string()).ok_or_else(|| anyhow!("analysis missing module path {module_path}"))
 }
 
 pub fn file_modules(session: &AnalysisSession, file: &Path) -> Vec<String> {

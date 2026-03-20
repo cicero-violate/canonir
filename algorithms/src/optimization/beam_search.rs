@@ -1,10 +1,4 @@
-pub fn beam_search<S, Expand, Score>(
-    initial: Vec<S>,
-    beam_width: usize,
-    depth: usize,
-    mut expand: Expand,
-    mut score: Score,
-) -> Option<S>
+pub fn beam_search<S, Expand, Score>(initial: Vec<S>, beam_width: usize, depth: usize, mut expand: Expand, mut score: Score) -> Option<S>
 where
     S: Clone,
     Expand: FnMut(&S, usize) -> Vec<S>,

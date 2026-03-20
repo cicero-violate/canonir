@@ -37,19 +37,9 @@ pub fn load_code_graph(graph_dir: &Path) -> Result<CodeGraph> {
         return Err(anyhow!("graph.bin not found at {}", graph_bin.display()));
     }
     let (nodes, edges, files) = load_graph_bin(&graph_bin)?;
-    let symbol_to_id = nodes
-        .iter()
-        .filter(|n| !n.symbol.is_empty())
-        .map(|n| (n.symbol.clone(), n.id))
-        .collect::<HashMap<_, _>>();
+    let symbol_to_id = nodes.iter().filter(|n| !n.symbol.is_empty()).map(|n| (n.symbol.clone(), n.id)).collect::<HashMap<_, _>>();
     let adjacency = build_csr(nodes.len(), &edges);
-    Ok(CodeGraph {
-        nodes,
-        edges,
-        adjacency,
-        symbol_to_id,
-        files,
-    })
+    Ok(CodeGraph { nodes, edges, adjacency, symbol_to_id, files })
 }
 
 fn build_csr(node_count: usize, edges: &[Edge]) -> CsrGraph {
@@ -122,9 +112,7 @@ fn load_graph_bin(path: &Path) -> Result<(Vec<Node>, Vec<Edge>, Vec<String>)> {
         while cursor < string_table.len() && string_table[cursor] != 0 {
             cursor += 1;
         }
-        let s = std::str::from_utf8(&string_table[start..cursor])
-            .unwrap_or("")
-            .to_string();
+        let s = std::str::from_utf8(&string_table[start..cursor]).unwrap_or("").to_string();
         files.push(s);
         cursor = cursor.saturating_add(1);
     }
@@ -145,27 +133,15 @@ fn load_graph_bin(path: &Path) -> Result<(Vec<Node>, Vec<Edge>, Vec<String>)> {
         } else {
             let end = sym_off.saturating_add(sym_len);
             if end <= string_table.len() {
-                std::str::from_utf8(&string_table[sym_off..end])
-                    .unwrap_or("")
-                    .to_string()
+                std::str::from_utf8(&string_table[sym_off..end]).unwrap_or("").to_string()
             } else {
                 String::new()
             }
         };
 
-        let file = if file_id == NO_FILE_ID {
-            String::new()
-        } else {
-            files.get(file_id as usize).cloned().unwrap_or_default()
-        };
+        let file = if file_id == NO_FILE_ID { String::new() } else { files.get(file_id as usize).cloned().unwrap_or_default() };
 
-        nodes.push(Node {
-            id,
-            kind: node_kind_str(kind_code).to_string(),
-            symbol,
-            file,
-            line: if line == NO_LINE { None } else { Some(line) },
-        });
+        nodes.push(Node { id, kind: node_kind_str(kind_code).to_string(), symbol, file, line: if line == NO_LINE { None } else { Some(line) } });
     }
 
     let mut edges: Vec<Edge> = Vec::with_capacity(n_edges);
@@ -175,11 +151,7 @@ fn load_graph_bin(path: &Path) -> Result<(Vec<Node>, Vec<Edge>, Vec<String>)> {
         let dst = u32::from_le_bytes(data[pos + 4..pos + 8].try_into()?);
         let kind_code = data[pos + 8];
         pos += EDGE_RECORD_SIZE;
-        edges.push(Edge {
-            src,
-            dst,
-            kind: edge_kind_str(kind_code).to_string(),
-        });
+        edges.push(Edge { src, dst, kind: edge_kind_str(kind_code).to_string() });
     }
 
     Ok((nodes, edges, files))

@@ -7,9 +7,5 @@ pub enum SupervisorEvent {
 }
 
 pub fn wrap_event(kind: &str, payload: Value) -> Value {
-    serde_json::to_value(SupervisorEvent::Generic {
-        kind: kind.to_string(),
-        payload,
-    })
-    .unwrap_or(Value::Null)
+    serde_json::to_value(SupervisorEvent::Generic { kind: kind.to_string(), payload }).unwrap_or(Value::Null)
 }

@@ -40,11 +40,7 @@ fn strip_json_fence(s: &str) -> &str {
             return inner[..close].trim();
         }
     }
-    for prefix in [
-        "```json\n", "```json\r\n", "```json ", "```json",
-        "```JSON\n", "```JSON\r\n", "```JSON ", "```JSON",
-        "```\n",     "```\r\n",     "```",
-    ] {
+    for prefix in ["```json\n", "```json\r\n", "```json ", "```json", "```JSON\n", "```JSON\r\n", "```JSON ", "```JSON", "```\n", "```\r\n", "```"] {
         if let Some(inner) = s.strip_prefix(prefix) {
             if let Some(close) = inner.rfind("```") {
                 return inner[..close].trim();
@@ -53,7 +49,6 @@ fn strip_json_fence(s: &str) -> &str {
     }
     s
 }
-
 
 use anyhow::Result;
 use serde_json::Value;
@@ -69,9 +64,23 @@ async fn llm_client_call_agent_json_inner(
     tab_cooldown_ms: u64, allow_req_id_mismatch: bool, bust_cache: bool,
 ) -> Result<Value> {
     let cache_key = llm_client_cache_key_for(prompt, role_schema);
-    let raw =
-        endpoint_worker::llm_worker_send_request(bridge, endpoint_id, url, stateful, prompt, role_schema, node_id, Some(cache_key), bust_cache, allow_req_id_mismatch, phase, tabs, max_tabs, tab_cooldown_ms)
-            .await?;
+    let raw = endpoint_worker::llm_worker_send_request(
+        bridge,
+        endpoint_id,
+        url,
+        stateful,
+        prompt,
+        role_schema,
+        node_id,
+        Some(cache_key),
+        bust_cache,
+        allow_req_id_mismatch,
+        phase,
+        tabs,
+        max_tabs,
+        tab_cooldown_ms,
+    )
+    .await?;
     let log_dir = "/workspace/ai_sandbox/canon/agent_logs/capability/llm_raw";
     let _ = std::fs::create_dir_all(log_dir);
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
@@ -84,9 +93,23 @@ async fn llm_client_call_agent_json_inner_with_req_id(
     tab_cooldown_ms: u64, allow_req_id_mismatch: bool, bust_cache: bool,
 ) -> Result<(Value, u64)> {
     let cache_key = llm_client_cache_key_for(prompt, role_schema);
-    let (req_id, raw) =
-        endpoint_worker::llm_worker_send_request_with_req_id(bridge, endpoint_id, url, stateful, prompt, role_schema, node_id, Some(cache_key), bust_cache, allow_req_id_mismatch, phase, tabs, max_tabs, tab_cooldown_ms)
-            .await?;
+    let (req_id, raw) = endpoint_worker::llm_worker_send_request_with_req_id(
+        bridge,
+        endpoint_id,
+        url,
+        stateful,
+        prompt,
+        role_schema,
+        node_id,
+        Some(cache_key),
+        bust_cache,
+        allow_req_id_mismatch,
+        phase,
+        tabs,
+        max_tabs,
+        tab_cooldown_ms,
+    )
+    .await?;
     let log_dir = "/workspace/ai_sandbox/canon/agent_logs/capability/llm_raw";
     let _ = std::fs::create_dir_all(log_dir);
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
@@ -104,19 +127,22 @@ pub async fn llm_client_call_agent_json_with_retry_allow_mismatch(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle, max_tabs: usize,
     tab_cooldown_ms: u64, max_retries: u32, delay_secs: u64, bust_cache: bool,
 ) -> Result<Value> {
-    llm_client_call_agent_json_with_retry_inner(bridge, endpoint_id, url, stateful, prompt, role_schema, phase, node_id, tabs, max_tabs, tab_cooldown_ms, max_retries, delay_secs, true, bust_cache).await
+    llm_client_call_agent_json_with_retry_inner(bridge, endpoint_id, url, stateful, prompt, role_schema, phase, node_id, tabs, max_tabs, tab_cooldown_ms, max_retries, delay_secs, true, bust_cache)
+        .await
 }
 pub async fn llm_client_call_agent_json_with_retry_allow_mismatch_with_req_id(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle, max_tabs: usize,
     tab_cooldown_ms: u64, max_retries: u32, delay_secs: u64,
 ) -> Result<(Value, u64)> {
-    llm_client_call_agent_json_with_retry_inner_with_req_id(bridge, endpoint_id, url, stateful, prompt, role_schema, phase, node_id, tabs, max_tabs, tab_cooldown_ms, max_retries, delay_secs, true).await
+    llm_client_call_agent_json_with_retry_inner_with_req_id(bridge, endpoint_id, url, stateful, prompt, role_schema, phase, node_id, tabs, max_tabs, tab_cooldown_ms, max_retries, delay_secs, true)
+        .await
 }
 pub async fn llm_client_call_agent_raw_with_retry_allow_mismatch(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle, max_tabs: usize,
     tab_cooldown_ms: u64, max_retries: u32, delay_secs: u64, bust_cache: bool,
 ) -> Result<Value> {
-    llm_client_call_agent_raw_with_retry_inner(bridge, endpoint_id, url, stateful, prompt, role_schema, phase, node_id, tabs, max_tabs, tab_cooldown_ms, max_retries, delay_secs, true, bust_cache).await
+    llm_client_call_agent_raw_with_retry_inner(bridge, endpoint_id, url, stateful, prompt, role_schema, phase, node_id, tabs, max_tabs, tab_cooldown_ms, max_retries, delay_secs, true, bust_cache)
+        .await
 }
 async fn llm_client_call_agent_json_with_retry_inner(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle, max_tabs: usize,
@@ -150,7 +176,8 @@ async fn llm_client_call_agent_json_with_retry_inner_with_req_id(
     for attempt in 0..max_retries {
         let start = tab_manager_now_ms();
         tab_manager_log_llm(format!("phase={} endpoint={} attempt={} start", phase, endpoint_id, attempt + 1));
-        match llm_client_call_agent_json_inner_with_req_id(bridge, endpoint_id, url, stateful, prompt, role_schema, phase, node_id, tabs, max_tabs, tab_cooldown_ms, allow_req_id_mismatch, false).await {
+        match llm_client_call_agent_json_inner_with_req_id(bridge, endpoint_id, url, stateful, prompt, role_schema, phase, node_id, tabs, max_tabs, tab_cooldown_ms, allow_req_id_mismatch, false).await
+        {
             Ok(v) => {
                 let elapsed = tab_manager_now_ms().saturating_sub(start);
                 tab_manager_log_llm(format!("phase={} endpoint={} attempt={} ok elapsed_ms={}", phase, endpoint_id, attempt + 1, elapsed));
@@ -195,9 +222,23 @@ async fn llm_client_call_agent_raw_inner(
     tab_cooldown_ms: u64, allow_req_id_mismatch: bool, bust_cache: bool,
 ) -> Result<Value> {
     let cache_key = llm_client_cache_key_for(prompt, role_schema);
-    let raw =
-        endpoint_worker::llm_worker_send_request(bridge, endpoint_id, url, stateful, prompt, role_schema, node_id, Some(cache_key), bust_cache, allow_req_id_mismatch, phase, tabs, max_tabs, tab_cooldown_ms)
-            .await?;
+    let raw = endpoint_worker::llm_worker_send_request(
+        bridge,
+        endpoint_id,
+        url,
+        stateful,
+        prompt,
+        role_schema,
+        node_id,
+        Some(cache_key),
+        bust_cache,
+        allow_req_id_mismatch,
+        phase,
+        tabs,
+        max_tabs,
+        tab_cooldown_ms,
+    )
+    .await?;
     let log_dir = "/workspace/ai_sandbox/canon/agent_logs/capability/llm_raw";
     let _ = std::fs::create_dir_all(log_dir);
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);

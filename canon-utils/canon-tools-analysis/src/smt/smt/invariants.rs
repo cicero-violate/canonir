@@ -1,10 +1,10 @@
-use crate::smt::loader::AnalysisGraph;
-use crate::smt::cache::{invariant_graph_hash, invariant_key, CacheEntry, now_ts};
+use crate::smt::cache::{invariant_graph_hash, invariant_key, now_ts, CacheEntry};
 use crate::smt::encoder::EncodedGraph;
+use crate::smt::loader::AnalysisGraph;
 use serde::Serialize;
 use serde_json::{json, Value};
-use z3::SatResult;
 use z3::ast::Ast;
+use z3::SatResult;
 
 #[derive(Debug, Serialize)]
 pub struct InvariantSmtResult {
@@ -13,21 +13,13 @@ pub struct InvariantSmtResult {
     pub counterexample: Option<Value>,
 }
 
-pub fn prove_invariants(
-    session: &crate::smt::SmtSession,
-    graph: &AnalysisGraph,
-    invariants: &Value,
-) -> Value {
+pub fn prove_invariants(session: &crate::smt::SmtSession, graph: &AnalysisGraph, invariants: &Value) -> Value {
     let encoded = EncodedGraph::build(graph, session.ctx());
     let mut out = invariants.clone();
     let mut results: Vec<InvariantSmtResult> = Vec::new();
     let candidate_graph = graph;
 
-    let candidate_list = invariants
-        .get("candidates")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let candidate_list = invariants.get("candidates").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 
     if candidate_list.is_empty() {
         if let Some(obj) = out.as_object_mut() {
@@ -46,11 +38,7 @@ pub fn prove_invariants(
         let key = invariant_key(pred, &graph_hash);
         if let Ok(cache) = session.cache().lock() {
             if let Some(entry) = cache.get(&key, &graph_hash) {
-                results.push(InvariantSmtResult {
-                    predicate: pred.to_string(),
-                    smt_verdict: entry.result,
-                    counterexample: entry.model,
-                });
+                results.push(InvariantSmtResult { predicate: pred.to_string(), smt_verdict: entry.result, counterexample: entry.model });
                 continue;
             }
         }
@@ -96,20 +84,11 @@ pub fn prove_invariants(
         };
         let counterexample = if verdict == "violated" { Some(json!({})) } else { None };
         if let Ok(mut cache) = session.cache().lock() {
-            let entry = CacheEntry {
-                result: verdict.to_string(),
-                model: counterexample.clone(),
-                graph_hash,
-                timestamp: now_ts(),
-            };
+            let entry = CacheEntry { result: verdict.to_string(), model: counterexample.clone(), graph_hash, timestamp: now_ts() };
             cache.insert(key, entry);
         }
         solver.pop(1);
-        results.push(InvariantSmtResult {
-            predicate: pred.to_string(),
-            smt_verdict: verdict.to_string(),
-            counterexample,
-        });
+        results.push(InvariantSmtResult { predicate: pred.to_string(), smt_verdict: verdict.to_string(), counterexample });
     }
     solver.pop(1);
 

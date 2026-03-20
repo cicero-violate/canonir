@@ -6,9 +6,9 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use crate::graph::graph_types::{CodeGraphEdge, ModuleNode, CodeGraphNode};
-use crate::graph::graph_builder::module_prefixes;
 use crate::artifacts::cache::GraphCache;
+use crate::graph::graph_builder::module_prefixes;
+use crate::graph::graph_types::{CodeGraphEdge, CodeGraphNode, ModuleNode};
 
 pub fn is_graph_bin_fresh(graph_bin: &Path, tlog_path: &Path) -> bool {
     let tlog_idx = tlog_path.with_extension("tlog.idx");
@@ -61,16 +61,10 @@ pub fn emit_graph_bin(path: &Path, nodes: &[CodeGraphNode], edges: &[CodeGraphEd
     }
 
     let str_table_offset = HEADER_SIZE as u32
-        + n_nodes
-            .checked_mul(NODE_RECORD_SIZE as u32)
-            .ok_or_else(|| anyhow!("graph.bin node section too large"))?
-        + n_edges
-            .checked_mul(EDGE_RECORD_SIZE as u32)
-            .ok_or_else(|| anyhow!("graph.bin edge section too large"))?;
+        + n_nodes.checked_mul(NODE_RECORD_SIZE as u32).ok_or_else(|| anyhow!("graph.bin node section too large"))?
+        + n_edges.checked_mul(EDGE_RECORD_SIZE as u32).ok_or_else(|| anyhow!("graph.bin edge section too large"))?;
 
-    let mut out = Vec::with_capacity(
-        HEADER_SIZE + (n_nodes as usize * NODE_RECORD_SIZE) + (n_edges as usize * EDGE_RECORD_SIZE) + string_table.len(),
-    );
+    let mut out = Vec::with_capacity(HEADER_SIZE + (n_nodes as usize * NODE_RECORD_SIZE) + (n_edges as usize * EDGE_RECORD_SIZE) + string_table.len());
 
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(&VERSION.to_le_bytes());
@@ -81,16 +75,8 @@ pub fn emit_graph_bin(path: &Path, nodes: &[CodeGraphNode], edges: &[CodeGraphEd
     out.extend_from_slice(&[0u8; 8]);
 
     for node in nodes {
-        let (sym_off, sym_len) = string_offsets
-            .get(node.symbol.as_str())
-            .copied()
-            .unwrap_or((0, 0));
-        let file_id = node
-            .file_id
-            .and_then(|id| files.get(id as usize))
-            .and_then(|p| file_index.get(p.as_str()))
-            .copied()
-            .unwrap_or(NO_FILE_ID);
+        let (sym_off, sym_len) = string_offsets.get(node.symbol.as_str()).copied().unwrap_or((0, 0));
+        let file_id = node.file_id.and_then(|id| files.get(id as usize)).and_then(|p| file_index.get(p.as_str())).copied().unwrap_or(NO_FILE_ID);
         out.extend_from_slice(&node.id.to_le_bytes());
         out.push(node_kind_code(node.kind.as_str()));
         out.extend_from_slice(&file_id.to_le_bytes());
@@ -224,9 +210,7 @@ pub fn load_graph_bin(path: &Path) -> Result<(Vec<CodeGraphNode>, Vec<CodeGraphE
         } else {
             let end = sym_off.saturating_add(sym_len);
             if end <= string_table.len() {
-                std::str::from_utf8(&string_table[sym_off..end])
-                    .unwrap_or("")
-                    .to_string()
+                std::str::from_utf8(&string_table[sym_off..end]).unwrap_or("").to_string()
             } else {
                 String::new()
             }
@@ -248,11 +232,7 @@ pub fn load_graph_bin(path: &Path) -> Result<(Vec<CodeGraphNode>, Vec<CodeGraphE
         let dst = u32::from_le_bytes(data[pos + 4..pos + 8].try_into()?);
         let kind_code = data[pos + 8];
         pos += EDGE_RECORD_SIZE;
-        edges.push(CodeGraphEdge {
-            src,
-            dst,
-            kind: edge_kind_str(kind_code).to_string(),
-        });
+        edges.push(CodeGraphEdge { src, dst, kind: edge_kind_str(kind_code).to_string() });
     }
 
     Ok((nodes, edges, files))
@@ -322,12 +302,7 @@ pub fn emit_cfg_csv(out_dir: &Path, cfg: &[CodeGraphEdge]) -> Result<()> {
     Ok(())
 }
 
-pub fn emit_cfg_full_csv(
-    out_dir: &Path,
-    cfg: &[CodeGraphEdge],
-    nodes: &[CodeGraphNode],
-    files: &[String],
-) -> Result<()> {
+pub fn emit_cfg_full_csv(out_dir: &Path, cfg: &[CodeGraphEdge], nodes: &[CodeGraphNode], files: &[String]) -> Result<()> {
     let path = out_dir.join("cfg_full.csv");
     let mut buf = String::with_capacity(cfg.len() * 64 + 64);
     buf.push_str("src_block,dst_block,edge_kind,src_symbol,dst_symbol,src_file,dst_file,src_line,dst_line\n");
@@ -336,16 +311,8 @@ pub fn emit_cfg_full_csv(
         let dst_node = nodes.iter().find(|n| n.id == edge.dst);
         let src_sym = src_node.map(|n| n.symbol.as_str()).unwrap_or("");
         let dst_sym = dst_node.map(|n| n.symbol.as_str()).unwrap_or("");
-        let src_file = src_node
-            .and_then(|n| n.file_id)
-            .and_then(|id| files.get(id as usize))
-            .map(|s| s.as_str())
-            .unwrap_or("");
-        let dst_file = dst_node
-            .and_then(|n| n.file_id)
-            .and_then(|id| files.get(id as usize))
-            .map(|s| s.as_str())
-            .unwrap_or("");
+        let src_file = src_node.and_then(|n| n.file_id).and_then(|id| files.get(id as usize)).map(|s| s.as_str()).unwrap_or("");
+        let dst_file = dst_node.and_then(|n| n.file_id).and_then(|id| files.get(id as usize)).map(|s| s.as_str()).unwrap_or("");
         let src_line = src_node.and_then(|n| n.line).unwrap_or(0);
         let dst_line = dst_node.and_then(|n| n.line).unwrap_or(0);
         buf.push_str(&format!(
@@ -365,12 +332,7 @@ pub fn emit_cfg_full_csv(
     Ok(())
 }
 
-pub fn emit_callgraph_csv(
-    out_dir: &Path,
-    callgraph: &[(u32, u32)],
-    nodes: &[CodeGraphNode],
-    files: &[String],
-) -> Result<()> {
+pub fn emit_callgraph_csv(out_dir: &Path, callgraph: &[(u32, u32)], nodes: &[CodeGraphNode], files: &[String]) -> Result<()> {
     let path = out_dir.join("callgraph.csv");
     let mut buf = String::with_capacity(callgraph.len() * 64 + 64);
     buf.push_str("caller_node,callee_node,caller_symbol,callee_symbol,caller_file,callee_file\n");
@@ -379,28 +341,15 @@ pub fn emit_callgraph_csv(
         let callee_node = nodes.iter().find(|n| n.id == *callee);
         let caller_sym = caller_node.map(|n| n.symbol.as_str()).unwrap_or("");
         let callee_sym = callee_node.map(|n| n.symbol.as_str()).unwrap_or("");
-        let caller_file = caller_node
-            .and_then(|n| n.file_id)
-            .and_then(|id| files.get(id as usize))
-            .map(|s| s.as_str())
-            .unwrap_or("");
-        let callee_file = callee_node
-            .and_then(|n| n.file_id)
-            .and_then(|id| files.get(id as usize))
-            .map(|s| s.as_str())
-            .unwrap_or("");
+        let caller_file = caller_node.and_then(|n| n.file_id).and_then(|id| files.get(id as usize)).map(|s| s.as_str()).unwrap_or("");
+        let callee_file = callee_node.and_then(|n| n.file_id).and_then(|id| files.get(id as usize)).map(|s| s.as_str()).unwrap_or("");
         buf.push_str(&format!("{caller},{callee},{caller_sym},{callee_sym},{caller_file},{callee_file}\n"));
     }
     fs::write(path, buf)?;
     Ok(())
 }
 
-pub fn emit_callgraph_full_csv(
-    out_dir: &Path,
-    callgraph: &[(u32, u32)],
-    nodes: &[CodeGraphNode],
-    files: &[String],
-) -> Result<()> {
+pub fn emit_callgraph_full_csv(out_dir: &Path, callgraph: &[(u32, u32)], nodes: &[CodeGraphNode], files: &[String]) -> Result<()> {
     let path = out_dir.join("callgraph_full.csv");
     let mut buf = String::with_capacity(callgraph.len() * 80 + 64);
     buf.push_str("caller_node,callee_node,caller_symbol,callee_symbol,caller_file,callee_file,caller_line,callee_line\n");
@@ -409,16 +358,8 @@ pub fn emit_callgraph_full_csv(
         let callee_node = nodes.iter().find(|n| n.id == *callee);
         let caller_sym = caller_node.map(|n| n.symbol.as_str()).unwrap_or("");
         let callee_sym = callee_node.map(|n| n.symbol.as_str()).unwrap_or("");
-        let caller_file = caller_node
-            .and_then(|n| n.file_id)
-            .and_then(|id| files.get(id as usize))
-            .map(|s| s.as_str())
-            .unwrap_or("");
-        let callee_file = callee_node
-            .and_then(|n| n.file_id)
-            .and_then(|id| files.get(id as usize))
-            .map(|s| s.as_str())
-            .unwrap_or("");
+        let caller_file = caller_node.and_then(|n| n.file_id).and_then(|id| files.get(id as usize)).map(|s| s.as_str()).unwrap_or("");
+        let callee_file = callee_node.and_then(|n| n.file_id).and_then(|id| files.get(id as usize)).map(|s| s.as_str()).unwrap_or("");
         let caller_line = caller_node.and_then(|n| n.line).unwrap_or(0);
         let callee_line = callee_node.and_then(|n| n.line).unwrap_or(0);
         buf.push_str(&format!(
@@ -435,21 +376,10 @@ pub fn emit_callgraph_full_csv(
     Ok(())
 }
 
-pub fn emit_modulegraph_csv(
-    out_dir: &Path,
-    modulegraph: &[(u32, u32)],
-    module_nodes: &[ModuleNode],
-) -> Result<()> {
+pub fn emit_modulegraph_csv(out_dir: &Path, modulegraph: &[(u32, u32)], module_nodes: &[ModuleNode]) -> Result<()> {
     let path = out_dir.join("modulegraph.csv");
     let mut writer = Writer::from_path(path)?;
-    writer.write_record([
-        "parent_module",
-        "child_module",
-        "parent_symbol",
-        "child_symbol",
-        "parent_file",
-        "child_file",
-    ])?;
+    writer.write_record(["parent_module", "child_module", "parent_symbol", "child_symbol", "parent_file", "child_file"])?;
     for (parent, child) in modulegraph {
         let parent_node = module_nodes.iter().find(|n| n.id == *parent);
         let child_node = module_nodes.iter().find(|n| n.id == *child);
@@ -457,14 +387,7 @@ pub fn emit_modulegraph_csv(
         let child_sym = child_node.map(|n| n.symbol.as_str()).unwrap_or("");
         let parent_file = parent_node.map(|n| n.file.as_str()).unwrap_or("");
         let child_file = child_node.map(|n| n.file.as_str()).unwrap_or("");
-        writer.write_record([
-            parent_sym.to_string(),
-            child_sym.to_string(),
-            parent_sym.to_string(),
-            child_sym.to_string(),
-            parent_file.to_string(),
-            child_file.to_string(),
-        ])?;
+        writer.write_record([parent_sym.to_string(), child_sym.to_string(), parent_sym.to_string(), child_sym.to_string(), parent_file.to_string(), child_file.to_string()])?;
     }
     writer.flush()?;
     Ok(())
@@ -476,63 +399,28 @@ pub fn emit_nodes_csv(out_dir: &Path, nodes: &[CodeGraphNode]) -> Result<()> {
     writeln!(file, "node_id,node_kind,symbol,file_id,line,column,parent")?;
     for node in nodes {
         let symbol = sanitize_csv_field(&node.symbol);
-        writeln!(
-            file,
-            "{},{},{},{},{},{},{}",
-            node.id,
-            node.kind,
-            symbol,
-            node.file_id.unwrap_or(0),
-            node.line.unwrap_or(0),
-            0,
-            0
-        )?;
+        writeln!(file, "{},{},{},{},{},{},{}", node.id, node.kind, symbol, node.file_id.unwrap_or(0), node.line.unwrap_or(0), 0, 0)?;
     }
     Ok(())
 }
 
-pub fn emit_nodes_full_csv(
-    out_dir: &Path,
-    nodes: &[CodeGraphNode],
-    files: &[String],
-) -> Result<()> {
+pub fn emit_nodes_full_csv(out_dir: &Path, nodes: &[CodeGraphNode], files: &[String]) -> Result<()> {
     let path = out_dir.join("nodes_full.csv");
     let mut file = fs::File::create(path)?;
     writeln!(file, "node_id,node_kind,symbol,file_id,file_path,line")?;
     for node in nodes {
-        let file_path = node
-            .file_id
-            .and_then(|id| files.get(id as usize))
-            .cloned()
-            .unwrap_or_default();
+        let file_path = node.file_id.and_then(|id| files.get(id as usize)).cloned().unwrap_or_default();
         let symbol = sanitize_csv_field(&node.symbol);
-        writeln!(
-            file,
-            "{},{},{},{},{},{}",
-            node.id,
-            node.kind,
-            symbol,
-            node.file_id.unwrap_or(0),
-            sanitize_csv_field(&file_path),
-            node.line.unwrap_or(0),
-        )?;
+        writeln!(file, "{},{},{},{},{},{}", node.id, node.kind, symbol, node.file_id.unwrap_or(0), sanitize_csv_field(&file_path), node.line.unwrap_or(0),)?;
     }
     Ok(())
 }
 
-pub fn emit_nodes_raw_jsonl(
-    out_dir: &Path,
-    nodes: &[CodeGraphNode],
-    files: &[String],
-) -> Result<()> {
+pub fn emit_nodes_raw_jsonl(out_dir: &Path, nodes: &[CodeGraphNode], files: &[String]) -> Result<()> {
     let path = out_dir.join("nodes_raw.jsonl");
     let mut file = fs::File::create(path)?;
     for node in nodes {
-        let file_path = node
-            .file_id
-            .and_then(|id| files.get(id as usize))
-            .cloned()
-            .unwrap_or_default();
+        let file_path = node.file_id.and_then(|id| files.get(id as usize)).cloned().unwrap_or_default();
         let line = node.line.unwrap_or(0);
         let obj = serde_json::json!({
             "node_id": node.id,
@@ -556,12 +444,7 @@ pub fn emit_edges_csv(out_dir: &Path, edges: &[CodeGraphEdge]) -> Result<()> {
     Ok(())
 }
 
-pub fn emit_edges_full_csv(
-    out_dir: &Path,
-    edges: &[CodeGraphEdge],
-    nodes: &[CodeGraphNode],
-    files: &[String],
-) -> Result<()> {
+pub fn emit_edges_full_csv(out_dir: &Path, edges: &[CodeGraphEdge], nodes: &[CodeGraphNode], files: &[String]) -> Result<()> {
     let path = out_dir.join("edges_full.csv");
     let mut file = fs::File::create(path)?;
     writeln!(file, "src_id,dst_id,edge_kind,src_symbol,dst_symbol,src_file,dst_file,src_line,dst_line")?;
@@ -570,16 +453,8 @@ pub fn emit_edges_full_csv(
         let dst_node = nodes.iter().find(|n| n.id == edge.dst);
         let src_sym = src_node.map(|n| n.symbol.as_str()).unwrap_or("");
         let dst_sym = dst_node.map(|n| n.symbol.as_str()).unwrap_or("");
-        let src_file = src_node
-            .and_then(|n| n.file_id)
-            .and_then(|id| files.get(id as usize))
-            .map(|s| s.as_str())
-            .unwrap_or("");
-        let dst_file = dst_node
-            .and_then(|n| n.file_id)
-            .and_then(|id| files.get(id as usize))
-            .map(|s| s.as_str())
-            .unwrap_or("");
+        let src_file = src_node.and_then(|n| n.file_id).and_then(|id| files.get(id as usize)).map(|s| s.as_str()).unwrap_or("");
+        let dst_file = dst_node.and_then(|n| n.file_id).and_then(|id| files.get(id as usize)).map(|s| s.as_str()).unwrap_or("");
         let src_line = src_node.and_then(|n| n.line).unwrap_or(0);
         let dst_line = dst_node.and_then(|n| n.line).unwrap_or(0);
         writeln!(
@@ -610,12 +485,7 @@ pub fn emit_files_txt(out_dir: &Path, files: &[String]) -> Result<()> {
     Ok(())
 }
 
-pub fn emit_typegraph_csv(
-    out_dir: &Path,
-    typegraph: &[(u32, u32, String)],
-    nodes: &[CodeGraphNode],
-    files: &[String],
-) -> Result<()> {
+pub fn emit_typegraph_csv(out_dir: &Path, typegraph: &[(u32, u32, String)], nodes: &[CodeGraphNode], files: &[String]) -> Result<()> {
     let path = out_dir.join("typegraph.csv");
     let mut buf = String::with_capacity(typegraph.len() * 80 + 64);
     buf.push_str("type_a,type_b,relation,type_a_symbol,type_b_symbol,type_a_file,type_b_file\n");
@@ -624,28 +494,15 @@ pub fn emit_typegraph_csv(
         let b_node = nodes.iter().find(|n| n.id == *b);
         let a_sym = a_node.map(|n| n.symbol.as_str()).unwrap_or("");
         let b_sym = b_node.map(|n| n.symbol.as_str()).unwrap_or("");
-        let a_file = a_node
-            .and_then(|n| n.file_id)
-            .and_then(|id| files.get(id as usize))
-            .map(|s| s.as_str())
-            .unwrap_or("");
-        let b_file = b_node
-            .and_then(|n| n.file_id)
-            .and_then(|id| files.get(id as usize))
-            .map(|s| s.as_str())
-            .unwrap_or("");
+        let a_file = a_node.and_then(|n| n.file_id).and_then(|id| files.get(id as usize)).map(|s| s.as_str()).unwrap_or("");
+        let b_file = b_node.and_then(|n| n.file_id).and_then(|id| files.get(id as usize)).map(|s| s.as_str()).unwrap_or("");
         buf.push_str(&format!("{a},{b},{rel},{a_sym},{b_sym},{a_file},{b_file}\n"));
     }
     fs::write(path, buf)?;
     Ok(())
 }
 
-pub fn emit_typegraph_full_csv(
-    out_dir: &Path,
-    typegraph: &[(u32, u32, String)],
-    nodes: &[CodeGraphNode],
-    files: &[String],
-) -> Result<()> {
+pub fn emit_typegraph_full_csv(out_dir: &Path, typegraph: &[(u32, u32, String)], nodes: &[CodeGraphNode], files: &[String]) -> Result<()> {
     let path = out_dir.join("typegraph_full.csv");
     let mut buf = String::with_capacity(typegraph.len() * 90 + 64);
     buf.push_str("type_a,type_b,relation,type_a_symbol,type_b_symbol,type_a_file,type_b_file,type_a_line,type_b_line\n");
@@ -654,27 +511,11 @@ pub fn emit_typegraph_full_csv(
         let b_node = nodes.iter().find(|n| n.id == *b);
         let a_sym = a_node.map(|n| n.symbol.as_str()).unwrap_or("");
         let b_sym = b_node.map(|n| n.symbol.as_str()).unwrap_or("");
-        let a_file = a_node
-            .and_then(|n| n.file_id)
-            .and_then(|id| files.get(id as usize))
-            .map(|s| s.as_str())
-            .unwrap_or("");
-        let b_file = b_node
-            .and_then(|n| n.file_id)
-            .and_then(|id| files.get(id as usize))
-            .map(|s| s.as_str())
-            .unwrap_or("");
+        let a_file = a_node.and_then(|n| n.file_id).and_then(|id| files.get(id as usize)).map(|s| s.as_str()).unwrap_or("");
+        let b_file = b_node.and_then(|n| n.file_id).and_then(|id| files.get(id as usize)).map(|s| s.as_str()).unwrap_or("");
         let a_line = a_node.and_then(|n| n.line).unwrap_or(0);
         let b_line = b_node.and_then(|n| n.line).unwrap_or(0);
-        buf.push_str(&format!(
-            "{a},{b},{rel},{},{},{},{},{},{}\n",
-            sanitize_csv_field(a_sym),
-            sanitize_csv_field(b_sym),
-            sanitize_csv_field(a_file),
-            sanitize_csv_field(b_file),
-            a_line,
-            b_line
-        ));
+        buf.push_str(&format!("{a},{b},{rel},{},{},{},{},{},{}\n", sanitize_csv_field(a_sym), sanitize_csv_field(b_sym), sanitize_csv_field(a_file), sanitize_csv_field(b_file), a_line, b_line));
     }
     fs::write(path, buf)?;
     Ok(())
@@ -688,11 +529,7 @@ fn sanitize_csv_field(raw: &str) -> String {
     out
 }
 
-pub fn emit_typegraph_csv_from_cache(
-    out_dir: &Path,
-    typegraph: &[(u32, u32, String)],
-    nodes: &[TypeCodeNode],
-) -> Result<()> {
+pub fn emit_typegraph_csv_from_cache(out_dir: &Path, typegraph: &[(u32, u32, String)], nodes: &[TypeCodeNode]) -> Result<()> {
     let path = out_dir.join("typegraph.csv");
     let mut buf = String::with_capacity(typegraph.len() * 80 + 64);
     buf.push_str("type_a,type_b,relation,type_a_symbol,type_b_symbol,type_a_file,type_b_file\n");
@@ -709,20 +546,13 @@ pub fn emit_typegraph_csv_from_cache(
     Ok(())
 }
 
-pub fn build_modulegraph(
-    nodes: &[CodeGraphNode],
-    files: &[String],
-) -> (Vec<(u32, u32)>, Vec<ModuleNode>) {
+pub fn build_modulegraph(nodes: &[CodeGraphNode], files: &[String]) -> (Vec<(u32, u32)>, Vec<ModuleNode>) {
     let mut module_files: BTreeMap<String, String> = BTreeMap::new();
     for node in nodes {
         if node.kind != "MODULE" {
             continue;
         }
-        let file = node
-            .file_id
-            .and_then(|id| files.get(id as usize))
-            .cloned()
-            .unwrap_or_default();
+        let file = node.file_id.and_then(|id| files.get(id as usize)).cloned().unwrap_or_default();
         module_files.insert(node.symbol.clone(), file);
     }
     let base_symbols: Vec<(String, String)> = module_files.iter().map(|(s, f)| (s.clone(), f.clone())).collect();
@@ -743,11 +573,7 @@ pub fn build_modulegraph(
         let id = next_id;
         next_id += 1;
         symbol_to_id.insert(symbol.clone(), id);
-        module_nodes.push(ModuleNode {
-            id,
-            symbol: if symbol.is_empty() { "crate".to_string() } else { symbol.clone() },
-            file: file.clone(),
-        });
+        module_nodes.push(ModuleNode { id, symbol: if symbol.is_empty() { "crate".to_string() } else { symbol.clone() }, file: file.clone() });
     }
 
     let mut edges: BTreeSet<(u32, u32)> = BTreeSet::new();
@@ -788,11 +614,7 @@ pub fn build_modulegraph_from_cache(cache: &GraphCache) -> (Vec<(u32, u32)>, Vec
         let id = next_id;
         next_id += 1;
         symbol_to_id.insert(symbol.clone(), id);
-        module_nodes.push(ModuleNode {
-            id,
-            symbol: if symbol.is_empty() { "crate".to_string() } else { symbol.clone() },
-            file: file.clone(),
-        });
+        module_nodes.push(ModuleNode { id, symbol: if symbol.is_empty() { "crate".to_string() } else { symbol.clone() }, file: file.clone() });
     }
 
     let mut edges: BTreeSet<(u32, u32)> = BTreeSet::new();
@@ -851,11 +673,7 @@ pub fn build_typegraph_from_cache(cache: &GraphCache) -> (Vec<(u32, u32, String)
         let id = next_id;
         next_id += 1;
         symbol_to_id.insert(symbol.clone(), id);
-        nodes.push(TypeCodeNode {
-            id,
-            symbol: symbol.clone(),
-            file: node.file.clone(),
-        });
+        nodes.push(TypeCodeNode { id, symbol: symbol.clone(), file: node.file.clone() });
     }
 
     let mut edges: BTreeSet<(u32, u32, String)> = BTreeSet::new();
@@ -866,11 +684,7 @@ pub fn build_typegraph_from_cache(cache: &GraphCache) -> (Vec<(u32, u32, String)
                 let id = next_id;
                 next_id += 1;
                 symbol_to_id.insert(edge.src.clone(), id);
-                nodes.push(TypeCodeNode {
-                    id,
-                    symbol: edge.src.clone(),
-                    file: String::new(),
-                });
+                nodes.push(TypeCodeNode { id, symbol: edge.src.clone(), file: String::new() });
                 id
             }
         };
@@ -880,11 +694,7 @@ pub fn build_typegraph_from_cache(cache: &GraphCache) -> (Vec<(u32, u32, String)
                 let id = next_id;
                 next_id += 1;
                 symbol_to_id.insert(edge.dst.clone(), id);
-                nodes.push(TypeCodeNode {
-                    id,
-                    symbol: edge.dst.clone(),
-                    file: String::new(),
-                });
+                nodes.push(TypeCodeNode { id, symbol: edge.dst.clone(), file: String::new() });
                 id
             }
         };

@@ -747,11 +747,7 @@ mod gpu_tests {
 
     #[test]
     fn union_find_gpu_merges_constraint_components() {
-        let constraints = vec![
-            EqualityConstraint::new(0, 1),
-            EqualityConstraint::new(1, 2),
-            EqualityConstraint::new(4, 5),
-        ];
+        let constraints = vec![EqualityConstraint::new(0, 1), EqualityConstraint::new(1, 2), EqualityConstraint::new(4, 5)];
         let reps = solve_constraints_gpu(6, &constraints).unwrap();
         assert_eq!(reps[0], reps[1]);
         assert_eq!(reps[1], reps[2]);

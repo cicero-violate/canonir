@@ -15,16 +15,7 @@ pub struct TlogEvent {
 
 impl TlogEvent {
     pub fn new(source: impl Into<String>, kind: impl Into<String>, payload: Value) -> Self {
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        Self {
-            event_id: None,
-            ts,
-            source: source.into(),
-            kind: kind.into(),
-            payload,
-        }
+        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+        Self { event_id: None, ts, source: source.into(), kind: kind.into(), payload }
     }
 }

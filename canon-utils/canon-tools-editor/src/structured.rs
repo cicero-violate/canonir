@@ -36,23 +36,12 @@ impl EditOp {
     pub fn to_event(self, project: &str) -> canon_event::EditEvent {
         match self {
             EditOp::MutateField { symbol_id, mutation, .. } => match mutation {
-                FieldMutation::RenameIdent(new_name) => canon_event::EditEvent::RenameSymbol(canon_event::RenameSymbol {
-                    project: project.to_string(),
-                    old: symbol_id,
-                    new: new_name,
-                }),
+                FieldMutation::RenameIdent(new_name) => canon_event::EditEvent::RenameSymbol(canon_event::RenameSymbol { project: project.to_string(), old: symbol_id, new: new_name }),
             },
             EditOp::MoveSymbol { symbol_id, new_module_path, .. } => {
-                canon_event::EditEvent::MoveSymbol(canon_event::MoveSymbol {
-                    project: project.to_string(),
-                    symbol: symbol_id,
-                    module: new_module_path,
-                })
+                canon_event::EditEvent::MoveSymbol(canon_event::MoveSymbol { project: project.to_string(), symbol: symbol_id, module: new_module_path })
             }
-            EditOp::DeleteSymbol { symbol_id, .. } => canon_event::EditEvent::DeleteSymbol(canon_event::DeleteSymbol {
-                project: project.to_string(),
-                symbol: symbol_id,
-            }),
+            EditOp::DeleteSymbol { symbol_id, .. } => canon_event::EditEvent::DeleteSymbol(canon_event::DeleteSymbol { project: project.to_string(), symbol: symbol_id }),
         }
     }
 }

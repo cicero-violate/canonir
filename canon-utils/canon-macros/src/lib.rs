@@ -51,11 +51,7 @@ macro_rules! canon_event_enum {
 macro_rules! canon_emit {
     // Emitter-routed form: routes through EventRuntime → canonical writer
     ($emitter:expr; $source:expr, $kind:expr, $payload:expr) => {{
-        $emitter.emit(canon_event::CanonEvent::Debug(canon_event::DebugEvent {
-            source: $source.to_string(),
-            kind: $kind.to_string(),
-            payload: $payload,
-        }))
+        $emitter.emit(canon_event::CanonEvent::Debug(canon_event::DebugEvent { source: $source.to_string(), kind: $kind.to_string(), payload: $payload }))
     }};
     // Direct form: writes directly to tlog path (external processes only)
     ($source:expr, $kind:expr, $payload:expr, $path:expr) => {{

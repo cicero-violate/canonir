@@ -38,20 +38,8 @@ fn main() {
         let obj = out_dir.join(format!("{}.o", name));
 
         // nvcc: compile .cu -> .o
-        let status = Command::new(&nvcc)
-            .args([*src, "-c", "-o"])
-            .arg(&obj)
-            .args([
-                "-Xcompiler",
-                "-fPIC",
-                "-std=c++17",
-                "-ccbin",
-                "/usr/bin/g++-11",
-                "-include",
-                "assert.h",
-            ])
-            .status()
-            .unwrap_or_else(|err| {
+        let status =
+            Command::new(&nvcc).args([*src, "-c", "-o"]).arg(&obj).args(["-Xcompiler", "-fPIC", "-std=c++17", "-ccbin", "/usr/bin/g++-11", "-include", "assert.h"]).status().unwrap_or_else(|err| {
                 eprintln!("nvcc failed to start for {}: {}", src, err);
                 std::process::exit(1);
             });

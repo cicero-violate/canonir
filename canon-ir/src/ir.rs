@@ -398,9 +398,7 @@ fn canonical_path_form(s: &str) -> Result<std::borrow::Cow<'_, str>, String> {
         || normalized.contains('!')
         || normalized.starts_with(':')
         || normalized.ends_with(':')
-        || normalized
-            .split("::")
-            .any(|seg| seg == "_" || seg.starts_with("__"));
+        || normalized.split("::").any(|seg| seg == "_" || seg.starts_with("__"));
     if invalid {
         return Err(format!("invalid path for path_intern: {s}"));
     }

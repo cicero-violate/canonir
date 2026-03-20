@@ -55,30 +55,29 @@ pub fn replay_capability_graph_from_tlog(tlog_path: &Path) -> anyhow::Result<Cap
             }
             "capability_failed" => {
                 let id = payload.get("request_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                if let Some(node) = state.nodes.get_mut(&id) { node.status = "failed".to_string(); }
+                if let Some(node) = state.nodes.get_mut(&id) {
+                    node.status = "failed".to_string();
+                }
             }
             "tool_call" => {
-                let req_id = payload
-                    .get("tool_call_id")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| payload.get("request_id").and_then(|v| v.as_str()))
-                    .unwrap_or("")
-                    .to_string();
+                let req_id = payload.get("tool_call_id").and_then(|v| v.as_str()).or_else(|| payload.get("request_id").and_then(|v| v.as_str())).unwrap_or("").to_string();
                 let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let kind = payload.get("kind").and_then(|v| v.as_str()).unwrap_or("tool").to_string();
                 if !req_id.is_empty() {
                     // tool_call is a child edge from the parent capability (node_id's capability)
                     state.edges.push(CapabilityOpEdge { from: node_id, to: req_id.clone(), kind: "tool_call".to_string() });
-                    state.nodes.entry(req_id.clone()).or_insert_with(|| CapabilityOpNode { capability_id: req_id, name: kind, node_id: String::new(), status: "pending".to_string(), duration_ms: None, result: None });
+                    state.nodes.entry(req_id.clone()).or_insert_with(|| CapabilityOpNode {
+                        capability_id: req_id,
+                        name: kind,
+                        node_id: String::new(),
+                        status: "pending".to_string(),
+                        duration_ms: None,
+                        result: None,
+                    });
                 }
             }
             "tool_result" => {
-                let req_id = payload
-                    .get("tool_call_id")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| payload.get("request_id").and_then(|v| v.as_str()))
-                    .unwrap_or("")
-                    .to_string();
+                let req_id = payload.get("tool_call_id").and_then(|v| v.as_str()).or_else(|| payload.get("request_id").and_then(|v| v.as_str())).unwrap_or("").to_string();
                 let success = payload.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
                 let output = payload.get("output").cloned();
                 if !req_id.is_empty() {

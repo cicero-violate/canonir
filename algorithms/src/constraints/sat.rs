@@ -25,10 +25,7 @@ pub struct Cnf {
 
 impl Cnf {
     pub fn new(num_vars: usize) -> Self {
-        Self {
-            num_vars,
-            clauses: Vec::new(),
-        }
+        Self { num_vars, clauses: Vec::new() }
     }
 
     pub fn add_clause(&mut self, clause: Vec<Lit>) {
@@ -78,10 +75,7 @@ fn dpll(cnf: &Cnf, assignment: &mut [Option<bool>]) -> bool {
         return true;
     }
 
-    let var = assignment
-        .iter()
-        .position(|v| v.is_none())
-        .expect("some variable must be unassigned");
+    let var = assignment.iter().position(|v| v.is_none()).expect("some variable must be unassigned");
 
     assignment[var] = Some(true);
     if dpll(cnf, assignment) {
@@ -98,13 +92,7 @@ fn dpll(cnf: &Cnf, assignment: &mut [Option<bool>]) -> bool {
 }
 
 fn solve_with_z3_cli(cnf: &Cnf) -> Option<Vec<bool>> {
-    let mut child = Command::new("z3")
-        .args(["-in", "-smt2"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    let mut child = Command::new("z3").args(["-in", "-smt2"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
 
     {
         let stdin = child.stdin.as_mut()?;

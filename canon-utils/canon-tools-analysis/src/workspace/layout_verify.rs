@@ -29,11 +29,7 @@ pub fn verify_reports_layout(root: &Path) -> Result<()> {
         for name in ["graph", "graphs", "analysis", "metrics", "invariants", "meta"] {
             let child = path.join(name);
             if !child.exists() {
-                return Err(anyhow!(
-                    "crate {} missing {}",
-                    path.file_name().unwrap_or_default().to_string_lossy(),
-                    name
-                ));
+                return Err(anyhow!("crate {} missing {}", path.file_name().unwrap_or_default().to_string_lossy(), name));
             }
         }
     }

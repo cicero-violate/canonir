@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize, Infallible};
 use rkyv::ser::Serializer;
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Infallible, Serialize as RkyvSerialize};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -63,32 +63,15 @@ pub fn load_graph_snapshot(path: &Path) -> Result<CodeSnapshot> {
             return Err(anyhow!("snapshot deserialize failed: panic during archived_root"));
         }
     };
-    let snapshot: CodeSnapshot = archived
-        .deserialize(&mut Infallible)
-        .map_err(|e| anyhow!("snapshot deserialize failed: {e}"))?;
+    let snapshot: CodeSnapshot = archived.deserialize(&mut Infallible).map_err(|e| anyhow!("snapshot deserialize failed: {e}"))?;
     Ok(snapshot)
 }
 
-pub fn save_graph_snapshot(
-    path: &Path,
-    nodes: &[CodeGraphNode],
-    edges: &[CodeGraphEdge],
-    files: &[String],
-) -> Result<()> {
+pub fn save_graph_snapshot(path: &Path, nodes: &[CodeGraphNode], edges: &[CodeGraphEdge], files: &[String]) -> Result<()> {
     let mut nodes_out: Vec<CodeSnapshotNode> = Vec::with_capacity(nodes.len());
     for node in nodes {
-        let file = node
-            .file_id
-            .and_then(|id| files.get(id as usize))
-            .cloned()
-            .unwrap_or_default();
-        nodes_out.push(CodeSnapshotNode {
-            kind: node.kind.clone(),
-            symbol: node.symbol.clone(),
-            file,
-            line: node.line.unwrap_or(0),
-            column: 0,
-        });
+        let file = node.file_id.and_then(|id| files.get(id as usize)).cloned().unwrap_or_default();
+        nodes_out.push(CodeSnapshotNode { kind: node.kind.clone(), symbol: node.symbol.clone(), file, line: node.line.unwrap_or(0), column: 0 });
     }
 
     let mut id_to_kind: HashMap<u32, (&str, &str)> = HashMap::new();
@@ -98,43 +81,21 @@ pub fn save_graph_snapshot(
 
     let mut edges_out: Vec<CodeSnapshotEdge> = Vec::with_capacity(edges.len());
     for edge in edges {
-        let (src_sym, src_kind) = id_to_kind
-            .get(&edge.src)
-            .copied()
-            .unwrap_or(("", "UNKNOWN"));
-        let (dst_sym, dst_kind) = id_to_kind
-            .get(&edge.dst)
-            .copied()
-            .unwrap_or(("", "UNKNOWN"));
-        edges_out.push(CodeSnapshotEdge {
-            src_symbol: src_sym.to_string(),
-            src_kind: src_kind.to_string(),
-            dst_symbol: dst_sym.to_string(),
-            dst_kind: dst_kind.to_string(),
-            kind: edge.kind.clone(),
-        });
+        let (src_sym, src_kind) = id_to_kind.get(&edge.src).copied().unwrap_or(("", "UNKNOWN"));
+        let (dst_sym, dst_kind) = id_to_kind.get(&edge.dst).copied().unwrap_or(("", "UNKNOWN"));
+        edges_out.push(CodeSnapshotEdge { src_symbol: src_sym.to_string(), src_kind: src_kind.to_string(), dst_symbol: dst_sym.to_string(), dst_kind: dst_kind.to_string(), kind: edge.kind.clone() });
     }
 
-    let snapshot = CodeSnapshot {
-        nodes: nodes_out,
-        edges: edges_out,
-        files: files.to_vec(),
-    };
+    let snapshot = CodeSnapshot { nodes: nodes_out, edges: edges_out, files: files.to_vec() };
 
     if estimate_snapshot_size(&snapshot) > i32::MAX as u64 {
-        eprintln!(
-            "canon_reports: kernel snapshot too large for rkyv (>{} bytes), skipping write to {}",
-            i32::MAX,
-            path.display()
-        );
+        eprintln!("canon_reports: kernel snapshot too large for rkyv (>{} bytes), skipping write to {}", i32::MAX, path.display());
         return Ok(());
     }
 
     let serialize_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut serializer = rkyv::ser::serializers::AllocSerializer::<256>::default();
-        serializer
-            .serialize_value(&snapshot)
-            .map_err(|e| anyhow!("snapshot serialize failed: {e}"))?;
+        serializer.serialize_value(&snapshot).map_err(|e| anyhow!("snapshot serialize failed: {e}"))?;
         let buf = serializer.into_serializer().into_inner();
         fs::write(path, buf)?;
         Ok::<(), anyhow::Error>(())
@@ -143,10 +104,7 @@ pub fn save_graph_snapshot(
     match serialize_result {
         Ok(res) => res?,
         Err(_) => {
-            eprintln!(
-                "canon_reports: kernel snapshot serialization panicked (rkyv ExceedsStorageRange likely). Skipping write to {}",
-                path.display()
-            );
+            eprintln!("canon_reports: kernel snapshot serialization panicked (rkyv ExceedsStorageRange likely). Skipping write to {}", path.display());
         }
     }
     Ok(())
@@ -175,9 +133,7 @@ pub fn estimate_snapshot_size(snapshot: &CodeSnapshot) -> u64 {
     total
 }
 
-pub fn snapshot_into_rows(
-    snapshot: CodeSnapshot,
-) -> (Vec<CodeGraphNode>, Vec<CodeGraphEdge>, Vec<String>) {
+pub fn snapshot_into_rows(snapshot: CodeSnapshot) -> (Vec<CodeGraphNode>, Vec<CodeGraphEdge>, Vec<String>) {
     let mut files = snapshot.files;
     let mut file_map: HashMap<String, u32> = HashMap::new();
     for (idx, path) in files.iter().enumerate() {
@@ -199,13 +155,7 @@ pub fn snapshot_into_rows(
         };
         let id = nodes.len() as u32;
         key_to_id.insert((node.symbol.clone(), node.kind.clone()), id);
-        nodes.push(CodeGraphNode {
-            id,
-            kind: node.kind,
-            symbol: node.symbol,
-            file_id,
-            line: Some(node.line).filter(|v| *v > 0),
-        });
+        nodes.push(CodeGraphNode { id, kind: node.kind, symbol: node.symbol, file_id, line: Some(node.line).filter(|v| *v > 0) });
     }
 
     let mut edges: Vec<CodeGraphEdge> = Vec::new();
@@ -216,11 +166,7 @@ pub fn snapshot_into_rows(
         let Some(&dst) = key_to_id.get(&(edge.dst_symbol, edge.dst_kind)) else {
             continue;
         };
-        edges.push(CodeGraphEdge {
-            src,
-            dst,
-            kind: edge.kind,
-        });
+        edges.push(CodeGraphEdge { src, dst, kind: edge.kind });
     }
 
     (nodes, edges, files)

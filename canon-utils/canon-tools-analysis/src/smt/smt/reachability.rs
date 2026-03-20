@@ -1,6 +1,6 @@
-use crate::smt::loader::{AnalysisGraph, EdgeKind, NodeKind};
+use crate::smt::cache::{function_graph_hash, now_ts, reachability_key, CacheEntry};
 use crate::smt::encoder::EncodedGraph;
-use crate::smt::cache::{reachability_key, function_graph_hash, CacheEntry, now_ts};
+use crate::smt::loader::{AnalysisGraph, EdgeKind, NodeKind};
 use algorithms::graph::csr::Csr;
 use algorithms::graph::reachability::reachability_gpu;
 use serde::Serialize;
@@ -15,37 +15,21 @@ pub struct SmtReachabilityEntry {
     pub smt_path_condition: BTreeMap<String, bool>,
 }
 
-pub fn check_repair_surface(
-    session: &crate::smt::SmtSession,
-    graph: &AnalysisGraph,
-    repair_surface: &Value,
-) -> Vec<SmtReachabilityEntry> {
+pub fn check_repair_surface(session: &crate::smt::SmtSession, graph: &AnalysisGraph, repair_surface: &Value) -> Vec<SmtReachabilityEntry> {
     let mut out = Vec::new();
-    let top_k = repair_surface
-        .get("top_k")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let top_k = repair_surface.get("top_k").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     for entry in top_k {
         let node_id = entry.get("node_id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         if node_id == 0 {
             continue;
         }
         let (reachable, path) = check_function_errors(session, graph, node_id);
-        out.push(SmtReachabilityEntry {
-            node_id,
-            smt_reachable: reachable,
-            smt_path_condition: path,
-        });
+        out.push(SmtReachabilityEntry { node_id, smt_reachable: reachable, smt_path_condition: path });
     }
     out
 }
 
-fn check_function_errors(
-    session: &crate::smt::SmtSession,
-    graph: &AnalysisGraph,
-    fn_id: u32,
-) -> (bool, BTreeMap<String, bool>) {
+fn check_function_errors(session: &crate::smt::SmtSession, graph: &AnalysisGraph, fn_id: u32) -> (bool, BTreeMap<String, bool>) {
     let encoded = EncodedGraph::build_scoped(graph, session.ctx(), fn_id);
     let entry_block = entry_block_for_function(graph, fn_id);
     let entry_block = match entry_block.and_then(|id| encoded.bb.get(&id)) {
@@ -53,12 +37,7 @@ fn check_function_errors(
         None => return (false, BTreeMap::new()),
     };
 
-    let error_nodes: Vec<u32> = graph
-        .edges
-        .iter()
-        .filter(|e| e.kind == EdgeKind::ErrorToFunction && e.dst == fn_id)
-        .map(|e| e.src)
-        .collect();
+    let error_nodes: Vec<u32> = graph.edges.iter().filter(|e| e.kind == EdgeKind::ErrorToFunction && e.dst == fn_id).map(|e| e.src).collect();
     if error_nodes.is_empty() {
         return (false, BTreeMap::new());
     }
@@ -106,12 +85,7 @@ fn check_function_errors(
                     }
                 }
                 if let Ok(mut cache) = session.cache().lock() {
-                    let entry = CacheEntry {
-                        result: "sat".to_string(),
-                        model: serde_json::to_value(&path).ok(),
-                        graph_hash: graph_hash.clone(),
-                        timestamp: now_ts(),
-                    };
+                    let entry = CacheEntry { result: "sat".to_string(), model: serde_json::to_value(&path).ok(), graph_hash: graph_hash.clone(), timestamp: now_ts() };
                     cache.insert(key, entry);
                 }
                 solver.pop(1);

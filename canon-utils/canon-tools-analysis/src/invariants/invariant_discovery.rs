@@ -84,13 +84,7 @@ impl InvariantRule for ModuleOwnerRule {
         let violated = violations.len();
         let coverage = if total == 0 { 1.0 } else { (total - violated) as f64 / total as f64 };
         let violation_rate = if total == 0 { 0.0 } else { violated as f64 / total as f64 };
-        InvariantResult {
-            name: self.name().to_string(),
-            description: self.description().to_string(),
-            coverage,
-            violation_rate,
-            violations,
-        }
+        InvariantResult { name: self.name().to_string(), description: self.description().to_string(), coverage, violation_rate, violations }
     }
 }
 
@@ -103,8 +97,7 @@ impl InvariantRule for CallEdgeRule {
         "CALL edge source must be CALL_SITE, FUNCTION, or METHOD"
     }
     fn evaluate(&self, graph: &CodeGraph, _features: &ReportFeatures) -> InvariantResult {
-        let id_to_kind: HashMap<u32, &str> =
-            graph.nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
+        let id_to_kind: HashMap<u32, &str> = graph.nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
         let mut total = 0usize;
         let mut violations = Vec::new();
         for e in &graph.edges {
@@ -122,13 +115,7 @@ impl InvariantRule for CallEdgeRule {
         let violation_rate = if total == 0 { 0.0 } else { violated as f64 / total as f64 };
         violations.sort();
         violations.dedup();
-        InvariantResult {
-            name: self.name().to_string(),
-            description: self.description().to_string(),
-            coverage,
-            violation_rate,
-            violations,
-        }
+        InvariantResult { name: self.name().to_string(), description: self.description().to_string(), coverage, violation_rate, violations }
     }
 }
 
@@ -173,13 +160,7 @@ impl InvariantRule for CfgEntryRule {
         let violated = violations.len();
         let coverage = if total == 0 { 1.0 } else { (total - violated) as f64 / total as f64 };
         let violation_rate = if total == 0 { 0.0 } else { violated as f64 / total as f64 };
-        InvariantResult {
-            name: self.name().to_string(),
-            description: self.description().to_string(),
-            coverage,
-            violation_rate,
-            violations,
-        }
+        InvariantResult { name: self.name().to_string(), description: self.description().to_string(), coverage, violation_rate, violations }
     }
 }
 
@@ -275,8 +256,7 @@ impl InvariantRule for ContainsSrcModuleRule {
 }
 
 fn edge_kind_src_rule(graph: &CodeGraph, kind: &str, allowed: &[&str]) -> InvariantResult {
-    let id_to_kind: HashMap<u32, &str> =
-        graph.nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
+    let id_to_kind: HashMap<u32, &str> = graph.nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
     let mut total = 0usize;
     let mut violations = Vec::new();
     for e in &graph.edges {
@@ -294,18 +274,11 @@ fn edge_kind_src_rule(graph: &CodeGraph, kind: &str, allowed: &[&str]) -> Invari
     let violation_rate = if total == 0 { 0.0 } else { violated as f64 / total as f64 };
     violations.sort();
     violations.dedup();
-    InvariantResult {
-        name: format!("{kind}_src_kind"),
-        description: format!("{kind} edge src kind in {:?}", allowed),
-        coverage,
-        violation_rate,
-        violations,
-    }
+    InvariantResult { name: format!("{kind}_src_kind"), description: format!("{kind} edge src kind in {:?}", allowed), coverage, violation_rate, violations }
 }
 
 fn edge_kind_dst_rule(graph: &CodeGraph, kind: &str, allowed: &[&str]) -> InvariantResult {
-    let id_to_kind: HashMap<u32, &str> =
-        graph.nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
+    let id_to_kind: HashMap<u32, &str> = graph.nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
     let mut total = 0usize;
     let mut violations = Vec::new();
     for e in &graph.edges {
@@ -323,13 +296,7 @@ fn edge_kind_dst_rule(graph: &CodeGraph, kind: &str, allowed: &[&str]) -> Invari
     let violation_rate = if total == 0 { 0.0 } else { violated as f64 / total as f64 };
     violations.sort();
     violations.dedup();
-    InvariantResult {
-        name: format!("{kind}_dst_kind"),
-        description: format!("{kind} edge dst kind in {:?}", allowed),
-        coverage,
-        violation_rate,
-        violations,
-    }
+    InvariantResult { name: format!("{kind}_dst_kind"), description: format!("{kind} edge dst kind in {:?}", allowed), coverage, violation_rate, violations }
 }
 
 fn mine_edge_kind_constraints(graph: &CodeGraph) -> Vec<InvariantResult> {
@@ -344,11 +311,7 @@ fn mine_edge_kind_constraints(graph: &CodeGraph) -> Vec<InvariantResult> {
         ("CONTAINS", true, &["MODULE", "CRATE"][..]),
     ];
     for (kind, check_src, allowed) in candidates {
-        let inv = if check_src {
-            edge_kind_src_rule(graph, kind, allowed)
-        } else {
-            edge_kind_dst_rule(graph, kind, allowed)
-        };
+        let inv = if check_src { edge_kind_src_rule(graph, kind, allowed) } else { edge_kind_dst_rule(graph, kind, allowed) };
         out.push(inv);
     }
     out

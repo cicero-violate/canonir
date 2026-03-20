@@ -84,14 +84,7 @@ pub fn edge_kind_histogram_gpu(csr: &Csr, edge_kind: &[u8], kind_count: usize) -
     assert_eq!(edge_kind.len(), csr.edge_count());
     let mut out = vec![0u32; csr.vertex_count() * kind_count];
     unsafe {
-        gpu_edge_kind_histogram(
-            csr.row_ptr.as_ptr(),
-            edge_kind.as_ptr(),
-            csr.vertex_count() as i32,
-            csr.edge_count() as i32,
-            kind_count as i32,
-            out.as_mut_ptr(),
-        );
+        gpu_edge_kind_histogram(csr.row_ptr.as_ptr(), edge_kind.as_ptr(), csr.vertex_count() as i32, csr.edge_count() as i32, kind_count as i32, out.as_mut_ptr());
     }
     out
 }

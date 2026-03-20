@@ -1,4 +1,4 @@
-use canon_macros::{canon_event_struct, canon_event_enum};
+use canon_macros::{canon_event_enum, canon_event_struct};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 

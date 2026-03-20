@@ -1,7 +1,7 @@
 use crate::analysis::callgraph::find_callgraph_roots;
-use canon_graph::graph::graph_types::{CodeGraphEdge, CodeGraphNode};
 use crate::semantics::semantic_features::NodeFeatureVector;
 use anyhow::Result;
+use canon_graph::graph::graph_types::{CodeGraphEdge, CodeGraphNode};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
@@ -30,11 +30,7 @@ struct SemanticClusterReport {
     nodes: Vec<u32>,
 }
 
-pub fn cluster_dbscan_like(
-    feats: &[NodeFeatureVector],
-    eps: f64,
-    min_pts: usize,
-) -> ClusteringResult {
+pub fn cluster_dbscan_like(feats: &[NodeFeatureVector], eps: f64, min_pts: usize) -> ClusteringResult {
     let mut by_kind: HashMap<u8, Vec<&NodeFeatureVector>> = HashMap::new();
     for f in feats {
         by_kind.entry(f.node_kind).or_default().push(f);
@@ -78,21 +74,12 @@ pub fn cluster_dbscan_like(
                 cluster_nodes.push(nid);
             }
             cluster_nodes.sort_unstable();
-            clusters.push(SemanticCluster {
-                cluster_id,
-                node_kind: kind,
-                nodes: cluster_nodes,
-            });
+            clusters.push(SemanticCluster { cluster_id, node_kind: kind, nodes: cluster_nodes });
         }
     }
 
     outliers.sort_unstable();
-    clusters.sort_by(|a, b| {
-        a.node_kind
-            .cmp(&b.node_kind)
-            .then_with(|| a.nodes.len().cmp(&b.nodes.len()))
-            .then_with(|| a.nodes.first().cmp(&b.nodes.first()))
-    });
+    clusters.sort_by(|a, b| a.node_kind.cmp(&b.node_kind).then_with(|| a.nodes.len().cmp(&b.nodes.len())).then_with(|| a.nodes.first().cmp(&b.nodes.first())));
     for (idx, cluster) in clusters.iter_mut().enumerate() {
         cluster.cluster_id = idx as u64;
     }
@@ -100,11 +87,7 @@ pub fn cluster_dbscan_like(
     ClusteringResult { clusters, outliers }
 }
 
-fn region_query(
-    f: &NodeFeatureVector,
-    items: &[&NodeFeatureVector],
-    eps: f64,
-) -> Vec<u32> {
+fn region_query(f: &NodeFeatureVector, items: &[&NodeFeatureVector], eps: f64) -> Vec<u32> {
     let mut out = Vec::new();
     for other in items {
         if f.node_id == other.node_id {
@@ -130,13 +113,7 @@ fn distance(a: &NodeFeatureVector, b: &NodeFeatureVector) -> f64 {
     d
 }
 
-pub fn write_semantic_clusters(
-    _graph_dir: &Path,
-    reports_dir: &Path,
-    nodes: &[CodeGraphNode],
-    edges: &[CodeGraphEdge],
-    callgraph: &[(u32, u32)],
-) -> Result<()> {
+pub fn write_semantic_clusters(_graph_dir: &Path, reports_dir: &Path, nodes: &[CodeGraphNode], edges: &[CodeGraphEdge], callgraph: &[(u32, u32)]) -> Result<()> {
     fs::create_dir_all(reports_dir)?;
     let mut fan_in: HashMap<u32, u32> = HashMap::new();
     let mut fan_out: HashMap<u32, u32> = HashMap::new();
@@ -171,9 +148,7 @@ pub fn write_semantic_clusters(
             let mut best = 0;
             let mut best_dist = f64::MAX;
             for (c_idx, c) in centroids.iter().enumerate() {
-                let dist = (feat[0] - c[0]).powi(2)
-                    + (feat[1] - c[1]).powi(2)
-                    + (feat[2] - c[2]).powi(2);
+                let dist = (feat[0] - c[0]).powi(2) + (feat[1] - c[1]).powi(2) + (feat[2] - c[2]).powi(2);
                 if dist < best_dist {
                     best_dist = dist;
                     best = c_idx;
@@ -205,21 +180,10 @@ pub fn write_semantic_clusters(
             }
         }
         let label = label_cluster(centroid[0], centroid[1], centroid[2]);
-        clusters.push(SemanticClusterReport {
-            cluster_id: idx as u32,
-            label,
-            size: nodes_in.len(),
-            avg_fan_in: centroid[0],
-            avg_fan_out: centroid[1],
-            avg_call_depth: centroid[2],
-            nodes: nodes_in,
-        });
+        clusters.push(SemanticClusterReport { cluster_id: idx as u32, label, size: nodes_in.len(), avg_fan_in: centroid[0], avg_fan_out: centroid[1], avg_call_depth: centroid[2], nodes: nodes_in });
     }
 
-    fs::write(
-        reports_dir.join("semantic_clusters.json"),
-        serde_json::to_string_pretty(&clusters)?,
-    )?;
+    fs::write(reports_dir.join("semantic_clusters.json"), serde_json::to_string_pretty(&clusters)?)?;
 
     write_cluster_graph_bin(&reports_dir.join("cluster_graph.bin"), &clusters, edges)?;
 
@@ -265,11 +229,7 @@ fn label_cluster(fan_in: f64, fan_out: f64, call_depth: f64) -> String {
     "io".to_string()
 }
 
-fn write_cluster_graph_bin(
-    path: &Path,
-    clusters: &[SemanticClusterReport],
-    edges: &[CodeGraphEdge],
-) -> Result<()> {
+fn write_cluster_graph_bin(path: &Path, clusters: &[SemanticClusterReport], edges: &[CodeGraphEdge]) -> Result<()> {
     const MAGIC: &[u8; 4] = b"CCGB";
     const VERSION: u32 = 1;
     let mut node_to_cluster: HashMap<u32, u32> = HashMap::new();
@@ -280,8 +240,12 @@ fn write_cluster_graph_bin(
     }
     let mut edge_counts: BTreeMap<(u32, u32), u32> = BTreeMap::new();
     for e in edges {
-        let Some(src_c) = node_to_cluster.get(&e.src).copied() else { continue; };
-        let Some(dst_c) = node_to_cluster.get(&e.dst).copied() else { continue; };
+        let Some(src_c) = node_to_cluster.get(&e.src).copied() else {
+            continue;
+        };
+        let Some(dst_c) = node_to_cluster.get(&e.dst).copied() else {
+            continue;
+        };
         if src_c == dst_c {
             continue;
         }

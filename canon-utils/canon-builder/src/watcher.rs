@@ -36,11 +36,7 @@ pub fn crate_for_path(path: &Path) -> Option<String> {
         if cur.join("Cargo.toml").is_file() {
             let text = std::fs::read_to_string(cur.join("Cargo.toml")).ok()?;
             let value: toml::Value = toml::from_str(&text).ok()?;
-            return value
-                .get("package")
-                .and_then(|p| p.get("name"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+            return value.get("package").and_then(|p| p.get("name")).and_then(|v| v.as_str()).map(|s| s.to_string());
         }
         if !(cur.pop()) {
             break;

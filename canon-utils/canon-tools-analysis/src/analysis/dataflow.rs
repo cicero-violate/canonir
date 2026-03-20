@@ -1,14 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
-use canon_graph::graph::graph_types::{CodeGraphEdge, CodeGraphNode};
 use crate::DataflowFanoutEntry;
+use canon_graph::graph::graph_types::{CodeGraphEdge, CodeGraphNode};
 
 pub fn build_dataflow_fanout(
-    nodes: &[CodeGraphNode],
-    node_map: &HashMap<u32, CodeGraphNode>,
-    file_map: &HashMap<u32, String>,
-    edges: &[CodeGraphEdge],
-    block_owner: &HashMap<u32, u32>,
+    nodes: &[CodeGraphNode], node_map: &HashMap<u32, CodeGraphNode>, file_map: &HashMap<u32, String>, edges: &[CodeGraphEdge], block_owner: &HashMap<u32, u32>,
 ) -> Vec<DataflowFanoutEntry> {
     let mut out = Vec::new();
     let mut fn_nodes: Vec<u32> = Vec::new();
@@ -32,10 +28,7 @@ pub fn build_dataflow_fanout(
     for fid in fn_nodes {
         let node = node_map.get(&fid);
         let symbol = node.map(|n| n.symbol.clone()).unwrap_or_default();
-        let file = node
-            .and_then(|n| n.file_id)
-            .and_then(|id| file_map.get(&id).cloned())
-            .unwrap_or_default();
+        let file = node.and_then(|n| n.file_id).and_then(|id| file_map.get(&id).cloned()).unwrap_or_default();
         let line = node.and_then(|n| n.line);
         let fn_edges = edges_by_fn.get(&fid).cloned().unwrap_or_default();
         let outgoing_edges = fn_edges.len();

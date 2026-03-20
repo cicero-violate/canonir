@@ -1,7 +1,7 @@
 use crate::analysis::callgraph::find_callgraph_roots;
-use canon_graph::graph::graph_types::{CodeGraphEdge, CodeGraphNode};
 use crate::semantics::semantic_features::NodeFeatureVector;
 use anyhow::Result;
+use canon_graph::graph::graph_types::{CodeGraphEdge, CodeGraphNode};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -59,13 +59,7 @@ struct SemanticSignatureReport {
     mutation_rate: f64,
 }
 
-pub fn write_semantic_signatures(
-    _graph_dir: &Path,
-    reports_dir: &Path,
-    nodes: &[CodeGraphNode],
-    edges: &[CodeGraphEdge],
-    callgraph: &[(u32, u32)],
-) -> Result<()> {
+pub fn write_semantic_signatures(_graph_dir: &Path, reports_dir: &Path, nodes: &[CodeGraphNode], edges: &[CodeGraphEdge], callgraph: &[(u32, u32)]) -> Result<()> {
     fs::create_dir_all(reports_dir)?;
     let mut fan_in: HashMap<u32, u32> = HashMap::new();
     let mut fan_out: HashMap<u32, u32> = HashMap::new();
@@ -86,10 +80,7 @@ pub fn write_semantic_signatures(
             mutation_rate: 0.0,
         });
     }
-    fs::write(
-        reports_dir.join("semantic_signatures.json"),
-        serde_json::to_string_pretty(&out)?,
-    )?;
+    fs::write(reports_dir.join("semantic_signatures.json"), serde_json::to_string_pretty(&out)?)?;
     Ok(())
 }
 

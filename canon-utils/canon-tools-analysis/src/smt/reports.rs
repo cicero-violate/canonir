@@ -1,9 +1,9 @@
 use anyhow::{anyhow, Result};
+use canon_types::ReportLayout;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-use canon_types::ReportLayout;
 
 #[derive(Debug, Clone)]
 struct NodeRow {
@@ -80,10 +80,7 @@ struct DataflowFanoutEntry {
 pub fn generate_reports(output_dir: &Path, out_dir: &Path) -> Result<()> {
     let layout = ReportLayout::from_crate_root(out_dir.to_path_buf());
     let graph_dir = output_dir;
-    let graphs_dir = output_dir
-        .parent()
-        .map(|p| p.join("graphs"))
-        .unwrap_or_else(|| layout.graphs_dir());
+    let graphs_dir = output_dir.parent().map(|p| p.join("graphs")).unwrap_or_else(|| layout.graphs_dir());
     let analysis_dir = layout.analysis_dir();
     let metrics_dir = layout.metrics_dir();
     fs::create_dir_all(&analysis_dir)?;
@@ -94,8 +91,7 @@ pub fn generate_reports(output_dir: &Path, out_dir: &Path) -> Result<()> {
     let cfg = read_cfg_csv(graphs_dir.join("cfg.csv"))?;
     let callgraph = read_callgraph_csv(graphs_dir.join("callgraph.csv"))?;
     let files = read_files_txt(graph_dir.join("files.txt"))?;
-    let _symbols_json = fs::read_to_string(graph_dir.join("symbols.json"))
-        .map_err(|e| anyhow!("failed to read symbols.json: {e}"))?;
+    let _symbols_json = fs::read_to_string(graph_dir.join("symbols.json")).map_err(|e| anyhow!("failed to read symbols.json: {e}"))?;
 
     let node_map: HashMap<u32, NodeRow> = nodes.iter().map(|n| (n.id, n.clone())).collect();
 
@@ -110,53 +106,22 @@ pub fn generate_reports(output_dir: &Path, out_dir: &Path) -> Result<()> {
     let block_owner = build_block_owner(&nodes, &edges);
     let block_effect_sig = build_block_effect_signatures(&edges, &node_map);
 
-    let branch_report = build_branch_complexity(
-        &nodes,
-        &node_map,
-        &file_map,
-        &cfg_out,
-        &cfg_in,
-        &block_effect_sig,
-    );
+    let branch_report = build_branch_complexity(&nodes, &node_map, &file_map, &cfg_out, &cfg_in, &block_effect_sig);
     write_report(&metrics_dir.join("branch_complexity_report.json"), &branch_report)?;
 
     let callgraph_report = build_callgraph_centrality(&callgraph, &node_map, &file_map);
     write_report(&metrics_dir.join("callgraph_centrality_report.json"), &callgraph_report)?;
 
-    let dead_report = build_dead_code(
-        &nodes,
-        &node_map,
-        &file_map,
-        &edges,
-        &cfg_out,
-        &cfg_in,
-        &callgraph,
-        &block_owner,
-    );
+    let dead_report = build_dead_code(&nodes, &node_map, &file_map, &edges, &cfg_out, &cfg_in, &callgraph, &block_owner);
     write_report(&analysis_dir.join("dead_code_report.json"), &dead_report)?;
 
     let cycle_report = build_dependency_cycles(&callgraph, &node_map, &file_map);
     write_report(&analysis_dir.join("dependency_cycle_report.json"), &cycle_report)?;
 
-    let structural_report = build_structural_hotspots(
-        &nodes,
-        &node_map,
-        &file_map,
-        &callgraph,
-        &cfg_out,
-        &cfg_in,
-        &block_owner,
-        &block_effect_sig,
-    );
+    let structural_report = build_structural_hotspots(&nodes, &node_map, &file_map, &callgraph, &cfg_out, &cfg_in, &block_owner, &block_effect_sig);
     write_report(&metrics_dir.join("structural_hotspots_report.json"), &structural_report)?;
 
-    let dataflow_report = build_dataflow_fanout(
-        &nodes,
-        &node_map,
-        &file_map,
-        &edges,
-        &block_owner,
-    );
+    let dataflow_report = build_dataflow_fanout(&nodes, &node_map, &file_map, &edges, &block_owner);
     write_report(&metrics_dir.join("dataflow_fanout_report.json"), &dataflow_report)?;
 
     Ok(())
@@ -345,12 +310,7 @@ fn trace_path(start: u32, cfg_out: &HashMap<u32, Vec<u32>>, cfg_in: &HashMap<u32
 }
 
 fn build_branch_complexity(
-    nodes: &[NodeRow],
-    node_map: &HashMap<u32, NodeRow>,
-    file_map: &HashMap<u32, String>,
-    cfg_out: &HashMap<u32, Vec<u32>>,
-    cfg_in: &HashMap<u32, usize>,
-    block_effect_sig: &HashMap<u32, Vec<String>>,
+    nodes: &[NodeRow], node_map: &HashMap<u32, NodeRow>, file_map: &HashMap<u32, String>, cfg_out: &HashMap<u32, Vec<u32>>, cfg_in: &HashMap<u32, usize>, block_effect_sig: &HashMap<u32, Vec<String>>,
 ) -> Vec<BranchComplexityEntry> {
     let mut out = Vec::new();
     for node in nodes {
@@ -361,12 +321,7 @@ fn build_branch_complexity(
         if outs < 2 {
             continue;
         }
-        let branch_paths: Vec<Vec<u32>> = cfg_out
-            .get(&node.id)
-            .unwrap_or(&Vec::new())
-            .iter()
-            .map(|dst| trace_path(*dst, cfg_out, cfg_in))
-            .collect();
+        let branch_paths: Vec<Vec<u32>> = cfg_out.get(&node.id).unwrap_or(&Vec::new()).iter().map(|dst| trace_path(*dst, cfg_out, cfg_in)).collect();
         let mut dup_blocks = 0usize;
         let mut seq_counts: BTreeMap<Vec<u32>, usize> = BTreeMap::new();
         for p in &branch_paths {
@@ -392,24 +347,13 @@ fn build_branch_complexity(
         let file = node.file_id.and_then(|id| file_map.get(&id).cloned()).unwrap_or_default();
         let score = outs * dup_blocks;
         let symbol = node_map.get(&node.id).map(|n| n.symbol.clone()).unwrap_or_default();
-        out.push(BranchComplexityEntry {
-            symbol,
-            file,
-            line: node.line,
-            branch_count: outs,
-            duplicate_block_count: dup_blocks,
-            score,
-        });
+        out.push(BranchComplexityEntry { symbol, file, line: node.line, branch_count: outs, duplicate_block_count: dup_blocks, score });
     }
     out.sort_by(|a, b| b.score.cmp(&a.score));
     out
 }
 
-fn build_callgraph_centrality(
-    callgraph: &[(u32, u32)],
-    node_map: &HashMap<u32, NodeRow>,
-    file_map: &HashMap<u32, String>,
-) -> Vec<CallgraphCentralityEntry> {
+fn build_callgraph_centrality(callgraph: &[(u32, u32)], node_map: &HashMap<u32, NodeRow>, file_map: &HashMap<u32, String>) -> Vec<CallgraphCentralityEntry> {
     let mut callers: HashMap<u32, BTreeSet<u32>> = HashMap::new();
     let mut callees: HashMap<u32, BTreeSet<u32>> = HashMap::new();
     for (s, d) in callgraph {
@@ -425,10 +369,7 @@ fn build_callgraph_centrality(
     for id in node_ids {
         let node = node_map.get(&id);
         let symbol = node.map(|n| n.symbol.clone()).unwrap_or_default();
-        let file = node
-            .and_then(|n| n.file_id)
-            .and_then(|id| file_map.get(&id).cloned())
-            .unwrap_or_default();
+        let file = node.and_then(|n| n.file_id).and_then(|id| file_map.get(&id).cloned()).unwrap_or_default();
         let caller_count = callers.get(&id).map(|s| s.len()).unwrap_or(0);
         let callee_count = callees.get(&id).map(|s| s.len()).unwrap_or(0);
         let centrality_score = caller_count + callee_count;
@@ -439,13 +380,7 @@ fn build_callgraph_centrality(
 }
 
 fn build_dead_code(
-    nodes: &[NodeRow],
-    node_map: &HashMap<u32, NodeRow>,
-    file_map: &HashMap<u32, String>,
-    edges: &[EdgeRow],
-    cfg_out: &HashMap<u32, Vec<u32>>,
-    cfg_in: &HashMap<u32, usize>,
-    callgraph: &[(u32, u32)],
+    nodes: &[NodeRow], node_map: &HashMap<u32, NodeRow>, file_map: &HashMap<u32, String>, edges: &[EdgeRow], cfg_out: &HashMap<u32, Vec<u32>>, cfg_in: &HashMap<u32, usize>, callgraph: &[(u32, u32)],
     block_owner: &HashMap<u32, u32>,
 ) -> Vec<DeadCodeEntry> {
     let mut fn_nodes: HashSet<u32> = HashSet::new();
@@ -496,9 +431,7 @@ fn build_dead_code(
         if e.kind != "HAS_BLOCK" {
             continue;
         }
-        if node_map.get(&e.src).map(|n| n.kind.as_str()) == Some("FUNCTION")
-            || node_map.get(&e.src).map(|n| n.kind.as_str()) == Some("METHOD")
-        {
+        if node_map.get(&e.src).map(|n| n.kind.as_str()) == Some("FUNCTION") || node_map.get(&e.src).map(|n| n.kind.as_str()) == Some("METHOD") {
             if node_map.get(&e.dst).map(|n| n.kind.as_str()) == Some("BASIC_BLOCK") {
                 fn_to_blocks.entry(e.src).or_default().push(e.dst);
             }
@@ -511,11 +444,7 @@ fn build_dead_code(
         if blocks.is_empty() {
             continue;
         }
-        let entries: Vec<u32> = blocks
-            .iter()
-            .copied()
-            .filter(|b| cfg_in.get(b).copied().unwrap_or(0) == 0)
-            .collect();
+        let entries: Vec<u32> = blocks.iter().copied().filter(|b| cfg_in.get(b).copied().unwrap_or(0) == 0).collect();
         let mut queue: VecDeque<u32> = if entries.is_empty() { VecDeque::from(vec![blocks[0]]) } else { VecDeque::from(entries) };
         let mut seen: HashSet<u32> = HashSet::new();
         while let Some(b) = queue.pop_front() {
@@ -538,10 +467,7 @@ fn build_dead_code(
         if !reachable_fns.contains(&f) {
             let node = node_map.get(&f);
             let symbol = node.map(|n| n.symbol.clone()).unwrap_or_default();
-            let file = node
-                .and_then(|n| n.file_id)
-                .and_then(|id| file_map.get(&id).cloned())
-                .unwrap_or_default();
+            let file = node.and_then(|n| n.file_id).and_then(|id| file_map.get(&id).cloned()).unwrap_or_default();
             let line = node.and_then(|n| n.line);
             out.push(DeadCodeEntry { symbol, file, line, reason: "unreachable function".to_string() });
         }
@@ -550,10 +476,7 @@ fn build_dead_code(
         if !reachable_blocks.contains(&b) {
             let node = node_map.get(&b);
             let symbol = node.map(|n| n.symbol.clone()).unwrap_or_default();
-            let file = node
-                .and_then(|n| n.file_id)
-                .and_then(|id| file_map.get(&id).cloned())
-                .unwrap_or_default();
+            let file = node.and_then(|n| n.file_id).and_then(|id| file_map.get(&id).cloned()).unwrap_or_default();
             let line = node.and_then(|n| n.line);
             out.push(DeadCodeEntry { symbol, file, line, reason: "unreachable basic block".to_string() });
         }
@@ -561,11 +484,7 @@ fn build_dead_code(
     out
 }
 
-fn build_dependency_cycles(
-    callgraph: &[(u32, u32)],
-    node_map: &HashMap<u32, NodeRow>,
-    file_map: &HashMap<u32, String>,
-) -> Vec<DependencyCycleEntry> {
+fn build_dependency_cycles(callgraph: &[(u32, u32)], node_map: &HashMap<u32, NodeRow>, file_map: &HashMap<u32, String>) -> Vec<DependencyCycleEntry> {
     let mut adj: HashMap<u32, Vec<u32>> = HashMap::new();
     let mut nodes: HashSet<u32> = HashSet::new();
     for (s, d) in callgraph {
@@ -583,13 +502,7 @@ fn build_dependency_cycles(
     let mut sccs: Vec<Vec<u32>> = Vec::new();
 
     fn strongconnect(
-        v: u32,
-        index: &mut usize,
-        stack: &mut Vec<u32>,
-        onstack: &mut HashSet<u32>,
-        indices: &mut HashMap<u32, usize>,
-        lowlink: &mut HashMap<u32, usize>,
-        adj: &HashMap<u32, Vec<u32>>,
+        v: u32, index: &mut usize, stack: &mut Vec<u32>, onstack: &mut HashSet<u32>, indices: &mut HashMap<u32, usize>, lowlink: &mut HashMap<u32, usize>, adj: &HashMap<u32, Vec<u32>>,
         sccs: &mut Vec<Vec<u32>>,
     ) {
         indices.insert(v, *index);
@@ -664,25 +577,14 @@ fn build_dependency_cycles(
         }
         node_syms.sort();
         cycle_id += 1;
-        out.push(DependencyCycleEntry {
-            cycle_id,
-            nodes: node_syms,
-            files: file_set.into_iter().collect(),
-            cycle_length: scc.len(),
-        });
+        out.push(DependencyCycleEntry { cycle_id, nodes: node_syms, files: file_set.into_iter().collect(), cycle_length: scc.len() });
     }
     out
 }
 
 fn build_structural_hotspots(
-    nodes: &[NodeRow],
-    node_map: &HashMap<u32, NodeRow>,
-    file_map: &HashMap<u32, String>,
-    callgraph: &[(u32, u32)],
-    cfg_out: &HashMap<u32, Vec<u32>>,
-    cfg_in: &HashMap<u32, usize>,
-    block_owner: &HashMap<u32, u32>,
-    block_effect_sig: &HashMap<u32, Vec<String>>,
+    nodes: &[NodeRow], node_map: &HashMap<u32, NodeRow>, file_map: &HashMap<u32, String>, callgraph: &[(u32, u32)], cfg_out: &HashMap<u32, Vec<u32>>, cfg_in: &HashMap<u32, usize>,
+    block_owner: &HashMap<u32, u32>, block_effect_sig: &HashMap<u32, Vec<String>>,
 ) -> Vec<StructuralHotspotEntry> {
     let mut callers: HashMap<u32, BTreeSet<u32>> = HashMap::new();
     for (s, d) in callgraph {
@@ -693,10 +595,7 @@ fn build_structural_hotspots(
     let mut per_fn: HashMap<u32, (usize, usize)> = HashMap::new(); // fn -> (branch_count, dup_blocks)
     for entry in branch_entries.drain(..) {
         // branch symbol is block; map to function owner
-        let block_id = node_map
-            .iter()
-            .find(|(_, n)| n.symbol == entry.symbol && n.line == entry.line)
-            .map(|(id, _)| *id);
+        let block_id = node_map.iter().find(|(_, n)| n.symbol == entry.symbol && n.line == entry.line).map(|(id, _)| *id);
         if let Some(bid) = block_id {
             if let Some(fid) = block_owner.get(&bid) {
                 let e = per_fn.entry(*fid).or_insert((0, 0));
@@ -710,37 +609,17 @@ fn build_structural_hotspots(
     for (fid, (branch_count, dup_blocks)) in per_fn {
         let node = node_map.get(&fid);
         let symbol = node.map(|n| n.symbol.clone()).unwrap_or_default();
-        let file = node
-            .and_then(|n| n.file_id)
-            .and_then(|id| file_map.get(&id).cloned())
-            .unwrap_or_default();
+        let file = node.and_then(|n| n.file_id).and_then(|id| file_map.get(&id).cloned()).unwrap_or_default();
         let line = node.and_then(|n| n.line);
-        let caller_syms: Vec<String> = callers
-            .get(&fid)
-            .map(|s| s.iter().filter_map(|id| node_map.get(id).map(|n| n.symbol.clone())).collect())
-            .unwrap_or_else(Vec::new);
+        let caller_syms: Vec<String> = callers.get(&fid).map(|s| s.iter().filter_map(|id| node_map.get(id).map(|n| n.symbol.clone())).collect()).unwrap_or_else(Vec::new);
         let score = branch_count * dup_blocks.max(1) * caller_syms.len().max(1);
-        out.push(StructuralHotspotEntry {
-            symbol,
-            file,
-            line,
-            branch_count,
-            duplicate_blocks: dup_blocks,
-            callers: caller_syms,
-            score,
-        });
+        out.push(StructuralHotspotEntry { symbol, file, line, branch_count, duplicate_blocks: dup_blocks, callers: caller_syms, score });
     }
     out.sort_by(|a, b| b.score.cmp(&a.score));
     out
 }
 
-fn build_dataflow_fanout(
-    nodes: &[NodeRow],
-    node_map: &HashMap<u32, NodeRow>,
-    file_map: &HashMap<u32, String>,
-    edges: &[EdgeRow],
-    block_owner: &HashMap<u32, u32>,
-) -> Vec<DataflowFanoutEntry> {
+fn build_dataflow_fanout(nodes: &[NodeRow], node_map: &HashMap<u32, NodeRow>, file_map: &HashMap<u32, String>, edges: &[EdgeRow], block_owner: &HashMap<u32, u32>) -> Vec<DataflowFanoutEntry> {
     let mut out = Vec::new();
     let mut fn_nodes: Vec<u32> = Vec::new();
     for n in nodes {
@@ -763,10 +642,7 @@ fn build_dataflow_fanout(
     for fid in fn_nodes {
         let node = node_map.get(&fid);
         let symbol = node.map(|n| n.symbol.clone()).unwrap_or_default();
-        let file = node
-            .and_then(|n| n.file_id)
-            .and_then(|id| file_map.get(&id).cloned())
-            .unwrap_or_default();
+        let file = node.and_then(|n| n.file_id).and_then(|id| file_map.get(&id).cloned()).unwrap_or_default();
         let line = node.and_then(|n| n.line);
         let fn_edges = edges_by_fn.get(&fid).cloned().unwrap_or_default();
         let outgoing_edges = fn_edges.len();

@@ -37,16 +37,11 @@ fn parse_args() -> anyhow::Result<Args> {
 }
 
 fn print_help() {
-    eprintln!(
-        "Usage: read_tlog --tlog <path> [--kind <kind>] [--trace-id <id>] [--session-id <id>] [--tick <n>] [--check-event-id]"
-    );
+    eprintln!("Usage: read_tlog --tlog <path> [--kind <kind>] [--trace-id <id>] [--session-id <id>] [--tick <n>] [--check-event-id]");
 }
 
 fn event_trace_id(payload: &serde_json::Value) -> Option<&str> {
-    payload
-        .get("trace_id")
-        .and_then(|v| v.as_str())
-        .or_else(|| payload.get("context").and_then(|v| v.get("trace_id")).and_then(|v| v.as_str()))
+    payload.get("trace_id").and_then(|v| v.as_str()).or_else(|| payload.get("context").and_then(|v| v.get("trace_id")).and_then(|v| v.as_str()))
 }
 
 fn event_tick(payload: &serde_json::Value) -> Option<u64> {
@@ -54,22 +49,16 @@ fn event_tick(payload: &serde_json::Value) -> Option<u64> {
 }
 
 fn event_runtime_session(payload: &serde_json::Value) -> Option<String> {
-    payload
-        .get("session_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+    payload.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string())
 }
 
 fn main() -> anyhow::Result<()> {
     let args = parse_args()?;
-    let tlog = args
-        .tlog
-        .ok_or_else(|| anyhow::anyhow!("missing --tlog"))?;
+    let tlog = args.tlog.ok_or_else(|| anyhow::anyhow!("missing --tlog"))?;
     let events = read_any_events_from_path(&tlog)?;
 
     let mut current_session: Option<String> = None;
-    let mut last_event_by_session: std::collections::HashMap<String, u64> =
-        std::collections::HashMap::new();
+    let mut last_event_by_session: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
 
     for event in events {
         let AnyEvent::Canon(canon) = event else {
@@ -104,14 +93,10 @@ fn main() -> anyhow::Result<()> {
         }
 
         if args.check_event_id {
-            if let (Some(session), Some(event_id)) = (session_for_event.as_deref(), canon.event_id)
-            {
+            if let (Some(session), Some(event_id)) = (session_for_event.as_deref(), canon.event_id) {
                 if let Some(last) = last_event_by_session.get(session) {
                     if event_id <= *last {
-                        eprintln!(
-                            "event_id regression for session {}: current={} previous={}",
-                            session, event_id, last
-                        );
+                        eprintln!("event_id regression for session {}: current={} previous={}", session, event_id, last);
                     }
                 }
                 last_event_by_session.insert(session.to_string(), event_id);

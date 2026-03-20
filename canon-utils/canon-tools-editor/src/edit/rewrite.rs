@@ -207,10 +207,7 @@ fn use_tree_group_prefix(tree: &mut syn::UseTree) -> Option<(Vec<String>, &mut s
     }
 }
 
-fn build_use_group_tree(
-    prefix: &[String],
-    items: syn::punctuated::Punctuated<syn::UseTree, syn::token::Comma>,
-) -> syn::UseTree {
+fn build_use_group_tree(prefix: &[String], items: syn::punctuated::Punctuated<syn::UseTree, syn::token::Comma>) -> syn::UseTree {
     let group = syn::UseGroup { brace_token: Default::default(), items };
     let mut tree = syn::UseTree::Group(group);
     for seg in prefix.iter().rev() {

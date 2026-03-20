@@ -4,8 +4,8 @@ use algorithms::graph::csr::Csr;
 #[cfg(feature = "cuda")]
 use algorithms::graph::scc_gpu::scc_gpu;
 
-use canon_graph::graph::graph_types::CodeGraphNode;
 use crate::DependencyCycleEntry;
+use canon_graph::graph::graph_types::CodeGraphNode;
 
 pub fn compute_scc(callgraph: &[(u32, u32)]) -> Vec<Vec<u32>> {
     let mut index = 0u32;
@@ -22,13 +22,7 @@ pub fn compute_scc(callgraph: &[(u32, u32)]) -> Vec<Vec<u32>> {
     }
 
     fn strongconnect(
-        v: u32,
-        index: &mut u32,
-        stack: &mut Vec<u32>,
-        indices: &mut HashMap<u32, u32>,
-        lowlink: &mut HashMap<u32, u32>,
-        on_stack: &mut HashSet<u32>,
-        result: &mut Vec<Vec<u32>>,
+        v: u32, index: &mut u32, stack: &mut Vec<u32>, indices: &mut HashMap<u32, u32>, lowlink: &mut HashMap<u32, u32>, on_stack: &mut HashSet<u32>, result: &mut Vec<Vec<u32>>,
         callgraph: &[(u32, u32)],
     ) {
         indices.insert(v, *index);
@@ -70,29 +64,15 @@ pub fn compute_scc(callgraph: &[(u32, u32)]) -> Vec<Vec<u32>> {
 
     for node in nodes {
         if !indices.contains_key(&node) {
-            strongconnect(
-                node,
-                &mut index,
-                &mut stack,
-                &mut indices,
-                &mut lowlink,
-                &mut on_stack,
-                &mut result,
-                callgraph,
-            );
+            strongconnect(node, &mut index, &mut stack, &mut indices, &mut lowlink, &mut on_stack, &mut result, callgraph);
         }
     }
     result
 }
 
-pub fn build_dependency_cycles(
-    callgraph: &[(u32, u32)],
-    node_map: &HashMap<u32, CodeGraphNode>,
-    file_map: &HashMap<u32, String>,
-) -> Vec<DependencyCycleEntry> {
+pub fn build_dependency_cycles(callgraph: &[(u32, u32)], node_map: &HashMap<u32, CodeGraphNode>, file_map: &HashMap<u32, String>) -> Vec<DependencyCycleEntry> {
     let sccs = compute_scc(callgraph);
-    sccs
-        .into_iter()
+    sccs.into_iter()
         .enumerate()
         .filter_map(|(idx, comp)| {
             if comp.len() < 2 {
@@ -114,22 +94,13 @@ pub fn build_dependency_cycles(
             if unique_symbols.len() < 2 {
                 return None;
             }
-            Some(DependencyCycleEntry {
-                cycle_id: idx + 1,
-                nodes,
-                files,
-                cycle_length: comp.len(),
-            })
+            Some(DependencyCycleEntry { cycle_id: idx + 1, nodes, files, cycle_length: comp.len() })
         })
         .collect()
 }
 
 pub fn build_dependency_cycles_gpu(
-    _callgraph: &[(u32, u32)],
-    node_map: &HashMap<u32, CodeGraphNode>,
-    file_map: &HashMap<u32, String>,
-    _cg_csr: &Csr,
-    _cg_local_to_id: &[u32],
+    _callgraph: &[(u32, u32)], node_map: &HashMap<u32, CodeGraphNode>, file_map: &HashMap<u32, String>, _cg_csr: &Csr, _cg_local_to_id: &[u32],
 ) -> Vec<DependencyCycleEntry> {
     #[cfg(not(feature = "cuda"))]
     {
@@ -163,12 +134,7 @@ pub fn build_dependency_cycles_gpu(
                 if unique_symbols.len() < 2 {
                     return None;
                 }
-                Some(DependencyCycleEntry {
-                    cycle_id: idx + 1,
-                    nodes,
-                    files,
-                    cycle_length: comp.len(),
-                })
+                Some(DependencyCycleEntry { cycle_id: idx + 1, nodes, files, cycle_length: comp.len() })
             })
             .collect();
     }

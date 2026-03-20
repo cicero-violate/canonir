@@ -1,9 +1,9 @@
 use anyhow::{anyhow, Result};
 use canon_builder::register_build_capabilities;
-use canon_runtime::EventRuntime;
-use canon_event_store::read_any_events_from_path;
 use canon_event::canon_emit;
 use canon_event::CapabilityRequested;
+use canon_event_store::read_any_events_from_path;
+use canon_runtime::EventRuntime;
 
 fn main() -> Result<()> {
     let tmp_dir = std::env::temp_dir().join(format!("canon-capability-smoke-{}", std::process::id()));
@@ -41,17 +41,9 @@ fn main() -> Result<()> {
     }
 
     if completed == 0 {
-        return Err(anyhow!(
-            "capability_smoke_test failed: completed=0 failed={failed} log={}",
-            tmp_dir.display()
-        ));
+        return Err(anyhow!("capability_smoke_test failed: completed=0 failed={failed} log={}", tmp_dir.display()));
     }
 
-    println!(
-        "capability_smoke_test: PASS (completed={}, failed={}, log={})",
-        completed,
-        failed,
-        tmp_dir.display()
-    );
+    println!("capability_smoke_test: PASS (completed={}, failed={}, log={})", completed, failed, tmp_dir.display());
     Ok(())
 }

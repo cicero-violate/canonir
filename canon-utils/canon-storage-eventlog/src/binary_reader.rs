@@ -38,10 +38,7 @@ pub fn is_binary_magic(bytes: &[u8]) -> bool {
     bytes.len() >= 4 && read_u32(&bytes[0..4]) == MAGIC
 }
 
-pub fn read_binary_events_from_segment_with_start_seq(
-    log_path: &Path,
-    start_seq: u64,
-) -> Result<Vec<TlogEvent>> {
+pub fn read_binary_events_from_segment_with_start_seq(log_path: &Path, start_seq: u64) -> Result<Vec<TlogEvent>> {
     let idx_path = log_path.with_extension("idx");
     let mut start_pos = 0u64;
     if idx_path.exists() {

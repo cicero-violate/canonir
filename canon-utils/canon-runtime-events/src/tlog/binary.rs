@@ -37,17 +37,8 @@ impl BinaryTlogWriter {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .read(true)
-            .open(path)?;
-        Ok(Self {
-            path: path.to_path_buf(),
-            file: Mutex::new(BufWriter::new(file)),
-            seq: AtomicU64::new(0),
-            fsync: false,
-        })
+        let file = OpenOptions::new().create(true).append(true).read(true).open(path)?;
+        Ok(Self { path: path.to_path_buf(), file: Mutex::new(BufWriter::new(file)), seq: AtomicU64::new(0), fsync: false })
     }
 
     pub fn with_fsync(mut self, enabled: bool) -> Self {
@@ -117,15 +108,9 @@ pub struct SegmentConfig {
     pub retain_segments: Option<usize>,
 }
 
-
 impl Default for SegmentConfig {
     fn default() -> Self {
-        Self {
-            max_bytes: 64 * 1024 * 1024,
-            index_stride: 256,
-            time_bucket_ms: 5_000,
-            retain_segments: None,
-        }
+        Self { max_bytes: 64 * 1024 * 1024, index_stride: 256, time_bucket_ms: 5_000, retain_segments: None }
     }
 }
 
@@ -178,13 +163,7 @@ impl BinarySegmentWriter {
         if let Some(keep) = config.retain_segments {
             apply_retention(dir, keep)?;
         }
-        Ok(Self {
-            dir: dir.to_path_buf(),
-            config,
-            seq: AtomicU64::new(next_seq),
-            fsync: false,
-            inner: Mutex::new(files),
-        })
+        Ok(Self { dir: dir.to_path_buf(), config, seq: AtomicU64::new(next_seq), fsync: false, inner: Mutex::new(files) })
     }
 
     pub fn with_fsync(mut self, enabled: bool) -> Self {
@@ -247,30 +226,11 @@ fn open_new_segment_files(dir: &Path, base_seq: u64) -> Result<SegmentFiles> {
     let log_path = dir.join(format!("{}.log", name));
     let idx_path = dir.join(format!("{}.idx", name));
     let time_path = dir.join(format!("{}.time", name));
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .read(true)
-        .open(&log_path)?;
-    let idx = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&idx_path)?;
-    let time = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&time_path)?;
+    let log = OpenOptions::new().create(true).append(true).read(true).open(&log_path)?;
+    let idx = OpenOptions::new().create(true).write(true).truncate(true).open(&idx_path)?;
+    let time = OpenOptions::new().create(true).write(true).truncate(true).open(&time_path)?;
     let size = log.metadata().map(|m| m.len()).unwrap_or(0);
-    Ok(SegmentFiles {
-        log: BufWriter::new(log),
-        idx: BufWriter::new(idx),
-        time: BufWriter::new(time),
-        size,
-        last_time_bucket: None,
-        records: 0,
-    })
+    Ok(SegmentFiles { log: BufWriter::new(log), idx: BufWriter::new(idx), time: BufWriter::new(time), size, last_time_bucket: None, records: 0 })
 }
 
 fn find_latest_segment(dir: &Path) -> Result<Option<u64>> {
@@ -323,11 +283,7 @@ fn apply_retention(dir: &Path, keep_segments: usize) -> Result<()> {
     Ok(())
 }
 
-fn recover_segment(
-    dir: &Path,
-    base_seq: u64,
-    config: &SegmentConfig,
-) -> Result<(SegmentFiles, Option<u64>)> {
+fn recover_segment(dir: &Path, base_seq: u64, config: &SegmentConfig) -> Result<(SegmentFiles, Option<u64>)> {
     let name = format!("{:020}", base_seq);
     let log_path = dir.join(format!("{}.log", name));
     let idx_path = dir.join(format!("{}.idx", name));
@@ -403,15 +359,5 @@ fn recover_segment(
     let idx = OpenOptions::new().create(true).append(true).read(true).open(&idx_path)?;
     let time_f = OpenOptions::new().create(true).append(true).read(true).open(&time_path)?;
 
-    Ok((
-        SegmentFiles {
-            log: BufWriter::new(log),
-            idx: BufWriter::new(idx),
-            time: BufWriter::new(time_f),
-            size,
-            last_time_bucket,
-            records,
-        },
-        last_seq,
-    ))
+    Ok((SegmentFiles { log: BufWriter::new(log), idx: BufWriter::new(idx), time: BufWriter::new(time_f), size, last_time_bucket, records }, last_seq))
 }

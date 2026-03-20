@@ -1,12 +1,10 @@
+pub mod consumer;
 mod gpu;
 mod jsonpath;
-pub mod consumer;
 pub use consumer::QueryConsumer;
 use gpu::{
-    device_synchronize, kernel_combined_escape_carry_newline_count_index,
-    kernel_combined_escape_newline_index, kernel_create_leveled_bitmaps,
-    kernel_create_leveled_bitmaps_carry_index, kernel_create_quote_index,
-    kernel_create_string_index, kernel_find_value, CudaError, DeviceBuffer,
+    device_synchronize, kernel_combined_escape_carry_newline_count_index, kernel_combined_escape_newline_index, kernel_create_leveled_bitmaps, kernel_create_leveled_bitmaps_carry_index,
+    kernel_create_quote_index, kernel_create_string_index, kernel_find_value, CudaError, DeviceBuffer,
 };
 use jsonpath::{JSONPathError, JSONPathParser};
 use std::ffi::c_void;
@@ -114,23 +112,15 @@ impl TlogQueryResult {
     }
 }
 
-pub fn query_file<P: AsRef<Path>>(
-    path: P,
-    queries: &[String],
-    _options: QueryOptions,
-) -> Result<Vec<TlogQueryResult>, QueryError> {
+pub fn query_file<P: AsRef<Path>>(path: P, queries: &[String], _options: QueryOptions) -> Result<Vec<TlogQueryResult>, QueryError> {
     if queries.is_empty() {
-        return Err(QueryError::InvalidQueryInput(
-            "expected at least one query".to_string(),
-        ));
+        return Err(QueryError::InvalidQueryInput("expected at least one query".to_string()));
     }
 
     let file = fs::read(path)?;
     let file_len = file.len() as i64;
     if file_len == 0 {
-        return Err(QueryError::InvalidQueryInput(
-            "input file is empty".to_string(),
-        ));
+        return Err(QueryError::InvalidQueryInput("input file is empty".to_string()));
     }
 
     let mut compiled = Vec::with_capacity(queries.len());
@@ -147,16 +137,11 @@ pub fn query_file<P: AsRef<Path>>(
     }
 
     if max_depth == 0 {
-        return Err(QueryError::InvalidQueryInput(
-            "query produced zero depth".to_string(),
-        ));
+        return Err(QueryError::InvalidQueryInput("query produced zero depth".to_string()));
     }
 
     if max_depth > MAX_NUM_LEVELS {
-        return Err(QueryError::Unsupported(format!(
-            "max depth {} exceeds MAX_NUM_LEVELS {}",
-            max_depth, MAX_NUM_LEVELS
-        )));
+        return Err(QueryError::Unsupported(format!("max depth {} exceeds MAX_NUM_LEVELS {}", max_depth, MAX_NUM_LEVELS)));
     }
 
     let file_arc = Arc::new(file);
@@ -174,18 +159,10 @@ pub fn query_file<P: AsRef<Path>>(
 
     escape_index_device.memset(0)?;
 
-    kernel_combined_escape_carry_newline_count_index(
-        file_device.as_ptr() as *mut i8,
-        file_len,
-        escape_carry_device.as_ptr() as *mut i8,
-        newline_count_device.as_ptr() as *mut i32,
-    )?;
+    kernel_combined_escape_carry_newline_count_index(file_device.as_ptr() as *mut i8, file_len, escape_carry_device.as_ptr() as *mut i8, newline_count_device.as_ptr() as *mut i32)?;
 
     let mut newline_counts = vec![0i32; CARRY_INDEX_SIZE];
-    newline_count_device.copy_to_host(
-        newline_counts.as_mut_ptr() as *mut c_void,
-        newline_counts.len() * 4,
-    )?;
+    newline_count_device.copy_to_host(newline_counts.as_mut_ptr() as *mut c_void, newline_counts.len() * 4)?;
 
     let mut sum = 1i32;
     for value in newline_counts.iter_mut() {
@@ -194,15 +171,10 @@ pub fn query_file<P: AsRef<Path>>(
         sum = sum.saturating_add(current);
     }
 
-    newline_count_device.copy_from_host(
-        newline_counts.as_ptr() as *const c_void,
-        newline_counts.len() * 4,
-    )?;
+    newline_count_device.copy_from_host(newline_counts.as_ptr() as *const c_void, newline_counts.len() * 4)?;
 
     if sum <= 0 {
-        return Err(QueryError::InvalidQueryInput(
-            "failed to compute newline index size".to_string(),
-        ));
+        return Err(QueryError::InvalidQueryInput("failed to compute newline index size".to_string()));
     }
 
     let number_of_lines = sum as usize;
@@ -230,10 +202,7 @@ pub fn query_file<P: AsRef<Path>>(
     )?;
 
     let mut carry_buffer = vec![0u8; CARRY_INDEX_SIZE];
-    escape_carry_device.copy_to_host(
-        carry_buffer.as_mut_ptr() as *mut c_void,
-        carry_buffer.len(),
-    )?;
+    escape_carry_device.copy_to_host(carry_buffer.as_mut_ptr() as *mut c_void, carry_buffer.len())?;
 
     let mut previous_value: u8 = 0;
     for value in carry_buffer.iter_mut() {
@@ -242,16 +211,9 @@ pub fn query_file<P: AsRef<Path>>(
         previous_value = new_value;
     }
 
-    escape_carry_device.copy_from_host(
-        carry_buffer.as_ptr() as *const c_void,
-        carry_buffer.len(),
-    )?;
+    escape_carry_device.copy_from_host(carry_buffer.as_ptr() as *const c_void, carry_buffer.len())?;
 
-    kernel_create_string_index(
-        result_size as i64,
-        string_index_device.as_ptr() as *mut i64,
-        escape_carry_device.as_ptr() as *mut i8,
-    )?;
+    kernel_create_string_index(result_size as i64, string_index_device.as_ptr() as *mut i64, escape_carry_device.as_ptr() as *mut i8)?;
 
     let level_size = ((file_arc.len() as i64 + 64 - 1) / 64) as i64;
     let leveled_bitmaps_size = (level_size as usize) * max_depth;
@@ -261,18 +223,10 @@ pub fn query_file<P: AsRef<Path>>(
 
     let level_carry_device = DeviceBuffer::new(CARRY_INDEX_SIZE)?;
 
-    kernel_create_leveled_bitmaps_carry_index(
-        file_device.as_ptr() as *mut i8,
-        file_len,
-        string_index_device.as_ptr() as *mut i64,
-        level_carry_device.as_ptr() as *mut i8,
-    )?;
+    kernel_create_leveled_bitmaps_carry_index(file_device.as_ptr() as *mut i8, file_len, string_index_device.as_ptr() as *mut i64, level_carry_device.as_ptr() as *mut i8)?;
 
     let mut level_carry = vec![0i8; CARRY_INDEX_SIZE];
-    level_carry_device.copy_to_host(
-        level_carry.as_mut_ptr() as *mut c_void,
-        level_carry.len(),
-    )?;
+    level_carry_device.copy_to_host(level_carry.as_mut_ptr() as *mut c_void, level_carry.len())?;
 
     let mut level: i8 = -1;
     for value in level_carry.iter_mut() {
@@ -281,10 +235,7 @@ pub fn query_file<P: AsRef<Path>>(
         level = level.wrapping_add(current);
     }
 
-    level_carry_device.copy_from_host(
-        level_carry.as_ptr() as *const c_void,
-        level_carry.len(),
-    )?;
+    level_carry_device.copy_from_host(level_carry.as_ptr() as *const c_void, level_carry.len())?;
 
     kernel_create_leveled_bitmaps(
         file_device.as_ptr() as *mut i8,
@@ -326,27 +277,15 @@ pub fn query_file<P: AsRef<Path>>(
         )?;
 
         let mut host_values = vec![0i64; result_len];
-        result_device.copy_to_host(
-            host_values.as_mut_ptr() as *mut c_void,
-            host_values.len() * 8,
-        )?;
+        result_device.copy_to_host(host_values.as_mut_ptr() as *mut c_void, host_values.len() * 8)?;
 
-        outputs.push(TlogQueryResult {
-            file: Arc::clone(&file_arc),
-            number_of_lines,
-            results_per_line,
-            values: host_values,
-        });
+        outputs.push(TlogQueryResult { file: Arc::clone(&file_arc), number_of_lines, results_per_line, values: host_values });
     }
 
     Ok(outputs)
 }
 
-pub fn query_file_single<P: AsRef<Path>>(
-    path: P,
-    query: &str,
-    options: QueryOptions,
-) -> Result<TlogQueryResult, QueryError> {
+pub fn query_file_single<P: AsRef<Path>>(path: P, query: &str, options: QueryOptions) -> Result<TlogQueryResult, QueryError> {
     let results = query_file(path, &[query.to_string()], options)?;
     Ok(results.into_iter().next().unwrap())
 }

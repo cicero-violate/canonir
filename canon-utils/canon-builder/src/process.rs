@@ -13,9 +13,7 @@ pub struct ProcessManager {
 
 impl ProcessManager {
     pub fn new() -> Self {
-        Self {
-            children: HashMap::new(),
-        }
+        Self { children: HashMap::new() }
     }
 
     pub fn spawn(&mut self, cfg: &ProcessConfig, resume: bool) -> Result<()> {

@@ -1,12 +1,12 @@
 use super::helper::{determine_source_root, module_path_from_file, symbol_kind_from_str};
-use crate::query::session::AnalysisSession;
 use crate::edit::oracle::StructuralEditOracle;
 use crate::edit::oracle::StructuralEditOracleApi;
-use crate::symbol_index::SymbolIndex;
 use crate::edit::symbol_id::normalize_symbol_id;
+use crate::query::session::AnalysisSession;
 use crate::structured::{EditOp, FieldMutation, SymbolHandle, SymbolKind};
-use canon_event::canon_emit;
+use crate::symbol_index::SymbolIndex;
 use anyhow::{anyhow, Result};
+use canon_event::canon_emit;
 use proc_macro2::Span;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -50,11 +50,7 @@ impl ProjectEditor {
             registry.asts.insert(file_path.clone(), ast);
             registry.sources.insert(file_path.clone(), content.clone());
             original_sources.insert(file_path.clone(), content);
-            let stored_ast = registry
-                .asts
-                .get(&file_path)
-                .cloned()
-                .unwrap_or_else(|| syn::File { shebang: None, attrs: Vec::new(), items: Vec::new() });
+            let stored_ast = registry.asts.get(&file_path).cloned().unwrap_or_else(|| syn::File { shebang: None, attrs: Vec::new(), items: Vec::new() });
             parsed_files.push((file_path.clone(), stored_ast));
         }
 
@@ -80,9 +76,7 @@ impl ProjectEditor {
                         "file": file,
                         "reason": "no modules found"
                     }),
-                    &std::env::var("CANON_TLOG_PATH")
-                        .map(std::path::PathBuf::from)
-                        .unwrap_or_else(|_| std::path::PathBuf::from("/workspace/ai_sandbox/canon/state/event_log/event.tlog.d"))
+                    &std::env::var("CANON_TLOG_PATH").map(std::path::PathBuf::from).unwrap_or_else(|_| std::path::PathBuf::from("/workspace/ai_sandbox/canon/state/event_log/event.tlog.d"))
                 );
             }
             let module_path = module_path_for_file(&registry.module_files, &source_root, file)?;
@@ -121,9 +115,7 @@ impl ProjectEditor {
     pub fn queue(&mut self, symbol_id: &str, op: EditOp) -> Result<()> {
         let norm = normalize_symbol_id(symbol_id);
         let handle = match &op {
-            EditOp::MutateField { handle, .. }
-            | EditOp::MoveSymbol { handle, .. }
-            | EditOp::DeleteSymbol { handle, .. } => Some(handle),
+            EditOp::MutateField { handle, .. } | EditOp::MoveSymbol { handle, .. } | EditOp::DeleteSymbol { handle, .. } => Some(handle),
         };
         if let Some(handle) = handle {
             if !self.registry.handles.contains_key(&norm) {
@@ -131,9 +123,7 @@ impl ProjectEditor {
             }
         }
         let file = match &op {
-            EditOp::MutateField { handle, .. }
-            | EditOp::MoveSymbol { handle, .. }
-            | EditOp::DeleteSymbol { handle, .. } => handle.file.clone(),
+            EditOp::MutateField { handle, .. } | EditOp::MoveSymbol { handle, .. } | EditOp::DeleteSymbol { handle, .. } => handle.file.clone(),
         };
         self.changesets.entry(file).or_default().push(PendingEdit { symbol_id: norm, op });
         Ok(())
@@ -209,11 +199,7 @@ impl ProjectEditor {
 }
 
 fn parse_file_lossy(content: &str) -> syn::File {
-    syn::parse_file(content).unwrap_or_else(|_| syn::File {
-        shebang: None,
-        attrs: Vec::new(),
-        items: Vec::new(),
-    })
+    syn::parse_file(content).unwrap_or_else(|_| syn::File { shebang: None, attrs: Vec::new(), items: Vec::new() })
 }
 
 pub(crate) fn index_file_symbols(ast: &syn::File, file: &Path, module_path: &str, handles: &mut HashMap<String, SymbolHandle>) {
@@ -381,10 +367,7 @@ fn select_best_module_path(candidates: &[String]) -> String {
     sorted.sort_by(|a, b| {
         let score_a = module_path_score(a);
         let score_b = module_path_score(b);
-        score_b
-            .cmp(&score_a)
-            .then_with(|| b.len().cmp(&a.len()))
-            .then_with(|| a.cmp(b))
+        score_b.cmp(&score_a).then_with(|| b.len().cmp(&a.len())).then_with(|| a.cmp(b))
     });
     sorted[0].clone()
 }

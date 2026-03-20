@@ -151,11 +151,7 @@ impl ServerState {
 
 fn emit(cell: &OnceLock<EventEmitterHandle>, source: &'static str, kind: &'static str, payload: Value) {
     if let Some(e) = cell.get() {
-        e.emit(CanonEvent::Debug(DebugEvent {
-            source: source.to_string(),
-            kind: kind.to_string(),
-            payload,
-        }));
+        e.emit(CanonEvent::Debug(DebugEvent { source: source.to_string(), kind: kind.to_string(), payload }));
     }
 }
 
@@ -300,12 +296,7 @@ impl WsBridge {
 pub fn spawn(addr: SocketAddr, response_timeout_secs: u64, emitter: Arc<OnceLock<EventEmitterHandle>>) -> WsBridge {
     let state = Arc::new(Mutex::new(ServerState::new()));
     let emitter_task = emitter.clone();
-    let bridge = WsBridge {
-        state: state.clone(),
-        next_req_id: Arc::new(AtomicU64::new(1)),
-        next_turn_id: Arc::new(AtomicU64::new(1)),
-        response_timeout_secs,
-    };
+    let bridge = WsBridge { state: state.clone(), next_req_id: Arc::new(AtomicU64::new(1)), next_turn_id: Arc::new(AtomicU64::new(1)), response_timeout_secs };
 
     tokio::spawn(async move {
         loop {

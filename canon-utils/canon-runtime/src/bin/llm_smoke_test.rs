@@ -1,9 +1,9 @@
 use anyhow::{anyhow, Result};
-use canon_llm::config::CapabilityConfig;
-use canon_event_store::read_any_events_from_path;
-use canon_event_store::read_any_events_from_path_with_start_seq;
 use canon_event::canon_emit;
 use canon_event::CapabilityRequested;
+use canon_event_store::read_any_events_from_path;
+use canon_event_store::read_any_events_from_path_with_start_seq;
+use canon_llm::config::CapabilityConfig;
 use std::fs::File;
 use std::io::Read;
 use std::time::{Duration, Instant};
@@ -27,14 +27,7 @@ fn main() -> Result<()> {
     }
 
     let args: Vec<String> = std::env::args().collect();
-    let mut tlog_path = std::env::var("CANON_TLOG_PATH")
-        .ok()
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::path::PathBuf::from(
-                "/workspace/ai_sandbox/canon/state/event_log/event.tlog.d",
-            )
-        });
+    let mut tlog_path = std::env::var("CANON_TLOG_PATH").ok().map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from("/workspace/ai_sandbox/canon/state/event_log/event.tlog.d"));
     let mut i = 1;
     while i < args.len() {
         if args[i] == "--tlog" {
@@ -64,10 +57,7 @@ fn main() -> Result<()> {
         // segments are large.
         tlog_path.clone() // kept as dir; we'll filter in the poll loop below
     } else if tlog_path.extension().and_then(|s| s.to_str()) == Some("log") {
-        tlog_path
-            .parent()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| tlog_path.clone())
+        tlog_path.parent().map(std::path::PathBuf::from).unwrap_or_else(|| tlog_path.clone())
     } else {
         tlog_path.clone()
     };
@@ -77,13 +67,7 @@ fn main() -> Result<()> {
     if let Ok(events) = read_any_events_from_path(&replay_path) {
         for event in events {
             if let canon_event_store::AnyEvent::Canon(canon) = event {
-                if canon.kind == "capability_requested"
-                    && canon
-                        .payload
-                        .get("request_id")
-                        .and_then(|v| v.as_str())
-                        == Some(request.request_id.as_str())
-                {
+                if canon.kind == "capability_requested" && canon.payload.get("request_id").and_then(|v| v.as_str()) == Some(request.request_id.as_str()) {
                     visible = true;
                     break;
                 }
@@ -99,18 +83,10 @@ fn main() -> Result<()> {
     let mut last_log = Instant::now();
     // Record which segment was latest when we wrote the request, so we only
     // scan that segment and newer ones instead of the full tlog history.
-    let scan_from_seq: u64 = if tlog_path.is_dir() {
-        latest_segment_seq_local(&tlog_path).unwrap_or(0)
-    } else {
-        0
-    };
+    let scan_from_seq: u64 = if tlog_path.is_dir() { latest_segment_seq_local(&tlog_path).unwrap_or(0) } else { 0 };
     loop {
         std::thread::sleep(Duration::from_millis(250));
-        let events = if tlog_path.is_dir() && scan_from_seq > 0 {
-            read_any_events_from_path_with_start_seq(&replay_path, scan_from_seq)?
-        } else {
-            read_any_events_from_path(&replay_path)?
-        };
+        let events = if tlog_path.is_dir() && scan_from_seq > 0 { read_any_events_from_path_with_start_seq(&replay_path, scan_from_seq)? } else { read_any_events_from_path(&replay_path)? };
 
         let mut completed = 0usize;
         let mut failed = 0usize;
@@ -120,47 +96,25 @@ fn main() -> Result<()> {
                 match canon.kind.as_str() {
                     "capability_completed" => {
                         completed += 1;
-                        matched |= canon
-                            .payload
-                            .get("request_id")
-                            .and_then(|v| v.as_str())
-                            .map(|v| v == request.request_id.as_str())
-                            .unwrap_or(false);
+                        matched |= canon.payload.get("request_id").and_then(|v| v.as_str()).map(|v| v == request.request_id.as_str()).unwrap_or(false);
                     }
                     "capability_failed" => {
                         failed += 1;
-                        matched |= canon
-                            .payload
-                            .get("request_id")
-                            .and_then(|v| v.as_str())
-                            .map(|v| v == request.request_id.as_str())
-                            .unwrap_or(false);
+                        matched |= canon.payload.get("request_id").and_then(|v| v.as_str()).map(|v| v == request.request_id.as_str()).unwrap_or(false);
                     }
                     _ => {}
                 }
             }
         }
         if matched && completed > 0 {
-            println!(
-                "llm_smoke_test: PASS (completed={}, failed={}, log={})",
-                completed,
-                failed,
-                tlog_path.display()
-            );
+            println!("llm_smoke_test: PASS (completed={}, failed={}, log={})", completed, failed, tlog_path.display());
             return Ok(());
         }
         if matched && failed > 0 {
-            return Err(anyhow!(
-                "llm_smoke_test failed: completed=0 failed={} log={}",
-                failed,
-                tlog_path.display()
-            ));
+            return Err(anyhow!("llm_smoke_test failed: completed=0 failed={} log={}", failed, tlog_path.display()));
         }
         if start.elapsed() > max_wait {
-            println!(
-                "llm_smoke_test: SKIP (timeout waiting for llm backend, log={})",
-                tlog_path.display()
-            );
+            println!("llm_smoke_test: SKIP (timeout waiting for llm backend, log={})", tlog_path.display());
             return Ok(());
         }
         if last_log.elapsed() > Duration::from_secs(5) {
@@ -171,16 +125,11 @@ fn main() -> Result<()> {
 }
 
 fn check_event_runtime_lock() -> Option<String> {
-    let lock_path = std::env::var("CANON_EVENT_RUNTIME_LOCK")
-        .ok()
-        .unwrap_or_else(|| "/workspace/ai_sandbox/canon/state/event_runtime.lock".to_string());
+    let lock_path = std::env::var("CANON_EVENT_RUNTIME_LOCK").ok().unwrap_or_else(|| "/workspace/ai_sandbox/canon/state/event_runtime.lock".to_string());
     let mut contents = String::new();
     let mut file = File::open(&lock_path).ok()?;
     let _ = file.read_to_string(&mut contents);
-    let pid = contents
-        .lines()
-        .find_map(|line| line.strip_prefix("pid="))
-        .and_then(|value| value.trim().parse::<u32>().ok())?;
+    let pid = contents.lines().find_map(|line| line.strip_prefix("pid=")).and_then(|value| value.trim().parse::<u32>().ok())?;
     if pid_is_alive(pid).unwrap_or(false) {
         None
     } else {
@@ -189,9 +138,7 @@ fn check_event_runtime_lock() -> Option<String> {
 }
 
 fn pid_is_alive(pid: u32) -> std::io::Result<bool> {
-    let stat_path = std::path::PathBuf::from("/proc")
-        .join(pid.to_string())
-        .join("stat");
+    let stat_path = std::path::PathBuf::from("/proc").join(pid.to_string()).join("stat");
     let mut file = match File::open(&stat_path) {
         Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -203,11 +150,7 @@ fn pid_is_alive(pid: u32) -> std::io::Result<bool> {
         Some(idx) => idx,
         None => return Ok(true),
     };
-    let state = contents[close_paren + 1..]
-        .trim_start()
-        .chars()
-        .next()
-        .unwrap_or(' ');
+    let state = contents[close_paren + 1..].trim_start().chars().next().unwrap_or(' ');
     Ok(state != 'Z')
 }
 
@@ -227,5 +170,9 @@ fn latest_segment_seq_local(tlog_path: &std::path::Path) -> Option<u64> {
             }
         }
     }
-    if max_seq > 0 { Some(max_seq) } else { None }
+    if max_seq > 0 {
+        Some(max_seq)
+    } else {
+        None
+    }
 }

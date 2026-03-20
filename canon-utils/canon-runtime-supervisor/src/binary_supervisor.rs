@@ -10,11 +10,7 @@ pub fn run_binary_supervisor(binary_path: &Path) {
 
     // Initial spawn (always run immediately)
     if binary_path.is_file() {
-        child = Command::new(binary_path)
-            .arg("--tlog")
-            .arg("/workspace/ai_sandbox/canon/state/event_log/event.tlog.d")
-            .spawn()
-            .ok();
+        child = Command::new(binary_path).arg("--tlog").arg("/workspace/ai_sandbox/canon/state/event_log/event.tlog.d").spawn().ok();
         if let Ok(meta) = fs::metadata(binary_path) {
             if let Ok(modified) = meta.modified() {
                 last = modified;
@@ -28,21 +24,13 @@ pub fn run_binary_supervisor(binary_path: &Path) {
                 if modified > last {
                     last = modified;
 
-                    println!(
-                        "[binary-supervisor] new binary detected: {:?} @ {:?}",
-                        binary_path,
-                        modified
-                    );
+                    println!("[binary-supervisor] new binary detected: {:?} @ {:?}", binary_path, modified);
 
                     if let Some(mut c) = child.take() {
                         let _ = c.kill();
                     }
 
-                    child = Command::new(binary_path)
-                        .arg("--tlog")
-                        .arg("/workspace/ai_sandbox/canon/state/event_log/event.tlog.d")
-                        .spawn()
-                        .ok();
+                    child = Command::new(binary_path).arg("--tlog").arg("/workspace/ai_sandbox/canon/state/event_log/event.tlog.d").spawn().ok();
                 }
             }
         }

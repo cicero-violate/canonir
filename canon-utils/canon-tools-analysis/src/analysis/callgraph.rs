@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use canon_graph::graph::graph_types::{CodeGraphEdge, CodeGraphNode};
 use crate::CallgraphCentralityEntry;
+use canon_graph::graph::graph_types::{CodeGraphEdge, CodeGraphNode};
 
 pub fn extract_callgraph_edges(nodes: &[CodeGraphNode], edges: &[CodeGraphEdge]) -> Vec<(u32, u32)> {
     let id_to_kind: HashMap<u32, &str> = nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
@@ -87,11 +87,7 @@ pub fn find_callgraph_roots_from_edges(cg_local_to_id: &[u32]) -> Vec<u32> {
     cg_local_to_id.iter().copied().collect()
 }
 
-pub fn build_callgraph_centrality(
-    callgraph: &[(u32, u32)],
-    node_map: &HashMap<u32, CodeGraphNode>,
-    file_map: &HashMap<u32, String>,
-) -> Vec<CallgraphCentralityEntry> {
+pub fn build_callgraph_centrality(callgraph: &[(u32, u32)], node_map: &HashMap<u32, CodeGraphNode>, file_map: &HashMap<u32, String>) -> Vec<CallgraphCentralityEntry> {
     let mut callers: HashMap<u32, BTreeSet<u32>> = HashMap::new();
     let mut callees: HashMap<u32, BTreeSet<u32>> = HashMap::new();
     for (s, d) in callgraph {
@@ -107,10 +103,7 @@ pub fn build_callgraph_centrality(
     for id in node_ids {
         let node = node_map.get(&id);
         let symbol = node.map(|n| n.symbol.clone()).unwrap_or_default();
-        let file = node
-            .and_then(|n| n.file_id)
-            .and_then(|id| file_map.get(&id).cloned())
-            .unwrap_or_default();
+        let file = node.and_then(|n| n.file_id).and_then(|id| file_map.get(&id).cloned()).unwrap_or_default();
         let caller_count = callers.get(&id).map(|s| s.len()).unwrap_or(0);
         let callee_count = callees.get(&id).map(|s| s.len()).unwrap_or(0);
         let centrality_score = caller_count + callee_count;

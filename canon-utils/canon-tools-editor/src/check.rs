@@ -57,10 +57,7 @@ pub fn accumulate_error_counts_json(messages: &[serde_json::Value], counts: &mut
     }
 }
 
-pub fn compute_delta_error_counts(
-    baseline: &BTreeMap<String, usize>,
-    after: &BTreeMap<String, usize>,
-) -> BTreeMap<String, i64> {
+pub fn compute_delta_error_counts(baseline: &BTreeMap<String, usize>, after: &BTreeMap<String, usize>) -> BTreeMap<String, i64> {
     let mut out = BTreeMap::new();
     for key in baseline.keys().chain(after.keys()) {
         let base = *baseline.get(key).unwrap_or(&0) as i64;
@@ -73,25 +70,14 @@ pub fn compute_delta_error_counts(
     out
 }
 
-pub fn summarize_error_categories(
-    messages: &[serde_json::Value],
-) -> Vec<serde_json::Value> {
+pub fn summarize_error_categories(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
     let mut by_code: BTreeMap<String, (String, usize)> = BTreeMap::new();
     for msg in messages {
         if msg.get("level").and_then(|v| v.as_str()) != Some("error") {
             continue;
         }
-        let code = msg
-            .get("code")
-            .and_then(|c| c.get("code"))
-            .and_then(|c| c.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let desc = msg
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("")
-            .to_string();
+        let code = msg.get("code").and_then(|c| c.get("code")).and_then(|c| c.as_str()).unwrap_or("unknown").to_string();
+        let desc = msg.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
         let entry = by_code.entry(code).or_insert((desc.clone(), 0));
         entry.1 += 1;
         if entry.0.is_empty() && !desc.is_empty() {

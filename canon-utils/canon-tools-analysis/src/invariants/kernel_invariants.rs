@@ -42,11 +42,7 @@ struct KernelInvariantReport {
     missing_fields: Vec<&'static str>,
 }
 
-pub fn write_kernel_invariants(
-    graph_dir: &Path,
-    reports_dir: &Path,
-    graph: &CodeGraph,
-) -> anyhow::Result<()> {
+pub fn write_kernel_invariants(graph_dir: &Path, reports_dir: &Path, graph: &CodeGraph) -> anyhow::Result<()> {
     let (report, ok) = build_report(graph_dir, graph);
     let mut report = report;
     report.ok = ok;
@@ -57,10 +53,7 @@ pub fn write_kernel_invariants(
 }
 
 fn build_report(graph_dir: &Path, graph: &CodeGraph) -> (KernelInvariantReport, bool) {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
 
     let node_count = graph.nodes.len();
     let edge_count = graph.edges.len();
@@ -81,12 +74,7 @@ fn build_report(graph_dir: &Path, graph: &CodeGraph) -> (KernelInvariantReport, 
     }
 
     let files_set: HashSet<&str> = graph.files.iter().map(|s| s.as_str()).collect();
-    let bad_file_id_nodes = graph
-        .nodes
-        .iter()
-        .filter(|n| !n.file.is_empty())
-        .filter(|n| !files_set.contains(n.file.as_str()))
-        .count();
+    let bad_file_id_nodes = graph.nodes.iter().filter(|n| !n.file.is_empty()).filter(|n| !files_set.contains(n.file.as_str())).count();
 
     let mut incoming: HashMap<u32, usize> = HashMap::new();
     let mut outgoing: HashMap<u32, usize> = HashMap::new();
@@ -95,38 +83,17 @@ fn build_report(graph_dir: &Path, graph: &CodeGraph) -> (KernelInvariantReport, 
         *outgoing.entry(e.src).or_insert(0) += 1;
     }
 
-    let callsite_no_incoming = graph
-        .nodes
-        .iter()
-        .filter(|n| n.kind == KIND_CALLSITE)
-        .filter(|n| incoming.get(&n.id).copied().unwrap_or(0) == 0)
-        .count();
+    let callsite_no_incoming = graph.nodes.iter().filter(|n| n.kind == KIND_CALLSITE).filter(|n| incoming.get(&n.id).copied().unwrap_or(0) == 0).count();
 
-    let isolated_nodes = graph
-        .nodes
-        .iter()
-        .filter(|n| incoming.get(&n.id).is_none() && outgoing.get(&n.id).is_none())
-        .count();
+    let isolated_nodes = graph.nodes.iter().filter(|n| incoming.get(&n.id).is_none() && outgoing.get(&n.id).is_none()).count();
 
     let module_nodes: Vec<_> = graph.nodes.iter().filter(|n| n.kind == KIND_MODULE).collect();
     let module_count = module_nodes.len();
-    let module_root_like = module_nodes
-        .iter()
-        .filter(|n| n.symbol == "crate" || n.symbol.is_empty())
-        .count();
+    let module_root_like = module_nodes.iter().filter(|n| n.symbol == "crate" || n.symbol.is_empty()).count();
 
-    let node_kind_by_id: HashMap<u32, &str> = graph
-        .nodes
-        .iter()
-        .map(|n| (n.id, n.kind.as_str()))
-        .collect();
+    let node_kind_by_id: HashMap<u32, &str> = graph.nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
 
-    let export_src_not_module = graph
-        .edges
-        .iter()
-        .filter(|e| e.kind == EDGE_EXPORT)
-        .filter(|e| node_kind_by_id.get(&e.src).copied() != Some(KIND_MODULE))
-        .count();
+    let export_src_not_module = graph.edges.iter().filter(|e| e.kind == EDGE_EXPORT).filter(|e| node_kind_by_id.get(&e.src).copied() != Some(KIND_MODULE)).count();
 
     let mut seen_symbol_kind: HashSet<(String, String)> = HashSet::new();
     let mut duplicate_symbol_kind = 0usize;
@@ -145,22 +112,10 @@ fn build_report(graph_dir: &Path, graph: &CodeGraph) -> (KernelInvariantReport, 
             module_has_owner.insert(e.dst);
         }
     }
-    let missing_module_owner = module_nodes
-        .iter()
-        .filter(|n| !module_has_owner.contains(&n.id))
-        .count();
+    let missing_module_owner = module_nodes.iter().filter(|n| !module_has_owner.contains(&n.id)).count();
 
-    let workspace_root = graph_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| graph_dir.to_path_buf());
-    let files_outside_project_root = graph
-        .nodes
-        .iter()
-        .filter(|n| !n.file.is_empty())
-        .filter(|n| !Path::new(&n.file).starts_with(&workspace_root))
-        .count();
+    let workspace_root = graph_dir.parent().and_then(|p| p.parent()).map(PathBuf::from).unwrap_or_else(|| graph_dir.to_path_buf());
+    let files_outside_project_root = graph.nodes.iter().filter(|n| !n.file.is_empty()).filter(|n| !Path::new(&n.file).starts_with(&workspace_root)).count();
 
     let must_have_valid_edge_sources = edges_with_missing_src == 0;
     let must_have_valid_edge_destinations = edges_with_missing_dst == 0;

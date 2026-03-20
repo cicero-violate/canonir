@@ -19,10 +19,7 @@ pub struct WatcherConfig {
 
 impl Default for WatcherConfig {
     fn default() -> Self {
-        Self {
-            debounce_ms: default_debounce_ms(),
-            watch_dirs: default_watch_dirs(),
-        }
+        Self { debounce_ms: default_debounce_ms(), watch_dirs: default_watch_dirs() }
     }
 }
 

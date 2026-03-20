@@ -1,7 +1,7 @@
 use canon_types::{EventDelta, RustcEvent, RustcState};
 use std::sync::Arc;
 
-use canon_macros::{canon_event_struct, canon_event_enum};
+use canon_macros::{canon_event_enum, canon_event_struct};
 
 pub const EVENT_SCHEMA_VERSION: &str = "1";
 
@@ -108,11 +108,7 @@ pub struct Code {
     pub delta: canon_types::EventDelta,
     pub state: canon_types::RustcState,
 }
-canon_event_struct!(DebugEvent {
-    source: String,
-    kind: String,
-    payload: serde_json::Value,
-});
+canon_event_struct!(DebugEvent { source: String, kind: String, payload: serde_json::Value });
 canon_event_struct!(ErrorOccurred {
     kind: String,
     source: String,
@@ -128,22 +124,9 @@ canon_event_struct!(ErrorOccurred {
 });
 
 pub fn new_error_occurred(
-    kind: impl Into<String>,
-    source: impl Into<String>,
-    message: impl Into<String>,
-    severity: impl Into<String>,
-    context: serde_json::Value,
-    trace_id: Option<String>,
+    kind: impl Into<String>, source: impl Into<String>, message: impl Into<String>, severity: impl Into<String>, context: serde_json::Value, trace_id: Option<String>,
 ) -> ErrorOccurred {
-    ErrorOccurred {
-        kind: kind.into(),
-        source: source.into(),
-        message: message.into(),
-        severity: severity.into(),
-        context,
-        trace_id,
-        error_id: Some(uuid::Uuid::new_v4().to_string()),
-    }
+    ErrorOccurred { kind: kind.into(), source: source.into(), message: message.into(), severity: severity.into(), context, trace_id, error_id: Some(uuid::Uuid::new_v4().to_string()) }
 }
 canon_event_struct!(Tick { tick: u64 });
 canon_event_struct!(LoopObserved {
@@ -240,22 +223,8 @@ canon_event_struct!(GoalSelected { payload: serde_json::Value });
 canon_event_struct!(SystemConfigLoaded { payload: serde_json::Value });
 canon_event_struct!(AgentRegistered { payload: serde_json::Value });
 canon_event_struct!(PromptLoaded { payload: serde_json::Value });
-canon_event_struct!(ToolCall {
-    node_id: String,
-    tool_call_id: String,
-    request_id: String,
-    kind: String,
-    payload: serde_json::Value,
-});
-canon_event_struct!(ToolResult {
-    node_id: String,
-    tool_call_id: String,
-    tool_result_id: String,
-    request_id: String,
-    kind: String,
-    output: serde_json::Value,
-    success: bool,
-});
+canon_event_struct!(ToolCall { node_id: String, tool_call_id: String, request_id: String, kind: String, payload: serde_json::Value });
+canon_event_struct!(ToolResult { node_id: String, tool_call_id: String, tool_result_id: String, request_id: String, kind: String, output: serde_json::Value, success: bool });
 canon_event_struct!(GoalNodeCreated {
     node_id: String,
     description: String,
@@ -333,23 +302,11 @@ pub trait EventConsumer: Send + Sync {
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 }
 
-canon_event_struct!(CapabilityRequested {
-    request_id: String,
-    name: String,
-    args: serde_json::Value,
-});
+canon_event_struct!(CapabilityRequested { request_id: String, name: String, args: serde_json::Value });
 
-canon_event_struct!(CapabilityCompleted {
-    request_id: String,
-    name: String,
-    result: serde_json::Value,
-});
+canon_event_struct!(CapabilityCompleted { request_id: String, name: String, result: serde_json::Value });
 
-canon_event_struct!(CapabilityFailed {
-    request_id: String,
-    name: String,
-    error: String,
-});
+canon_event_struct!(CapabilityFailed { request_id: String, name: String, error: String });
 
 canon_event_struct!(NodeReady {
     node_id: String,

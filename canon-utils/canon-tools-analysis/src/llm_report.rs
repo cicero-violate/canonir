@@ -1,5 +1,5 @@
 use canon_event::{CapabilityCompleted, CapabilityFailed};
-use canon_event_store::{read_any_events_from_path, AnyEvent, extract_capability_request};
+use canon_event_store::{extract_capability_request, read_any_events_from_path, AnyEvent};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -24,10 +24,7 @@ pub fn write_llm_reports_from_tlog(tlog_path: &Path, reports_root: &Path) -> any
 
         if let Some(req) = extract_capability_request(&canon) {
             if req.name == "llm.call" {
-                let entry = by_id.entry(req.request_id.clone()).or_insert_with(|| LlmRecord {
-                    request_id: req.request_id.clone(),
-                    ..Default::default()
-                });
+                let entry = by_id.entry(req.request_id.clone()).or_insert_with(|| LlmRecord { request_id: req.request_id.clone(), ..Default::default() });
                 if let Some(prompt) = req.args.get("prompt").and_then(|v| v.as_str()) {
                     entry.prompt = Some(prompt.to_string());
                 }
@@ -43,10 +40,7 @@ pub fn write_llm_reports_from_tlog(tlog_path: &Path, reports_root: &Path) -> any
         match canon.kind.as_str() {
             "request_dispatch" if canon.source == "llm_executor" => {
                 if let Some(id) = canon.payload.get("request_id").and_then(|v| v.as_str()) {
-                    let entry = by_id.entry(id.to_string()).or_insert_with(|| LlmRecord {
-                        request_id: id.to_string(),
-                        ..Default::default()
-                    });
+                    let entry = by_id.entry(id.to_string()).or_insert_with(|| LlmRecord { request_id: id.to_string(), ..Default::default() });
                     entry.endpoint = canon.payload.get("endpoint").and_then(|v| v.as_str()).map(|s| s.to_string());
                     entry.url = canon.payload.get("url").and_then(|v| v.as_str()).map(|s| s.to_string());
                 }
@@ -54,10 +48,7 @@ pub fn write_llm_reports_from_tlog(tlog_path: &Path, reports_root: &Path) -> any
             "capability_completed" => {
                 if let Ok(done) = serde_json::from_value::<CapabilityCompleted>(canon.payload.clone()) {
                     if done.name == "llm.call" {
-                        let entry = by_id.entry(done.request_id.clone()).or_insert_with(|| LlmRecord {
-                            request_id: done.request_id.clone(),
-                            ..Default::default()
-                        });
+                        let entry = by_id.entry(done.request_id.clone()).or_insert_with(|| LlmRecord { request_id: done.request_id.clone(), ..Default::default() });
                         if let Some(result) = done.result.get("result") {
                             entry.response = Some(result.clone());
                         }
@@ -67,10 +58,7 @@ pub fn write_llm_reports_from_tlog(tlog_path: &Path, reports_root: &Path) -> any
             "capability_failed" => {
                 if let Ok(failed) = serde_json::from_value::<CapabilityFailed>(canon.payload.clone()) {
                     if failed.name == "llm.call" {
-                        let entry = by_id.entry(failed.request_id.clone()).or_insert_with(|| LlmRecord {
-                            request_id: failed.request_id.clone(),
-                            ..Default::default()
-                        });
+                        let entry = by_id.entry(failed.request_id.clone()).or_insert_with(|| LlmRecord { request_id: failed.request_id.clone(), ..Default::default() });
                         entry.error = Some(failed.error);
                     }
                 }

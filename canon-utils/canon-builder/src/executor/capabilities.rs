@@ -1,6 +1,6 @@
 use crate::executor::{run_cargo_build, run_cargo_check, run_cargo_run, BuildRequest, CheckRequest, RunRequest};
-use canon_capability::{CapabilityHandler, CapabilityExecutionContext, CapabilityRegistry, CapabilityExecutionResult};
-use canon_event::{CapabilityCompleted, CapabilityFailed, CapabilityRequested, CanonEvent};
+use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityHandler, CapabilityRegistry};
+use canon_event::{CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityRequested};
 use serde_json::json;
 use std::process::Command;
 
@@ -26,37 +26,19 @@ fn request_from_ctx(ctx: &CapabilityExecutionContext) -> anyhow::Result<Capabili
 }
 
 fn emit_completed(req: &CapabilityRequested, result: serde_json::Value) -> CapabilityExecutionResult {
-    CapabilityExecutionResult::Emit(CanonEvent::CapabilityCompleted(CapabilityCompleted {
-        request_id: req.request_id.clone(),
-        name: req.name.clone(),
-        result,
-    }))
+    CapabilityExecutionResult::Emit(CanonEvent::CapabilityCompleted(CapabilityCompleted { request_id: req.request_id.clone(), name: req.name.clone(), result }))
 }
 
 fn emit_failed(req: &CapabilityRequested, error: &str) -> CapabilityExecutionResult {
-    CapabilityExecutionResult::Emit(CanonEvent::CapabilityFailed(CapabilityFailed {
-        request_id: req.request_id.clone(),
-        name: req.name.clone(),
-        error: error.to_string(),
-    }))
+    CapabilityExecutionResult::Emit(CanonEvent::CapabilityFailed(CapabilityFailed { request_id: req.request_id.clone(), name: req.name.clone(), error: error.to_string() }))
 }
 
 fn runtime_log_event(kind: &str, payload: serde_json::Value) -> CanonEvent {
-    CanonEvent::RuntimeStateUpdated(canon_event::RuntimeStateUpdated {
-        payload: json!({ "kind": kind, "payload": payload }),
-    })
+    CanonEvent::RuntimeStateUpdated(canon_event::RuntimeStateUpdated { payload: json!({ "kind": kind, "payload": payload }) })
 }
 
-fn emit_completed_with_events(
-    req: &CapabilityRequested,
-    result: serde_json::Value,
-    mut events: Vec<CanonEvent>,
-) -> CapabilityExecutionResult {
-    events.push(CanonEvent::CapabilityCompleted(CapabilityCompleted {
-        request_id: req.request_id.clone(),
-        name: req.name.clone(),
-        result,
-    }));
+fn emit_completed_with_events(req: &CapabilityRequested, result: serde_json::Value, mut events: Vec<CanonEvent>) -> CapabilityExecutionResult {
+    events.push(CanonEvent::CapabilityCompleted(CapabilityCompleted { request_id: req.request_id.clone(), name: req.name.clone(), result }));
     CapabilityExecutionResult::EmitMany(events)
 }
 
@@ -78,17 +60,11 @@ impl CapabilityHandler for BuildCargoCapability {
 
     fn execute(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
         let req = request_from_ctx(&ctx)?;
-        let crate_name = req
-            .args
-            .get("crate")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing crate arg"))?;
+        let crate_name = req.args.get("crate").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("missing crate arg"))?;
 
         let mut events = vec![runtime_log_event("build.started", json!({ "crate": crate_name }))];
 
-        let result = run_cargo_build(&BuildRequest {
-            crate_name: crate_name.to_string(),
-        })?;
+        let result = run_cargo_build(&BuildRequest { crate_name: crate_name.to_string() })?;
 
         events.push(runtime_log_event(
             "build.completed",
@@ -99,11 +75,7 @@ impl CapabilityHandler for BuildCargoCapability {
             }),
         ));
 
-        Ok(emit_completed_with_events(
-            &req,
-            result_payload(result.status, result.success, result.stdout, result.stderr),
-            events,
-        ))
+        Ok(emit_completed_with_events(&req, result_payload(result.status, result.success, result.stdout, result.stderr), events))
     }
 }
 
@@ -116,41 +88,21 @@ impl CapabilityHandler for CargoRunCapability {
 
     fn execute(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
         let req = request_from_ctx(&ctx)?;
-        let crate_name = req
-            .args
-            .get("crate")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing crate arg"))?;
-        let bin = req
-            .args
-            .get("bin")
-            .and_then(|v| v.as_str())
-            .map(|value| value.to_string());
+        let crate_name = req.args.get("crate").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("missing crate arg"))?;
+        let bin = req.args.get("bin").and_then(|v| v.as_str()).map(|value| value.to_string());
         let args = match req.args.get("args") {
             Some(value) => value
                 .as_array()
                 .ok_or_else(|| anyhow::anyhow!("args must be an array"))?
                 .iter()
-                .map(|entry| {
-                    entry
-                        .as_str()
-                        .map(|value| value.to_string())
-                        .ok_or_else(|| anyhow::anyhow!("args must be an array of strings"))
-                })
+                .map(|entry| entry.as_str().map(|value| value.to_string()).ok_or_else(|| anyhow::anyhow!("args must be an array of strings")))
                 .collect::<anyhow::Result<Vec<_>>>()?,
             None => Vec::new(),
         };
 
-        let mut events = vec![runtime_log_event(
-            "run.started",
-            json!({ "crate": crate_name, "bin": bin }),
-        )];
+        let mut events = vec![runtime_log_event("run.started", json!({ "crate": crate_name, "bin": bin }))];
 
-        let result = run_cargo_run(&RunRequest {
-            crate_name: crate_name.to_string(),
-            bin: bin.clone(),
-            args,
-        })?;
+        let result = run_cargo_run(&RunRequest { crate_name: crate_name.to_string(), bin: bin.clone(), args })?;
 
         events.push(runtime_log_event(
             "run.completed",
@@ -162,11 +114,7 @@ impl CapabilityHandler for CargoRunCapability {
             }),
         ));
 
-        Ok(emit_completed_with_events(
-            &req,
-            result_payload(result.status, result.success, result.stdout, result.stderr),
-            events,
-        ))
+        Ok(emit_completed_with_events(&req, result_payload(result.status, result.success, result.stdout, result.stderr), events))
     }
 }
 
@@ -179,18 +127,11 @@ impl CapabilityHandler for CargoCheckCapability {
 
     fn execute(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
         let req = request_from_ctx(&ctx)?;
-        let crate_name = req
-            .args
-            .get("crate")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing crate arg"))?;
+        let crate_name = req.args.get("crate").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("missing crate arg"))?;
 
-        let mut events =
-            vec![runtime_log_event("check.started", json!({ "crate": crate_name }))];
+        let mut events = vec![runtime_log_event("check.started", json!({ "crate": crate_name }))];
 
-        let result = run_cargo_check(&CheckRequest {
-            crate_name: crate_name.to_string(),
-        })?;
+        let result = run_cargo_check(&CheckRequest { crate_name: crate_name.to_string() })?;
 
         events.push(runtime_log_event(
             "check.completed",
@@ -201,11 +142,7 @@ impl CapabilityHandler for CargoCheckCapability {
             }),
         ));
 
-        Ok(emit_completed_with_events(
-            &req,
-            result_payload(result.status, result.success, result.stdout, result.stderr),
-            events,
-        ))
+        Ok(emit_completed_with_events(&req, result_payload(result.status, result.success, result.stdout, result.stderr), events))
     }
 }
 
@@ -225,10 +162,7 @@ impl CapabilityHandler for FileReadCapability {
             Ok(content) => content,
             Err(err) => return Ok(emit_failed(&req, &err.to_string())),
         };
-        Ok(emit_completed(
-            &req,
-            result_payload(0, true, content, String::new()),
-        ))
+        Ok(emit_completed(&req, result_payload(0, true, content, String::new())))
     }
 }
 
@@ -250,10 +184,7 @@ impl CapabilityHandler for FileWriteCapability {
         if let Err(err) = std::fs::write(path, content) {
             return Ok(emit_failed(&req, &err.to_string()));
         }
-        Ok(emit_completed(
-            &req,
-            result_payload(0, true, String::new(), String::new()),
-        ))
+        Ok(emit_completed(&req, result_payload(0, true, String::new(), String::new())))
     }
 }
 
@@ -274,12 +205,7 @@ impl CapabilityHandler for BashCapability {
         let output = command.output()?;
         Ok(emit_completed(
             &req,
-            result_payload(
-                output.status.code().unwrap_or(-1),
-                output.status.success(),
-                String::from_utf8_lossy(&output.stdout).to_string(),
-                String::from_utf8_lossy(&output.stderr).to_string(),
-            ),
+            result_payload(output.status.code().unwrap_or(-1), output.status.success(), String::from_utf8_lossy(&output.stdout).to_string(), String::from_utf8_lossy(&output.stderr).to_string()),
         ))
     }
 }

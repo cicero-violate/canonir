@@ -78,10 +78,7 @@ pub(crate) fn normalize_module_path(module_path: &str, uses_crate_prefix: bool) 
         }
         return format!("crate::{module_path}");
     }
-    module_path
-        .strip_prefix("crate::")
-        .unwrap_or(module_path)
-        .to_string()
+    module_path.strip_prefix("crate::").unwrap_or(module_path).to_string()
 }
 
 pub(crate) fn infer_crate_name(project_root: &Path) -> Option<String> {

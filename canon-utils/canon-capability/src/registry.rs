@@ -1,4 +1,4 @@
-use crate::{CapabilityHandler, CapabilityExecutionContext, CapabilityExecutionResult};
+use crate::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityHandler};
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,10 +22,7 @@ impl CapabilityRegistry {
     }
 
     pub fn execute(&self, name: &str, ctx: CapabilityExecutionContext) -> Result<CapabilityExecutionResult> {
-        let capability = self
-            .map
-            .get(name)
-            .ok_or_else(|| anyhow!("capability not registered: {name}"))?;
+        let capability = self.map.get(name).ok_or_else(|| anyhow!("capability not registered: {name}"))?;
         capability.execute(ctx)
     }
 

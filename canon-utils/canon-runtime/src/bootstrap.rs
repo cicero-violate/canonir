@@ -7,8 +7,7 @@ use std::sync::{Arc, RwLock};
 //
 const PROMPTS_DIR: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts";
 const GOAL_PROMPT_FILE: &str = "AGENT_GOAL.md";
-const AGENT_CONFIG_TOML: &str =
-    "/workspace/ai_sandbox/canon/canon-agent-prompts/capability_config.toml";
+const AGENT_CONFIG_TOML: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts/capability_config.toml";
 
 // ---------------------------------------------------------------------------
 // PromptRegistry — shared between bootstrap and LlmExecutorConsumer
@@ -30,9 +29,7 @@ impl PromptRegistry {
 pub type PromptRegistryHandle = Arc<RwLock<PromptRegistry>>;
 
 pub fn new_prompt_registry() -> PromptRegistryHandle {
-    Arc::new(RwLock::new(PromptRegistry {
-        prompts: HashMap::new(),
-    }))
+    Arc::new(RwLock::new(PromptRegistry { prompts: HashMap::new() }))
 }
 
 // ---------------------------------------------------------------------------
@@ -151,11 +148,7 @@ pub fn prompts_dir() -> &'static str {
     PROMPTS_DIR
 }
 
-pub fn reload_prompt_file(
-    path: &Path,
-    tlog_path: &Path,
-    registry: &PromptRegistryHandle,
-) {
+pub fn reload_prompt_file(path: &Path, tlog_path: &Path, registry: &PromptRegistryHandle) {
     if path.file_name().and_then(|s| s.to_str()) != Some(GOAL_PROMPT_FILE) {
         return;
     }

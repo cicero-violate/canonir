@@ -21,10 +21,7 @@ impl TypeConstraintGraph {
 
     pub fn add_equality(&mut self, left: u32, right: u32) -> Result<(), String> {
         if left >= self.var_count || right >= self.var_count {
-            return Err(format!(
-                "type variable out of range: ({left}, {right}) with var_count={}",
-                self.var_count
-            ));
+            return Err(format!("type variable out of range: ({left}, {right}) with var_count={}", self.var_count));
         }
         self.constraints.push(EqualityConstraint::new(left, right));
         Ok(())

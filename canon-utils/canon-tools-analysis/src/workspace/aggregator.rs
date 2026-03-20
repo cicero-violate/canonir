@@ -1,8 +1,8 @@
 use anyhow::Result;
 use serde_json::Value;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 
 pub fn aggregate_workspace(reports_root: &Path) -> Result<()> {
     let crates_dir = reports_root.join("crates");
@@ -32,32 +32,17 @@ pub fn aggregate_workspace(reports_root: &Path) -> Result<()> {
     }
 
     write_global_callgraph(&workspace_dir, &callgraph_rows)?;
-    fs::write(
-        workspace_dir.join("global_dependency_cycles.json"),
-        serde_json::to_string_pretty(&cycles)?,
-    )?;
-    fs::write(
-        workspace_dir.join("global_invariant_report.json"),
-        serde_json::to_string_pretty(&serde_json::json!({ "crates": invariant_reports }))?,
-    )?;
-    fs::write(
-        workspace_dir.join("global_violations.json"),
-        serde_json::to_string_pretty(&serde_json::json!({ "crates": violations }))?,
-    )?;
-    fs::write(
-        workspace_dir.join("history.json"),
-        serde_json::to_string_pretty(&history)?,
-    )?;
+    fs::write(workspace_dir.join("global_dependency_cycles.json"), serde_json::to_string_pretty(&cycles)?)?;
+    fs::write(workspace_dir.join("global_invariant_report.json"), serde_json::to_string_pretty(&serde_json::json!({ "crates": invariant_reports }))?)?;
+    fs::write(workspace_dir.join("global_violations.json"), serde_json::to_string_pretty(&serde_json::json!({ "crates": violations }))?)?;
+    fs::write(workspace_dir.join("history.json"), serde_json::to_string_pretty(&history)?)?;
     let fingerprint = input_fingerprint(&input_files)?;
     let meta = serde_json::json!({
         "crates_dir": crates_dir,
         "input_count": input_files.len(),
         "fingerprint": fingerprint
     });
-    fs::write(
-        workspace_dir.join("aggregation_meta.json"),
-        serde_json::to_string_pretty(&meta)?,
-    )?;
+    fs::write(workspace_dir.join("aggregation_meta.json"), serde_json::to_string_pretty(&meta)?)?;
 
     Ok(())
 }
@@ -82,23 +67,13 @@ fn aggregate_callgraph(crate_name: &str, crate_dir: &Path, out: &mut Vec<String>
             let callee_symbol = parts.get(3).copied().unwrap_or("");
             let caller_file = parts.get(4).copied().unwrap_or("");
             let callee_file = parts.get(5).copied().unwrap_or("");
-            out.push(format!(
-                "{},{},{},{},{}",
-                crate_name, caller_symbol, callee_symbol, caller_file, callee_file
-            ));
+            out.push(format!("{},{},{},{},{}", crate_name, caller_symbol, callee_symbol, caller_file, callee_file));
         }
     }
 }
 
-fn aggregate_dependency_cycles(
-    crate_name: &str,
-    crate_dir: &Path,
-    out: &mut Vec<Value>,
-    inputs: &mut Vec<PathBuf>,
-) {
-    let path = crate_dir
-        .join("analysis")
-        .join("dependency_cycle_report.json");
+fn aggregate_dependency_cycles(crate_name: &str, crate_dir: &Path, out: &mut Vec<Value>, inputs: &mut Vec<PathBuf>) {
+    let path = crate_dir.join("analysis").join("dependency_cycle_report.json");
     if let Ok(text) = fs::read_to_string(&path) {
         inputs.push(path.clone());
         if let Ok(val) = serde_json::from_str::<Value>(&text) {
@@ -110,13 +85,7 @@ fn aggregate_dependency_cycles(
     }
 }
 
-fn aggregate_invariants(
-    crate_name: &str,
-    crate_dir: &Path,
-    reports: &mut Vec<Value>,
-    violations: &mut Vec<Value>,
-    inputs: &mut Vec<PathBuf>,
-) {
+fn aggregate_invariants(crate_name: &str, crate_dir: &Path, reports: &mut Vec<Value>, violations: &mut Vec<Value>, inputs: &mut Vec<PathBuf>) {
     let report_path = crate_dir.join("invariants").join("invariant_report.json");
     if let Ok(text) = fs::read_to_string(&report_path) {
         inputs.push(report_path.clone());

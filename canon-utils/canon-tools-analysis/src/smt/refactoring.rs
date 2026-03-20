@@ -49,19 +49,9 @@ pub fn analyze_refactoring(graph: &AnalysisGraph, duplicates: &DuplicateReport) 
     }
     let t_types = t3.elapsed();
 
-    eprintln!(
-        "refactoring timings: call_csr={:?} scc={:?} schedule={:?} uses+reachability={:?}",
-        t_call, t_scc, t_sched, t_types
-    );
+    eprintln!("refactoring timings: call_csr={:?} scc={:?} schedule={:?} uses+reachability={:?}", t_call, t_scc, t_sched, t_types);
 
-    RefactoringReport {
-        scc_count: sccs.len(),
-        recursive_clusters,
-        ready_count,
-        deadlock,
-        duplicates: duplicates.pairs.len(),
-        type_reachable,
-    }
+    RefactoringReport { scc_count: sccs.len(), recursive_clusters, ready_count, deadlock, duplicates: duplicates.pairs.len(), type_reachable }
 }
 
 fn map_id(graph: &AnalysisGraph, id: u32) -> Option<usize> {

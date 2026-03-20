@@ -14,8 +14,7 @@ struct GuardEntry {
     last_run: Option<Instant>,
 }
 
-static RUN_GUARD: Lazy<Mutex<HashMap<String, GuardEntry>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static RUN_GUARD: Lazy<Mutex<HashMap<String, GuardEntry>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static REPORTS_ROOT_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 pub enum RunOutcome {
@@ -55,10 +54,7 @@ fn current_tlog_cursor(tlog_path: &Path) -> Option<TlogCursor> {
             }
         }
         let seq = max_seq?;
-        Some(TlogCursor::Binary {
-            max_seq: seq,
-            max_seq_size,
-        })
+        Some(TlogCursor::Binary { max_seq: seq, max_seq_size })
     } else {
         let size = tlog_path.metadata().ok()?.len();
         Some(TlogCursor::Jsonl { size })
@@ -92,19 +88,12 @@ fn write_reports_meta(path: &Path, meta: &ReportsMeta) -> Result<()> {
 }
 
 fn unix_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 fn path_modified_ts(path: &Path) -> Option<u64> {
     let meta = fs::metadata(path).ok()?;
-    meta.modified()
-        .ok()?
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .map(|d| d.as_secs())
+    meta.modified().ok()?.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
 }
 
 fn tlog_last_modified(tlog_path: &Path) -> Option<u64> {
@@ -131,9 +120,7 @@ fn invalidate_reports_if_stale(reports_root: &Path, tlog_path: &Path) -> Result<
         None => return Ok(()),
     };
     let meta_path = reports_meta_path(reports_root);
-    let stale = read_reports_meta(&meta_path)
-        .map(|meta| meta.tlog_cursor != cursor)
-        .unwrap_or(true);
+    let stale = read_reports_meta(&meta_path).map(|meta| meta.tlog_cursor != cursor).unwrap_or(true);
     if stale {
         // Keep existing reports so a failed rebuild doesn't leave an empty tree.
         if !reports_root.exists() {
@@ -165,19 +152,13 @@ fn collect_crate_names_from_tlog(tlog_path: &Path) -> Result<Vec<String>> {
 
 pub fn run_full_analysis(args: &serde_json::Value) -> Result<RunOutcome> {
     let _root_guard = REPORTS_ROOT_GUARD.lock().ok();
-    let crate_name = args
-        .get("crate")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("missing crate in capability args"))?;
+    let crate_name = args.get("crate").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("missing crate in capability args"))?;
     let reports_root = if let Some(root) = args.get("reports_root").and_then(|v| v.as_str()) {
         PathBuf::from(root)
     } else if let Ok(root) = std::env::var("CANON_REPORTS_OUT") {
         PathBuf::from(root)
     } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join("state")
-            .join("reports_out")
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join("state").join("reports_out")
     };
 
     let crate_root = reports_root.join("crates").join(crate_name);
@@ -196,8 +177,7 @@ pub fn run_full_analysis(args: &serde_json::Value) -> Result<RunOutcome> {
         let mut attempts = 0u32;
         loop {
             attempts += 1;
-            let cursor_before = current_tlog_cursor(&tlog_path)
-                .ok_or_else(|| anyhow!("failed to read tlog cursor"))?;
+            let cursor_before = current_tlog_cursor(&tlog_path).ok_or_else(|| anyhow!("failed to read tlog cursor"))?;
             let tlog_modified_before = tlog_last_modified(&tlog_path).unwrap_or(0);
             invalidate_reports_if_stale(&reports_root, &tlog_path)?;
             let workspace_dir = reports_root.join("workspace");
@@ -213,8 +193,7 @@ pub fn run_full_analysis(args: &serde_json::Value) -> Result<RunOutcome> {
             }
             crate::workspace::aggregator::aggregate_workspace(&reports_root)?;
             let report_generated_at = unix_timestamp();
-            let cursor_after = current_tlog_cursor(&tlog_path)
-                .ok_or_else(|| anyhow!("failed to read tlog cursor"))?;
+            let cursor_after = current_tlog_cursor(&tlog_path).ok_or_else(|| anyhow!("failed to read tlog cursor"))?;
             let tlog_modified_after = tlog_last_modified(&tlog_path).unwrap_or(0);
             if cursor_before != cursor_after || tlog_modified_after > report_generated_at {
                 if attempts < 2 {
@@ -222,11 +201,7 @@ pub fn run_full_analysis(args: &serde_json::Value) -> Result<RunOutcome> {
                 }
                 return Err(anyhow!("tlog changed during report generation"));
             }
-            let meta = ReportsMeta {
-                tlog_cursor: cursor_after,
-                tlog_last_modified: tlog_modified_after.max(tlog_modified_before),
-                report_generated_at,
-            };
+            let meta = ReportsMeta { tlog_cursor: cursor_after, tlog_last_modified: tlog_modified_after.max(tlog_modified_before), report_generated_at };
             write_reports_meta(&reports_meta_path(&reports_root), &meta)?;
             break;
         }
@@ -251,10 +226,7 @@ pub fn run_workspace_analysis(args: &serde_json::Value) -> Result<RunOutcome> {
     } else if let Ok(root) = std::env::var("CANON_REPORTS_OUT") {
         PathBuf::from(root)
     } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join("state")
-            .join("reports_out")
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join("state").join("reports_out")
     };
     let workspace_dir = reports_root.join("workspace");
     let tlog_path = canon_event::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG"));
@@ -268,8 +240,7 @@ pub fn run_workspace_analysis(args: &serde_json::Value) -> Result<RunOutcome> {
         let mut attempts = 0u32;
         loop {
             attempts += 1;
-            let cursor_before = current_tlog_cursor(&tlog_path)
-                .ok_or_else(|| anyhow!("failed to read tlog cursor"))?;
+            let cursor_before = current_tlog_cursor(&tlog_path).ok_or_else(|| anyhow!("failed to read tlog cursor"))?;
             let tlog_modified_before = tlog_last_modified(&tlog_path).unwrap_or(0);
             invalidate_reports_if_stale(&reports_root, &tlog_path)?;
             crate::report_pipeline::generate_reports_from_tlog(&tlog_path, &workspace_dir)?;
@@ -280,8 +251,7 @@ pub fn run_workspace_analysis(args: &serde_json::Value) -> Result<RunOutcome> {
             }
             crate::workspace::aggregator::aggregate_workspace(&reports_root)?;
             let report_generated_at = unix_timestamp();
-            let cursor_after = current_tlog_cursor(&tlog_path)
-                .ok_or_else(|| anyhow!("failed to read tlog cursor"))?;
+            let cursor_after = current_tlog_cursor(&tlog_path).ok_or_else(|| anyhow!("failed to read tlog cursor"))?;
             let tlog_modified_after = tlog_last_modified(&tlog_path).unwrap_or(0);
             if cursor_before != cursor_after || tlog_modified_after > report_generated_at {
                 if attempts < 2 {
@@ -289,11 +259,7 @@ pub fn run_workspace_analysis(args: &serde_json::Value) -> Result<RunOutcome> {
                 }
                 return Err(anyhow!("tlog changed during report generation"));
             }
-            let meta = ReportsMeta {
-                tlog_cursor: cursor_after,
-                tlog_last_modified: tlog_modified_after.max(tlog_modified_before),
-                report_generated_at,
-            };
+            let meta = ReportsMeta { tlog_cursor: cursor_after, tlog_last_modified: tlog_modified_after.max(tlog_modified_before), report_generated_at };
             write_reports_meta(&reports_meta_path(&reports_root), &meta)?;
             break;
         }

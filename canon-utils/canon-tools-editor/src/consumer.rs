@@ -2,7 +2,7 @@ use crate::edit::ProjectEditor;
 use crate::structured::{EditOp, FieldMutation};
 use crate::symbol_index::SymbolIndex;
 use anyhow::{anyhow, Result};
-use canon_event::{EditEvent, EventConsumer, CanonEvent, EventFilter};
+use canon_event::{CanonEvent, EditEvent, EventConsumer, EventFilter};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -24,20 +24,12 @@ impl EditConsumer {
             }
             EditEvent::MoveSymbol(canon_event::MoveSymbol { symbol, module, .. }) => {
                 let handle = editor.synthetic_handle_from_symbol_id(&symbol)?;
-                let op = EditOp::MoveSymbol {
-                    handle,
-                    symbol_id: symbol.clone(),
-                    new_module_path: module,
-                    new_crate: None,
-                };
+                let op = EditOp::MoveSymbol { handle, symbol_id: symbol.clone(), new_module_path: module, new_crate: None };
                 editor.queue(&symbol, op)?;
             }
             EditEvent::DeleteSymbol(canon_event::DeleteSymbol { symbol, .. }) => {
                 let handle = editor.synthetic_handle_from_symbol_id(&symbol)?;
-                let op = EditOp::DeleteSymbol {
-                    handle,
-                    symbol_id: symbol.clone(),
-                };
+                let op = EditOp::DeleteSymbol { handle, symbol_id: symbol.clone() };
                 editor.queue(&symbol, op)?;
             }
             EditEvent::RenameModule(canon_event::RenameModule { old, new, .. }) => {

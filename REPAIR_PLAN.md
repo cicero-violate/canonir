@@ -1,201 +1,355 @@
-# REPAIR_PLAN.md — Post-Repair Analysis (Round 7)
+# REPAIR_PLAN.md — Kernel Event Routing Off Main Thread
 
-## Verification results from latest tlog (82,118 events) + LLM log files (calls #000–#042)
+## Root Cause (confirmed via tlog analysis)
 
-| Check                           | Result                                                                           |
-|---------------------------------+----------------------------------------------------------------------------------|
-| Error spam                      | **0** ✅                                                                         |
-| Verify races                    | **0** ✅                                                                         |
-| LTR fix                         | **✅ confirmed working** — LTR appears in router prompts from call #005 onward   |
-| Gate blocking                   | **✅ confirmed working** — BLOCKED events show correct pending_tool_call_ids     |
-| LTR in tlog route_selected      | **❌ not logged** — route_selected payload has no ltr_present field              |
-| Gate override visible in tlog   | **❌ not logged** — gate_note not in route_selected payload                      |
-| Gate forcing execute over shape | **❌ BUG** — gate overrides LLM's shape recommendation when has_queued_plan=true |
+`bus.dispatch` is **already non-blocking**. Each consumer runs in its own dedicated thread
+(`EventBus.register` spawns a thread + crossbeam bounded channel per consumer). `bus.dispatch`
+sends to channels; it does not call `on_event` synchronously.
 
----
+The real blocking is in `drain_event_queue_with_grace` inside `handle_control_msg`.
+After each LLM routing call completes, the main loop drains `q_event_rx` to process
+any events that arrived during the call. This processes every event from both:
+- **P1** (bootstrap replayer, line 715-717 of event_runtime.rs)
+- **P2** (inotify watcher, line 765-769 of event_runtime.rs)
 
-## Bug — Gate forces Execute even when last action failed
+For each event, `handle_event_msg` → `runtime.process_events()` →
+`handle_kernel_event()` is called. Each kernel event does:
+1. `apply_delta(&mut self.state, &delta)` — for EdgeDefined/EdgeRemoved events, this calls
+   `known_edges.retain(...)` on a `Vec`, which is **O(n)** where n is the current edge count.
+   With 67,012 edge events and a growing graph, this is O(n²) total.
+2. `handle_runtime_event(CanonEvent::Code(Code { delta, state: self.state.clone() }))` —
+   **clones the entire `RustcState`** (HashMap + Vec + HashSet) for every single event,
+   then tries-sends to all consumer channels (fast), then fails to match in `append_runtime_event`
+   (Code has no write arm — it is not written to the tlog by the runtime).
 
-**What the LLM log shows (calls #006 and #007):**
-
-```
-#005  router  LTR=REAL(success)  → route=execute  ← mkdir succeeded
-#006  router  LTR=REAL(failure)  → LLM says shape  ← cargo new failed (status=101)
-       ↑ tlog shows approved_route=execute         ← gate OVERRODE to execute!
-#007  router  LTR=REAL(failure)  → LLM says shape  ← LLM still says replan
-       ↑ tlog shows approved_route=execute         ← gate OVERRODE again!
-```
-
-After cargo new fails with "destination already exists", the router LLM correctly diagnoses the problem and returns `route=shape` (to trigger replanning). But the gate overrides this to `execute`, dispatching the NEXT planned action (cargo build), which compiles canon-runtime and restarts the runtime. On restart the same plan is generated and the cycle repeats.
-
-**Root cause in `canon-judgment/src/lib.rs` line 118:**
-
-```rust
-// CURRENT — fires unconditionally when any plan actions remain:
-if signals.has_queued_plan && lane != RouteKind::Execute {
-    lane = RouteKind::Execute;
-    changed = true;
-    notes.push("queued plan requires execute");
-}
-```
-
-`has_queued_plan = planned_pending > 0`. After cargo new fails, `planned_pending=3` (cargo build, write_file, done still queued). So the gate forces execute, skipping the LLM's correct shape recommendation.
-
-**Why the gate exists**: Designed to prevent the LLM from routing to scan/shape/validate while queued work remains unexecuted. Correct in the happy path. Wrong when a step fails and the remaining plan is invalid.
+**Confirmed in tlog**: 184,511 watcher events between `tick=6 signals_snapshot` and
+`verify_result` at index [196,606]. All from watcher: 97,595 rustc_events, 67,012
+dependency_edge, 19,819 symbol_emitted, 43 crate_compiled, 42 file_processed.
+The routing loop could not advance to tick=7 because `drain_event_queue_with_grace`
+was processing all 184,511 of them.
 
 ---
 
-## Fix
+## Fix — Route kernel events to a dedicated background thread
 
-### Part 1 — Add `last_action_failed` signal to canon-judgment
+Kernel events (watcher rustc events) are **irrelevant to routing**. The routing loop
+only needs:
+- `CapabilityRequested("analysis.run" / "analysis.workspace")` when `CompilationUnitFinished`
+- `RuntimeStateUpdated(workspace_dirty=true)` when compilation units change
 
-**File: `canon-utils/canon-judgment/src/lib.rs`**
+Both of these can be **emitted by a background kernel processor thread** via the
+shared `EventEmitterHandle`. The main routing loop never needs to call `apply_delta`
+or clone `RustcState` for 184,511 watcher events.
 
-**Add field to `RuntimeSignals`:**
+No consumer registered in `main()` responds to `CanonEvent::Code` events:
+- `ObserveConsumer`, `PlanConsumer`, `ActConsumer`, `VerifyConsumer`, `RewardConsumer`:
+  all match on LoopObserved / LoopActed / LoopVerified / Debug / CapabilityCompleted
+- `ErrorLogger`: `EventFilter::ErrorOnly` — never sees Code
+- `CapabilityExecutor`: `EventFilter::CapabilityOnly` — never sees Code
 
-```rust
-// BEFORE:
-pub struct RuntimeSignals {
-    pub context_ready: bool,
-    pub has_queued_plan: bool,
-    pub workspace_dirty: bool,
-    pub performed_recently: bool,
-    pub finish_ready: bool,
-}
-
-// AFTER:
-pub struct RuntimeSignals {
-    pub context_ready: bool,
-    pub has_queued_plan: bool,
-    pub workspace_dirty: bool,
-    pub performed_recently: bool,
-    pub finish_ready: bool,
-    pub last_action_failed: bool,  // ← ADD: true when last LoopActed.success=false
-}
-```
-
-**Modify gate rule to exempt failures:**
-
-```rust
-// BEFORE (line 118):
-if signals.has_queued_plan && lane != RouteKind::Execute {
-    lane = RouteKind::Execute;
-    changed = true;
-    notes.push("queued plan requires execute");
-}
-
-// AFTER:
-if signals.has_queued_plan && lane != RouteKind::Execute && !signals.last_action_failed {
-    lane = RouteKind::Execute;
-    changed = true;
-    notes.push("queued plan requires execute");
-}
-```
-
-When `last_action_failed=true`, the gate does NOT force execute, allowing the LLM's shape recommendation to pass through.
+Code events dispatched to consumers use `try_send` (non-control events), so they are
+already dropped when consumer queues are full. Stopping Code dispatch from kernel events
+has zero behavioural impact on the running system.
 
 ---
 
-### Part 2 — Track last_action_failed in RouteRuntimeState
+## File: `canon-utils/canon-runtime/src/lib.rs`
 
-**File: `canon-utils/canon-runtime/src/bin/event_runtime.rs`**
+### Addition 1 — `emitter_handle()` method on `EventRuntime`
 
-**Add field to `RouteRuntimeState` struct (after `last_action_kind`):**
+Add after the existing `next_id()` method (around line 94):
 
 ```rust
-// BEFORE:
-last_action_kind: String,
-
-// AFTER:
-last_action_kind: String,
-last_action_failed: bool,
+pub fn emitter_handle(&self) -> EventEmitterHandle {
+    self.emitter.clone()
+}
 ```
 
-**Set it in `update_route_runtime_state`, `LoopActed` arm (after the existing `last_action_kind` assignment):**
+### Addition 2 — `spawn_kernel_processor` free function
+
+Add at the bottom of `lib.rs`, below `apply_delta`:
 
 ```rust
-// BEFORE:
-route_state.last_action_kind = action_kind.clone();
+// ---------------------------------------------------------------------------
+// Kernel processor — processes watcher (rustc plugin) events off the main
+// routing loop thread.  Owns its own RustcState.  Emits CapabilityRequested
+// back to the main loop via the shared emitter handle when a
+// CompilationUnitFinished event is observed.
+// ---------------------------------------------------------------------------
 
-// AFTER:
-route_state.last_action_kind = action_kind.clone();
-route_state.last_action_failed = !success;
+pub fn spawn_kernel_processor(
+    rx: crossbeam_channel::Receiver<KernelMsg>,
+    emitter: EventEmitterHandle,
+) -> std::thread::JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("canon-kernel-processor".to_string())
+        .spawn(move || {
+            let mut state = empty_state();
+            let mut tick: u64 = 0;
+            for msg in rx.iter() {
+                match msg {
+                    KernelMsg::Reset => {
+                        state = empty_state();
+                        tick = 0;
+                    }
+                    KernelMsg::Event(event) => {
+                        let AnyEvent::Canon(ref canon) = event else { continue };
+                        let Some(kernel) = extract_rustc_event(canon) else { continue };
+                        let crate_name = if let RustcEvent::CompilationUnitFinished(ref cu) = kernel {
+                            Some(cu.crate_name.clone())
+                        } else {
+                            None
+                        };
+                        if matches!(kernel, RustcEvent::SessionStart(_)) {
+                            state = empty_state();
+                            tick = 0;
+                        } else {
+                            tick = tick.saturating_add(1);
+                        }
+                        let delta = EventDelta { id: tick, tick, event: kernel };
+                        let _ = apply_delta(&mut state, &delta);
+                        if let Some(crate_name) = crate_name {
+                            emitter.emit(CanonEvent::CapabilityRequested(CapabilityRequested {
+                                request_id: format!("analysis-k-{}-{}", crate_name, tick),
+                                name: "analysis.run".to_string(),
+                                args: serde_json::json!({ "crate": crate_name }),
+                            }));
+                            emitter.emit(CanonEvent::CapabilityRequested(CapabilityRequested {
+                                request_id: format!("analysis-workspace-k-{}", tick),
+                                name: "analysis.workspace".to_string(),
+                                args: serde_json::json!({}),
+                            }));
+                        }
+                    }
+                }
+            }
+        })
+        .expect("kernel processor thread")
+}
+
+pub enum KernelMsg {
+    Event(canon_event_store::AnyEvent),
+    Reset,
+}
 ```
 
-**Expose it in `signals()` method:**
+**Required imports to add** (already present in `lib.rs` scope, verify each):
+- `RustcEvent` — already imported via `canon_event`
+- `extract_rustc_event` — already imported via `canon_event_store`
+- `CapabilityRequested`, `EventDelta`, `EventEmitterHandle` — already imported
+- `AnyEvent` — already imported via `canon_event_store`
+
+---
+
+## File: `canon-utils/canon-runtime/src/bin/event_runtime.rs`
+
+### Change 1 — Import `KernelMsg` and `spawn_kernel_processor`
+
+Add to the existing `use canon_runtime::...` import:
 
 ```rust
 // BEFORE:
-fn signals(&self) -> RuntimeSignals {
-    RuntimeSignals {
-        context_ready: self.context_ready,
-        has_queued_plan: self.planned_pending > 0,
-        workspace_dirty: self.workspace_dirty,
-        performed_recently: self.acted_unverified,
-        finish_ready: self.finish_ready,
+use canon_runtime::{register_default_capabilities, EventRuntime};
+
+// AFTER:
+use canon_runtime::{register_default_capabilities, spawn_kernel_processor, EventRuntime, KernelMsg};
+```
+
+### Change 2 — Helper predicate `is_kernel_canon_event`
+
+Add as a free function near the top of `event_runtime.rs` (before `main`):
+
+```rust
+fn is_kernel_canon_event(event: &AnyEvent) -> bool {
+    if let AnyEvent::Canon(canon) = event {
+        extract_rustc_event(canon).is_some()
+    } else {
+        false
+    }
+}
+```
+
+### Change 3 — Create `q_kernel_tx/rx` channel alongside `q_event_tx/rx`
+
+After the existing channel creation at line 710:
+
+```rust
+// EXISTING:
+let (q_control_tx, q_control_rx) = cc::unbounded::<ControlMsg>();
+let (q_event_tx, q_event_rx) = cc::unbounded::<EventMsg>();
+
+// ADD immediately after:
+let (q_kernel_tx, q_kernel_rx) = cc::unbounded::<KernelMsg>();
+```
+
+### Change 4 — Spawn the kernel processor thread
+
+After the `runtime.set_next_id(resumed_next_id)` setup block and before the `once` mode
+early return (so it's only spawned for the live runtime, not once mode):
+
+```rust
+// Spawn kernel processor before P1/P2 producers send events.
+let kernel_emitter = runtime.emitter_handle();
+let _kernel_processor = spawn_kernel_processor(q_kernel_rx, kernel_emitter);
+```
+
+Place this immediately after:
+```rust
+runtime.set_execute_capabilities(false);
+runtime.set_tlog_path(tlog_path.clone());
+runtime.set_next_id(resumed_next_id);
+// ← INSERT HERE, before the `if once { ... }` block
+```
+
+### Change 5 — P1 bootstrap replayer: route kernel events to `q_kernel_tx`
+
+```rust
+// BEFORE (line 715-717):
+for event in bootstrap_events.into_iter().skip(processed) {
+    q_event_tx.send(EventMsg::Event(event)).ok();
+}
+
+// AFTER:
+for event in bootstrap_events.into_iter().skip(processed) {
+    if is_kernel_canon_event(&event) {
+        q_kernel_tx.send(KernelMsg::Event(event)).ok();
+    } else {
+        q_event_tx.send(EventMsg::Event(event)).ok();
+    }
+}
+```
+
+### Change 6 — P2 watcher: route kernel events to `q_kernel_tx`
+
+The P2 watcher thread needs `q_kernel_tx`. Clone it before the thread spawn:
+
+```rust
+// ADD before the P2 thread spawn block:
+let kernel_tx = q_kernel_tx.clone();
+```
+
+Inside the P2 thread, update the new-event delivery loop (lines 765-770):
+
+```rust
+// BEFORE:
+for event in all.into_iter().skip(watcher_seen) {
+    watcher_seen += 1;
+    if watcher_tx.send(EventMsg::Event(event)).is_err() {
+        break;
     }
 }
 
 // AFTER:
-fn signals(&self) -> RuntimeSignals {
-    RuntimeSignals {
-        context_ready: self.context_ready,
-        has_queued_plan: self.planned_pending > 0,
-        workspace_dirty: self.workspace_dirty,
-        performed_recently: self.acted_unverified,
-        finish_ready: self.finish_ready,
-        last_action_failed: self.last_action_failed,
+for event in all.into_iter().skip(watcher_seen) {
+    watcher_seen += 1;
+    if is_kernel_canon_event(&event) {
+        if kernel_tx.send(KernelMsg::Event(event)).is_err() {
+            break;
+        }
+    } else if watcher_tx.send(EventMsg::Event(event)).is_err() {
+        break;
     }
 }
 ```
 
-**Clear it on next successful action (same LoopActed arm, `last_action_failed = !success` handles this already** — when `success=true`, `!success=false`).
-
----
-
-### Part 3 — Add debug fields to route_selected event (yes, emit debug events)
-
-**File: `canon-utils/canon-runtime/src/bin/event_runtime.rs`**
-
-In `handle_control_msg`, where `route_selected` is emitted (around line 603–616), add `ltr_present`, `gate_changed`, `gate_note`:
+Also update the Reset path (lines 758-761) to reset the kernel processor's state
+in addition to sending the full Reset to the main loop:
 
 ```rust
 // BEFORE:
-runtime.emit_debug_event(
-    "supervisor".to_string(),
-    "route_selected".to_string(),
-    serde_json::json!({
-        "tick": route_state.scheduler_tick,
-        "suggested_route": selection.route.as_str(),
-        "approved_route": lane,
-        "rationale": selection.rationale,
-        "confidence": selection.confidence,
-        "changed": gate.changed,
-        "note": gate.note,
-        "prompt": prompt,
-    }),
-)?;
+if watcher_tx.send(EventMsg::Reset(all)).is_err() {
+    break;
+}
 
 // AFTER:
-runtime.emit_debug_event(
-    "supervisor".to_string(),
-    "route_selected".to_string(),
-    serde_json::json!({
-        "tick": route_state.scheduler_tick,
-        "suggested_route": selection.route.as_str(),
-        "approved_route": lane,
-        "rationale": selection.rationale,
-        "confidence": selection.confidence,
-        "changed": gate.changed,
-        "note": gate.note,
-        "ltr_present": route_state.latest_tool_result.is_some(),
-        "last_action_failed": route_state.last_action_failed,
-        "prompt": prompt,
-    }),
-)?;
+if kernel_tx.send(KernelMsg::Reset).is_err() {
+    break;
+}
+// Replay kernel events into processor from the reset payload before sending
+// control Reset so that processor state is rebuilt before the main loop
+// re-evaluates routing signals.
+for event in &all {
+    if is_kernel_canon_event(event) {
+        kernel_tx.send(KernelMsg::Event(event.clone())).ok();
+    }
+}
+if watcher_tx.send(EventMsg::Reset(all)).is_err() {
+    break;
+}
 ```
 
-This makes LTR presence and gate overrides visible directly in the tlog without needing to read LLM log files.
+Note: On Reset, the main loop calls `runtime.reset()` and `runtime.process_events(all)`.
+`process_events` still has the `extract_rustc_event` branch — it will try to call
+`handle_kernel_event` for kernel events in the Reset payload. Since these are now also
+routed to the kernel processor, this causes duplicate analysis triggers.
+To prevent this, update the Reset handling in `handle_event_msg` to filter kernel events
+out of the Reset payload before passing to `process_events`:
+
+```rust
+// In handle_event_msg, the Reset arm:
+EventMsg::Reset(events) => {
+    runtime.reset();
+    let non_kernel: Vec<AnyEvent> = events
+        .iter()
+        .filter(|e| !is_kernel_canon_event(e))
+        .cloned()
+        .collect();
+    runtime.process_events(&non_kernel)?;
+    apply_observed_events(runtime, route_state, workspace)?;
+    *processed = events.len();
+}
+```
+
+---
+
+## What does NOT change
+
+- `EventBus`, `bus.dispatch`, consumer threads — unchanged. Already non-blocking.
+- `VerifyConsumer.verify_acted` / `run_cargo_check` — already runs in its own consumer
+  thread (spawned by `bus.register`). Does not block the main routing thread.
+- `CapabilityExecutor.on_event` — already in its own thread. Returns fast for `Deferred`.
+- `analysis.run` / `analysis.workspace` capabilities — already async background thread
+  (previous fix). Unchanged.
+- `LlmCapabilityHandler` — unchanged.
+- `EventRuntime.handle_kernel_event` and `EventRuntime.state` — still present for
+  the `once` mode code path and internal state tracking. Just not called from the
+  main routing drain anymore (no kernel events reach `q_event_rx`).
+- `apply_delta` — unchanged. Now called by kernel processor thread only.
+- Analysis CapabilityRequested events — still written to tlog (when the main loop
+  drains `emitter_rx` via `drain_emitted_events`, it calls `handle_runtime_event`
+  → `append_runtime_event` for CapabilityRequested).
+- `crate_compiled` old-format events — these are custom events (not rustc_events),
+  `is_kernel_canon_event` returns false for them; they continue through `q_event_tx`
+  and are processed by `process_events` as before. Note: these trigger analysis.run
+  in `process_events`; combined with the kernel processor also triggering on
+  `CompilationUnitFinished`, there may be duplicate analysis requests for modern
+  rustc events. The `RUN_GUARD` dedup in `runner.rs` already handles this.
+
+---
+
+## Expected behaviour after fix
+
+```
+Tick fires (P3)
+  → handle_control_msg
+  → request_route_via_llm_call  (90s timeout, main thread blocks on LLM)
+
+  [meanwhile P2 watcher writes 184,511 kernel events to q_kernel_tx]
+  [kernel processor thread processes all 184,511 events independently]
+  [kernel processor emits 86 CapabilityRequested(analysis.*) to emitter_rx]
+
+  → LLM returns
+  → drain_event_queue_with_grace(Duration::ZERO)
+      q_event_rx is EMPTY (kernel events never entered q_event_rx)
+      drains only emitted events: 86 CapabilityRequested from kernel processor
+      each: send Deferred to analysis background thread, return immediately
+  → signals computed, gate applied, route_selected emitted to tlog
+  → tick=7 fires
+```
+
+`drain_event_queue_with_grace` processes ~100 events per tick (emitter events and
+routing control events) instead of 184,511. Per-tick routing latency drops from
+minutes to milliseconds.
 
 ---
 
@@ -203,106 +357,5 @@ This makes LTR presence and gate overrides visible directly in the tlog without 
 
 | File | Change |
 |---|---|
-| `canon-utils/canon-judgment/src/lib.rs` | (1) Add `last_action_failed: bool` to `RuntimeSignals`. (2) Add `&& !signals.last_action_failed` to the `has_queued_plan → Execute` gate rule. |
-| `canon-utils/canon-runtime/src/bin/event_runtime.rs` | (1) Add `last_action_failed: bool` to `RouteRuntimeState`. (2) Set `route_state.last_action_failed = !success` in `LoopActed` arm of `update_route_runtime_state`. (3) Add `last_action_failed: self.last_action_failed` in `signals()`. (4) Add `ltr_present` and `last_action_failed` to `route_selected` event payload. |
-
----
-
-## Invariants to preserve
-
-- When `last_action_failed=true` and LLM says shape: gate passes shape through (allows replanning).
-- When `last_action_failed=true` and LLM says execute: gate still passes execute (LLM may choose to continue despite failure — gate does not block it).
-- When `last_action_failed=false` and `has_queued_plan=true`: gate still forces execute as before (existing behavior unchanged in the happy path).
-- `last_action_failed` is cleared automatically on the next successful action (`!success = false`), so a recovered plan resumes normal forced-execute behavior.
-- Do NOT change `error_logger.rs`, `canon-verify/src/lib.rs`, `dispatch_next_in_active_batch` removal, or the LTR clear-on-ToolCall fix — all confirmed working.
-
----
-
----
-
-## Bug — route_selected=execute is silently dropped, causing multi-tick delay before tool dispatch
-
-**Root cause in `canon-runtime/src/bus.rs`:**
-
-`ActConsumer` uses `EventFilter::All` — it receives ALL events including 40,000+ `CanonEvent::Code` (rustc) events per session. Its consumer channel is `bounded(1024)`. The channel fills with rustc events. When `route_selected=execute` (`CanonEvent::Debug`) is dispatched via `try_send`, the channel has no room and the signal is **silently dropped**.
-
-Result: the router fires `route_selected=execute` 2–3 times before ActConsumer ever sees it. When the signal finally gets through, the tool runs and completes quickly. From the LLM's perspective: multiple execute choices → tool result appears "immediately" with no gate-blocking wait in between. This is the "immediate system response" behavior the user observes.
-
-**Evidence from LLM logs (current session):**
-```
-#004  execute  ltr=(none)   ← router fires, signal dropped
-#005  execute  ltr=(none)   ← router fires again, signal dropped
-#006  execute  ltr=(none)   ← signal finally delivered → mkdir dispatched
-#007  execute  ltr=REAL     ← mkdir done, gate unblocked, LTR=Some
-```
-
-**The `is_control_event` check** determines reliable vs try_send delivery:
-```rust
-// current — missing CanonEvent::Debug:
-fn is_control_event(event: &CanonEvent) -> bool {
-    matches!(event,
-        CanonEvent::Tick(_) | CanonEvent::LoopPlanned(_) | CanonEvent::LoopActed(_) | ...
-        // Debug is NOT here → try_send → drops when ActConsumer channel is full
-    )
-}
-```
-
-**Also**: all 43+ `route_selected` events that were missing from the tlog (only 11 visible) are because the **tlog writer's consumer channel** also drops them via the same try_send path.
-
-### Fix — Add `CanonEvent::Debug` to `is_control_event`
-
-**File: `canon-utils/canon-runtime/src/bus.rs`**
-
-```rust
-// BEFORE:
-fn is_control_event(event: &CanonEvent) -> bool {
-    matches!(
-        event,
-        CanonEvent::Tick(_)
-            | CanonEvent::PromptLoaded(_)
-            | CanonEvent::CapabilityRequested(_)
-            | CanonEvent::CapabilityCompleted(_)
-            | CanonEvent::CapabilityFailed(_)
-            | CanonEvent::LoopObserved(_)
-            | CanonEvent::LoopPlanned(_)
-            | CanonEvent::LoopActed(_)
-            | CanonEvent::LoopVerified(_)
-            | CanonEvent::LoopRewarded(_)
-    )
-}
-
-// AFTER:
-fn is_control_event(event: &CanonEvent) -> bool {
-    matches!(
-        event,
-        CanonEvent::Tick(_)
-            | CanonEvent::PromptLoaded(_)
-            | CanonEvent::CapabilityRequested(_)
-            | CanonEvent::CapabilityCompleted(_)
-            | CanonEvent::CapabilityFailed(_)
-            | CanonEvent::LoopObserved(_)
-            | CanonEvent::LoopPlanned(_)
-            | CanonEvent::LoopActed(_)
-            | CanonEvent::LoopVerified(_)
-            | CanonEvent::LoopRewarded(_)
-            | CanonEvent::Debug(_)  // route_selected must reach ActConsumer reliably
-    )
-}
-```
-
-**Why this is safe**: `Debug` events are infrequent (~500/session vs 40,000+ `Code` events). Blocking delivery is fine — all consumers handle Debug events quickly (error_logger ignores them, verify_consumer only inspects `route_selected`, ActConsumer does a simple lane string check). This also fixes the missing `route_selected` events in the tlog.
-
-**Note**: `CanonEvent::ToolCall` and `CanonEvent::ToolResult` do NOT need to be added here — they travel from ActConsumer to event_runtime via the tlog reader (durable, reliable path), not via the event bus consumer channels.
-
-**File change summary addition:**
-
-| File | Change |
-|---|---|
-| `canon-utils/canon-runtime/src/bus.rs` | Add `CanonEvent::Debug(_)` to `is_control_event` so route_selected events use blocking send instead of try_send. |
-
----
-
-## What this does NOT fix
-
-- The plan always starts with `cargo new` even though the directory exists. After this fix, the router will route to shape on failure, the planner will be called again, and the planner's prompt includes the LTR (the failure stderr). The planner prompt already says "If a target directory already exists, prefer `cargo init --bin <dir>`" — with the failure LTR now reaching the planner, it should generate the correct plan.
-- LLM timeout at calls #041 and #042 — this is a transient LLM bridge connectivity issue, not a routing logic bug. The heuristic fallback handles it by routing to validate or scan.
+| `canon-utils/canon-runtime/src/lib.rs` | Add `pub fn emitter_handle()`. Add `pub enum KernelMsg`. Add `pub fn spawn_kernel_processor(rx, emitter)`. |
+| `canon-utils/canon-runtime/src/bin/event_runtime.rs` | Add `is_kernel_canon_event`. Create `q_kernel_tx/rx`. Spawn kernel processor. P1 + P2 producers route kernel events to `q_kernel_tx`. Reset arm filters kernel events from `process_events` payload. |

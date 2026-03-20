@@ -38,15 +38,7 @@ pub fn solve_constraints_gpu(var_count: usize, constraints: &[EqualityConstraint
     }
 
     let mut parents = vec![-1i32; var_count];
-    let ok = unsafe {
-        gpu_union_find_solve(
-            var_count as i32,
-            constraints.len() as i32,
-            edge_u.as_ptr(),
-            edge_v.as_ptr(),
-            parents.as_mut_ptr(),
-        )
-    };
+    let ok = unsafe { gpu_union_find_solve(var_count as i32, constraints.len() as i32, edge_u.as_ptr(), edge_v.as_ptr(), parents.as_mut_ptr()) };
 
     if ok == 0 {
         return Err("gpu_union_find_solve failed".into());
@@ -106,11 +98,7 @@ mod tests {
 
     #[test]
     fn cpu_unification_merges_connected_components() {
-        let constraints = vec![
-            EqualityConstraint::new(0, 1),
-            EqualityConstraint::new(1, 2),
-            EqualityConstraint::new(4, 5),
-        ];
+        let constraints = vec![EqualityConstraint::new(0, 1), EqualityConstraint::new(1, 2), EqualityConstraint::new(4, 5)];
         let out = solve_constraints_cpu(6, &constraints).unwrap();
         assert_eq!(out[0], out[1]);
         assert_eq!(out[1], out[2]);

@@ -17,10 +17,7 @@ impl FailureStoreConsumer {
             let _ = create_dir_all(parent);
         }
         let file = File::create(&path).expect("failure store open");
-        Self {
-            store: FailureStore::new(),
-            file: Mutex::new(file),
-        }
+        Self { store: FailureStore::new(), file: Mutex::new(file) }
     }
 
     fn persist(&self) {
@@ -50,9 +47,7 @@ impl EventConsumer for FailureStoreConsumer {
 }
 
 fn resolve_failure_store_path() -> PathBuf {
-    std::env::var("CANON_FAILURE_STORE_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/workspace/ai_sandbox/canon/state/failure_store.json"))
+    std::env::var("CANON_FAILURE_STORE_PATH").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/workspace/ai_sandbox/canon/state/failure_store.json"))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -117,8 +112,7 @@ impl FailureStore {
     fn record_message(&mut self, kind: &str, message: &str) {
         self.stats.total += 1;
         let is_cycle = kind.contains("cycle") || message.to_lowercase().contains("cycle");
-        let is_deadlock =
-            kind.contains("deadlock") || message.to_lowercase().contains("deadlock");
+        let is_deadlock = kind.contains("deadlock") || message.to_lowercase().contains("deadlock");
         if is_cycle {
             self.stats.cycle += 1;
         }

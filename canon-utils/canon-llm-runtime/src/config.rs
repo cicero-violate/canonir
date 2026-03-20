@@ -448,14 +448,8 @@ impl CapabilityConfig {
     }
     pub fn apply_env_flags(&self) {
         unsafe {
-            std::env::set_var(
-                "CANON_REPORTS_DISABLE",
-                if self.reports_disable { "1" } else { "0" },
-            );
-            std::env::set_var(
-                "CANON_REPORTS_SKIP_SNAPSHOT",
-                if self.reports_skip_snapshot { "1" } else { "0" },
-            );
+            std::env::set_var("CANON_REPORTS_DISABLE", if self.reports_disable { "1" } else { "0" });
+            std::env::set_var("CANON_REPORTS_SKIP_SNAPSHOT", if self.reports_skip_snapshot { "1" } else { "0" });
         }
     }
     pub fn endpoint_by_id(&self, id: &str) -> Result<&LlmEndpoint> {

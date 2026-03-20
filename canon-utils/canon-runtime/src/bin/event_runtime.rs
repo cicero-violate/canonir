@@ -5,7 +5,7 @@ use canon_decision::{JournalLine, RouteKind};
 use canon_event::{CanonEvent, CapabilityRequested, EventEmitter, EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult, EVENT_SCHEMA_VERSION};
 use canon_event_store::replay_graph_from_tlog;
 use canon_event_store::AnyEvent;
-use canon_event_store::{read_any_events_from_path, read_any_events_from_path_with_start_seq};
+use canon_event_store::{extract_rustc_event, read_any_events_from_path, read_any_events_from_path_with_start_seq};
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
 use canon_judgment::{GuardConfig, RuntimeSignals};
 use canon_observe::ObserveConsumer;
@@ -15,7 +15,7 @@ use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry, prompts_di
 use canon_runtime::consumers::capability_executor::CapabilityExecutor;
 use canon_runtime::consumers::error_logger::ErrorLogger;
 use canon_runtime::consumers::llm_executor::LlmCapabilityHandler;
-use canon_runtime::{register_default_capabilities, EventRuntime};
+use canon_runtime::{register_default_capabilities, spawn_kernel_processor, EventRuntime, KernelMsg};
 use canon_runtime_supervisor::judgment_loop::RouteController;
 use canon_verify::VerifyConsumer;
 use crossbeam_channel as cc;
@@ -119,6 +119,14 @@ enum ControlMsg {
     Tick,
 }
 
+fn is_kernel_canon_event(event: &AnyEvent) -> bool {
+    if let AnyEvent::Canon(canon) = event {
+        extract_rustc_event(canon).is_some()
+    } else {
+        false
+    }
+}
+
 #[derive(Default)]
 struct RouteRuntimeState {
     scheduler_tick: u64,
@@ -211,11 +219,7 @@ fn heuristic_route_json(state: &RouteRuntimeState) -> String {
 }
 
 fn request_route_via_llm_call(
-    registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>,
-    workspace: &Path,
-    prompt: String,
-    timeout: Duration,
-    last_tool_result: Option<serde_json::Value>,
+    registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>, workspace: &Path, prompt: String, timeout: Duration, last_tool_result: Option<serde_json::Value>,
 ) -> Result<String> {
     let request_id = format!("route-{}", Uuid::new_v4());
     let request = CapabilityRequested {
@@ -260,6 +264,37 @@ fn request_route_via_llm_call(
     }
 }
 
+fn count_loc(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut total = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            total += count_loc(&path);
+        } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                total += content.lines().count();
+            }
+        }
+    }
+    total
+}
+
+fn extract_loc_requirement(spec: &GoalSpec) -> usize {
+    for req in &spec.requirements {
+        let lower = req.to_lowercase();
+        if lower.contains("loc") {
+            let digits: String = req.chars().filter(|c| c.is_ascii_digit()).collect();
+            if let Ok(n) = digits.parse::<usize>() {
+                return n;
+            }
+        }
+    }
+    0
+}
+
 fn evaluate_goal_satisfied(spec: Option<&GoalSpec>, workspace: &Path) -> bool {
     let Some(spec) = spec else {
         return false;
@@ -273,6 +308,14 @@ fn evaluate_goal_satisfied(spec: Option<&GoalSpec>, workspace: &Path) -> bool {
     let readme_non_empty = std::fs::metadata(&readme).ok().map(|m| m.is_file() && m.len() > 0).unwrap_or(false);
     if !readme_non_empty {
         return false;
+    }
+
+    let required_loc = extract_loc_requirement(spec);
+    if required_loc > 0 {
+        let actual_loc = count_loc(&target);
+        if actual_loc < required_loc {
+            return false;
+        }
     }
 
     std::process::Command::new("cargo").arg("build").current_dir(&target).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
@@ -413,52 +456,18 @@ fn handle_event_msg(
 }
 
 fn drain_event_queue_with_grace(
-    q_event_rx: &cc::Receiver<EventMsg>,
-    runtime: &mut EventRuntime,
-    route_state: &mut RouteRuntimeState,
-    workspace: &Path,
-    processed: &mut usize,
-    cursor_path: &Path,
-    tlog_path: &Path,
-    start_seq: u64,
-    session_id: &str,
-    last_saved: &mut Instant,
-    last_saved_processed: &mut usize,
-    grace: Duration,
+    q_event_rx: &cc::Receiver<EventMsg>, runtime: &mut EventRuntime, route_state: &mut RouteRuntimeState, workspace: &Path, processed: &mut usize, cursor_path: &Path, tlog_path: &Path,
+    start_seq: u64, session_id: &str, last_saved: &mut Instant, last_saved_processed: &mut usize, grace: Duration,
 ) -> Result<()> {
     while let Ok(event_msg) = q_event_rx.try_recv() {
-        handle_event_msg(
-            event_msg,
-            runtime,
-            route_state,
-            workspace,
-            processed,
-            cursor_path,
-            tlog_path,
-            start_seq,
-            session_id,
-            last_saved,
-            last_saved_processed,
-        )?;
+        handle_event_msg(event_msg, runtime, route_state, workspace, processed, cursor_path, tlog_path, start_seq, session_id, last_saved, last_saved_processed)?;
     }
 
     let deadline = Instant::now() + grace;
     while Instant::now() < deadline {
         match q_event_rx.recv_timeout(Duration::from_millis(5)) {
             Ok(event_msg) => {
-                handle_event_msg(
-                    event_msg,
-                    runtime,
-                    route_state,
-                    workspace,
-                    processed,
-                    cursor_path,
-                    tlog_path,
-                    start_seq,
-                    session_id,
-                    last_saved,
-                    last_saved_processed,
-                )?;
+                handle_event_msg(event_msg, runtime, route_state, workspace, processed, cursor_path, tlog_path, start_seq, session_id, last_saved, last_saved_processed)?;
             }
             Err(cc::RecvTimeoutError::Timeout) => {
                 if q_event_rx.is_empty() {
@@ -472,20 +481,9 @@ fn drain_event_queue_with_grace(
 }
 
 fn handle_control_msg(
-    msg: ControlMsg,
-    q_event_rx: &cc::Receiver<EventMsg>,
-    runtime: &mut EventRuntime,
-    route_controller: &mut RouteController,
-    route_state: &mut RouteRuntimeState,
-    registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>,
-    workspace: &Path,
-    processed: &mut usize,
-    cursor_path: &Path,
-    tlog_path: &Path,
-    start_seq: u64,
-    session_id: &str,
-    last_saved: &mut Instant,
-    last_saved_processed: &mut usize,
+    msg: ControlMsg, q_event_rx: &cc::Receiver<EventMsg>, runtime: &mut EventRuntime, route_controller: &mut RouteController, route_state: &mut RouteRuntimeState,
+    registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>, workspace: &Path, processed: &mut usize, cursor_path: &Path, tlog_path: &Path, start_seq: u64, session_id: &str,
+    last_saved: &mut Instant, last_saved_processed: &mut usize,
 ) -> Result<bool> {
     match msg {
         ControlMsg::Tick => {
@@ -528,22 +526,9 @@ fn handle_control_msg(
                 }),
             )?;
             let snapshot = route_state.snapshot_text();
-            let prompt = route_controller.build_prompt(
-                &route_state.mission_summary,
-                &snapshot,
-                route_state.latest_tool_result.as_ref(),
-                &route_state.journal,
-            );
-            let model_json = match request_route_via_llm_call(
-                registry,
-                workspace,
-                prompt.clone(),
-                Duration::from_secs(90),
-                route_state.latest_tool_result.clone(),
-            ) {
-                Ok(json) => {
-                    json
-                }
+            let prompt = route_controller.build_prompt(&route_state.mission_summary, &snapshot, route_state.latest_tool_result.as_ref(), &route_state.journal);
+            let model_json = match request_route_via_llm_call(registry, workspace, prompt.clone(), Duration::from_secs(90), route_state.latest_tool_result.clone()) {
+                Ok(json) => json,
                 Err(err) => {
                     runtime.emit_debug_event(
                         "supervisor".to_string(),
@@ -557,20 +542,7 @@ fn handle_control_msg(
                 }
             };
 
-            drain_event_queue_with_grace(
-                q_event_rx,
-                runtime,
-                route_state,
-                workspace,
-                processed,
-                cursor_path,
-                tlog_path,
-                start_seq,
-                session_id,
-                last_saved,
-                last_saved_processed,
-                Duration::ZERO,
-            )?;
+            drain_event_queue_with_grace(q_event_rx, runtime, route_state, workspace, processed, cursor_path, tlog_path, start_seq, session_id, last_saved, last_saved_processed, Duration::ZERO)?;
             apply_observed_events(runtime, route_state, workspace)?;
             if !route_state.pending_tool_result_ids.is_empty() {
                 runtime.emit_debug_event(
@@ -727,7 +699,7 @@ fn main() -> Result<()> {
     let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
         Box::new(ObserveConsumer::new(workspace.clone(), tlog_path.clone())),
-        Box::new(PlanConsumer::new()),
+        Box::new(PlanConsumer::new(workspace.clone())),
         Box::new(ActConsumer::new(workspace.clone())),
         Box::new(VerifyConsumer::new(workspace.clone(), tlog_path.clone())),
         Box::new(RewardConsumer::new()),
@@ -783,12 +755,20 @@ fn main() -> Result<()> {
     // Q_e: event-plane queue (tlog events/replay/reset).
     let (q_control_tx, q_control_rx) = cc::unbounded::<ControlMsg>();
     let (q_event_tx, q_event_rx) = cc::unbounded::<EventMsg>();
+    let (q_kernel_tx, q_kernel_rx) = cc::unbounded::<KernelMsg>();
     let event_budget_per_cycle = std::env::var("CANON_EVENT_RUNTIME_EVENT_BUDGET").ok().and_then(|v| v.parse::<usize>().ok()).filter(|v| *v > 0).unwrap_or(256);
+
+    let kernel_emitter = runtime.emitter_handle();
+    let _kernel_processor = spawn_kernel_processor(q_kernel_rx, kernel_emitter);
 
     // --- P1: bootstrap replayer ---
     // Unprocessed events already in memory — push directly into Q, no file re-read.
     for event in bootstrap_events.into_iter().skip(processed) {
-        q_event_tx.send(EventMsg::Event(event)).ok();
+        if is_kernel_canon_event(&event) {
+            q_kernel_tx.send(KernelMsg::Event(event)).ok();
+        } else {
+            q_event_tx.send(EventMsg::Event(event)).ok();
+        }
     }
 
     // --- P2: notify watcher ---
@@ -799,6 +779,7 @@ fn main() -> Result<()> {
     {
         let watcher_tlog = tlog_path.clone();
         let watcher_tx = q_event_tx.clone();
+        let kernel_tx = q_kernel_tx.clone();
         let mut watcher_start_seq = start_seq;
         // watcher_seen tracks how many events from L this producer has already forwarded.
         let mut watcher_seen: usize = processed;
@@ -831,7 +812,20 @@ fn main() -> Result<()> {
                 if all.len() < watcher_seen {
                     // L was truncated or recreated — W must reset (Rule 10).
                     watcher_seen = 0;
-                    if watcher_tx.send(EventMsg::Reset(all)).is_err() {
+                    if kernel_tx.send(KernelMsg::Reset).is_err() {
+                        break;
+                    }
+                    let mut non_kernel = Vec::new();
+                    for event in all {
+                        if is_kernel_canon_event(&event) {
+                            if kernel_tx.send(KernelMsg::Event(event)).is_err() {
+                                break;
+                            }
+                        } else {
+                            non_kernel.push(event);
+                        }
+                    }
+                    if watcher_tx.send(EventMsg::Reset(non_kernel)).is_err() {
                         break;
                     }
                 } else {
@@ -839,7 +833,11 @@ fn main() -> Result<()> {
                     // so W can interleave other message types between them.
                     for event in all.into_iter().skip(watcher_seen) {
                         watcher_seen += 1;
-                        if watcher_tx.send(EventMsg::Event(event)).is_err() {
+                        if is_kernel_canon_event(&event) {
+                            if kernel_tx.send(KernelMsg::Event(event)).is_err() {
+                                break;
+                            }
+                        } else if watcher_tx.send(EventMsg::Event(event)).is_err() {
                             break;
                         }
                     }
@@ -949,10 +947,7 @@ fn main() -> Result<()> {
     // =========================================================================
     let mut last_saved = Instant::now();
     let mut last_saved_processed = processed;
-    let pre_control_grace_ms = std::env::var("CANON_PRE_CONTROL_EVENT_GRACE_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(50);
+    let pre_control_grace_ms = std::env::var("CANON_PRE_CONTROL_EVENT_GRACE_MS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(50);
     let pre_control_grace = Duration::from_millis(pre_control_grace_ms);
 
     loop {

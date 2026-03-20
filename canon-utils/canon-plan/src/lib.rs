@@ -1,5 +1,6 @@
 use canon_event::{
-    CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopObserved, LoopPlanned, PromptLoaded, Tick, ToolCall, ToolResult,
+    CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopObserved, LoopPlanned, PromptLoaded, Tick, ToolCall,
+    ToolResult,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -20,6 +21,7 @@ pub struct PlanConsumer {
     batch_tool_results: Vec<ToolResult>,
     /// Last goal text that was fully inlined into the planner prompt.
     last_prompted_goal: Option<String>,
+    workspace: std::path::PathBuf,
 }
 
 struct PendingPlan {
@@ -37,7 +39,7 @@ struct PendingPlan {
 }
 
 impl PlanConsumer {
-    pub fn new() -> Self {
+    pub fn new(workspace: std::path::PathBuf) -> Self {
         Self {
             emitter: None,
             pending: None,
@@ -47,6 +49,7 @@ impl PlanConsumer {
             batch_acted: Vec::new(),
             batch_tool_results: Vec::new(),
             last_prompted_goal: None,
+            workspace,
         }
     }
 }
@@ -99,6 +102,25 @@ impl EventConsumer for PlanConsumer {
 }
 
 impl PlanConsumer {
+    fn requirements_satisfied(&self, observed: &LoopObserved) -> bool {
+        let Some(goal_text) = observed.goal_text.as_ref() else {
+            return false;
+        };
+        let required_loc = goal_text
+            .lines()
+            .filter(|l| l.to_lowercase().contains("loc"))
+            .find_map(|l| {
+                let digits: String = l.chars().filter(|c| c.is_ascii_digit()).collect();
+                digits.parse::<usize>().ok()
+            })
+            .unwrap_or(0);
+        if required_loc == 0 {
+            return true;
+        }
+        let actual_loc = count_loc_in_workspace(&self.workspace);
+        actual_loc >= required_loc
+    }
+
     fn check_llm_timeout(&mut self, current_tick: u64) {
         let Some(pending) = &self.pending else {
             return;
@@ -160,23 +182,27 @@ impl PlanConsumer {
             });
             return;
         }
-        // Goal already completed — don't call the LLM again unless errors appear.
+        // Only suppress LLM call if done was previously declared and requirements
+        // are actually satisfied in the workspace.
         if observed.error_count == 0 && self.last_done_goal.is_some() && self.last_done_goal == observed.goal_text {
-            self.emit_plan(LoopPlanned {
-                tick: observed.tick,
-                action_kind: "no_op".to_string(),
-                action_payload: serde_json::json!({}),
-                reason: "goal_complete".to_string(),
-                llm_request_id: None,
-                trace_id: None,
-                execution_id: None,
-                span_id: None,
-                parent_span_id: None,
-                plan_id: None,
-                plan_step_id: None,
-                action_id: None,
-            });
-            return;
+            if self.requirements_satisfied(observed) {
+                self.emit_plan(LoopPlanned {
+                    tick: observed.tick,
+                    action_kind: "no_op".to_string(),
+                    action_payload: serde_json::json!({}),
+                    reason: "goal_complete".to_string(),
+                    llm_request_id: None,
+                    trace_id: None,
+                    execution_id: None,
+                    span_id: None,
+                    parent_span_id: None,
+                    plan_id: None,
+                    plan_step_id: None,
+                    action_id: None,
+                });
+                return;
+            }
+            self.last_done_goal = None;
         }
 
         let request_id = Uuid::new_v4().to_string();
@@ -185,36 +211,36 @@ impl PlanConsumer {
         let span_id = Uuid::new_v4().to_string();
         let plan_id = Uuid::new_v4().to_string();
         let include_full_goal = observed.goal_text != self.last_prompted_goal;
-        let prompt = build_prompt(observed, &self.batch_acted, &self.batch_tool_results, include_full_goal);
+        let prompt = build_prompt(observed, &self.batch_acted, &self.batch_tool_results, include_full_goal, &self.workspace);
         let last_action_results_payload: Vec<Value> = self
             .batch_acted
             .iter()
             .map(|a| {
-            serde_json::json!({
-                "action_kind": a.action_kind,
-                "success": a.success,
-                "exit_code": a.exit_code,
-                "capability_request_id": a.capability_request_id,
-                "tool_call_id": a.tool_call_id,
-                "tool_result_id": a.tool_result_id,
-                "stdout": a.stdout,
-                "stderr": a.stderr,
-            })
+                serde_json::json!({
+                    "action_kind": a.action_kind,
+                    "success": a.success,
+                    "exit_code": a.exit_code,
+                    "capability_request_id": a.capability_request_id,
+                    "tool_call_id": a.tool_call_id,
+                    "tool_result_id": a.tool_result_id,
+                    "stdout": a.stdout,
+                    "stderr": a.stderr,
+                })
             })
             .collect();
         let last_tool_results_payload: Vec<Value> = self
             .batch_tool_results
             .iter()
             .map(|r| {
-            serde_json::json!({
-                "node_id": r.node_id,
-                "tool_call_id": r.tool_call_id,
-                "tool_result_id": r.tool_result_id,
-                "request_id": r.request_id,
-                "kind": r.kind,
-                "output": r.output,
-                "success": r.success,
-            })
+                serde_json::json!({
+                    "node_id": r.node_id,
+                    "tool_call_id": r.tool_call_id,
+                    "tool_result_id": r.tool_result_id,
+                    "request_id": r.request_id,
+                    "kind": r.kind,
+                    "output": r.output,
+                    "success": r.success,
+                })
             })
             .collect();
         let request = CapabilityRequested {
@@ -357,9 +383,22 @@ impl PlanConsumer {
                     });
                 }
                 LlmAction::Done { reason } => {
-                    // Remember which goal was completed so we don't re-dispatch
-                    // until a new goal arrives via PromptLoaded.
-                    self.last_done_goal = pending.goal_text.clone();
+                    if let Some(goal_text) = &pending.goal_text {
+                        let required_loc = goal_text
+                            .lines()
+                            .filter(|l| l.to_lowercase().contains("loc"))
+                            .find_map(|l| {
+                                let digits: String = l.chars().filter(|c| c.is_ascii_digit()).collect();
+                                digits.parse::<usize>().ok()
+                            })
+                            .unwrap_or(0);
+                        let satisfied = required_loc == 0 || count_loc_in_workspace(&self.workspace) >= required_loc;
+                        if satisfied {
+                            self.last_done_goal = pending.goal_text.clone();
+                        }
+                    } else {
+                        self.last_done_goal = pending.goal_text.clone();
+                    }
                     self.emit_plan(LoopPlanned {
                         tick: pending.tick,
                         action_kind: "done".to_string(),
@@ -508,12 +547,13 @@ fn parse_llm_actions(result: &Value) -> Vec<LlmAction> {
     parse_value_to_action(value).into_iter().collect()
 }
 
-fn build_prompt(observed: &LoopObserved, batch_acted: &[LoopActed], batch_tool_results: &[ToolResult], include_full_goal: bool) -> String {
+fn build_prompt(observed: &LoopObserved, batch_acted: &[LoopActed], batch_tool_results: &[ToolResult], include_full_goal: bool, workspace: &std::path::Path) -> String {
     let goal_section = match (observed.goal_text.as_ref(), include_full_goal) {
         (Some(text), true) => format!("## Active Goal\n{text}\n\n"),
         (Some(_), false) => "## Active Goal\n(unchanged from previous planner request)\n\n".to_string(),
         (None, _) => String::new(),
     };
+    let progress_section = build_progress_section(observed, workspace);
     let error_section = if observed.error_count > 0 {
         let first = observed.compiler_errors.first().and_then(|e| e.get("message")).and_then(|m| m.get("message")).and_then(|v| v.as_str()).unwrap_or("unknown error");
         format!("## Compiler Errors ({})\nFirst error: {}\n\n", observed.error_count, first)
@@ -555,18 +595,54 @@ fn build_prompt(observed: &LoopObserved, batch_acted: &[LoopActed], batch_tool_r
             }
             s.push_str(&format!(
                 "### Result {}\ntool_kind: {}\nrequest_id: {}\ntool_call_id: {}\ntool_result_id: {}\nsuccess: {}\noutput:\n{}\n\n",
-                i + 1, result.kind, result.request_id, result.tool_call_id, result.tool_result_id, result.success, output,
+                i + 1,
+                result.kind,
+                result.request_id,
+                result.tool_call_id,
+                result.tool_result_id,
+                result.success,
+                output,
             ));
         }
         s
     };
     format!(
-        "{goal}{last_action}{last_tool_result}{errors}Execution policy constraints:\n- Do NOT emit destructive commands (`rm -rf`, `git reset --hard`, `git clean -f`, `dd`, `mkfs`, `shred`).\n- If a target directory already exists, prefer `cargo init --bin <dir>` instead of deleting and recreating it.\n\nReturn one or more fenced ```json code blocks (no prose outside code blocks). Each block must be one action object using one schema:\n- Run a command:  {{\"cmd\": \"cargo new foo\", \"cwd\": \"/path\"}}\n- Write a file:   {{\"write\": \"/abs/path\", \"content\": \"full content\"}}\n- Patch a file:   {{\"path\": \"/abs/path\", \"old\": \"exact text\", \"new\": \"replacement\"}}\n- Signal done:    {{\"done\": true, \"reason\": \"...\"}}",
+        "{goal}{progress}{last_action}{last_tool_result}{errors}Execution policy constraints:\n- Do NOT emit destructive commands (`rm -rf`, `git reset --hard`, `git clean -f`, `dd`, `mkfs`, `shred`).\n- If a target directory already exists, prefer `cargo init --bin <dir>` instead of deleting and recreating it.\n\nGeneration policy:\n- You MUST generate LARGE amounts of code per shape step. Each `write` action should contain hundreds to thousands of lines of Rust.\n- A single shape step should advance LOC by thousands, not tens. Write entire modules at once.\n- Do not declare done until the LOC progress section shows >= required LOC.\n\nReturn one or more fenced ```json code blocks (no prose outside code blocks). Each block must be one action object using one schema:\n- Run a command:  {{\"cmd\": \"cargo new foo\", \"cwd\": \"/path\"}}\n- Write a file:   {{\"write\": \"/abs/path\", \"content\": \"full content\"}}\n- Patch a file:   {{\"path\": \"/abs/path\", \"old\": \"exact text\", \"new\": \"replacement\"}}\n- Signal done:    {{\"done\": true, \"reason\": \"...\"}}",
         goal = goal_section,
+        progress = progress_section,
         last_action = last_action_section,
         last_tool_result = last_tool_result_section,
         errors = error_section,
     )
+}
+
+fn build_progress_section(observed: &LoopObserved, workspace: &std::path::Path) -> String {
+    let Some(goal_text) = observed.goal_text.as_ref() else {
+        return String::new();
+    };
+
+    let required_loc: usize = goal_text
+        .lines()
+        .filter(|l| l.to_lowercase().contains("loc"))
+        .find_map(|l| {
+            let digits: String = l.chars().filter(|c| c.is_ascii_digit()).collect();
+            digits.parse::<usize>().ok()
+        })
+        .unwrap_or(0);
+    if required_loc == 0 {
+        return String::new();
+    }
+
+    let target = goal_text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("- Project path:").map(|p| std::path::PathBuf::from(p.trim().trim_matches('`'))))
+        .unwrap_or_else(|| workspace.join("test_rust_project_v3"));
+
+    let actual_loc = count_loc_in_workspace(&target);
+    let remaining = required_loc.saturating_sub(actual_loc);
+    let pct = if required_loc > 0 { (actual_loc * 100) / required_loc } else { 100 };
+
+    format!("## LOC Progress\nCurrent: {} lines / {} required ({}%)\nRemaining: {} lines to write\n\n", actual_loc, required_loc, pct, remaining)
 }
 
 fn action_payload_with_cwd(cmd: String, cwd: Option<String>) -> Value {
@@ -575,4 +651,22 @@ fn action_payload_with_cwd(cmd: String, cwd: Option<String>) -> Value {
     } else {
         serde_json::json!({ "cmd": cmd })
     }
+}
+
+fn count_loc_in_workspace(workspace: &std::path::Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(workspace) else {
+        return 0;
+    };
+    let mut total = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            total += count_loc_in_workspace(&path);
+        } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                total += content.lines().count();
+            }
+        }
+    }
+    total
 }

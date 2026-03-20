@@ -84,10 +84,7 @@ fn handle_rename_symbol(editor: &mut ProjectEditor, old: &str, new: &str) -> Api
         Err(e) => return e,
     };
     let op = EditOp::MutateField { handle, symbol_id: old.to_string(), mutation: FieldMutation::RenameIdent(new_ident) };
-    publish_result(
-        "RenameSymbol",
-        publish_edit_event(&editor.project_root, op.to_event(editor.project_root.to_string_lossy().as_ref())),
-    )
+    publish_result("RenameSymbol", publish_edit_event(&editor.project_root, op.to_event(editor.project_root.to_string_lossy().as_ref())))
 }
 
 fn handle_move_symbol(editor: &mut ProjectEditor, symbol_id: &str, new_module_path: &str) -> ApiResult {
@@ -96,10 +93,7 @@ fn handle_move_symbol(editor: &mut ProjectEditor, symbol_id: &str, new_module_pa
         Err(e) => return e,
     };
     let op = EditOp::MoveSymbol { handle, symbol_id: symbol_id.to_string(), new_module_path: new_module_path.to_string(), new_crate: None };
-    publish_result(
-        "MoveSymbol",
-        publish_edit_event(&editor.project_root, op.to_event(editor.project_root.to_string_lossy().as_ref())),
-    )
+    publish_result("MoveSymbol", publish_edit_event(&editor.project_root, op.to_event(editor.project_root.to_string_lossy().as_ref())))
 }
 
 fn handle_delete_symbol(editor: &mut ProjectEditor, symbol_id: &str) -> ApiResult {
@@ -108,10 +102,7 @@ fn handle_delete_symbol(editor: &mut ProjectEditor, symbol_id: &str) -> ApiResul
         Err(e) => return e,
     };
     let op = EditOp::DeleteSymbol { handle, symbol_id: symbol_id.to_string() };
-    publish_result(
-        "DeleteSymbol",
-        publish_edit_event(&editor.project_root, op.to_event(editor.project_root.to_string_lossy().as_ref())),
-    )
+    publish_result("DeleteSymbol", publish_edit_event(&editor.project_root, op.to_event(editor.project_root.to_string_lossy().as_ref())))
 }
 
 pub fn dispatch(editor: &mut ProjectEditor, op: &ApiOp) -> ApiResult {
@@ -127,11 +118,8 @@ pub fn dispatch(editor: &mut ProjectEditor, op: &ApiOp) -> ApiResult {
             publish_result("RenameModule", publish_edit_event(&editor.project_root, event))
         }
         ApiOp::RenameDir { old_dir, new_dir } => {
-            let event = canon_event::EditEvent::RenameDir(canon_event::RenameDir {
-                project: editor.project_root.to_string_lossy().to_string(),
-                old: PathBuf::from(old_dir),
-                new: PathBuf::from(new_dir),
-            });
+            let event =
+                canon_event::EditEvent::RenameDir(canon_event::RenameDir { project: editor.project_root.to_string_lossy().to_string(), old: PathBuf::from(old_dir), new: PathBuf::from(new_dir) });
             publish_result("RenameDir", publish_edit_event(&editor.project_root, event))
         }
         ApiOp::Help | ApiOp::ListOps => {

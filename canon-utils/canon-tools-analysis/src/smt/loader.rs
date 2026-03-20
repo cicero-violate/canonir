@@ -1,22 +1,10 @@
 use anyhow::{anyhow, Result};
+pub use canon_types::{edge_kind_str, node_kind_str, parse_edge_kind, parse_node_kind, Edge, EdgeKind, Metadata, Node, NodeKind, SCHEMA_VERSION};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-pub use canon_types::{
-    edge_kind_str,
-    node_kind_str,
-    parse_edge_kind,
-    parse_node_kind,
-    Edge,
-    EdgeKind,
-    Metadata,
-    Node,
-    NodeKind,
-    SCHEMA_VERSION,
-};
-
 
 #[derive(Debug, Clone)]
 pub struct AnalysisGraph {
@@ -44,18 +32,7 @@ pub fn load_dir(dir: &Path) -> Result<AnalysisGraph> {
     let edge_kinds = read_edge_kinds(dir.join("edge_kinds.txt"))?;
 
     let id_to_index: HashMap<u32, usize> = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
-    Ok(AnalysisGraph {
-        nodes,
-        edges,
-        row_ptr,
-        col_idx,
-        repair_surface,
-        errors,
-        metadata,
-        node_kinds,
-        edge_kinds,
-        id_to_index,
-    })
+    Ok(AnalysisGraph { nodes, edges, row_ptr, col_idx, repair_surface, errors, metadata, node_kinds, edge_kinds, id_to_index })
 }
 
 fn read_nodes_csv(path: PathBuf) -> Result<Vec<Node>> {
@@ -96,16 +73,7 @@ fn read_nodes_csv(path: PathBuf) -> Result<Vec<Node>> {
         };
         let file = files.get(file_id as usize).cloned().unwrap_or_default();
         let symbol = parts[2..parts.len() - 4].join(",");
-        nodes.push(Node {
-            id,
-            kind,
-            symbol,
-            file,
-            line: line_no,
-            column: col,
-            file_id: Some(file_id),
-            parent: Some(parent),
-        });
+        nodes.push(Node { id, kind, symbol, file, line: line_no, column: col, file_id: Some(file_id), parent: Some(parent) });
     }
     Ok(nodes)
 }
@@ -182,14 +150,9 @@ fn read_json(path: PathBuf) -> Value {
 
 fn read_metadata(path: PathBuf) -> Result<Metadata> {
     let content = fs::read_to_string(path)?;
-    let meta: Metadata = serde_json::from_str(&content)
-        .map_err(|e| anyhow!("metadata.json parse error: {e}"))?;
+    let meta: Metadata = serde_json::from_str(&content).map_err(|e| anyhow!("metadata.json parse error: {e}"))?;
     if meta.schema_version != SCHEMA_VERSION {
-        return Err(anyhow!(
-            "schema version mismatch: expected {}, found {} — re-run the UPG extractor",
-            SCHEMA_VERSION,
-            meta.schema_version
-        ));
+        return Err(anyhow!("schema version mismatch: expected {}, found {} — re-run the UPG extractor", SCHEMA_VERSION, meta.schema_version));
     }
     Ok(meta)
 }

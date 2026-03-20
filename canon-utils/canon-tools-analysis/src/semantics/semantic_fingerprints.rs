@@ -14,22 +14,13 @@ pub struct FingerprintSummary {
 }
 
 pub fn compute_fingerprints(graph: &CodeGraph) -> Vec<FingerprintSummary> {
-    let id_to_kind: HashMap<u32, &str> =
-        graph.nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
+    let id_to_kind: HashMap<u32, &str> = graph.nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
     let mut out = Vec::new();
 
     let mut counts: HashMap<&str, FingerprintSummary> = HashMap::new();
     for e in &graph.edges {
         let src_kind = id_to_kind.get(&e.src).copied().unwrap_or("UNKNOWN");
-        let entry = counts.entry(src_kind).or_insert(FingerprintSummary {
-            kind: src_kind.to_string(),
-            has_block: 0,
-            has_param: 0,
-            has_return: 0,
-            callsite_calls: 0,
-            blocks_flow: 0,
-            blocks_unwind: 0,
-        });
+        let entry = counts.entry(src_kind).or_insert(FingerprintSummary { kind: src_kind.to_string(), has_block: 0, has_param: 0, has_return: 0, callsite_calls: 0, blocks_flow: 0, blocks_unwind: 0 });
         match e.kind.as_str() {
             "HAS_BLOCK" => entry.has_block += 1,
             "HAS_PARAM" => entry.has_param += 1,

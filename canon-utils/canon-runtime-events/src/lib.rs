@@ -1,8 +1,8 @@
-pub mod events;
 pub mod emit;
+pub mod events;
+pub mod macros;
 pub mod schema;
 pub mod tlog;
-pub mod macros;
 
 /// Generate a [`RustcEventConsumer`] impl for a concrete type.
 ///
@@ -20,72 +20,20 @@ macro_rules! impl_rustc_consumer {
             fn mask(&self) -> $crate::EventMask {
                 $mask
             }
-            fn on_event(
-                &mut self,
-                delta: &canon_types::EventDelta,
-                state: &canon_types::RustcState,
-            ) {
+            fn on_event(&mut self, delta: &canon_types::EventDelta, state: &canon_types::RustcState) {
                 self.$handler(delta, state);
             }
         }
     };
 }
 
-pub use events::{
-    EVENT_SCHEMA_VERSION,
-    CanonEvent,
-    EditEvent,
-    EventConsumer,
-    EventEmitter,
-    EventEmitterHandle,
-    EventFilter,
-    EventMask,
-    RustcEventConsumer,
-    RenameSymbol,
-    MoveSymbol,
-    DeleteSymbol,
-    RenameModule,
-    RenameDir,
-    InlineModule,
-    ExtractModule,
-    Code,
-    DebugEvent,
-    ErrorOccurred,
-    new_error_occurred,
-    Tick,
-    LoopObserved,
-    LoopPlanned,
-    LoopActed,
-    LoopVerified,
-    LoopRewarded,
-    RuntimeStateUpdated,
-    PolicyBaselineUpdated,
-    GoalSelected,
-    SystemConfigLoaded,
-    AgentRegistered,
-    PromptLoaded,
-    ToolCall,
-    ToolResult,
-    GoalNodeCreated,
-    GoalNodeRetracted,
-    GoalNodeRewritten,
-    GoalEdgeDefined,
-    GoalGraphCheckpointed,
-    CapabilityInvoked,
-    CapabilityResolved,
-    CapabilityRequested,
-    CapabilityCompleted,
-    CapabilityFailed,
-    NodeReady,
-    NodeStarted,
-    NodeCompleted,
-    NodeFailed,
-};
 pub use emit::*;
-pub use schema::*;
-pub use macros::emit::canon_emit;
-pub use tlog::{
-    emit_event_json, is_binary_tlog,
-    BinarySegmentWriter, BinaryTlogWriter, TlogEvent, RotateConfig, SegmentConfig, TlogWriter,
-    maybe_rotate,
+pub use events::{
+    new_error_occurred, AgentRegistered, CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityInvoked, CapabilityRequested, CapabilityResolved, Code, DebugEvent, DeleteSymbol, EditEvent,
+    ErrorOccurred, EventConsumer, EventEmitter, EventEmitterHandle, EventFilter, EventMask, ExtractModule, GoalEdgeDefined, GoalGraphCheckpointed, GoalNodeCreated, GoalNodeRetracted,
+    GoalNodeRewritten, GoalSelected, InlineModule, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, MoveSymbol, NodeCompleted, NodeFailed, NodeReady, NodeStarted,
+    PolicyBaselineUpdated, PromptLoaded, RenameDir, RenameModule, RenameSymbol, RuntimeStateUpdated, RustcEventConsumer, SystemConfigLoaded, Tick, ToolCall, ToolResult, EVENT_SCHEMA_VERSION,
 };
+pub use macros::emit::canon_emit;
+pub use schema::*;
+pub use tlog::{emit_event_json, is_binary_tlog, maybe_rotate, BinarySegmentWriter, BinaryTlogWriter, RotateConfig, SegmentConfig, TlogEvent, TlogWriter};

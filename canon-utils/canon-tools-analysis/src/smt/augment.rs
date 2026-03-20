@@ -1,7 +1,4 @@
-use crate::smt::loader::{
-    edge_kind_str, node_kind_str, parse_edge_kind, parse_node_kind, Edge, EdgeKind, Metadata,
-    Node, NodeKind, SCHEMA_VERSION,
-};
+use crate::smt::loader::{edge_kind_str, node_kind_str, parse_edge_kind, parse_node_kind, Edge, EdgeKind, Metadata, Node, NodeKind, SCHEMA_VERSION};
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use serde_json::Value;
@@ -45,10 +42,7 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
 
     for (idx, err) in parsed.errors.iter().enumerate() {
         let span = primary_span(err);
-        let (file, line, column) = span
-            .as_ref()
-            .map(|s| (s.file.clone(), s.line_start, s.col_start))
-            .unwrap_or_else(|| ("unknown".to_string(), 0, 0));
+        let (file, line, column) = span.as_ref().map(|s| (s.file.clone(), s.line_start, s.col_start)).unwrap_or_else(|| ("unknown".to_string(), 0, 0));
         let code = err.get("code").and_then(|c| c.get("code")).and_then(|v| v.as_str()).unwrap_or("unknown");
         let symbol = format!("error::{code}::{idx}");
         let node_id = next_id;
@@ -58,16 +52,7 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
             next_file_id = next_file_id.saturating_add(1);
             id
         });
-        nodes.push(Node {
-            id: node_id,
-            kind: NodeKind::Error,
-            symbol,
-            file,
-            line,
-            column,
-            file_id: Some(file_id),
-            parent: Some(0),
-        });
+        nodes.push(Node { id: node_id, kind: NodeKind::Error, symbol, file, line, column, file_id: Some(file_id), parent: Some(0) });
         if let Some(span) = span {
             added_errors.push((node_id, span));
         }
@@ -80,9 +65,7 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
 
         let selected_fn = if function_targets.is_empty() {
             let file_key = normalize_file(&span.file);
-            let nearest = find_nearest_node(&nodes, span, &[NodeKind::Function, NodeKind::Method])
-                .or_else(|| find_nearest_node(&nodes, span, &[NodeKind::Module]))
-                .map(|n| n.id);
+            let nearest = find_nearest_node(&nodes, span, &[NodeKind::Function, NodeKind::Method]).or_else(|| find_nearest_node(&nodes, span, &[NodeKind::Module])).map(|n| n.id);
             if nearest.is_some() {
                 nearest
             } else {
@@ -94,16 +77,7 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
                         next_file_id = next_file_id.saturating_add(1);
                         id
                     });
-                    nodes.push(Node {
-                        id,
-                        kind: NodeKind::Module,
-                        symbol: format!("file::{}", file_key),
-                        file: file_key.clone(),
-                        line: 0,
-                        column: 0,
-                        file_id: Some(file_id),
-                        parent: Some(0),
-                    });
+                    nodes.push(Node { id, kind: NodeKind::Module, symbol: format!("file::{}", file_key), file: file_key.clone(), line: 0, column: 0, file_id: Some(file_id), parent: Some(0) });
                     id
                 });
                 Some(module_id)
@@ -138,18 +112,8 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
         generated_by: "UPG extractor".to_string(),
     };
     let id_to_index = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
-    let graph = crate::smt::loader::AnalysisGraph {
-        nodes,
-        edges,
-        row_ptr,
-        col_idx,
-        repair_surface: Value::Null,
-        errors: Value::Null,
-        metadata,
-        node_kinds: Vec::new(),
-        edge_kinds: Vec::new(),
-        id_to_index,
-    };
+    let graph =
+        crate::smt::loader::AnalysisGraph { nodes, edges, row_ptr, col_idx, repair_surface: Value::Null, errors: Value::Null, metadata, node_kinds: Vec::new(), edge_kinds: Vec::new(), id_to_index };
     let surface = compute_repair_surface(&graph);
     write_repair_surface(out_dir, &surface)?;
 
@@ -169,8 +133,7 @@ fn write_outputs(graph: &crate::smt::loader::AnalysisGraph, output_dir: &Path) -
     write_bin_u32(output_dir.join("csr_col_idx.bin"), &graph.col_idx)?;
     let metadata_path = output_dir.join("metadata.json");
     let file = fs::File::create(metadata_path)?;
-    serde_json::to_writer_pretty(file, &graph.metadata)
-        .map_err(|err| anyhow!("failed to write metadata.json: {err}"))?;
+    serde_json::to_writer_pretty(file, &graph.metadata).map_err(|err| anyhow!("failed to write metadata.json: {err}"))?;
     Ok(())
 }
 
@@ -179,17 +142,7 @@ fn write_nodes_csv(output_dir: &Path, nodes: &[Node]) -> Result<()> {
     let mut file = fs::File::create(path)?;
     writeln!(file, "node_id,node_kind,symbol,file_id,line,column,parent")?;
     for node in nodes {
-        writeln!(
-            file,
-            "{},{},{},{},{},{},{}",
-            node.id,
-            node_kind_str(node.kind),
-            sanitize_csv_field(&node.symbol),
-            node.file_id.unwrap_or(0),
-            node.line,
-            node.column,
-            node.parent.unwrap_or(0)
-        )?;
+        writeln!(file, "{},{},{},{},{},{},{}", node.id, node_kind_str(node.kind), sanitize_csv_field(&node.symbol), node.file_id.unwrap_or(0), node.line, node.column, node.parent.unwrap_or(0))?;
     }
     Ok(())
 }
@@ -208,10 +161,7 @@ fn write_files_txt(output_dir: &Path, nodes: &[Node]) -> Result<()> {
     let path = output_dir.join("files.txt");
     let mut file = fs::File::create(path)?;
     writeln!(file, "file_id,path")?;
-    let mut entries: Vec<(u32, String)> = nodes
-        .iter()
-        .map(|n| (n.file_id.unwrap_or(0), n.file.clone()))
-        .collect();
+    let mut entries: Vec<(u32, String)> = nodes.iter().map(|n| (n.file_id.unwrap_or(0), n.file.clone())).collect();
     entries.sort_by_key(|(id, _)| *id);
     entries.dedup_by_key(|(id, _)| *id);
     for (id, path_str) in entries {
@@ -253,13 +203,7 @@ fn compute_repair_surface(graph: &crate::smt::loader::AnalysisGraph) -> Vec<Repa
     let mut entries: Vec<RepairSurfaceEntry> = Vec::new();
     for (fn_id, count) in fn_counts {
         if let Some(node) = graph.nodes.iter().find(|n| n.id == fn_id) {
-            entries.push(RepairSurfaceEntry {
-                node_id: node.id,
-                symbol: node.symbol.clone(),
-                file: node.file.clone(),
-                line: node.line,
-                error_count: count,
-            });
+            entries.push(RepairSurfaceEntry { node_id: node.id, symbol: node.symbol.clone(), file: node.file.clone(), line: node.line, error_count: count });
         }
     }
     entries.sort_by(|a, b| b.error_count.cmp(&a.error_count).then_with(|| a.symbol.cmp(&b.symbol)));
@@ -291,21 +235,12 @@ fn primary_span(err: &Value) -> Option<ErrorSpan> {
 
 fn find_nodes_at_span<'a>(nodes: &'a [Node], span: &ErrorSpan, kind: NodeKind) -> Vec<&'a Node> {
     let span_file = normalize_file(&span.file);
-    nodes
-        .iter()
-        .filter(|n| n.kind == kind)
-        .filter(|n| files_match(&normalize_file(&n.file), &span_file))
-        .filter(|n| n.line >= span.line_start && n.line <= span.line_end)
-        .collect()
+    nodes.iter().filter(|n| n.kind == kind).filter(|n| files_match(&normalize_file(&n.file), &span_file)).filter(|n| n.line >= span.line_start && n.line <= span.line_end).collect()
 }
 
 fn find_nearest_node<'a>(nodes: &'a [Node], span: &ErrorSpan, kinds: &[NodeKind]) -> Option<&'a Node> {
     let span_file = normalize_file(&span.file);
-    let mut candidates: Vec<&Node> = nodes
-        .iter()
-        .filter(|n| kinds.contains(&n.kind))
-        .filter(|n| files_match(&normalize_file(&n.file), &span_file))
-        .collect();
+    let mut candidates: Vec<&Node> = nodes.iter().filter(|n| kinds.contains(&n.kind)).filter(|n| files_match(&normalize_file(&n.file), &span_file)).collect();
     if candidates.is_empty() {
         return None;
     }
@@ -361,16 +296,7 @@ fn read_nodes_csv(path: PathBuf) -> Result<Vec<Node>> {
         let parent = parts[parts.len() - 1].parse::<u32>().unwrap_or(0);
         let file = files.get(file_id as usize).cloned().unwrap_or_default();
         let symbol = parts[2..parts.len() - 4].join(",");
-        nodes.push(Node {
-            id,
-            kind,
-            symbol,
-            file,
-            line: line_no,
-            column: col,
-            file_id: Some(file_id),
-            parent: Some(parent),
-        });
+        nodes.push(Node { id, kind, symbol, file, line: line_no, column: col, file_id: Some(file_id), parent: Some(parent) });
     }
     Ok(nodes)
 }
@@ -451,22 +377,7 @@ fn sanitize_csv_field(raw: &str) -> String {
 }
 
 fn write_kinds(output_dir: &Path) -> Result<()> {
-    let node_kinds = [
-        "FUNCTION",
-        "METHOD",
-        "STRUCT",
-        "ENUM",
-        "TRAIT",
-        "IMPL",
-        "FIELD",
-        "PARAM",
-        "VARIABLE",
-        "MODULE",
-        "TYPE",
-        "BASIC_BLOCK",
-        "CALL_SITE",
-        "ERROR",
-    ];
+    let node_kinds = ["FUNCTION", "METHOD", "STRUCT", "ENUM", "TRAIT", "IMPL", "FIELD", "PARAM", "VARIABLE", "MODULE", "TYPE", "BASIC_BLOCK", "CALL_SITE", "ERROR"];
     let edge_kinds = [
         "HAS_FIELD",
         "HAS_METHOD",

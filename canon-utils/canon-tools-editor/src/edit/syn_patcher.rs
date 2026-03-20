@@ -1,5 +1,5 @@
-use canon_types::SpanRange;
 use anyhow::{anyhow, Result};
+use canon_types::SpanRange;
 
 #[derive(Clone, Debug)]
 pub struct SpanReplacement {
@@ -23,12 +23,7 @@ pub fn patch_file(src: &str, spans: &[SpanReplacement]) -> Result<String> {
             return Err(anyhow!("invalid span {}..{}", lo, hi));
         }
         if hi > cursor {
-            return Err(anyhow!(
-                "overlapping spans: span {}..{} conflicts with already-applied region ending at {}",
-                lo,
-                hi,
-                cursor
-            ));
+            return Err(anyhow!("overlapping spans: span {}..{} conflicts with already-applied region ending at {}", lo, hi, cursor));
         }
         chunks.push(src_bytes[hi..cursor].to_vec());
         chunks.push(span.replacement.as_bytes().to_vec());

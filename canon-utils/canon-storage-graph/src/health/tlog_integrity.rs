@@ -3,10 +3,7 @@ use std::fs;
 use std::io::BufRead;
 use std::path::Path;
 
-use canon_event_store::{
-    extract_rustc_event, find_last_session_offset, parse_any_event, read_any_events_from_path,
-    AnyEvent,
-};
+use canon_event_store::{extract_rustc_event, find_last_session_offset, parse_any_event, read_any_events_from_path, AnyEvent};
 use canon_types::RustcEvent;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -41,18 +38,16 @@ pub fn write_tlog_integrity_report(tlog_path: &Path, reports_dir: &Path) -> Resu
         let mut hash_chain: u64 = 0;
         for event in events {
             line_count += 1;
-        if let AnyEvent::Canon(canon) = event {
-            hash_chain = hash_chain.wrapping_mul(1315423911).wrapping_add(hash_bytes(
-                serde_json::to_string(&canon).unwrap_or_default().as_bytes(),
-            ));
-            if let Some(kernel) = extract_rustc_event(&canon) {
-                if let RustcEvent::SessionStart(_) = kernel {
-                    session_count += 1;
+            if let AnyEvent::Canon(canon) = event {
+                hash_chain = hash_chain.wrapping_mul(1315423911).wrapping_add(hash_bytes(serde_json::to_string(&canon).unwrap_or_default().as_bytes()));
+                if let Some(kernel) = extract_rustc_event(&canon) {
+                    if let RustcEvent::SessionStart(_) = kernel {
+                        session_count += 1;
+                    }
+                } else {
+                    parse_errors += 1;
                 }
-            } else {
-                parse_errors += 1;
             }
-        }
         }
         let report = TlogIntegrityReport {
             tlog_path: tlog_path.to_string_lossy().to_string(),
@@ -66,10 +61,7 @@ pub fn write_tlog_integrity_report(tlog_path: &Path, reports_dir: &Path) -> Resu
             hash_chain_last: hash_chain,
             replay_determinism_ok: parse_errors == 0,
         };
-        fs::write(
-            reports_dir.join("tlog_integrity.json"),
-            serde_json::to_string_pretty(&report)?,
-        )?;
+        fs::write(reports_dir.join("tlog_integrity.json"), serde_json::to_string_pretty(&report)?)?;
         return Ok(());
     }
     let file = fs::File::open(tlog_path)?;
@@ -96,17 +88,25 @@ pub fn write_tlog_integrity_report(tlog_path: &Path, reports_dir: &Path) -> Resu
             if let Some(idx) = line.find("{\"t\":\"SESSION\"") {
                 if idx > 0 {
                     let (prefix, suffix) = line.split_at(idx);
-            if let Some(event) = parse_any_event(prefix) {
-                if let AnyEvent::Canon(canon) = event {
-                    if let Some(value) = extract_rustc_event(&canon) {
-                        if apply_tlog_integrity_record(&value, slice_offset, &idx_offset, &mut session_count, &mut last_session_offset_found, &mut session_offsets_monotonic, &mut last_session_offset_seen) {
-                            // ok
+                    if let Some(event) = parse_any_event(prefix) {
+                        if let AnyEvent::Canon(canon) = event {
+                            if let Some(value) = extract_rustc_event(&canon) {
+                                if apply_tlog_integrity_record(
+                                    &value,
+                                    slice_offset,
+                                    &idx_offset,
+                                    &mut session_count,
+                                    &mut last_session_offset_found,
+                                    &mut session_offsets_monotonic,
+                                    &mut last_session_offset_seen,
+                                ) {
+                                    // ok
+                                }
+                            }
                         }
+                    } else {
+                        parse_errors += 1;
                     }
-                }
-            } else {
-                parse_errors += 1;
-            }
                     slice_offset = slice_offset.saturating_add(idx as u64);
                     line = suffix;
                     continue;
@@ -115,7 +115,15 @@ pub fn write_tlog_integrity_report(tlog_path: &Path, reports_dir: &Path) -> Resu
             if let Some(event) = parse_any_event(line) {
                 if let AnyEvent::Canon(canon) = event {
                     if let Some(value) = extract_rustc_event(&canon) {
-                        if apply_tlog_integrity_record(&value, slice_offset, &idx_offset, &mut session_count, &mut last_session_offset_found, &mut session_offsets_monotonic, &mut last_session_offset_seen) {
+                        if apply_tlog_integrity_record(
+                            &value,
+                            slice_offset,
+                            &idx_offset,
+                            &mut session_count,
+                            &mut last_session_offset_found,
+                            &mut session_offsets_monotonic,
+                            &mut last_session_offset_seen,
+                        ) {
                             // ok
                         }
                     }
@@ -145,12 +153,7 @@ pub fn write_tlog_integrity_report(tlog_path: &Path, reports_dir: &Path) -> Resu
 }
 
 fn apply_tlog_integrity_record(
-    value: &RustcEvent,
-    line_start: u64,
-    idx_offset: &Option<u64>,
-    session_count: &mut u64,
-    last_session_offset_found: &mut bool,
-    session_offsets_monotonic: &mut bool,
+    value: &RustcEvent, line_start: u64, idx_offset: &Option<u64>, session_count: &mut u64, last_session_offset_found: &mut bool, session_offsets_monotonic: &mut bool,
     last_session_offset_seen: &mut Option<u64>,
 ) -> bool {
     let RustcEvent::SessionStart(canon_types::SessionStart { byte_offset, .. }) = value else {

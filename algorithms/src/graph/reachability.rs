@@ -74,15 +74,7 @@ pub fn reachability_batched_flat_gpu(csr: &Csr, roots: &[usize]) -> Vec<i32> {
     let roots_i32: Vec<i32> = roots.iter().map(|&x| x as i32).collect();
     let mut out = vec![0i32; r * v];
     unsafe {
-        gpu_reachability_batched(
-            csr.row_ptr.as_ptr(),
-            csr.col_idx.as_ptr(),
-            v as i32,
-            csr.edge_count() as i32,
-            roots_i32.as_ptr(),
-            r as i32,
-            out.as_mut_ptr(),
-        );
+        gpu_reachability_batched(csr.row_ptr.as_ptr(), csr.col_idx.as_ptr(), v as i32, csr.edge_count() as i32, roots_i32.as_ptr(), r as i32, out.as_mut_ptr());
     }
     out
 }
@@ -98,15 +90,7 @@ pub fn reachability_tc_gpu(csr: &Csr, max_iters: usize) -> Vec<u64> {
     let w = (v + 63) / 64;
     let mut out = vec![0u64; v * w];
     unsafe {
-        gpu_reachability_tc(
-            csr.row_ptr.as_ptr(),
-            csr.col_idx.as_ptr(),
-            v as i32,
-            csr.edge_count() as i32,
-            w as i32,
-            max_iters as i32,
-            out.as_mut_ptr(),
-        );
+        gpu_reachability_tc(csr.row_ptr.as_ptr(), csr.col_idx.as_ptr(), v as i32, csr.edge_count() as i32, w as i32, max_iters as i32, out.as_mut_ptr());
     }
     out
 }

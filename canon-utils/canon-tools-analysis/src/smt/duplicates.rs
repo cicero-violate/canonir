@@ -1,10 +1,10 @@
 use crate::smt::loader::{AnalysisGraph, EdgeKind, NodeKind};
-use anyhow::{anyhow, Result};
-use algorithms::graph::reachability::reachability_batched_gpu;
 use algorithms::graph::csr::Csr;
 use algorithms::graph::feature_gpu::edge_kind_histogram_gpu;
+use algorithms::graph::reachability::reachability_batched_gpu;
 #[cfg(feature = "cuda")]
 use algorithms::numerical::gpu::cosine_distance_gpu;
+use anyhow::{anyhow, Result};
 use serde::Serialize;
 
 #[cfg(not(feature = "cuda"))]
@@ -34,13 +34,7 @@ pub fn find_duplicates(graph: &AnalysisGraph, epsilon: f32) -> Result<DuplicateR
 
     let call_csr = build_kind_csr(graph, EdgeKind::Call);
     let rev_csr = reverse_csr(&call_csr);
-    let candidates: Vec<usize> = graph
-        .nodes
-        .iter()
-        .enumerate()
-        .filter(|(_, n)| matches!(n.kind, NodeKind::Function | NodeKind::Method))
-        .map(|(i, _)| i)
-        .collect();
+    let candidates: Vec<usize> = graph.nodes.iter().enumerate().filter(|(_, n)| matches!(n.kind, NodeKind::Function | NodeKind::Method)).map(|(i, _)| i).collect();
 
     let m = candidates.len();
     let mut phi_flat = vec![0.0f32; m * kind_count];
@@ -64,12 +58,7 @@ pub fn find_duplicates(graph: &AnalysisGraph, epsilon: f32) -> Result<DuplicateR
                 let a = candidates[i];
                 let b = candidates[j];
                 let reachable = ancestors[i].iter().zip(ancestors[j].iter()).any(|(x, y)| *x && *y);
-                pairs.push(DuplicatePair {
-                    left: graph.nodes[a].id,
-                    right: graph.nodes[b].id,
-                    distance: dist,
-                    reachable,
-                });
+                pairs.push(DuplicatePair { left: graph.nodes[a].id, right: graph.nodes[b].id, distance: dist, reachable });
             }
         }
     }

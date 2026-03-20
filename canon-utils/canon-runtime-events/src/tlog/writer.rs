@@ -22,19 +22,8 @@ impl TlogWriter {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .read(true)
-            .open(path)?;
-        Ok(Self {
-            path: path.to_path_buf(),
-            file: Mutex::new(BufWriter::new(file)),
-            fsync: false,
-            retries: 2,
-            retry_delay_ms: 10,
-            rotate: RotateConfig::default(),
-        })
+        let file = OpenOptions::new().create(true).append(true).read(true).open(path)?;
+        Ok(Self { path: path.to_path_buf(), file: Mutex::new(BufWriter::new(file)), fsync: false, retries: 2, retry_delay_ms: 10, rotate: RotateConfig::default() })
     }
 
     pub fn with_fsync(mut self, enabled: bool) -> Self {
@@ -89,12 +78,7 @@ impl TlogWriter {
     }
 }
 
-pub fn emit_event_json(
-    path: &Path,
-    source: impl Into<String>,
-    kind: impl Into<String>,
-    payload: serde_json::Value,
-) -> Result<()> {
+pub fn emit_event_json(path: &Path, source: impl Into<String>, kind: impl Into<String>, payload: serde_json::Value) -> Result<()> {
     let event = TlogEvent::new(source, kind, payload);
     let writer = TlogWriter::open(path)?;
     writer.write_event(&event)

@@ -1,5 +1,5 @@
-use canon_types::{parse_edge_kind, parse_node_kind, Edge, EdgeKind, Node, NodeKind};
 use anyhow::{anyhow, Result};
+use canon_types::{parse_edge_kind, parse_node_kind, Edge, EdgeKind, Node, NodeKind};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -39,24 +39,12 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
 
     for (idx, err) in parsed.errors.iter().enumerate() {
         let span = primary_span(err);
-        let (file, line, column) = span
-            .as_ref()
-            .map(|s| (s.file.clone(), s.line_start, s.col_start))
-            .unwrap_or_else(|| ("unknown".to_string(), 0, 0));
+        let (file, line, column) = span.as_ref().map(|s| (s.file.clone(), s.line_start, s.col_start)).unwrap_or_else(|| ("unknown".to_string(), 0, 0));
         let code = err.get("code").and_then(|c| c.get("code")).and_then(|v| v.as_str()).unwrap_or("unknown");
         let symbol = format!("error::{code}::{idx}");
         let node_id = next_id;
         next_id = next_id.saturating_add(1);
-        nodes.push(Node {
-            id: node_id,
-            kind: NodeKind::Error,
-            symbol,
-            file,
-            line,
-            column,
-            file_id: None,
-            parent: None,
-        });
+        nodes.push(Node { id: node_id, kind: NodeKind::Error, symbol, file, line, column, file_id: None, parent: None });
         if let Some(span) = span {
             added_errors.push((node_id, span));
         }
@@ -69,25 +57,14 @@ pub fn augment_with_errors(output_dir: &Path, errors_json: &Path, out_dir: &Path
 
         let selected_fn = if function_targets.is_empty() {
             let file_key = normalize_file(&span.file);
-            let nearest = find_nearest_node(&nodes, span, &[NodeKind::Function, NodeKind::Method])
-                .or_else(|| find_nearest_node(&nodes, span, &[NodeKind::Module]))
-                .map(|n| n.id);
+            let nearest = find_nearest_node(&nodes, span, &[NodeKind::Function, NodeKind::Method]).or_else(|| find_nearest_node(&nodes, span, &[NodeKind::Module])).map(|n| n.id);
             if nearest.is_some() {
                 nearest
             } else {
                 let module_id = *synthetic_modules.entry(file_key.clone()).or_insert_with(|| {
                     let id = next_id;
                     next_id = next_id.saturating_add(1);
-                    nodes.push(Node {
-                        id,
-                        kind: NodeKind::Module,
-                        symbol: format!("file::{}", file_key),
-                        file: file_key.clone(),
-                        line: 0,
-                        column: 0,
-                        file_id: None,
-                        parent: None,
-                    });
+                    nodes.push(Node { id, kind: NodeKind::Module, symbol: format!("file::{}", file_key), file: file_key.clone(), line: 0, column: 0, file_id: None, parent: None });
                     id
                 });
                 Some(module_id)
@@ -150,13 +127,7 @@ fn build_repair_surface(graph: &Graph) -> Vec<RepairSurfaceEntry> {
     let mut entries: Vec<RepairSurfaceEntry> = Vec::new();
     for (fn_id, count) in fn_counts {
         if let Some(node) = graph.nodes.iter().find(|n| n.id == fn_id) {
-            entries.push(RepairSurfaceEntry {
-                node_id: node.id,
-                symbol: node.symbol.clone(),
-                file: node.file.clone(),
-                line: node.line,
-                error_count: count,
-            });
+            entries.push(RepairSurfaceEntry { node_id: node.id, symbol: node.symbol.clone(), file: node.file.clone(), line: node.line, error_count: count });
         }
     }
     entries.sort_by(|a, b| b.error_count.cmp(&a.error_count).then_with(|| a.symbol.cmp(&b.symbol)));
@@ -188,21 +159,12 @@ fn primary_span(err: &Value) -> Option<ErrorSpan> {
 
 fn find_nodes_at_span<'a>(nodes: &'a [Node], span: &ErrorSpan, kind: NodeKind) -> Vec<&'a Node> {
     let span_file = normalize_file(&span.file);
-    nodes
-        .iter()
-        .filter(|n| n.kind == kind)
-        .filter(|n| files_match(&normalize_file(&n.file), &span_file))
-        .filter(|n| n.line >= span.line_start && n.line <= span.line_end)
-        .collect()
+    nodes.iter().filter(|n| n.kind == kind).filter(|n| files_match(&normalize_file(&n.file), &span_file)).filter(|n| n.line >= span.line_start && n.line <= span.line_end).collect()
 }
 
 fn find_nearest_node<'a>(nodes: &'a [Node], span: &ErrorSpan, kinds: &[NodeKind]) -> Option<&'a Node> {
     let span_file = normalize_file(&span.file);
-    let mut candidates: Vec<&Node> = nodes
-        .iter()
-        .filter(|n| kinds.contains(&n.kind))
-        .filter(|n| files_match(&normalize_file(&n.file), &span_file))
-        .collect();
+    let mut candidates: Vec<&Node> = nodes.iter().filter(|n| kinds.contains(&n.kind)).filter(|n| files_match(&normalize_file(&n.file), &span_file)).collect();
     if candidates.is_empty() {
         return None;
     }
@@ -257,16 +219,7 @@ fn read_nodes_csv(path: PathBuf) -> Result<Vec<Node>> {
         let file_id = parts[parts.len() - 4].parse::<usize>()?;
         let file = files.get(file_id).cloned().unwrap_or_default();
         let symbol = parts[2..parts.len() - 4].join(",");
-        nodes.push(Node {
-            id,
-            kind,
-            symbol,
-            file,
-            line: line_no,
-            column: col,
-            file_id: None,
-            parent: None,
-        });
+        nodes.push(Node { id, kind, symbol, file, line: line_no, column: col, file_id: None, parent: None });
     }
     Ok(nodes)
 }

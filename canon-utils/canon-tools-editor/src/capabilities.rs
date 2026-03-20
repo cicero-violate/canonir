@@ -1,5 +1,5 @@
-use canon_capability::{CapabilityHandler, CapabilityExecutionContext, CapabilityRegistry, CapabilityExecutionResult};
-use canon_event::{EditEvent, CanonEvent};
+use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityHandler, CapabilityRegistry};
+use canon_event::{CanonEvent, EditEvent};
 
 pub const CAP_RENAME_SYMBOL: &str = "edit.rename_symbol";
 pub const CAP_MOVE_SYMBOL: &str = "edit.move_symbol";
@@ -16,9 +16,7 @@ pub fn register_editor_capabilities(registry: &mut CapabilityRegistry) {
 }
 
 fn require_arg<'a>(args: &'a serde_json::Value, key: &str) -> anyhow::Result<&'a str> {
-    args.get(key)
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("missing or invalid arg: {key}"))
+    args.get(key).and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("missing or invalid arg: {key}"))
 }
 
 fn emit_edit(event: EditEvent) -> CapabilityExecutionResult {
@@ -39,11 +37,7 @@ impl CapabilityHandler for RenameSymbolCapability {
         let project = require_arg(&request.args, "project")?;
         let old = require_arg(&request.args, "old")?;
         let new = require_arg(&request.args, "new")?;
-        Ok(emit_edit(EditEvent::RenameSymbol(canon_event::RenameSymbol {
-            project: project.to_string(),
-            old: old.to_string(),
-            new: new.to_string(),
-        })))
+        Ok(emit_edit(EditEvent::RenameSymbol(canon_event::RenameSymbol { project: project.to_string(), old: old.to_string(), new: new.to_string() })))
     }
 }
 
@@ -61,11 +55,7 @@ impl CapabilityHandler for MoveSymbolCapability {
         let project = require_arg(&request.args, "project")?;
         let symbol = require_arg(&request.args, "symbol")?;
         let module = require_arg(&request.args, "module")?;
-        Ok(emit_edit(EditEvent::MoveSymbol(canon_event::MoveSymbol {
-            project: project.to_string(),
-            symbol: symbol.to_string(),
-            module: module.to_string(),
-        })))
+        Ok(emit_edit(EditEvent::MoveSymbol(canon_event::MoveSymbol { project: project.to_string(), symbol: symbol.to_string(), module: module.to_string() })))
     }
 }
 
@@ -82,10 +72,7 @@ impl CapabilityHandler for DeleteSymbolCapability {
         };
         let project = require_arg(&request.args, "project")?;
         let symbol = require_arg(&request.args, "symbol")?;
-        Ok(emit_edit(EditEvent::DeleteSymbol(canon_event::DeleteSymbol {
-            project: project.to_string(),
-            symbol: symbol.to_string(),
-        })))
+        Ok(emit_edit(EditEvent::DeleteSymbol(canon_event::DeleteSymbol { project: project.to_string(), symbol: symbol.to_string() })))
     }
 }
 
@@ -103,11 +90,7 @@ impl CapabilityHandler for RenameModuleCapability {
         let project = require_arg(&request.args, "project")?;
         let old = require_arg(&request.args, "old")?;
         let new = require_arg(&request.args, "new")?;
-        Ok(emit_edit(EditEvent::RenameModule(canon_event::RenameModule {
-            project: project.to_string(),
-            old: old.to_string(),
-            new: new.to_string(),
-        })))
+        Ok(emit_edit(EditEvent::RenameModule(canon_event::RenameModule { project: project.to_string(), old: old.to_string(), new: new.to_string() })))
     }
 }
 
@@ -125,11 +108,6 @@ impl CapabilityHandler for RenameDirCapability {
         let project = require_arg(&request.args, "project")?;
         let old = require_arg(&request.args, "old")?;
         let new = require_arg(&request.args, "new")?;
-        Ok(emit_edit(EditEvent::RenameDir(canon_event::RenameDir {
-            project: project.to_string(),
-            old: old.into(),
-            new: new.into(),
-        })))
+        Ok(emit_edit(EditEvent::RenameDir(canon_event::RenameDir { project: project.to_string(), old: old.into(), new: new.into() })))
     }
 }
-

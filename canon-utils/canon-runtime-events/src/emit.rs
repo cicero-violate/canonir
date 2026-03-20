@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::tlog::{emit_event_json, BinarySegmentWriter, TlogEvent};
+use anyhow::Result;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -19,10 +19,7 @@ pub fn resolve_tlog_path(project_root: Option<&Path>, override_env: Option<&str>
         return PathBuf::from(path);
     }
     if let Some(root) = project_root {
-        return root
-            .join("state")
-            .join("event_log")
-            .join("event.tlog.d");
+        return root.join("state").join("event_log").join("event.tlog.d");
     }
     PathBuf::from("/workspace/ai_sandbox/canon/state/event_log/event.tlog.d")
 }
@@ -34,17 +31,10 @@ pub fn resolve_tlog_path(project_root: Option<&Path>, override_env: Option<&str>
 pub fn write_event_auto(path: &Path, event: &TlogEvent) -> Result<()> {
     let path_str = path.to_string_lossy();
     let is_segment_dir = path.is_dir() || path_str.ends_with(".tlog.d");
-    let force_jsonl = matches!(
-        std::env::var("CANON_TLOG_FORMAT").as_deref(),
-        Ok("jsonl") | Ok("JSONL")
-    );
+    let force_jsonl = matches!(std::env::var("CANON_TLOG_FORMAT").as_deref(), Ok("jsonl") | Ok("JSONL"));
 
     if is_segment_dir || !force_jsonl {
-        let dir = if is_segment_dir {
-            path.to_path_buf()
-        } else {
-            path.with_extension("tlog.d")
-        };
+        let dir = if is_segment_dir { path.to_path_buf() } else { path.with_extension("tlog.d") };
         WRITER_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
             if !cache.contains_key(&dir) {

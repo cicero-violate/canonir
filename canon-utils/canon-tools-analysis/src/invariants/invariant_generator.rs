@@ -9,13 +9,5 @@ pub struct InvariantCandidate {
 }
 
 pub fn generate_candidates(patterns: &[PatternRule]) -> Vec<InvariantCandidate> {
-    patterns
-        .iter()
-        .filter(|p| p.support >= 0.98 && p.confidence >= 0.99)
-        .map(|p| InvariantCandidate {
-            rule: p.rule.clone(),
-            support: p.support,
-            confidence: p.confidence,
-        })
-        .collect()
+    patterns.iter().filter(|p| p.support >= 0.98 && p.confidence >= 0.99).map(|p| InvariantCandidate { rule: p.rule.clone(), support: p.support, confidence: p.confidence }).collect()
 }

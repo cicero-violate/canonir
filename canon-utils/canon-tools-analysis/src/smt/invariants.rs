@@ -29,11 +29,7 @@ pub fn analyze_invariants(graph: &AnalysisGraph) -> InvariantReport {
     let invariant_mask = vec![1u8; node_count];
     let model_check_ok = model_check_gpu(&flow, &[0], &invariant_mask);
 
-    InvariantReport {
-        dominator_words,
-        reaching_defs_words,
-        model_check_ok,
-    }
+    InvariantReport { dominator_words, reaching_defs_words, model_check_ok }
 }
 
 fn map_id(graph: &AnalysisGraph, id: u32) -> Option<usize> {

@@ -55,11 +55,7 @@ impl LlmWorker {
                 return;
             }
         }
-        let full_prompt = if req.role_schema.trim().is_empty() {
-            req.prompt
-        } else {
-            format!("{}\n\n{}", req.role_schema.trim_end(), req.prompt)
-        };
+        let full_prompt = if req.role_schema.trim().is_empty() { req.prompt } else { format!("{}\n\n{}", req.role_schema.trim_end(), req.prompt) };
         let prompt_chars = full_prompt.len();
         let full_prompt = if prompt_chars > 120_000 {
             let truncated = &full_prompt[..120_000];
@@ -144,42 +140,25 @@ impl LlmWorker {
         let hash = llm_worker_stable_hash64(&raw);
         if !self.seen_hashes.insert(hash) {
             // Duplicate outputs can legitimately occur for verify/observe steps; don't fail the call.
-            tab_manager_log_llm(format!(
-                "phase={} endpoint={} tab={} duplicate_hash={}",
-                phase, self.endpoint_id, tab_id, hash
-            ));
+            tab_manager_log_llm(format!("phase={} endpoint={} tab={} duplicate_hash={}", phase, self.endpoint_id, tab_id, hash));
         }
         Ok(raw)
     }
 }
 pub async fn llm_worker_send_request(
-    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool, phase: &str,
-    tabs: &TabManagerHandle, max_tabs: usize, tab_cooldown_ms: u64,
+    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
+    phase: &str, tabs: &TabManagerHandle, max_tabs: usize, tab_cooldown_ms: u64,
 ) -> Result<String> {
-    let (req_id, raw) = llm_worker_send_request_with_req_id(
-        bridge,
-        endpoint_id,
-        url,
-        stateful,
-        prompt,
-        role_schema,
-        node_id,
-        cache_key,
-        bust_cache,
-        allow_req_id_mismatch,
-        phase,
-        tabs,
-        max_tabs,
-        tab_cooldown_ms,
-    )
-    .await?;
+    let (req_id, raw) =
+        llm_worker_send_request_with_req_id(bridge, endpoint_id, url, stateful, prompt, role_schema, node_id, cache_key, bust_cache, allow_req_id_mismatch, phase, tabs, max_tabs, tab_cooldown_ms)
+            .await?;
     let _ = req_id;
     Ok(raw)
 }
 
 pub async fn llm_worker_send_request_with_req_id(
-    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool, phase: &str,
-    tabs: &TabManagerHandle, max_tabs: usize, tab_cooldown_ms: u64,
+    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
+    phase: &str, tabs: &TabManagerHandle, max_tabs: usize, tab_cooldown_ms: u64,
 ) -> Result<(u64, String)> {
     let req_id = NEXT_REQ_ID.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = oneshot::channel();

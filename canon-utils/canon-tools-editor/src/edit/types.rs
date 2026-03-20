@@ -1,6 +1,6 @@
 use crate::edit::oracle::StructuralEditOracleApi;
-use crate::symbol_index::SymbolIndex;
 use crate::structured::{EditOp, SymbolHandle};
+use crate::symbol_index::SymbolIndex;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;

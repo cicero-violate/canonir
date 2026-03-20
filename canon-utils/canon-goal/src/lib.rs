@@ -57,32 +57,14 @@ pub fn parse_agent_goal_markdown(goal_text: &str) -> GoalSpec {
             continue;
         }
         if trimmed.starts_with("- ") {
-            spec.requirements
-                .push(trimmed.trim_start_matches("- ").trim().to_string());
+            spec.requirements.push(trimmed.trim_start_matches("- ").trim().to_string());
         }
     }
     spec
 }
 
 pub fn summarize_goal(spec: &GoalSpec) -> String {
-    let target = spec
-        .target_path
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "(unspecified)".to_string());
-    let requirements = if spec.requirements.is_empty() {
-        "(none)".to_string()
-    } else {
-        spec.requirements
-            .iter()
-            .take(6)
-            .map(|r| format!("- {r}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    format!(
-        "goal_id={}\ngoal_type={}\ntarget_path={}\nrequirements:\n{}",
-        spec.id, spec.goal_type, target, requirements
-    )
+    let target = spec.target_path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "(unspecified)".to_string());
+    let requirements = if spec.requirements.is_empty() { "(none)".to_string() } else { spec.requirements.iter().take(6).map(|r| format!("- {r}")).collect::<Vec<_>>().join("\n") };
+    format!("goal_id={}\ngoal_type={}\ntarget_path={}\nrequirements:\n{}", spec.id, spec.goal_type, target, requirements)
 }
-

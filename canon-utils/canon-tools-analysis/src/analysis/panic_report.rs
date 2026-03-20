@@ -29,10 +29,7 @@ pub fn build_panic_report(log_path: &Path, summary_path: &Path) -> Result<()> {
     for rec in records.iter().take(5) {
         sample.push(rec.message.clone());
     }
-    let summary = PanicSummary {
-        panic_count: records.len(),
-        sample_messages: sample,
-    };
+    let summary = PanicSummary { panic_count: records.len(), sample_messages: sample };
     fs::write(summary_path, serde_json::to_string_pretty(&summary)?)?;
     Ok(())
 }

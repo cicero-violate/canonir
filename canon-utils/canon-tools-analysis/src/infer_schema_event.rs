@@ -47,19 +47,9 @@ fn ingest(state: &mut SchemaState, kind: &str, payload: &Value) {
         _ => ("__flat__", payload),
     };
 
-    *state
-        .variant_counts
-        .entry(kind.to_string())
-        .or_default()
-        .entry(variant.to_string())
-        .or_insert(0) += 1;
+    *state.variant_counts.entry(kind.to_string()).or_default().entry(variant.to_string()).or_insert(0) += 1;
 
-    let shape = state
-        .variants_by_kind
-        .entry(kind.to_string())
-        .or_default()
-        .entry(variant.to_string())
-        .or_default();
+    let shape = state.variants_by_kind.entry(kind.to_string()).or_default().entry(variant.to_string()).or_default();
     infer_shape(body, shape, "");
 }
 
@@ -67,11 +57,7 @@ fn infer_shape(value: &Value, shape: &mut BTreeMap<String, FieldInfo>, prefix: &
     match value {
         Value::Object(map) => {
             for (k, v) in map {
-                let path = if prefix.is_empty() {
-                    k.to_string()
-                } else {
-                    format!("{prefix}.{k}")
-                };
+                let path = if prefix.is_empty() { k.to_string() } else { format!("{prefix}.{k}") };
                 let entry = shape.entry(path.clone()).or_default();
                 entry.types.insert(classify(v));
                 entry.present = entry.present.saturating_add(1);
@@ -159,11 +145,7 @@ fn presence_card(present: u64, total: u64) -> &'static str {
 fn render(state: &SchemaState) -> String {
     let mut out = String::new();
     out.push_str("══════════════════════════════════════════════════════════════════════\n");
-    out.push_str(&format!(
-        "  Event Schema  ·  {} events  ·  {} kind(s)\n",
-        format_u64(state.total_objects),
-        state.kind_counts.len()
-    ));
+    out.push_str(&format!("  Event Schema  ·  {} events  ·  {} kind(s)\n", format_u64(state.total_objects), state.kind_counts.len()));
     out.push_str("  Model: Schema = Map(kind → Map(variant → shape))\n");
     out.push_str("  Rule:  |keys(payload)| = 1  →  variant = that key\n");
     out.push_str("══════════════════════════════════════════════════════════════════════\n\n");
@@ -183,35 +165,17 @@ fn render(state: &SchemaState) -> String {
             let v_branch = if is_last_v { "└──" } else { "├──" };
             out.push_str(&format!("  │  {v_branch} {vname}  ({})\n", format_u64(*vcount)));
             let inner = if is_last_v { "       " } else { "   │   " };
-            let shape = state
-                .variants_by_kind
-                .get(kind)
-                .and_then(|v| v.get(vname))
-                .cloned()
-                .unwrap_or_default();
+            let shape = state.variants_by_kind.get(kind).and_then(|v| v.get(vname)).cloned().unwrap_or_default();
             let mut fields: Vec<(String, FieldInfo)> = shape.into_iter().collect();
             fields.sort_by(|a, b| b.1.present.cmp(&a.1.present).then_with(|| a.0.cmp(&b.0)));
             for (fi, (fname, info)) in fields.iter().enumerate() {
                 let is_last_f = fi + 1 == fields.len();
                 let f_branch = if is_last_f { "└──" } else { "├──" };
                 let t = info.types.iter().cloned().collect::<Vec<_>>().join(",");
-                let arr = if info.array_item_types.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        " → [{}]",
-                        info.array_item_types.iter().cloned().collect::<Vec<_>>().join(",")
-                    )
-                };
-                let ex = if info.examples.is_empty() {
-                    String::new()
-                } else {
-                    format!("  ex: {}", info.examples.iter().cloned().collect::<Vec<_>>().join(", "))
-                };
+                let arr = if info.array_item_types.is_empty() { String::new() } else { format!(" → [{}]", info.array_item_types.iter().cloned().collect::<Vec<_>>().join(",")) };
+                let ex = if info.examples.is_empty() { String::new() } else { format!("  ex: {}", info.examples.iter().cloned().collect::<Vec<_>>().join(", ")) };
                 let req = presence_card(info.present, *vcount);
-                out.push_str(&format!(
-                    "  │  {inner}{f_branch} {fname}{req}{t}{arr}{ex}\n"
-                ));
+                out.push_str(&format!("  │  {inner}{f_branch} {fname}{req}{t}{arr}{ex}\n"));
             }
         }
         out.push_str("  └──────────────────────────────────────────────────\n\n");

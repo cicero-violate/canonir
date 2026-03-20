@@ -12,10 +12,7 @@ impl SmtSession {
         let mut cfg = Config::new();
         cfg.set_timeout_msec(timeout_ms);
         let ctx = Context::new(&cfg);
-        Self {
-            ctx,
-            cache: Mutex::new(ProofCache::new(cache_path, clear_cache)),
-        }
+        Self { ctx, cache: Mutex::new(ProofCache::new(cache_path, clear_cache)) }
     }
 
     pub fn solver(&self) -> Solver<'_> {
@@ -31,9 +28,9 @@ impl SmtSession {
     }
 }
 
+pub mod cache;
 pub mod encoder;
 pub mod equivalence;
 pub mod invariants;
 pub mod reachability;
 pub mod repair;
-pub mod cache;

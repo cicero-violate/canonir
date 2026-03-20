@@ -7,7 +7,7 @@ use std::io::BufRead;
 use std::path::Path;
 
 use crate::graph_types::{CodeGraphEdge, CodeGraphNode, CodeGraphProjection};
-use crate::reader::{extract_rustc_event, parse_any_event, read_any_events_from_path, read_any_events_from_path_with_start_seq, AnyEvent, detect_tlog_format, TlogFormat};
+use crate::reader::{detect_tlog_format, extract_rustc_event, parse_any_event, read_any_events_from_path, read_any_events_from_path_with_start_seq, AnyEvent, TlogFormat};
 use crate::session_scan::{find_last_graph_session_offset, find_last_session_offset};
 
 /// Replay only events belonging to a specific crate (matched by SessionStart.project).
@@ -63,9 +63,7 @@ pub fn replay_graph_from_tlog(tlog_path: &Path) -> Result<CodeGraphProjection> {
     }
     let mut file = fs::File::open(tlog_path)?;
     let mut stop_after_session = false;
-    if let Some(offset) = find_last_graph_session_offset(tlog_path)
-        .or_else(|| find_last_session_offset(tlog_path))
-    {
+    if let Some(offset) = find_last_graph_session_offset(tlog_path).or_else(|| find_last_session_offset(tlog_path)) {
         use std::io::Seek;
         use std::io::SeekFrom;
         let _ = file.seek(SeekFrom::Start(offset));
@@ -100,11 +98,7 @@ pub fn replay_graph_from_tlog(tlog_path: &Path) -> Result<CodeGraphProjection> {
     Ok(graph)
 }
 
-pub fn replay_graph_from_tlog_incremental(
-    tlog_path: &Path,
-    snapshot_path: &Path,
-    meta_path: &Path,
-) -> Result<CodeGraphProjection> {
+pub fn replay_graph_from_tlog_incremental(tlog_path: &Path, snapshot_path: &Path, meta_path: &Path) -> Result<CodeGraphProjection> {
     if detect_tlog_format(tlog_path) == TlogFormat::Binary || tlog_path.is_dir() {
         return replay_graph_from_tlog(tlog_path);
     }
@@ -144,24 +138,12 @@ pub fn replay_graph_from_tlog_incremental(
         }
     }
 
-    let (_new_offset, _new_events) = replay_events_from_offset(
-        tlog_path,
-        base_offset,
-        &mut graph,
-        &mut symbol_to_id,
-        stop_after_session,
-    )?;
+    let (_new_offset, _new_events) = replay_events_from_offset(tlog_path, base_offset, &mut graph, &mut symbol_to_id, stop_after_session)?;
 
     Ok(graph)
 }
 
-pub fn replay_events_from_offset(
-    tlog_path: &Path,
-    start_offset: u64,
-    graph: &mut CodeGraphProjection,
-    symbol_to_id: &mut HashMap<String, u32>,
-    stop_after_session: bool,
-) -> Result<(u64, u64)> {
+pub fn replay_events_from_offset(tlog_path: &Path, start_offset: u64, graph: &mut CodeGraphProjection, symbol_to_id: &mut HashMap<String, u32>, stop_after_session: bool) -> Result<(u64, u64)> {
     if detect_tlog_format(tlog_path) == TlogFormat::Binary || tlog_path.is_dir() {
         let mut events_added: u64 = 0;
         let events = read_any_events_from_path_with_start_seq(tlog_path, start_offset)?;
@@ -186,11 +168,7 @@ pub fn replay_events_from_offset(
     let mut seen_session = false;
 
     'outer: while cursor < bytes.len() {
-        let line_end = bytes[cursor..]
-            .iter()
-            .position(|b| *b == b'\n')
-            .map(|idx| cursor + idx)
-            .unwrap_or(bytes.len());
+        let line_end = bytes[cursor..].iter().position(|b| *b == b'\n').map(|idx| cursor + idx).unwrap_or(bytes.len());
         let line_bytes = &bytes[cursor..line_end];
         let line = String::from_utf8_lossy(line_bytes);
         let slice = line.as_ref();
@@ -228,12 +206,7 @@ pub fn rebuild_symbol_index(nodes: &[CodeGraphNode]) -> HashMap<String, u32> {
     map
 }
 
-pub fn apply_rustc_event_to_graph(
-    event: RustcEvent,
-    graph: &mut CodeGraphProjection,
-    symbol_to_id: &mut HashMap<String, u32>,
-    clear_on_session: bool,
-) -> bool {
+pub fn apply_rustc_event_to_graph(event: RustcEvent, graph: &mut CodeGraphProjection, symbol_to_id: &mut HashMap<String, u32>, clear_on_session: bool) -> bool {
     match event {
         RustcEvent::SessionStart(_) => {
             if clear_on_session {
@@ -244,8 +217,7 @@ pub fn apply_rustc_event_to_graph(
             }
             true
         }
-        RustcEvent::NodeDefined(canon_event::NodeDefined { symbol, kind, file, line, .. })
-        | RustcEvent::NodeUpdated(canon_event::NodeUpdated { symbol, kind, file, line, .. }) => {
+        RustcEvent::NodeDefined(canon_event::NodeDefined { symbol, kind, file, line, .. }) | RustcEvent::NodeUpdated(canon_event::NodeUpdated { symbol, kind, file, line, .. }) => {
             let sym = symbol.as_str();
             let kind = kind.as_str();
             let file = file.as_str();
@@ -261,15 +233,10 @@ pub fn apply_rustc_event_to_graph(
                     if let Some(node) = graph.nodes.get_mut(id as usize) {
                         node.kind = kind.to_string();
                         if !file.is_empty() {
-                            let file_id = graph
-                                .files
-                                .iter()
-                                .position(|p| p == file)
-                                .map(|idx| idx as u32)
-                                .or_else(|| {
-                                    graph.files.push(file.to_string());
-                                    Some((graph.files.len() - 1) as u32)
-                                });
+                            let file_id = graph.files.iter().position(|p| p == file).map(|idx| idx as u32).or_else(|| {
+                                graph.files.push(file.to_string());
+                                Some((graph.files.len() - 1) as u32)
+                            });
                             node.file_id = file_id;
                         }
                         if line.is_some() {
@@ -289,13 +256,7 @@ pub fn apply_rustc_event_to_graph(
                 })
             };
             let id = graph.nodes.len() as u32;
-            graph.nodes.push(CodeGraphNode {
-                id,
-                kind: kind.to_string(),
-                symbol: sym.to_string(),
-                file_id,
-                line,
-            });
+            graph.nodes.push(CodeGraphNode { id, kind: kind.to_string(), symbol: sym.to_string(), file_id, line });
             if !sym.is_empty() {
                 symbol_to_id.insert(sym.to_string(), id);
             }
@@ -311,11 +272,7 @@ pub fn apply_rustc_event_to_graph(
             let Some(&dst) = symbol_to_id.get(dst_sym) else {
                 return false;
             };
-            graph.edges.push(CodeGraphEdge {
-                src,
-                dst,
-                kind: kind.to_string(),
-            });
+            graph.edges.push(CodeGraphEdge { src, dst, kind: kind.to_string() });
             true
         }
         RustcEvent::NodeRemoved(canon_event::NodeRemoved { symbol }) => {
@@ -356,11 +313,7 @@ pub fn apply_rustc_event_to_graph(
     }
 }
 
-fn delete_node(
-    id: u32,
-    graph: &mut CodeGraphProjection,
-    symbol_to_id: &mut HashMap<String, u32>,
-) -> bool {
+fn delete_node(id: u32, graph: &mut CodeGraphProjection, symbol_to_id: &mut HashMap<String, u32>) -> bool {
     let idx = id as usize;
     if idx >= graph.nodes.len() {
         return false;

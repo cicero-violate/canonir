@@ -8,10 +8,5 @@ pub enum BuildEvent {
     CheckStarted { crate_name: String },
     CheckCompleted { crate_name: String, success: bool, duration_ms: u128 },
     RunStarted { crate_name: String, bin: Option<String> },
-    RunCompleted {
-        crate_name: String,
-        bin: Option<String>,
-        success: bool,
-        duration_ms: u128,
-    },
+    RunCompleted { crate_name: String, bin: Option<String>, success: bool, duration_ms: u128 },
 }

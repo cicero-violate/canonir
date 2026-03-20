@@ -82,12 +82,7 @@ pub struct IRBuilder {
 
 impl IRBuilder {
     pub fn new() -> Self {
-        Self {
-            buffer: IRByteOutputBuffer::new(),
-            current_level: 0,
-            num_result_stores: 0,
-            ended: false,
-        }
+        Self { buffer: IRByteOutputBuffer::new(), current_level: 0, num_result_stores: 0, ended: false }
     }
 
     pub fn property(&mut self, name: &str) {
@@ -143,18 +138,12 @@ impl IRBuilder {
 
     pub fn into_result(self) -> Result<JSONPathResult, JSONPathError> {
         if !self.ended {
-            return Err(JSONPathError::Message(
-                "Cannot convert to byte array until end() has been called".to_string(),
-            ));
+            return Err(JSONPathError::Message("Cannot convert to byte array until end() has been called".to_string()));
         }
         // force usage of internal metrics to avoid dead-code elimination
         let _len = self.buffer.len();
         let _stores = self.num_result_stores;
-        Ok(JSONPathResult {
-            ir: self.buffer.to_vec(),
-            max_depth: 0,
-            num_results: self.num_result_stores as usize,
-        })
+        Ok(JSONPathResult { ir: self.buffer.to_vec(), max_depth: 0, num_results: self.num_result_stores as usize })
     }
 
     pub fn buffer(&self) -> &IRByteOutputBuffer {
@@ -181,11 +170,7 @@ pub struct JSONPathScanner {
 
 impl JSONPathScanner {
     pub fn new(s: &str) -> Self {
-        Self {
-            bytes: s.as_bytes().to_vec(),
-            position: -1,
-            marks: Vec::new(),
-        }
+        Self { bytes: s.as_bytes().to_vec(), position: -1, marks: Vec::new() }
     }
 
     pub fn has_next(&self) -> bool {
@@ -194,10 +179,7 @@ impl JSONPathScanner {
 
     pub fn next(&mut self) -> Result<u8, JSONPathError> {
         if !self.has_next() {
-            return Err(JSONPathError::Message(format!(
-                "Expected character, got EOF at {}",
-                self.position
-            )));
+            return Err(JSONPathError::Message(format!("Expected character, got EOF at {}", self.position)));
         }
         self.position += 1;
         Ok(self.bytes[self.position as usize])
@@ -205,10 +187,7 @@ impl JSONPathScanner {
 
     pub fn peek(&self) -> Result<u8, JSONPathError> {
         if !self.has_next() {
-            return Err(JSONPathError::Message(format!(
-                "Expected character, got EOF at {}",
-                self.position
-            )));
+            return Err(JSONPathError::Message(format!("Expected character, got EOF at {}", self.position)));
         }
         Ok(self.bytes[(self.position + 1) as usize])
     }
@@ -226,10 +205,7 @@ impl JSONPathScanner {
     pub fn expect_char(&mut self, c: u8) -> Result<(), JSONPathError> {
         let next = self.next()?;
         if next != c {
-            return Err(JSONPathError::Message(format!(
-                "Expected character '{}', got character '{}' at {}",
-                c as char, next as char, self.position
-            )));
+            return Err(JSONPathError::Message(format!("Expected character '{}', got character '{}' at {}", c as char, next as char, self.position)));
         }
         Ok(())
     }
@@ -281,12 +257,7 @@ pub struct JSONPathParser {
 
 impl JSONPathParser {
     pub fn new(s: &str) -> Self {
-        Self {
-            scanner: JSONPathScanner::new(s),
-            ir: IRBuilder::new(),
-            max_level: 0,
-            skip_terminal_store: false,
-        }
+        Self { scanner: JSONPathScanner::new(s), ir: IRBuilder::new(), max_level: 0, skip_terminal_store: false }
     }
 
     pub fn compile(mut self) -> Result<JSONPathResult, JSONPathError> {
@@ -361,9 +332,7 @@ impl JSONPathParser {
         } else if next == b'?' {
             self.compile_filter_expression()?;
         } else {
-            return Err(self.scanner.error_next(
-                "Unexpected character in index, expected ', \"', or an integer",
-            ));
+            return Err(self.scanner.error_next("Unexpected character in index, expected ', \"', or an integer"));
         }
 
         self.scanner.expect_char(b']')?;
@@ -491,9 +460,7 @@ impl JSONPathParser {
     }
 
     fn read_integer<F>(&mut self, is_end: F) -> Result<i32, JSONPathError>
-    where
-        F: Fn(u8) -> bool,
-    {
+    where F: Fn(u8) -> bool {
         let start_pos = self.scanner.position();
         while self.scanner.has_next() {
             let c = self.scanner.peek()?;

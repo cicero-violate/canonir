@@ -49,12 +49,7 @@ impl EventConsumer for RewardConsumer {
                 self.handle_verified(verified);
             }
             CanonEvent::Debug(debug) if debug.kind == "route_selected" => {
-                let lane = debug
-                    .payload
-                    .get("approved_route")
-                    .or_else(|| debug.payload.get("lane"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let lane = debug.payload.get("approved_route").or_else(|| debug.payload.get("lane")).and_then(|v| v.as_str()).unwrap_or("");
                 if lane == "conclude" {
                     self.emit_forced_halt(debug.payload.get("tick").and_then(|v| v.as_u64()));
                 }

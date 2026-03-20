@@ -1,4 +1,4 @@
-use canon_event::{TlogEvent, CapabilityRequested, EditEvent, RustcEvent};
+use canon_event::{CapabilityRequested, EditEvent, RustcEvent, TlogEvent};
 use std::fs;
 use std::io::{BufRead, Read};
 use std::path::Path;
@@ -153,10 +153,7 @@ pub fn read_any_events_from_path(path: &Path) -> anyhow::Result<Vec<AnyEvent>> {
     }
 }
 
-pub fn read_any_events_from_path_with_start_seq(
-    path: &Path,
-    start_seq: u64,
-) -> anyhow::Result<Vec<AnyEvent>> {
+pub fn read_any_events_from_path_with_start_seq(path: &Path, start_seq: u64) -> anyhow::Result<Vec<AnyEvent>> {
     if path.is_dir() {
         let mut entries = Vec::new();
         for entry in fs::read_dir(path)? {

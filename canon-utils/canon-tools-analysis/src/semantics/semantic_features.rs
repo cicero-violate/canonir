@@ -1,5 +1,5 @@
-use canon_graph::artifacts_loader::CodeGraph;
 use anyhow::Result;
+use canon_graph::artifacts_loader::CodeGraph;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -21,11 +21,7 @@ pub fn extract_node_features(graph_dir: &Path, graph: &CodeGraph) -> Result<Vec<
     let mut outdeg: HashMap<u32, u32> = HashMap::new();
     let mut edge_hist: HashMap<u32, [u32; EDGE_KIND_COUNT]> = HashMap::new();
     let mut neighbor_hist: HashMap<u32, [u32; 16]> = HashMap::new();
-    let id_to_kind: HashMap<u32, u8> = graph
-        .nodes
-        .iter()
-        .map(|n| (n.id, node_kind_code(&n.kind)))
-        .collect();
+    let id_to_kind: HashMap<u32, u8> = graph.nodes.iter().map(|n| (n.id, node_kind_code(&n.kind))).collect();
 
     for e in &graph.edges {
         *outdeg.entry(e.src).or_default() += 1;

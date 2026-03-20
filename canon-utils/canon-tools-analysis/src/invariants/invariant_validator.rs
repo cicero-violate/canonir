@@ -1,13 +1,13 @@
-use canon_graph::artifacts_loader::{load_code_graph, CodeGraph};
 use crate::invariants::invariant_discovery::{discover_invariants, mine_candidates, InvariantResult};
-use crate::semantics::semantic_features::extract_node_features;
-use crate::semantics::semantic_signature::compute_signatures;
-use crate::semantics::semantic_clustering::cluster_dbscan_like;
-use crate::semantics::pattern_mining::mine_patterns;
 use crate::invariants::invariant_generator::generate_candidates;
 use crate::invariants::invariant_sat::validate_candidates;
-use canon_graph::ingest::report_ingest::{ingest_reports, ReportFeatures};
+use crate::semantics::pattern_mining::mine_patterns;
+use crate::semantics::semantic_clustering::cluster_dbscan_like;
+use crate::semantics::semantic_features::extract_node_features;
+use crate::semantics::semantic_signature::compute_signatures;
 use anyhow::Result;
+use canon_graph::artifacts_loader::{load_code_graph, CodeGraph};
+use canon_graph::ingest::report_ingest::{ingest_reports, ReportFeatures};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -38,13 +38,7 @@ struct InvariantHistoryEntry {
     satisfied: bool,
 }
 
-pub fn run_invariant_pipeline(
-    graph_dir: &Path,
-    invariants_dir: &Path,
-    meta_dir: &Path,
-    _analysis_dir: &Path,
-    metrics_dir: &Path,
-) -> Result<()> {
+pub fn run_invariant_pipeline(graph_dir: &Path, invariants_dir: &Path, meta_dir: &Path, _analysis_dir: &Path, metrics_dir: &Path) -> Result<()> {
     let graph = load_code_graph(graph_dir)?;
     let features = ingest_reports(metrics_dir, &graph)?;
     let invariants = discover_invariants(&graph, &features);
@@ -81,11 +75,7 @@ fn write_report(invariants_dir: &Path, report: &InvariantReport) -> Result<()> {
     Ok(())
 }
 
-fn write_discovered(
-    invariants_dir: &Path,
-    graph: &CodeGraph,
-    features: &ReportFeatures,
-) -> Result<()> {
+fn write_discovered(invariants_dir: &Path, graph: &CodeGraph, features: &ReportFeatures) -> Result<()> {
     let discovered = mine_candidates(graph, features);
     fs::create_dir_all(invariants_dir)?;
     let path = invariants_dir.join("invariants_discovered.json");
@@ -94,11 +84,7 @@ fn write_discovered(
     Ok(())
 }
 
-fn write_violations(
-    invariants_dir: &Path,
-    graph: &CodeGraph,
-    invariants: &[InvariantResult],
-) -> Result<()> {
+fn write_violations(invariants_dir: &Path, graph: &CodeGraph, invariants: &[InvariantResult]) -> Result<()> {
     let mut id_to_node = HashMap::new();
     for n in &graph.nodes {
         id_to_node.insert(n.id, n);
@@ -125,10 +111,7 @@ fn write_violations(
             "violations": entries,
         }));
     }
-    fs::write(
-        invariants_dir.join("violations.json"),
-        serde_json::to_string_pretty(&out)?,
-    )?;
+    fs::write(invariants_dir.join("violations.json"), serde_json::to_string_pretty(&out)?)?;
     Ok(())
 }
 
@@ -143,24 +126,13 @@ fn update_history(meta_dir: &Path, invariants: &[InvariantResult]) -> Result<()>
     };
     let ts = current_timestamp();
     for inv in invariants {
-        history.push(InvariantHistoryEntry {
-            timestamp: ts,
-            invariant: inv.name.clone(),
-            coverage: inv.coverage,
-            violation_rate: inv.violation_rate,
-            satisfied: inv.violation_rate == 0.0,
-        });
+        history.push(InvariantHistoryEntry { timestamp: ts, invariant: inv.name.clone(), coverage: inv.coverage, violation_rate: inv.violation_rate, satisfied: inv.violation_rate == 0.0 });
     }
     fs::write(path, serde_json::to_string_pretty(&history)?)?;
     Ok(())
 }
 
-fn run_semantic_pipeline(
-    invariants_dir: &Path,
-    metrics_dir: &Path,
-    graph_dir: &Path,
-    graph: &CodeGraph,
-) -> Result<()> {
+fn run_semantic_pipeline(invariants_dir: &Path, metrics_dir: &Path, graph_dir: &Path, graph: &CodeGraph) -> Result<()> {
     let features = extract_node_features(graph_dir, graph)?;
     let _signatures = compute_signatures(metrics_dir, &features)?;
     let clustering = cluster_dbscan_like(&features, 5.0, 3);
@@ -178,8 +150,5 @@ fn run_semantic_pipeline(
 }
 fn current_timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }

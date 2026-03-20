@@ -54,25 +54,10 @@ pub struct RouteSelection {
 }
 
 pub fn compose_routing_prompt(input: &RoutingInput) -> String {
-    let routes = input
-        .open_routes
-        .iter()
-        .map(|r| r.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
+    let routes = input.open_routes.iter().map(|r| r.as_str()).collect::<Vec<_>>().join(", ");
 
-    let recent = if input.journal.is_empty() {
-        "(none)".to_string()
-    } else {
-        input
-            .journal
-            .iter()
-            .rev()
-            .take(8)
-            .map(|line| format!("- [{}] {}", line.lane, line.summary))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
+    let recent =
+        if input.journal.is_empty() { "(none)".to_string() } else { input.journal.iter().rev().take(8).map(|line| format!("- [{}] {}", line.lane, line.summary)).collect::<Vec<_>>().join("\n") };
     let last_tool_result = input
         .last_tool_result
         .as_ref()
@@ -115,10 +100,7 @@ pub fn parse_route_selection(raw: &str, allowed: &[RouteKind]) -> Result<RouteSe
                 }
 
                 if !allowed.contains(&selection.route) {
-                    last_err = Some(anyhow!(
-                        "route '{}' is not in current allowed set",
-                        selection.route.as_str()
-                    ));
+                    last_err = Some(anyhow!("route '{}' is not in current allowed set", selection.route.as_str()));
                     continue;
                 }
 

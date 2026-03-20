@@ -1,56 +1,22 @@
 use anyhow::Result;
-mod bus;
 pub mod bootstrap;
+mod bus;
 pub mod consumers;
 
-use canon_capability::{CapabilityExecutionContext, CapabilityRegistry, CapabilityExecutionResult};
-use canon_event::{BinarySegmentWriter, TlogEvent};
-use std::sync::Mutex as StdMutex;
-use canon_event_store::{
-    extract_capability_request,
-    extract_supervisor_event,
-    extract_edit_event,
-    extract_rustc_event,
-    read_any_events_from_path,
-    AnyEvent,
-};
-use canon_event::{NodeDefined, NodeUpdated, NodeRemoved, EdgeDefined, EdgeRemoved, FileSeen};
+use bus::EventBus;
+use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityRegistry};
 use canon_event::{
-    CapabilityCompleted,
-    CapabilityFailed,
-    CapabilityRequested,
-    new_error_occurred,
-    ErrorOccurred,
-    EventDelta,
-    RustcEvent,
-    RustcState,
-    EventConsumer,
-    EventEmitter,
-    EventEmitterHandle,
-    CanonEvent,
-    Code,
-    DebugEvent,
-    Tick,
-    RuntimeStateUpdated,
-    PolicyBaselineUpdated,
-    GoalSelected,
-    SystemConfigLoaded,
-    AgentRegistered,
-    PromptLoaded,
-    ToolCall,
-    ToolResult,
-    GoalNodeCreated,
-    GoalNodeRetracted,
-    GoalNodeRewritten,
-    GoalEdgeDefined,
-    GoalGraphCheckpointed,
-    CapabilityInvoked,
-    CapabilityResolved,
+    new_error_occurred, AgentRegistered, CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityInvoked, CapabilityRequested, CapabilityResolved, Code, DebugEvent, ErrorOccurred, EventConsumer,
+    EventDelta, EventEmitter, EventEmitterHandle, GoalEdgeDefined, GoalGraphCheckpointed, GoalNodeCreated, GoalNodeRetracted, GoalNodeRewritten, GoalSelected, PolicyBaselineUpdated, PromptLoaded,
+    RuntimeStateUpdated, RustcEvent, RustcState, SystemConfigLoaded, Tick, ToolCall, ToolResult,
 };
+use canon_event::{BinarySegmentWriter, TlogEvent};
+use canon_event::{EdgeDefined, EdgeRemoved, FileSeen, NodeDefined, NodeRemoved, NodeUpdated};
+use canon_event_store::{extract_capability_request, extract_edit_event, extract_rustc_event, extract_supervisor_event, read_any_events_from_path, AnyEvent};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use bus::EventBus;
+use std::sync::Mutex as StdMutex;
 
 pub struct EventRuntime {
     state: RustcState,
@@ -82,14 +48,8 @@ impl EventRuntime {
         Self::new_with_registry(consumers, registry)
     }
 
-    pub fn new_with_registry(
-        consumers: Vec<Box<dyn EventConsumer>>,
-        registry: std::sync::Arc<std::sync::Mutex<CapabilityRegistry>>,
-    ) -> Self {
-        let queue_size = std::env::var("CANON_EVENT_BUS_QUEUE")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(1024);
+    pub fn new_with_registry(consumers: Vec<Box<dyn EventConsumer>>, registry: std::sync::Arc<std::sync::Mutex<CapabilityRegistry>>) -> Self {
+        let queue_size = std::env::var("CANON_EVENT_BUS_QUEUE").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(1024);
         let mut bus = EventBus::new(queue_size);
         let (emitter_tx, emitter_rx) = crossbeam_channel::unbounded();
         let emitter: EventEmitterHandle = Arc::new(RuntimeEmitterImpl { sender: emitter_tx });
@@ -132,6 +92,10 @@ impl EventRuntime {
 
     pub fn next_id(&self) -> u64 {
         self.next_id
+    }
+
+    pub fn emitter_handle(&self) -> EventEmitterHandle {
+        self.emitter.clone()
     }
 
     pub fn set_tlog_path(&mut self, path: std::path::PathBuf) {
@@ -183,9 +147,7 @@ impl EventRuntime {
                     self.handle_runtime_event(CanonEvent::CapabilityRequested(request))?;
                     self.drain_emitted_events()?;
                 } else if canon.kind == "runtime_state.updated" {
-                    self.handle_runtime_event(CanonEvent::RuntimeStateUpdated(RuntimeStateUpdated {
-                        payload: canon.payload.clone(),
-                    }))?;
+                    self.handle_runtime_event(CanonEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload: canon.payload.clone() }))?;
                     self.drain_emitted_events()?;
                 } else if let Some(supervisor_event) = extract_supervisor_event(canon) {
                     if supervisor_event.kind == "workspace.changed" {
@@ -211,11 +173,8 @@ impl EventRuntime {
                             };
                             self.handle_runtime_event(CanonEvent::CapabilityRequested(request))?;
                             self.drain_emitted_events()?;
-                            let workspace_request = CapabilityRequested {
-                                request_id: format!("analysis-workspace-{}", self.tick),
-                                name: "analysis.workspace".to_string(),
-                                args: serde_json::json!({}),
-                            };
+                            let workspace_request =
+                                CapabilityRequested { request_id: format!("analysis-workspace-{}", self.tick), name: "analysis.workspace".to_string(), args: serde_json::json!({}) };
                             self.handle_runtime_event(CanonEvent::CapabilityRequested(workspace_request))?;
                             self.drain_emitted_events()?;
                         }
@@ -223,9 +182,7 @@ impl EventRuntime {
                 } else if canon.kind == "prompt_loaded" && canon.source != "event-runtime" {
                     // Guard mirrors capability_completed: skip W's own re-emission
                     // (source="event-runtime") to break the write-back feedback loop.
-                    self.handle_runtime_event(CanonEvent::PromptLoaded(PromptLoaded {
-                        payload: canon.payload.clone(),
-                    }))?;
+                    self.handle_runtime_event(CanonEvent::PromptLoaded(PromptLoaded { payload: canon.payload.clone() }))?;
                     self.drain_emitted_events()?;
                 } else if canon.kind == "capability_completed" && canon.source != "event-runtime" {
                     // External capability result written directly to tlog (e.g. by an external executor).
@@ -257,25 +214,13 @@ impl EventRuntime {
     }
 
     pub fn handle_kernel_event(&mut self, event: RustcEvent) -> Result<()> {
-        let analysis_crate = if let RustcEvent::CompilationUnitFinished(ref cu) = event {
-            Some(cu.crate_name.clone())
-        } else {
-            None
-        };
+        let analysis_crate = if let RustcEvent::CompilationUnitFinished(ref cu) = event { Some(cu.crate_name.clone()) } else { None };
         let delta = if matches!(event, RustcEvent::SessionStart(_)) {
             self.tick = 0;
-            EventDelta {
-                id: 0,
-                tick: 0,
-                event,
-            }
+            EventDelta { id: 0, tick: 0, event }
         } else {
             self.tick = self.tick.saturating_add(1);
-            let delta = EventDelta {
-                id: self.next_id,
-                tick: self.tick,
-                event,
-            };
+            let delta = EventDelta { id: self.next_id, tick: self.tick, event };
             self.next_id = self.next_id.saturating_add(1);
             delta
         };
@@ -283,17 +228,9 @@ impl EventRuntime {
         apply_delta(&mut self.state, &delta)?;
         self.handle_runtime_event(CanonEvent::Code(Code { delta, state: self.state.clone() }))?;
         if let Some(crate_name) = analysis_crate {
-            let request = CapabilityRequested {
-                request_id: format!("analysis-{}-{}", crate_name, self.tick),
-                name: "analysis.run".to_string(),
-                args: serde_json::json!({ "crate": crate_name }),
-            };
+            let request = CapabilityRequested { request_id: format!("analysis-{}-{}", crate_name, self.tick), name: "analysis.run".to_string(), args: serde_json::json!({ "crate": crate_name }) };
             self.handle_runtime_event(CanonEvent::CapabilityRequested(request))?;
-            let workspace_request = CapabilityRequested {
-                request_id: format!("analysis-workspace-{}", self.tick),
-                name: "analysis.workspace".to_string(),
-                args: serde_json::json!({}),
-            };
+            let workspace_request = CapabilityRequested { request_id: format!("analysis-workspace-{}", self.tick), name: "analysis.workspace".to_string(), args: serde_json::json!({}) };
             self.handle_runtime_event(CanonEvent::CapabilityRequested(workspace_request))?;
         }
         Ok(())
@@ -301,19 +238,12 @@ impl EventRuntime {
 
     pub fn emit_tick(&mut self) -> Result<()> {
         self.runtime_tick = self.runtime_tick.saturating_add(1);
-        self.handle_runtime_event(CanonEvent::Tick(Tick {
-            tick: self.runtime_tick,
-        }))?;
+        self.handle_runtime_event(CanonEvent::Tick(Tick { tick: self.runtime_tick }))?;
         self.drain_emitted_events()?;
         Ok(())
     }
 
-    pub fn emit_debug_event(
-        &mut self,
-        source: String,
-        kind: String,
-        payload: serde_json::Value,
-    ) -> Result<()> {
+    pub fn emit_debug_event(&mut self, source: String, kind: String, payload: serde_json::Value) -> Result<()> {
         self.handle_runtime_event(CanonEvent::Debug(DebugEvent { source, kind, payload }))?;
         self.drain_emitted_events()?;
         Ok(())
@@ -357,41 +287,32 @@ impl EventRuntime {
                 self.bus.dispatch(error_event.clone());
                 self.append_runtime_event(&error_event);
             }
-            CanonEvent::Code(Code { delta, .. }) => {
-                match &delta.event {
-                    RustcEvent::PanicCaptured(payload) => {
-                        let error_event = CanonEvent::ErrorOccurred(new_error_occurred(
-                            "panic_captured",
-                            "rustc",
-                            payload.message.clone(),
-                            "error",
-                            serde_json::json!({
-                                "def_id": payload.def_id,
-                                "mir_variant": payload.mir_variant,
-                                "lowering_stage": payload.lowering_stage,
-                                "file": payload.file,
-                                "span": payload.span,
-                            }),
-                            None,
-                        ));
-                        self.bus.dispatch(error_event.clone());
-                        self.append_runtime_event(&error_event);
-                    }
-                    RustcEvent::InvariantViolation(payload) => {
-                        let error_event = CanonEvent::ErrorOccurred(new_error_occurred(
-                            "invariant_violation",
-                            "rustc",
-                            payload.message.clone(),
-                            "error",
-                            serde_json::json!({}),
-                            None,
-                        ));
-                        self.bus.dispatch(error_event.clone());
-                        self.append_runtime_event(&error_event);
-                    }
-                    _ => {}
+            CanonEvent::Code(Code { delta, .. }) => match &delta.event {
+                RustcEvent::PanicCaptured(payload) => {
+                    let error_event = CanonEvent::ErrorOccurred(new_error_occurred(
+                        "panic_captured",
+                        "rustc",
+                        payload.message.clone(),
+                        "error",
+                        serde_json::json!({
+                            "def_id": payload.def_id,
+                            "mir_variant": payload.mir_variant,
+                            "lowering_stage": payload.lowering_stage,
+                            "file": payload.file,
+                            "span": payload.span,
+                        }),
+                        None,
+                    ));
+                    self.bus.dispatch(error_event.clone());
+                    self.append_runtime_event(&error_event);
                 }
-            }
+                RustcEvent::InvariantViolation(payload) => {
+                    let error_event = CanonEvent::ErrorOccurred(new_error_occurred("invariant_violation", "rustc", payload.message.clone(), "error", serde_json::json!({}), None));
+                    self.bus.dispatch(error_event.clone());
+                    self.append_runtime_event(&error_event);
+                }
+                _ => {}
+            },
             CanonEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload }) => {
                 self.runtime_state = payload;
             }
@@ -400,10 +321,7 @@ impl EventRuntime {
                 // capabilities NOT handled asynchronously by bus consumers (e.g. CapabilityExecutor).
                 // Skip "llm.call" here: it is always handled asynchronously by LlmCapabilityHandler
                 // via the consumer bus. Running it here too would double-enqueue every LLM request.
-                if self.execute_capabilities
-                    && request.name != "llm.call"
-                    && self.registry.lock().ok().and_then(|r| r.lookup(&request.name)).is_some()
-                {
+                if self.execute_capabilities && request.name != "llm.call" && self.registry.lock().ok().and_then(|r| r.lookup(&request.name)).is_some() {
                     self.handle_capability_request(request)?;
                 }
             }
@@ -428,10 +346,7 @@ impl EventRuntime {
             emitter: Some(self.emitter.clone()),
         };
         let execute_result = {
-            let registry = self
-                .registry
-                .lock()
-                .map_err(|_| anyhow::anyhow!("capability registry lock poisoned"))?;
+            let registry = self.registry.lock().map_err(|_| anyhow::anyhow!("capability registry lock poisoned"))?;
             registry.execute(&request.name, ctx)
         };
         let result = match execute_result {
@@ -450,11 +365,7 @@ impl EventRuntime {
                 ));
                 self.bus.dispatch(error_event.clone());
                 self.append_runtime_event(&error_event);
-                let failed = CanonEvent::CapabilityFailed(CapabilityFailed {
-                    request_id: request_id.clone(),
-                    name: request_name.clone(),
-                    error: err.to_string(),
-                });
+                let failed = CanonEvent::CapabilityFailed(CapabilityFailed { request_id: request_id.clone(), name: request_name.clone(), error: err.to_string() });
                 self.bus.dispatch(failed.clone());
                 self.append_runtime_event(&failed);
                 return Ok(());
@@ -465,10 +376,7 @@ impl EventRuntime {
         let mut deferred = false;
         match result {
             CapabilityExecutionResult::Emit(event) => {
-                terminal_emitted = matches!(
-                    event,
-                    CanonEvent::CapabilityCompleted(_) | CanonEvent::CapabilityFailed(_)
-                );
+                terminal_emitted = matches!(event, CanonEvent::CapabilityCompleted(_) | CanonEvent::CapabilityFailed(_));
                 if terminal_emitted {
                     self.append_runtime_event(&event);
                 }
@@ -476,10 +384,7 @@ impl EventRuntime {
             }
             CapabilityExecutionResult::EmitMany(events) => {
                 for event in events {
-                    let is_terminal = matches!(
-                        event,
-                        CanonEvent::CapabilityCompleted(_) | CanonEvent::CapabilityFailed(_)
-                    );
+                    let is_terminal = matches!(event, CanonEvent::CapabilityCompleted(_) | CanonEvent::CapabilityFailed(_));
                     if is_terminal {
                         terminal_emitted = true;
                         self.append_runtime_event(&event);
@@ -494,11 +399,7 @@ impl EventRuntime {
         }
 
         if !terminal_emitted && !deferred {
-            let completed = CanonEvent::CapabilityCompleted(CapabilityCompleted {
-                request_id: request_id.clone(),
-                name: request_name.clone(),
-                result: serde_json::json!({ "status": "ok" }),
-            });
+            let completed = CanonEvent::CapabilityCompleted(CapabilityCompleted { request_id: request_id.clone(), name: request_name.clone(), result: serde_json::json!({ "status": "ok" }) });
             self.bus.dispatch(completed.clone());
             self.append_runtime_event(&completed);
         }
@@ -510,137 +411,137 @@ impl EventRuntime {
             return;
         };
         let mut canon = match event {
-        CanonEvent::CapabilityCompleted(payload) => {
-            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
-            TlogEvent::new("event-runtime", "capability_completed", val)
-        }
-        CanonEvent::CapabilityFailed(payload) => {
-            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
-            TlogEvent::new("event-runtime", "capability_failed", val)
-        }
-        CanonEvent::NodeStarted(payload) => {
-            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
-            TlogEvent::new("agent-consumer", "node_started", val)
-        }
-        CanonEvent::NodeCompleted(payload) => {
-            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
-            TlogEvent::new("agent-consumer", "node_completed", val)
-        }
-        CanonEvent::NodeFailed(payload) => {
-            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
-            TlogEvent::new("agent-consumer", "node_failed", val)
-        }
-        CanonEvent::PolicyBaselineUpdated(PolicyBaselineUpdated { payload }) => {
-            TlogEvent::new("agent-consumer", "policy_baseline_updated", payload.clone())
-        }
-        CanonEvent::GoalSelected(GoalSelected { payload }) => {
-            TlogEvent::new("agent-consumer", "goal_selected", payload.clone())
-        }
-        CanonEvent::SystemConfigLoaded(SystemConfigLoaded { payload }) => {
-            TlogEvent::new("bootstrap", "system_config_loaded", payload.clone())
-        }
-        CanonEvent::AgentRegistered(AgentRegistered { payload }) => {
-            TlogEvent::new("bootstrap", "agent_registered", payload.clone())
-        }
-        CanonEvent::PromptLoaded(PromptLoaded { payload }) => {
-            // Use "event-runtime" source so process_events can distinguish W's
-            // re-emission from the original bootstrap write and skip it (Rule 9).
-            TlogEvent::new("event-runtime", "prompt_loaded", payload.clone())
-        }
-        CanonEvent::ToolCall(ToolCall { node_id, tool_call_id, request_id, kind, payload }) => {
-            TlogEvent::new("agent-consumer", "tool_call", serde_json::json!({
-                "node_id": node_id,
-                "tool_call_id": tool_call_id,
-                "request_id": request_id,
-                "kind": kind,
-                "payload": payload,
-            }))
-        }
-        CanonEvent::ToolResult(ToolResult { node_id, tool_call_id, tool_result_id, request_id, kind, output, success }) => {
-            TlogEvent::new("agent-consumer", "tool_result", serde_json::json!({
-                "node_id": node_id,
-                "tool_call_id": tool_call_id,
-                "tool_result_id": tool_result_id,
-                "request_id": request_id,
-                "kind": kind,
-                "output": output,
-                "success": success,
-            }))
-        }
-        CanonEvent::GoalNodeCreated(GoalNodeCreated { node_id, description, deps, caps, node_type, priority, budget }) => {
-            TlogEvent::new("goal_graph", "goal_node_created", serde_json::json!({
-                "node_id": node_id,
-                "description": description,
-                "deps": deps,
-                "caps": caps,
-                "node_type": node_type,
-                "priority": priority,
-                "budget": budget,
-            }))
-        }
-        CanonEvent::GoalNodeRetracted(GoalNodeRetracted { node_id }) => {
-            TlogEvent::new("goal_graph", "goal_node_retracted", serde_json::json!({ "node_id": node_id }))
-        }
-        CanonEvent::GoalNodeRewritten(GoalNodeRewritten { node_id, new_description, new_caps }) => {
-            TlogEvent::new("goal_graph", "goal_node_rewritten", serde_json::json!({
-                "node_id": node_id,
-                "new_description": new_description,
-                "new_caps": new_caps,
-            }))
-        }
-        CanonEvent::GoalEdgeDefined(GoalEdgeDefined { from_node_id, to_node_id }) => {
-            TlogEvent::new("goal_graph", "goal_edge_defined", serde_json::json!({
-                "from_node_id": from_node_id,
-                "to_node_id": to_node_id,
-            }))
-        }
-        CanonEvent::GoalGraphCheckpointed(GoalGraphCheckpointed { tlog_seq }) => {
-            TlogEvent::new("goal_graph", "goal_graph_checkpointed", serde_json::json!({ "tlog_seq": tlog_seq }))
-        }
-        CanonEvent::CapabilityInvoked(CapabilityInvoked { capability_id, name, node_id }) => {
-            TlogEvent::new("capability_graph", "capability_invoked", serde_json::json!({
-                "capability_id": capability_id,
-                "name": name,
-                "node_id": node_id,
-            }))
-        }
-        CanonEvent::CapabilityResolved(CapabilityResolved { capability_id, success, duration_ms }) => {
-            TlogEvent::new("capability_graph", "capability_resolved", serde_json::json!({
-                "capability_id": capability_id,
-                "success": success,
-                "duration_ms": duration_ms,
-            }))
-        }
-        CanonEvent::LoopObserved(payload) => {
-            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
-            TlogEvent::new("observe", "loop_observed", val)
-        }
-        CanonEvent::LoopPlanned(payload) => {
-            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
-            TlogEvent::new("plan", "loop_planned", val)
-        }
-        CanonEvent::LoopActed(payload) => {
-            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
-            TlogEvent::new("act", "loop_acted", val)
-        }
-        CanonEvent::LoopVerified(payload) => {
-            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
-            TlogEvent::new("verify", "loop_verified", val)
-        }
-        CanonEvent::LoopRewarded(payload) => {
-            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
-            TlogEvent::new("reward", "loop_rewarded", val)
-        }
-        CanonEvent::Debug(DebugEvent { source, kind, payload }) => {
-            TlogEvent::new(source, kind, payload.clone())
-        }
-        CanonEvent::ErrorOccurred(payload) => {
-            let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
-            TlogEvent::new("event-runtime", "error_occurred", val)
-        }
-        _ => {
-            return;
-        }
+            CanonEvent::CapabilityCompleted(payload) => {
+                let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+                TlogEvent::new("event-runtime", "capability_completed", val)
+            }
+            CanonEvent::CapabilityFailed(payload) => {
+                let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+                TlogEvent::new("event-runtime", "capability_failed", val)
+            }
+            CanonEvent::NodeStarted(payload) => {
+                let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+                TlogEvent::new("agent-consumer", "node_started", val)
+            }
+            CanonEvent::NodeCompleted(payload) => {
+                let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+                TlogEvent::new("agent-consumer", "node_completed", val)
+            }
+            CanonEvent::NodeFailed(payload) => {
+                let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+                TlogEvent::new("agent-consumer", "node_failed", val)
+            }
+            CanonEvent::PolicyBaselineUpdated(PolicyBaselineUpdated { payload }) => TlogEvent::new("agent-consumer", "policy_baseline_updated", payload.clone()),
+            CanonEvent::GoalSelected(GoalSelected { payload }) => TlogEvent::new("agent-consumer", "goal_selected", payload.clone()),
+            CanonEvent::SystemConfigLoaded(SystemConfigLoaded { payload }) => TlogEvent::new("bootstrap", "system_config_loaded", payload.clone()),
+            CanonEvent::AgentRegistered(AgentRegistered { payload }) => TlogEvent::new("bootstrap", "agent_registered", payload.clone()),
+            CanonEvent::PromptLoaded(PromptLoaded { payload }) => {
+                // Use "event-runtime" source so process_events can distinguish W's
+                // re-emission from the original bootstrap write and skip it (Rule 9).
+                TlogEvent::new("event-runtime", "prompt_loaded", payload.clone())
+            }
+            CanonEvent::ToolCall(ToolCall { node_id, tool_call_id, request_id, kind, payload }) => TlogEvent::new(
+                "agent-consumer",
+                "tool_call",
+                serde_json::json!({
+                    "node_id": node_id,
+                    "tool_call_id": tool_call_id,
+                    "request_id": request_id,
+                    "kind": kind,
+                    "payload": payload,
+                }),
+            ),
+            CanonEvent::ToolResult(ToolResult { node_id, tool_call_id, tool_result_id, request_id, kind, output, success }) => TlogEvent::new(
+                "agent-consumer",
+                "tool_result",
+                serde_json::json!({
+                    "node_id": node_id,
+                    "tool_call_id": tool_call_id,
+                    "tool_result_id": tool_result_id,
+                    "request_id": request_id,
+                    "kind": kind,
+                    "output": output,
+                    "success": success,
+                }),
+            ),
+            CanonEvent::GoalNodeCreated(GoalNodeCreated { node_id, description, deps, caps, node_type, priority, budget }) => TlogEvent::new(
+                "goal_graph",
+                "goal_node_created",
+                serde_json::json!({
+                    "node_id": node_id,
+                    "description": description,
+                    "deps": deps,
+                    "caps": caps,
+                    "node_type": node_type,
+                    "priority": priority,
+                    "budget": budget,
+                }),
+            ),
+            CanonEvent::GoalNodeRetracted(GoalNodeRetracted { node_id }) => TlogEvent::new("goal_graph", "goal_node_retracted", serde_json::json!({ "node_id": node_id })),
+            CanonEvent::GoalNodeRewritten(GoalNodeRewritten { node_id, new_description, new_caps }) => TlogEvent::new(
+                "goal_graph",
+                "goal_node_rewritten",
+                serde_json::json!({
+                    "node_id": node_id,
+                    "new_description": new_description,
+                    "new_caps": new_caps,
+                }),
+            ),
+            CanonEvent::GoalEdgeDefined(GoalEdgeDefined { from_node_id, to_node_id }) => TlogEvent::new(
+                "goal_graph",
+                "goal_edge_defined",
+                serde_json::json!({
+                    "from_node_id": from_node_id,
+                    "to_node_id": to_node_id,
+                }),
+            ),
+            CanonEvent::GoalGraphCheckpointed(GoalGraphCheckpointed { tlog_seq }) => TlogEvent::new("goal_graph", "goal_graph_checkpointed", serde_json::json!({ "tlog_seq": tlog_seq })),
+            CanonEvent::CapabilityInvoked(CapabilityInvoked { capability_id, name, node_id }) => TlogEvent::new(
+                "capability_graph",
+                "capability_invoked",
+                serde_json::json!({
+                    "capability_id": capability_id,
+                    "name": name,
+                    "node_id": node_id,
+                }),
+            ),
+            CanonEvent::CapabilityResolved(CapabilityResolved { capability_id, success, duration_ms }) => TlogEvent::new(
+                "capability_graph",
+                "capability_resolved",
+                serde_json::json!({
+                    "capability_id": capability_id,
+                    "success": success,
+                    "duration_ms": duration_ms,
+                }),
+            ),
+            CanonEvent::LoopObserved(payload) => {
+                let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+                TlogEvent::new("observe", "loop_observed", val)
+            }
+            CanonEvent::LoopPlanned(payload) => {
+                let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+                TlogEvent::new("plan", "loop_planned", val)
+            }
+            CanonEvent::LoopActed(payload) => {
+                let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+                TlogEvent::new("act", "loop_acted", val)
+            }
+            CanonEvent::LoopVerified(payload) => {
+                let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+                TlogEvent::new("verify", "loop_verified", val)
+            }
+            CanonEvent::LoopRewarded(payload) => {
+                let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+                TlogEvent::new("reward", "loop_rewarded", val)
+            }
+            CanonEvent::Debug(DebugEvent { source, kind, payload }) => TlogEvent::new(source, kind, payload.clone()),
+            CanonEvent::ErrorOccurred(payload) => {
+                let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
+                TlogEvent::new("event-runtime", "error_occurred", val)
+            }
+            _ => {
+                return;
+            }
         };
         canon.event_id = Some(self.next_id);
         self.next_id = self.next_id.saturating_add(1);
@@ -712,14 +613,8 @@ fn compute_invariant_hash(node_count: u64, edge_count: u64, schema_version: u64)
 }
 
 fn apply_delta(state: &mut RustcState, delta: &EventDelta) -> Result<()> {
-    if delta.id <= state.last_event_id
-        && !matches!(delta.event, RustcEvent::SessionStart(_))
-    {
-        return Err(anyhow::anyhow!(
-            "event id must be monotonic id={} last_event_id={}",
-            delta.id,
-            state.last_event_id
-        ));
+    if delta.id <= state.last_event_id && !matches!(delta.event, RustcEvent::SessionStart(_)) {
+        return Err(anyhow::anyhow!("event id must be monotonic id={} last_event_id={}", delta.id, state.last_event_id));
     }
     state.tick = delta.tick;
     state.last_event_id = delta.id;
@@ -737,20 +632,12 @@ fn apply_delta(state: &mut RustcState, delta: &EventDelta) -> Result<()> {
             state.removed_symbols.insert(symbol.clone());
         }
         RustcEvent::EdgeDefined(EdgeDefined { src, dst, kind }) => {
-            state
-                .known_edges
-                .push((src.clone(), dst.clone(), kind.clone()));
-            state
-                .removed_edges
-                .retain(|e| e != &(src.clone(), dst.clone(), kind.clone()));
+            state.known_edges.push((src.clone(), dst.clone(), kind.clone()));
+            state.removed_edges.retain(|e| e != &(src.clone(), dst.clone(), kind.clone()));
         }
         RustcEvent::EdgeRemoved(EdgeRemoved { src, dst, kind }) => {
-            state
-                .known_edges
-                .retain(|e| e != &(src.clone(), dst.clone(), kind.clone()));
-            state
-                .removed_edges
-                .push((src.clone(), dst.clone(), kind.clone()));
+            state.known_edges.retain(|e| e != &(src.clone(), dst.clone(), kind.clone()));
+            state.removed_edges.push((src.clone(), dst.clone(), kind.clone()));
         }
         RustcEvent::FileSeen(FileSeen { path }) => {
             state.known_files.insert(path.clone());
@@ -777,4 +664,56 @@ fn apply_delta(state: &mut RustcState, delta: &EventDelta) -> Result<()> {
     let edge_count = state.known_edges.len() as u64;
     state.invariant_hash = compute_invariant_hash(node_count, edge_count, 2);
     Ok(())
+}
+
+pub enum KernelMsg {
+    Event(AnyEvent),
+    Reset,
+}
+
+pub fn spawn_kernel_processor(rx: crossbeam_channel::Receiver<KernelMsg>, emitter: EventEmitterHandle) -> std::thread::JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("canon-kernel-processor".to_string())
+        .spawn(move || {
+            let mut state = empty_state();
+            let mut tick: u64 = 0;
+            for msg in rx.iter() {
+                match msg {
+                    KernelMsg::Reset => {
+                        state = empty_state();
+                        tick = 0;
+                    }
+                    KernelMsg::Event(event) => {
+                        let AnyEvent::Canon(ref canon) = event else {
+                            continue;
+                        };
+                        let Some(kernel) = extract_rustc_event(canon) else {
+                            continue;
+                        };
+                        let analysis_crate = if let RustcEvent::CompilationUnitFinished(ref cu) = kernel { Some(cu.crate_name.clone()) } else { None };
+                        if matches!(kernel, RustcEvent::SessionStart(_)) {
+                            state = empty_state();
+                            tick = 0;
+                        } else {
+                            tick = tick.saturating_add(1);
+                        }
+                        let delta = EventDelta { id: tick, tick, event: kernel };
+                        let _ = apply_delta(&mut state, &delta);
+                        if let Some(crate_name) = analysis_crate {
+                            emitter.emit(CanonEvent::CapabilityRequested(CapabilityRequested {
+                                request_id: format!("analysis-k-{}-{}", crate_name, tick),
+                                name: "analysis.run".to_string(),
+                                args: serde_json::json!({ "crate": crate_name }),
+                            }));
+                            emitter.emit(CanonEvent::CapabilityRequested(CapabilityRequested {
+                                request_id: format!("analysis-workspace-k-{}", tick),
+                                name: "analysis.workspace".to_string(),
+                                args: serde_json::json!({}),
+                            }));
+                        }
+                    }
+                }
+            }
+        })
+        .expect("kernel processor thread")
 }

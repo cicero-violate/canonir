@@ -19,24 +19,13 @@ pub struct SymbolIndex {
 
 impl SymbolIndex {
     pub fn from_reports(out_dir: &Path) -> Result<Self> {
-        let graph_dir = if out_dir.file_name().and_then(|s| s.to_str()) == Some("graph") {
-            out_dir.to_path_buf()
-        } else {
-            ReportLayout::from_crate_root(out_dir.to_path_buf()).graph_dir()
-        };
+        let graph_dir = if out_dir.file_name().and_then(|s| s.to_str()) == Some("graph") { out_dir.to_path_buf() } else { ReportLayout::from_crate_root(out_dir.to_path_buf()).graph_dir() };
         let symbols_path = graph_dir.join("symbols.json");
         let spans_path = graph_dir.join("symbol_spans.jsonl");
         if !symbols_path.exists() || !spans_path.exists() {
-            return Err(anyhow!(
-                "reports artifacts not found in {}; run reports generation first",
-                out_dir.display()
-            ));
+            return Err(anyhow!("reports artifacts not found in {}; run reports generation first", out_dir.display()));
         }
-        let tlog_offset = symbols_path
-            .metadata()
-            .map(|m| m.len())
-            .unwrap_or(0)
-            .saturating_add(spans_path.metadata().map(|m| m.len()).unwrap_or(0));
+        let tlog_offset = symbols_path.metadata().map(|m| m.len()).unwrap_or(0).saturating_add(spans_path.metadata().map(|m| m.len()).unwrap_or(0));
         let reader = BufReader::new(File::open(&spans_path)?);
         let mut span_index: HashMap<String, HashMap<PathBuf, Vec<SpanRange>>> = HashMap::new();
         let symbol_kinds: HashMap<String, String> = load_symbol_kinds(&symbols_path)?;
@@ -46,11 +35,7 @@ impl SymbolIndex {
 
         for line in reader.lines() {
             let line = line?;
-            apply_span_line(
-                &line,
-                &mut span_index,
-                &mut files,
-            )?;
+            apply_span_line(&line, &mut span_index, &mut files)?;
         }
 
         for (symbol_id, kind) in &symbol_kinds {
@@ -69,17 +54,7 @@ impl SymbolIndex {
         dedup_spans(&mut span_index);
         let uses_crate_prefix = module_files.keys().any(|k| k.starts_with("crate::"));
 
-        Ok(Self {
-            span_index,
-            symbol_kinds,
-            symbol_catalog,
-            normalized_sources: HashMap::new(),
-            tlog_offset,
-            module_files,
-            file_modules,
-            files,
-            uses_crate_prefix,
-        })
+        Ok(Self { span_index, symbol_kinds, symbol_catalog, normalized_sources: HashMap::new(), tlog_offset, module_files, file_modules, files, uses_crate_prefix })
     }
 
     pub fn build(project_root: &Path) -> Result<Self> {
@@ -91,34 +66,18 @@ impl SymbolIndex {
         if self.tlog_offset == 0 {
             return false;
         }
-        let graph_dir = if out_dir.file_name().and_then(|s| s.to_str()) == Some("graph") {
-            out_dir.to_path_buf()
-        } else {
-            ReportLayout::from_crate_root(out_dir.to_path_buf()).graph_dir()
-        };
+        let graph_dir = if out_dir.file_name().and_then(|s| s.to_str()) == Some("graph") { out_dir.to_path_buf() } else { ReportLayout::from_crate_root(out_dir.to_path_buf()).graph_dir() };
         let symbols_path = graph_dir.join("symbols.json");
         let spans_path = graph_dir.join("symbol_spans.jsonl");
-        let current = symbols_path
-            .metadata()
-            .map(|m| m.len())
-            .unwrap_or(0)
-            .saturating_add(spans_path.metadata().map(|m| m.len()).unwrap_or(0));
+        let current = symbols_path.metadata().map(|m| m.len()).unwrap_or(0).saturating_add(spans_path.metadata().map(|m| m.len()).unwrap_or(0));
         current != self.tlog_offset
     }
 
     pub fn refresh_from_reports(&mut self, out_dir: &Path) -> Result<bool> {
-        let graph_dir = if out_dir.file_name().and_then(|s| s.to_str()) == Some("graph") {
-            out_dir.to_path_buf()
-        } else {
-            ReportLayout::from_crate_root(out_dir.to_path_buf()).graph_dir()
-        };
+        let graph_dir = if out_dir.file_name().and_then(|s| s.to_str()) == Some("graph") { out_dir.to_path_buf() } else { ReportLayout::from_crate_root(out_dir.to_path_buf()).graph_dir() };
         let symbols_path = graph_dir.join("symbols.json");
         let spans_path = graph_dir.join("symbol_spans.jsonl");
-        let new_len = symbols_path
-            .metadata()
-            .map(|m| m.len())
-            .unwrap_or(0)
-            .saturating_add(spans_path.metadata().map(|m| m.len()).unwrap_or(0));
+        let new_len = symbols_path.metadata().map(|m| m.len()).unwrap_or(0).saturating_add(spans_path.metadata().map(|m| m.len()).unwrap_or(0));
         if new_len == self.tlog_offset {
             return Ok(false);
         }
@@ -131,11 +90,7 @@ impl SymbolIndex {
         self.files.clear();
         for line in reader.lines() {
             let line = line?;
-            apply_span_line(
-                &line,
-                &mut self.span_index,
-                &mut self.files,
-            )?;
+            apply_span_line(&line, &mut self.span_index, &mut self.files)?;
         }
         for (symbol_id, kind) in &self.symbol_kinds {
             if kind != "MODULE" {
@@ -168,10 +123,7 @@ impl SymbolIndex {
     }
 
     pub fn symbol_ids(&self) -> Vec<String> {
-        self.symbol_catalog
-            .iter()
-            .map(|(id, _)| split_module_segments(id).join("::"))
-            .collect()
+        self.symbol_catalog.iter().map(|(id, _)| split_module_segments(id).join("::")).collect()
     }
 
     pub fn symbol_kind(&self, symbol_id: &str) -> Option<&str> {
@@ -199,11 +151,7 @@ fn split_module_segments(path: &str) -> Vec<&str> {
     path.split("::").filter(|s| !s.is_empty()).collect()
 }
 
-fn apply_span_line(
-    line: &str,
-    span_index: &mut HashMap<String, HashMap<PathBuf, Vec<SpanRange>>>,
-    files: &mut HashSet<PathBuf>,
-) -> Result<()> {
+fn apply_span_line(line: &str, span_index: &mut HashMap<String, HashMap<PathBuf, Vec<SpanRange>>>, files: &mut HashSet<PathBuf>) -> Result<()> {
     if line.trim().is_empty() {
         return Ok(());
     }
@@ -217,12 +165,7 @@ fn apply_span_line(
     }
     let pb = PathBuf::from(file);
     files.insert(pb.clone());
-    span_index
-        .entry(sym.to_string())
-        .or_default()
-        .entry(pb.clone())
-        .or_default()
-        .push(SpanRange { lo, hi });
+    span_index.entry(sym.to_string()).or_default().entry(pb.clone()).or_default().push(SpanRange { lo, hi });
     Ok(())
 }
 
@@ -256,8 +199,7 @@ fn load_symbol_kinds(path: &Path) -> Result<HashMap<String, String>> {
 }
 
 fn build_symbol_catalog(symbol_kinds: &HashMap<String, String>) -> Vec<(String, String)> {
-    let mut catalog: Vec<(String, String)> =
-        symbol_kinds.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let mut catalog: Vec<(String, String)> = symbol_kinds.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     catalog.sort_by(|a, b| a.0.cmp(&b.0));
     catalog
 }

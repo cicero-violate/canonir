@@ -15,11 +15,7 @@ pub fn mine_patterns(clusters: &[SemanticCluster]) -> Vec<PatternRule> {
             continue;
         }
         let rule = format!("cluster_{}: kind={}", c.cluster_id, c.node_kind);
-        out.push(PatternRule {
-            rule,
-            support: 1.0,
-            confidence: 1.0,
-        });
+        out.push(PatternRule { rule, support: 1.0, confidence: 1.0 });
     }
     out
 }

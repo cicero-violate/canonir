@@ -1,31 +1,24 @@
+pub mod api;
+pub mod capabilities;
+pub mod check;
+pub mod consumer;
 pub mod edit;
 pub mod fs;
-pub mod structured;
-pub mod api;
-pub mod check;
 pub mod git;
-pub mod verify;
 pub mod query;
+pub mod structured;
 pub mod symbol_index;
 pub mod tlog;
-pub mod consumer;
-pub mod capabilities;
+pub mod verify;
 
 use std::path::Path;
 use std::sync::Arc;
 
-use edit::ProjectEditor;
 use crate::symbol_index::SymbolIndex;
-use structured::{EditOp, FieldMutation};
+pub use capabilities::{register_editor_capabilities, CAP_DELETE_SYMBOL, CAP_MOVE_SYMBOL, CAP_RENAME_DIR, CAP_RENAME_MODULE, CAP_RENAME_SYMBOL};
 pub use consumer::EditConsumer;
-pub use capabilities::{
-    register_editor_capabilities,
-    CAP_DELETE_SYMBOL,
-    CAP_MOVE_SYMBOL,
-    CAP_RENAME_DIR,
-    CAP_RENAME_MODULE,
-    CAP_RENAME_SYMBOL,
-};
+use edit::ProjectEditor;
+use structured::{EditOp, FieldMutation};
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct RenameRunReport {
@@ -56,11 +49,7 @@ pub fn rename_symbol_pairs(project: &Path, renames: &[(String, String)]) -> Rena
     rename_symbol_pairs_with_session(project, session, renames)
 }
 
-pub fn rename_symbol_pairs_with_session(
-    project: &Path,
-    session: Arc<SymbolIndex>,
-    renames: &[(String, String)],
-) -> RenameRunReport {
+pub fn rename_symbol_pairs_with_session(project: &Path, session: Arc<SymbolIndex>, renames: &[(String, String)]) -> RenameRunReport {
     let mut report = RenameRunReport::default();
     let mut editor = match ProjectEditor::load_with_session(project, session) {
         Ok(editor) => editor,
@@ -76,11 +65,7 @@ pub fn rename_symbol_pairs_with_session(
             return report;
         };
         let new_ident = new_symbol.rsplit("::").next().unwrap_or(new_symbol.as_str());
-        let op = EditOp::MutateField {
-            handle,
-            symbol_id: old_symbol.to_string(),
-            mutation: FieldMutation::RenameIdent(new_ident.to_string()),
-        };
+        let op = EditOp::MutateField { handle, symbol_id: old_symbol.to_string(), mutation: FieldMutation::RenameIdent(new_ident.to_string()) };
         if let Err(err) = editor.queue(old_symbol, op) {
             report.error = Some(format!("{err:?}"));
             return report;
@@ -89,20 +74,8 @@ pub fn rename_symbol_pairs_with_session(
 
     let preview_output = editor
         .validate()
-        .and_then(|conflicts| {
-            if conflicts.is_empty() {
-                Ok(())
-            } else {
-                Err(anyhow::anyhow!("validation conflicts: {conflicts:?}"))
-            }
-        })
-        .and_then(|_| editor.apply().and_then(|report| {
-            if report.conflicts.is_empty() {
-                Ok(())
-            } else {
-                Err(anyhow::anyhow!("apply conflicts: {:?}", report.conflicts))
-            }
-        }))
+        .and_then(|conflicts| if conflicts.is_empty() { Ok(()) } else { Err(anyhow::anyhow!("validation conflicts: {conflicts:?}")) })
+        .and_then(|_| editor.apply().and_then(|report| if report.conflicts.is_empty() { Ok(()) } else { Err(anyhow::anyhow!("apply conflicts: {:?}", report.conflicts)) }))
         .and_then(|_| editor.preview());
 
     match preview_output {

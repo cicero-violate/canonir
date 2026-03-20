@@ -50,9 +50,7 @@ pub struct CheckResult {
 
 pub fn run_cargo_build(req: &BuildRequest) -> Result<BuildResult> {
     let start = std::time::Instant::now();
-    let output = Command::new("cargo")
-        .args(["build", "-p", &req.crate_name])
-        .output()?;
+    let output = Command::new("cargo").args(["build", "-p", &req.crate_name]).output()?;
     Ok(BuildResult {
         crate_name: req.crate_name.clone(),
         status: output.status.code().unwrap_or(-1),
@@ -87,9 +85,7 @@ pub fn run_cargo_run(req: &RunRequest) -> Result<RunResult> {
 
 pub fn run_cargo_check(req: &CheckRequest) -> Result<CheckResult> {
     let start = std::time::Instant::now();
-    let output = Command::new("cargo")
-        .args(["check", "-p", &req.crate_name])
-        .output()?;
+    let output = Command::new("cargo").args(["check", "-p", &req.crate_name]).output()?;
     Ok(CheckResult {
         crate_name: req.crate_name.clone(),
         status: output.status.code().unwrap_or(-1),

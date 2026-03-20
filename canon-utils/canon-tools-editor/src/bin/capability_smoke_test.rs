@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
-use canon_capability::{CapabilityExecutionContext, CapabilityRegistry, CapabilityExecutionResult};
+use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityRegistry};
 use canon_editor::register_editor_capabilities;
-use canon_event::{CapabilityRequested, CanonEvent};
+use canon_event::{CanonEvent, CapabilityRequested};
 
 fn main() -> Result<()> {
     let mut registry = CapabilityRegistry::new();
@@ -17,20 +17,13 @@ fn main() -> Result<()> {
         }),
     };
 
-    let ctx = CapabilityExecutionContext {
-        workspace: "/workspace/ai_sandbox/canon".into(),
-        event: CanonEvent::CapabilityRequested(request.clone()),
-        emitter: None,
-    };
+    let ctx = CapabilityExecutionContext { workspace: "/workspace/ai_sandbox/canon".into(), event: CanonEvent::CapabilityRequested(request.clone()), emitter: None };
 
     let result = registry.execute(&request.name, ctx)?;
     let event = match result {
         CapabilityExecutionResult::Emit(event) => event,
         other => {
-            return Err(anyhow!(
-                "unexpected capability result: expected Emit(Edit), got {:?}",
-                other
-            ));
+            return Err(anyhow!("unexpected capability result: expected Emit(Edit), got {:?}", other));
         }
     };
     let CanonEvent::Edit(edit) = event else {

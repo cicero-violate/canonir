@@ -1,4 +1,4 @@
-use canon_event::{EventMask, EventConsumer, EventEmitterHandle, CanonEvent, EventFilter, RustcEvent};
+use canon_event::{CanonEvent, EventConsumer, EventEmitterHandle, EventFilter, EventMask, RustcEvent};
 use crossbeam_channel::{bounded, Sender};
 use std::thread;
 
@@ -25,10 +25,7 @@ fn is_error_event(event: &CanonEvent) -> bool {
         CanonEvent::LoopActed(payload) => !payload.success,
         CanonEvent::LoopVerified(payload) => !payload.passed,
         CanonEvent::LoopRewarded(payload) => payload.halt,
-        CanonEvent::Code(canon_event::Code { delta, .. }) => matches!(
-            delta.event,
-            RustcEvent::PanicCaptured(_) | RustcEvent::InvariantViolation(_)
-        ),
+        CanonEvent::Code(canon_event::Code { delta, .. }) => matches!(delta.event, RustcEvent::PanicCaptured(_) | RustcEvent::InvariantViolation(_)),
         _ => false,
     }
 }
@@ -52,30 +49,20 @@ fn is_control_event(event: &CanonEvent) -> bool {
 
 impl EventBus {
     pub fn new(queue_size: usize) -> Self {
-        Self {
-            consumers: Vec::new(),
-            queue_size: queue_size.max(1),
-        }
+        Self { consumers: Vec::new(), queue_size: queue_size.max(1) }
     }
 
-    pub fn register(
-        &mut self,
-        name: String,
-        mut consumer: Box<dyn EventConsumer>,
-        emitter: EventEmitterHandle,
-    ) {
+    pub fn register(&mut self, name: String, mut consumer: Box<dyn EventConsumer>, emitter: EventEmitterHandle) {
         consumer.set_emitter(emitter);
         let filter = consumer.filter();
         let (tx, rx) = bounded::<EventMessage>(self.queue_size);
         let thread_name = format!("event_consumer_{name}");
-        let _ = thread::Builder::new()
-            .name(thread_name.clone())
-            .spawn(move || {
-                let mut consumer = consumer;
-                for msg in rx.iter() {
-                    consumer.on_event(&msg.event);
-                }
-            });
+        let _ = thread::Builder::new().name(thread_name.clone()).spawn(move || {
+            let mut consumer = consumer;
+            for msg in rx.iter() {
+                consumer.on_event(&msg.event);
+            }
+        });
         self.consumers.push(ConsumerEntry { filter, sender: tx });
     }
 
@@ -95,12 +82,7 @@ impl EventBus {
                     }
                 }
                 EventFilter::CapabilityOnly => {
-                    if !matches!(
-                        event,
-                        CanonEvent::CapabilityRequested(_)
-                            | CanonEvent::CapabilityCompleted(_)
-                            | CanonEvent::CapabilityFailed(_)
-                    ) {
+                    if !matches!(event, CanonEvent::CapabilityRequested(_) | CanonEvent::CapabilityCompleted(_) | CanonEvent::CapabilityFailed(_)) {
                         continue;
                     }
                 }
@@ -122,6 +104,5 @@ impl EventBus {
         }
     }
 
-    pub fn log_registry(&self) {
-    }
+    pub fn log_registry(&self) {}
 }

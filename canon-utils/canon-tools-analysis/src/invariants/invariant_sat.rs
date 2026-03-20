@@ -8,11 +8,5 @@ pub struct SatResult {
 }
 
 pub fn validate_candidates(candidates: &[InvariantCandidate]) -> Vec<SatResult> {
-    candidates
-        .iter()
-        .map(|c| SatResult {
-            rule: c.rule.clone(),
-            valid: c.support >= 0.98 && c.confidence >= 0.99,
-        })
-        .collect()
+    candidates.iter().map(|c| SatResult { rule: c.rule.clone(), valid: c.support >= 0.98 && c.confidence >= 0.99 }).collect()
 }

@@ -1,8 +1,6 @@
 use anyhow::{anyhow, Result};
-use canon_event_store::{
-    extract_rustc_event, read_any_events_from_path, replay_graph_from_tlog, AnyEvent,
-};
 use canon_event::RustcEvent;
+use canon_event_store::{extract_rustc_event, read_any_events_from_path, replay_graph_from_tlog, AnyEvent};
 use std::collections::HashSet;
 use std::env;
 use std::io::Write;
@@ -11,9 +9,7 @@ use std::path::{Path, PathBuf};
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 5 {
-        eprintln!(
-            "usage: verify_tlog_equivalence --json <event.tlog> --binary <event.tlog.d> [--stress]"
-        );
+        eprintln!("usage: verify_tlog_equivalence --json <event.tlog> --binary <event.tlog.d> [--stress]");
         return Err(anyhow!("missing args"));
     }
     let mut json_path: Option<PathBuf> = None;
@@ -49,47 +45,28 @@ fn main() -> Result<()> {
 
     let mut diffs = Vec::new();
     if gj.nodes.len() != gb.nodes.len() {
-        diffs.push(format!(
-            "node_count json={} binary={}",
-            gj.nodes.len(),
-            gb.nodes.len()
-        ));
+        diffs.push(format!("node_count json={} binary={}", gj.nodes.len(), gb.nodes.len()));
     }
     if gj.edges.len() != gb.edges.len() {
-        diffs.push(format!(
-            "edge_count json={} binary={}",
-            gj.edges.len(),
-            gb.edges.len()
-        ));
+        diffs.push(format!("edge_count json={} binary={}", gj.edges.len(), gb.edges.len()));
     }
 
     let json_nodes = node_set(&gj.nodes);
     let bin_nodes = node_set(&gb.nodes);
     if json_nodes != bin_nodes {
-        diffs.push(format!(
-            "node_set mismatch: json_only={} binary_only={}",
-            json_nodes.difference(&bin_nodes).count(),
-            bin_nodes.difference(&json_nodes).count()
-        ));
+        diffs.push(format!("node_set mismatch: json_only={} binary_only={}", json_nodes.difference(&bin_nodes).count(), bin_nodes.difference(&json_nodes).count()));
     }
 
     let json_edges = edge_set(&gj.edges);
     let bin_edges = edge_set(&gb.edges);
     if json_edges != bin_edges {
-        diffs.push(format!(
-            "edge_set mismatch: json_only={} binary_only={}",
-            json_edges.difference(&bin_edges).count(),
-            bin_edges.difference(&json_edges).count()
-        ));
+        diffs.push(format!("edge_set mismatch: json_only={} binary_only={}", json_edges.difference(&bin_edges).count(), bin_edges.difference(&json_edges).count()));
     }
 
     let json_sessions = count_sessions(&json_path)?;
     let bin_sessions = count_sessions(&bin_path)?;
     if json_sessions != bin_sessions {
-        diffs.push(format!(
-            "session_count json={} binary={}",
-            json_sessions, bin_sessions
-        ));
+        diffs.push(format!("session_count json={} binary={}", json_sessions, bin_sessions));
     }
 
     if diffs.is_empty() {
@@ -103,20 +80,12 @@ fn main() -> Result<()> {
     Err(anyhow!("verification failed"))
 }
 
-fn node_set(
-    nodes: &[canon_event_store::CodeGraphNode],
-) -> HashSet<(u32, String, String, Option<u32>, Option<u32>)> {
-    nodes
-        .iter()
-        .map(|n| (n.id, n.kind.clone(), n.symbol.clone(), n.file_id, n.line))
-        .collect()
+fn node_set(nodes: &[canon_event_store::CodeGraphNode]) -> HashSet<(u32, String, String, Option<u32>, Option<u32>)> {
+    nodes.iter().map(|n| (n.id, n.kind.clone(), n.symbol.clone(), n.file_id, n.line)).collect()
 }
 
 fn edge_set(edges: &[canon_event_store::CodeGraphEdge]) -> HashSet<(u32, u32, String)> {
-    edges
-        .iter()
-        .map(|e| (e.src, e.dst, e.kind.clone()))
-        .collect()
+    edges.iter().map(|e| (e.src, e.dst, e.kind.clone())).collect()
 }
 
 fn count_sessions(path: &Path) -> Result<u64> {
@@ -154,11 +123,7 @@ fn run_stress(json_path: &Path, bin_path: &Path) -> Result<()> {
     let mut json_writer = BufWriter::new(File::create(json_path)?);
     let bin_writer = BinarySegmentWriter::open(bin_path)?;
 
-    let session = RustcEvent::SessionStart(canon_event::SessionStart {
-        project: "stress".to_string(),
-        schema: 2,
-        byte_offset: 0,
-    });
+    let session = RustcEvent::SessionStart(canon_event::SessionStart { project: "stress".to_string(), schema: 2, byte_offset: 0 });
     let session_json = serde_json::to_value(&session)?;
     let canon = TlogEvent::new("rustc", "rustc_event", session_json.clone());
     let line = serde_json::to_string(&canon)?;
@@ -167,15 +132,7 @@ fn run_stress(json_path: &Path, bin_path: &Path) -> Result<()> {
     let _ = bin_writer.write_event(&TlogEvent::new("rustc", "rustc_event", session_json));
 
     for i in 0..10_000u32 {
-        let node = RustcEvent::NodeDefined(canon_event::NodeDefined {
-            symbol: format!("node_{i}"),
-            kind: "FUNCTION".to_string(),
-            file: "src/lib.rs".to_string(),
-            line: 1,
-            col: 1,
-            lo: 0,
-            hi: 0,
-        });
+        let node = RustcEvent::NodeDefined(canon_event::NodeDefined { symbol: format!("node_{i}"), kind: "FUNCTION".to_string(), file: "src/lib.rs".to_string(), line: 1, col: 1, lo: 0, hi: 0 });
         let val = serde_json::to_value(&node)?;
         let canon = TlogEvent::new("rustc", "rustc_event", val.clone());
         let line = serde_json::to_string(&canon)?;
@@ -186,11 +143,7 @@ fn run_stress(json_path: &Path, bin_path: &Path) -> Result<()> {
     for i in 0..50_000u32 {
         let src = format!("node_{}", i % 10_000);
         let dst = format!("node_{}", (i * 7) % 10_000);
-        let edge = RustcEvent::EdgeDefined(canon_event::EdgeDefined {
-            src,
-            dst,
-            kind: "CALL".to_string(),
-        });
+        let edge = RustcEvent::EdgeDefined(canon_event::EdgeDefined { src, dst, kind: "CALL".to_string() });
         let val = serde_json::to_value(&edge)?;
         let canon = TlogEvent::new("rustc", "rustc_event", val.clone());
         let line = serde_json::to_string(&canon)?;

@@ -31,26 +31,12 @@ impl ProofCache {
         if clear {
             let _ = fs::remove_file(&path);
         }
-        let entries = if !clear {
-            load_cache(&path)
-        } else {
-            HashMap::new()
-        };
-        Self {
-            path,
-            entries,
-            dirty: false,
-        }
+        let entries = if !clear { load_cache(&path) } else { HashMap::new() };
+        Self { path, entries, dirty: false }
     }
 
     pub fn get(&self, key: &str, graph_hash: &str) -> Option<CacheEntry> {
-        self.entries.get(key).and_then(|entry| {
-            if entry.graph_hash == graph_hash {
-                Some(entry.clone())
-            } else {
-                None
-            }
-        })
+        self.entries.get(key).and_then(|entry| if entry.graph_hash == graph_hash { Some(entry.clone()) } else { None })
     }
 
     pub fn insert(&mut self, key: String, entry: CacheEntry) {
@@ -64,9 +50,7 @@ impl Drop for ProofCache {
         if !self.dirty {
             return;
         }
-        let payload = CacheFile {
-            entries: self.entries.clone(),
-        };
+        let payload = CacheFile { entries: self.entries.clone() };
         if let Ok(text) = serde_json::to_string_pretty(&payload) {
             let _ = fs::write(&self.path, text);
         }
@@ -77,9 +61,7 @@ fn load_cache(path: &Path) -> HashMap<String, CacheEntry> {
     let Ok(text) = fs::read_to_string(path) else {
         return HashMap::new();
     };
-    serde_json::from_str::<CacheFile>(&text)
-        .map(|f| f.entries)
-        .unwrap_or_default()
+    serde_json::from_str::<CacheFile>(&text).map(|f| f.entries).unwrap_or_default()
 }
 
 pub fn reachability_key(fn_id: u32, err_id: u32, graph_hash: &str) -> String {
@@ -95,10 +77,7 @@ pub fn equivalence_key(a: u32, b: u32, graph_hash: &str) -> String {
 }
 
 pub fn now_ts() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 pub fn function_graph_hash(graph: &AnalysisGraph, fn_id: u32) -> String {
