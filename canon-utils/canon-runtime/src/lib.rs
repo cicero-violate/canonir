@@ -635,9 +635,8 @@ impl EventRuntime {
             TlogEvent::new(source, kind, payload.clone())
         }
         CanonEvent::ErrorOccurred(payload) => {
-            let source = payload.source.clone();
             let val = serde_json::to_value(payload).unwrap_or_else(|_| serde_json::json!({}));
-            TlogEvent::new(source, "error_occurred", val)
+            TlogEvent::new("event-runtime", "error_occurred", val)
         }
         _ => {
             return;

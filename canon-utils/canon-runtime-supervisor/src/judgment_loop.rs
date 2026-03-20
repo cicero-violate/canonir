@@ -12,10 +12,17 @@ impl RouteController {
         }
     }
 
-    pub fn build_prompt(&self, mission: &str, snapshot: &str, journal: &[JournalLine]) -> String {
+    pub fn build_prompt(
+        &self,
+        mission: &str,
+        snapshot: &str,
+        last_tool_result: Option<&serde_json::Value>,
+        journal: &[JournalLine],
+    ) -> String {
         compose_routing_prompt(&RoutingInput {
             mission: mission.to_string(),
             snapshot: snapshot.to_string(),
+            last_tool_result: last_tool_result.cloned(),
             journal: journal.to_vec(),
             open_routes: vec![
                 RouteKind::Scan,

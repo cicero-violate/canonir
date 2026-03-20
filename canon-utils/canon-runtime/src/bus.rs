@@ -46,6 +46,7 @@ fn is_control_event(event: &CanonEvent) -> bool {
             | CanonEvent::LoopActed(_)
             | CanonEvent::LoopVerified(_)
             | CanonEvent::LoopRewarded(_)
+            | CanonEvent::Debug(_)
     )
 }
 

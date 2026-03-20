@@ -26,6 +26,7 @@ struct LlmWork {
     prompt: String,
     role: Option<String>,
     raw: bool,
+    args: serde_json::Value,
     emitter: EventEmitterHandle,
 }
 
@@ -89,7 +90,7 @@ impl LlmCapabilityHandler {
                     let _ = std::fs::create_dir_all(&llm_log_dir);
                     let mut llm_call_counter: u32 = next_llm_call_counter(&llm_log_dir);
                     for job in work_rx.iter() {
-                        let LlmWork { request_id, name, prompt, role, raw, emitter } = job;
+                        let LlmWork { request_id, name, prompt, role, raw, args, emitter } = job;
                         // Capture emitter on first job; ws_server uses it for
                         // bridge-level events for the rest of the process lifetime.
                         let _ = ws_emitter_thread.set(emitter.clone());
@@ -98,26 +99,48 @@ impl LlmCapabilityHandler {
                             json!({ "request_id": request_id, "name": name }));
                         let is_planner_role = role.as_deref() == Some("planner");
                         let bust_cache = config.planner_refine_on_cache && is_planner_role;
-                        let Some(endpoint) = (if let Some(role) = role.as_deref() {
-                            config.llm_endpoints.iter().find(|e| e.role.as_deref() == Some(role))
+                        let requested_role = role.clone().unwrap_or_default();
+                        let selected = if let Some(role_name) = role.as_deref() {
+                            config
+                                .llm_endpoints
+                                .iter()
+                                .find(|e| e.role.as_deref() == Some(role_name))
+                                // Backward-compatible fallback: router requests can use planner.
+                                .or_else(|| {
+                                    if role_name == "router" {
+                                        config
+                                            .llm_endpoints
+                                            .iter()
+                                            .find(|e| e.role.as_deref() == Some("planner"))
+                                    } else {
+                                        None
+                                    }
+                                })
                         } else {
                             config.llm_endpoints.first()
-                        }) else {
+                        };
+                        let Some(endpoint) = selected else {
+                            let error_msg = if requested_role.is_empty() {
+                                "no llm endpoints configured".to_string()
+                            } else {
+                                format!("no llm endpoint configured for role={}", requested_role)
+                            };
                             emitter.emit(CanonEvent::ErrorOccurred(new_error_occurred(
                                 "llm_config",
                                 "llm_executor",
-                                "no llm endpoints configured",
+                                &error_msg,
                                 "error",
                                 json!({
                                     "request_id": request_id.clone(),
                                     "capability": name.clone(),
+                                    "role": role,
                                 }),
                                 Some(request_id.clone()),
                             )));
                             emitter.emit(CanonEvent::CapabilityFailed(canon_event::CapabilityFailed {
                                 request_id,
                                 name,
-                                error: "no llm endpoints configured".to_string(),
+                                error: error_msg,
                             }));
                             continue;
                         };
@@ -138,17 +161,23 @@ impl LlmCapabilityHandler {
                                 "endpoint": endpoint.id,
                                 "url": endpoint.url
                             }));
+                        let dispatched_ms = now_ms();
                         let call_n = llm_call_counter;
                         llm_call_counter += 1;
-                        let req_path = format!("{}/{:04}_request.json", llm_log_dir, call_n);
-                        let res_path = format!("{}/{:04}_response.json", llm_log_dir, call_n);
+                        let req_tag = format!("{dispatched_ms}_{call_n:04}");
+                        let req_path = format!("{}/{}_request.json", llm_log_dir, req_tag);
+                        let res_path = format!("{}/{}_response.json", llm_log_dir, req_tag);
                         let req_obj = json!({
                             "n": call_n,
                             "request_id": request_id,
+                            "capability": name,
                             "endpoint": endpoint.id,
                             "url": endpoint.url,
                             "role": role_content,
                             "prompt": prompt_with_request_id,
+                            "args": args,
+                            "dispatched_ms": dispatched_ms,
+                            "finalized_ms": serde_json::Value::Null,
                         });
                         let _ = std::fs::write(&req_path, serde_json::to_string_pretty(&req_obj).unwrap_or_default());
                         // Ensure every request has a terminal artifact path immediately.
@@ -191,6 +220,7 @@ impl LlmCapabilityHandler {
 
                         match result {
                             Ok(payload) => {
+                                let finalized_ms = now_ms();
                                 // E_in → L → E_out boundary: emit exactly once per LLM
                                 // response arrival, before the capability result is sealed.
                                 // Gives real-time visibility into: which endpoint replied,
@@ -209,6 +239,19 @@ impl LlmCapabilityHandler {
                                     "response": payload,
                                 });
                                 let _ = std::fs::write(&res_path, serde_json::to_string_pretty(&res_obj).unwrap_or_default());
+                                let req_done = json!({
+                                    "n": call_n,
+                                    "request_id": request_id,
+                                    "capability": name,
+                                    "endpoint": endpoint.id,
+                                    "url": endpoint.url,
+                                    "role": role_content,
+                                    "prompt": prompt_with_request_id,
+                                    "args": args,
+                                    "dispatched_ms": dispatched_ms,
+                                    "finalized_ms": finalized_ms,
+                                });
+                                let _ = std::fs::write(&req_path, serde_json::to_string_pretty(&req_done).unwrap_or_default());
                                 canon_emit!(emitter; "llm_executor", "llm_response",
                                     json!({
                                         "request_id": request_id,
@@ -236,6 +279,7 @@ impl LlmCapabilityHandler {
                                     json!({ "request_id": request_id }));
                             }
                             Err(err) => {
+                                let finalized_ms = now_ms();
                                 let res_obj = json!({
                                     "n": call_n,
                                     "request_id": request_id,
@@ -243,6 +287,19 @@ impl LlmCapabilityHandler {
                                     "error": err.to_string(),
                                 });
                                 let _ = std::fs::write(&res_path, serde_json::to_string_pretty(&res_obj).unwrap_or_default());
+                                let req_done = json!({
+                                    "n": call_n,
+                                    "request_id": request_id,
+                                    "capability": name,
+                                    "endpoint": endpoint.id,
+                                    "url": endpoint.url,
+                                    "role": role_content,
+                                    "prompt": prompt_with_request_id,
+                                    "args": args,
+                                    "dispatched_ms": dispatched_ms,
+                                    "finalized_ms": finalized_ms,
+                                });
+                                let _ = std::fs::write(&req_path, serde_json::to_string_pretty(&req_done).unwrap_or_default());
                                 emitter.emit(CanonEvent::ErrorOccurred(new_error_occurred(
                                     "llm_call",
                                     "llm_executor",
@@ -402,18 +459,30 @@ fn next_llm_call_counter(log_dir: &str) -> u32 {
         let Some(name) = entry.file_name().to_str().map(|s| s.to_string()) else {
             continue;
         };
-        let Some((prefix, suffix)) = name.split_once('_') else {
+        let Some((n, suffix)) = parse_artifact_reqnum_and_suffix(&name) else {
             continue;
         };
         if suffix != "request.json" && suffix != "response.json" {
             continue;
         }
-        let Ok(n) = prefix.parse::<u32>() else {
-            continue;
-        };
         max_seen = Some(max_seen.map_or(n, |m| m.max(n)));
     }
     max_seen.map_or(0, |m| m.saturating_add(1))
+}
+
+fn parse_artifact_reqnum_and_suffix(name: &str) -> Option<(u32, String)> {
+    let mut parts = name.splitn(3, '_');
+    let first = parts.next()?;
+    let second = parts.next()?;
+    let third = parts.next()?;
+
+    if let Ok(n) = first.parse::<u32>() {
+        // Legacy: <REQNUM>_<suffix>.json
+        return Some((n, format!("{}_{}", second, third)));
+    }
+    // New: <TS>_<REQNUM>_<suffix>.json
+    let n = second.parse::<u32>().ok()?;
+    Some((n, third.to_string()))
 }
 
 fn default_role_content(role: Option<&str>, endpoint_id: &str) -> String {
@@ -453,6 +522,7 @@ impl CapabilityHandler for LlmCapabilityHandler {
             prompt,
             role,
             raw,
+            args: request.args,
             emitter,
         }).is_err() {
             return Err(anyhow::anyhow!("llm executor worker channel closed"));

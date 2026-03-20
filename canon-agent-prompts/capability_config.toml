@@ -64,6 +64,14 @@ role = "planner"
 stateful = true
 max_tabs = 1
 
+[llm.endpoints.router]
+id = "router_chatgpt_group"
+url = "https://chatgpt.com/gg/69bb5d85449481959470422b599305bb"
+role_markdown = "builtin:planner"
+role = "router"
+stateful = true
+max_tabs = 1
+
 [llm.endpoints.exec_chatgpt_a]
 id = "exec_chatgpt_a"
 url = "https://chatgpt.com/gg/699c50e06bc881a3aa5ac1866bf15679"
@@ -110,6 +118,12 @@ burst = 4
 planner_chatgpt_group = 100
 
 [llm.roles.planner]
+burst = 4
+
+[llm.roles.router.weights]
+router_chatgpt_group = 100
+
+[llm.roles.router]
 burst = 4
 
 [llm.roles.exec.weights]

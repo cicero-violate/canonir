@@ -39,34 +39,11 @@ impl EventConsumer for VerifyConsumer {
     fn on_event(&mut self, event: &CanonEvent) {
         match event {
             CanonEvent::LoopActed(acted) => {
+                // Keep action context for route_selected=validate-driven verification.
                 self.last_trace_id = acted.trace_id.clone();
                 self.last_execution_id = acted.execution_id.clone();
                 self.last_act_span_id = acted.span_id.clone();
                 self.last_acted = Some(acted.clone());
-                let action_key = acted_action_key(acted);
-                self.emit_debug(
-                    "verify_scheduled",
-                    serde_json::json!({
-                        "tick": acted.tick,
-                        "action_kind": acted.action_kind,
-                        "action_key": action_key,
-                        "source": "loop_acted",
-                    }),
-                );
-                if self.last_verified_action_key.as_deref() == Some(action_key.as_str()) {
-                    self.emit_debug(
-                        "verify_dedupe_skip",
-                        serde_json::json!({
-                            "tick": acted.tick,
-                            "action_kind": acted.action_kind,
-                            "action_key": action_key,
-                            "source": "loop_acted",
-                        }),
-                    );
-                    return;
-                }
-                self.last_verified_action_key = Some(action_key);
-                self.verify_acted(acted);
             }
             CanonEvent::Debug(debug) if debug.kind == "route_selected" => {
                 let lane = debug

@@ -37,6 +37,8 @@ pub struct RoutingInput {
     pub mission: String,
     pub snapshot: String,
     #[serde(default)]
+    pub last_tool_result: Option<Value>,
+    #[serde(default)]
     pub journal: Vec<JournalLine>,
     pub open_routes: Vec<RouteKind>,
 }
@@ -71,11 +73,24 @@ pub fn compose_routing_prompt(input: &RoutingInput) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let last_tool_result = input
+        .last_tool_result
+        .as_ref()
+        .map(|value| {
+            let mut text = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
+            if text.len() > 2000 {
+                text.truncate(2000);
+                text.push_str("\n...<truncated>");
+            }
+            text
+        })
+        .unwrap_or_else(|| "(none)".to_string());
 
     format!(
         "You are the runtime route selector. Pick exactly one next route.\n\n\
 Mission:\n{mission}\n\n\
 Snapshot:\n{snapshot}\n\n\
+Last Tool Result:\n{last_tool_result}\n\n\
 Recent Journal:\n{recent}\n\n\
 Allowed Routes: {routes}\n\n\
 Return exactly one JSON object in one fenced ```json code block with schema:\n\
@@ -83,6 +98,7 @@ Return exactly one JSON object in one fenced ```json code block with schema:\n\
 No prose outside the code block.",
         mission = input.mission,
         snapshot = input.snapshot,
+        last_tool_result = last_tool_result,
         recent = recent,
         routes = routes,
     )

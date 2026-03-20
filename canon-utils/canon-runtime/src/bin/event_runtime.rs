@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use canon_act::ActConsumer;
 use canon_capability::CapabilityExecutionContext;
 use canon_decision::{JournalLine, RouteKind};
-use canon_event::{CanonEvent, CapabilityRequested, EventEmitter, EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolResult, EVENT_SCHEMA_VERSION};
+use canon_event::{CanonEvent, CapabilityRequested, EventEmitter, EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult, EVENT_SCHEMA_VERSION};
 use canon_event_store::replay_graph_from_tlog;
 use canon_event_store::AnyEvent;
 use canon_event_store::{read_any_events_from_path, read_any_events_from_path_with_start_seq};
@@ -20,7 +20,7 @@ use canon_runtime_supervisor::judgment_loop::RouteController;
 use canon_verify::VerifyConsumer;
 use crossbeam_channel as cc;
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -129,6 +129,9 @@ struct RouteRuntimeState {
     workspace_dirty: bool,
     planned_pending: usize,
     acted_unverified: bool,
+    last_action_failed: bool,
+    pending_tool_result_ids: HashSet<String>,
+    latest_tool_result: Option<serde_json::Value>,
     finish_ready: bool,
     last_action_kind: String,
     journal: Vec<JournalLine>,
@@ -151,6 +154,7 @@ impl RouteRuntimeState {
             has_queued_plan: self.planned_pending > 0,
             workspace_dirty: self.workspace_dirty,
             performed_recently: self.acted_unverified,
+            last_action_failed: self.last_action_failed,
             finish_ready: self.finish_ready,
         }
     }
@@ -206,7 +210,13 @@ fn heuristic_route_json(state: &RouteRuntimeState) -> String {
     .to_string()
 }
 
-fn request_route_via_llm_call(registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>, workspace: &Path, prompt: String, timeout: Duration) -> Result<String> {
+fn request_route_via_llm_call(
+    registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>,
+    workspace: &Path,
+    prompt: String,
+    timeout: Duration,
+    last_tool_result: Option<serde_json::Value>,
+) -> Result<String> {
     let request_id = format!("route-{}", Uuid::new_v4());
     let request = CapabilityRequested {
         request_id: request_id.clone(),
@@ -214,6 +224,7 @@ fn request_route_via_llm_call(registry: &std::sync::Arc<std::sync::Mutex<canon_c
         args: serde_json::json!({
             "prompt": prompt,
             "role": "router",
+            "last_tool_result": last_tool_result,
         }),
     };
     let (tx, rx) = cc::unbounded::<CanonEvent>();
@@ -298,6 +309,12 @@ fn update_route_runtime_state(route_state: &mut RouteRuntimeState, event: &Canon
         CanonEvent::LoopActed(LoopActed { action_kind, capability_request_id, tool_call_id, tool_result_id, success, .. }) => {
             route_state.planned_pending = route_state.planned_pending.saturating_sub(1);
             route_state.acted_unverified = true;
+            route_state.last_action_failed = !success;
+            if let Some(tool_call_id) = tool_call_id {
+                if tool_result_id.is_some() {
+                    route_state.pending_tool_result_ids.remove(tool_call_id);
+                }
+            }
             route_state.workspace_dirty = true;
             route_state.last_action_kind = action_kind.clone();
             let mut summary = format!("executed action={} success={} capability_request_id={}", route_state.last_action_kind, success, capability_request_id);
@@ -322,12 +339,27 @@ fn update_route_runtime_state(route_state: &mut RouteRuntimeState, event: &Canon
             }
             route_state.push_journal("reward", format!("halt={halt}"));
         }
-        CanonEvent::ToolResult(ToolResult { kind, success, tool_call_id, tool_result_id, output, .. }) => {
+        CanonEvent::ToolCall(ToolCall { tool_call_id, .. }) => {
+            // Track in-flight tool calls as soon as dispatch occurs.
+            route_state.pending_tool_result_ids.insert(tool_call_id.clone());
+            route_state.latest_tool_result = None;
+        }
+        CanonEvent::ToolResult(ToolResult { node_id, kind, success, request_id, tool_call_id, tool_result_id, output, .. }) => {
+            route_state.pending_tool_result_ids.remove(tool_call_id);
             let mut output_text = output.to_string();
             if output_text.len() > 512 {
                 output_text.truncate(512);
                 output_text.push_str("...<truncated>");
             }
+            route_state.latest_tool_result = Some(serde_json::json!({
+                "node_id": node_id,
+                "kind": kind,
+                "success": success,
+                "request_id": request_id,
+                "tool_call_id": tool_call_id,
+                "tool_result_id": tool_result_id,
+                "output": output,
+            }));
             route_state.push_journal("tool", format!("tool_result kind={kind} success={success} tool_call_id={tool_call_id} tool_result_id={tool_result_id} output={output_text}"));
         }
         CanonEvent::RuntimeStateUpdated(updated) => {
@@ -347,37 +379,9 @@ fn apply_observed_events(runtime: &mut EventRuntime, route_state: &mut RouteRunt
     if observed.is_empty() {
         return Ok(());
     }
-
-    let mut kind_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
     for emitted in observed {
-        let kind = match &emitted {
-            CanonEvent::LoopObserved(_) => "loop_observed",
-            CanonEvent::LoopPlanned(_) => "loop_planned",
-            CanonEvent::LoopActed(_) => "loop_acted",
-            CanonEvent::LoopVerified(_) => "loop_verified",
-            CanonEvent::LoopRewarded(_) => "loop_rewarded",
-            CanonEvent::CapabilityRequested(_) => "capability_requested",
-            CanonEvent::CapabilityCompleted(_) => "capability_completed",
-            CanonEvent::CapabilityFailed(_) => "capability_failed",
-            CanonEvent::ErrorOccurred(_) => "error_occurred",
-            CanonEvent::Debug(_) => "debug",
-            _ => "other",
-        };
-        *kind_counts.entry(kind).or_insert(0) += 1;
         update_route_runtime_state(route_state, &emitted, workspace);
     }
-
-    runtime.emit_debug_event(
-        "event-runtime".to_string(),
-        "apply_observed_events".to_string(),
-        serde_json::json!({
-            "count": kind_counts.values().sum::<usize>(),
-            "kinds": kind_counts,
-            "acted_unverified": route_state.acted_unverified,
-            "planned_pending": route_state.planned_pending,
-            "finish_ready": route_state.finish_ready,
-        }),
-    )?;
     Ok(())
 }
 
@@ -408,19 +412,121 @@ fn handle_event_msg(
     Ok(())
 }
 
+fn drain_event_queue_with_grace(
+    q_event_rx: &cc::Receiver<EventMsg>,
+    runtime: &mut EventRuntime,
+    route_state: &mut RouteRuntimeState,
+    workspace: &Path,
+    processed: &mut usize,
+    cursor_path: &Path,
+    tlog_path: &Path,
+    start_seq: u64,
+    session_id: &str,
+    last_saved: &mut Instant,
+    last_saved_processed: &mut usize,
+    grace: Duration,
+) -> Result<()> {
+    while let Ok(event_msg) = q_event_rx.try_recv() {
+        handle_event_msg(
+            event_msg,
+            runtime,
+            route_state,
+            workspace,
+            processed,
+            cursor_path,
+            tlog_path,
+            start_seq,
+            session_id,
+            last_saved,
+            last_saved_processed,
+        )?;
+    }
+
+    let deadline = Instant::now() + grace;
+    while Instant::now() < deadline {
+        match q_event_rx.recv_timeout(Duration::from_millis(5)) {
+            Ok(event_msg) => {
+                handle_event_msg(
+                    event_msg,
+                    runtime,
+                    route_state,
+                    workspace,
+                    processed,
+                    cursor_path,
+                    tlog_path,
+                    start_seq,
+                    session_id,
+                    last_saved,
+                    last_saved_processed,
+                )?;
+            }
+            Err(cc::RecvTimeoutError::Timeout) => {
+                if q_event_rx.is_empty() {
+                    break;
+                }
+            }
+            Err(cc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    Ok(())
+}
+
 fn handle_control_msg(
-    msg: ControlMsg, runtime: &mut EventRuntime, route_controller: &mut RouteController, route_state: &mut RouteRuntimeState,
-    registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>, workspace: &Path, cursor_path: &Path, tlog_path: &Path, processed: usize, start_seq: u64, session_id: &str,
+    msg: ControlMsg,
+    q_event_rx: &cc::Receiver<EventMsg>,
+    runtime: &mut EventRuntime,
+    route_controller: &mut RouteController,
+    route_state: &mut RouteRuntimeState,
+    registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>,
+    workspace: &Path,
+    processed: &mut usize,
+    cursor_path: &Path,
+    tlog_path: &Path,
+    start_seq: u64,
+    session_id: &str,
+    last_saved: &mut Instant,
+    last_saved_processed: &mut usize,
 ) -> Result<bool> {
     match msg {
         ControlMsg::Tick => {
             runtime.flush_emitted_events()?;
             apply_observed_events(runtime, route_state, workspace)?;
+
+            if !route_state.pending_tool_result_ids.is_empty() {
+                runtime.emit_debug_event(
+                    "supervisor".to_string(),
+                    "route_blocked_waiting_tool_result".to_string(),
+                    serde_json::json!({
+                        "tick": route_state.scheduler_tick,
+                        "pending_tool_call_ids": route_state.pending_tool_result_ids.iter().cloned().collect::<Vec<_>>(),
+                        "planned_pending": route_state.planned_pending,
+                        "acted_unverified": route_state.acted_unverified,
+                        "last_action_kind": route_state.last_action_kind,
+                    }),
+                )?;
+                runtime.flush_emitted_events()?;
+                apply_observed_events(runtime, route_state, workspace)?;
+                return Ok(false);
+            }
+
             route_state.scheduler_tick = route_state.scheduler_tick.saturating_add(1);
             let snapshot = route_state.snapshot_text();
-            let prompt = route_controller.build_prompt(&route_state.mission_summary, &snapshot, &route_state.journal);
-            let model_json = match request_route_via_llm_call(registry, workspace, prompt.clone(), Duration::from_secs(90)) {
-                Ok(json) => json,
+            let prompt = route_controller.build_prompt(
+                &route_state.mission_summary,
+                &snapshot,
+                route_state.latest_tool_result.as_ref(),
+                &route_state.journal,
+            );
+            let model_json = match request_route_via_llm_call(
+                registry,
+                workspace,
+                prompt.clone(),
+                Duration::from_secs(90),
+                route_state.latest_tool_result.clone(),
+            ) {
+                Ok(json) => {
+                    json
+                }
                 Err(err) => {
                     runtime.emit_debug_event(
                         "supervisor".to_string(),
@@ -433,6 +539,37 @@ fn handle_control_msg(
                     heuristic_route_json(route_state)
                 }
             };
+
+            drain_event_queue_with_grace(
+                q_event_rx,
+                runtime,
+                route_state,
+                workspace,
+                processed,
+                cursor_path,
+                tlog_path,
+                start_seq,
+                session_id,
+                last_saved,
+                last_saved_processed,
+                Duration::ZERO,
+            )?;
+            apply_observed_events(runtime, route_state, workspace)?;
+            if !route_state.pending_tool_result_ids.is_empty() {
+                runtime.emit_debug_event(
+                    "supervisor".to_string(),
+                    "route_blocked_waiting_tool_result".to_string(),
+                    serde_json::json!({
+                        "tick": route_state.scheduler_tick,
+                        "reason": "tools_dispatched_during_llm_call",
+                        "pending_tool_call_ids": route_state.pending_tool_result_ids.iter().cloned().collect::<Vec<_>>(),
+                    }),
+                )?;
+                runtime.flush_emitted_events()?;
+                apply_observed_events(runtime, route_state, workspace)?;
+                return Ok(false);
+            }
+
             let signals = route_state.signals();
             let (selection, gate) = match route_controller.evaluate_model_output(&model_json, &signals) {
                 Ok(v) => v,
@@ -477,6 +614,8 @@ fn handle_control_msg(
                     "confidence": selection.confidence,
                     "changed": gate.changed,
                     "note": gate.note,
+                    "ltr_present": route_state.latest_tool_result.is_some(),
+                    "last_action_failed": route_state.last_action_failed,
                     "prompt": prompt,
                 }),
             )?;
@@ -484,7 +623,7 @@ fn handle_control_msg(
             if gate.should_stop {
                 runtime.flush_emitted_events()?;
                 apply_observed_events(runtime, route_state, workspace)?;
-                let _ = save_cursor(cursor_path, tlog_path, processed, start_seq, session_id, runtime.next_id());
+                let _ = save_cursor(cursor_path, tlog_path, *processed, start_seq, session_id, runtime.next_id());
                 return Ok(true);
             }
 
@@ -569,7 +708,7 @@ fn main() -> Result<()> {
     let mut consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
         Box::new(ObserveConsumer::new(workspace.clone(), tlog_path.clone())),
         Box::new(PlanConsumer::new()),
-        Box::new(ActConsumer::new()),
+        Box::new(ActConsumer::new(workspace.clone())),
         Box::new(VerifyConsumer::new(workspace.clone(), tlog_path.clone())),
         Box::new(RewardConsumer::new()),
         Box::new(ErrorLogger::new(None)),
@@ -790,6 +929,11 @@ fn main() -> Result<()> {
     // =========================================================================
     let mut last_saved = Instant::now();
     let mut last_saved_processed = processed;
+    let pre_control_grace_ms = std::env::var("CANON_PRE_CONTROL_EVENT_GRACE_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(50);
+    let pre_control_grace = Duration::from_millis(pre_control_grace_ms);
 
     loop {
         // Step 1: process one control message when available.
@@ -797,7 +941,36 @@ fn main() -> Result<()> {
         match q_control_rx.try_recv() {
             Ok(control_msg) => {
                 processed_control = true;
-                if handle_control_msg(control_msg, &mut runtime, &mut route_controller, &mut route_state, &registry, &workspace, &cursor_path, &tlog_path, processed, start_seq, &session_id)? {
+                drain_event_queue_with_grace(
+                    &q_event_rx,
+                    &mut runtime,
+                    &mut route_state,
+                    &workspace,
+                    &mut processed,
+                    &cursor_path,
+                    &tlog_path,
+                    start_seq,
+                    &session_id,
+                    &mut last_saved,
+                    &mut last_saved_processed,
+                    pre_control_grace,
+                )?;
+                if handle_control_msg(
+                    control_msg,
+                    &q_event_rx,
+                    &mut runtime,
+                    &mut route_controller,
+                    &mut route_state,
+                    &registry,
+                    &workspace,
+                    &mut processed,
+                    &cursor_path,
+                    &tlog_path,
+                    start_seq,
+                    &session_id,
+                    &mut last_saved,
+                    &mut last_saved_processed,
+                )? {
                     return Ok(());
                 }
             }
@@ -808,18 +981,35 @@ fn main() -> Result<()> {
                     recv(q_control_rx) -> msg => {
                         if let Ok(control_msg) = msg {
                             processed_control = true;
+                            drain_event_queue_with_grace(
+                                &q_event_rx,
+                                &mut runtime,
+                                &mut route_state,
+                                &workspace,
+                                &mut processed,
+                                &cursor_path,
+                                &tlog_path,
+                                start_seq,
+                                &session_id,
+                                &mut last_saved,
+                                &mut last_saved_processed,
+                                pre_control_grace,
+                            )?;
                             if handle_control_msg(
                                 control_msg,
+                                &q_event_rx,
                                 &mut runtime,
                                 &mut route_controller,
                                 &mut route_state,
                                 &registry,
                                 &workspace,
+                                &mut processed,
                                 &cursor_path,
                                 &tlog_path,
-                                processed,
                                 start_seq,
                                 &session_id,
+                                &mut last_saved,
+                                &mut last_saved_processed,
                             )? {
                                 return Ok(());
                             }
@@ -876,7 +1066,36 @@ fn main() -> Result<()> {
         // so routing cadence remains responsive.
         if !processed_control && handled_events == 0 {
             if let Ok(control_msg) = q_control_rx.recv() {
-                if handle_control_msg(control_msg, &mut runtime, &mut route_controller, &mut route_state, &registry, &workspace, &cursor_path, &tlog_path, processed, start_seq, &session_id)? {
+                drain_event_queue_with_grace(
+                    &q_event_rx,
+                    &mut runtime,
+                    &mut route_state,
+                    &workspace,
+                    &mut processed,
+                    &cursor_path,
+                    &tlog_path,
+                    start_seq,
+                    &session_id,
+                    &mut last_saved,
+                    &mut last_saved_processed,
+                    pre_control_grace,
+                )?;
+                if handle_control_msg(
+                    control_msg,
+                    &q_event_rx,
+                    &mut runtime,
+                    &mut route_controller,
+                    &mut route_state,
+                    &registry,
+                    &workspace,
+                    &mut processed,
+                    &cursor_path,
+                    &tlog_path,
+                    start_seq,
+                    &session_id,
+                    &mut last_saved,
+                    &mut last_saved_processed,
+                )? {
                     return Ok(());
                 }
             }

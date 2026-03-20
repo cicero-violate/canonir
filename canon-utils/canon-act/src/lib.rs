@@ -10,6 +10,7 @@ pub struct ActConsumer {
     emitter: Option<EventEmitterHandle>,
     pending: Option<PendingAct>,
     queue: VecDeque<LoopPlanned>,
+    workspace: PathBuf,
     artifact_dir: PathBuf,
     artifact_counter: u32,
     active_batch_llm_request_id: Option<String>,
@@ -72,13 +73,14 @@ impl DestructiveCmdPolicy {
 }
 
 impl ActConsumer {
-    pub fn new() -> Self {
+    pub fn new(workspace: PathBuf) -> Self {
         let artifact_dir = default_tool_artifact_dir();
         let artifact_counter = next_tool_artifact_counter(&artifact_dir);
         Self {
             emitter: None,
             pending: None,
             queue: VecDeque::new(),
+            workspace,
             artifact_dir,
             artifact_counter,
             active_batch_llm_request_id: None,
@@ -171,7 +173,7 @@ impl ActConsumer {
                     self.emit_missing_args(planned, "missing_cmd");
                     return;
                 };
-                if is_potentially_destructive(cmd) {
+                if is_potentially_destructive(cmd, &self.workspace) {
                     match self.destructive_cmd_policy {
                         DestructiveCmdPolicy::Block => {
                             self.emit_missing_args(planned, "rejected_destructive_command");
@@ -402,7 +404,6 @@ impl ActConsumer {
         self.emit_tool_result(&pending, tool_result_id.clone(), payload.result.clone(), success);
         self.mark_batch_completion(llm_request_id.as_deref(), success);
         self.emit_acted(pending, stdout, stderr, exit_code, duration_ms, success, Some(tool_result_id));
-        self.dispatch_next_in_active_batch();
     }
 
     fn handle_failed(&mut self, payload: &CapabilityFailed) {
@@ -419,7 +420,6 @@ impl ActConsumer {
         self.emit_tool_result(&pending, tool_result_id.clone(), serde_json::json!({ "error": payload.error }), false);
         self.mark_batch_completion(llm_request_id.as_deref(), false);
         self.emit_acted(pending, String::new(), payload.error.clone(), None, duration_ms, false, Some(tool_result_id));
-        self.dispatch_next_in_active_batch();
     }
 
     fn check_timeout(&mut self) {
@@ -435,7 +435,6 @@ impl ActConsumer {
         self.emit_tool_result(&pending, tool_result_id.clone(), serde_json::json!({ "error": "timeout" }), false);
         self.mark_batch_completion(llm_request_id.as_deref(), false);
         self.emit_acted(pending, String::new(), "timeout".to_string(), None, 30_000, false, Some(tool_result_id));
-        self.dispatch_next_in_active_batch();
     }
 
     fn emit_acted(&mut self, pending: PendingAct, stdout: String, stderr: String, exit_code: Option<i32>, duration_ms: u64, success: bool, tool_result_id: Option<String>) {
@@ -620,7 +619,7 @@ impl ActConsumer {
         }
         self.last_reconcile = Some(Instant::now());
 
-        let timeout_ms = env::var("CANON_TOOL_PENDING_TIMEOUT_MS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(10_000);
+        let timeout_ms = env::var("CANON_TOOL_PENDING_TIMEOUT_MS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(5_000);
         let now_ms = now_ms_u64();
         let Ok(entries) = std::fs::read_dir(&self.artifact_dir) else {
             return;
@@ -779,7 +778,7 @@ impl ActConsumer {
 
     fn write_batch_status_artifact(&self, artifact_n: u32, llm_request_id: &str, status: &str, batch: &BatchStatus) {
         let _ = std::fs::create_dir_all(&self.artifact_dir);
-        let path = self.artifact_dir.join(format!("{artifact_n:04}_batch_status.json"));
+        let path = artifact_path_for(&self.artifact_dir, artifact_n, "batch_status");
         let value = serde_json::json!({
             "n": artifact_n,
             "llm_request_id": llm_request_id,
@@ -837,9 +836,16 @@ fn plan_cache_key(planned: &LoopPlanned) -> Option<String> {
     planned.action_id.as_ref().map(|id| format!("action:{id}")).or_else(|| planned.plan_step_id.as_ref().map(|id| format!("step:{id}")))
 }
 
-fn is_potentially_destructive(cmd: &str) -> bool {
+fn is_potentially_destructive(cmd: &str, workspace: &Path) -> bool {
     let trimmed = cmd.trim();
     if trimmed.contains("rm -rf") || trimmed.contains("rm -fr") || trimmed.contains("rm -r ") || trimmed.contains("rm -f ") {
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        let target = parts.iter().rev().find(|part| !part.starts_with('-')).copied().unwrap_or("");
+        let target_path = Path::new(target);
+        let resolved_target = if target_path.is_absolute() { target_path.to_path_buf() } else { workspace.join(target_path) };
+        if resolved_target.starts_with(workspace) {
+            return false;
+        }
         return true;
     }
     if trimmed.contains("git reset --hard") || trimmed.contains("git clean -f") {
@@ -873,10 +879,7 @@ fn next_tool_artifact_counter(log_dir: &Path) -> u32 {
         let Some(name) = entry.file_name().to_str().map(|s| s.to_string()) else {
             continue;
         };
-        let Some((prefix, _suffix)) = name.split_once('_') else {
-            continue;
-        };
-        let Ok(n) = prefix.parse::<u32>() else {
+        let Some((n, _suffix, _ts)) = parse_artifact_name(&name) else {
             continue;
         };
         max_seen = Some(max_seen.map_or(n, |m| m.max(n)));
@@ -886,7 +889,7 @@ fn next_tool_artifact_counter(log_dir: &Path) -> u32 {
 
 fn append_tool_artifact(log_dir: &Path, artifact_n: u32, suffix: &str, value: &Value) {
     let _ = std::fs::create_dir_all(log_dir);
-    let path = log_dir.join(format!("{artifact_n:04}_{suffix}.json"));
+    let path = artifact_path_for(log_dir, artifact_n, suffix);
     let mut rows = read_artifact_rows(&path);
     rows.push(value.clone());
     let serialized = serde_json::to_string_pretty(&rows).unwrap_or_default();
@@ -895,7 +898,7 @@ fn append_tool_artifact(log_dir: &Path, artifact_n: u32, suffix: &str, value: &V
 
 fn upsert_tool_result_artifact(log_dir: &Path, artifact_n: u32, value: &Value) {
     let _ = std::fs::create_dir_all(log_dir);
-    let path = log_dir.join(format!("{artifact_n:04}_tool_results.json"));
+    let path = artifact_path_for(log_dir, artifact_n, "tool_results");
     let mut rows = read_artifact_rows(&path);
     let key = value.get("tool_call_id").and_then(|v| v.as_str());
     let mut replaced = false;
@@ -941,15 +944,12 @@ fn find_request_index_by_request_id(log_dir: &Path, request_id: &str) -> Option<
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_str()?;
-        let Some((prefix, suffix)) = name.split_once('_') else {
+        let Some((n, suffix, _ts)) = parse_artifact_name(name) else {
             continue;
         };
         if suffix != "request.json" {
             continue;
         }
-        let Ok(n) = prefix.parse::<u32>() else {
-            continue;
-        };
         let raw = std::fs::read_to_string(entry.path()).ok()?;
         let v = serde_json::from_str::<Value>(&raw).ok()?;
         if v.get("request_id").and_then(|x| x.as_str()) == Some(request_id) {
@@ -961,4 +961,45 @@ fn find_request_index_by_request_id(log_dir: &Path, request_id: &str) -> Option<
 
 fn now_ms_u64() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+}
+
+fn parse_artifact_name(name: &str) -> Option<(u32, String, Option<u64>)> {
+    let mut parts = name.splitn(3, '_');
+    let first = parts.next()?;
+    let second = parts.next()?;
+    let third = parts.next()?;
+
+    if let Ok(n) = first.parse::<u32>() {
+        // Legacy: <REQNUM>_<suffix>.json
+        return Some((n, format!("{}_{}", second, third), None));
+    }
+    // New: <TS>_<REQNUM>_<suffix>.json
+    let ts = first.parse::<u64>().ok()?;
+    let n = second.parse::<u32>().ok()?;
+    Some((n, third.to_string(), Some(ts)))
+}
+
+fn resolve_artifact_ts(log_dir: &Path, artifact_n: u32) -> u64 {
+    let Ok(entries) = std::fs::read_dir(log_dir) else {
+        return now_ms_u64();
+    };
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(|s| s.to_string()) else {
+            continue;
+        };
+        let Some((n, _suffix, ts)) = parse_artifact_name(&name) else {
+            continue;
+        };
+        if n == artifact_n {
+            if let Some(ts) = ts {
+                return ts;
+            }
+        }
+    }
+    now_ms_u64()
+}
+
+fn artifact_path_for(log_dir: &Path, artifact_n: u32, suffix: &str) -> PathBuf {
+    let ts = resolve_artifact_ts(log_dir, artifact_n);
+    log_dir.join(format!("{ts}_{artifact_n:04}_{suffix}.json"))
 }

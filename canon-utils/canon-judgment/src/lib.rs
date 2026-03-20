@@ -21,6 +21,7 @@ pub struct RuntimeSignals {
     pub has_queued_plan: bool,
     pub workspace_dirty: bool,
     pub performed_recently: bool,
+    pub last_action_failed: bool,
     pub finish_ready: bool,
 }
 
@@ -98,7 +99,7 @@ impl Gatekeeper {
             }
         }
 
-        if self.state.repeat_count > self.cfg.max_repeat_lane {
+        if self.state.repeat_count > self.cfg.max_repeat_lane && !signals.has_queued_plan {
             if signals.performed_recently {
                 lane = RouteKind::Validate;
                 notes.push("repeat limit reached under unverified state; forcing validate");
@@ -113,6 +114,12 @@ impl Gatekeeper {
             lane = RouteKind::Validate;
             changed = true;
             notes.push("acted_unverified=true requires validate");
+        }
+
+        if signals.has_queued_plan && lane != RouteKind::Execute && !signals.last_action_failed {
+            lane = RouteKind::Execute;
+            changed = true;
+            notes.push("queued plan requires execute");
         }
 
         if lane == RouteKind::Execute && !(signals.context_ready || signals.has_queued_plan) {
