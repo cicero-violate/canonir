@@ -25,7 +25,7 @@ members = [
   "canon-utils/canon-reward",
   "canon-utils/canon-storage-graph",
   "canon-utils/canon-tools-analysis", "canon-utils/canon-llm-runtime",
-  "canon-utils/canon-builder", "test_rust_project",
+  "canon-utils/canon-builder", "test_rust_project", "test_rust_project_v2",
 ]
 exclude = [
   "test_projects",

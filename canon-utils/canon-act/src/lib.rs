@@ -1,4 +1,4 @@
-use canon_event::{CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopPlanned};
+use canon_event::{CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopPlanned, ToolCall, ToolResult};
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -14,6 +14,8 @@ struct PendingAct {
     tick: u64,
     action_kind: String,
     request_id: String,
+    tool_call_id: String,
+    node_id: String,
     started_at: Instant,
     trace_id: Option<String>,
     execution_id: Option<String>,
@@ -69,6 +71,8 @@ impl ActConsumer {
                     tick: planned.tick,
                     action_kind: planned.action_kind.clone(),
                     capability_request_id: String::new(),
+                    tool_call_id: None,
+                    tool_result_id: None,
                     stdout: String::new(),
                     stderr: String::new(),
                     exit_code: None,
@@ -100,6 +104,18 @@ impl ActConsumer {
                     return;
                 };
                 let request_id = Uuid::new_v4().to_string();
+                let tool_call_id = Uuid::new_v4().to_string();
+                let node_id = tool_node_id(planned);
+                emitter.emit(CanonEvent::ToolCall(ToolCall {
+                    node_id: node_id.clone(),
+                    tool_call_id: tool_call_id.clone(),
+                    request_id: request_id.clone(),
+                    kind: "bash".to_string(),
+                    payload: serde_json::json!({
+                        "cmd": cmd,
+                        "cwd": cwd,
+                    }),
+                }));
                 emitter.emit(CanonEvent::CapabilityRequested(CapabilityRequested {
                     request_id: request_id.clone(),
                     name: "bash".to_string(),
@@ -112,6 +128,8 @@ impl ActConsumer {
                     tick: planned.tick,
                     action_kind: planned.action_kind.clone(),
                     request_id,
+                    tool_call_id,
+                    node_id,
                     started_at: Instant::now(),
                     trace_id: planned.trace_id.clone(),
                     execution_id: planned.execution_id.clone(),
@@ -129,6 +147,18 @@ impl ActConsumer {
                     return;
                 };
                 let request_id = Uuid::new_v4().to_string();
+                let tool_call_id = Uuid::new_v4().to_string();
+                let node_id = tool_node_id(planned);
+                emitter.emit(CanonEvent::ToolCall(ToolCall {
+                    node_id: node_id.clone(),
+                    tool_call_id: tool_call_id.clone(),
+                    request_id: request_id.clone(),
+                    kind: "file.write".to_string(),
+                    payload: serde_json::json!({
+                        "path": path,
+                        "content": content,
+                    }),
+                }));
                 emitter.emit(CanonEvent::CapabilityRequested(CapabilityRequested {
                     request_id: request_id.clone(),
                     name: "file.write".to_string(),
@@ -141,6 +171,8 @@ impl ActConsumer {
                     tick: planned.tick,
                     action_kind: planned.action_kind.clone(),
                     request_id,
+                    tool_call_id,
+                    node_id,
                     started_at: Instant::now(),
                     trace_id: planned.trace_id.clone(),
                     execution_id: planned.execution_id.clone(),
@@ -159,6 +191,19 @@ impl ActConsumer {
                     return;
                 };
                 let request_id = Uuid::new_v4().to_string();
+                let tool_call_id = Uuid::new_v4().to_string();
+                let node_id = tool_node_id(planned);
+                emitter.emit(CanonEvent::ToolCall(ToolCall {
+                    node_id: node_id.clone(),
+                    tool_call_id: tool_call_id.clone(),
+                    request_id: request_id.clone(),
+                    kind: "file.patch".to_string(),
+                    payload: serde_json::json!({
+                        "path": path,
+                        "old": old,
+                        "new": new,
+                    }),
+                }));
                 emitter.emit(CanonEvent::CapabilityRequested(CapabilityRequested {
                     request_id: request_id.clone(),
                     name: "file.patch".to_string(),
@@ -172,6 +217,8 @@ impl ActConsumer {
                     tick: planned.tick,
                     action_kind: planned.action_kind.clone(),
                     request_id,
+                    tool_call_id,
+                    node_id,
                     started_at: Instant::now(),
                     trace_id: planned.trace_id.clone(),
                     execution_id: planned.execution_id.clone(),
@@ -196,7 +243,14 @@ impl ActConsumer {
             return;
         }
         let (stdout, stderr, exit_code, duration_ms, success) = extract_result_fields(&payload.result, pending.started_at);
-        self.emit_acted(pending, stdout, stderr, exit_code, duration_ms, success);
+        let tool_result_id = Uuid::new_v4().to_string();
+        self.emit_tool_result(
+            &pending,
+            tool_result_id.clone(),
+            payload.result.clone(),
+            success,
+        );
+        self.emit_acted(pending, stdout, stderr, exit_code, duration_ms, success, Some(tool_result_id));
     }
 
     fn handle_failed(&mut self, payload: &CapabilityFailed) {
@@ -208,7 +262,22 @@ impl ActConsumer {
             return;
         }
         let duration_ms = pending.started_at.elapsed().as_millis() as u64;
-        self.emit_acted(pending, String::new(), payload.error.clone(), None, duration_ms, false);
+        let tool_result_id = Uuid::new_v4().to_string();
+        self.emit_tool_result(
+            &pending,
+            tool_result_id.clone(),
+            serde_json::json!({ "error": payload.error }),
+            false,
+        );
+        self.emit_acted(
+            pending,
+            String::new(),
+            payload.error.clone(),
+            None,
+            duration_ms,
+            false,
+            Some(tool_result_id),
+        );
     }
 
     fn check_timeout(&mut self) {
@@ -219,7 +288,22 @@ impl ActConsumer {
             self.pending = Some(pending);
             return;
         }
-        self.emit_acted(pending, String::new(), "timeout".to_string(), None, 30_000, false);
+        let tool_result_id = Uuid::new_v4().to_string();
+        self.emit_tool_result(
+            &pending,
+            tool_result_id.clone(),
+            serde_json::json!({ "error": "timeout" }),
+            false,
+        );
+        self.emit_acted(
+            pending,
+            String::new(),
+            "timeout".to_string(),
+            None,
+            30_000,
+            false,
+            Some(tool_result_id),
+        );
     }
 
     fn emit_acted(
@@ -230,12 +314,15 @@ impl ActConsumer {
         exit_code: Option<i32>,
         duration_ms: u64,
         success: bool,
+        tool_result_id: Option<String>,
     ) {
         if let Some(emitter) = self.emitter.as_ref() {
             emitter.emit(CanonEvent::LoopActed(LoopActed {
                 tick: pending.tick,
                 action_kind: pending.action_kind,
                 capability_request_id: pending.request_id,
+                tool_call_id: Some(pending.tool_call_id),
+                tool_result_id,
                 stdout,
                 stderr,
                 exit_code,
@@ -262,6 +349,8 @@ impl ActConsumer {
                 tick: planned.tick,
                 action_kind: planned.action_kind.clone(),
                 capability_request_id: String::new(),
+                tool_call_id: None,
+                tool_result_id: None,
                 stdout: String::new(),
                 stderr: reason.to_string(),
                 exit_code: None,
@@ -277,6 +366,36 @@ impl ActConsumer {
             }));
         }
     }
+
+    fn emit_tool_result(
+        &self,
+        pending: &PendingAct,
+        tool_result_id: String,
+        output: Value,
+        success: bool,
+    ) {
+        if let Some(emitter) = self.emitter.as_ref() {
+            emitter.emit(CanonEvent::ToolResult(ToolResult {
+                node_id: pending.node_id.clone(),
+                tool_call_id: pending.tool_call_id.clone(),
+                tool_result_id,
+                request_id: pending.request_id.clone(),
+                kind: pending.action_kind.clone(),
+                output,
+                success,
+            }));
+        }
+    }
+}
+
+fn tool_node_id(planned: &LoopPlanned) -> String {
+    if let Some(action_id) = planned.action_id.as_ref() {
+        return action_id.clone();
+    }
+    if let Some(plan_step_id) = planned.plan_step_id.as_ref() {
+        return plan_step_id.clone();
+    }
+    format!("tick:{}:{}", planned.tick, planned.action_kind)
 }
 
 fn extract_result_fields(result: &Value, started_at: Instant) -> (String, String, Option<i32>, u64, bool) {

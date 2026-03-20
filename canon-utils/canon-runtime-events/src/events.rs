@@ -178,6 +178,10 @@ canon_event_struct!(LoopActed {
     tick: u64,
     action_kind: String,
     capability_request_id: String,
+    #[serde(default)]
+    tool_call_id: Option<String>,
+    #[serde(default)]
+    tool_result_id: Option<String>,
     stdout: String,
     stderr: String,
     exit_code: Option<i32>,
@@ -238,12 +242,15 @@ canon_event_struct!(AgentRegistered { payload: serde_json::Value });
 canon_event_struct!(PromptLoaded { payload: serde_json::Value });
 canon_event_struct!(ToolCall {
     node_id: String,
+    tool_call_id: String,
     request_id: String,
     kind: String,
     payload: serde_json::Value,
 });
 canon_event_struct!(ToolResult {
     node_id: String,
+    tool_call_id: String,
+    tool_result_id: String,
     request_id: String,
     kind: String,
     output: serde_json::Value,

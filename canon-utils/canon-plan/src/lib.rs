@@ -444,9 +444,15 @@ fn build_prompt(observed: &LoopObserved, last_acted: Option<&LoopActed>) -> Stri
         Some(a) => {
             let status = if a.success { "succeeded" } else { "FAILED" };
             let mut s = format!(
-                "## Last Action Result\naction: {}\nstatus: {} (exit_code: {:?})\n",
-                a.action_kind, status, a.exit_code
+                "## Last Action Result\naction: {}\nstatus: {} (exit_code: {:?})\ncapability_request_id: {}\n",
+                a.action_kind, status, a.exit_code, a.capability_request_id
             );
+            if let Some(tool_call_id) = a.tool_call_id.as_ref() {
+                s.push_str(&format!("tool_call_id: {}\n", tool_call_id));
+            }
+            if let Some(tool_result_id) = a.tool_result_id.as_ref() {
+                s.push_str(&format!("tool_result_id: {}\n", tool_result_id));
+            }
             if !a.stdout.is_empty() {
                 s.push_str(&format!("stdout: {}\n", a.stdout.trim()));
             }

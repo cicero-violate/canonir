@@ -1,87 +1,111 @@
 #!/usr/bin/env python3
-import re
-import time
+import json
 import os
+import time
+from typing import Optional
 
-DIR = "/workspace/ai_sandbox/canon/canon-utils/state/event_log/event.tlog.d"
 
-def latest_log():
-    files = [f for f in os.listdir(DIR) if f.endswith(".log")]
-    if not files:
-        return None
-    return os.path.join(DIR, max(files))
+DEFAULT_DIR = "/workspace/ai_sandbox/canon/state/event_log/event.tlog.d"
+DIR = os.environ.get("CANON_WATCH_TLOG_DIR", DEFAULT_DIR)
+
 # ANSI COLORS
 RESET = "\033[0m"
 COLORS = {
-    "ts": "\033[90m",          # gray
-    "source": "\033[94m",      # blue
-    "kind": "\033[92m",        # green
-    "error": "\033[91m",       # red
-    "json": "\033[96m",        # cyan
-    "default": "\033[97m",     # white
+    "ts": "\033[90m",      # gray
+    "source": "\033[94m",  # blue
+    "kind": "\033[92m",    # green
+    "error": "\033[91m",   # red
+    "json": "\033[96m",    # cyan
 }
 
+
+def latest_log() -> Optional[str]:
+    try:
+        files = [f for f in os.listdir(DIR) if f.endswith(".log")]
+    except FileNotFoundError:
+        return None
+    if not files:
+        return None
+    files.sort()
+    return os.path.join(DIR, files[-1])
+
+
 def colorize(line: str) -> str:
-    # highlight json blocks
-    if "{" in line and "}" in line:
-        line = f"{COLORS['json']}{line}{RESET}"
-
-    # key highlights
-    line = re.sub(r'("ts":\s*\d+)', lambda m: f"{COLORS['ts']}{m.group(1)}{RESET}", line)
-    line = re.sub(r'("source":\s*"[^"]+")', lambda m: f"{COLORS['source']}{m.group(1)}{RESET}", line)
-    line = re.sub(r'("kind":\s*"[^"]+")', lambda m: f"{COLORS['kind']}{m.group(1)}{RESET}", line)
-
-    # errors / warnings
+    line = f"{COLORS['json']}{line}{RESET}"
+    if '"ts":' in line:
+        line = line.replace('"ts":', f"{COLORS['ts']}\"ts\":{RESET}")
+    if '"source":' in line:
+        line = line.replace('"source":', f"{COLORS['source']}\"source\":{RESET}")
+    if '"kind":' in line:
+        line = line.replace('"kind":', f"{COLORS['kind']}\"kind\":{RESET}")
     if "error" in line.lower() or "fail" in line.lower():
         line = f"{COLORS['error']}{line}{RESET}"
-
     return line
 
-def truncate_values(line: str) -> str:
-    # Truncate any JSON string value longer than 20 chars
-    def _trunc(m):
-        key, val = m.group(1), m.group(2)
-        if len(val) > 20:
-            val = val[:20] + "..."
-        return f'"{key}": "{val}"'
-    return re.sub(r'"(\w+)":\s*"([^"]{21,})"', _trunc, line)
 
-def extract_strings(data):
-    matches = re.findall(rb"[ -~]{8,}", data)
-    for m in matches:
-        try:
-            line = m.decode("ascii")
-            line = truncate_values(line)
-            print(colorize(line))
-        except:
-            pass
+def should_skip(obj: dict) -> bool:
+    # Requested: filter rustc events from console output.
+    return obj.get("source") == "rustc" or obj.get("kind") == "rustc_event"
 
-def watch_file():
+
+def process_line(line: str) -> None:
+    line = line.strip()
+    if not line:
+        return
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(obj, dict):
+        return
+    if should_skip(obj):
+        return
+    rendered = json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+    print(colorize(rendered), flush=True)
+
+
+def open_tail(path: str):
+    f = open(path, "r", encoding="utf-8", errors="replace")
+    f.seek(0, os.SEEK_END)
+    return f
+
+
+def watch_file() -> None:
     current = latest_log()
     if not current:
-        print("no logs found")
+        print(f"no logs found in {DIR}")
         return
 
-    f = open(current, "rb")
-    f.seek(0, os.SEEK_END)
+    print(f"watching {DIR} (filtering rustc events)")
+    f = open_tail(current)
+    inode = os.fstat(f.fileno()).st_ino
 
     while True:
         new_latest = latest_log()
         if new_latest and new_latest != current:
             f.close()
             current = new_latest
-            f = open(current, "rb")
-            f.seek(0, os.SEEK_END)
-            print(f"\n--- switched to {current} ---\n")
+            f = open_tail(current)
+            inode = os.fstat(f.fileno()).st_ino
+            print(f"\n--- switched to {current} ---\n", flush=True)
 
-        pos = f.tell()
-        chunk = f.read()
-
-        if not chunk:
+        # Detect truncation/recreation of current file.
+        try:
+            st = os.stat(current)
+            if st.st_ino != inode or f.tell() > st.st_size:
+                f.close()
+                f = open_tail(current)
+                inode = os.fstat(f.fileno()).st_ino
+        except FileNotFoundError:
             time.sleep(0.2)
-            f.seek(pos)
-        else:
-            extract_strings(chunk)
+            continue
+
+        line = f.readline()
+        if not line:
+            time.sleep(0.2)
+            continue
+        process_line(line)
+
 
 if __name__ == "__main__":
     watch_file()

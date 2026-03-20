@@ -58,7 +58,12 @@ pub fn replay_capability_graph_from_tlog(tlog_path: &Path) -> anyhow::Result<Cap
                 if let Some(node) = state.nodes.get_mut(&id) { node.status = "failed".to_string(); }
             }
             "tool_call" => {
-                let req_id = payload.get("request_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let req_id = payload
+                    .get("tool_call_id")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| payload.get("request_id").and_then(|v| v.as_str()))
+                    .unwrap_or("")
+                    .to_string();
                 let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let kind = payload.get("kind").and_then(|v| v.as_str()).unwrap_or("tool").to_string();
                 if !req_id.is_empty() {
@@ -68,7 +73,12 @@ pub fn replay_capability_graph_from_tlog(tlog_path: &Path) -> anyhow::Result<Cap
                 }
             }
             "tool_result" => {
-                let req_id = payload.get("request_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let req_id = payload
+                    .get("tool_call_id")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| payload.get("request_id").and_then(|v| v.as_str()))
+                    .unwrap_or("")
+                    .to_string();
                 let success = payload.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
                 let output = payload.get("output").cloned();
                 if !req_id.is_empty() {

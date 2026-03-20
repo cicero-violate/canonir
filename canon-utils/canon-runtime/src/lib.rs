@@ -537,17 +537,20 @@ impl EventRuntime {
             // re-emission from the original bootstrap write and skip it (Rule 9).
             TlogEvent::new("event-runtime", "prompt_loaded", payload.clone())
         }
-        CanonEvent::ToolCall(ToolCall { node_id, request_id, kind, payload }) => {
+        CanonEvent::ToolCall(ToolCall { node_id, tool_call_id, request_id, kind, payload }) => {
             TlogEvent::new("agent-consumer", "tool_call", serde_json::json!({
                 "node_id": node_id,
+                "tool_call_id": tool_call_id,
                 "request_id": request_id,
                 "kind": kind,
                 "payload": payload,
             }))
         }
-        CanonEvent::ToolResult(ToolResult { node_id, request_id, kind, output, success }) => {
+        CanonEvent::ToolResult(ToolResult { node_id, tool_call_id, tool_result_id, request_id, kind, output, success }) => {
             TlogEvent::new("agent-consumer", "tool_result", serde_json::json!({
                 "node_id": node_id,
+                "tool_call_id": tool_call_id,
+                "tool_result_id": tool_result_id,
                 "request_id": request_id,
                 "kind": kind,
                 "output": output,
