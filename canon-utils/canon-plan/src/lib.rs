@@ -1,4 +1,4 @@
-use canon_event::{CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopObserved, LoopPlanned, PromptLoaded, Tick};
+use canon_event::{CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopObserved, LoopPlanned, PromptLoaded, Tick, ToolResult};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -16,6 +16,8 @@ pub struct PlanConsumer {
     /// Result of the most recent action — included in the next LLM prompt so
     /// the planner can react to failures (e.g. command not found, dir exists).
     last_acted: Option<LoopActed>,
+    /// Raw tool result payload, sent back to planner on next shape call.
+    last_tool_result: Option<ToolResult>,
     /// Last goal text that was fully inlined into the planner prompt.
     last_prompted_goal: Option<String>,
 }
@@ -41,6 +43,7 @@ impl PlanConsumer {
             last_planned_observed_tick: None,
             last_done_goal: None,
             last_acted: None,
+            last_tool_result: None,
             last_prompted_goal: None,
         }
     }
@@ -80,6 +83,9 @@ impl EventConsumer for PlanConsumer {
             }
             CanonEvent::LoopActed(acted) => {
                 self.last_acted = Some(acted.clone());
+            }
+            CanonEvent::ToolResult(result) => {
+                self.last_tool_result = Some(result.clone());
             }
             CanonEvent::CapabilityCompleted(payload) => {
                 self.handle_capability_completed(payload);
@@ -197,7 +203,12 @@ impl PlanConsumer {
         let span_id = Uuid::new_v4().to_string();
         let plan_id = Uuid::new_v4().to_string();
         let include_full_goal = observed.goal_text != self.last_prompted_goal;
-        let prompt = build_prompt(observed, self.last_acted.as_ref(), include_full_goal);
+        let prompt = build_prompt(
+            observed,
+            self.last_acted.as_ref(),
+            self.last_tool_result.as_ref(),
+            include_full_goal,
+        );
         let request = CapabilityRequested {
             request_id: request_id.clone(),
             name: "llm.call".to_string(),
@@ -378,19 +389,34 @@ enum LlmAction {
     Done { reason: String },
 }
 
-/// Extract all ```json ... ``` blocks from a text string.
-fn extract_fenced_blocks(text: &str) -> Vec<&str> {
+/// Extract fenced code blocks by line-delimited fences only.
+/// This avoids false closes from embedded ``` inside JSON string literals.
+fn extract_fenced_blocks(text: &str) -> Vec<String> {
     let mut blocks = Vec::new();
-    let mut remaining = text;
-    while let Some(start) = remaining.find("```") {
-        let after_fence = &remaining[start + 3..];
-        // Skip optional language tag on the same line (e.g. "json")
-        let content_start = after_fence.find('\n').map(|i| i + 1).unwrap_or(0);
-        let content = &after_fence[content_start..];
-        let Some(end) = content.find("```") else { break; };
-        blocks.push(content[..end].trim());
-        remaining = &content[end + 3..];
+    let mut in_fence = false;
+    let mut current = String::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if !in_fence {
+            if trimmed.starts_with("```") {
+                in_fence = true;
+                current.clear();
+            }
+            continue;
+        }
+
+        if trimmed.starts_with("```") {
+            blocks.push(current.trim().to_string());
+            in_fence = false;
+            current.clear();
+            continue;
+        }
+
+        current.push_str(line);
+        current.push('\n');
     }
+
     blocks
 }
 
@@ -438,7 +464,7 @@ fn parse_llm_actions(result: &Value) -> Vec<LlmAction> {
         let blocks = extract_fenced_blocks(text);
         if !blocks.is_empty() {
             return blocks
-                .into_iter()
+                .iter()
                 .filter_map(|block| serde_json::from_str::<Value>(block).ok())
                 .filter_map(parse_value_to_action)
                 .collect();
@@ -454,7 +480,12 @@ fn parse_llm_actions(result: &Value) -> Vec<LlmAction> {
     parse_value_to_action(value).into_iter().collect()
 }
 
-fn build_prompt(observed: &LoopObserved, last_acted: Option<&LoopActed>, include_full_goal: bool) -> String {
+fn build_prompt(
+    observed: &LoopObserved,
+    last_acted: Option<&LoopActed>,
+    last_tool_result: Option<&ToolResult>,
+    include_full_goal: bool,
+) -> String {
     let goal_section = match (observed.goal_text.as_ref(), include_full_goal) {
         (Some(text), true) => format!("## Active Goal\n{text}\n\n"),
         (Some(_), false) => "## Active Goal\n(unchanged from previous planner request)\n\n".to_string(),
@@ -499,10 +530,31 @@ fn build_prompt(observed: &LoopObserved, last_acted: Option<&LoopActed>, include
             s
         }
     };
+    let last_tool_result_section = match last_tool_result {
+        None => String::new(),
+        Some(result) => {
+            let mut output = serde_json::to_string_pretty(&result.output)
+                .unwrap_or_else(|_| result.output.to_string());
+            if output.len() > 4000 {
+                output.truncate(4000);
+                output.push_str("\n...<truncated>");
+            }
+            format!(
+                "## Last Tool Result\ntool_kind: {}\nrequest_id: {}\ntool_call_id: {}\ntool_result_id: {}\nsuccess: {}\noutput:\n{}\n\n",
+                result.kind,
+                result.request_id,
+                result.tool_call_id,
+                result.tool_result_id,
+                result.success,
+                output,
+            )
+        }
+    };
     format!(
-        "{goal}{last_action}{errors}Return one or more fenced ```json code blocks (no prose outside code blocks). Each block must be one action object using one schema:\n- Run a command:  {{\"cmd\": \"cargo new foo\", \"cwd\": \"/path\"}}\n- Write a file:   {{\"write\": \"/abs/path\", \"content\": \"full content\"}}\n- Patch a file:   {{\"path\": \"/abs/path\", \"old\": \"exact text\", \"new\": \"replacement\"}}\n- Signal done:    {{\"done\": true, \"reason\": \"...\"}}",
+        "{goal}{last_action}{last_tool_result}{errors}Return one or more fenced ```json code blocks (no prose outside code blocks). Each block must be one action object using one schema:\n- Run a command:  {{\"cmd\": \"cargo new foo\", \"cwd\": \"/path\"}}\n- Write a file:   {{\"write\": \"/abs/path\", \"content\": \"full content\"}}\n- Patch a file:   {{\"path\": \"/abs/path\", \"old\": \"exact text\", \"new\": \"replacement\"}}\n- Signal done:    {{\"done\": true, \"reason\": \"...\"}}",
         goal = goal_section,
         last_action = last_action_section,
+        last_tool_result = last_tool_result_section,
         errors = error_section,
     )
 }

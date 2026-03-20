@@ -1,4 +1,4 @@
-use canon_event::{CanonEvent, ErrorOccurred, EventConsumer, EventEmitterHandle, EventFilter, LoopObserved, Tick};
+use canon_event::{CanonEvent, ErrorOccurred, EventConsumer, EventEmitterHandle, EventFilter, LoopObserved, Tick, LoopVerified};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -32,6 +32,14 @@ impl EventConsumer for ObserveConsumer {
     fn on_event(&mut self, event: &CanonEvent) {
         if let CanonEvent::ErrorOccurred(err) = event {
             self.capture_compiler_signal(err);
+            return;
+        }
+        if let CanonEvent::LoopVerified(LoopVerified { passed, .. }) = event {
+            if *passed {
+                self.error_count = 0;
+                self.warning_count = 0;
+                self.recent_compiler_errors.clear();
+            }
             return;
         }
         if let CanonEvent::PromptLoaded(prompt) = event {

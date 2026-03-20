@@ -35,13 +35,10 @@ distributed tracing, and invariant enforcement.
 - **No `phase_id`** — the loop phases (observe/plan/act/verify) are implicit in event
   kind names, not an explicit tagged field. Phase-level replay or phase-level metrics
   require string matching on `kind`.
-- **No `tool_call_id` / `tool_result_id`** — tool use events (`ToolCall`, `ToolResult`)
-  carry `request_id` and `node_id` but no dedicated tool-call chain ID. The `tool_call_id`
-  concept from the OpenAI/Claude tool-use protocol is absent, which will matter when the
-  system integrates external LLM tool-use APIs.
-- **No dedicated `tool_call_id` / `tool_result_id` emission path in active loop** —
-  `ToolCall`/`ToolResult` serialization exists, but current planner/act capability flow does
-  not emit these events.
+- **Tool IDs are action-path dependent** — `tool_call_id` / `tool_result_id` are emitted for
+  actionable plans (`run_command`, `write_file`, `patch_file`) via `ToolCall`/`ToolResult` and
+  copied onto `LoopActed`. They are intentionally `null` for `no_op` / `done` / missing-args
+  acted events, so coverage can look sparse in runs dominated by those branches.
 - **Versioning IDs are startup-scoped** (`build_id`, `commit_id`, `schema_id`) — present
   on `runtime_started`, but not stamped on every event payload.
 
@@ -62,8 +59,8 @@ distributed tracing, and invariant enforcement.
 |  3.1 | Loop Structure               | `tick_id`            | `tick`                           | `events.rs:125+` — all loop events                      | Present; u64 counter per iteration                      |
 |  3.2 | Loop Structure               | `phase_id`           | pending                          | —                                                       | Phase implicit in event `kind` string only              |
 |  3.3 | Loop Structure               | `step_id`            | `plan_step_id`                   | `LoopPlanned` / `LoopActed` payload                     | Present for planned action step identity                |
-|  4.1 | Tooling / Actions            | `tool_call_id`       | pending                          | —                                                       | `ToolCall` uses `request_id`; no dedicated tool-call ID |
-|  4.2 | Tooling / Actions            | `tool_result_id`     | pending                          | —                                                       | `ToolResult` uses `request_id`; no dedicated result ID  |
+|  4.1 | Tooling / Actions            | `tool_call_id`       | `tool_call_id`                   | `ToolCall`, `ToolResult`, `LoopActed` payloads          | Present; generated in `ActConsumer` and propagated       |
+|  4.2 | Tooling / Actions            | `tool_result_id`     | `tool_result_id`                 | `ToolResult`, `LoopActed` payloads                      | Present; generated on completion/failure/timeout         |
 |  4.3 | Tooling / Actions            | `action_id`          | `action_id`                      | `LoopPlanned` / `LoopActed` payload                     | Present; UUID per planned action                        |
 |  4.4 | Tooling / Actions            | `operation_id`       | `capability_request_id`          | `events.rs:143` on `LoopActed`                          | Closest match; UUIDs via `canon-act`                    |
 |  5.1 | Events                       | `event_id`           | `event_id`                       | `TlogEvent.event_id` (set by runtime append)            | Present; cursor now persists `next_id`                  |
@@ -107,11 +104,11 @@ distributed tracing, and invariant enforcement.
 
 | Status                            | Count |
 |-----------------------------------+-------|
-| **Present (exact or near match)** |    21 |
+| **Present (exact or near match)** |    23 |
 | **Partial / repurposed field**    |    11 |
-| **Pending (not implemented)**     |    12 |
+| **Pending (not implemented)**     |    10 |
 | **Total target IDs**              |    44 |
 
-**Coverage: ~48% full, ~73% incl. partial.**
+**Coverage: ~52% full, ~77% incl. partial.**
 
-The minimal closure set from `IDs.md` — `{ agent, session, trace, span, tick, phase, tool_call, event, state, plan, action, error }` — now has most core IDs implemented (`agent_id`, `session_id`, `trace_id`, `span_id`, `tick`, `event_id`, `plan_id`, `action_id`, `error_id`). The highest-priority remaining gaps are explicit `phase_id`, first-class `tool_call_id`/`tool_result_id` emission in the active loop, and broader state/data identity coverage.
+The minimal closure set from `IDs.md` — `{ agent, session, trace, span, tick, phase, tool_call, event, state, plan, action, error }` — now has most core IDs implemented (`agent_id`, `session_id`, `trace_id`, `span_id`, `tick`, `event_id`, `plan_id`, `action_id`, `error_id`, `tool_call_id`, `tool_result_id`). The highest-priority remaining gaps are explicit `phase_id` and broader state/data identity coverage.

@@ -135,23 +135,38 @@ fn parse_json_candidates(raw: &str) -> Vec<Value> {
         out.push(value);
     }
     for block in extract_fenced_blocks(trimmed) {
-        if let Ok(value) = serde_json::from_str::<Value>(block) {
+        if let Ok(value) = serde_json::from_str::<Value>(&block) {
             out.push(value);
         }
     }
     out
 }
 
-fn extract_fenced_blocks(text: &str) -> Vec<&str> {
+fn extract_fenced_blocks(text: &str) -> Vec<String> {
     let mut blocks = Vec::new();
-    let mut remaining = text;
-    while let Some(start) = remaining.find("```") {
-        let after_fence = &remaining[start + 3..];
-        let content_start = after_fence.find('\n').map(|i| i + 1).unwrap_or(0);
-        let content = &after_fence[content_start..];
-        let Some(end) = content.find("```") else { break; };
-        blocks.push(content[..end].trim());
-        remaining = &content[end + 3..];
+    let mut in_fence = false;
+    let mut current = String::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if !in_fence {
+            if trimmed.starts_with("```") {
+                in_fence = true;
+                current.clear();
+            }
+            continue;
+        }
+
+        if trimmed.starts_with("```") {
+            blocks.push(current.trim().to_string());
+            in_fence = false;
+            current.clear();
+            continue;
+        }
+
+        current.push_str(line);
+        current.push('\n');
     }
+
     blocks
 }

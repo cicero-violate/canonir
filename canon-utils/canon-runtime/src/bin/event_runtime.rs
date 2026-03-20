@@ -1,33 +1,33 @@
 use anyhow::{anyhow, Result};
-use canon_event::{EVENT_SCHEMA_VERSION, CanonEvent, CapabilityRequested, EventEmitter, EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified};
+use canon_act::ActConsumer;
+use canon_capability::CapabilityExecutionContext;
+use canon_decision::{JournalLine, RouteKind};
+use canon_event::{CanonEvent, CapabilityRequested, EventEmitter, EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolResult, EVENT_SCHEMA_VERSION};
+use canon_event_store::replay_graph_from_tlog;
+use canon_event_store::AnyEvent;
+use canon_event_store::{read_any_events_from_path, read_any_events_from_path_with_start_seq};
+use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
+use canon_judgment::{GuardConfig, RuntimeSignals};
+use canon_observe::ObserveConsumer;
+use canon_plan::PlanConsumer;
+use canon_reward::RewardConsumer;
 use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry, prompts_dir, reload_prompt_file};
 use canon_runtime::consumers::capability_executor::CapabilityExecutor;
 use canon_runtime::consumers::error_logger::ErrorLogger;
 use canon_runtime::consumers::llm_executor::LlmCapabilityHandler;
 use canon_runtime::{register_default_capabilities, EventRuntime};
-use canon_act::ActConsumer;
-use canon_observe::ObserveConsumer;
-use canon_plan::PlanConsumer;
-use canon_reward::RewardConsumer;
-use canon_verify::VerifyConsumer;
-use canon_event_store::{read_any_events_from_path, read_any_events_from_path_with_start_seq};
-use canon_event_store::replay_graph_from_tlog;
-use canon_event_store::AnyEvent;
-use canon_decision::{JournalLine, RouteKind};
-use canon_judgment::{GuardConfig, RuntimeSignals};
 use canon_runtime_supervisor::judgment_loop::RouteController;
-use canon_goal::{GoalSpec, parse_agent_goal_markdown, summarize_goal};
+use canon_verify::VerifyConsumer;
 use crossbeam_channel as cc;
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::collections::HashSet;
 use uuid::Uuid;
-use canon_capability::CapabilityExecutionContext;
 
 // ---------------------------------------------------------------------------
 // Lock guard — ensures only one instance runs against a given tlog path.
@@ -45,10 +45,7 @@ impl Drop for LockGuard {
 }
 
 fn parse_pid(lock_contents: &str) -> Option<u32> {
-    lock_contents
-        .lines()
-        .find_map(|line| line.strip_prefix("pid="))
-        .and_then(|value| value.trim().parse::<u32>().ok())
+    lock_contents.lines().find_map(|line| line.strip_prefix("pid=")).and_then(|value| value.trim().parse::<u32>().ok())
 }
 
 fn pid_is_alive(pid: u32) -> Result<bool> {
@@ -64,11 +61,7 @@ fn pid_is_alive(pid: u32) -> Result<bool> {
         Some(idx) => idx,
         None => return Ok(true),
     };
-    let state = contents[close_paren + 1..]
-        .trim_start()
-        .chars()
-        .next()
-        .unwrap_or(' ');
+    let state = contents[close_paren + 1..].trim_start().chars().next().unwrap_or(' ');
     Ok(state != 'Z')
 }
 
@@ -76,10 +69,7 @@ fn acquire_lock(path: &Path) -> Result<Option<LockGuard>> {
     match OpenOptions::new().write(true).create_new(true).open(path) {
         Ok(mut file) => {
             let _ = file.write_all(format!("pid={}\n", std::process::id()).as_bytes());
-            return Ok(Some(LockGuard {
-                path: path.to_path_buf(),
-                _file: file,
-            }));
+            return Ok(Some(LockGuard { path: path.to_path_buf(), _file: file }));
         }
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(err) => return Err(err.into()),
@@ -90,28 +80,19 @@ fn acquire_lock(path: &Path) -> Result<Option<LockGuard>> {
         let _ = file.read_to_string(&mut contents);
     }
     let Some(pid) = parse_pid(&contents) else {
-        eprintln!(
-            "[event_runtime] another instance is running (lock: {})",
-            path.display()
-        );
+        eprintln!("[event_runtime] another instance is running (lock: {})", path.display());
         return Ok(None);
     };
     let alive = pid_is_alive(pid)?;
     if alive {
-        eprintln!(
-            "[event_runtime] another instance is running (lock: {})",
-            path.display()
-        );
+        eprintln!("[event_runtime] another instance is running (lock: {})", path.display());
         return Ok(None);
     }
 
     let _ = fs::remove_file(path);
     let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
     let _ = file.write_all(format!("pid={}\n", std::process::id()).as_bytes());
-    Ok(Some(LockGuard {
-        path: path.to_path_buf(),
-        _file: file,
-    }))
+    Ok(Some(LockGuard { path: path.to_path_buf(), _file: file }))
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +126,7 @@ struct RouteRuntimeState {
     mission_summary: String,
     mission_goal_spec: Option<GoalSpec>,
     context_ready: bool,
+    workspace_dirty: bool,
     planned_pending: usize,
     acted_unverified: bool,
     finish_ready: bool,
@@ -167,6 +149,7 @@ impl RouteRuntimeState {
         RuntimeSignals {
             context_ready: self.context_ready,
             has_queued_plan: self.planned_pending > 0,
+            workspace_dirty: self.workspace_dirty,
             performed_recently: self.acted_unverified,
             finish_ready: self.finish_ready,
         }
@@ -174,9 +157,10 @@ impl RouteRuntimeState {
 
     fn snapshot_text(&self) -> String {
         format!(
-            "tick={tick}\ncontext_ready={context}\nplanned_pending={pending}\nacted_unverified={unverified}\nfinish_ready={finish}\nlast_action_kind={action}",
+            "tick={tick}\ncontext_ready={context}\nworkspace_dirty={dirty}\nplanned_pending={pending}\nacted_unverified={unverified}\nfinish_ready={finish}\nlast_action_kind={action}",
             tick = self.scheduler_tick,
             context = self.context_ready,
+            dirty = self.workspace_dirty,
             pending = self.planned_pending,
             unverified = self.acted_unverified,
             finish = self.finish_ready,
@@ -185,11 +169,7 @@ impl RouteRuntimeState {
     }
 
     fn push_journal(&mut self, lane: impl Into<String>, summary: impl Into<String>) {
-        self.journal.push(JournalLine {
-            lane: lane.into(),
-            summary: summary.into(),
-            data: serde_json::Value::Null,
-        });
+        self.journal.push(JournalLine { lane: lane.into(), summary: summary.into(), data: serde_json::Value::Null });
         if self.journal.len() > 32 {
             let drop_n = self.journal.len() - 32;
             self.journal.drain(0..drop_n);
@@ -200,10 +180,12 @@ impl RouteRuntimeState {
 fn heuristic_route_json(state: &RouteRuntimeState) -> String {
     let route = if state.finish_ready {
         RouteKind::Conclude
-    } else if state.acted_unverified {
-        RouteKind::Validate
     } else if state.planned_pending > 0 {
         RouteKind::Execute
+    } else if state.acted_unverified {
+        RouteKind::Validate
+    } else if state.workspace_dirty {
+        RouteKind::Validate
     } else if state.context_ready {
         RouteKind::Shape
     } else {
@@ -215,6 +197,7 @@ fn heuristic_route_json(state: &RouteRuntimeState) -> String {
         "confidence": 0.75,
         "signals": {
             "context_ready": state.context_ready,
+            "workspace_dirty": state.workspace_dirty,
             "planned_pending": state.planned_pending,
             "acted_unverified": state.acted_unverified,
             "finish_ready": state.finish_ready,
@@ -223,33 +206,22 @@ fn heuristic_route_json(state: &RouteRuntimeState) -> String {
     .to_string()
 }
 
-fn request_route_via_llm_call(
-    registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>,
-    workspace: &Path,
-    prompt: String,
-    timeout: Duration,
-) -> Result<String> {
+fn request_route_via_llm_call(registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>, workspace: &Path, prompt: String, timeout: Duration) -> Result<String> {
     let request_id = format!("route-{}", Uuid::new_v4());
     let request = CapabilityRequested {
         request_id: request_id.clone(),
         name: "llm.call".to_string(),
         args: serde_json::json!({
             "prompt": prompt,
-            "role": "planner",
+            "role": "router",
         }),
     };
     let (tx, rx) = cc::unbounded::<CanonEvent>();
     let emitter: EventEmitterHandle = Arc::new(DirectEventEmitter { tx });
-    let ctx = CapabilityExecutionContext {
-        workspace: workspace.to_path_buf(),
-        event: CanonEvent::CapabilityRequested(request.clone()),
-        emitter: Some(emitter),
-    };
+    let ctx = CapabilityExecutionContext { workspace: workspace.to_path_buf(), event: CanonEvent::CapabilityRequested(request.clone()), emitter: Some(emitter) };
 
     {
-        let guard = registry
-            .lock()
-            .map_err(|_| anyhow!("capability registry lock poisoned"))?;
+        let guard = registry.lock().map_err(|_| anyhow!("capability registry lock poisoned"))?;
         guard.execute("llm.call", ctx)?;
     }
 
@@ -260,22 +232,16 @@ fn request_route_via_llm_call(
             return Err(anyhow!("route llm.call timed out"));
         }
         let remaining = deadline.saturating_duration_since(now);
-        let event = rx
-            .recv_timeout(remaining)
-            .map_err(|_| anyhow!("route llm.call timed out"))?;
+        let event = rx.recv_timeout(remaining).map_err(|_| anyhow!("route llm.call timed out"))?;
         match event {
-            CanonEvent::CapabilityCompleted(done)
-                if done.request_id == request_id && done.name == "llm.call" =>
-            {
+            CanonEvent::CapabilityCompleted(done) if done.request_id == request_id && done.name == "llm.call" => {
                 let value = done.result.get("result").cloned().unwrap_or(done.result);
                 if let Some(text) = value.get("text").and_then(|v| v.as_str()) {
                     return Ok(text.to_string());
                 }
                 return Ok(value.to_string());
             }
-            CanonEvent::CapabilityFailed(failed)
-                if failed.request_id == request_id && failed.name == "llm.call" =>
-            {
+            CanonEvent::CapabilityFailed(failed) if failed.request_id == request_id && failed.name == "llm.call" => {
                 return Err(anyhow!("route llm.call failed: {}", failed.error));
             }
             _ => {}
@@ -287,40 +253,24 @@ fn evaluate_goal_satisfied(spec: Option<&GoalSpec>, workspace: &Path) -> bool {
     let Some(spec) = spec else {
         return false;
     };
-    let target = spec
-        .target_path
-        .clone()
-        .unwrap_or_else(|| workspace.join("test_rust_project_v3"));
+    let target = spec.target_path.clone().unwrap_or_else(|| workspace.join("test_rust_project_v3"));
     if !target.is_dir() {
         return false;
     }
 
     let readme = target.join("README.md");
-    let readme_non_empty = std::fs::metadata(&readme)
-        .ok()
-        .map(|m| m.is_file() && m.len() > 0)
-        .unwrap_or(false);
+    let readme_non_empty = std::fs::metadata(&readme).ok().map(|m| m.is_file() && m.len() > 0).unwrap_or(false);
     if !readme_non_empty {
         return false;
     }
 
-    std::process::Command::new("cargo")
-        .arg("build")
-        .current_dir(&target)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    std::process::Command::new("cargo").arg("build").current_dir(&target).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
 }
 
 fn update_route_runtime_state(route_state: &mut RouteRuntimeState, event: &CanonEvent, workspace: &Path) {
     match event {
         CanonEvent::LoopObserved(LoopObserved { goal_text, error_count, .. }) => {
-            let goal_present = goal_text
-                .as_ref()
-                .map(|v| !v.trim().is_empty())
-                .unwrap_or(false);
+            let goal_present = goal_text.as_ref().map(|v| !v.trim().is_empty()).unwrap_or(false);
             route_state.context_ready = goal_present || *error_count > 0;
             if let Some(goal_text) = goal_text {
                 if !goal_text.trim().is_empty() {
@@ -348,6 +298,7 @@ fn update_route_runtime_state(route_state: &mut RouteRuntimeState, event: &Canon
         CanonEvent::LoopActed(LoopActed { action_kind, capability_request_id, tool_call_id, tool_result_id, success, .. }) => {
             route_state.planned_pending = route_state.planned_pending.saturating_sub(1);
             route_state.acted_unverified = true;
+            route_state.workspace_dirty = true;
             route_state.last_action_kind = action_kind.clone();
             let mut summary = format!("executed action={} success={} capability_request_id={}", route_state.last_action_kind, success, capability_request_id);
             if let Some(tool_call_id) = tool_call_id {
@@ -360,12 +311,10 @@ fn update_route_runtime_state(route_state: &mut RouteRuntimeState, event: &Canon
         }
         CanonEvent::LoopVerified(LoopVerified { passed, diagnostics, .. }) => {
             route_state.acted_unverified = false;
+            route_state.workspace_dirty = false;
             let system_satisfied = evaluate_goal_satisfied(route_state.mission_goal_spec.as_ref(), workspace);
             route_state.finish_ready = *passed && system_satisfied;
-            route_state.push_journal(
-                "verify",
-                format!("passed={} system_satisfied={} diagnostics={}", passed, system_satisfied, diagnostics.join("|")),
-            );
+            route_state.push_journal("verify", format!("passed={} system_satisfied={} diagnostics={}", passed, system_satisfied, diagnostics.join("|")));
         }
         CanonEvent::LoopRewarded(LoopRewarded { halt, .. }) => {
             if *halt {
@@ -373,41 +322,77 @@ fn update_route_runtime_state(route_state: &mut RouteRuntimeState, event: &Canon
             }
             route_state.push_journal("reward", format!("halt={halt}"));
         }
+        CanonEvent::ToolResult(ToolResult { kind, success, tool_call_id, tool_result_id, output, .. }) => {
+            let mut output_text = output.to_string();
+            if output_text.len() > 512 {
+                output_text.truncate(512);
+                output_text.push_str("...<truncated>");
+            }
+            route_state.push_journal("tool", format!("tool_result kind={kind} success={success} tool_call_id={tool_call_id} tool_result_id={tool_result_id} output={output_text}"));
+        }
+        CanonEvent::RuntimeStateUpdated(updated) => {
+            let dirty = updated.payload.get("workspace_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
+            if dirty {
+                route_state.workspace_dirty = true;
+                let crate_name = updated.payload.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown");
+                route_state.push_journal("observe", format!("workspace_dirty=true crate={crate_name}"));
+            }
+        }
         _ => {}
     }
 }
 
+fn apply_observed_events(runtime: &mut EventRuntime, route_state: &mut RouteRuntimeState, workspace: &Path) -> Result<()> {
+    let observed = runtime.take_observed_events();
+    if observed.is_empty() {
+        return Ok(());
+    }
+
+    let mut kind_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+    for emitted in observed {
+        let kind = match &emitted {
+            CanonEvent::LoopObserved(_) => "loop_observed",
+            CanonEvent::LoopPlanned(_) => "loop_planned",
+            CanonEvent::LoopActed(_) => "loop_acted",
+            CanonEvent::LoopVerified(_) => "loop_verified",
+            CanonEvent::LoopRewarded(_) => "loop_rewarded",
+            CanonEvent::CapabilityRequested(_) => "capability_requested",
+            CanonEvent::CapabilityCompleted(_) => "capability_completed",
+            CanonEvent::CapabilityFailed(_) => "capability_failed",
+            CanonEvent::ErrorOccurred(_) => "error_occurred",
+            CanonEvent::Debug(_) => "debug",
+            _ => "other",
+        };
+        *kind_counts.entry(kind).or_insert(0) += 1;
+        update_route_runtime_state(route_state, &emitted, workspace);
+    }
+
+    runtime.emit_debug_event(
+        "event-runtime".to_string(),
+        "apply_observed_events".to_string(),
+        serde_json::json!({
+            "count": kind_counts.values().sum::<usize>(),
+            "kinds": kind_counts,
+            "acted_unverified": route_state.acted_unverified,
+            "planned_pending": route_state.planned_pending,
+            "finish_ready": route_state.finish_ready,
+        }),
+    )?;
+    Ok(())
+}
+
 fn handle_event_msg(
-    msg: EventMsg,
-    runtime: &mut EventRuntime,
-    route_state: &mut RouteRuntimeState,
-    workspace: &Path,
-    processed: &mut usize,
-    cursor_path: &Path,
-    tlog_path: &Path,
-    start_seq: u64,
-    session_id: &str,
-    last_saved: &mut Instant,
-    last_saved_processed: &mut usize,
+    msg: EventMsg, runtime: &mut EventRuntime, route_state: &mut RouteRuntimeState, workspace: &Path, processed: &mut usize, cursor_path: &Path, tlog_path: &Path, start_seq: u64, session_id: &str,
+    last_saved: &mut Instant, last_saved_processed: &mut usize,
 ) -> Result<()> {
     match msg {
         EventMsg::Event(event) => {
             runtime.process_events(std::slice::from_ref(&event))?;
-            for emitted in runtime.take_observed_events() {
-                update_route_runtime_state(route_state, &emitted, workspace);
-            }
+            apply_observed_events(runtime, route_state, workspace)?;
             *processed = processed.saturating_add(1);
             if *processed != *last_saved_processed
                 && last_saved.elapsed() >= Duration::from_secs(1)
-                && save_cursor(
-                    cursor_path,
-                    tlog_path,
-                    *processed,
-                    start_seq,
-                    session_id,
-                    runtime.next_id(),
-                )
-                .is_ok()
+                && save_cursor(cursor_path, tlog_path, *processed, start_seq, session_id, runtime.next_id()).is_ok()
             {
                 *last_saved = Instant::now();
                 *last_saved_processed = *processed;
@@ -416,9 +401,7 @@ fn handle_event_msg(
         EventMsg::Reset(events) => {
             runtime.reset();
             runtime.process_events(&events)?;
-            for emitted in runtime.take_observed_events() {
-                update_route_runtime_state(route_state, &emitted, workspace);
-            }
+            apply_observed_events(runtime, route_state, workspace)?;
             *processed = events.len();
         }
     }
@@ -426,33 +409,17 @@ fn handle_event_msg(
 }
 
 fn handle_control_msg(
-    msg: ControlMsg,
-    runtime: &mut EventRuntime,
-    route_controller: &mut RouteController,
-    route_state: &mut RouteRuntimeState,
-    registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>,
-    workspace: &Path,
-    cursor_path: &Path,
-    tlog_path: &Path,
-    processed: usize,
-    start_seq: u64,
-    session_id: &str,
+    msg: ControlMsg, runtime: &mut EventRuntime, route_controller: &mut RouteController, route_state: &mut RouteRuntimeState,
+    registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>, workspace: &Path, cursor_path: &Path, tlog_path: &Path, processed: usize, start_seq: u64, session_id: &str,
 ) -> Result<bool> {
     match msg {
         ControlMsg::Tick => {
+            runtime.flush_emitted_events()?;
+            apply_observed_events(runtime, route_state, workspace)?;
             route_state.scheduler_tick = route_state.scheduler_tick.saturating_add(1);
             let snapshot = route_state.snapshot_text();
-            let prompt = route_controller.build_prompt(
-                &route_state.mission_summary,
-                &snapshot,
-                &route_state.journal,
-            );
-            let model_json = match request_route_via_llm_call(
-                registry,
-                workspace,
-                prompt.clone(),
-                Duration::from_secs(90),
-            ) {
+            let prompt = route_controller.build_prompt(&route_state.mission_summary, &snapshot, &route_state.journal);
+            let model_json = match request_route_via_llm_call(registry, workspace, prompt.clone(), Duration::from_secs(90)) {
                 Ok(json) => json,
                 Err(err) => {
                     runtime.emit_debug_event(
@@ -515,28 +482,17 @@ fn handle_control_msg(
             )?;
 
             if gate.should_stop {
-                for emitted in runtime.take_observed_events() {
-                    update_route_runtime_state(route_state, &emitted, workspace);
-                }
-                let _ = save_cursor(
-                    cursor_path,
-                    tlog_path,
-                    processed,
-                    start_seq,
-                    session_id,
-                    runtime.next_id(),
-                );
+                runtime.flush_emitted_events()?;
+                apply_observed_events(runtime, route_state, workspace)?;
+                let _ = save_cursor(cursor_path, tlog_path, processed, start_seq, session_id, runtime.next_id());
                 return Ok(true);
             }
 
             if matches!(gate.lane, RouteKind::Scan) {
                 runtime.emit_tick()?;
-                for emitted in runtime.take_observed_events() {
-                    update_route_runtime_state(route_state, &emitted, workspace);
-                }
-            } else {
-                let _ = runtime.take_observed_events();
             }
+            runtime.flush_emitted_events()?;
+            apply_observed_events(runtime, route_state, workspace)?;
         }
     }
     Ok(false)
@@ -550,17 +506,8 @@ fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     let mut tlog_path: Option<PathBuf> = None;
     let mut once = false;
-    let start_at_tail = env::var("CANON_EVENT_RUNTIME_START_AT_TAIL")
-        .ok()
-        .map(|v| v != "0" && v.to_lowercase() != "false")
-        .unwrap_or(false);
-    let cursor_path = env::var("CANON_EVENT_RUNTIME_CURSOR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            PathBuf::from(
-                "/workspace/ai_sandbox/canon/state/event_runtime.cursor.json",
-            )
-        });
+    let start_at_tail = env::var("CANON_EVENT_RUNTIME_START_AT_TAIL").ok().map(|v| v != "0" && v.to_lowercase() != "false").unwrap_or(false);
+    let cursor_path = env::var("CANON_EVENT_RUNTIME_CURSOR").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/workspace/ai_sandbox/canon/state/event_runtime.cursor.json"));
 
     let mut i = 1;
     while i < args.len() {
@@ -576,15 +523,8 @@ fn main() -> Result<()> {
     }
 
     let tlog_path = tlog_path.ok_or_else(|| anyhow!("missing --tlog"))?;
-    let event_execution_enabled = std::env::var("CANON_EVENT_EXECUTION")
-        .ok()
-        .map(|v| v != "0" && v.to_lowercase() != "false")
-        .unwrap_or(true);
-    let lock_path = env::var("CANON_EVENT_RUNTIME_LOCK")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            PathBuf::from("/workspace/ai_sandbox/canon/state/event_runtime.lock")
-        });
+    let event_execution_enabled = std::env::var("CANON_EVENT_EXECUTION").ok().map(|v| v != "0" && v.to_lowercase() != "false").unwrap_or(true);
+    let lock_path = env::var("CANON_EVENT_RUNTIME_LOCK").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/workspace/ai_sandbox/canon/state/event_runtime.lock"));
     let _lock_guard = match acquire_lock(&lock_path)? {
         Some(guard) => guard,
         None => return Ok(()),
@@ -606,34 +546,22 @@ fn main() -> Result<()> {
     if let (Some(cursor), Some(tlog_session_id)) = (&cursor_state, &latest_tlog_session_id) {
         if let Some(cursor_session_id) = &cursor.session_id {
             if cursor_session_id != tlog_session_id {
-                eprintln!(
-                    "[event_runtime] cursor session_id mismatch; ignoring stale cursor (cursor={} tlog={})",
-                    cursor_session_id, tlog_session_id
-                );
+                eprintln!("[event_runtime] cursor session_id mismatch; ignoring stale cursor (cursor={} tlog={})", cursor_session_id, tlog_session_id);
                 cursor_state = None;
             }
         }
     }
     let start_seq: u64 = cursor_state.as_ref().map(|c| c.start_seq).unwrap_or(0);
     let resumed_next_id: u64 = cursor_state.as_ref().map(|c| c.next_id).unwrap_or(0);
-    let session_id = cursor_state
-        .as_ref()
-        .and_then(|c| c.session_id.clone())
-        .or(latest_tlog_session_id)
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let session_id = cursor_state.as_ref().and_then(|c| c.session_id.clone()).or(latest_tlog_session_id).unwrap_or_else(|| Uuid::new_v4().to_string());
     if let Some(schema_id) = find_last_runtime_started_schema_id(&tlog_path) {
         if schema_id != EVENT_SCHEMA_VERSION {
-            eprintln!(
-                "[event_runtime] unsupported schema_id in tlog: {} (runtime supports {})",
-                schema_id, EVENT_SCHEMA_VERSION
-            );
+            eprintln!("[event_runtime] unsupported schema_id in tlog: {} (runtime supports {})", schema_id, EVENT_SCHEMA_VERSION);
         }
     }
 
     // --- Build runtime (W owns this exclusively) ---
-    let registry = std::sync::Arc::new(std::sync::Mutex::new(
-        canon_capability::CapabilityRegistry::new(),
-    ));
+    let registry = std::sync::Arc::new(std::sync::Mutex::new(canon_capability::CapabilityRegistry::new()));
     let prompt_registry = new_prompt_registry();
     bootstrap_config(&tlog_path, &prompt_registry);
 
@@ -647,10 +575,7 @@ fn main() -> Result<()> {
         Box::new(ErrorLogger::new(None)),
     ];
     if event_execution_enabled {
-        consumers.push(Box::new(CapabilityExecutor::new(
-            registry.clone(),
-            workspace.clone(),
-        )));
+        consumers.push(Box::new(CapabilityExecutor::new(registry.clone(), workspace.clone())));
     }
     let mut runtime = EventRuntime::new_with_registry(consumers, registry.clone());
     {
@@ -664,11 +589,7 @@ fn main() -> Result<()> {
     runtime.set_next_id(resumed_next_id);
 
     // Read events that already exist in L at startup (in-memory after this point).
-    let bootstrap_events: Vec<AnyEvent> = if tlog_path.exists() {
-        read_any_events_from_path_with_start_seq(&tlog_path, start_seq).unwrap_or_default()
-    } else {
-        vec![]
-    };
+    let bootstrap_events: Vec<AnyEvent> = if tlog_path.exists() { read_any_events_from_path_with_start_seq(&tlog_path, start_seq).unwrap_or_default() } else { vec![] };
 
     // Always start at tail — never replay into consumers.
     let mut processed: usize = bootstrap_events.len();
@@ -682,14 +603,7 @@ fn main() -> Result<()> {
             runtime.process_events(&bootstrap_events[processed..])?;
         }
         processed = bootstrap_events.len();
-        let _ = save_cursor(
-            &cursor_path,
-            &tlog_path,
-            processed,
-            start_seq,
-            &session_id,
-            runtime.next_id(),
-        );
+        let _ = save_cursor(&cursor_path, &tlog_path, processed, start_seq, &session_id, runtime.next_id());
         return Ok(());
     }
 
@@ -710,11 +624,7 @@ fn main() -> Result<()> {
     // Q_e: event-plane queue (tlog events/replay/reset).
     let (q_control_tx, q_control_rx) = cc::unbounded::<ControlMsg>();
     let (q_event_tx, q_event_rx) = cc::unbounded::<EventMsg>();
-    let event_budget_per_cycle = std::env::var("CANON_EVENT_RUNTIME_EVENT_BUDGET")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(256);
+    let event_budget_per_cycle = std::env::var("CANON_EVENT_RUNTIME_EVENT_BUDGET").ok().and_then(|v| v.parse::<usize>().ok()).filter(|v| *v > 0).unwrap_or(256);
 
     // --- P1: bootstrap replayer ---
     // Unprocessed events already in memory — push directly into Q, no file re-read.
@@ -744,30 +654,18 @@ fn main() -> Result<()> {
 
         // For a segmented binary tlog (dir) watch the dir itself; otherwise watch
         // the parent so we also catch the file being created for the first time.
-        let watch_target = if watcher_tlog.is_dir() {
-            watcher_tlog.clone()
-        } else {
-            watcher_tlog
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| PathBuf::from("."))
-        };
+        let watch_target = if watcher_tlog.is_dir() { watcher_tlog.clone() } else { watcher_tlog.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from(".")) };
         if watch_target.exists() {
             fs_watcher.watch(&watch_target, RecursiveMode::NonRecursive)?;
         }
 
-        std::thread::Builder::new()
-            .name("canon-p2-watcher".to_string())
-            .spawn(move || {
+        std::thread::Builder::new().name("canon-p2-watcher".to_string()).spawn(move || {
             let _watcher = fs_watcher; // keep alive for thread lifetime
             while let Ok(res) = fs_rx.recv() {
                 if res.is_err() {
                     continue;
                 }
-                let all = match read_any_events_from_path_with_start_seq(
-                    &watcher_tlog,
-                    watcher_start_seq,
-                ) {
+                let all = match read_any_events_from_path_with_start_seq(&watcher_tlog, watcher_start_seq) {
                     Ok(e) => e,
                     Err(_) => continue,
                 };
@@ -790,12 +688,7 @@ fn main() -> Result<()> {
                     // only scan the current segment instead of the full history.
                     if let Some(latest_seq) = latest_segment_seq(&watcher_tlog) {
                         if latest_seq > watcher_start_seq {
-                            let from_latest = read_any_events_from_path_with_start_seq(
-                                &watcher_tlog,
-                                latest_seq,
-                            )
-                            .unwrap_or_default()
-                            .len();
+                            let from_latest = read_any_events_from_path_with_start_seq(&watcher_tlog, latest_seq).unwrap_or_default().len();
                             watcher_start_seq = latest_seq;
                             watcher_seen = from_latest;
                         }
@@ -811,9 +704,7 @@ fn main() -> Result<()> {
     // log entry (Tick is not appended to L).
     {
         let tick_tx = q_control_tx.clone();
-        std::thread::Builder::new()
-            .name("canon-p3-tick".to_string())
-            .spawn(move || loop {
+        std::thread::Builder::new().name("canon-p3-tick".to_string()).spawn(move || loop {
             std::thread::sleep(Duration::from_secs(1));
             if tick_tx.send(ControlMsg::Tick).is_err() {
                 break;
@@ -833,20 +724,18 @@ fn main() -> Result<()> {
         let registry_for_prompts = prompt_registry.clone();
 
         if prompts_path.exists() {
-            let (prompt_fs_tx, prompt_fs_rx) =
-                cc::unbounded::<notify::Result<notify::Event>>();
+            let (prompt_fs_tx, prompt_fs_rx) = cc::unbounded::<notify::Result<notify::Event>>();
             let mut prompt_watcher = RecommendedWatcher::new(
-                move |res| { let _ = prompt_fs_tx.send(res); },
+                move |res| {
+                    let _ = prompt_fs_tx.send(res);
+                },
                 NotifyConfig::default(),
             )?;
             prompt_watcher.watch(&prompts_path, RecursiveMode::NonRecursive)?;
 
-            std::thread::Builder::new()
-                .name("canon-p4-prompts".to_string())
-                .spawn(move || {
+            std::thread::Builder::new().name("canon-p4-prompts".to_string()).spawn(move || {
                 let _watcher = prompt_watcher;
-                let mut last_reload: std::collections::HashMap<PathBuf, Instant> =
-                    std::collections::HashMap::new();
+                let mut last_reload: std::collections::HashMap<PathBuf, Instant> = std::collections::HashMap::new();
                 while let Ok(Ok(event)) = prompt_fs_rx.recv() {
                     for path in &event.paths {
                         // Debounce: skip if same file reloaded within 500ms
@@ -879,22 +768,15 @@ fn main() -> Result<()> {
         }),
     )?;
     if env!("CANON_COMMIT_ID").starts_with("unknown") {
-        eprintln!(
-            "[event_runtime] warning: CANON_COMMIT_ID is unknown; build metadata is incomplete"
-        );
+        eprintln!("[event_runtime] warning: CANON_COMMIT_ID is unknown; build metadata is incomplete");
     }
     let mut route_controller = RouteController::new(GuardConfig::default());
     let mut route_state = RouteRuntimeState::default();
-    route_state.mission_raw = std::fs::read_to_string(
-        "/workspace/ai_sandbox/canon/canon-agent-prompts/AGENT_GOAL.md",
-    )
-    .unwrap_or_default();
+    route_state.mission_raw = std::fs::read_to_string("/workspace/ai_sandbox/canon/canon-agent-prompts/AGENT_GOAL.md").unwrap_or_default();
     let initial_spec = parse_agent_goal_markdown(&route_state.mission_raw);
     route_state.mission_summary = summarize_goal(&initial_spec);
     route_state.mission_goal_spec = Some(initial_spec);
-    for emitted in runtime.take_observed_events() {
-        update_route_runtime_state(&mut route_state, &emitted, &workspace);
-    }
+    apply_observed_events(&mut runtime, &mut route_state, &workspace)?;
 
     // =========================================================================
     // W = 1 — single writer loop
@@ -915,19 +797,7 @@ fn main() -> Result<()> {
         match q_control_rx.try_recv() {
             Ok(control_msg) => {
                 processed_control = true;
-                if handle_control_msg(
-                    control_msg,
-                    &mut runtime,
-                    &mut route_controller,
-                    &mut route_state,
-                    &registry,
-                    &workspace,
-                    &cursor_path,
-                    &tlog_path,
-                    processed,
-                    start_seq,
-                    &session_id,
-                )? {
+                if handle_control_msg(control_msg, &mut runtime, &mut route_controller, &mut route_state, &registry, &workspace, &cursor_path, &tlog_path, processed, start_seq, &session_id)? {
                     return Ok(());
                 }
             }
@@ -1006,19 +876,7 @@ fn main() -> Result<()> {
         // so routing cadence remains responsive.
         if !processed_control && handled_events == 0 {
             if let Ok(control_msg) = q_control_rx.recv() {
-                if handle_control_msg(
-                    control_msg,
-                    &mut runtime,
-                    &mut route_controller,
-                    &mut route_state,
-                    &registry,
-                    &workspace,
-                    &cursor_path,
-                    &tlog_path,
-                    processed,
-                    start_seq,
-                    &session_id,
-                )? {
+                if handle_control_msg(control_msg, &mut runtime, &mut route_controller, &mut route_state, &registry, &workspace, &cursor_path, &tlog_path, processed, start_seq, &session_id)? {
                     return Ok(());
                 }
             }
@@ -1029,7 +887,6 @@ fn main() -> Result<()> {
 // ---------------------------------------------------------------------------
 // Cursor helpers — track W's read offset into L for crash recovery / replay.
 // ---------------------------------------------------------------------------
-
 
 /// Returns the base sequence number of the latest `.log` segment in `dir`.
 /// Used by the P2 watcher to advance `watcher_start_seq` after each batch so
@@ -1043,9 +900,7 @@ fn latest_segment_seq(dir: &Path) -> Option<u64> {
             if p.extension().and_then(|s| s.to_str()) != Some("log") {
                 return None;
             }
-            p.file_stem()
-                .and_then(|s| s.to_str())
-                .and_then(|s| s.parse::<u64>().ok())
+            p.file_stem().and_then(|s| s.to_str()).and_then(|s| s.parse::<u64>().ok())
         })
         .max()
 }
@@ -1065,22 +920,12 @@ fn load_cursor_state(path: &Path, tlog_path: &Path) -> Option<CursorState> {
     }
     Some(CursorState {
         start_seq: value.get("start_seq")?.as_u64()?,
-        session_id: value
-            .get("session_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+        session_id: value.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
         next_id: value.get("next_id").and_then(|v| v.as_u64()).unwrap_or(0),
     })
 }
 
-fn save_cursor(
-    path: &Path,
-    tlog_path: &Path,
-    state_version: usize,
-    start_seq: u64,
-    session_id: &str,
-    next_id: u64,
-) -> Result<()> {
+fn save_cursor(path: &Path, tlog_path: &Path, state_version: usize, start_seq: u64, session_id: &str, next_id: u64) -> Result<()> {
     let state = serde_json::json!({
         "tlog_path": tlog_path.display().to_string(),
         "state_version": state_version,
@@ -1137,27 +982,19 @@ fn system_id_path() -> PathBuf {
 }
 
 fn find_last_runtime_started_session_id(tlog_path: &Path) -> Option<String> {
-    find_last_runtime_started_payload(tlog_path).and_then(|payload| {
-        payload
-            .get("session_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    })
+    find_last_runtime_started_payload(tlog_path).and_then(|payload| payload.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string()))
 }
 
 fn find_last_runtime_started_schema_id(tlog_path: &Path) -> Option<String> {
-    find_last_runtime_started_payload(tlog_path).and_then(|payload| {
-        payload
-            .get("schema_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    })
+    find_last_runtime_started_payload(tlog_path).and_then(|payload| payload.get("schema_id").and_then(|v| v.as_str()).map(|s| s.to_string()))
 }
 
 fn find_last_runtime_started_payload(tlog_path: &Path) -> Option<serde_json::Value> {
     let events = read_any_events_from_path(tlog_path).ok()?;
     events.into_iter().rev().find_map(|event| {
-        let AnyEvent::Canon(canon) = event else { return None; };
+        let AnyEvent::Canon(canon) = event else {
+            return None;
+        };
         if canon.kind != "runtime_started" {
             return None;
         }
@@ -1166,10 +1003,7 @@ fn find_last_runtime_started_payload(tlog_path: &Path) -> Option<serde_json::Val
 }
 
 fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
 }
 
 // ---------------------------------------------------------------------------
@@ -1177,11 +1011,7 @@ fn now_ms() -> u128 {
 // ---------------------------------------------------------------------------
 
 fn maybe_verify_tlog_equivalence(tlog_path: &Path) -> Result<()> {
-    let (json_path, bin_path) = if tlog_path.is_dir() {
-        (tlog_path.with_extension("tlog"), tlog_path.to_path_buf())
-    } else {
-        (tlog_path.to_path_buf(), tlog_path.with_extension("tlog.d"))
-    };
+    let (json_path, bin_path) = if tlog_path.is_dir() { (tlog_path.with_extension("tlog"), tlog_path.to_path_buf()) } else { (tlog_path.to_path_buf(), tlog_path.with_extension("tlog.d")) };
     if !json_path.exists() || !bin_path.exists() {
         return Ok(());
     }
@@ -1194,52 +1024,20 @@ fn verify_tlog_equivalence(json_path: &Path, bin_path: &Path) -> Result<Vec<Stri
     let bin_graph = replay_graph_from_tlog(bin_path)?;
     let mut diffs = Vec::new();
     if json_graph.nodes.len() != bin_graph.nodes.len() {
-        diffs.push(format!(
-            "node_count json={} binary={}",
-            json_graph.nodes.len(),
-            bin_graph.nodes.len()
-        ));
+        diffs.push(format!("node_count json={} binary={}", json_graph.nodes.len(), bin_graph.nodes.len()));
     }
     if json_graph.edges.len() != bin_graph.edges.len() {
-        diffs.push(format!(
-            "edge_count json={} binary={}",
-            json_graph.edges.len(),
-            bin_graph.edges.len()
-        ));
+        diffs.push(format!("edge_count json={} binary={}", json_graph.edges.len(), bin_graph.edges.len()));
     }
-    let json_nodes: HashSet<(u32, String, String, Option<u32>, Option<u32>)> = json_graph
-        .nodes
-        .iter()
-        .map(|n| (n.id, n.kind.clone(), n.symbol.clone(), n.file_id, n.line))
-        .collect();
-    let bin_nodes: HashSet<(u32, String, String, Option<u32>, Option<u32>)> = bin_graph
-        .nodes
-        .iter()
-        .map(|n| (n.id, n.kind.clone(), n.symbol.clone(), n.file_id, n.line))
-        .collect();
+    let json_nodes: HashSet<(u32, String, String, Option<u32>, Option<u32>)> = json_graph.nodes.iter().map(|n| (n.id, n.kind.clone(), n.symbol.clone(), n.file_id, n.line)).collect();
+    let bin_nodes: HashSet<(u32, String, String, Option<u32>, Option<u32>)> = bin_graph.nodes.iter().map(|n| (n.id, n.kind.clone(), n.symbol.clone(), n.file_id, n.line)).collect();
     if json_nodes != bin_nodes {
-        diffs.push(format!(
-            "node_set mismatch: json_only={} binary_only={}",
-            json_nodes.difference(&bin_nodes).count(),
-            bin_nodes.difference(&json_nodes).count()
-        ));
+        diffs.push(format!("node_set mismatch: json_only={} binary_only={}", json_nodes.difference(&bin_nodes).count(), bin_nodes.difference(&json_nodes).count()));
     }
-    let json_edges: HashSet<(u32, u32, String)> = json_graph
-        .edges
-        .iter()
-        .map(|e| (e.src, e.dst, e.kind.clone()))
-        .collect();
-    let bin_edges: HashSet<(u32, u32, String)> = bin_graph
-        .edges
-        .iter()
-        .map(|e| (e.src, e.dst, e.kind.clone()))
-        .collect();
+    let json_edges: HashSet<(u32, u32, String)> = json_graph.edges.iter().map(|e| (e.src, e.dst, e.kind.clone())).collect();
+    let bin_edges: HashSet<(u32, u32, String)> = bin_graph.edges.iter().map(|e| (e.src, e.dst, e.kind.clone())).collect();
     if json_edges != bin_edges {
-        diffs.push(format!(
-            "edge_set mismatch: json_only={} binary_only={}",
-            json_edges.difference(&bin_edges).count(),
-            bin_edges.difference(&json_edges).count()
-        ));
+        diffs.push(format!("edge_set mismatch: json_only={} binary_only={}", json_edges.difference(&bin_edges).count(), bin_edges.difference(&json_edges).count()));
     }
     Ok(diffs)
 }
@@ -1255,13 +1053,7 @@ mod tests {
 
         update_route_runtime_state(
             &mut state,
-            &CanonEvent::LoopObserved(LoopObserved {
-                tick: 1,
-                error_count: 1,
-                warning_count: 0,
-                compiler_errors: vec![],
-                goal_text: Some("# Agent Goal\n- Project path: `/tmp/nope`\n".to_string()),
-            }),
+            &CanonEvent::LoopObserved(LoopObserved { tick: 1, error_count: 1, warning_count: 0, compiler_errors: vec![], goal_text: Some("# Agent Goal\n- Project path: `/tmp/nope`\n".to_string()) }),
             &workspace,
         );
         assert!(state.context_ready);

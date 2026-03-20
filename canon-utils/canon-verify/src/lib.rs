@@ -1,4 +1,4 @@
-use canon_event::{CanonEvent, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopVerified};
+use canon_event::{canon_emit, CanonEvent, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopVerified};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -43,6 +43,30 @@ impl EventConsumer for VerifyConsumer {
                 self.last_execution_id = acted.execution_id.clone();
                 self.last_act_span_id = acted.span_id.clone();
                 self.last_acted = Some(acted.clone());
+                let action_key = acted_action_key(acted);
+                self.emit_debug(
+                    "verify_scheduled",
+                    serde_json::json!({
+                        "tick": acted.tick,
+                        "action_kind": acted.action_kind,
+                        "action_key": action_key,
+                        "source": "loop_acted",
+                    }),
+                );
+                if self.last_verified_action_key.as_deref() == Some(action_key.as_str()) {
+                    self.emit_debug(
+                        "verify_dedupe_skip",
+                        serde_json::json!({
+                            "tick": acted.tick,
+                            "action_kind": acted.action_kind,
+                            "action_key": action_key,
+                            "source": "loop_acted",
+                        }),
+                    );
+                    return;
+                }
+                self.last_verified_action_key = Some(action_key);
+                self.verify_acted(acted);
             }
             CanonEvent::Debug(debug) if debug.kind == "route_selected" => {
                 let lane = debug
@@ -58,7 +82,25 @@ impl EventConsumer for VerifyConsumer {
                     return;
                 };
                 let action_key = acted_action_key(&acted);
+                self.emit_debug(
+                    "verify_scheduled",
+                    serde_json::json!({
+                        "tick": acted.tick,
+                        "action_kind": acted.action_kind,
+                        "action_key": action_key,
+                        "source": "route_validate",
+                    }),
+                );
                 if self.last_verified_action_key.as_deref() == Some(action_key.as_str()) {
+                    self.emit_debug(
+                        "verify_dedupe_skip",
+                        serde_json::json!({
+                            "tick": acted.tick,
+                            "action_kind": acted.action_kind,
+                            "action_key": action_key,
+                            "source": "route_validate",
+                        }),
+                    );
                     return;
                 }
                 self.last_verified_action_key = Some(action_key);
@@ -70,12 +112,48 @@ impl EventConsumer for VerifyConsumer {
 
     fn set_emitter(&mut self, emitter: EventEmitterHandle) {
         self.emitter = Some(emitter);
+        self.emit_debug(
+            "verify_consumer_started",
+            serde_json::json!({
+                "component": "canon-verify",
+                "version": env!("CARGO_PKG_VERSION"),
+                "build_hash": option_env!("CANON_COMMIT_ID").unwrap_or("unknown"),
+            }),
+        );
     }
 }
 
 impl VerifyConsumer {
+    fn emit_debug(&self, kind: &str, payload: Value) {
+        if let Some(emitter) = self.emitter.as_ref() {
+            let _ = canon_emit!(emitter; "verify_consumer", kind, payload);
+        }
+    }
+
     fn verify_acted(&mut self, acted: &LoopActed) {
+        let action_key = acted_action_key(acted);
+        self.emit_debug(
+            "verify_start",
+            serde_json::json!({
+                "tick": acted.tick,
+                "action_kind": acted.action_kind,
+                "action_key": action_key,
+            }),
+        );
         if acted.action_kind == "no_op" {
+            let diagnostics: Vec<String> = Vec::new();
+            self.emit_debug(
+                "verify_result",
+                serde_json::json!({
+                    "tick": acted.tick,
+                    "action_kind": acted.action_kind,
+                    "action_key": action_key,
+                    "passed": true,
+                    "diagnostics_count": diagnostics.len(),
+                    "diagnostics": diagnostics,
+                    "source": "no_op_fast_path",
+                }),
+            );
             if let Some(emitter) = self.emitter.as_ref() {
                 emitter.emit(CanonEvent::LoopVerified(LoopVerified {
                     tick: acted.tick,
@@ -113,6 +191,17 @@ impl VerifyConsumer {
         }
 
         let passed = compiler_clean && tlog_clean && file_ok;
+        self.emit_debug(
+            "verify_result",
+            serde_json::json!({
+                "tick": acted.tick,
+                "action_kind": acted.action_kind,
+                "action_key": action_key,
+                "passed": passed,
+                "diagnostics_count": diagnostics.len(),
+                "diagnostics": diagnostics.clone(),
+            }),
+        );
         let payload = LoopVerified {
             tick: acted.tick,
             passed,

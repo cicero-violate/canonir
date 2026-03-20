@@ -8,9 +8,17 @@ use canon_event::{new_error_occurred, CanonEvent, EventEmitterHandle, canon_emit
 use serde_json::json;
 use std::sync::{Arc, OnceLock};
 use std::thread;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::env;
 use std::path::Path;
+
+#[derive(Clone, Copy)]
+struct ParseDiagnostics {
+    parse_ok: bool,
+    parse_mode: &'static str,
+    block_count: usize,
+    valid_action_count: usize,
+}
 
 struct LlmWork {
     request_id: String,
@@ -117,6 +125,12 @@ impl LlmCapabilityHandler {
                         let delay = config.llm_retry_delay_secs;
                         let role_content = default_role_content(
                             role.as_deref().or(endpoint.role.as_deref()),
+                            &endpoint.id,
+                        );
+                        let prompt_with_request_id = format!(
+                            "{{\"request_id\":\"{}\"}}\n{}",
+                            request_id,
+                            prompt
                         );
                         canon_emit!(emitter; "llm_executor", "request_dispatch",
                             json!({
@@ -134,22 +148,33 @@ impl LlmCapabilityHandler {
                             "endpoint": endpoint.id,
                             "url": endpoint.url,
                             "role": role_content,
-                            "prompt": prompt,
+                            "prompt": prompt_with_request_id,
                         });
                         let _ = std::fs::write(&req_path, serde_json::to_string_pretty(&req_obj).unwrap_or_default());
+                        // Ensure every request has a terminal artifact path immediately.
+                        // If the process crashes mid-call, this remains as a durable marker
+                        // instead of leaving a missing *_response.json file.
+                        let pending_obj = json!({
+                            "n": call_n,
+                            "request_id": request_id,
+                            "endpoint": endpoint.id,
+                            "status": "pending",
+                            "started_ms": now_ms(),
+                        });
+                        let _ = std::fs::write(&res_path, serde_json::to_string_pretty(&pending_obj).unwrap_or_default());
                         let result = runtime.block_on(async {
                             let call = async {
                                 if raw {
                                     llm::llm_client_call_agent_raw_with_retry_allow_mismatch(
                                         &bridge, &endpoint.id, &endpoint.url,
-                                        endpoint.stateful, &prompt, &role_content,
+                                        endpoint.stateful, &prompt_with_request_id, &role_content,
                                         "llm_executor", None, &tabs, endpoint.max_tabs,
                                         config.tab_cooldown_ms, retries, delay, bust_cache,
                                     ).await
                                 } else {
                                     llm::llm_client_call_agent_json_with_retry_allow_mismatch(
                                         &bridge, &endpoint.id, &endpoint.url,
-                                        endpoint.stateful, &prompt, &role_content,
+                                        endpoint.stateful, &prompt_with_request_id, &role_content,
                                         "llm_executor", None, &tabs, endpoint.max_tabs,
                                         config.tab_cooldown_ms, retries, delay, bust_cache,
                                     ).await
@@ -171,15 +196,16 @@ impl LlmCapabilityHandler {
                                 // Gives real-time visibility into: which endpoint replied,
                                 // how long it took, response size, and whether JSON parsed.
                                 let elapsed_ms = start.elapsed().as_millis() as u64;
-                                let parse_ok = !payload.as_object()
-                                    .map(|o| o.len() == 1 && o.contains_key("text"))
-                                    .unwrap_or(false);
+                                let parse = analyze_llm_payload(&payload, is_planner_role);
                                 let res_obj = json!({
                                     "n": call_n,
                                     "request_id": request_id,
                                     "endpoint": endpoint.id,
                                     "duration_ms": elapsed_ms,
-                                    "parse_ok": parse_ok,
+                                    "parse_ok": parse.parse_ok,
+                                    "parse_mode": parse.parse_mode,
+                                    "parse_blocks": parse.block_count,
+                                    "valid_action_count": parse.valid_action_count,
                                     "response": payload,
                                 });
                                 let _ = std::fs::write(&res_path, serde_json::to_string_pretty(&res_obj).unwrap_or_default());
@@ -189,7 +215,10 @@ impl LlmCapabilityHandler {
                                         "endpoint":   endpoint.id,
                                         "duration_ms": elapsed_ms,
                                         "bytes":      payload.to_string().len(),
-                                        "parse_ok":   parse_ok,
+                                        "parse_ok":   parse.parse_ok,
+                                        "parse_mode": parse.parse_mode,
+                                        "parse_blocks": parse.block_count,
+                                        "valid_action_count": parse.valid_action_count,
                                     }));
                                 emitter.emit(CanonEvent::CapabilityCompleted(
                                     canon_event::CapabilityCompleted {
@@ -246,6 +275,124 @@ impl LlmCapabilityHandler {
     }
 }
 
+fn now_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+fn analyze_llm_payload(payload: &serde_json::Value, is_planner_role: bool) -> ParseDiagnostics {
+    let Some(obj) = payload.as_object() else {
+        return ParseDiagnostics {
+            parse_ok: true,
+            parse_mode: "strict_json",
+            block_count: 0,
+            valid_action_count: 0,
+        };
+    };
+
+    let Some(text) = (obj.len() == 1 && obj.contains_key("text"))
+        .then(|| obj.get("text").and_then(|v| v.as_str()))
+        .flatten()
+    else {
+        return ParseDiagnostics {
+            parse_ok: !is_planner_role || is_valid_planner_action(payload),
+            parse_mode: "strict_json",
+            block_count: 0,
+            valid_action_count: usize::from(is_valid_planner_action(payload)),
+        };
+    };
+
+    let blocks = extract_fenced_json_blocks(text);
+    if !blocks.is_empty() {
+        let mode = if blocks.len() > 1 { "multi_block" } else { "fenced_block" };
+        let mut parsed_count = 0usize;
+        let mut valid_action_count = 0usize;
+        for block in &blocks {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(block) {
+                parsed_count += 1;
+                if !is_planner_role || is_valid_planner_action(&value) {
+                    valid_action_count += 1;
+                }
+            }
+        }
+        let parse_ok = if is_planner_role {
+            parsed_count > 0 && parsed_count == valid_action_count && parsed_count == blocks.len()
+        } else {
+            parsed_count > 0
+        };
+        return ParseDiagnostics {
+            parse_ok,
+            parse_mode: mode,
+            block_count: blocks.len(),
+            valid_action_count,
+        };
+    }
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(text.trim()) {
+        return ParseDiagnostics {
+            parse_ok: !is_planner_role || is_valid_planner_action(&value),
+            parse_mode: "strict_json",
+            block_count: 0,
+            valid_action_count: usize::from(is_valid_planner_action(&value)),
+        };
+    }
+
+    ParseDiagnostics {
+        parse_ok: false,
+        parse_mode: "strict_json",
+        block_count: 0,
+        valid_action_count: 0,
+    }
+}
+
+fn extract_fenced_json_blocks(text: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut in_fence = false;
+    let mut current = String::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if !in_fence {
+            if trimmed.starts_with("```") {
+                in_fence = true;
+                current.clear();
+            }
+            continue;
+        }
+
+        if trimmed.starts_with("```") {
+            blocks.push(current.trim().to_string());
+            in_fence = false;
+            current.clear();
+            continue;
+        }
+
+        current.push_str(line);
+        current.push('\n');
+    }
+
+    blocks
+}
+
+fn is_valid_planner_action(value: &serde_json::Value) -> bool {
+    if value.get("done").and_then(|v| v.as_bool()) == Some(true) {
+        return true;
+    }
+    if value.get("cmd").and_then(|v| v.as_str()).is_some() {
+        return true;
+    }
+    if value.get("write").and_then(|v| v.as_str()).is_some()
+        && value.get("content").and_then(|v| v.as_str()).is_some()
+    {
+        return true;
+    }
+    value.get("path").and_then(|v| v.as_str()).is_some()
+        && value.get("old").and_then(|v| v.as_str()).is_some()
+        && value.get("new").and_then(|v| v.as_str()).is_some()
+}
+
 fn next_llm_call_counter(log_dir: &str) -> u32 {
     let mut max_seen: Option<u32> = None;
     let Ok(entries) = std::fs::read_dir(Path::new(log_dir)) else {
@@ -269,7 +416,10 @@ fn next_llm_call_counter(log_dir: &str) -> u32 {
     max_seen.map_or(0, |m| m.saturating_add(1))
 }
 
-fn default_role_content(role: Option<&str>) -> String {
+fn default_role_content(role: Option<&str>, endpoint_id: &str) -> String {
+    if endpoint_id == "planner_chatgpt_group" {
+        return String::new();
+    }
     match role.unwrap_or("exec") {
         "planner" => "You are a planning agent. Return only JSON inside fenced ```json code block(s) with no prose.".to_string(),
         "router" => "You are a routing selector. Choose exactly one next route and return only one fenced ```json code block with no prose.".to_string(),

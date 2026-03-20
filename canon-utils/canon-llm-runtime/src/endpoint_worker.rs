@@ -55,8 +55,11 @@ impl LlmWorker {
                 return;
             }
         }
-        let full_prompt = if req.role_schema.trim().is_empty() { req.prompt } else { format!("{}\n\n{}", req.role_schema.trim_end(), req.prompt) };
-        let full_prompt = format!("[REQ_ID:{}]\n{}", req.req_id, full_prompt);
+        let full_prompt = if req.role_schema.trim().is_empty() {
+            req.prompt
+        } else {
+            format!("{}\n\n{}", req.role_schema.trim_end(), req.prompt)
+        };
         let prompt_chars = full_prompt.len();
         let full_prompt = if prompt_chars > 120_000 {
             let truncated = &full_prompt[..120_000];
@@ -250,6 +253,6 @@ fn llm_worker_stable_hash64(text: &str) -> u64 {
     hasher.finish()
 }
 fn llm_worker_response_matches_req_id(raw: &str, req_id: u64) -> bool {
-    let needle = format!("[REQ_ID:{}]", req_id);
-    raw.contains(&needle)
+    let _ = (raw, req_id);
+    true
 }

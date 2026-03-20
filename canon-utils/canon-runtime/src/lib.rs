@@ -252,6 +252,10 @@ impl EventRuntime {
         Ok(processed)
     }
 
+    pub fn flush_emitted_events(&mut self) -> Result<()> {
+        self.drain_emitted_events()
+    }
+
     pub fn handle_kernel_event(&mut self, event: RustcEvent) -> Result<()> {
         let analysis_crate = if let RustcEvent::CompilationUnitFinished(ref cu) = event {
             Some(cu.crate_name.clone())
