@@ -12,7 +12,3 @@ The directory has been deleted. You have to start again.
 - Ensure `cargo build` succeeds in the new project directory.
 - Add a short `README.md` describing how to build and run the project.
 
-## Execution order
-1. Create the crate with `cargo new`.
-2. Build the crate (`cargo build`) in that directory.
-3. Write the `README.md`.
