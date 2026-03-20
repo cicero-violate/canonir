@@ -404,6 +404,9 @@ impl ActConsumer {
         self.emit_tool_result(&pending, tool_result_id.clone(), payload.result.clone(), success);
         self.mark_batch_completion(llm_request_id.as_deref(), success);
         self.emit_acted(pending, stdout, stderr, exit_code, duration_ms, success, Some(tool_result_id));
+        if !success {
+            self.abort_active_batch();
+        }
     }
 
     fn handle_failed(&mut self, payload: &CapabilityFailed) {
@@ -420,6 +423,7 @@ impl ActConsumer {
         self.emit_tool_result(&pending, tool_result_id.clone(), serde_json::json!({ "error": payload.error }), false);
         self.mark_batch_completion(llm_request_id.as_deref(), false);
         self.emit_acted(pending, String::new(), payload.error.clone(), None, duration_ms, false, Some(tool_result_id));
+        self.abort_active_batch();
     }
 
     fn check_timeout(&mut self) {
@@ -435,6 +439,7 @@ impl ActConsumer {
         self.emit_tool_result(&pending, tool_result_id.clone(), serde_json::json!({ "error": "timeout" }), false);
         self.mark_batch_completion(llm_request_id.as_deref(), false);
         self.emit_acted(pending, String::new(), "timeout".to_string(), None, 30_000, false, Some(tool_result_id));
+        self.abort_active_batch();
     }
 
     fn emit_acted(&mut self, pending: PendingAct, stdout: String, stderr: String, exit_code: Option<i32>, duration_ms: u64, success: bool, tool_result_id: Option<String>) {
@@ -819,6 +824,42 @@ impl ActConsumer {
             let next = self.queue.pop_front().expect("front exists");
             self.dispatch_plan(&next);
         }
+    }
+
+    fn abort_active_batch(&mut self) {
+        loop {
+            let Some(next) = self.queue.front() else {
+                break;
+            };
+            let same_batch = next.llm_request_id == self.active_batch_llm_request_id;
+            if !same_batch {
+                break;
+            }
+            let next = self.queue.pop_front().expect("front exists");
+            self.mark_batch_inline_completion(&next, false);
+            if let Some(emitter) = self.emitter.as_ref() {
+                emitter.emit(CanonEvent::LoopActed(LoopActed {
+                    tick: next.tick,
+                    action_kind: next.action_kind.clone(),
+                    capability_request_id: String::new(),
+                    tool_call_id: None,
+                    tool_result_id: None,
+                    stdout: String::new(),
+                    stderr: "skipped:batch_aborted".to_string(),
+                    exit_code: None,
+                    duration_ms: 0,
+                    success: false,
+                    trace_id: next.trace_id.clone(),
+                    execution_id: next.execution_id.clone(),
+                    span_id: Some(Uuid::new_v4().to_string()),
+                    parent_span_id: next.span_id.clone(),
+                    plan_id: next.plan_id.clone(),
+                    plan_step_id: next.plan_step_id.clone(),
+                    action_id: next.action_id.clone(),
+                }));
+            }
+        }
+        self.active_batch_llm_request_id = None;
     }
 }
 

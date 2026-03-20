@@ -114,7 +114,7 @@ fn event_to_payload(event: &CanonEvent) -> Option<(String, serde_json::Value)> {
             ))
             .unwrap_or_else(|_| json!({})),
         )),
-        CanonEvent::LoopActed(payload) if !payload.success => Some((
+        CanonEvent::LoopActed(payload) if !payload.success && payload.stderr != "skipped:batch_aborted" => Some((
             "act".to_string(),
             serde_json::to_value(new_error_occurred(
                 "loop_acted_failed",

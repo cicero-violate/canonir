@@ -510,6 +510,23 @@ fn handle_control_msg(
             }
 
             route_state.scheduler_tick = route_state.scheduler_tick.saturating_add(1);
+            runtime.emit_debug_event(
+                "supervisor".to_string(),
+                "signals_snapshot".to_string(),
+                serde_json::json!({
+                    "tick": route_state.scheduler_tick,
+                    "context_ready": route_state.context_ready,
+                    "planned_pending": route_state.planned_pending,
+                    "has_queued_plan": route_state.planned_pending > 0,
+                    "acted_unverified": route_state.acted_unverified,
+                    "last_action_kind": route_state.last_action_kind,
+                    "last_action_failed": route_state.last_action_failed,
+                    "workspace_dirty": route_state.workspace_dirty,
+                    "finish_ready": route_state.finish_ready,
+                    "ltr_present": route_state.latest_tool_result.is_some(),
+                    "pending_tool_count": route_state.pending_tool_result_ids.len(),
+                }),
+            )?;
             let snapshot = route_state.snapshot_text();
             let prompt = route_controller.build_prompt(
                 &route_state.mission_summary,
@@ -614,8 +631,11 @@ fn handle_control_msg(
                     "confidence": selection.confidence,
                     "changed": gate.changed,
                     "note": gate.note,
+                    "gate_rules_fired": gate.note.split("; ").filter(|s| !s.is_empty() && *s != "accepted").collect::<Vec<_>>(),
                     "ltr_present": route_state.latest_tool_result.is_some(),
+                    "last_action_kind": route_state.last_action_kind,
                     "last_action_failed": route_state.last_action_failed,
+                    "last_action_success": !route_state.last_action_failed,
                     "prompt": prompt,
                 }),
             )?;

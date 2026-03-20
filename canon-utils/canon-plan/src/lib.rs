@@ -2,8 +2,6 @@ use canon_event::{
     CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopObserved, LoopPlanned, PromptLoaded, Tick, ToolCall, ToolResult,
 };
 use serde_json::Value;
-use std::env;
-use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 const LLM_TIMEOUT_TICKS: u64 = 60;
@@ -17,11 +15,9 @@ pub struct PlanConsumer {
     /// While `observed.goal_text == last_done_goal` and there are no errors,
     /// the planner emits `no_op` instead of calling the LLM again.
     last_done_goal: Option<String>,
-    /// Result of the most recent action — included in the next LLM prompt so
-    /// the planner can react to failures (e.g. command not found, dir exists).
-    last_acted: Option<LoopActed>,
-    /// Raw tool result payload, sent back to planner on next shape call.
-    last_tool_result: Option<ToolResult>,
+    /// Results from the last completed action batch, fed to the next planner call.
+    batch_acted: Vec<LoopActed>,
+    batch_tool_results: Vec<ToolResult>,
     /// Last goal text that was fully inlined into the planner prompt.
     last_prompted_goal: Option<String>,
 }
@@ -42,7 +38,16 @@ struct PendingPlan {
 
 impl PlanConsumer {
     pub fn new() -> Self {
-        Self { emitter: None, pending: None, last_observed: None, last_planned_observed_tick: None, last_done_goal: None, last_acted: None, last_tool_result: None, last_prompted_goal: None }
+        Self {
+            emitter: None,
+            pending: None,
+            last_observed: None,
+            last_planned_observed_tick: None,
+            last_done_goal: None,
+            batch_acted: Vec::new(),
+            batch_tool_results: Vec::new(),
+            last_prompted_goal: None,
+        }
     }
 }
 
@@ -70,10 +75,10 @@ impl EventConsumer for PlanConsumer {
                 }
             }
             CanonEvent::LoopActed(acted) => {
-                self.last_acted = Some(acted.clone());
+                self.batch_acted.push(acted.clone());
             }
-            CanonEvent::ToolResult(result) => {
-                self.last_tool_result = Some(result.clone());
+            CanonEvent::ToolResult(result) if result.kind != "llm.plan" => {
+                self.batch_tool_results.push(result.clone());
             }
             CanonEvent::CapabilityCompleted(payload) => {
                 self.handle_capability_completed(payload);
@@ -135,9 +140,6 @@ impl PlanConsumer {
         if self.pending.is_some() {
             return;
         }
-        if self.last_tool_result.is_none() {
-            self.last_tool_result = read_latest_tool_result_artifact();
-        }
         if self.last_planned_observed_tick == Some(observed.tick) {
             return;
         }
@@ -183,8 +185,11 @@ impl PlanConsumer {
         let span_id = Uuid::new_v4().to_string();
         let plan_id = Uuid::new_v4().to_string();
         let include_full_goal = observed.goal_text != self.last_prompted_goal;
-        let prompt = build_prompt(observed, self.last_acted.as_ref(), self.last_tool_result.as_ref(), include_full_goal);
-        let last_action_payload = self.last_acted.as_ref().map(|a| {
+        let prompt = build_prompt(observed, &self.batch_acted, &self.batch_tool_results, include_full_goal);
+        let last_action_results_payload: Vec<Value> = self
+            .batch_acted
+            .iter()
+            .map(|a| {
             serde_json::json!({
                 "action_kind": a.action_kind,
                 "success": a.success,
@@ -195,8 +200,12 @@ impl PlanConsumer {
                 "stdout": a.stdout,
                 "stderr": a.stderr,
             })
-        });
-        let last_tool_result_payload = self.last_tool_result.as_ref().map(|r| {
+            })
+            .collect();
+        let last_tool_results_payload: Vec<Value> = self
+            .batch_tool_results
+            .iter()
+            .map(|r| {
             serde_json::json!({
                 "node_id": r.node_id,
                 "tool_call_id": r.tool_call_id,
@@ -206,19 +215,22 @@ impl PlanConsumer {
                 "output": r.output,
                 "success": r.success,
             })
-        });
+            })
+            .collect();
         let request = CapabilityRequested {
             request_id: request_id.clone(),
             name: "llm.call".to_string(),
             args: serde_json::json!({
                 "prompt": prompt,
                 "role": "planner",
-                "last_action_result": last_action_payload,
-                "last_tool_result": last_tool_result_payload,
+                "last_action_results": last_action_results_payload,
+                "last_tool_results": last_tool_results_payload,
             }),
         };
 
         let plan_tool_call_id = Uuid::new_v4().to_string();
+        self.batch_acted.clear();
+        self.batch_tool_results.clear();
         self.pending = Some(PendingPlan {
             tick: observed.tick,
             request_id: request_id.clone(),
@@ -376,6 +388,9 @@ impl PlanConsumer {
             return;
         }
 
+        // Unblock the routing gate — matches the ToolCall emitted in handle_observed.
+        self.emit_tool_result(&pending.plan_tool_call_id, &pending.request_id, false);
+
         self.emit_plan(LoopPlanned {
             tick: pending.tick,
             action_kind: "no_op".to_string(),
@@ -395,6 +410,20 @@ impl PlanConsumer {
     fn emit_plan(&self, payload: LoopPlanned) {
         if let Some(emitter) = self.emitter.as_ref() {
             emitter.emit(CanonEvent::LoopPlanned(payload));
+        }
+    }
+
+    fn emit_tool_result(&self, tool_call_id: &str, request_id: &str, success: bool) {
+        if let Some(emitter) = self.emitter.as_ref() {
+            emitter.emit(CanonEvent::ToolResult(ToolResult {
+                node_id: "plan_consumer".to_string(),
+                tool_call_id: tool_call_id.to_string(),
+                tool_result_id: Uuid::new_v4().to_string(),
+                request_id: request_id.to_string(),
+                kind: "llm.plan".to_string(),
+                output: serde_json::json!({}),
+                success,
+            }));
         }
     }
 }
@@ -479,7 +508,7 @@ fn parse_llm_actions(result: &Value) -> Vec<LlmAction> {
     parse_value_to_action(value).into_iter().collect()
 }
 
-fn build_prompt(observed: &LoopObserved, last_acted: Option<&LoopActed>, last_tool_result: Option<&ToolResult>, include_full_goal: bool) -> String {
+fn build_prompt(observed: &LoopObserved, batch_acted: &[LoopActed], batch_tool_results: &[ToolResult], include_full_goal: bool) -> String {
     let goal_section = match (observed.goal_text.as_ref(), include_full_goal) {
         (Some(text), true) => format!("## Active Goal\n{text}\n\n"),
         (Some(_), false) => "## Active Goal\n(unchanged from previous planner request)\n\n".to_string(),
@@ -491,11 +520,13 @@ fn build_prompt(observed: &LoopObserved, last_acted: Option<&LoopActed>, last_to
     } else {
         "## Compiler Errors\nNone.\n\n".to_string()
     };
-    let last_action_section = match last_acted {
-        None => String::new(),
-        Some(a) => {
+    let last_action_section = if batch_acted.is_empty() {
+        String::new()
+    } else {
+        let mut s = format!("## Action Results ({} actions)\n", batch_acted.len());
+        for (i, a) in batch_acted.iter().enumerate() {
             let status = if a.success { "succeeded" } else { "FAILED" };
-            let mut s = format!("## Last Action Result\naction: {}\nstatus: {} (exit_code: {:?})\ncapability_request_id: {}\n", a.action_kind, status, a.exit_code, a.capability_request_id);
+            s.push_str(&format!("### Action {}\naction: {}\nstatus: {} (exit_code: {:?})\ncapability_request_id: {}\n", i + 1, a.action_kind, status, a.exit_code, a.capability_request_id));
             if let Some(tool_call_id) = a.tool_call_id.as_ref() {
                 s.push_str(&format!("tool_call_id: {}\n", tool_call_id));
             }
@@ -509,22 +540,25 @@ fn build_prompt(observed: &LoopObserved, last_acted: Option<&LoopActed>, last_to
                 s.push_str(&format!("stderr: {}\n", a.stderr.trim()));
             }
             s.push('\n');
-            s
         }
+        s
     };
-    let last_tool_result_section = match last_tool_result {
-        None => String::new(),
-        Some(result) => {
+    let last_tool_result_section = if batch_tool_results.is_empty() {
+        String::new()
+    } else {
+        let mut s = format!("## Tool Results ({} results)\n", batch_tool_results.len());
+        for (i, result) in batch_tool_results.iter().enumerate() {
             let mut output = serde_json::to_string_pretty(&result.output).unwrap_or_else(|_| result.output.to_string());
-            if output.len() > 4000 {
-                output.truncate(4000);
+            if output.len() > 2000 {
+                output.truncate(2000);
                 output.push_str("\n...<truncated>");
             }
-            format!(
-                "## Last Tool Result\ntool_kind: {}\nrequest_id: {}\ntool_call_id: {}\ntool_result_id: {}\nsuccess: {}\noutput:\n{}\n\n",
-                result.kind, result.request_id, result.tool_call_id, result.tool_result_id, result.success, output,
-            )
+            s.push_str(&format!(
+                "### Result {}\ntool_kind: {}\nrequest_id: {}\ntool_call_id: {}\ntool_result_id: {}\nsuccess: {}\noutput:\n{}\n\n",
+                i + 1, result.kind, result.request_id, result.tool_call_id, result.tool_result_id, result.success, output,
+            ));
         }
+        s
     };
     format!(
         "{goal}{last_action}{last_tool_result}{errors}Execution policy constraints:\n- Do NOT emit destructive commands (`rm -rf`, `git reset --hard`, `git clean -f`, `dd`, `mkfs`, `shred`).\n- If a target directory already exists, prefer `cargo init --bin <dir>` instead of deleting and recreating it.\n\nReturn one or more fenced ```json code blocks (no prose outside code blocks). Each block must be one action object using one schema:\n- Run a command:  {{\"cmd\": \"cargo new foo\", \"cwd\": \"/path\"}}\n- Write a file:   {{\"write\": \"/abs/path\", \"content\": \"full content\"}}\n- Patch a file:   {{\"path\": \"/abs/path\", \"old\": \"exact text\", \"new\": \"replacement\"}}\n- Signal done:    {{\"done\": true, \"reason\": \"...\"}}",
@@ -540,94 +574,5 @@ fn action_payload_with_cwd(cmd: String, cwd: Option<String>) -> Value {
         serde_json::json!({ "cmd": cmd, "cwd": cwd })
     } else {
         serde_json::json!({ "cmd": cmd })
-    }
-}
-
-fn default_llm_log_dir() -> PathBuf {
-    PathBuf::from(env::var("CANON_LLM_LOG_DIR").unwrap_or_else(|_| "/workspace/ai_sandbox/canon/state/reports_out/llm".to_string()))
-}
-
-fn read_latest_tool_result_artifact() -> Option<ToolResult> {
-    let dir = default_llm_log_dir();
-    let entries = std::fs::read_dir(&dir).ok()?;
-    let mut best: Option<(u64, u32, usize, ToolResult)> = None;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(v) => v,
-            None => continue,
-        };
-        let Some((n, suffix)) = parse_artifact_reqnum_suffix(name) else {
-            continue;
-        };
-        if suffix != "tool_results.json" {
-            continue;
-        }
-        let rows = read_artifact_rows(&path);
-        for (idx, row) in rows.iter().enumerate() {
-            let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
-            if status == "pending" {
-                continue;
-            }
-            let Some(tool_result_id) = row.get("tool_result_id").and_then(|v| v.as_str()).map(|s| s.to_string()) else {
-                continue;
-            };
-            let Some(node_id) = row.get("node_id").and_then(|v| v.as_str()).map(|s| s.to_string()) else {
-                continue;
-            };
-            let Some(tool_call_id) = row.get("tool_call_id").and_then(|v| v.as_str()).map(|s| s.to_string()) else {
-                continue;
-            };
-            let Some(request_id) = row.get("request_id").and_then(|v| v.as_str()).map(|s| s.to_string()) else {
-                continue;
-            };
-            let Some(kind) = row.get("kind").and_then(|v| v.as_str()).map(|s| s.to_string()) else {
-                continue;
-            };
-            let output = row.get("output").cloned().unwrap_or_else(|| serde_json::json!({}));
-            let success = row.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
-            let ts = row.get("finalized_ms").and_then(|v| v.as_u64()).or_else(|| row.get("dispatched_ms").and_then(|v| v.as_u64())).unwrap_or(0);
-
-            let candidate = ToolResult { node_id, tool_call_id, tool_result_id, request_id, kind, output, success };
-            let candidate_key = (ts, n, idx, candidate);
-            if let Some(current) = &best {
-                if (candidate_key.0, candidate_key.1, candidate_key.2) > (current.0, current.1, current.2) {
-                    best = Some(candidate_key);
-                }
-            } else {
-                best = Some(candidate_key);
-            }
-        }
-    }
-
-    best.map(|(_, _, _, tr)| tr)
-}
-
-fn parse_artifact_reqnum_suffix(name: &str) -> Option<(u32, String)> {
-    let mut parts = name.splitn(3, '_');
-    let first = parts.next()?;
-    let second = parts.next()?;
-    let third = parts.next()?;
-    if let Ok(n) = first.parse::<u32>() {
-        // Legacy: <REQNUM>_<suffix>.json
-        return Some((n, format!("{}_{}", second, third)));
-    }
-    // New: <TS>_<REQNUM>_<suffix>.json
-    let n = second.parse::<u32>().ok()?;
-    Some((n, third.to_string()))
-}
-
-fn read_artifact_rows(path: &Path) -> Vec<Value> {
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    let Ok(parsed) = serde_json::from_str::<Value>(&raw) else {
-        return Vec::new();
-    };
-    match parsed {
-        Value::Array(arr) => arr,
-        Value::Null => Vec::new(),
-        other => vec![other],
     }
 }

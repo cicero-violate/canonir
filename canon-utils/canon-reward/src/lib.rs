@@ -1,10 +1,11 @@
-use canon_event::{new_error_occurred, CanonEvent, EventConsumer, EventEmitterHandle, EventFilter, LoopRewarded, LoopVerified};
+use canon_event::{new_error_occurred, CanonEvent, DebugEvent, EventConsumer, EventEmitterHandle, EventFilter, LoopRewarded, LoopVerified};
 
 pub struct RewardConsumer {
     emitter: Option<EventEmitterHandle>,
     errors_before: usize,
     stagnant_ticks: u32,
     last_action_kind: String,
+    last_action_success: bool,
     halted: bool,
     last_trace_id: Option<String>,
     last_execution_id: Option<String>,
@@ -18,6 +19,7 @@ impl RewardConsumer {
             errors_before: 0,
             stagnant_ticks: 0,
             last_action_kind: "no_op".to_string(),
+            last_action_success: true,
             halted: false,
             last_trace_id: None,
             last_execution_id: None,
@@ -38,6 +40,7 @@ impl EventConsumer for RewardConsumer {
             }
             CanonEvent::LoopActed(acted) => {
                 self.last_action_kind = acted.action_kind.clone();
+                self.last_action_success = acted.success;
             }
             CanonEvent::LoopVerified(verified) => {
                 self.last_trace_id = verified.trace_id.clone();
@@ -93,6 +96,23 @@ impl RewardConsumer {
             return;
         }
 
+        if let Some(emitter) = self.emitter.as_ref() {
+            emitter.emit(CanonEvent::Debug(DebugEvent {
+                source: "reward_consumer".to_string(),
+                kind: "reward_state".to_string(),
+                payload: serde_json::json!({
+                    "last_action_kind": self.last_action_kind,
+                    "last_action_success": self.last_action_success,
+                    "stagnant_ticks": self.stagnant_ticks,
+                    "errors_before": self.errors_before,
+                    "halted": self.halted,
+                    "verified_passed": verified.passed,
+                    "verified_error_count": verified.error_count,
+                    "will_halt_as_done": self.last_action_kind == "done" && self.last_action_success,
+                }),
+            }));
+        }
+
         let errors_after = verified.error_count;
         let mut reward = (self.errors_before as i32 - errors_after as i32) as f32;
         if verified.passed && self.last_action_kind != "no_op" {
@@ -102,7 +122,7 @@ impl RewardConsumer {
             reward -= 1.0;
         }
 
-        if self.last_action_kind == "done" {
+        if self.last_action_kind == "done" && self.last_action_success {
             if let Some(emitter) = self.emitter.as_ref() {
                 emitter.emit(CanonEvent::LoopRewarded(LoopRewarded {
                     tick: verified.tick,

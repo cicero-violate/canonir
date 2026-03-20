@@ -116,7 +116,13 @@ impl Gatekeeper {
             notes.push("acted_unverified=true requires validate");
         }
 
-        if signals.has_queued_plan && lane != RouteKind::Execute && !signals.last_action_failed {
+        if signals.last_action_failed && !signals.has_queued_plan && !signals.performed_recently && lane != RouteKind::Shape {
+            lane = RouteKind::Shape;
+            changed = true;
+            notes.push("batch_failed requires shape for replan");
+        }
+
+        if signals.has_queued_plan && lane != RouteKind::Execute {
             lane = RouteKind::Execute;
             changed = true;
             notes.push("queued plan requires execute");
