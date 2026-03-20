@@ -1,0 +1,12 @@
+[package]
+name = "canon-judgment"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+name = "canon_judgment"
+
+[dependencies]
+canon_decision = { package = "canon-decision", path = "../canon-decision" }
+serde = { workspace = true, features = ["derive"] }

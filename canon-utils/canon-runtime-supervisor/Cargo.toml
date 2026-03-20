@@ -5,6 +5,9 @@ edition = "2021"
 
 [dependencies]
 anyhow.workspace = true
+canon_decision = { package = "canon-decision", path = "../canon-decision" }
+canon_judgment = { package = "canon-judgment", path = "../canon-judgment" }
+serde_json.workspace = true
 # canon_builder = { package = "canon-builder", path = "../canon-builder" }
 notify = "6"
 signal-hook = "0.3"

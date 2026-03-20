@@ -12,6 +12,8 @@ pub struct VerifyConsumer {
     last_trace_id: Option<String>,
     last_execution_id: Option<String>,
     last_act_span_id: Option<String>,
+    last_acted: Option<LoopActed>,
+    last_verified_action_key: Option<String>,
 }
 
 impl VerifyConsumer {
@@ -23,6 +25,8 @@ impl VerifyConsumer {
             last_trace_id: None,
             last_execution_id: None,
             last_act_span_id: None,
+            last_acted: None,
+            last_verified_action_key: None,
         }
     }
 }
@@ -33,12 +37,44 @@ impl EventConsumer for VerifyConsumer {
     }
 
     fn on_event(&mut self, event: &CanonEvent) {
-        let CanonEvent::LoopActed(acted) = event else {
-            return;
-        };
-        self.last_trace_id = acted.trace_id.clone();
-        self.last_execution_id = acted.execution_id.clone();
-        self.last_act_span_id = acted.span_id.clone();
+        match event {
+            CanonEvent::LoopActed(acted) => {
+                self.last_trace_id = acted.trace_id.clone();
+                self.last_execution_id = acted.execution_id.clone();
+                self.last_act_span_id = acted.span_id.clone();
+                self.last_acted = Some(acted.clone());
+            }
+            CanonEvent::Debug(debug) if debug.kind == "route_selected" => {
+                let lane = debug
+                    .payload
+                    .get("approved_route")
+                    .or_else(|| debug.payload.get("lane"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if lane != "validate" {
+                    return;
+                }
+                let Some(acted) = self.last_acted.clone() else {
+                    return;
+                };
+                let action_key = acted_action_key(&acted);
+                if self.last_verified_action_key.as_deref() == Some(action_key.as_str()) {
+                    return;
+                }
+                self.last_verified_action_key = Some(action_key);
+                self.verify_acted(&acted);
+            }
+            _ => {}
+        }
+    }
+
+    fn set_emitter(&mut self, emitter: EventEmitterHandle) {
+        self.emitter = Some(emitter);
+    }
+}
+
+impl VerifyConsumer {
+    fn verify_acted(&mut self, acted: &LoopActed) {
         if acted.action_kind == "no_op" {
             if let Some(emitter) = self.emitter.as_ref() {
                 emitter.emit(CanonEvent::LoopVerified(LoopVerified {
@@ -94,10 +130,13 @@ impl EventConsumer for VerifyConsumer {
             emitter.emit(CanonEvent::LoopVerified(payload));
         }
     }
+}
 
-    fn set_emitter(&mut self, emitter: EventEmitterHandle) {
-        self.emitter = Some(emitter);
+fn acted_action_key(acted: &LoopActed) -> String {
+    if !acted.capability_request_id.is_empty() {
+        return acted.capability_request_id.clone();
     }
+    format!("{}:{}", acted.tick, acted.action_kind)
 }
 
 struct CommandOutput {

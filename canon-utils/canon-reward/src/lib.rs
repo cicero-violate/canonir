@@ -45,6 +45,17 @@ impl EventConsumer for RewardConsumer {
                 self.last_verify_span_id = verified.span_id.clone();
                 self.handle_verified(verified);
             }
+            CanonEvent::Debug(debug) if debug.kind == "route_selected" => {
+                let lane = debug
+                    .payload
+                    .get("approved_route")
+                    .or_else(|| debug.payload.get("lane"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if lane == "conclude" {
+                    self.emit_forced_halt(debug.payload.get("tick").and_then(|v| v.as_u64()));
+                }
+            }
             _ => {}
         }
     }
@@ -55,6 +66,27 @@ impl EventConsumer for RewardConsumer {
 }
 
 impl RewardConsumer {
+    fn emit_forced_halt(&mut self, tick: Option<u64>) {
+        if self.halted {
+            return;
+        }
+        self.halted = true;
+        if let Some(emitter) = self.emitter.as_ref() {
+            emitter.emit(CanonEvent::LoopRewarded(LoopRewarded {
+                tick: tick.unwrap_or(0),
+                reward: 1.0,
+                errors_before: self.errors_before,
+                errors_after: self.errors_before,
+                stagnant_ticks: self.stagnant_ticks,
+                halt: true,
+                trace_id: self.last_trace_id.clone(),
+                execution_id: self.last_execution_id.clone(),
+                span_id: Some(uuid::Uuid::new_v4().to_string()),
+                parent_span_id: self.last_verify_span_id.clone(),
+            }));
+        }
+    }
+
     fn handle_verified(&mut self, verified: &LoopVerified) {
         // Already halted — stop processing to prevent repeated halt events on tlog replay
         if self.halted {

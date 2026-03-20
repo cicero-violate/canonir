@@ -23,6 +23,8 @@ members = [
   "canon-utils/canon-act",
   "canon-utils/canon-verify",
   "canon-utils/canon-reward",
+  "canon-utils/canon-decision",
+  "canon-utils/canon-judgment",
   "canon-utils/canon-storage-graph",
   "canon-utils/canon-tools-analysis", "canon-utils/canon-llm-runtime",
   "canon-utils/canon-builder", "test_rust_project", "test_rust_project_v2",

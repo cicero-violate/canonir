@@ -7,6 +7,8 @@ const LLM_TIMEOUT_TICKS: u64 = 60;
 pub struct PlanConsumer {
     emitter: Option<EventEmitterHandle>,
     pending: Option<PendingPlan>,
+    last_observed: Option<LoopObserved>,
+    last_planned_observed_tick: Option<u64>,
     /// Goal text that most recently produced a `done` response.
     /// While `observed.goal_text == last_done_goal` and there are no errors,
     /// the planner emits `no_op` instead of calling the LLM again.
@@ -33,6 +35,8 @@ impl PlanConsumer {
         Self {
             emitter: None,
             pending: None,
+            last_observed: None,
+            last_planned_observed_tick: None,
             last_done_goal: None,
             last_acted: None,
         }
@@ -50,7 +54,26 @@ impl EventConsumer for PlanConsumer {
                 self.check_llm_timeout(*tick);
             }
             CanonEvent::LoopObserved(observed) => {
-                self.handle_observed(observed);
+                self.last_observed = Some(observed.clone());
+            }
+            CanonEvent::Debug(debug) if debug.kind == "route_selected" => {
+                let lane = debug
+                    .payload
+                    .get("approved_route")
+                    .or_else(|| debug.payload.get("lane"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let tick = debug
+                    .payload
+                    .get("tick")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                self.check_llm_timeout(tick);
+                if lane == "shape" {
+                    if let Some(observed) = self.last_observed.clone() {
+                        self.handle_observed(&observed);
+                    }
+                }
             }
             CanonEvent::LoopActed(acted) => {
                 self.last_acted = Some(acted.clone());
@@ -122,6 +145,9 @@ impl PlanConsumer {
         if self.pending.is_some() {
             return;
         }
+        if self.last_planned_observed_tick == Some(observed.tick) {
+            return;
+        }
         if observed.goal_text.is_none() && observed.error_count == 0 {
             self.emit_plan(LoopPlanned {
                 tick: observed.tick,
@@ -186,6 +212,7 @@ impl PlanConsumer {
             span_id,
             plan_id,
         });
+        self.last_planned_observed_tick = Some(observed.tick);
 
         if let Some(emitter) = self.emitter.as_ref() {
             emitter.emit(CanonEvent::CapabilityRequested(request));

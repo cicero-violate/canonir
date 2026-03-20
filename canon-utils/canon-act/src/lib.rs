@@ -13,6 +13,7 @@ pub struct ActConsumer {
 struct PendingAct {
     tick: u64,
     action_kind: String,
+    tool_kind: String,
     request_id: String,
     tool_call_id: String,
     node_id: String,
@@ -42,7 +43,10 @@ impl EventConsumer for ActConsumer {
 
     fn on_event(&mut self, event: &CanonEvent) {
         match event {
-            CanonEvent::LoopPlanned(planned) => self.handle_plan(planned),
+            CanonEvent::LoopPlanned(planned) => self.enqueue_plan(planned),
+            CanonEvent::Debug(debug) if debug.kind == "route_selected" => {
+                self.handle_route_selected(debug.payload.as_object());
+            }
             CanonEvent::CapabilityCompleted(payload) => self.handle_completed(payload),
             CanonEvent::CapabilityFailed(payload) => self.handle_failed(payload),
             CanonEvent::Tick(_) => self.check_timeout(),
@@ -56,11 +60,31 @@ impl EventConsumer for ActConsumer {
 }
 
 impl ActConsumer {
-    fn handle_plan(&mut self, planned: &LoopPlanned) {
-        if self.pending.is_some() {
-            self.queue.push_back(planned.clone());
+    fn enqueue_plan(&mut self, planned: &LoopPlanned) {
+        self.queue.push_back(planned.clone());
+    }
+
+    fn handle_route_selected(&mut self, payload: Option<&serde_json::Map<String, Value>>) {
+        let Some(payload) = payload else {
+            return;
+        };
+        let lane = payload
+            .get("approved_route")
+            .or_else(|| payload.get("lane"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if lane != "execute" {
             return;
         }
+        if self.pending.is_some() {
+            return;
+        }
+        if let Some(next) = self.queue.pop_front() {
+            self.dispatch_plan(&next);
+        }
+    }
+
+    fn dispatch_plan(&mut self, planned: &LoopPlanned) {
         let Some(emitter) = self.emitter.as_ref() else {
             return;
         };
@@ -86,11 +110,6 @@ impl ActConsumer {
                     plan_step_id: planned.plan_step_id.clone(),
                     action_id: planned.action_id.clone(),
                 }));
-                // No capability pending — drain the next queued plan immediately
-                if let Some(next) = self.queue.pop_front() {
-                    let next_planned = next;
-                    self.handle_plan(&next_planned);
-                }
             }
             "run_command" => {
                 let cmd = planned.action_payload.get("cmd").and_then(|v| v.as_str());
@@ -127,6 +146,7 @@ impl ActConsumer {
                 self.pending = Some(PendingAct {
                     tick: planned.tick,
                     action_kind: planned.action_kind.clone(),
+                    tool_kind: "bash".to_string(),
                     request_id,
                     tool_call_id,
                     node_id,
@@ -170,6 +190,7 @@ impl ActConsumer {
                 self.pending = Some(PendingAct {
                     tick: planned.tick,
                     action_kind: planned.action_kind.clone(),
+                    tool_kind: "file.write".to_string(),
                     request_id,
                     tool_call_id,
                     node_id,
@@ -216,6 +237,7 @@ impl ActConsumer {
                 self.pending = Some(PendingAct {
                     tick: planned.tick,
                     action_kind: planned.action_kind.clone(),
+                    tool_kind: "file.patch".to_string(),
                     request_id,
                     tool_call_id,
                     node_id,
@@ -337,10 +359,6 @@ impl ActConsumer {
                 action_id: pending.action_id,
             }));
         }
-        // Start the next queued plan immediately
-        if let Some(next) = self.queue.pop_front() {
-            self.handle_plan(&next);
-        }
     }
 
     fn emit_missing_args(&self, planned: &LoopPlanned, reason: &str) {
@@ -380,7 +398,7 @@ impl ActConsumer {
                 tool_call_id: pending.tool_call_id.clone(),
                 tool_result_id,
                 request_id: pending.request_id.clone(),
-                kind: pending.action_kind.clone(),
+                kind: pending.tool_kind.clone(),
                 output,
                 success,
             }));

@@ -13,6 +13,9 @@ use canon_verify::VerifyConsumer;
 use canon_event_store::{read_any_events_from_path, read_any_events_from_path_with_start_seq};
 use canon_event_store::replay_graph_from_tlog;
 use canon_event_store::AnyEvent;
+use canon_decision::{JournalLine, RouteKind};
+use canon_judgment::{GuardConfig, RuntimeSignals};
+use canon_runtime_supervisor::judgment_loop::RouteController;
 use crossbeam_channel as cc;
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use std::env;
@@ -128,6 +131,152 @@ enum Msg {
     Reset(Vec<AnyEvent>),
     /// Periodic housekeeping tick from the timer producer (P3).
     Tick,
+}
+
+#[derive(Default)]
+struct RouteRuntimeState {
+    scheduler_tick: u64,
+    mission: String,
+    context_ready: bool,
+    planned_pending: usize,
+    acted_unverified: bool,
+    finish_ready: bool,
+    last_action_kind: String,
+    journal: Vec<JournalLine>,
+}
+
+impl RouteRuntimeState {
+    fn signals(&self) -> RuntimeSignals {
+        RuntimeSignals {
+            context_ready: self.context_ready,
+            performed_recently: self.acted_unverified,
+            finish_ready: self.finish_ready,
+        }
+    }
+
+    fn snapshot_text(&self) -> String {
+        format!(
+            "tick={tick}\ncontext_ready={context}\nplanned_pending={pending}\nacted_unverified={unverified}\nfinish_ready={finish}\nlast_action_kind={action}",
+            tick = self.scheduler_tick,
+            context = self.context_ready,
+            pending = self.planned_pending,
+            unverified = self.acted_unverified,
+            finish = self.finish_ready,
+            action = self.last_action_kind,
+        )
+    }
+
+    fn push_journal(&mut self, lane: impl Into<String>, summary: impl Into<String>) {
+        self.journal.push(JournalLine {
+            lane: lane.into(),
+            summary: summary.into(),
+            data: serde_json::Value::Null,
+        });
+        if self.journal.len() > 32 {
+            let drop_n = self.journal.len() - 32;
+            self.journal.drain(0..drop_n);
+        }
+    }
+}
+
+fn propose_route_json(state: &RouteRuntimeState) -> String {
+    let route = if state.finish_ready {
+        RouteKind::Conclude
+    } else if state.acted_unverified {
+        RouteKind::Validate
+    } else if state.planned_pending > 0 {
+        RouteKind::Execute
+    } else if state.context_ready {
+        RouteKind::Shape
+    } else {
+        RouteKind::Scan
+    };
+    serde_json::json!({
+        "route": route.as_str(),
+        "rationale": "heuristic proposal from runtime state",
+        "confidence": 0.75,
+        "signals": {
+            "context_ready": state.context_ready,
+            "planned_pending": state.planned_pending,
+            "acted_unverified": state.acted_unverified,
+            "finish_ready": state.finish_ready,
+        }
+    })
+    .to_string()
+}
+
+fn update_route_runtime_state(route_state: &mut RouteRuntimeState, event: &AnyEvent) {
+    let AnyEvent::Canon(canon) = event else {
+        return;
+    };
+    match canon.kind.as_str() {
+        "loop_observed" => {
+            let goal_present = canon
+                .payload
+                .get("goal_text")
+                .and_then(|v| v.as_str())
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false);
+            let errors = canon
+                .payload
+                .get("error_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            route_state.context_ready = goal_present || errors > 0;
+            if let Some(goal_text) = canon.payload.get("goal_text").and_then(|v| v.as_str()) {
+                if !goal_text.trim().is_empty() {
+                    route_state.mission = goal_text.to_string();
+                }
+            }
+            route_state.push_journal("observe", "snapshot refreshed");
+        }
+        "loop_planned" => {
+            route_state.planned_pending = route_state.planned_pending.saturating_add(1);
+            let action = canon
+                .payload
+                .get("action_kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            route_state.push_journal("plan", format!("planned action={action}"));
+        }
+        "loop_acted" => {
+            route_state.planned_pending = route_state.planned_pending.saturating_sub(1);
+            route_state.acted_unverified = true;
+            route_state.last_action_kind = canon
+                .payload
+                .get("action_kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            route_state.push_journal(
+                "act",
+                format!("executed action={}", route_state.last_action_kind),
+            );
+        }
+        "loop_verified" => {
+            route_state.acted_unverified = false;
+            let passed = canon
+                .payload
+                .get("passed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            route_state.finish_ready =
+                route_state.last_action_kind == "done" && passed;
+            route_state.push_journal("verify", format!("passed={passed}"));
+        }
+        "loop_rewarded" => {
+            let halt = canon
+                .payload
+                .get("halt")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if halt {
+                route_state.finish_ready = true;
+            }
+            route_state.push_journal("reward", format!("halt={halt}"));
+        }
+        _ => {}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -463,8 +612,12 @@ fn main() -> Result<()> {
             "[event_runtime] warning: CANON_COMMIT_ID is unknown; build metadata is incomplete"
         );
     }
-    // Kick the agent loop immediately so it doesn't wait for external ticks.
-    let _ = runtime.emit_tick();
+    let mut route_controller = RouteController::new(GuardConfig::default());
+    let mut route_state = RouteRuntimeState::default();
+    route_state.mission = std::fs::read_to_string(
+        "/workspace/ai_sandbox/canon/canon-agent-prompts/AGENT_GOAL.md",
+    )
+    .unwrap_or_default();
 
     // =========================================================================
     // W = 1 — single writer loop
@@ -481,6 +634,7 @@ fn main() -> Result<()> {
             Msg::Event(event) => {
                 // W processes and commits; consumers (C) receive via bus dispatch.
                 runtime.process_events(std::slice::from_ref(&event))?;
+                update_route_runtime_state(&mut route_state, &event);
                 processed += 1;
                 // Persist cursor periodically so replay can resume from offset.
                 if processed != last_saved_processed
@@ -509,7 +663,63 @@ fn main() -> Result<()> {
                 processed = events.len();
             }
             Msg::Tick => {
-                runtime.emit_tick()?;
+                route_state.scheduler_tick = route_state.scheduler_tick.saturating_add(1);
+                let snapshot = route_state.snapshot_text();
+                let prompt = route_controller.build_prompt(
+                    &route_state.mission,
+                    &snapshot,
+                    &route_state.journal,
+                );
+                let model_json = propose_route_json(&route_state);
+                let signals = route_state.signals();
+                let (selection, gate) = match route_controller
+                    .evaluate_model_output(&model_json, &signals)
+                {
+                    Ok(v) => v,
+                    Err(err) => {
+                        runtime.emit_debug_event(
+                            "supervisor".to_string(),
+                            "route_error".to_string(),
+                            serde_json::json!({
+                                "tick": route_state.scheduler_tick,
+                                "error": err,
+                            }),
+                        )?;
+                        continue;
+                    }
+                };
+
+                let lane = gate.lane.as_str();
+                runtime.emit_debug_event(
+                    "supervisor".to_string(),
+                    "route_selected".to_string(),
+                    serde_json::json!({
+                        "tick": route_state.scheduler_tick,
+                        "suggested_route": selection.route.as_str(),
+                        "approved_route": lane,
+                        "rationale": selection.rationale,
+                        "confidence": selection.confidence,
+                        "changed": gate.changed,
+                        "note": gate.note,
+                        "prompt": prompt,
+                    }),
+                )?;
+
+                if gate.should_stop {
+                    let _ = save_cursor(
+                        &cursor_path,
+                        &tlog_path,
+                        processed,
+                        start_seq,
+                        &session_id,
+                        runtime.next_id(),
+                    );
+                    return Ok(());
+                }
+
+                if matches!(gate.lane, RouteKind::Scan) {
+                    runtime.emit_tick()?;
+                }
             }
         }
     }
