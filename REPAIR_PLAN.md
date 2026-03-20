@@ -1,321 +1,308 @@
-# REPAIR PLAN — ISSUES.md (snapshot 2026-03-20)
+# REPAIR_PLAN.md — Post-Repair Analysis (Round 7)
 
-## Source
-`ISSUES.md` (derived from `state/reports_out/llm` snapshot at 01:01).
+## Verification results from latest tlog (82,118 events) + LLM log files (calls #000–#042)
 
-## Issue Summary
-
-| # | Severity | Title                                                        |
-|---+----------+--------------------------------------------------------------|
-| 1 | High     | Partial execution visibility for multi-block planner output  |
-| 2 | High     | Pending tool result remains open in artifact                 |
-| 3 | Medium   | Destructive command dispatched without guardrail             |
-| 4 | Medium   | No explicit batch-complete marker per planner response index |
-
----
-
-## Issue 1 — Partial execution visibility
-
-### Root cause
-
-`ActConsumer.write_tool_call_artifact` is called inside `dispatch_plan`, which is only
-invoked when an action is actually dispatched to a capability. Actions that are enqueued
-(via `enqueue_plan`) but not yet dispatched have **no artifact record**. At any snapshot
-between the start of a batch and its full completion, N−k actions are invisible.
-
-The sequential chaining (`dispatch_next_in_active_batch`) is correct, but the visibility
-gap exists because artifacts are written at dispatch time, not queue time.
-
-File: `canon-utils/canon-act/src/lib.rs`
-
-### Fix — write a "queued" record at enqueue time
-
-**`enqueue_plan`** — after pushing to `self.queue`, immediately write a lightweight queued
-record to the batch artifact so all planned actions are observable from the moment they are
-enqueued.
-
-```rust
-// In enqueue_plan, after self.queue.push_back(planned.clone()):
-let artifact_n = self.artifact_index_for_plan(planned);
-self.write_tool_call_queued_artifact(artifact_n, planned);
-```
-
-Add a new helper `write_tool_call_queued_artifact`:
-
-```rust
-fn write_tool_call_queued_artifact(&self, artifact_n: u32, planned: &LoopPlanned) {
-    let value = serde_json::json!({
-        "n": artifact_n,
-        "status": "queued",
-        "queued_ms": now_ms_u64(),
-        "action_kind": planned.action_kind,
-        "llm_request_id": planned.llm_request_id,
-        "plan_id": planned.plan_id,
-        "plan_step_id": planned.plan_step_id,
-        "action_id": planned.action_id,
-        "payload": planned.action_payload,
-    });
-    append_tool_artifact(&self.artifact_dir, artifact_n, "tool_call", &value);
-}
-```
-
-When `dispatch_plan` later fires, `write_tool_call_artifact` appends the actual dispatch
-record (with `tool_call_id`, `request_id`, etc.) as a second entry in the same array.
-This keeps the array append-only and shows the full lifecycle: `queued → dispatched`.
-
-**Note**: `artifact_index_for_plan` in `enqueue_plan` must be called carefully — it calls
-`next_tool_artifact_n()` as a fallback when no request file is found yet. Cache the
-chosen `artifact_n` per `(llm_request_id, plan_step_id)` to avoid double-incrementing the
-counter. Add a `queued_artifact_index: HashMap<String, u32>` to `ActConsumer` keyed by
-`plan_step_id` or `action_id`.
-
-### Acceptance criteria
-- Immediately after a `LoopPlanned` event, the corresponding `{n}_tool_call.json` contains
-  at least one entry with `status: "queued"`.
-- The entry count in `{n}_tool_call.json` equals `valid_action_count` in
-  `{n}_response.json` once all `LoopPlanned` events are processed.
-- Dispatched entries appear as additional array elements with `tool_call_id` populated.
+| Check                           | Result                                                                           |
+|---------------------------------+----------------------------------------------------------------------------------|
+| Error spam                      | **0** ✅                                                                         |
+| Verify races                    | **0** ✅                                                                         |
+| LTR fix                         | **✅ confirmed working** — LTR appears in router prompts from call #005 onward   |
+| Gate blocking                   | **✅ confirmed working** — BLOCKED events show correct pending_tool_call_ids     |
+| LTR in tlog route_selected      | **❌ not logged** — route_selected payload has no ltr_present field              |
+| Gate override visible in tlog   | **❌ not logged** — gate_note not in route_selected payload                      |
+| Gate forcing execute over shape | **❌ BUG** — gate overrides LLM's shape recommendation when has_queued_plan=true |
 
 ---
 
-## Issue 2 — Pending tool result remains open
+## Bug — Gate forces Execute even when last action failed
 
-### Root cause
+**What the LLM log shows (calls #006 and #007):**
 
-`reconcile_stale_pending_artifacts` is called exactly once: inside `set_emitter`, which
-runs at startup. If the process terminates after writing a `pending` artifact but before
-finalizing it (crash, SIGKILL), the artifact stays pending until the next process starts.
+```
+#005  router  LTR=REAL(success)  → route=execute  ← mkdir succeeded
+#006  router  LTR=REAL(failure)  → LLM says shape  ← cargo new failed (status=101)
+       ↑ tlog shows approved_route=execute         ← gate OVERRODE to execute!
+#007  router  LTR=REAL(failure)  → LLM says shape  ← LLM still says replan
+       ↑ tlog shows approved_route=execute         ← gate OVERRODE again!
+```
 
-Additionally, `set_emitter` is called before the emitter is stored, so the reconciliation
-path that emits `ToolResult` / `LoopActed` fires correctly only if the emitter is set
-before the call — verify the ordering in `set_emitter`.
+After cargo new fails with "destination already exists", the router LLM correctly diagnoses the problem and returns `route=shape` (to trigger replanning). But the gate overrides this to `execute`, dispatching the NEXT planned action (cargo build), which compiles canon-runtime and restarts the runtime. On restart the same plan is generated and the cycle repeats.
 
-File: `canon-utils/canon-act/src/lib.rs`
-
-### Fix — periodic reconciliation on Tick
-
-1. **Also call `reconcile_stale_pending_artifacts` on `Tick`** events so any pending
-   records created mid-run (e.g., if a capability handler thread panics without completing)
-   are caught without waiting for the next restart:
+**Root cause in `canon-judgment/src/lib.rs` line 118:**
 
 ```rust
-CanonEvent::Tick(_) => {
-    self.check_timeout();
-    self.reconcile_stale_pending_artifacts(); // add this
+// CURRENT — fires unconditionally when any plan actions remain:
+if signals.has_queued_plan && lane != RouteKind::Execute {
+    lane = RouteKind::Execute;
+    changed = true;
+    notes.push("queued plan requires execute");
 }
 ```
 
-   Use a rate-limiter inside `reconcile_stale_pending_artifacts` (e.g., skip if called
-   within the last 10 seconds) to avoid per-tick filesystem scans:
+`has_queued_plan = planned_pending > 0`. After cargo new fails, `planned_pending=3` (cargo build, write_file, done still queued). So the gate forces execute, skipping the LLM's correct shape recommendation.
 
-```rust
-// Add field: last_reconcile: Option<Instant>
-// In reconcile_stale_pending_artifacts:
-if self.last_reconcile.map_or(false, |t| t.elapsed() < Duration::from_secs(10)) {
-    return;
-}
-self.last_reconcile = Some(Instant::now());
-```
-
-2. **Reduce crash-recovery window**: lower the default `CANON_TOOL_PENDING_TIMEOUT_MS`
-   from 30 000 ms to 10 000 ms (10 s). Long-running commands can still override via the
-   env var; 10 s catches crashed dispatch entries promptly.
-
-3. **Verify `set_emitter` order**: confirm `self.emitter = Some(emitter)` is assigned
-   *before* `self.reconcile_stale_pending_artifacts()` is called; otherwise the emitter
-   field is still `None` during the reconcile pass and the synthetic `ToolResult` /
-   `LoopActed` events are silently dropped.
-
-### Acceptance criteria
-- A `pending` entry written at time T transitions to `failed` (with `finalized_ms`) within
-  `CANON_TOOL_PENDING_TIMEOUT_MS` even without a process restart.
-- No `pending` entry survives beyond `CANON_TOOL_PENDING_TIMEOUT_MS` + 10 s under normal
-  runtime conditions.
-- After crash-restart, previously-pending entries are reconciled on the first Tick cycle
-  that runs `reconcile_stale_pending_artifacts`.
+**Why the gate exists**: Designed to prevent the LLM from routing to scan/shape/validate while queued work remains unexecuted. Correct in the happy path. Wrong when a step fails and the remaining plan is invalid.
 
 ---
 
-## Issue 3 — Destructive command dispatched without guardrail
+## Fix
 
-### Root cause
+### Part 1 — Add `last_action_failed` signal to canon-judgment
 
-`dispatch_plan` for `run_command` forwards the `cmd` string directly to the `bash`
-capability without inspecting it. The LLM planner can emit any shell command, including
-`rm -rf <path>`, and it will execute immediately.
+**File: `canon-utils/canon-judgment/src/lib.rs`**
 
-File: `canon-utils/canon-act/src/lib.rs`
-
-### Fix — policy gate in `dispatch_plan`
-
-Add a `destructive_cmd_policy` field to `ActConsumer` (read once at construction from
-`CANON_DESTRUCTIVE_CMD_POLICY` env var; values: `"allow"` | `"warn"` | `"block"`; default
-`"warn"`).
-
-Add `is_potentially_destructive(cmd: &str) -> bool`:
+**Add field to `RuntimeSignals`:**
 
 ```rust
-fn is_potentially_destructive(cmd: &str) -> bool {
-    let trimmed = cmd.trim();
-    // Recursive/force deletion
-    if trimmed.contains("rm -rf") || trimmed.contains("rm -fr")
-        || trimmed.contains("rm -r ") || trimmed.contains("rm -f ")
-    {
-        return true;
-    }
-    // Hard git resets
-    if trimmed.contains("git reset --hard") || trimmed.contains("git clean -f") {
-        return true;
-    }
-    // Disk-level writes
-    if trimmed.starts_with("dd ") || trimmed.starts_with("mkfs") || trimmed.starts_with("shred ") {
-        return true;
-    }
-    false
+// BEFORE:
+pub struct RuntimeSignals {
+    pub context_ready: bool,
+    pub has_queued_plan: bool,
+    pub workspace_dirty: bool,
+    pub performed_recently: bool,
+    pub finish_ready: bool,
+}
+
+// AFTER:
+pub struct RuntimeSignals {
+    pub context_ready: bool,
+    pub has_queued_plan: bool,
+    pub workspace_dirty: bool,
+    pub performed_recently: bool,
+    pub finish_ready: bool,
+    pub last_action_failed: bool,  // ← ADD: true when last LoopActed.success=false
 }
 ```
 
-Inside `dispatch_plan` for `"run_command"`, before emitting `ToolCall`:
+**Modify gate rule to exempt failures:**
 
 ```rust
-if is_potentially_destructive(cmd) {
-    match self.destructive_cmd_policy.as_str() {
-        "block" => {
-            self.emit_missing_args(planned, "rejected_destructive_command");
-            return;
-        }
-        "warn" => {
-            // Emit structured warning event but still execute
-            if let Some(emitter) = self.emitter.as_ref() {
-                emitter.emit(CanonEvent::Debug(canon_event::DebugEvent {
-                    source: "act_consumer".to_string(),
-                    kind: "destructive_command_warning".to_string(),
-                    payload: serde_json::json!({
-                        "cmd": cmd,
-                        "policy": "warn",
-                        "action_id": planned.action_id,
-                    }),
-                }));
-            }
-        }
-        _ => {} // "allow" — pass through silently
+// BEFORE (line 118):
+if signals.has_queued_plan && lane != RouteKind::Execute {
+    lane = RouteKind::Execute;
+    changed = true;
+    notes.push("queued plan requires execute");
+}
+
+// AFTER:
+if signals.has_queued_plan && lane != RouteKind::Execute && !signals.last_action_failed {
+    lane = RouteKind::Execute;
+    changed = true;
+    notes.push("queued plan requires execute");
+}
+```
+
+When `last_action_failed=true`, the gate does NOT force execute, allowing the LLM's shape recommendation to pass through.
+
+---
+
+### Part 2 — Track last_action_failed in RouteRuntimeState
+
+**File: `canon-utils/canon-runtime/src/bin/event_runtime.rs`**
+
+**Add field to `RouteRuntimeState` struct (after `last_action_kind`):**
+
+```rust
+// BEFORE:
+last_action_kind: String,
+
+// AFTER:
+last_action_kind: String,
+last_action_failed: bool,
+```
+
+**Set it in `update_route_runtime_state`, `LoopActed` arm (after the existing `last_action_kind` assignment):**
+
+```rust
+// BEFORE:
+route_state.last_action_kind = action_kind.clone();
+
+// AFTER:
+route_state.last_action_kind = action_kind.clone();
+route_state.last_action_failed = !success;
+```
+
+**Expose it in `signals()` method:**
+
+```rust
+// BEFORE:
+fn signals(&self) -> RuntimeSignals {
+    RuntimeSignals {
+        context_ready: self.context_ready,
+        has_queued_plan: self.planned_pending > 0,
+        workspace_dirty: self.workspace_dirty,
+        performed_recently: self.acted_unverified,
+        finish_ready: self.finish_ready,
+    }
+}
+
+// AFTER:
+fn signals(&self) -> RuntimeSignals {
+    RuntimeSignals {
+        context_ready: self.context_ready,
+        has_queued_plan: self.planned_pending > 0,
+        workspace_dirty: self.workspace_dirty,
+        performed_recently: self.acted_unverified,
+        finish_ready: self.finish_ready,
+        last_action_failed: self.last_action_failed,
     }
 }
 ```
 
-**Default policy** should be `"warn"` to avoid breaking existing usage while making
-destructive commands visible. Set `CANON_DESTRUCTIVE_CMD_POLICY=block` in environments
-where data loss risk is not acceptable.
-
-### Acceptance criteria
-- With `CANON_DESTRUCTIVE_CMD_POLICY=block`: a planned `rm -rf` action emits `LoopActed`
-  with `success=false` and `stderr="rejected_destructive_command"` without any filesystem
-  side effect.
-- With `CANON_DESTRUCTIVE_CMD_POLICY=warn` (default): a `destructive_command_warning`
-  debug event appears in the tlog before the command executes.
-- With `CANON_DESTRUCTIVE_CMD_POLICY=allow`: no change in behavior (full pass-through).
+**Clear it on next successful action (same LoopActed arm, `last_action_failed = !success` handles this already** — when `success=true`, `!success=false`).
 
 ---
 
-## Issue 4 — No batch-complete marker
+### Part 3 — Add debug fields to route_selected event (yes, emit debug events)
 
-### Root cause
+**File: `canon-utils/canon-runtime/src/bin/event_runtime.rs`**
 
-Artifacts are per-action (`{n}_tool_call.json`, `{n}_tool_results.json`) but there is no
-file that records the lifecycle of the full planner-response batch: how many actions were
-planned, how many dispatched, how many completed.
-
-A snapshot taken mid-execution looks identical to a snapshot of a partial/failed batch.
-
-File: `canon-utils/canon-act/src/lib.rs`
-
-### Fix — per-batch status tracker + `{n}_batch_status.json`
-
-Add a `batch_tracker: HashMap<String, BatchStatus>` to `ActConsumer` keyed by
-`llm_request_id`.
+In `handle_control_msg`, where `route_selected` is emitted (around line 603–616), add `ltr_present`, `gate_changed`, `gate_note`:
 
 ```rust
-#[derive(Default)]
-struct BatchStatus {
-    artifact_n: u32,
-    planned: usize,
-    dispatched: usize,
-    completed_ok: usize,
-    completed_fail: usize,
-}
+// BEFORE:
+runtime.emit_debug_event(
+    "supervisor".to_string(),
+    "route_selected".to_string(),
+    serde_json::json!({
+        "tick": route_state.scheduler_tick,
+        "suggested_route": selection.route.as_str(),
+        "approved_route": lane,
+        "rationale": selection.rationale,
+        "confidence": selection.confidence,
+        "changed": gate.changed,
+        "note": gate.note,
+        "prompt": prompt,
+    }),
+)?;
+
+// AFTER:
+runtime.emit_debug_event(
+    "supervisor".to_string(),
+    "route_selected".to_string(),
+    serde_json::json!({
+        "tick": route_state.scheduler_tick,
+        "suggested_route": selection.route.as_str(),
+        "approved_route": lane,
+        "rationale": selection.rationale,
+        "confidence": selection.confidence,
+        "changed": gate.changed,
+        "note": gate.note,
+        "ltr_present": route_state.latest_tool_result.is_some(),
+        "last_action_failed": route_state.last_action_failed,
+        "prompt": prompt,
+    }),
+)?;
 ```
 
-**On `enqueue_plan`**: if this is the first action for a given `llm_request_id`, insert a
-new `BatchStatus` with the resolved `artifact_n`. Increment `planned`. Call
-`write_batch_status_artifact(artifact_n, &status, "in_progress")`.
-
-**On `dispatch_plan`** (for non-no_op/done actions): increment `dispatched`. Call
-`write_batch_status_artifact`.
-
-**On `handle_completed` / `handle_failed`**: look up the `llm_request_id` from the
-completed `PendingAct`, increment the appropriate counter. When
-`completed_ok + completed_fail == planned`, write final `{n}_batch_status.json` with
-`status: "completed"` (all ok) or `status: "failed_partial"` (some failed).
-
-Artifact schema (`{n}_batch_status.json`):
-```json
-{
-  "n": 0,
-  "llm_request_id": "...",
-  "status": "in_progress | completed | failed_partial",
-  "planned": 4,
-  "dispatched": 3,
-  "completed_ok": 3,
-  "completed_fail": 0,
-  "updated_ms": 1773983027598
-}
-```
-
-Note: `done` and `no_op` action kinds contribute to `planned` and `completed_ok` counts
-but are handled inline (no async pending), so they should be counted immediately upon
-`dispatch_plan` returning without setting `self.pending`.
-
-### Acceptance criteria
-- A `{n}_batch_status.json` exists for every LLM response index `n` that produced at
-  least one `LoopPlanned` event.
-- `status` transitions from `"in_progress"` to `"completed"` or `"failed_partial"` once
-  `completed_ok + completed_fail == planned`.
-- External observers can determine batch health from a single file read without inspecting
-  `{n}_tool_results.json`.
+This makes LTR presence and gate overrides visible directly in the tlog without needing to read LLM log files.
 
 ---
 
-## Implementation Order
+## File change summary
 
-Execute in this order to minimise regressions:
+| File | Change |
+|---|---|
+| `canon-utils/canon-judgment/src/lib.rs` | (1) Add `last_action_failed: bool` to `RuntimeSignals`. (2) Add `&& !signals.last_action_failed` to the `has_queued_plan → Execute` gate rule. |
+| `canon-utils/canon-runtime/src/bin/event_runtime.rs` | (1) Add `last_action_failed: bool` to `RouteRuntimeState`. (2) Set `route_state.last_action_failed = !success` in `LoopActed` arm of `update_route_runtime_state`. (3) Add `last_action_failed: self.last_action_failed` in `signals()`. (4) Add `ltr_present` and `last_action_failed` to `route_selected` event payload. |
 
-1. **Issue 2** (pending reconciliation on Tick) — lowest risk, isolated to startup + Tick
-   handler. Test: kill the process mid-run, restart, verify pending → failed transition.
+---
 
-2. **Issue 1** (queued artifact at enqueue time) — requires adding `queued_artifact_index`
-   cache. Test: compare `valid_action_count` in `_response.json` with entry count in
-   `_tool_call.json` immediately after LoopPlanned events land.
+## Invariants to preserve
 
-3. **Issue 4** (batch-complete marker) — depends on the `queued_artifact_index` cache from
-   Issue 1. Test: verify `{n}_batch_status.json` shows `status=completed` once all results
-   land.
+- When `last_action_failed=true` and LLM says shape: gate passes shape through (allows replanning).
+- When `last_action_failed=true` and LLM says execute: gate still passes execute (LLM may choose to continue despite failure — gate does not block it).
+- When `last_action_failed=false` and `has_queued_plan=true`: gate still forces execute as before (existing behavior unchanged in the happy path).
+- `last_action_failed` is cleared automatically on the next successful action (`!success = false`), so a recovered plan resumes normal forced-execute behavior.
+- Do NOT change `error_logger.rs`, `canon-verify/src/lib.rs`, `dispatch_next_in_active_batch` removal, or the LTR clear-on-ToolCall fix — all confirmed working.
 
-4. **Issue 3** (destructive command guardrail) — isolated to `dispatch_plan`. Test with
-   `CANON_DESTRUCTIVE_CMD_POLICY=block`, emit a goal that produces `rm -rf`, verify no
-   deletion occurs and `LoopActed.success=false` is emitted.
+---
 
-## Files to Modify
+---
 
-| File                               | Issues     |
-|------------------------------------+------------|
-| `canon-utils/canon-act/src/lib.rs` | 1, 2, 3, 4 |
+## Bug — route_selected=execute is silently dropped, causing multi-tick delay before tool dispatch
 
-No other files require changes for these fixes. The `llm_executor.rs` and
-`event_runtime.rs` changes from the previous REPAIR_PLAN remain valid and are not
-superseded.
+**Root cause in `canon-runtime/src/bus.rs`:**
 
-## Out of Scope
+`ActConsumer` uses `EventFilter::All` — it receives ALL events including 40,000+ `CanonEvent::Code` (rustc) events per session. Its consumer channel is `bounded(1024)`. The channel fills with rustc events. When `route_selected=execute` (`CanonEvent::Debug`) is dispatched via `try_send`, the channel has no room and the signal is **silently dropped**.
 
-- Multi-process locking for artifact files (currently fine; single W writer).
-- Parser `parse_ok` flag promotion for multi-block outputs (addressed in prior plan).
-- Route oscillation guard (addressed in prior plan).
+Result: the router fires `route_selected=execute` 2–3 times before ActConsumer ever sees it. When the signal finally gets through, the tool runs and completes quickly. From the LLM's perspective: multiple execute choices → tool result appears "immediately" with no gate-blocking wait in between. This is the "immediate system response" behavior the user observes.
+
+**Evidence from LLM logs (current session):**
+```
+#004  execute  ltr=(none)   ← router fires, signal dropped
+#005  execute  ltr=(none)   ← router fires again, signal dropped
+#006  execute  ltr=(none)   ← signal finally delivered → mkdir dispatched
+#007  execute  ltr=REAL     ← mkdir done, gate unblocked, LTR=Some
+```
+
+**The `is_control_event` check** determines reliable vs try_send delivery:
+```rust
+// current — missing CanonEvent::Debug:
+fn is_control_event(event: &CanonEvent) -> bool {
+    matches!(event,
+        CanonEvent::Tick(_) | CanonEvent::LoopPlanned(_) | CanonEvent::LoopActed(_) | ...
+        // Debug is NOT here → try_send → drops when ActConsumer channel is full
+    )
+}
+```
+
+**Also**: all 43+ `route_selected` events that were missing from the tlog (only 11 visible) are because the **tlog writer's consumer channel** also drops them via the same try_send path.
+
+### Fix — Add `CanonEvent::Debug` to `is_control_event`
+
+**File: `canon-utils/canon-runtime/src/bus.rs`**
+
+```rust
+// BEFORE:
+fn is_control_event(event: &CanonEvent) -> bool {
+    matches!(
+        event,
+        CanonEvent::Tick(_)
+            | CanonEvent::PromptLoaded(_)
+            | CanonEvent::CapabilityRequested(_)
+            | CanonEvent::CapabilityCompleted(_)
+            | CanonEvent::CapabilityFailed(_)
+            | CanonEvent::LoopObserved(_)
+            | CanonEvent::LoopPlanned(_)
+            | CanonEvent::LoopActed(_)
+            | CanonEvent::LoopVerified(_)
+            | CanonEvent::LoopRewarded(_)
+    )
+}
+
+// AFTER:
+fn is_control_event(event: &CanonEvent) -> bool {
+    matches!(
+        event,
+        CanonEvent::Tick(_)
+            | CanonEvent::PromptLoaded(_)
+            | CanonEvent::CapabilityRequested(_)
+            | CanonEvent::CapabilityCompleted(_)
+            | CanonEvent::CapabilityFailed(_)
+            | CanonEvent::LoopObserved(_)
+            | CanonEvent::LoopPlanned(_)
+            | CanonEvent::LoopActed(_)
+            | CanonEvent::LoopVerified(_)
+            | CanonEvent::LoopRewarded(_)
+            | CanonEvent::Debug(_)  // route_selected must reach ActConsumer reliably
+    )
+}
+```
+
+**Why this is safe**: `Debug` events are infrequent (~500/session vs 40,000+ `Code` events). Blocking delivery is fine — all consumers handle Debug events quickly (error_logger ignores them, verify_consumer only inspects `route_selected`, ActConsumer does a simple lane string check). This also fixes the missing `route_selected` events in the tlog.
+
+**Note**: `CanonEvent::ToolCall` and `CanonEvent::ToolResult` do NOT need to be added here — they travel from ActConsumer to event_runtime via the tlog reader (durable, reliable path), not via the event bus consumer channels.
+
+**File change summary addition:**
+
+| File | Change |
+|---|---|
+| `canon-utils/canon-runtime/src/bus.rs` | Add `CanonEvent::Debug(_)` to `is_control_event` so route_selected events use blocking send instead of try_send. |
+
+---
+
+## What this does NOT fix
+
+- The plan always starts with `cargo new` even though the directory exists. After this fix, the router will route to shape on failure, the planner will be called again, and the planner's prompt includes the LTR (the failure stderr). The planner prompt already says "If a target directory already exists, prefer `cargo init --bin <dir>`" — with the failure LTR now reaching the planner, it should generate the correct plan.
+- LLM timeout at calls #041 and #042 — this is a transient LLM bridge connectivity issue, not a routing logic bug. The heuristic fallback handles it by routing to validate or scan.
