@@ -37,16 +37,18 @@ pub fn write_llm_reports_from_tlog(tlog_path: &Path, reports_root: &Path) -> any
     for event in events {
         let AnyEvent::Canon(canon) = event else { continue };
 
-        match canon.kind.as_str() {
-            "request_dispatch" if canon.source == "llm_executor" => {
-                if let Some(id) = canon.payload.get("request_id").and_then(|v| v.as_str()) {
+        let kind = canon.payload.kind_str();
+        let Some(payload) = canon.payload.as_value() else { continue };
+        match kind {
+            "request_dispatch" if canon.meta.source == "llm_executor" => {
+                if let Some(id) = payload.get("request_id").and_then(|v| v.as_str()) {
                     let entry = by_id.entry(id.to_string()).or_insert_with(|| LlmRecord { request_id: id.to_string(), ..Default::default() });
-                    entry.endpoint = canon.payload.get("endpoint").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    entry.url = canon.payload.get("url").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    entry.endpoint = payload.get("endpoint").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    entry.url = payload.get("url").and_then(|v| v.as_str()).map(|s| s.to_string());
                 }
             }
             "capability_completed" => {
-                if let Ok(done) = serde_json::from_value::<CapabilityCompletedOwned>(canon.payload.clone()) {
+                if let Ok(done) = serde_json::from_value::<CapabilityCompletedOwned>(payload.clone()) {
                     if done.capability == "llm.call" {
                         let entry = by_id.entry(done.request_id.clone()).or_insert_with(|| LlmRecord { request_id: done.request_id.clone(), ..Default::default() });
                         if let CapabilityResult::Llm(res) = done.result {
@@ -56,7 +58,7 @@ pub fn write_llm_reports_from_tlog(tlog_path: &Path, reports_root: &Path) -> any
                 }
             }
             "capability_failed" => {
-                if let Ok(failed) = serde_json::from_value::<CapabilityFailedOwned>(canon.payload.clone()) {
+                if let Ok(failed) = serde_json::from_value::<CapabilityFailedOwned>(payload.clone()) {
                     if failed.capability == "llm.call" {
                         let entry = by_id.entry(failed.request_id.clone()).or_insert_with(|| LlmRecord { request_id: failed.request_id.clone(), ..Default::default() });
                         entry.error = Some(failed.error);

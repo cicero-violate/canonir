@@ -695,10 +695,10 @@ fn find_last_runtime_started_payload(tlog_path: &Path) -> Option<serde_json::Val
         let AnyEvent::Canon(canon) = event else {
             return None;
         };
-        if canon.kind != "runtime_started" {
+        if canon.payload.kind_str() != "runtime_started" {
             return None;
         }
-        Some(canon.payload)
+        canon.payload.as_value()
     })
 }
 

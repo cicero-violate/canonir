@@ -12,6 +12,20 @@ Phase 6 — 🔴 not started  (update external tools)
 Phase 7 — 🔴 not started  (compile-time guard; verify)
 ```
 
+## Micro-Plan Breakdown (one Codex turn each)
+
+Phases 3–7 are split into focused single-turn plans. Start each only after the previous exits 0.
+
+| Plan file | Status | Scope | Key change |
+|-----------|--------|-------|------------|
+| `implementation_plan_h1b_projector_fix.md` | 🔴 **START HERE — BLOCKING** | `wire.rs` + 2 projectors + `lib.rs` | Add `kind_str()`/`as_value()` to CanonPayload; fix `canon.kind`/`canon.ts`/`payload.get()` in projectors; add missing variants |
+| `implementation_plan_h1_tlog_writer.md` | 🔴 | `canon-runtime-events` only | Add `write_canon_event_auto` + `BinarySegmentWriter::write_canon_event` alongside existing write fns |
+| `implementation_plan_h2_append_switch.md` | 🔴 | `canon-runtime/src/lib.rs` only | `append_runtime_event` stops wrapping CanonEvent in TlogEvent — writes wire directly |
+| `implementation_plan_h3_process_events_reader.md` | 🔴 | `canon-runtime/src/lib.rs` only | `process_events` decodes CanonEvent typed match; fallback for old TlogEvent records |
+| `implementation_plan_h4_macro_collapse.md` | 🔴 | `canon-meta/src/lib.rs` only | Form 1 macro produces CanonEvent instead of TlogEvent + data/meta nesting |
+| `implementation_plan_h5_cleanup.md` | 🔴 | `canon-runtime-events` + `lib.rs` | Deprecate old write path; fix any remaining callers |
+| `implementation_plan_h6_tlogevent_removal.md` | 🔴 | `canon-runtime-events` + readers | Delete TlogEvent write path; upgrade scan_tlog_for_goal to typed decode |
+
 **Confirmed 2026-03-21:**
 - `cargo check --workspace` — zero errors
 - IDE diagnostic `unresolved import canon_event::CanonEvent` in `async_bus.rs` is **stale** — the file

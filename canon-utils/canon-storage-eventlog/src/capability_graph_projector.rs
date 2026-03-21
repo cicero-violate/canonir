@@ -33,14 +33,15 @@ pub fn replay_capability_graph_from_tlog(tlog_path: &Path) -> anyhow::Result<Cap
     let mut start_times: HashMap<String, u64> = HashMap::new();
     for event in &events {
         let AnyEvent::Canon(canon) = event else { continue };
-        let payload = &canon.payload;
-        match canon.kind.as_str() {
+        let kind = canon.payload.kind_str();
+        let Some(payload) = canon.payload.as_value() else { continue };
+        match kind {
             "capability_requested" => {
                 let id = payload.get("request_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 if !id.is_empty() {
-                    start_times.insert(id.clone(), canon.ts);
+                    start_times.insert(id.clone(), canon.meta.ts);
                     state.nodes.insert(id.clone(), CapabilityOpNode { capability_id: id, name, node_id, status: "pending".to_string(), duration_ms: None, result: None });
                 }
             }
@@ -49,7 +50,7 @@ pub fn replay_capability_graph_from_tlog(tlog_path: &Path) -> anyhow::Result<Cap
                 if let Some(node) = state.nodes.get_mut(&id) {
                     node.status = "completed".to_string();
                     if let Some(start) = start_times.get(&id) {
-                        node.duration_ms = Some(canon.ts.saturating_sub(*start));
+                        node.duration_ms = Some(canon.meta.ts.saturating_sub(*start));
                     }
                 }
             }
@@ -64,7 +65,6 @@ pub fn replay_capability_graph_from_tlog(tlog_path: &Path) -> anyhow::Result<Cap
                 let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let kind = payload.get("kind").and_then(|v| v.as_str()).unwrap_or("tool").to_string();
                 if !req_id.is_empty() {
-                    // tool_call is a child edge from the parent capability (node_id's capability)
                     state.edges.push(CapabilityOpEdge { from: node_id, to: req_id.clone(), kind: "tool_call".to_string() });
                     state.nodes.entry(req_id.clone()).or_insert_with(|| CapabilityOpNode {
                         capability_id: req_id,
@@ -85,7 +85,7 @@ pub fn replay_capability_graph_from_tlog(tlog_path: &Path) -> anyhow::Result<Cap
                         node.status = if success { "completed" } else { "failed" }.to_string();
                         node.result = output;
                         if let Some(start) = start_times.get(&req_id) {
-                            node.duration_ms = Some(canon.ts.saturating_sub(*start));
+                            node.duration_ms = Some(canon.meta.ts.saturating_sub(*start));
                         }
                     }
                 }

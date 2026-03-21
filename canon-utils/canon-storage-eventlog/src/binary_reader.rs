@@ -1,5 +1,5 @@
 use anyhow::Result;
-use canon_event::TlogEvent;
+use canon_event::CanonEvent;
 use std::fs;
 use std::path::Path;
 //
@@ -13,7 +13,7 @@ fn read_u64(buf: &[u8]) -> u64 {
     u64::from_le_bytes([buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]])
 }
 
-pub fn read_binary_events(path: &Path) -> Result<Vec<TlogEvent>> {
+pub fn read_binary_events(path: &Path) -> Result<Vec<CanonEvent>> {
     let bytes = fs::read(path)?;
     // Legacy binary segment — skip silently.
     if is_binary_magic(&bytes) {
@@ -26,7 +26,7 @@ pub fn read_binary_events(path: &Path) -> Result<Vec<TlogEvent>> {
         if trimmed.is_empty() {
             continue;
         }
-        match serde_json::from_str::<TlogEvent>(trimmed) {
+        match serde_json::from_str::<CanonEvent>(trimmed) {
             Ok(e) => events.push(e),
             Err(_) => continue,
         }
@@ -38,7 +38,7 @@ pub fn is_binary_magic(bytes: &[u8]) -> bool {
     bytes.len() >= 4 && read_u32(&bytes[0..4]) == MAGIC
 }
 
-pub fn read_binary_events_from_segment_with_start_seq(log_path: &Path, start_seq: u64) -> Result<Vec<TlogEvent>> {
+pub fn read_binary_events_from_segment_with_start_seq(log_path: &Path, start_seq: u64) -> Result<Vec<CanonEvent>> {
     let idx_path = log_path.with_extension("idx");
     let mut start_pos = 0u64;
     if idx_path.exists() {
@@ -69,7 +69,7 @@ pub fn read_binary_events_from_segment_with_start_seq(log_path: &Path, start_seq
         if trimmed.is_empty() {
             continue;
         }
-        match serde_json::from_str::<TlogEvent>(trimmed) {
+        match serde_json::from_str::<CanonEvent>(trimmed) {
             Ok(e) => events.push(e),
             Err(_) => continue,
         }

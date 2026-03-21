@@ -80,16 +80,17 @@ macro_rules! canon_emit {
     }};
     // Direct form: writes directly to tlog path (external processes only)
     ($source:expr, $kind:expr, $payload:expr, $path:expr) => {{
-        let __wrapped = serde_json::json!({
-            "meta": {
-                "file": file!(),
-                "line": line!(),
-                "module": module_path!(),
-                "crate_name": env!("CARGO_PKG_NAME"),
+        let __meta = canon_event::EventMeta {
+            ts: {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
             },
-            "data": $payload,
-        });
-        let __event = canon_event::TlogEvent::new($source, $kind, __wrapped);
-        canon_event::write_event_auto($path, &__event)
+            source: $source.to_string(),
+            file: file!().to_string(),
+            line: line!(),
+        };
+        let __payload = canon_event::CanonPayload::from_kind($kind, serde_json::to_value($payload).unwrap_or_default());
+        let __wire = canon_event::CanonEvent { event_id: None, meta: __meta, payload: __payload };
+        canon_event::write_canon_event_auto($path, &__wire)
     }};
 }

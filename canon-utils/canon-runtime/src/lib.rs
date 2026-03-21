@@ -5,12 +5,12 @@ pub mod consumers;
 
 use bus::EventBus;
 use canon_event::{
-    new_error_occurred, AnalysisEvent, AnalysisRun, AnalysisWorkspace, CapabilityCompleted, CapabilityFailed, Code, DebugEvent, ErrorOccurred, EventConsumer, EventDelta, EventEmitter,
+    new_error_occurred, AnalysisEvent, AnalysisRun, AnalysisWorkspace, CanonPayload, CapabilityCompleted, CapabilityFailed, Code, DebugEvent, ErrorOccurred, EventConsumer, EventDelta, EventEmitter,
     EventEmitterHandle, PromptLoaded, RuntimeEvent, RuntimeStateUpdated, RustcEvent, RustcState, Tick,
 };
-use canon_event::{BinarySegmentWriter, TlogEvent};
+use canon_event::BinarySegmentWriter;
 use canon_event::{EdgeDefined, EdgeRemoved, FileSeen, NodeDefined, NodeRemoved, NodeUpdated};
-use canon_event_store::{extract_edit_event, extract_rustc_event, extract_supervisor_event, read_any_events_from_path, AnyEvent};
+use canon_event_store::{extract_edit_event, extract_rustc_event, read_any_events_from_path, AnyEvent};
 use serde::Deserialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -130,64 +130,80 @@ impl EventRuntime {
         let mut processed = 0usize;
         for event in events {
             if let AnyEvent::Canon(canon) = event {
-                let data_payload = canon.payload.get("data").unwrap_or(&canon.payload);
                 if let Some(kernel) = extract_rustc_event(canon) {
                     self.handle_kernel_event(kernel)?;
                     self.drain_emitted_events()?;
                 } else if let Some(edit) = extract_edit_event(canon) {
                     self.handle_runtime_event(RuntimeEvent::Edit(edit))?;
                     self.drain_emitted_events()?;
-                } else if canon.kind == "runtime_state.updated" {
-                    self.handle_runtime_event(RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload: data_payload.clone() }))?;
-                    self.drain_emitted_events()?;
-                } else if let Some(supervisor_event) = extract_supervisor_event(canon) {
-                    if supervisor_event.kind == "workspace.changed" {
-                        let payload = serde_json::json!({
-                            "workspace_dirty": true,
-                            "crate": supervisor_event.payload.get("crate").cloned().unwrap_or(serde_json::Value::Null),
-                            "reason": "workspace_changed",
-                        });
-                        self.handle_runtime_event(RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload }))?;
-                        self.drain_emitted_events()?;
-                    }
-                } else if canon.kind == "crate_compiled" {
-                    // Old-format crate_compiled events (byte_offset/schema) from pre-CompilationUnitFinished
-                    // rustc. Trigger analysis for any crate not already handled via rustc_event.
-                    if let Some(crate_name) = canon.payload.get("crate").and_then(|v| v.as_str()) {
-                        // Skip build scripts and the new duplicate event already paired with
-                        // a CompilationUnitFinished rustc_event above.
-                        if canon.payload.get("byte_offset").is_some() && crate_name != "build_script_build" {
-                            self.handle_runtime_event(RuntimeEvent::Analysis(AnalysisEvent::Run(AnalysisRun {
-                                request_id: format!("analysis-legacy-{}-{}", crate_name, self.tick),
-                                crate_name: crate_name.to_string(),
-                                batch_id: None,
-                            })))?;
+                } else {
+                    match &canon.payload {
+                        CanonPayload::RuntimeStateUpdated(val) => {
+                            self.handle_runtime_event(RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload: val.clone() }))?;
                             self.drain_emitted_events()?;
-                            self.handle_runtime_event(RuntimeEvent::Analysis(AnalysisEvent::Workspace(AnalysisWorkspace { request_id: format!("analysis-workspace-legacy-{}", self.tick) })))?;
+                        }
+                        CanonPayload::PromptLoaded(val) if canon.meta.source != "event-runtime" => {
+                            let data = val.get("data").unwrap_or(val);
+                            self.handle_runtime_event(RuntimeEvent::PromptLoaded(PromptLoaded { payload: data.clone() }))?;
+                            self.drain_emitted_events()?;
+                        }
+                        CanonPayload::CapabilityCompleted(val) if canon.meta.source != "event-runtime" => {
+                            if let Ok(payload_owned) = serde_json::from_value::<CapabilityCompletedOwned>(val.clone()) {
+                                let payload = CapabilityCompleted { request_id: payload_owned.request_id, capability: Box::leak(payload_owned.capability.into_boxed_str()), result: payload_owned.result };
+                                self.handle_runtime_event(RuntimeEvent::CapabilityCompleted(payload))?;
+                                self.drain_emitted_events()?;
+                            }
+                        }
+                        CanonPayload::CapabilityFailed(val) if canon.meta.source != "event-runtime" => {
+                            if let Ok(payload_owned) = serde_json::from_value::<CapabilityFailedOwned>(val.clone()) {
+                                let payload = CapabilityFailed { request_id: payload_owned.request_id, capability: Box::leak(payload_owned.capability.into_boxed_str()), error: payload_owned.error };
+                                self.handle_runtime_event(RuntimeEvent::CapabilityFailed(payload))?;
+                                self.drain_emitted_events()?;
+                            }
+                        }
+                        CanonPayload::ErrorOccurred(val) if canon.meta.source != "event-runtime" => {
+                            if let Ok(payload) = serde_json::from_value::<ErrorOccurred>(val.clone()) {
+                                self.handle_runtime_event(RuntimeEvent::ErrorOccurred(payload))?;
+                                self.drain_emitted_events()?;
+                            }
+                        }
+                        CanonPayload::LoopObserved(ev) => {
+                            self.handle_runtime_event(RuntimeEvent::LoopObserved(ev.clone()))?;
+                            self.drain_emitted_events()?;
+                        }
+                    CanonPayload::LoopPlanned(ev) => {
+                        if let Ok(decoded) = serde_json::from_value::<canon_event::LoopPlanned>(ev.clone()) {
+                            self.handle_runtime_event(RuntimeEvent::LoopPlanned(decoded))?;
                             self.drain_emitted_events()?;
                         }
                     }
-                } else if canon.kind == "prompt_loaded" && canon.source != "event-runtime" {
-                    // Guard mirrors capability_completed: skip W's own re-emission
-                    // (source="event-runtime") to break the write-back feedback loop.
-                    self.handle_runtime_event(RuntimeEvent::PromptLoaded(PromptLoaded { payload: data_payload.clone() }))?;
-                    self.drain_emitted_events()?;
-                } else if canon.kind == "capability_completed" && canon.source != "event-runtime" {
-                    if let Ok(payload_owned) = serde_json::from_value::<CapabilityCompletedOwned>(data_payload.clone()) {
-                        let payload = CapabilityCompleted { request_id: payload_owned.request_id, capability: Box::leak(payload_owned.capability.into_boxed_str()), result: payload_owned.result };
-                        self.handle_runtime_event(RuntimeEvent::CapabilityCompleted(payload))?;
+                    CanonPayload::LoopActed(ev) => {
+                        if let Ok(decoded) = serde_json::from_value::<canon_event::LoopActed>(ev.clone()) {
+                            self.handle_runtime_event(RuntimeEvent::LoopActed(decoded))?;
+                            self.drain_emitted_events()?;
+                        }
+                    }
+                    CanonPayload::LoopVerified(ev) => {
+                        if let Ok(decoded) = serde_json::from_value::<canon_event::LoopVerified>(ev.clone()) {
+                            self.handle_runtime_event(RuntimeEvent::LoopVerified(decoded))?;
+                            self.drain_emitted_events()?;
+                        }
+                    }
+                    CanonPayload::LoopRewarded(ev) => {
+                        if let Ok(decoded) = serde_json::from_value::<canon_event::LoopRewarded>(ev.clone()) {
+                            self.handle_runtime_event(RuntimeEvent::LoopRewarded(decoded))?;
+                            self.drain_emitted_events()?;
+                        }
+                    }
+                    CanonPayload::RouteTick(ev) => {
+                        self.handle_runtime_event(RuntimeEvent::RouteTick(ev.clone()))?;
                         self.drain_emitted_events()?;
                     }
-                } else if canon.kind == "capability_failed" && canon.source != "event-runtime" {
-                    if let Ok(payload_owned) = serde_json::from_value::<CapabilityFailedOwned>(data_payload.clone()) {
-                        let payload = CapabilityFailed { request_id: payload_owned.request_id, capability: Box::leak(payload_owned.capability.into_boxed_str()), error: payload_owned.error };
-                        self.handle_runtime_event(RuntimeEvent::CapabilityFailed(payload))?;
-                        self.drain_emitted_events()?;
-                    }
-                } else if canon.kind == "error_occurred" && canon.source != "event-runtime" {
-                    if let Ok(payload) = serde_json::from_value::<ErrorOccurred>(data_payload.clone()) {
-                        self.handle_runtime_event(RuntimeEvent::ErrorOccurred(payload))?;
-                        self.drain_emitted_events()?;
+                        CanonPayload::RouteSelected(ev) => {
+                            self.handle_runtime_event(RuntimeEvent::RouteSelected(ev.clone()))?;
+                            self.drain_emitted_events()?;
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -325,18 +341,16 @@ impl EventRuntime {
         let Some(path) = self.tlog_path.clone() else {
             return;
         };
-        let Some(wire) = runtime_event_to_wire(event) else {
+        let Some(mut wire) = runtime_event_to_wire(event) else {
             return;
         };
-        let kind = payload_kind(&wire);
-        let mut canon = TlogEvent::new(wire.meta.source.clone(), kind, serde_json::to_value(&wire).unwrap_or_else(|_| serde_json::json!({})));
-        canon.event_id = Some(self.next_id);
+        wire.event_id = Some(self.next_id);
         self.next_id = self.next_id.saturating_add(1);
 
         if is_segment_dir_path(&path) {
             if let Some(writer_arc) = self.tlog_writer.as_ref() {
                 let needs_reopen = if let Ok(w) = writer_arc.lock() {
-                    if w.write_event(&canon).is_err() {
+                    if w.write_canon_event(&wire).is_err() {
                         true
                     } else {
                         false
@@ -348,7 +362,7 @@ impl EventRuntime {
                     if let Ok(fresh) = BinarySegmentWriter::open(&path) {
                         if let Ok(mut w) = writer_arc.lock() {
                             *w = fresh;
-                            let _ = w.write_event(&canon);
+                            let _ = w.write_canon_event(&wire);
                         }
                     }
                 }
@@ -356,35 +370,7 @@ impl EventRuntime {
             return;
         }
 
-        let _ = canon_event::write_event_auto(&path, &canon);
-    }
-}
-
-fn payload_kind(wire: &canon_event::CanonEvent) -> &str {
-    match &wire.payload {
-        canon_event::CanonPayload::LoopObserved(_) => "loop_observed",
-        canon_event::CanonPayload::LoopPlanned(_) => "loop_planned",
-        canon_event::CanonPayload::LoopActed(_) => "loop_acted",
-        canon_event::CanonPayload::LoopVerified(_) => "loop_verified",
-        canon_event::CanonPayload::LoopRewarded(_) => "loop_rewarded",
-        canon_event::CanonPayload::RouteTick(_) => "route_tick",
-        canon_event::CanonPayload::RouteSelected(_) => "route_selected",
-        canon_event::CanonPayload::CapabilityCompleted(_) => "capability_completed",
-        canon_event::CanonPayload::CapabilityFailed(_) => "capability_failed",
-        canon_event::CanonPayload::CapabilityInvoked(_) => "capability_invoked",
-        canon_event::CanonPayload::CapabilityResolved(_) => "capability_resolved",
-        canon_event::CanonPayload::ErrorOccurred(_) => "error_occurred",
-        canon_event::CanonPayload::Debug(_) => "debug",
-        canon_event::CanonPayload::PromptLoaded(_) => "prompt_loaded",
-        canon_event::CanonPayload::RuntimeStateUpdated(_) => "runtime_state.updated",
-        canon_event::CanonPayload::ToolCall(_) => "tool_call",
-        canon_event::CanonPayload::ToolResult(_) => "tool_result",
-        canon_event::CanonPayload::GoalNodeCreated(_) => "goal_node_created",
-        canon_event::CanonPayload::GoalNodeRetracted(_) => "goal_node_retracted",
-        canon_event::CanonPayload::GoalNodeRewritten(_) => "goal_node_rewritten",
-        canon_event::CanonPayload::GoalEdgeDefined(_) => "goal_edge_defined",
-        canon_event::CanonPayload::GoalGraphCheckpointed(_) => "goal_graph_checkpointed",
-        canon_event::CanonPayload::Unknown => "unknown",
+        let _ = canon_event::write_canon_event_auto(&path, &wire);
     }
 }
 

@@ -64,8 +64,10 @@ fn main() -> anyhow::Result<()> {
         let AnyEvent::Canon(canon) = event else {
             continue;
         };
-        if canon.kind == "runtime_started" {
-            if let Some(session) = event_runtime_session(&canon.payload) {
+        let kind = canon.payload.kind_str();
+        let Some(payload) = canon.payload.as_value() else { continue };
+        if kind == "runtime_started" {
+            if let Some(session) = event_runtime_session(&payload) {
                 current_session = Some(session);
             }
         }
@@ -77,17 +79,17 @@ fn main() -> anyhow::Result<()> {
             }
         }
         if let Some(want) = args.kind.as_deref() {
-            if canon.kind != want {
+            if kind != want {
                 continue;
             }
         }
         if let Some(want) = args.trace_id.as_deref() {
-            if event_trace_id(&canon.payload) != Some(want) {
+            if event_trace_id(&payload) != Some(want) {
                 continue;
             }
         }
         if let Some(want) = args.tick {
-            if event_tick(&canon.payload) != Some(want) {
+            if event_tick(&payload) != Some(want) {
                 continue;
             }
         }
@@ -106,10 +108,10 @@ fn main() -> anyhow::Result<()> {
         let out = serde_json::json!({
             "session_id": session_for_event,
             "event_id": canon.event_id,
-            "ts": canon.ts,
-            "source": canon.source,
-            "kind": canon.kind,
-            "payload": canon.payload,
+            "ts": canon.meta.ts,
+            "source": canon.meta.source,
+            "kind": kind,
+            "payload": payload,
         });
         println!("{}", serde_json::to_string(&out)?);
     }

@@ -39,4 +39,4 @@ pub use events::{
 pub use wire::{CanonEvent, CanonPayload, EventMeta};
 pub use macros::emit::canon_emit;
 pub use schema::*;
-pub use tlog::{is_binary_tlog, maybe_rotate, BinarySegmentWriter, BinaryTlogWriter, RotateConfig, SegmentConfig, TlogEvent, TlogWriter};
+pub use tlog::{is_binary_tlog, maybe_rotate, BinarySegmentWriter, RotateConfig, SegmentConfig};

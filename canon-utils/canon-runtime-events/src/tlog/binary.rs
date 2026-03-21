@@ -1,6 +1,6 @@
 use super::event::TlogEvent;
-use anyhow::{anyhow, Result};
-use crc32fast::Hasher;
+use crate::CanonEvent;
+use anyhow::Result;
 use fs2::FileExt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Read, Write};
@@ -9,83 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 const MAGIC: u32 = 0x544C4F47; // "TLOG"
-const VERSION: u16 = 1;
-const HEADER_LEN: u16 = 40;
-
-fn fnv1a_32(value: &str) -> u32 {
-    let mut hash: u32 = 0x811c9dc5;
-    for b in value.as_bytes() {
-        hash ^= *b as u32;
-        hash = hash.wrapping_mul(0x01000193);
-    }
-    hash
-}
 
 fn read_u32(buf: &[u8]) -> u32 {
     u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]])
-}
-
-pub struct BinaryTlogWriter {
-    path: PathBuf,
-    file: Mutex<BufWriter<File>>,
-    seq: AtomicU64,
-    fsync: bool,
-}
-
-impl BinaryTlogWriter {
-    pub fn open(path: &Path) -> Result<Self> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let file = OpenOptions::new().create(true).append(true).read(true).open(path)?;
-        Ok(Self { path: path.to_path_buf(), file: Mutex::new(BufWriter::new(file)), seq: AtomicU64::new(0), fsync: false })
-    }
-
-    pub fn with_fsync(mut self, enabled: bool) -> Self {
-        self.fsync = enabled;
-        self
-    }
-
-    pub fn write_event(&self, event: &TlogEvent) -> Result<()> {
-        let payload = serde_json::to_vec(event)?;
-        let payload_len = payload.len() as u32;
-        let mut hasher = Hasher::new();
-        hasher.update(&payload);
-        let crc32 = hasher.finalize();
-        let seq = self.seq.fetch_add(1, Ordering::Relaxed);
-        let source_id = fnv1a_32(&event.source);
-        let kind_id = fnv1a_32(&event.kind);
-
-        let mut header = Vec::with_capacity(HEADER_LEN as usize);
-        header.extend_from_slice(&MAGIC.to_le_bytes());
-        header.extend_from_slice(&VERSION.to_le_bytes());
-        header.extend_from_slice(&HEADER_LEN.to_le_bytes());
-        header.extend_from_slice(&event.ts.to_le_bytes());
-        header.extend_from_slice(&source_id.to_le_bytes());
-        header.extend_from_slice(&kind_id.to_le_bytes());
-        header.extend_from_slice(&seq.to_le_bytes());
-        header.extend_from_slice(&payload_len.to_le_bytes());
-        header.extend_from_slice(&crc32.to_le_bytes());
-
-        if header.len() != HEADER_LEN as usize {
-            return Err(anyhow!("binary header length mismatch"));
-        }
-
-        let mut guard = self.file.lock().expect("binary tlog writer poisoned");
-        guard.get_ref().lock_exclusive()?;
-        guard.write_all(&header)?;
-        guard.write_all(&payload)?;
-        guard.flush()?;
-        if self.fsync {
-            guard.get_ref().sync_data()?;
-        }
-        guard.get_ref().unlock()?;
-        Ok(())
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
 }
 
 pub fn is_binary_tlog(path: &Path) -> bool {
@@ -171,7 +97,7 @@ impl BinarySegmentWriter {
         self
     }
 
-    pub fn write_event(&self, event: &TlogEvent) -> Result<()> {
+    pub fn write_canon_event(&self, event: &CanonEvent) -> Result<()> {
         let mut line = serde_json::to_vec(event)?;
         line.push(b'\n');
         let line_len = line.len() as u64;
@@ -201,7 +127,7 @@ impl BinarySegmentWriter {
             guard.idx.write_all(&record_pos.to_le_bytes())?;
         }
 
-        let bucket = event.ts / self.config.time_bucket_ms;
+        let bucket = event.meta.ts / self.config.time_bucket_ms;
         if guard.last_time_bucket != Some(bucket) {
             guard.time.write_all(&bucket.to_le_bytes())?;
             guard.time.write_all(&record_pos.to_le_bytes())?;
@@ -218,6 +144,10 @@ impl BinarySegmentWriter {
         }
         guard.log.get_ref().unlock()?;
         Ok(())
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.dir
     }
 }
 

@@ -1,4 +1,4 @@
-use canon_event::{EditEvent, RustcEvent, TlogEvent};
+use canon_event::{CanonEvent, CanonPayload, EditEvent, RustcEvent};
 use std::fs;
 use std::io::{BufRead, Read};
 use std::path::Path;
@@ -7,7 +7,7 @@ use crate::binary_reader::{is_binary_magic, read_binary_events};
 
 #[derive(Debug, Clone)]
 pub enum AnyEvent {
-    Canon(TlogEvent),
+    Canon(CanonEvent),
     Code(RustcEvent),
 }
 
@@ -22,7 +22,7 @@ pub fn parse_any_event(line: &str) -> Option<AnyEvent> {
     if trimmed.is_empty() {
         return None;
     }
-    if let Ok(event) = serde_json::from_str::<TlogEvent>(trimmed) {
+    if let Ok(event) = serde_json::from_str::<CanonEvent>(trimmed) {
         return Some(AnyEvent::Canon(event));
     }
     None
@@ -36,18 +36,20 @@ pub fn parse_edit_event_value(value: &serde_json::Value) -> Option<EditEvent> {
     serde_json::from_value(value.clone()).ok()
 }
 
-pub fn extract_rustc_event(canon: &TlogEvent) -> Option<RustcEvent> {
-    if canon.kind != "rustc_event" {
-        return None;
+pub fn extract_rustc_event(canon: &CanonEvent) -> Option<RustcEvent> {
+    match &canon.payload {
+        CanonPayload::RustcEvent(val) => parse_rustc_event_value(val),
+        CanonPayload::Unknown => None,
+        _ => None,
     }
-    parse_rustc_event_value(&canon.payload)
 }
 
-pub fn extract_edit_event(canon: &TlogEvent) -> Option<EditEvent> {
-    if canon.kind != "edit_event" {
-        return None;
+pub fn extract_edit_event(canon: &CanonEvent) -> Option<EditEvent> {
+    match &canon.payload {
+        CanonPayload::EditEvent(val) => parse_edit_event_value(val),
+        CanonPayload::Unknown => None,
+        _ => None,
     }
-    parse_edit_event_value(&canon.payload)
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -57,11 +59,11 @@ pub struct SupervisorEvent {
     pub payload: serde_json::Value,
 }
 
-pub fn extract_supervisor_event(canon: &TlogEvent) -> Option<SupervisorEvent> {
-    if canon.kind != "supervisor_event" {
-        return None;
+pub fn extract_supervisor_event(canon: &CanonEvent) -> Option<SupervisorEvent> {
+    match &canon.payload {
+        CanonPayload::SupervisorEvent(val) => serde_json::from_value(val.clone()).ok(),
+        _ => None,
     }
-    serde_json::from_value(canon.payload.clone()).ok()
 }
 
 pub fn detect_tlog_format(path: &Path) -> TlogFormat {

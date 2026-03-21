@@ -35,8 +35,9 @@ pub fn replay_goal_graph_incremental(tlog_path: &Path, start_seq: u64, mut state
 
 fn apply_planning_event(event: &AnyEvent, state: &mut GoalGraphState) {
     let AnyEvent::Canon(canon) = event else { return };
-    let payload = &canon.payload;
-    match canon.kind.as_str() {
+    let kind = canon.payload.kind_str();
+    let Some(payload) = canon.payload.as_value() else { return };
+    match kind {
         "goal_node_created" => {
             let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
             if node_id.is_empty() {
@@ -100,8 +101,7 @@ fn apply_planning_event(event: &AnyEvent, state: &mut GoalGraphState) {
         }
         _ => {}
     }
-    // Use ts as a proxy for seq_processed
-    if canon.ts > state.seq_processed {
-        state.seq_processed = canon.ts;
+    if canon.meta.ts > state.seq_processed {
+        state.seq_processed = canon.meta.ts;
     }
 }

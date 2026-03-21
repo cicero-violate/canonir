@@ -1,5 +1,4 @@
-use canon_event::{RuntimeEvent, LoopObserved, Tick};
-use serde_json::Value;
+use canon_event::{CanonEvent, CanonPayload, RuntimeEvent, LoopObserved, Tick};
 use std::path::{Path, PathBuf};
 
 use crate::{context::LoopContext, result::LoopStageResult};
@@ -31,19 +30,17 @@ fn scan_tlog_for_goal(tlog_path: &Path) -> Option<String> {
             Err(_) => continue,
         };
         for line in content.lines() {
-            let Ok(v) = serde_json::from_str::<Value>(line) else {
+            let Ok(ev) = serde_json::from_str::<CanonEvent>(line) else {
                 continue;
             };
-            if v.get("kind").and_then(|k| k.as_str()) != Some("prompt_loaded") {
-                continue;
-            }
-            let payload = v.get("payload").unwrap_or(&Value::Null);
-            let data = payload.get("data").unwrap_or(payload);
-            let is_goal = data.get("path").and_then(|p| p.as_str()).map(|p| p.contains("AGENT_GOAL")).unwrap_or(false)
-                || data.get("prompt_id").and_then(|p| p.as_str()).map(|p| p == "AGENT_GOAL").unwrap_or(false);
-            if is_goal {
-                if let Some(c) = data.get("content").and_then(|c| c.as_str()) {
-                    found = Some(c.to_string());
+            if let CanonPayload::PromptLoaded(val) = ev.payload {
+                let data = val.get("data").unwrap_or(&val);
+                let is_goal = data.get("prompt_id").and_then(|v| v.as_str()) == Some("AGENT_GOAL")
+                    || data.get("path").and_then(|v| v.as_str()).map(|p| p.contains("AGENT_GOAL")).unwrap_or(false);
+                if is_goal {
+                    if let Some(c) = data.get("content").and_then(|v| v.as_str()) {
+                        found = Some(c.to_string());
+                    }
                 }
             }
         }
