@@ -968,42 +968,42 @@ S = min(0.95, 0.90, 0.75, 1.0) = 0.75
 
 ## Files Created / Modified / Deleted
 
-| Phase | Status | File | Action |
-|-------|--------|------|--------|
-| 1 | ✅ | `canon-exec/Cargo.toml` | Created |
-| 1 | ✅ | `canon-exec/src/lib.rs` | Created |
-| 1 | ✅ | `canon-exec/src/exec/mod.rs` | Created: ExecutableEvent, Executable trait, ExecutionContext, ExecutionResult, TryFrom |
-| 1 | ✅ | `Cargo.toml` (workspace) | canon-exec member added |
-| 2 | ✅ | `canon-exec/src/exec/edit.rs` | Created: EditEvent::execute() — pass-through re-emit |
-| 2 | ✅ | `canon-exec/src/exec/cargo.rs` | Created: CargoEvent::execute() — inlined subprocess |
-| 2 | ✅ | `canon-exec/src/exec/file.rs` | Created: FileEvent::execute() — std::fs |
-| 2 | ✅ | `canon-exec/src/exec/bash.rs` | Created: BashInvoke::execute() — std::process |
-| 2 | ✅ | `canon-exec/src/exec/llm.rs` | Created: LlmCall::execute() + RwLock worker lifecycle |
-| 2 | ✅ | `canon-exec/src/exec/analysis.rs` | Created: AnalysisEvent::execute() + RwLock worker lifecycle |
-| 2 | ✅ | `canon-exec/src/lib.rs` | Updated: init/shutdown_analysis_worker pub use added |
-| 3 | ✅ | `canon-runtime/src/consumers/capability_executor.rs` | Replaced with ExecutableEvent::try_from + execute |
-| 3 | ✅ | `canon-runtime/src/consumers/llm_executor.rs` | Deleted (content moved to canon-exec) |
-| 3 | ✅ | `canon-runtime/src/consumers/mod.rs` | pub mod llm_executor removed |
-| 3 | ✅ | `canon-runtime/src/lib.rs` | Registry field and register_default_capabilities removed |
-| 3 | ✅ | `canon-runtime/src/bin/event_runtime.rs` | Registry setup removed, init/shutdown calls added |
-| 3 | ✅ | `canon-runtime/src/bin/capability_smoke_test.rs` | Rewritten with canon_exec |
-| 3 | ✅ | `canon-runtime/Cargo.toml` | canon-exec dep added, canon_capability removed |
-| 4a | ✅ | `canon-tools-analysis/src/capabilities/run.rs` | Deleted |
-| 4a | ✅ | `canon-tools-analysis/src/capabilities/mod.rs` | Replaced: register fn removed, canon_capability removed, mod run removed |
-| 4a | ✅ | `canon-tools-analysis/src/lib.rs` | pub use capabilities::register_analysis_capabilities removed |
-| 4a | ✅ | `canon-tools-analysis/Cargo.toml` | canon_capability dep removed |
-| 4b | ✅ | `canon-tools-editor/src/capabilities.rs` | Deleted |
-| 4b | ✅ | `canon-tools-editor/src/lib.rs` | pub mod capabilities + pub use capabilities::{...} removed |
-| 4b | ✅ | `canon-tools-editor/src/bin/capability_smoke_test.rs` | Rewritten with canon_exec |
-| 4b | ✅ | `canon-tools-editor/Cargo.toml` | canon_capability dep removed, canon_exec dep added |
-| 4c | ✅ | `canon-builder/src/executor/capabilities.rs` | Deleted |
-| 4c | ✅ | `canon-builder/src/executor.rs` | mod capabilities + pub use removed |
-| 4c | ✅ | `canon-builder/src/lib.rs` | Capability re-exports removed from pub use executor::{...} |
-| 4c | ✅ | `canon-builder/Cargo.toml` | canon_capability dep removed |
-| 4d | ✅ | `canon-runtime/Cargo.toml` | Dead deps removed: canon_llm, canon_analysis, canon_editor |
-| 4e | ✅ | `canon-capability/` | Entire crate deleted |
-| 4e | ✅ | `canon-introspection/` | Entire crate deleted |
-| 4e | ✅ | `Cargo.toml` (workspace) | canon-capability, canon-introspection members removed |
-| 5 | ✅ | `canon-runtime/src/bin/capability_smoke_test.rs` | Rewritten with canon_exec |
-| 5 | ✅ | `canon-tools-editor/src/bin/capability_smoke_test.rs` | Rewritten with canon_exec |
-| 5 | ✅ | `canon-exec/src/exec/llm.rs` | LlmWork visibility fixed (pub(crate)); unused set_test_worker_tx removed |
+| Phase | Status | File                                                  | Action                                                                                 |
+|-------+--------+-------------------------------------------------------+----------------------------------------------------------------------------------------|
+|     1 | ✅     | `canon-exec/Cargo.toml`                               | Created                                                                                |
+|     1 | ✅     | `canon-exec/src/lib.rs`                               | Created                                                                                |
+|     1 | ✅     | `canon-exec/src/exec/mod.rs`                          | Created: ExecutableEvent, Executable trait, ExecutionContext, ExecutionResult, TryFrom |
+|     1 | ✅     | `Cargo.toml` (workspace)                              | canon-exec member added                                                                |
+|     2 | ✅     | `canon-exec/src/exec/edit.rs`                         | Created: EditEvent::execute() — pass-through re-emit                                   |
+|     2 | ✅     | `canon-exec/src/exec/cargo.rs`                        | Created: CargoEvent::execute() — inlined subprocess                                    |
+|     2 | ✅     | `canon-exec/src/exec/file.rs`                         | Created: FileEvent::execute() — std::fs                                                |
+|     2 | ✅     | `canon-exec/src/exec/bash.rs`                         | Created: BashInvoke::execute() — std::process                                          |
+|     2 | ✅     | `canon-exec/src/exec/llm.rs`                          | Created: LlmCall::execute() + RwLock worker lifecycle                                  |
+|     2 | ✅     | `canon-exec/src/exec/analysis.rs`                     | Created: AnalysisEvent::execute() + RwLock worker lifecycle                            |
+|     2 | ✅     | `canon-exec/src/lib.rs`                               | Updated: init/shutdown_analysis_worker pub use added                                   |
+|     3 | ✅     | `canon-runtime/src/consumers/capability_executor.rs`  | Replaced with ExecutableEvent::try_from + execute                                      |
+|     3 | ✅     | `canon-runtime/src/consumers/llm_executor.rs`         | Deleted (content moved to canon-exec)                                                  |
+|     3 | ✅     | `canon-runtime/src/consumers/mod.rs`                  | pub mod llm_executor removed                                                           |
+|     3 | ✅     | `canon-runtime/src/lib.rs`                            | Registry field and register_default_capabilities removed                               |
+|     3 | ✅     | `canon-runtime/src/bin/event_runtime.rs`              | Registry setup removed, init/shutdown calls added                                      |
+|     3 | ✅     | `canon-runtime/src/bin/capability_smoke_test.rs`      | Rewritten with canon_exec                                                              |
+|     3 | ✅     | `canon-runtime/Cargo.toml`                            | canon-exec dep added, canon_capability removed                                         |
+|    4a | ✅     | `canon-tools-analysis/src/capabilities/run.rs`        | Deleted                                                                                |
+|    4a | ✅     | `canon-tools-analysis/src/capabilities/mod.rs`        | Replaced: register fn removed, canon_capability removed, mod run removed               |
+|    4a | ✅     | `canon-tools-analysis/src/lib.rs`                     | pub use capabilities::register_analysis_capabilities removed                           |
+|    4a | ✅     | `canon-tools-analysis/Cargo.toml`                     | canon_capability dep removed                                                           |
+|    4b | ✅     | `canon-tools-editor/src/capabilities.rs`              | Deleted                                                                                |
+|    4b | ✅     | `canon-tools-editor/src/lib.rs`                       | pub mod capabilities + pub use capabilities::{...} removed                             |
+|    4b | ✅     | `canon-tools-editor/src/bin/capability_smoke_test.rs` | Rewritten with canon_exec                                                              |
+|    4b | ✅     | `canon-tools-editor/Cargo.toml`                       | canon_capability dep removed, canon_exec dep added                                     |
+|    4c | ✅     | `canon-builder/src/executor/capabilities.rs`          | Deleted                                                                                |
+|    4c | ✅     | `canon-builder/src/executor.rs`                       | mod capabilities + pub use removed                                                     |
+|    4c | ✅     | `canon-builder/src/lib.rs`                            | Capability re-exports removed from pub use executor::{...}                             |
+|    4c | ✅     | `canon-builder/Cargo.toml`                            | canon_capability dep removed                                                           |
+|    4d | ✅     | `canon-runtime/Cargo.toml`                            | Dead deps removed: canon_llm, canon_analysis, canon_editor                             |
+|    4e | ✅     | `canon-capability/`                                   | Entire crate deleted                                                                   |
+|    4e | ✅     | `canon-introspection/`                                | Entire crate deleted                                                                   |
+|    4e | ✅     | `Cargo.toml` (workspace)                              | canon-capability, canon-introspection members removed                                  |
+|     5 | ✅     | `canon-runtime/src/bin/capability_smoke_test.rs`      | Rewritten with canon_exec                                                              |
+|     5 | ✅     | `canon-tools-editor/src/bin/capability_smoke_test.rs` | Rewritten with canon_exec                                                              |
+|     5 | ✅     | `canon-exec/src/exec/llm.rs`                          | LlmWork visibility fixed (pub(crate)); unused set_test_worker_tx removed               |
