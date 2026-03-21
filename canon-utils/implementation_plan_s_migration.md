@@ -25,12 +25,12 @@ Target: finish Phase 3 (unblock build), then Phase 4.
 
 ## Scope
 
-| Phase | Status | Score impact | Files touched |
-|-------|--------|-------------|---------------|
-| 1 | ✅ done | J ↑ | `NodeReady` — `args` removed |
-| 2 | ✅ done | J ↑, E ↑ | `CapabilityCompleted.result: CapabilityResult` |
-| 3 | 🔴 blocked | C ↑ | `LlmWork.name` lifetime fix + `CapabilityInvoked` |
-| 4 | pending | J ↑ | analysis internal channel |
+| Phase | Status     | Score impact | Files touched                                     |
+|-------+------------+--------------+---------------------------------------------------|
+|     1 | ✅ done    | J ↑          | `NodeReady` — `args` removed                      |
+|     2 | ✅ done    | J ↑, E ↑     | `CapabilityCompleted.result: CapabilityResult`    |
+|     3 | 🔴 blocked | C ↑          | `LlmWork.name` lifetime fix + `CapabilityInvoked` |
+|     4 | pending    | J ↑          | analysis internal channel                         |
 
 ---
 
@@ -230,13 +230,13 @@ Do not batch multiple phases into one commit. One phase = one clean build = one 
 
 ## Files Modified
 
-| Phase | Status | File | Change |
-|-------|--------|------|--------|
-| 1 | ✅ | `canon-runtime-events/src/events.rs` | `NodeReady.args` removed |
-| 2 | ✅ | `canon-runtime-events/src/events.rs` | `ProcessResult`, `LlmResult`, `CapabilityResult` added; `CapabilityCompleted.result` typed |
-| 2 | ✅ | `canon-builder/src/executor/capabilities.rs` | Helpers + capability impls updated |
-| 2 | ✅ | `canon-runtime/src/consumers/llm_executor.rs` | `CapabilityCompleted` emit updated |
-| 3 | 🔴 | `canon-runtime/src/consumers/llm_executor.rs` | `LlmWork.name: &'static str`; remove `.as_str()` at lines 113, 249, 288 |
-| 3 | pending | `canon-runtime-events/src/events.rs` | `CapabilityInvoked.name: String` → `capability: &'static str` |
-| 3 | pending | All `CapabilityInvoked {` construction sites | `name:` → `capability:` |
-| 4 | pending | `canon-tools-analysis/src/capabilities/run.rs` | Type `AnalysisWork` channel |
+| Phase | Status  | File                                           | Change                                                                                     |
+|-------+---------+------------------------------------------------+--------------------------------------------------------------------------------------------|
+|     1 | ✅      | `canon-runtime-events/src/events.rs`           | `NodeReady.args` removed                                                                   |
+|     2 | ✅      | `canon-runtime-events/src/events.rs`           | `ProcessResult`, `LlmResult`, `CapabilityResult` added; `CapabilityCompleted.result` typed |
+|     2 | ✅      | `canon-builder/src/executor/capabilities.rs`   | Helpers + capability impls updated                                                         |
+|     2 | ✅      | `canon-runtime/src/consumers/llm_executor.rs`  | `CapabilityCompleted` emit updated                                                         |
+|     3 | 🔴      | `canon-runtime/src/consumers/llm_executor.rs`  | `LlmWork.name: &'static str`; remove `.as_str()` at lines 113, 249, 288                    |
+|     3 | pending | `canon-runtime-events/src/events.rs`           | `CapabilityInvoked.name: String` → `capability: &'static str`                              |
+|     3 | pending | All `CapabilityInvoked {` construction sites   | `name:` → `capability:`                                                                    |
+|     4 | pending | `canon-tools-analysis/src/capabilities/run.rs` | Type `AnalysisWork` channel                                                                |
