@@ -47,7 +47,7 @@ pub fn write_event_auto(path: &Path, event: &TlogEvent) -> Result<()> {
     }
 }
 
-pub fn emit_event(source: &str, kind: &str, payload: Value, tlog_path: &Path) -> Result<()> {
+pub(crate) fn emit_event(source: &str, kind: &str, payload: Value, tlog_path: &Path) -> Result<()> {
     let event = TlogEvent::new(source, kind, payload);
     write_event_auto(tlog_path, &event)
 }

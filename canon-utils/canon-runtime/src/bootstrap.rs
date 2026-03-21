@@ -1,4 +1,3 @@
-use canon_event::canon_emit;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -136,7 +135,7 @@ fn bootstrap_agents(tlog_path: &Path) {
 // ---------------------------------------------------------------------------
 
 fn write_boot_event(tlog_path: &Path, kind: &str, payload: serde_json::Value) {
-    let _ = canon_emit!("bootstrap", kind, payload, tlog_path);
+    let _ = canon_meta::canon_emit_meta!("bootstrap", kind, payload, tlog_path);
 }
 
 // ---------------------------------------------------------------------------
@@ -174,5 +173,5 @@ pub fn reload_prompt_file(path: &Path, tlog_path: &Path, registry: &PromptRegist
         "hash": hash,
         "content": content,
     });
-    let _ = canon_emit!("prompt-watcher", "prompt_loaded", payload, tlog_path);
+    let _ = canon_meta::canon_emit_meta!("prompt-watcher", "prompt_loaded", payload, tlog_path);
 }

@@ -15,10 +15,6 @@ pub fn register_editor_capabilities(registry: &mut CapabilityRegistry) {
     registry.register(std::sync::Arc::new(RenameDirCapability));
 }
 
-fn require_arg<'a>(args: &'a serde_json::Value, key: &str) -> anyhow::Result<&'a str> {
-    args.get(key).and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("missing or invalid arg: {key}"))
-}
-
 fn emit_edit(event: EditEvent) -> CapabilityExecutionResult {
     CapabilityExecutionResult::Emit(CanonEvent::Edit(event))
 }
@@ -30,14 +26,11 @@ impl CapabilityHandler for RenameSymbolCapability {
         CAP_RENAME_SYMBOL
     }
 
-    fn execute(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
-        let CanonEvent::CapabilityRequested(request) = ctx.event else {
-            anyhow::bail!("capability context missing request");
-        };
-        let project = require_arg(&request.args, "project")?;
-        let old = require_arg(&request.args, "old")?;
-        let new = require_arg(&request.args, "new")?;
-        Ok(emit_edit(EditEvent::RenameSymbol(canon_event::RenameSymbol { project: project.to_string(), old: old.to_string(), new: new.to_string() })))
+    fn handle(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
+        match ctx.event {
+            CanonEvent::Edit(EditEvent::RenameSymbol(ev)) => Ok(emit_edit(EditEvent::RenameSymbol(ev))),
+            _ => Ok(CapabilityExecutionResult::NoOp),
+        }
     }
 }
 
@@ -48,14 +41,11 @@ impl CapabilityHandler for MoveSymbolCapability {
         CAP_MOVE_SYMBOL
     }
 
-    fn execute(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
-        let CanonEvent::CapabilityRequested(request) = ctx.event else {
-            anyhow::bail!("capability context missing request");
-        };
-        let project = require_arg(&request.args, "project")?;
-        let symbol = require_arg(&request.args, "symbol")?;
-        let module = require_arg(&request.args, "module")?;
-        Ok(emit_edit(EditEvent::MoveSymbol(canon_event::MoveSymbol { project: project.to_string(), symbol: symbol.to_string(), module: module.to_string() })))
+    fn handle(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
+        match ctx.event {
+            CanonEvent::Edit(EditEvent::MoveSymbol(ev)) => Ok(emit_edit(EditEvent::MoveSymbol(ev))),
+            _ => Ok(CapabilityExecutionResult::NoOp),
+        }
     }
 }
 
@@ -66,13 +56,11 @@ impl CapabilityHandler for DeleteSymbolCapability {
         CAP_DELETE_SYMBOL
     }
 
-    fn execute(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
-        let CanonEvent::CapabilityRequested(request) = ctx.event else {
-            anyhow::bail!("capability context missing request");
-        };
-        let project = require_arg(&request.args, "project")?;
-        let symbol = require_arg(&request.args, "symbol")?;
-        Ok(emit_edit(EditEvent::DeleteSymbol(canon_event::DeleteSymbol { project: project.to_string(), symbol: symbol.to_string() })))
+    fn handle(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
+        match ctx.event {
+            CanonEvent::Edit(EditEvent::DeleteSymbol(ev)) => Ok(emit_edit(EditEvent::DeleteSymbol(ev))),
+            _ => Ok(CapabilityExecutionResult::NoOp),
+        }
     }
 }
 
@@ -83,14 +71,11 @@ impl CapabilityHandler for RenameModuleCapability {
         CAP_RENAME_MODULE
     }
 
-    fn execute(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
-        let CanonEvent::CapabilityRequested(request) = ctx.event else {
-            anyhow::bail!("capability context missing request");
-        };
-        let project = require_arg(&request.args, "project")?;
-        let old = require_arg(&request.args, "old")?;
-        let new = require_arg(&request.args, "new")?;
-        Ok(emit_edit(EditEvent::RenameModule(canon_event::RenameModule { project: project.to_string(), old: old.to_string(), new: new.to_string() })))
+    fn handle(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
+        match ctx.event {
+            CanonEvent::Edit(EditEvent::RenameModule(ev)) => Ok(emit_edit(EditEvent::RenameModule(ev))),
+            _ => Ok(CapabilityExecutionResult::NoOp),
+        }
     }
 }
 
@@ -101,13 +86,10 @@ impl CapabilityHandler for RenameDirCapability {
         CAP_RENAME_DIR
     }
 
-    fn execute(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
-        let CanonEvent::CapabilityRequested(request) = ctx.event else {
-            anyhow::bail!("capability context missing request");
-        };
-        let project = require_arg(&request.args, "project")?;
-        let old = require_arg(&request.args, "old")?;
-        let new = require_arg(&request.args, "new")?;
-        Ok(emit_edit(EditEvent::RenameDir(canon_event::RenameDir { project: project.to_string(), old: old.into(), new: new.into() })))
+    fn handle(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
+        match ctx.event {
+            CanonEvent::Edit(EditEvent::RenameDir(ev)) => Ok(emit_edit(EditEvent::RenameDir(ev))),
+            _ => Ok(CapabilityExecutionResult::NoOp),
+        }
     }
 }

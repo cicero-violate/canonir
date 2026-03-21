@@ -1,501 +1,512 @@
-# IMPLEMENTATION_PLAN.md — Goal Enforcement and Shape Improvement
+# Implementation Plan: canon Event System Upgrade
 
-Source: `/workspace/ai_sandbox/canon/canon-utils/PLAN.md`
+## Goals
 
-## Diagnosis
+**Phase 1 — Metadata injection:** Wrap `canon_emit!` so every event can automatically include `file`, `crate_name`, `module`, and `line`. No breaking changes.
 
-Three compounding failures prevent the agent from building 50k+ LOC:
+**Phase 2 — Single Path Event Architecture:** Collapse all emission paths to route exclusively through `canon_emit!`. Eliminate direct `.emit(CanonEvent::...)` call sites. Restrict low-level writer API. Result: one deterministic, auditable event path.
 
-**Failure 1 — Goal check is wrong**
-`evaluate_goal_satisfied` (event_runtime.rs) only checks:
-- target dir exists
-- README.md non-empty
-- `cargo build` exits 0
+---
 
-It ignores "50000+ LOC" entirely. The moment `cargo build` passes on a 10-line Hello
-World, `finish_ready=true`, the gate allows `conclude`, and the session halts.
+## Codebase Facts (Verified)
 
-**Failure 2 — Done guard silences the planner**
-`PlanConsumer.handle_observed` (canon-plan/src/lib.rs lines 165–181):
+### Key existing symbols
+
+| Symbol | Location | Notes |
+|---|---|---|
+| `canon_event_struct!` | `canon-macros/src/lib.rs:4` | Generates `#[derive(Debug, Clone, Serialize, Deserialize)] pub struct` |
+| `canon_emit!` | `canon-macros/src/lib.rs:51` | Two arms: emitter-routed and direct |
+| `DebugEvent` | `canon-runtime-events/src/events.rs:111` | `{ source: String, kind: String, payload: serde_json::Value }` |
+| `CanonEvent::Debug` | `canon-runtime-events/src/events.rs` | Wraps `DebugEvent` |
+| `canon_event` | lib name of `canon-runtime-events` | Used as bare path in `canon_emit!` internals |
+
+### `canon_emit!` arms (exact expansion)
 ```rust
-if error_count == 0 && last_done_goal == observed.goal_text {
-    emit no_op (reason: "goal_complete");
-    return;
-}
+// Emitter-routed:
+$emitter.emit(canon_event::CanonEvent::Debug(canon_event::DebugEvent {
+    source: $source.to_string(), kind: $kind.to_string(), payload: $payload
+}))
+
+// Direct:
+let __event = canon_event::TlogEvent::new($source, $kind, $payload);
+canon_event::write_event_auto($path, &__event)
 ```
-The LLM says `{"done": true}` after creating a minimal project. `last_done_goal` is set.
-Every subsequent shape tick hits this guard and emits `no_op` — the LLM is never called
-again. The agent has permanently stopped shaping.
 
-**Failure 3 — Planner has no information**
-`build_prompt` (canon-plan/src/lib.rs lines 512–577) includes:
-- Goal text
-- Compiler errors
-- Previous action results
+### `canon-meta` current state
+- `Cargo.toml`: `name = "canon-meta"`, `edition = "2024"`, no deps, no `[lib]`
+- `src/main.rs`: `fn main() { println!("Hello, world!"); }` — stub binary only
 
-It does NOT include:
-- Current LOC count
-- Which requirements are met / unmet
-- Any instruction to generate large volumes of code per step
-
-The LLM has no idea it is at 50 LOC instead of 50000.
+### Workspace
+- `canon-meta` is already a workspace member in root `Cargo.toml:31`
+- `serde`, `serde_json` available as workspace deps
 
 ---
 
-## Files changed
+## Files to Create or Modify
 
-| File | Change |
-|------|--------|
-| `canon-utils/canon-runtime/src/bin/event_runtime.rs` | Fix `evaluate_goal_satisfied` to count LOC; add `count_loc` helper |
-| `canon-utils/canon-plan/src/lib.rs` | Add `workspace: PathBuf` to `PlanConsumer`; fix done guard; add LOC + requirement progress to `build_prompt` |
-| `canon-utils/canon-runtime/src/bin/event_runtime.rs` | Pass `workspace` to `PlanConsumer::new` |
+### 1. `canon-utils/canon-meta/Cargo.toml` — MODIFY
+
+Add a `[lib]` section and the required dependencies. Keep the existing `[[bin]]` or let the existing `main.rs` be the default binary (Cargo handles both automatically when both `src/lib.rs` and `src/main.rs` exist).
+
+```toml
+[package]
+name = "canon-meta"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+name = "canon_meta"
+
+[dependencies]
+canon-macros = { path = "../canon-macros" }
+canon-runtime-events = { path = "../canon-runtime-events" }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+```
 
 ---
 
-## Change 1 — `event_runtime.rs`: Fix `evaluate_goal_satisfied`
+### 2. `canon-utils/canon-meta/src/lib.rs` — CREATE (new file)
 
-### Add `count_loc` helper
-
-Add directly above `evaluate_goal_satisfied` (before line 267):
+This file provides:
+- `Meta` struct (typed, serializable)
+- `capture_meta!` macro (expands `file!`, `line!`, `module_path!`, `env!` at call site)
+- `canon_emit_meta!` macro (wraps payload, delegates to `canon_emit!`)
 
 ```rust
-fn count_loc(dir: &Path) -> usize {
-    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
-    let mut total = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            total += count_loc(&path);
-        } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                total += content.lines().count();
-            }
+use canon_macros::canon_event_struct;
+
+canon_event_struct!(Meta {
+    file: String,
+    crate_name: String,
+    module: String,
+    line: u32,
+});
+
+/// Capture source location metadata at the call site.
+/// Must be a macro so that file!/line!/module_path!/env! expand at the caller.
+#[macro_export]
+macro_rules! capture_meta {
+    () => {
+        canon_meta::Meta {
+            file: file!().to_string(),
+            crate_name: env!("CARGO_PKG_NAME").to_string(),
+            module: module_path!().to_string(),
+            line: line!(),
         }
-    }
-    total
-}
-
-fn extract_loc_requirement(spec: &GoalSpec) -> usize {
-    for req in &spec.requirements {
-        // Match patterns like "50000+ LOC" or "50000 LOC" or "50k LOC"
-        let lower = req.to_lowercase();
-        if lower.contains("loc") {
-            let digits: String = req.chars().filter(|c| c.is_ascii_digit()).collect();
-            if let Ok(n) = digits.parse::<usize>() {
-                return n;
-            }
-        }
-    }
-    0
-}
-```
-
-### Replace `evaluate_goal_satisfied` body
-
-Current body (lines 268–275):
-```rust
-let Some(spec) = spec else {
-    return false;
-};
-let target = spec.target_path.clone().unwrap_or_else(|| workspace.join("test_rust_project_v3"));
-if !target.is_dir() {
-    return false;
-}
-
-let readme = target.join("README.md");
-let readme_non_empty = std::fs::metadata(&readme).ok().map(|m| m.is_file() && m.len() > 0).unwrap_or(false);
-if !readme_non_empty {
-    return false;
-}
-
-std::process::Command::new("cargo").arg("build").current_dir(&target).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
-```
-
-Replace with:
-```rust
-let Some(spec) = spec else {
-    return false;
-};
-let target = spec.target_path.clone().unwrap_or_else(|| workspace.join("test_rust_project_v3"));
-if !target.is_dir() {
-    return false;
-}
-
-let readme = target.join("README.md");
-let readme_non_empty = std::fs::metadata(&readme).ok().map(|m| m.is_file() && m.len() > 0).unwrap_or(false);
-if !readme_non_empty {
-    return false;
-}
-
-let required_loc = extract_loc_requirement(spec);
-if required_loc > 0 {
-    let actual_loc = count_loc(&target);
-    if actual_loc < required_loc {
-        return false;
-    }
-}
-
-std::process::Command::new("cargo").arg("build").current_dir(&target).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
-```
-
----
-
-## Change 2 — `canon-plan/src/lib.rs`: Add `workspace` to `PlanConsumer`
-
-### Add field to struct
-
-Current `PlanConsumer` struct (lines 10–24):
-```rust
-pub struct PlanConsumer {
-    emitter: Option<EventEmitterHandle>,
-    pending: Option<PendingPlan>,
-    last_observed: Option<LoopObserved>,
-    last_planned_observed_tick: Option<u64>,
-    last_done_goal: Option<String>,
-    batch_acted: Vec<LoopActed>,
-    batch_tool_results: Vec<ToolResult>,
-    last_prompted_goal: Option<String>,
-}
-```
-
-Add `workspace` field:
-```rust
-pub struct PlanConsumer {
-    emitter: Option<EventEmitterHandle>,
-    pending: Option<PendingPlan>,
-    last_observed: Option<LoopObserved>,
-    last_planned_observed_tick: Option<u64>,
-    last_done_goal: Option<String>,
-    batch_acted: Vec<LoopActed>,
-    batch_tool_results: Vec<ToolResult>,
-    last_prompted_goal: Option<String>,
-    workspace: std::path::PathBuf,
-}
-```
-
-### Change `new()` signature and body
-
-Current (lines 41–53):
-```rust
-pub fn new() -> Self {
-    Self {
-        emitter: None,
-        pending: None,
-        last_observed: None,
-        last_planned_observed_tick: None,
-        last_done_goal: None,
-        batch_acted: Vec::new(),
-        batch_tool_results: Vec::new(),
-        last_prompted_goal: None,
-    }
-}
-```
-
-Replace with:
-```rust
-pub fn new(workspace: std::path::PathBuf) -> Self {
-    Self {
-        emitter: None,
-        pending: None,
-        last_observed: None,
-        last_planned_observed_tick: None,
-        last_done_goal: None,
-        batch_acted: Vec::new(),
-        batch_tool_results: Vec::new(),
-        last_prompted_goal: None,
-        workspace,
-    }
-}
-```
-
----
-
-## Change 3 — `canon-plan/src/lib.rs`: Fix the done guard
-
-### Add LOC-check helper to `impl PlanConsumer`
-
-Add this method to the `impl PlanConsumer` block (before `check_llm_timeout`):
-
-```rust
-/// Returns true only if the workspace actually satisfies the LOC requirement
-/// parsed from the active goal text. Used to prevent the done-guard from
-/// silencing the planner when the LLM prematurely declares "done".
-fn requirements_satisfied(&self, observed: &LoopObserved) -> bool {
-    let Some(goal_text) = observed.goal_text.as_ref() else {
-        return false;
     };
-    // Parse LOC requirement from goal text lines
-    let required_loc = goal_text
-        .lines()
-        .filter(|l| l.to_lowercase().contains("loc"))
-        .find_map(|l| {
-            let digits: String = l.chars().filter(|c| c.is_ascii_digit()).collect();
-            digits.parse::<usize>().ok()
-        })
-        .unwrap_or(0);
-    if required_loc == 0 {
-        return true; // No LOC requirement — trust the LLM
-    }
-    let actual_loc = count_loc_in_workspace(&self.workspace);
-    actual_loc >= required_loc
 }
-```
 
-Add `count_loc_in_workspace` as a module-level private function (not a method),
-below the existing private helpers at the bottom of the file:
-
-```rust
-fn count_loc_in_workspace(workspace: &std::path::Path) -> usize {
-    let Ok(entries) = std::fs::read_dir(workspace) else { return 0 };
-    let mut total = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            total += count_loc_in_workspace(&path);
-        } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                total += content.lines().count();
-            }
-        }
-    }
-    total
-}
-```
-
-### Fix the done guard in `handle_observed`
-
-Current guard (lines 165–181):
-```rust
-// Goal already completed — don't call the LLM again unless errors appear.
-if observed.error_count == 0 && self.last_done_goal.is_some() && self.last_done_goal == observed.goal_text {
-    self.emit_plan(LoopPlanned {
-        tick: observed.tick,
-        action_kind: "no_op".to_string(),
-        action_payload: serde_json::json!({}),
-        reason: "goal_complete".to_string(),
-        ...
-    });
-    return;
-}
-```
-
-Replace with:
-```rust
-// Only suppress LLM call if the LLM previously declared done AND requirements
-// are actually satisfied in the workspace. If LOC requirements are unmet,
-// reset the guard so the LLM is called again with updated context.
-if observed.error_count == 0 && self.last_done_goal.is_some() && self.last_done_goal == observed.goal_text {
-    if self.requirements_satisfied(observed) {
-        self.emit_plan(LoopPlanned {
-            tick: observed.tick,
-            action_kind: "no_op".to_string(),
-            action_payload: serde_json::json!({}),
-            reason: "goal_complete".to_string(),
-            llm_request_id: None,
-            trace_id: None,
-            execution_id: None,
-            span_id: None,
-            parent_span_id: None,
-            plan_id: None,
-            plan_step_id: None,
-            action_id: None,
+/// Emit a canonical event with automatic source metadata injected into the payload.
+///
+/// Wraps the existing `canon_emit!` — does NOT replace it.
+///
+/// Emitter-routed form:
+/// ```rust,ignore
+/// canon_emit_meta!(emitter; "source", "kind", payload);
+/// ```
+///
+/// Direct form:
+/// ```rust,ignore
+/// canon_emit_meta!("source", "kind", payload, &tlog_path)?;
+/// ```
+///
+/// Output payload shape:
+/// ```json
+/// { "meta": { "file": "...", "crate_name": "...", "module": "...", "line": 42 }, "data": <original> }
+/// ```
+///
+/// Callers must have `canon_event` and `serde_json` as dependencies (same requirement as `canon_emit!`).
+#[macro_export]
+macro_rules! canon_emit_meta {
+    // Emitter-routed form
+    ($emitter:expr; $source:expr, $kind:expr, $payload:expr) => {{
+        let __meta = canon_meta::capture_meta!();
+        let __wrapped = serde_json::json!({
+            "meta": __meta,
+            "data": $payload,
         });
-        return;
-    }
-    // Requirements not met — reset guard, fall through to call LLM again.
-    self.last_done_goal = None;
-}
-```
-
-### Fix `last_done_goal` assignment in `handle_capability_completed`
-
-Current (lines 360–363, inside `LlmAction::Done` arm):
-```rust
-LlmAction::Done { reason } => {
-    self.last_done_goal = pending.goal_text.clone();
-    ...
-}
-```
-
-Replace with:
-```rust
-LlmAction::Done { reason } => {
-    // Only lock in the done guard if requirements are actually satisfied.
-    // If not, we let next shape tick call the LLM again with current context.
-    if let Some(goal_text) = &pending.goal_text {
-        // Reuse requirements_satisfied via a temporary observed-like check
-        let required_loc = goal_text
-            .lines()
-            .filter(|l| l.to_lowercase().contains("loc"))
-            .find_map(|l| {
-                let digits: String = l.chars().filter(|c| c.is_ascii_digit()).collect();
-                digits.parse::<usize>().ok()
-            })
-            .unwrap_or(0);
-        let satisfied = required_loc == 0 || count_loc_in_workspace(&self.workspace) >= required_loc;
-        if satisfied {
-            self.last_done_goal = pending.goal_text.clone();
-        }
-        // If not satisfied: last_done_goal stays None/old, LLM called again next tick.
-    } else {
-        self.last_done_goal = pending.goal_text.clone();
-    }
-    ...
+        canon_event::canon_emit!($emitter; $source, $kind, __wrapped)
+    }};
+    // Direct form
+    ($source:expr, $kind:expr, $payload:expr, $path:expr) => {{
+        let __meta = canon_meta::capture_meta!();
+        let __wrapped = serde_json::json!({
+            "meta": __meta,
+            "data": $payload,
+        });
+        canon_event::canon_emit!($source, $kind, __wrapped, $path)
+    }};
 }
 ```
 
 ---
 
-## Change 4 — `canon-plan/src/lib.rs`: Add progress context to `build_prompt`
+## Files NOT Modified
 
-### Change `build_prompt` signature
+| File | Reason |
+|---|---|
+| `canon-macros/src/lib.rs` | `canon_emit!` untouched per spec |
+| `canon-runtime-events/src/events.rs` | `DebugEvent` struct untouched |
+| `canon-runtime-events/src/lib.rs` | No changes needed |
+| All consumer crates | Existing `canon_emit!` calls remain valid |
 
-Current:
-```rust
-fn build_prompt(observed: &LoopObserved, batch_acted: &[LoopActed], batch_tool_results: &[ToolResult], include_full_goal: bool) -> String {
+---
+
+## Dependency Chain
+
+```
+canon_emit_meta! caller
+  → canon_meta (provides macro)
+    → canon-macros (for canon_event_struct!)
+    → canon-runtime-events (for canon_event::canon_emit! path used in macro body)
+    → serde_json (for json! used in macro body)
 ```
 
-Add `workspace` parameter:
-```rust
-fn build_prompt(observed: &LoopObserved, batch_acted: &[LoopActed], batch_tool_results: &[ToolResult], include_full_goal: bool, workspace: &std::path::Path) -> String {
+Callers of `canon_emit_meta!` need in their `Cargo.toml`:
+- `canon-meta = { path = "../canon-meta" }` (or appropriate relative path)
+- `canon-runtime-events` / `canon_event` (already required by `canon_emit!` users)
+- `serde_json` (already present in most crates)
+
+---
+
+## Correctness Constraints
+
+### Why `capture_meta!` must be a macro, not a function
+
+`file!()`, `line!()`, and `module_path!()` are compiler built-in macros that expand to the location of their *call site*. If wrapped in a regular function, they would capture the function's own location inside `canon-meta`, not the caller's location. The `capture_meta!` macro expands inline at the call site, ensuring accurate metadata.
+
+### `$crate::` hygiene in `capture_meta!`
+
+Inside `capture_meta!`, `canon_meta::Meta { ... }` is used (not `$crate::Meta`) because `capture_meta!` is called *from within* `canon_emit_meta!`'s expansion, where `$crate` would refer to the caller's crate, not `canon_meta`. Using the full path `canon_meta::Meta` is unambiguous.
+
+### Payload wrapping only at emission time
+
+The `DebugEvent.payload` field is `serde_json::Value`. The wrapping `{ "meta": ..., "data": ... }` is a `serde_json::Value` produced by `json!()` — it satisfies the type without any struct changes.
+
+---
+
+## Migration Strategy
+
+- All existing `canon_emit!(...)` call sites compile unchanged.
+- New call sites use `canon_emit_meta!(...)` to gain automatic metadata.
+- Gradual adoption: replace calls crate-by-crate as needed.
+- No flag day required.
+
+---
+
+## Expected Output JSON Shape
+
+```json
+{
+  "source": "my-crate",
+  "kind": "some.event",
+  "payload": {
+    "meta": {
+      "file": "src/consumers/observe.rs",
+      "crate_name": "canon-observe",
+      "module": "canon_observe",
+      "line": 87
+    },
+    "data": {
+      "...": "original payload fields"
+    }
+  }
+}
 ```
 
-### Update the call site in `handle_observed` (line 189):
+---
+
+## Phase 1 Summary of Changes
+
+| File | Action | Lines Changed (approx) |
+|---|---|---|
+| `canon-utils/canon-meta/Cargo.toml` | Modify — add `[lib]`, add 4 deps | +8 |
+| `canon-utils/canon-meta/src/lib.rs` | Create — Meta struct + 2 macros | ~50 |
+
+Total: 2 files. No existing files broken.
+
+---
+
+# Phase 2 — Single Path Event Architecture
+
+## Invariant
+
+Every event emission must pass through `canon_emit!`. No direct `.emit(CanonEvent::...)` calls at non-macro call sites. No raw writer calls from consumer crates.
+
+## Codebase Facts (Verified)
+
+### Direct `.emit(CanonEvent::...)` call sites to eliminate
+
+| File | Lines | Variants used |
+|---|---|---|
+| `canon-act/src/lib.rs` | 148, 184, 218, 228, 282, 292, 348, 359, 447, 471, 497, 676, 685, 841 | `LoopActed`, `Debug`, `ToolCall`, `CapabilityRequested`, `ToolResult` |
+| `canon-plan/src/lib.rs` | 285, 292, 454, 460 | `ToolCall`, `CapabilityRequested`, `LoopPlanned`, `ToolResult` |
+| `canon-reward/src/lib.rs` | 73, 95, 122, 165, 167 | `LoopRewarded`, `Debug`, `ErrorOccurred` |
+| `canon-verify/src/lib.rs` | 121, 187 | `LoopVerified` |
+| `canon-observe/src/lib.rs` | 60 | `LoopObserved` |
+| `canon-llm-runtime/src/ws_server.rs` | 154 | `Debug` |
+| `canon-runtime/src/lib.rs` | 703, 708 | `CapabilityRequested` |
+| `canon-runtime/src/consumers/capability_executor.rs` | 58, 62 | (variable `event`) |
+| `canon-runtime/src/consumers/llm_executor.rs` | 102, 114, 248, 283, 294 | `ErrorOccurred`, `CapabilityFailed`, `CapabilityCompleted` |
+
+Total: ~33 call sites across 9 files.
+
+### Raw writer calls to restrict (not in macro path)
+
+| File | Symbol | Action |
+|---|---|---|
+| `canon-runtime/src/lib.rs:572` | `write_event_auto` | Internal runtime drain — keep, already isolated |
+| `canon-runtime-events/src/emit.rs:50` | `emit_event` | Make `pub(crate)` |
+| `canon-runtime-events/src/tlog/writer.rs:81` | `emit_event_json` | Make `pub(crate)` within tlog module |
+| `canon-runtime-events/src/lib.rs:39` | re-export of `emit_event_json` | Remove from public API |
+
+### Existing `canon_emit!` call sites (already canonical — keep as-is)
+
+`canon-verify/src/lib.rs:92`, `canon-runtime/src/bootstrap.rs:139,177`, `canon-runtime/src/bin/*.rs`, `canon-runtime-events/src/bin/*.rs`, `canon-tools-editor/src/*.rs`, `canon-runtime/src/consumers/error_logger.rs:59`, `canon-runtime/src/consumers/llm_executor.rs:85,121,237,258,295,462`, `canon-builder/src/process.rs:29,52,66,92`, `canon-tools-analysis/src/capabilities/events.rs:6`
+
+---
+
+## Δ1 — Extend `canon_emit!` with Typed Variant Arm
+
+**File:** `canon-utils/canon-macros/src/lib.rs`
+
+Add a third arm to the existing `canon_emit!` macro that accepts a typed `CanonEvent` variant directly:
 
 ```rust
-// Current:
-let prompt = build_prompt(observed, &self.batch_acted, &self.batch_tool_results, include_full_goal);
+// New arm — typed variant form
+($emitter:expr; $variant:ident($inner:expr)) => {{
+    $emitter.emit(canon_event::CanonEvent::$variant($inner))
+}};
+```
+
+Insert this arm **before** the existing emitter-routed arm (the `$source:expr, $kind:expr` arm) so the more specific pattern matches first.
+
+**Full updated macro:**
+
+```rust
+#[macro_export]
+macro_rules! canon_emit {
+    // NEW: Typed variant form — canon_emit!(emitter; LoopPlanned(payload))
+    ($emitter:expr; $variant:ident($inner:expr)) => {{
+        $emitter.emit(canon_event::CanonEvent::$variant($inner))
+    }};
+    // Existing: Debug/DebugEvent form — canon_emit!(emitter; "source", "kind", payload)
+    ($emitter:expr; $source:expr, $kind:expr, $payload:expr) => {{
+        $emitter.emit(canon_event::CanonEvent::Debug(canon_event::DebugEvent {
+            source: $source.to_string(),
+            kind: $kind.to_string(),
+            payload: $payload,
+        }))
+    }};
+    // Existing: Direct form — canon_emit!("source", "kind", payload, &path)?
+    ($source:expr, $kind:expr, $payload:expr, $path:expr) => {{
+        let __event = canon_event::TlogEvent::new($source, $kind, $payload);
+        canon_event::write_event_auto($path, &__event)
+    }};
+}
+```
+
+**Backward compatibility:** Both existing arms are unchanged. All current call sites compile as-is.
+
+**Disambiguation note:** The `$variant:ident($inner:expr)` arm is distinguished from the `$source:expr, $kind:expr, $payload:expr` arm because the former has no comma before the `(` — Rust's macro parser disambiguates on the token tree structure. However, to be safe, use `ident` vs `expr` at the arm boundary: an `ident` followed by `(` cannot match `expr, expr, expr`. No conflict.
+
+---
+
+## Δ2 — Replace All Direct `.emit(CanonEvent::...)` Calls
+
+**Pattern to replace:**
+```rust
+emitter.emit(CanonEvent::X(payload));
+```
+
+**Replacement:**
+```rust
+canon_emit!(emitter; X(payload));
+```
+
+**Special case — `DebugEvent` inline construction:**
+```rust
+// Before:
+emitter.emit(CanonEvent::Debug(DebugEvent { source: s.to_string(), kind: k.to_string(), payload }));
+
+// After (use existing Debug arm):
+canon_emit!(emitter; "source-str", "kind-str", payload);
+```
+
+**Special case — `capability_executor.rs` variable event:**
+```rust
+// Before:
+emitter.emit(event);  // event: CanonEvent
+
+// Keep as-is — this is already a CanonEvent value, not a construction site.
+// This call site is in the runtime drain/dispatch path and is structurally correct.
+// Do not replace.
+```
+
+### File-by-file replacements
+
+#### `canon-act/src/lib.rs`
+- Lines 148, 447, 471, 685, 841: `emitter.emit(CanonEvent::LoopActed(...))` → `canon_emit!(emitter; LoopActed(...))`
+- Line 184: `emitter.emit(CanonEvent::Debug(DebugEvent {...}))` → `canon_emit!(emitter; "act_consumer", "debug", payload)`
+- Lines 218, 282, 348: `emitter.emit(CanonEvent::ToolCall(...))` → `canon_emit!(emitter; ToolCall(...))`
+- Lines 228, 292, 359: `emitter.emit(CanonEvent::CapabilityRequested(...))` → `canon_emit!(emitter; CapabilityRequested(...))`
+- Lines 497, 676: `emitter.emit(CanonEvent::ToolResult(...))` → `canon_emit!(emitter; ToolResult(...))`
+
+#### `canon-plan/src/lib.rs`
+- Lines 285, 282: `emitter.emit(CanonEvent::ToolCall(...))` → `canon_emit!(emitter; ToolCall(...))`
+- Line 292: `emitter.emit(CanonEvent::CapabilityRequested(...))` → `canon_emit!(emitter; CapabilityRequested(...))`
+- Line 454: `emitter.emit(CanonEvent::LoopPlanned(...))` → `canon_emit!(emitter; LoopPlanned(...))`
+- Line 460: `emitter.emit(CanonEvent::ToolResult(...))` → `canon_emit!(emitter; ToolResult(...))`
+
+#### `canon-reward/src/lib.rs`
+- Lines 73, 122, 165: `emitter.emit(CanonEvent::LoopRewarded(...))` → `canon_emit!(emitter; LoopRewarded(...))`
+- Line 95: `emitter.emit(CanonEvent::Debug(DebugEvent {...}))` → `canon_emit!(emitter; "reward_consumer", "debug", payload)`
+- Line 167: `emitter.emit(CanonEvent::ErrorOccurred(...))` → `canon_emit!(emitter; ErrorOccurred(...))`
+
+#### `canon-verify/src/lib.rs`
+- Lines 121, 187: `emitter.emit(CanonEvent::LoopVerified(...))` → `canon_emit!(emitter; LoopVerified(...))`
+
+#### `canon-observe/src/lib.rs`
+- Line 60: `emitter.emit(CanonEvent::LoopObserved(...))` → `canon_emit!(emitter; LoopObserved(...))`
+
+#### `canon-llm-runtime/src/ws_server.rs`
+- Line 154: `e.emit(CanonEvent::Debug(DebugEvent {...}))` → `canon_emit!(e; "ws_server", "debug", payload)` or extract source/kind from local vars
+
+#### `canon-runtime/src/lib.rs`
+- Lines 703, 708: `emitter.emit(CanonEvent::CapabilityRequested(...))` → `canon_emit!(emitter; CapabilityRequested(...))`
+
+#### `canon-runtime/src/consumers/llm_executor.rs`
+- Lines 102, 283: `emitter.emit(CanonEvent::ErrorOccurred(...))` → `canon_emit!(emitter; ErrorOccurred(...))`
+- Lines 114, 294: `emitter.emit(CanonEvent::CapabilityFailed(...))` → `canon_emit!(emitter; CapabilityFailed(...))`
+- Line 248: `emitter.emit(CanonEvent::CapabilityCompleted(...))` → `canon_emit!(emitter; CapabilityCompleted(...))`
+
+#### `canon-runtime/src/consumers/capability_executor.rs`
+- Lines 58, 62: `emitter.emit(event)` — **leave unchanged** (dispatch path, `event` is already a `CanonEvent`)
+
+---
+
+## Δ3 — Restrict Writer Layer
+
+Make low-level writer functions inaccessible from outside `canon-runtime-events`. The `canon_emit!` direct arm is the only sanctioned external path to `write_event_auto`.
+
+**File: `canon-utils/canon-runtime-events/src/emit.rs`**
+
+Change `emit_event` from `pub` to `pub(crate)`:
+```rust
+// Before:
+pub fn emit_event(source: &str, kind: &str, payload: Value, tlog_path: &Path) -> Result<()> {
 
 // After:
-let prompt = build_prompt(observed, &self.batch_acted, &self.batch_tool_results, include_full_goal, &self.workspace);
+pub(crate) fn emit_event(source: &str, kind: &str, payload: Value, tlog_path: &Path) -> Result<()> {
 ```
 
-### Add progress section inside `build_prompt`
+**File: `canon-utils/canon-runtime-events/src/tlog/writer.rs`**
 
-Add after `goal_section` is computed (after line 517), before `error_section`:
-
+Change `emit_event_json` from `pub` to `pub(crate)`:
 ```rust
-let progress_section = build_progress_section(observed, workspace);
+// Before:
+pub fn emit_event_json(path: &Path, ...) -> Result<()> {
+
+// After:
+pub(crate) fn emit_event_json(path: &Path, ...) -> Result<()> {
 ```
 
-Add `build_progress_section` as a module-level private function:
+**File: `canon-utils/canon-runtime-events/src/tlog/mod.rs`**
 
+Remove `emit_event_json` from the `pub use` line:
 ```rust
-fn build_progress_section(observed: &LoopObserved, workspace: &std::path::Path) -> String {
-    let Some(goal_text) = observed.goal_text.as_ref() else {
-        return String::new();
-    };
+// Before:
+pub use writer::{emit_event_json, TlogWriter};
 
-    // Parse LOC requirement
-    let required_loc: usize = goal_text
-        .lines()
-        .filter(|l| l.to_lowercase().contains("loc"))
-        .find_map(|l| {
-            let digits: String = l.chars().filter(|c| c.is_ascii_digit()).collect();
-            digits.parse::<usize>().ok()
-        })
-        .unwrap_or(0);
-
-    if required_loc == 0 {
-        return String::new();
-    }
-
-    // Find target path from goal text
-    let target = goal_text
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("- Project path:").map(|p| std::path::PathBuf::from(p.trim().trim_matches('`'))))
-        .unwrap_or_else(|| workspace.join("test_rust_project_v3"));
-
-    let actual_loc = count_loc_in_workspace(&target);
-    let remaining = required_loc.saturating_sub(actual_loc);
-    let pct = if required_loc > 0 { (actual_loc * 100) / required_loc } else { 100 };
-
-    format!(
-        "## LOC Progress\nCurrent: {} lines / {} required ({}%)\nRemaining: {} lines to write\n\n",
-        actual_loc, required_loc, pct, remaining
-    )
-}
+// After:
+pub use writer::TlogWriter;
 ```
 
-### Inject `progress_section` into the final format string
+**File: `canon-utils/canon-runtime-events/src/lib.rs`**
 
-Current format string at line 570:
+Remove `emit_event_json` from the public re-export:
 ```rust
-format!(
-    "{goal}{last_action}{last_tool_result}{errors}Execution policy constraints:\n...",
-    goal = goal_section,
-    last_action = last_action_section,
-    last_tool_result = last_tool_result_section,
-    errors = error_section,
-)
+// Before:
+pub use tlog::{emit_event_json, is_binary_tlog, maybe_rotate, BinarySegmentWriter, BinaryTlogWriter, RotateConfig, SegmentConfig, TlogEvent, TlogWriter};
+
+// After:
+pub use tlog::{is_binary_tlog, maybe_rotate, BinarySegmentWriter, BinaryTlogWriter, RotateConfig, SegmentConfig, TlogEvent, TlogWriter};
 ```
 
-Change to:
+**`write_event_auto` stays `pub`** — it is called from within the `canon_emit!` macro body (macro expansions run at the call site and need the symbol to be pub).
+
+---
+
+## Δ4 — Compile-Time Enforcement
+
+Rust does not support custom lint passes without a compiler plugin. Use a CI grep gate instead:
+
+**Enforcement script** (add to CI / `Makefile`):
+```bash
+# Fail if any direct .emit(CanonEvent:: call exists outside macro definitions
+! rg --type rust '\.emit\(CanonEvent::' canon-utils \
+    --glob '!canon-macros/**' \
+    --glob '!canon-runtime-events/**'
+```
+
+This grep returns non-zero (CI pass) when zero matches are found. The `!` prefix inverts the exit code. Exclude `canon-macros` (definition site) and `canon-runtime-events` (internal runtime drain at `lib.rs:572` which is permitted).
+
+The `capability_executor.rs` dispatch (`emitter.emit(event)`) matches `\.emit\(` but not `\.emit\(CanonEvent::` since `event` is a variable — this call site passes the grep gate automatically.
+
+---
+
+## Δ5 — Normalize Inline Event Construction
+
+Where event structs are constructed inline at call sites, keep construction inline within `canon_emit!()`. Do not extract to separate `let` bindings unless the struct is referenced more than once.
+
+**Preferred style:**
 ```rust
-format!(
-    "{goal}{progress}{last_action}{last_tool_result}{errors}Execution policy constraints:\n- Do NOT emit destructive commands (`rm -rf`, `git reset --hard`, `git clean -f`, `dd`, `mkfs`, `shred`).\n- If a target directory already exists, prefer `cargo init --bin <dir>` instead of deleting and recreating it.\n\nGeneration policy:\n- You MUST generate LARGE amounts of code per shape step. Each `write` action should contain hundreds to thousands of lines of Rust.\n- A single shape step should advance LOC by thousands, not tens. Write entire modules at once.\n- Do not declare done until the LOC progress section shows >= required LOC.\n\nReturn one or more fenced ```json code blocks (no prose outside code blocks). Each block must be one action object using one schema:\n- Run a command:  {{\"cmd\": \"cargo new foo\", \"cwd\": \"/path\"}}\n- Write a file:   {{\"write\": \"/abs/path\", \"content\": \"full content\"}}\n- Patch a file:   {{\"path\": \"/abs/path\", \"old\": \"exact text\", \"new\": \"replacement\"}}\n- Signal done:    {{\"done\": true, \"reason\": \"...\"}}",
-    goal = goal_section,
-    progress = progress_section,
-    last_action = last_action_section,
-    last_tool_result = last_tool_result_section,
-    errors = error_section,
-)
+canon_emit!(emitter; LoopPlanned(LoopPlanned {
+    action_kind: action.kind.clone(),
+    payload: action.payload.clone(),
+    reason: plan.reason.clone(),
+    ..Default::default()
+}));
+```
+
+**Not:**
+```rust
+let payload = CanonEvent::LoopPlanned(LoopPlanned { ... });
+emitter.emit(payload);
 ```
 
 ---
 
-## Change 5 — `event_runtime.rs`: Pass workspace to `PlanConsumer::new`
+## Migration Order
 
-Current (line 655 approx):
-```rust
-Box::new(PlanConsumer::new()),
-```
+1. **Δ1** — Extend `canon_emit!` macro (unblocks all other steps; zero risk, additive only)
+2. **Δ2** — Replace all direct `.emit(CanonEvent::...)` call sites (mechanical substitution)
+3. **Δ3** — Restrict writer layer (`pub` → `pub(crate)`, remove re-exports)
+4. **Δ4** — Add CI grep gate
+5. **Verify** — `rg '\.emit\(CanonEvent::' canon-utils --glob '!canon-macros/**' --glob '!canon-runtime-events/**'` returns zero matches
 
-Replace with:
-```rust
-Box::new(PlanConsumer::new(workspace.clone())),
-```
-
-`workspace` is already defined at line 652:
-```rust
-let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-```
+Steps 1 and 2 can be done in one pass per file. Step 3 must come after step 2 (restricting the API before migrating callers would break compilation). Step 4 is last (enforcement after full migration).
 
 ---
 
-## Expected behaviour after changes
+## Phase 2 Summary of Changes
 
-```
-shape tick fires
-  → PlanConsumer receives route_selected(shape)
-  → handle_observed called
-  → last_done_goal guard: previous "done" was set, BUT count_loc = 1200 < 50000
-    → guard resets, falls through to LLM call
-  → build_prompt includes:
-      "## LOC Progress
-       Current: 1200 lines / 50000 required (2%)
-       Remaining: 48800 lines to write"
-      "Generation policy: you MUST generate LARGE amounts of code per shape step..."
-  → LLM sees 2% progress, generates 10+ write actions with large Rust modules
-  → PlanConsumer emits 10+ LoopPlanned events (one per action block)
-  → ActConsumer executes them sequentially
-  → LoopVerified fires
-  → evaluate_goal_satisfied: count_loc = 12000 < 50000 → false
-  → finish_ready stays false → gate blocks conclude
-  → next tick: shape again, LLM sees 24% progress, generates more code
-  → ... repeats until count_loc >= 50000 AND cargo build passes
-  → evaluate_goal_satisfied returns true → finish_ready = true → conclude
-```
+| File | Action |
+|---|---|
+| `canon-macros/src/lib.rs` | Add typed variant arm to `canon_emit!` |
+| `canon-act/src/lib.rs` | Replace ~14 direct emit calls |
+| `canon-plan/src/lib.rs` | Replace ~4 direct emit calls |
+| `canon-reward/src/lib.rs` | Replace ~5 direct emit calls |
+| `canon-verify/src/lib.rs` | Replace ~2 direct emit calls |
+| `canon-observe/src/lib.rs` | Replace ~1 direct emit call |
+| `canon-llm-runtime/src/ws_server.rs` | Replace ~1 direct emit call |
+| `canon-runtime/src/lib.rs` | Replace ~2 direct emit calls |
+| `canon-runtime/src/consumers/llm_executor.rs` | Replace ~5 direct emit calls |
+| `canon-runtime-events/src/emit.rs` | `pub` → `pub(crate)` on `emit_event` |
+| `canon-runtime-events/src/tlog/writer.rs` | `pub` → `pub(crate)` on `emit_event_json` |
+| `canon-runtime-events/src/tlog/mod.rs` | Remove `emit_event_json` from `pub use` |
+| `canon-runtime-events/src/lib.rs` | Remove `emit_event_json` from public re-export |
 
----
-
-## What does NOT change
-
-| Component | Why |
-|-----------|-----|
-| `VerifyConsumer` | `run_cargo_check` still validates compilation — unchanged |
-| `evaluate_goal_satisfied` cargo build check | Still required; LOC check is additive |
-| Routing gate (`canon-judgment`) | Gate rules unchanged; `finish_ready` signal now just triggers correctly |
-| `RewardConsumer` | Halt-on-done logic unchanged; halts only when system actually concludes |
-| `ObserveConsumer` | Unchanged |
-| Action types (patch/write/command/done) | Parser unchanged; more actions per plan batch just means more `LoopPlanned` events |
+Total: 13 files modified. No new files. All changes are mechanical substitutions or visibility restrictions.

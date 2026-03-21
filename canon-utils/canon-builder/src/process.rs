@@ -1,7 +1,7 @@
 use crate::config::ProcessConfig;
 use crate::events::wrap_event;
 use anyhow::Result;
-use canon_event::{canon_emit, resolve_tlog_path};
+use canon_event::resolve_tlog_path;
 use std::collections::HashMap;
 use std::process::{Child, Command};
 use std::thread;
@@ -26,7 +26,7 @@ impl ProcessManager {
                 }),
             );
             let tlog_path = resolve_tlog_path(None, None);
-            let _ = canon_emit!("canon-supervisor", "supervisor_event", payload, &tlog_path);
+            let _ = canon_meta::canon_emit_meta!("canon-supervisor", "supervisor_event", payload, &tlog_path);
             return Ok(());
         }
         let mut cmd = Command::new(&cfg.bin);
@@ -49,7 +49,7 @@ impl ProcessManager {
             }),
         );
         let tlog_path = resolve_tlog_path(None, None);
-        let _ = canon_emit!("canon-supervisor", "supervisor_event", payload, &tlog_path);
+        let _ = canon_meta::canon_emit_meta!("canon-supervisor", "supervisor_event", payload, &tlog_path);
         Ok(())
     }
 
@@ -63,7 +63,7 @@ impl ProcessManager {
                 }),
             );
             let tlog_path = resolve_tlog_path(None, None);
-            let _ = canon_emit!("canon-supervisor", "supervisor_event", payload, &tlog_path);
+            let _ = canon_meta::canon_emit_meta!("canon-supervisor", "supervisor_event", payload, &tlog_path);
             let _ = terminate_child(&mut child, &name, timeout_ms);
         }
     }
@@ -89,7 +89,7 @@ fn wait_for_exit(child: &mut Child, name: &str, timeout_ms: u64) -> bool {
                 }),
             );
             let tlog_path = resolve_tlog_path(None, None);
-            let _ = canon_emit!("canon-supervisor", "supervisor_event", payload, &tlog_path);
+            let _ = canon_meta::canon_emit_meta!("canon-supervisor", "supervisor_event", payload, &tlog_path);
             return true;
         }
         if start.elapsed() >= Duration::from_millis(timeout_ms) {

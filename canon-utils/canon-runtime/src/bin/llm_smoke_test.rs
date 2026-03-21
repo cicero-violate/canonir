@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Result};
-use canon_event::canon_emit;
 use canon_event::CapabilityRequested;
 use canon_event_store::read_any_events_from_path;
 use canon_event_store::read_any_events_from_path_with_start_seq;
@@ -49,7 +48,7 @@ fn main() -> Result<()> {
     };
     let payload = serde_json::to_value(&request)?;
     println!("llm_smoke_test: writing request to {}", tlog_path.display());
-    canon_emit!("smoke-test", "capability_requested", payload, &tlog_path)?;
+    canon_meta::canon_emit_meta!("smoke-test", "capability_requested", payload, &tlog_path)?;
 
     let replay_path = if tlog_path.is_dir() {
         // Only scan the segment the request was written into (and the next one).

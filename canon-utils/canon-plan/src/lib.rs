@@ -282,14 +282,14 @@ impl PlanConsumer {
             // has no pending_tool_call_id to block on and fires 2-3 extra routing
             // ticks during the planning window, contaminating the stateful LLM's
             // conversation history with contradictory router prompts.
-            emitter.emit(CanonEvent::ToolCall(ToolCall {
+            canon_meta::canon_emit_meta!(emitter; ToolCall(ToolCall {
                 node_id: "plan_consumer".to_string(),
                 tool_call_id: plan_tool_call_id,
                 request_id: request_id.clone(),
                 kind: "llm.plan".to_string(),
                 payload: serde_json::json!({"role": "planner"}),
             }));
-            emitter.emit(CanonEvent::CapabilityRequested(request));
+            canon_meta::canon_emit_meta!(emitter; CapabilityRequested(request));
         }
     }
 
@@ -451,13 +451,13 @@ impl PlanConsumer {
 
     fn emit_plan(&self, payload: LoopPlanned) {
         if let Some(emitter) = self.emitter.as_ref() {
-            emitter.emit(CanonEvent::LoopPlanned(payload));
+            canon_meta::canon_emit_meta!(emitter; LoopPlanned(payload));
         }
     }
 
     fn emit_tool_result(&self, tool_call_id: &str, request_id: &str, success: bool) {
         if let Some(emitter) = self.emitter.as_ref() {
-            emitter.emit(CanonEvent::ToolResult(ToolResult {
+            canon_meta::canon_emit_meta!(emitter; ToolResult(ToolResult {
                 node_id: "plan_consumer".to_string(),
                 tool_call_id: tool_call_id.to_string(),
                 tool_result_id: Uuid::new_v4().to_string(),

@@ -1,0 +1,11 @@
+[package]
+name = "canon-check"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+name = "canon_check"
+
+[dependencies]
+serde_json = { workspace = true }

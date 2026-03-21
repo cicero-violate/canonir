@@ -9,3 +9,13 @@ pub enum CapabilityExecutionResult {
     Deferred,
     NoOp,
 }
+
+impl CapabilityExecutionResult {
+    pub fn into_event(self) -> Option<CanonEvent> {
+        match self {
+            CapabilityExecutionResult::Emit(e) => Some(e),
+            CapabilityExecutionResult::EmitMany(mut v) => v.pop(), // take last if any
+            _ => None,
+        }
+    }
+}

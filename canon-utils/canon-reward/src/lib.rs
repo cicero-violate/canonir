@@ -1,4 +1,4 @@
-use canon_event::{new_error_occurred, CanonEvent, DebugEvent, EventConsumer, EventEmitterHandle, EventFilter, LoopRewarded, LoopVerified};
+use canon_event::{new_error_occurred, CanonEvent, EventConsumer, EventEmitterHandle, EventFilter, LoopRewarded, LoopVerified};
 
 pub struct RewardConsumer {
     emitter: Option<EventEmitterHandle>,
@@ -70,7 +70,7 @@ impl RewardConsumer {
         }
         self.halted = true;
         if let Some(emitter) = self.emitter.as_ref() {
-            emitter.emit(CanonEvent::LoopRewarded(LoopRewarded {
+            canon_meta::canon_emit_meta!(emitter; LoopRewarded(LoopRewarded {
                 tick: tick.unwrap_or(0),
                 reward: 1.0,
                 errors_before: self.errors_before,
@@ -92,19 +92,15 @@ impl RewardConsumer {
         }
 
         if let Some(emitter) = self.emitter.as_ref() {
-            emitter.emit(CanonEvent::Debug(DebugEvent {
-                source: "reward_consumer".to_string(),
-                kind: "reward_state".to_string(),
-                payload: serde_json::json!({
-                    "last_action_kind": self.last_action_kind,
-                    "last_action_success": self.last_action_success,
-                    "stagnant_ticks": self.stagnant_ticks,
-                    "errors_before": self.errors_before,
-                    "halted": self.halted,
-                    "verified_passed": verified.passed,
-                    "verified_error_count": verified.error_count,
-                    "will_halt_as_done": self.last_action_kind == "done" && self.last_action_success,
-                }),
+            canon_meta::canon_emit_meta!(emitter; "reward_consumer", "reward_state", serde_json::json!({
+                "last_action_kind": self.last_action_kind,
+                "last_action_success": self.last_action_success,
+                "stagnant_ticks": self.stagnant_ticks,
+                "errors_before": self.errors_before,
+                "halted": self.halted,
+                "verified_passed": verified.passed,
+                "verified_error_count": verified.error_count,
+                "will_halt_as_done": self.last_action_kind == "done" && self.last_action_success,
             }));
         }
 
@@ -119,7 +115,7 @@ impl RewardConsumer {
 
         if self.last_action_kind == "done" && self.last_action_success {
             if let Some(emitter) = self.emitter.as_ref() {
-                emitter.emit(CanonEvent::LoopRewarded(LoopRewarded {
+                canon_meta::canon_emit_meta!(emitter; LoopRewarded(LoopRewarded {
                     tick: verified.tick,
                     reward: 1.0,
                     errors_before: self.errors_before,
@@ -162,9 +158,9 @@ impl RewardConsumer {
         };
 
         if let Some(emitter) = self.emitter.as_ref() {
-            emitter.emit(CanonEvent::LoopRewarded(payload));
+            canon_meta::canon_emit_meta!(emitter; LoopRewarded(payload));
             if halt {
-                emitter.emit(CanonEvent::ErrorOccurred(new_error_occurred(
+                canon_meta::canon_emit_meta!(emitter; ErrorOccurred(new_error_occurred(
                     "reward_halt",
                     "reward",
                     "stagnant:halt",

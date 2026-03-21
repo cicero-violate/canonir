@@ -1,4 +1,5 @@
 use canon_event::{CanonEvent, ErrorOccurred, EventConsumer, EventEmitterHandle, EventFilter, LoopObserved, LoopVerified, Tick};
+use canon_meta;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -57,7 +58,7 @@ impl EventConsumer for ObserveConsumer {
             LoopObserved { tick: *tick, error_count: self.error_count, warning_count: self.warning_count, compiler_errors: self.recent_compiler_errors.clone(), goal_text: self.goal_text.clone() };
 
         if let Some(emitter) = self.emitter.as_ref() {
-            emitter.emit(CanonEvent::LoopObserved(payload));
+            canon_meta::canon_emit_meta!(emitter; LoopObserved(payload));
         }
     }
 

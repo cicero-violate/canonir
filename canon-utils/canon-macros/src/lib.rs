@@ -49,6 +49,10 @@ macro_rules! canon_event_enum {
 /// Writes directly to tlog via `write_event_auto`.
 #[macro_export]
 macro_rules! canon_emit {
+    // Typed variant form: canon_emit!(emitter; LoopPlanned(payload))
+    ($emitter:expr; $variant:ident($inner:expr)) => {{
+        $emitter.emit(canon_event::CanonEvent::$variant($inner))
+    }};
     // Emitter-routed form: routes through EventRuntime → canonical writer
     ($emitter:expr; $source:expr, $kind:expr, $payload:expr) => {{
         $emitter.emit(canon_event::CanonEvent::Debug(canon_event::DebugEvent { source: $source.to_string(), kind: $kind.to_string(), payload: $payload }))

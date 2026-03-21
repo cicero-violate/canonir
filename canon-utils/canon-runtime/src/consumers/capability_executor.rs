@@ -27,7 +27,7 @@ impl EventConsumer for CapabilityExecutor {
         };
         let ctx = CapabilityExecutionContext { workspace: self.workspace.clone(), event: CanonEvent::CapabilityRequested(request.clone()), emitter: self.emitter.clone() };
         let result = match self.registry.lock() {
-            Ok(registry) => registry.execute(&request.name, ctx),
+            Ok(registry) => registry.route(ctx),
             Err(err) => Err(anyhow!("capability registry lock poisoned: {err}")),
         };
 

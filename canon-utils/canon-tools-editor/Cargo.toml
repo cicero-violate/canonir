@@ -21,6 +21,7 @@ serde_json.workspace = true
 chrono.workspace = true
 canon-ir = { path = "../../canon-ir" }
 canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
+canon-meta = { path = "../canon-meta" }
 canon_capability = { package = "canon-capability", path = "../canon-capability" }
 
 [dev-dependencies]

@@ -1,4 +1,4 @@
-use canon_event::{canon_emit, new_error_occurred, CanonEvent, EventConsumer, EventEmitterHandle, EventFilter, RustcEvent};
+use canon_event::{new_error_occurred, CanonEvent, EventConsumer, EventEmitterHandle, EventFilter, RustcEvent};
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs::{create_dir_all, OpenOptions};
@@ -56,7 +56,7 @@ impl EventConsumer for ErrorLogger {
         if !self.should_emit(&source, message) {
             return;
         }
-        let _ = canon_emit!(source, "error_occurred", payload.clone(), &self.tlog_path);
+        let _ = canon_meta::canon_emit_meta!(source, "error_occurred", payload.clone(), &self.tlog_path);
         let _ = append_error_jsonl(&self.jsonl_path, &payload);
     }
 

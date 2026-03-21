@@ -21,7 +21,7 @@
 //!
 //! WsBridge is a cheap-clone handle for callers.
 
-use canon_event::{CanonEvent, DebugEvent, EventEmitterHandle};
+use canon_event::EventEmitterHandle;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
@@ -151,7 +151,7 @@ impl ServerState {
 
 fn emit(cell: &OnceLock<EventEmitterHandle>, source: &'static str, kind: &'static str, payload: Value) {
     if let Some(e) = cell.get() {
-        e.emit(CanonEvent::Debug(DebugEvent { source: source.to_string(), kind: kind.to_string(), payload }));
+        canon_meta::canon_emit_meta!(e; source, kind, payload);
     }
 }
 

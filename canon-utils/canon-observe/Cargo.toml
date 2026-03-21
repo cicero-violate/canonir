@@ -7,5 +7,6 @@ edition = "2021"
 path = "src/lib.rs"
 
 [dependencies]
+canon-meta = { path = "../canon-meta" }
 canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
 serde_json = { workspace = true }

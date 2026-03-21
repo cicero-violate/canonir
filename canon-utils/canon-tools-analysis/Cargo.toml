@@ -21,6 +21,7 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
 canon_capability = { package = "canon-capability", path = "../canon-capability" }
+canon-meta = { path = "../canon-meta" }
 once_cell = { workspace = true }
 
 [dev-dependencies]

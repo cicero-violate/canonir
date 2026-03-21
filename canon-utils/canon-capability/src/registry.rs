@@ -1,3 +1,4 @@
+use crate::r#trait::CapabilitySchema;
 use crate::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityHandler};
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
@@ -23,12 +24,30 @@ impl CapabilityRegistry {
 
     pub fn execute(&self, name: &str, ctx: CapabilityExecutionContext) -> Result<CapabilityExecutionResult> {
         let capability = self.map.get(name).ok_or_else(|| anyhow!("capability not registered: {name}"))?;
-        capability.execute(ctx)
+        capability.handle(ctx)
     }
 
     pub fn names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.map.keys().cloned().collect();
         names.sort();
         names
+    }
+
+    #[allow(deprecated)]
+    pub fn schemas(&self) -> Vec<CapabilitySchema> {
+        self.map.values().map(|h| h.schema()).collect()
+    }
+
+    /// Route a CanonEvent (during migration) via decode bridge.
+    pub fn route(&self, ctx: CapabilityExecutionContext) -> Result<CapabilityExecutionResult> {
+        let name = match &ctx.event {
+            canon_event::CanonEvent::CapabilityRequested(req) => req.name.clone(),
+            _ => return Ok(CapabilityExecutionResult::NoOp),
+        };
+
+        // Decode CapabilityRequested args into typed CanonEvent
+        let typed_event = crate::decode::decode_capability_event(&ctx.event)?;
+        let ctx = CapabilityExecutionContext { event: typed_event, ..ctx };
+        self.execute(&name, ctx)
     }
 }

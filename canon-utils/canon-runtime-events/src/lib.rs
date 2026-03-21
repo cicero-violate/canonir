@@ -36,4 +36,4 @@ pub use events::{
 };
 pub use macros::emit::canon_emit;
 pub use schema::*;
-pub use tlog::{emit_event_json, is_binary_tlog, maybe_rotate, BinarySegmentWriter, BinaryTlogWriter, RotateConfig, SegmentConfig, TlogEvent, TlogWriter};
+pub use tlog::{is_binary_tlog, maybe_rotate, BinarySegmentWriter, BinaryTlogWriter, RotateConfig, SegmentConfig, TlogEvent, TlogWriter};

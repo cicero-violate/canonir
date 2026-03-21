@@ -6,7 +6,7 @@ use crate::query::session::AnalysisSession;
 use crate::structured::{EditOp, FieldMutation, SymbolHandle, SymbolKind};
 use crate::symbol_index::SymbolIndex;
 use anyhow::{anyhow, Result};
-use canon_event::canon_emit;
+use canon_meta;
 use proc_macro2::Span;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -69,7 +69,7 @@ impl ProjectEditor {
         for (file, ast) in &parsed_files {
             let candidates = analysis.file_modules.get(file).cloned().unwrap_or_default();
             if candidates.is_empty() {
-                let _ = canon_emit!(
+                let _ = canon_meta::canon_emit_meta!(
                     "editor.loader",
                     "no_candidates",
                     serde_json::json!({

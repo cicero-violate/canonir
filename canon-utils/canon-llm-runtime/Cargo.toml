@@ -9,6 +9,7 @@ name = "canon_llm"
 
 [dependencies]
 anyhow = "1.0"
+canon-meta = { path = "../canon-meta" }
 canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
 
 # async runtime

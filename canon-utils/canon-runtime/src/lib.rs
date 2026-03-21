@@ -700,12 +700,12 @@ pub fn spawn_kernel_processor(rx: crossbeam_channel::Receiver<KernelMsg>, emitte
                         let delta = EventDelta { id: tick, tick, event: kernel };
                         let _ = apply_delta(&mut state, &delta);
                         if let Some(crate_name) = analysis_crate {
-                            emitter.emit(CanonEvent::CapabilityRequested(CapabilityRequested {
+                            canon_meta::canon_emit_meta!(emitter; CapabilityRequested(CapabilityRequested {
                                 request_id: format!("analysis-k-{}-{}", crate_name, tick),
                                 name: "analysis.run".to_string(),
                                 args: serde_json::json!({ "crate": crate_name }),
                             }));
-                            emitter.emit(CanonEvent::CapabilityRequested(CapabilityRequested {
+                            canon_meta::canon_emit_meta!(emitter; CapabilityRequested(CapabilityRequested {
                                 request_id: format!("analysis-workspace-k-{}", tick),
                                 name: "analysis.workspace".to_string(),
                                 args: serde_json::json!({}),

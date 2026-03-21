@@ -1,6 +1,6 @@
 use crate::bootstrap::PromptRegistryHandle;
 use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityHandler};
-use canon_event::{canon_emit, new_error_occurred, CanonEvent, EventEmitterHandle};
+use canon_event::{new_error_occurred, CanonEvent, EventEmitterHandle};
 use canon_llm::config::CapabilityConfig;
 use canon_llm::endpoint_worker;
 use canon_llm::llm;
@@ -82,7 +82,7 @@ impl LlmCapabilityHandler {
                         // bridge-level events for the rest of the process lifetime.
                         let _ = ws_emitter_thread.set(emitter.clone());
                         let start = Instant::now();
-                        canon_emit!(emitter; "llm_executor", "request_start",
+                        canon_meta::canon_emit_meta!(emitter; "llm_executor", "request_start",
                             json!({ "request_id": request_id, "name": name }));
                         let is_planner_role = role.as_deref() == Some("planner");
                         let bust_cache = config.planner_refine_on_cache && is_planner_role;
@@ -99,7 +99,7 @@ impl LlmCapabilityHandler {
                         };
                         let Some(endpoint) = selected else {
                             let error_msg = if requested_role.is_empty() { "no llm endpoints configured".to_string() } else { format!("no llm endpoint configured for role={}", requested_role) };
-                            emitter.emit(CanonEvent::ErrorOccurred(new_error_occurred(
+                            canon_meta::canon_emit_meta!(emitter; ErrorOccurred(new_error_occurred(
                                 "llm_config",
                                 "llm_executor",
                                 &error_msg,
@@ -111,14 +111,14 @@ impl LlmCapabilityHandler {
                                 }),
                                 Some(request_id.clone()),
                             )));
-                            emitter.emit(CanonEvent::CapabilityFailed(canon_event::CapabilityFailed { request_id, name, error: error_msg }));
+                            canon_meta::canon_emit_meta!(emitter; CapabilityFailed(canon_event::CapabilityFailed { request_id, name, error: error_msg }));
                             continue;
                         };
                         let retries = config.llm_retry_count.max(1);
                         let delay = config.llm_retry_delay_secs;
                         let role_content = default_role_content(role.as_deref().or(endpoint.role.as_deref()), &endpoint.id);
                         let prompt_with_request_id = format!("{{\"request_id\":\"{}\"}}\n{}", request_id, prompt);
-                        canon_emit!(emitter; "llm_executor", "request_dispatch",
+                        canon_meta::canon_emit_meta!(emitter; "llm_executor", "request_dispatch",
                         json!({
                             "request_id": request_id,
                             "endpoint": endpoint.id,
@@ -234,7 +234,7 @@ impl LlmCapabilityHandler {
                                     "finalized_ms": finalized_ms,
                                 });
                                 let _ = std::fs::write(&req_path, serde_json::to_string_pretty(&req_done).unwrap_or_default());
-                                canon_emit!(emitter; "llm_executor", "llm_response",
+                                canon_meta::canon_emit_meta!(emitter; "llm_executor", "llm_response",
                                 json!({
                                     "request_id": request_id,
                                     "endpoint":   endpoint.id,
@@ -245,7 +245,7 @@ impl LlmCapabilityHandler {
                                     "parse_blocks": parse.block_count,
                                     "valid_action_count": parse.valid_action_count,
                                 }));
-                                emitter.emit(CanonEvent::CapabilityCompleted(canon_event::CapabilityCompleted {
+                                canon_meta::canon_emit_meta!(emitter; CapabilityCompleted(canon_event::CapabilityCompleted {
                                     request_id: request_id.clone(),
                                     name,
                                     result: json!({
@@ -255,7 +255,7 @@ impl LlmCapabilityHandler {
                                         "result": payload,
                                     }),
                                 }));
-                                canon_emit!(emitter; "llm_executor", "request_completed",
+                                canon_meta::canon_emit_meta!(emitter; "llm_executor", "request_completed",
                                     json!({ "request_id": request_id }));
                             }
                             Err(err) => {
@@ -280,7 +280,7 @@ impl LlmCapabilityHandler {
                                     "finalized_ms": finalized_ms,
                                 });
                                 let _ = std::fs::write(&req_path, serde_json::to_string_pretty(&req_done).unwrap_or_default());
-                                emitter.emit(CanonEvent::ErrorOccurred(new_error_occurred(
+                                canon_meta::canon_emit_meta!(emitter; ErrorOccurred(new_error_occurred(
                                     "llm_call",
                                     "llm_executor",
                                     err.to_string(),
@@ -291,8 +291,8 @@ impl LlmCapabilityHandler {
                                     }),
                                     Some(request_id.clone()),
                                 )));
-                                emitter.emit(CanonEvent::CapabilityFailed(canon_event::CapabilityFailed { request_id: request_id.clone(), name, error: err.to_string() }));
-                                canon_emit!(emitter; "llm_executor", "request_failed",
+                                canon_meta::canon_emit_meta!(emitter; CapabilityFailed(canon_event::CapabilityFailed { request_id: request_id.clone(), name, error: err.to_string() }));
+                                canon_meta::canon_emit_meta!(emitter; "llm_executor", "request_failed",
                                     json!({ "request_id": request_id, "error": err.to_string() }));
                             }
                         }
@@ -459,7 +459,7 @@ impl CapabilityHandler for LlmCapabilityHandler {
         };
         let role = request.args.get("role").and_then(|v| v.as_str()).map(|v| v.to_string());
         let raw = request.args.get("raw").and_then(|v| v.as_bool()).unwrap_or(false);
-        canon_emit!(emitter; "llm_executor", "enqueue_request",
+        canon_meta::canon_emit_meta!(emitter; "llm_executor", "enqueue_request",
             json!({ "request_id": request.request_id }));
         if self.work_tx.send(LlmWork { request_id: request.request_id, name: request.name, prompt, role, raw, args: request.args, emitter }).is_err() {
             return Err(anyhow::anyhow!("llm executor worker channel closed"));

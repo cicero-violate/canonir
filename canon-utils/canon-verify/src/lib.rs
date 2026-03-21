@@ -1,4 +1,4 @@
-use canon_event::{canon_emit, CanonEvent, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopVerified};
+use canon_event::{CanonEvent, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopVerified};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -89,7 +89,7 @@ impl EventConsumer for VerifyConsumer {
 impl VerifyConsumer {
     fn emit_debug(&self, kind: &str, payload: Value) {
         if let Some(emitter) = self.emitter.as_ref() {
-            let _ = canon_emit!(emitter; "verify_consumer", kind, payload);
+            let _ = canon_meta::canon_emit_meta!(emitter; "verify_consumer", kind, payload);
         }
     }
 
@@ -118,7 +118,7 @@ impl VerifyConsumer {
                 }),
             );
             if let Some(emitter) = self.emitter.as_ref() {
-                emitter.emit(CanonEvent::LoopVerified(LoopVerified {
+                canon_meta::canon_emit_meta!(emitter; LoopVerified(LoopVerified {
                     tick: acted.tick,
                     passed: true,
                     compiler_clean: true,
@@ -184,7 +184,7 @@ impl VerifyConsumer {
         };
 
         if let Some(emitter) = self.emitter.as_ref() {
-            emitter.emit(CanonEvent::LoopVerified(payload));
+            canon_meta::canon_emit_meta!(emitter; LoopVerified(payload));
         }
     }
 }

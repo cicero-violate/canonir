@@ -81,7 +81,7 @@ async fn llm_client_call_agent_json_inner(
         tab_cooldown_ms,
     )
     .await?;
-    let log_dir = "/workspace/ai_sandbox/canon/agent_logs/capability/llm_raw";
+    let log_dir = "/workspace/ai_sandbox/canon/canon-utils/state/reports_out/llm_raw";
     let _ = std::fs::create_dir_all(log_dir);
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let raw_path = format!("{}/llm_raw_full_{}_{}.txt", log_dir, endpoint_id, ts);
@@ -110,7 +110,7 @@ async fn llm_client_call_agent_json_inner_with_req_id(
         tab_cooldown_ms,
     )
     .await?;
-    let log_dir = "/workspace/ai_sandbox/canon/agent_logs/capability/llm_raw";
+    let log_dir = "/workspace/ai_sandbox/canon/canon-utils/state/reports_out/llm_raw";
     let _ = std::fs::create_dir_all(log_dir);
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let raw_path = format!("{}/llm_raw_full_{}_{}.txt", log_dir, endpoint_id, ts);
@@ -239,7 +239,7 @@ async fn llm_client_call_agent_raw_inner(
         tab_cooldown_ms,
     )
     .await?;
-    let log_dir = "/workspace/ai_sandbox/canon/agent_logs/capability/llm_raw";
+    let log_dir = "/workspace/ai_sandbox/canon/canon-utils/state/reports_out/llm_raw";
     let _ = std::fs::create_dir_all(log_dir);
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let raw_path = format!("{}/llm_raw_full_{}_{}.txt", log_dir, endpoint_id, ts);

@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Result};
 use canon_builder::register_build_capabilities;
-use canon_event::canon_emit;
 use canon_event::CapabilityRequested;
 use canon_event_store::read_any_events_from_path;
 use canon_runtime::EventRuntime;
@@ -20,7 +19,7 @@ fn main() -> Result<()> {
         }),
     };
     let payload = serde_json::to_value(&request)?;
-    canon_emit!("smoke-test", "capability_requested", payload, &tmp_dir)?;
+    canon_meta::canon_emit_meta!("smoke-test", "capability_requested", payload, &tmp_dir)?;
 
     let mut runtime = EventRuntime::new(Vec::new());
     register_build_capabilities(&mut runtime.registry_mut());

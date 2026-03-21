@@ -78,7 +78,7 @@ impl TlogWriter {
     }
 }
 
-pub fn emit_event_json(path: &Path, source: impl Into<String>, kind: impl Into<String>, payload: serde_json::Value) -> Result<()> {
+pub(crate) fn emit_event_json(path: &Path, source: impl Into<String>, kind: impl Into<String>, payload: serde_json::Value) -> Result<()> {
     let event = TlogEvent::new(source, kind, payload);
     let writer = TlogWriter::open(path)?;
     writer.write_event(&event)

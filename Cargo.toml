@@ -28,7 +28,7 @@ members = [
   "canon-utils/canon-judgment",
   "canon-utils/canon-storage-graph",
   "canon-utils/canon-tools-analysis", "canon-utils/canon-llm-runtime",
-  "canon-utils/canon-builder", "test_rust_project", "canon-utils/canon-meta", 
+  "canon-utils/canon-builder", "test_rust_project", "canon-utils/canon-meta", "canon-utils/canon-check",
 ]
 exclude = [
   "test_projects",

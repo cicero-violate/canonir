@@ -6,6 +6,7 @@ use canon_event::{CanonEvent, CapabilityRequested, EventEmitter, EventEmitterHan
 use canon_event_store::replay_graph_from_tlog;
 use canon_event_store::AnyEvent;
 use canon_event_store::{extract_rustc_event, read_any_events_from_path, read_any_events_from_path_with_start_seq};
+use canon_runtime::consumers::check_consumer::CheckConsumer;
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
 use canon_judgment::{GuardConfig, RuntimeSignals};
 use canon_observe::ObserveConsumer;
@@ -706,6 +707,7 @@ fn main() -> Result<()> {
         Box::new(VerifyConsumer::new(workspace.clone(), tlog_path.clone())),
         Box::new(RewardConsumer::new()),
         Box::new(ErrorLogger::new(None)),
+        Box::new(CheckConsumer::new()),
     ];
     if event_execution_enabled {
         consumers.push(Box::new(CapabilityExecutor::new(registry.clone(), workspace.clone())));

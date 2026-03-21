@@ -1,4 +1,4 @@
-use canon_event::{CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityRequested, DebugEvent, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopPlanned, ToolCall, ToolResult};
+use canon_event::{CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopPlanned, ToolCall, ToolResult};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::env;
@@ -145,7 +145,7 @@ impl ActConsumer {
 
         match planned.action_kind.as_str() {
             "no_op" | "done" => {
-                emitter.emit(CanonEvent::LoopActed(LoopActed {
+                canon_meta::canon_emit_meta!(emitter; LoopActed(LoopActed {
                     tick: planned.tick,
                     action_kind: planned.action_kind.clone(),
                     capability_request_id: String::new(),
@@ -181,14 +181,10 @@ impl ActConsumer {
                         }
                         DestructiveCmdPolicy::Warn => {
                             if let Some(emitter) = self.emitter.as_ref() {
-                                emitter.emit(CanonEvent::Debug(DebugEvent {
-                                    source: "act_consumer".to_string(),
-                                    kind: "destructive_command_warning".to_string(),
-                                    payload: serde_json::json!({
-                                        "cmd": cmd,
-                                        "policy": self.destructive_cmd_policy.as_str(),
-                                        "action_id": planned.action_id,
-                                    }),
+                                canon_meta::canon_emit_meta!(emitter; "act_consumer", "destructive_command_warning", serde_json::json!({
+                                    "cmd": cmd,
+                                    "policy": self.destructive_cmd_policy.as_str(),
+                                    "action_id": planned.action_id,
                                 }));
                             }
                         }
@@ -215,7 +211,7 @@ impl ActConsumer {
                 );
                 self.write_tool_result_pending_artifact(artifact_n, planned, "bash", &node_id, &tool_call_id, &request_id);
 
-                emitter.emit(CanonEvent::ToolCall(ToolCall {
+                canon_meta::canon_emit_meta!(emitter; ToolCall(ToolCall {
                     node_id: node_id.clone(),
                     tool_call_id: tool_call_id.clone(),
                     request_id: request_id.clone(),
@@ -225,7 +221,7 @@ impl ActConsumer {
                         "cwd": cwd,
                     }),
                 }));
-                emitter.emit(CanonEvent::CapabilityRequested(CapabilityRequested {
+                canon_meta::canon_emit_meta!(emitter; CapabilityRequested(CapabilityRequested {
                     request_id: request_id.clone(),
                     name: "bash".to_string(),
                     args: serde_json::json!({
@@ -279,7 +275,7 @@ impl ActConsumer {
                 );
                 self.write_tool_result_pending_artifact(artifact_n, planned, "file.write", &node_id, &tool_call_id, &request_id);
 
-                emitter.emit(CanonEvent::ToolCall(ToolCall {
+                canon_meta::canon_emit_meta!(emitter; ToolCall(ToolCall {
                     node_id: node_id.clone(),
                     tool_call_id: tool_call_id.clone(),
                     request_id: request_id.clone(),
@@ -289,7 +285,7 @@ impl ActConsumer {
                         "content": content,
                     }),
                 }));
-                emitter.emit(CanonEvent::CapabilityRequested(CapabilityRequested {
+                canon_meta::canon_emit_meta!(emitter; CapabilityRequested(CapabilityRequested {
                     request_id: request_id.clone(),
                     name: "file.write".to_string(),
                     args: serde_json::json!({
@@ -345,7 +341,7 @@ impl ActConsumer {
                 );
                 self.write_tool_result_pending_artifact(artifact_n, planned, "file.patch", &node_id, &tool_call_id, &request_id);
 
-                emitter.emit(CanonEvent::ToolCall(ToolCall {
+                canon_meta::canon_emit_meta!(emitter; ToolCall(ToolCall {
                     node_id: node_id.clone(),
                     tool_call_id: tool_call_id.clone(),
                     request_id: request_id.clone(),
@@ -356,7 +352,7 @@ impl ActConsumer {
                         "new": new,
                     }),
                 }));
-                emitter.emit(CanonEvent::CapabilityRequested(CapabilityRequested {
+                canon_meta::canon_emit_meta!(emitter; CapabilityRequested(CapabilityRequested {
                     request_id: request_id.clone(),
                     name: "file.patch".to_string(),
                     args: serde_json::json!({
@@ -444,7 +440,7 @@ impl ActConsumer {
 
     fn emit_acted(&mut self, pending: PendingAct, stdout: String, stderr: String, exit_code: Option<i32>, duration_ms: u64, success: bool, tool_result_id: Option<String>) {
         if let Some(emitter) = self.emitter.as_ref() {
-            emitter.emit(CanonEvent::LoopActed(LoopActed {
+            canon_meta::canon_emit_meta!(emitter; LoopActed(LoopActed {
                 tick: pending.tick,
                 action_kind: pending.action_kind,
                 capability_request_id: pending.request_id,
@@ -468,7 +464,7 @@ impl ActConsumer {
 
     fn emit_missing_args(&mut self, planned: &LoopPlanned, reason: &str) {
         if let Some(emitter) = self.emitter.as_ref() {
-            emitter.emit(CanonEvent::LoopActed(LoopActed {
+            canon_meta::canon_emit_meta!(emitter; LoopActed(LoopActed {
                 tick: planned.tick,
                 action_kind: planned.action_kind.clone(),
                 capability_request_id: String::new(),
@@ -494,7 +490,7 @@ impl ActConsumer {
     fn emit_tool_result(&self, pending: &PendingAct, tool_result_id: String, output: Value, success: bool) {
         if let Some(emitter) = self.emitter.as_ref() {
             self.write_tool_result_artifact(pending.artifact_n, pending, &tool_result_id, &output, success);
-            emitter.emit(CanonEvent::ToolResult(ToolResult {
+            canon_meta::canon_emit_meta!(emitter; ToolResult(ToolResult {
                 node_id: pending.node_id.clone(),
                 tool_call_id: pending.tool_call_id.clone(),
                 tool_result_id,
@@ -673,7 +669,7 @@ impl ActConsumer {
                 changed = true;
 
                 if let Some(emitter) = self.emitter.as_ref() {
-                    emitter.emit(CanonEvent::ToolResult(ToolResult {
+                    canon_meta::canon_emit_meta!(emitter; ToolResult(ToolResult {
                         node_id: node_id.clone(),
                         tool_call_id: tool_call_id.clone(),
                         tool_result_id: tool_result_id.clone(),
@@ -682,7 +678,7 @@ impl ActConsumer {
                         output: serde_json::json!({"error": error}),
                         success: false,
                     }));
-                    emitter.emit(CanonEvent::LoopActed(LoopActed {
+                    canon_meta::canon_emit_meta!(emitter; LoopActed(LoopActed {
                         tick: row.get("tick").and_then(|v| v.as_u64()).unwrap_or(0),
                         action_kind: row.get("action_kind").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
                         capability_request_id: request_id,
@@ -838,7 +834,7 @@ impl ActConsumer {
             let next = self.queue.pop_front().expect("front exists");
             self.mark_batch_inline_completion(&next, false);
             if let Some(emitter) = self.emitter.as_ref() {
-                emitter.emit(CanonEvent::LoopActed(LoopActed {
+                canon_meta::canon_emit_meta!(emitter; LoopActed(LoopActed {
                     tick: next.tick,
                     action_kind: next.action_kind.clone(),
                     capability_request_id: String::new(),
