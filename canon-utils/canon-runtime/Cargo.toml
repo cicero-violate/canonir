@@ -11,6 +11,17 @@ name = "canon_runtime"
 [[bin]]
 name = "canon-runtime"
 path = "src/bin/event_runtime.rs"
+test = false
+
+[[bin]]
+name = "capability_smoke_test"
+path = "src/bin/capability_smoke_test.rs"
+test = false
+
+[[bin]]
+name = "llm_smoke_test"
+path = "src/bin/llm_smoke_test.rs"
+test = false
 
 [dependencies]
 anyhow = { workspace = true }

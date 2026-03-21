@@ -140,7 +140,12 @@ impl VerifyConsumer {
 
         let tlog_tail = read_tlog_tail(&self.tlog_path, 10);
         let (tlog_clean, tlog_diag) = check_tlog_clean(&tlog_tail, acted.duration_ms);
-        let (file_ok, file_diag) = check_file_written(&tlog_tail, acted);
+        let is_skipped = acted.stderr == "skipped:batch_aborted";
+        let (file_ok, file_diag) = if is_skipped {
+            (true, None)
+        } else {
+            check_file_written(&tlog_tail, acted)
+        };
 
         let mut diagnostics = Vec::new();
         if !compiler_clean {

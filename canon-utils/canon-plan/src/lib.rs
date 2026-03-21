@@ -79,6 +79,9 @@ impl EventConsumer for PlanConsumer {
             }
             CanonEvent::LoopActed(acted) => {
                 self.batch_acted.push(acted.clone());
+                if !acted.success {
+                    self.last_planned_observed_tick = None;
+                }
             }
             CanonEvent::ToolResult(result) if result.kind != "llm.plan" => {
                 self.batch_tool_results.push(result.clone());
@@ -548,6 +551,7 @@ fn parse_llm_actions(result: &Value) -> Vec<LlmAction> {
 }
 
 fn build_prompt(observed: &LoopObserved, batch_acted: &[LoopActed], batch_tool_results: &[ToolResult], include_full_goal: bool, workspace: &std::path::Path) -> String {
+    let workspace_state_section = build_workspace_state_section(observed, workspace);
     let goal_section = match (observed.goal_text.as_ref(), include_full_goal) {
         (Some(text), true) => format!("## Active Goal\n{text}\n\n"),
         (Some(_), false) => "## Active Goal\n(unchanged from previous planner request)\n\n".to_string(),
@@ -607,13 +611,58 @@ fn build_prompt(observed: &LoopObserved, batch_acted: &[LoopActed], batch_tool_r
         s
     };
     format!(
-        "{goal}{progress}{last_action}{last_tool_result}{errors}Execution policy constraints:\n- Do NOT emit destructive commands (`rm -rf`, `git reset --hard`, `git clean -f`, `dd`, `mkfs`, `shred`).\n- If a target directory already exists, prefer `cargo init --bin <dir>` instead of deleting and recreating it.\n\nGeneration policy:\n- You MUST generate LARGE amounts of code per shape step. Each `write` action should contain hundreds to thousands of lines of Rust.\n- A single shape step should advance LOC by thousands, not tens. Write entire modules at once.\n- Do not declare done until the LOC progress section shows >= required LOC.\n\nReturn one or more fenced ```json code blocks (no prose outside code blocks). Each block must be one action object using one schema:\n- Run a command:  {{\"cmd\": \"cargo new foo\", \"cwd\": \"/path\"}}\n- Write a file:   {{\"write\": \"/abs/path\", \"content\": \"full content\"}}\n- Patch a file:   {{\"path\": \"/abs/path\", \"old\": \"exact text\", \"new\": \"replacement\"}}\n- Signal done:    {{\"done\": true, \"reason\": \"...\"}}",
+        "{workspace}{goal}{progress}{last_action}{last_tool_result}{errors}Execution policy constraints:\n- Do NOT emit destructive commands (`rm -rf`, `git reset --hard`, `git clean -f`, `dd`, `mkfs`, `shred`).\n- If a target directory already exists, prefer `cargo init --bin <dir>` instead of deleting and recreating it.\n\nGeneration policy:\n- You MUST generate LARGE amounts of code per shape step. Each `write` action should contain hundreds to thousands of lines of Rust.\n- A single shape step should advance LOC by thousands, not tens. Write entire modules at once.\n- Do not declare done until the LOC progress section shows >= required LOC.\n\nReturn one or more fenced ```json code blocks (no prose outside code blocks). Each block must be one action object using one schema:\n- Run a command:  {{\"cmd\": \"cargo new foo\", \"cwd\": \"/path\"}}\n- Write a file:   {{\"write\": \"/abs/path\", \"content\": \"full content\"}}\n- Patch a file:   {{\"path\": \"/abs/path\", \"old\": \"exact text\", \"new\": \"replacement\"}}\n- Signal done:    {{\"done\": true, \"reason\": \"...\"}}",
+        workspace = workspace_state_section,
         goal = goal_section,
         progress = progress_section,
         last_action = last_action_section,
         last_tool_result = last_tool_result_section,
         errors = error_section,
     )
+}
+
+fn build_workspace_state_section(observed: &LoopObserved, workspace: &std::path::Path) -> String {
+    let target = resolve_target_project_dir(observed, workspace);
+    if target.is_dir() {
+        let cargo_toml = target.join("Cargo.toml").exists();
+        let src_main = target.join("src/main.rs").exists();
+        let entries = std::fs::read_dir(&target)
+            .ok()
+            .into_iter()
+            .flat_map(|it| it.flatten())
+            .take(20)
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect::<Vec<_>>();
+        let contents = if entries.is_empty() {
+            "(empty)".to_string()
+        } else {
+            entries.join(", ")
+        };
+        format!(
+            "## Workspace State\nTarget directory: {} - EXISTS\nCargo.toml present: {}\nsrc/main.rs present: {}\nContents: {}\nDirective: Use `cargo init` or write files directly. Do NOT run `cargo new` for this path.\n\n",
+            target.display(),
+            cargo_toml,
+            src_main,
+            contents
+        )
+    } else {
+        format!(
+            "## Workspace State\nTarget directory: {} - DOES NOT EXIST\nDirective: Use `cargo new` or `cargo init` to create the project directory.\n\n",
+            target.display()
+        )
+    }
+}
+
+fn resolve_target_project_dir(observed: &LoopObserved, workspace: &std::path::Path) -> std::path::PathBuf {
+    observed
+        .goal_text
+        .as_ref()
+        .and_then(|goal_text| {
+            goal_text
+                .lines()
+                .find_map(|l| l.trim().strip_prefix("- Project path:").map(|p| std::path::PathBuf::from(p.trim().trim_matches('`'))))
+        })
+        .unwrap_or_else(|| workspace.join("test_rust_project_v3"))
 }
 
 fn build_progress_section(observed: &LoopObserved, workspace: &std::path::Path) -> String {
@@ -633,10 +682,7 @@ fn build_progress_section(observed: &LoopObserved, workspace: &std::path::Path) 
         return String::new();
     }
 
-    let target = goal_text
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("- Project path:").map(|p| std::path::PathBuf::from(p.trim().trim_matches('`'))))
-        .unwrap_or_else(|| workspace.join("test_rust_project_v3"));
+    let target = resolve_target_project_dir(observed, workspace);
 
     let actual_loc = count_loc_in_workspace(&target);
     let remaining = required_loc.saturating_sub(actual_loc);

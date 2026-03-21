@@ -349,10 +349,12 @@ fn update_route_runtime_state(route_state: &mut RouteRuntimeState, event: &Canon
             }
             route_state.push_journal("plan", summary);
         }
-        CanonEvent::LoopActed(LoopActed { action_kind, capability_request_id, tool_call_id, tool_result_id, success, .. }) => {
+        CanonEvent::LoopActed(LoopActed { action_kind, capability_request_id, tool_call_id, tool_result_id, success, stderr, .. }) => {
             route_state.planned_pending = route_state.planned_pending.saturating_sub(1);
             route_state.acted_unverified = true;
-            route_state.last_action_failed = !success;
+            if stderr != "skipped:batch_aborted" {
+                route_state.last_action_failed = !success;
+            }
             if let Some(tool_call_id) = tool_call_id {
                 if tool_result_id.is_some() {
                     route_state.pending_tool_result_ids.remove(tool_call_id);
