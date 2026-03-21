@@ -16,7 +16,6 @@ members = [
   "canon-utils/canon-runtime",
   "canon-utils/canon-macros",
   "canon-utils/canon-types",
-  "canon-utils/canon-capability",
   "canon-utils/canon-runtime-supervisor",
  "canon-utils/canon-goal",
  "canon-utils/canon-observe",
@@ -29,7 +28,7 @@ members = [
  "canon-utils/canon-storage-graph",
  "canon-utils/canon-tools-analysis", "canon-utils/canon-llm-runtime",
   "canon-utils/canon-builder", "test_rust_project", "canon-utils/canon-meta", "canon-utils/canon-check",
-  "canon-utils/canon-introspection",
+  "canon-utils/canon_exec",
 ]
 exclude = [
   "test_projects",
