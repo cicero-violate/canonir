@@ -8,20 +8,20 @@ All structural work is done and verified. Two diagnostic fixes remain before the
 
 ## Verification Results
 
-| Check | Status | Evidence |
-|---|---|---|
-| `CapabilityRequested` removed | ✅ | Zero grep matches across all .rs files |
-| `canon_event_struct!` derives `Default` | ✅ | Line 7 of canon-macros/src/lib.rs |
-| `canon_event_enum!` generates `sample_all()` | ✅ | Lines 33-43 of canon-macros/src/lib.rs |
-| `canon-introspection` crate exists | ✅ | Crate + lib.rs present |
-| `assert_all_routes_safe` used in tests | ✅ | canon-capability/src/tests.rs |
-| `decode.rs` deleted | ✅ | File does not exist |
-| `ArgSpec` / `ArgKind` removed | ✅ | Zero grep matches across all .rs files |
-| `registry.route()` type-based dispatch | ✅ | Uses `matches!` on typed variants |
-| `CapabilityExecutor` typed filter | ✅ | `EventFilter::All` + typed guard |
-| Sub-enum `Default` impls | ✅ | All 4 impls in events.rs:314-336 |
-| `anyhow` import in tools-editor | ❌ | Used but not imported — compiler error |
-| Unused imports in builder capabilities | ❌ | Stale imports — compiler warning as error |
+| Check                                        | Status | Evidence                                  |
+|----------------------------------------------+--------+-------------------------------------------|
+| `CapabilityRequested` removed                | ✅     | Zero grep matches across all .rs files    |
+| `canon_event_struct!` derives `Default`      | ✅     | Line 7 of canon-macros/src/lib.rs         |
+| `canon_event_enum!` generates `sample_all()` | ✅     | Lines 33-43 of canon-macros/src/lib.rs    |
+| `canon-introspection` crate exists           | ✅     | Crate + lib.rs present                    |
+| `assert_all_routes_safe` used in tests       | ✅     | canon-capability/src/tests.rs             |
+| `decode.rs` deleted                          | ✅     | File does not exist                       |
+| `ArgSpec` / `ArgKind` removed                | ✅     | Zero grep matches across all .rs files    |
+| `registry.route()` type-based dispatch       | ✅     | Uses `matches!` on typed variants         |
+| `CapabilityExecutor` typed filter            | ✅     | `EventFilter::All` + typed guard          |
+| Sub-enum `Default` impls                     | ✅     | All 4 impls in events.rs:314-336          |
+| `anyhow` import in tools-editor              | ❌     | Used but not imported — compiler error    |
+| Unused imports in builder capabilities       | ❌     | Stale imports — compiler warning as error |
 
 ---
 
