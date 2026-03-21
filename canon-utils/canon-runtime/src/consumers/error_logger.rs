@@ -12,6 +12,7 @@ pub struct ErrorLogger {
     tlog_path: PathBuf,
     jsonl_path: PathBuf,
     seen: HashMap<u64, Instant>,
+    emitter: Option<EventEmitterHandle>,
 }
 
 impl ErrorLogger {
@@ -22,7 +23,7 @@ impl ErrorLogger {
         if let Some(parent) = jsonl_path.parent() {
             let _ = create_dir_all(parent);
         }
-        Self { tlog_path, jsonl_path, seen: HashMap::new() }
+        Self { tlog_path, jsonl_path, seen: HashMap::new(), emitter: None }
     }
 
     fn should_emit(&mut self, source: &str, message: &str) -> bool {
@@ -56,11 +57,17 @@ impl EventConsumer for ErrorLogger {
         if !self.should_emit(&source, message) {
             return;
         }
-        let _ = canon_meta::canon_emit_meta!(source, "error_occurred", payload.clone(), &self.tlog_path);
+        if let Some(emitter) = &self.emitter {
+            canon_meta::canon_emit_meta!(emitter; source, "error_occurred", payload.clone());
+        } else {
+            let _ = canon_meta::canon_emit_meta!(source, "error_occurred", payload.clone(), &self.tlog_path);
+        }
         let _ = append_error_jsonl(&self.jsonl_path, &payload);
     }
 
-    fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
+    fn set_emitter(&mut self, emitter: EventEmitterHandle) {
+        self.emitter = Some(emitter);
+    }
 }
 
 fn dedup_key(source: &str, message: &str) -> u64 {
