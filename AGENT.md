@@ -1,5 +1,7 @@
 RULES TO FOLLOW
 If you are tempted to create a heuristic, it means there is a structural gap.The new solution lacks invariants. Therefore abort the job, and notify the user.
+Create code that is zero maintenance
+Full forward compatibility
 
 USEFUL INFORMATION
 rustc compiler source code can be found in here, it is very useful
