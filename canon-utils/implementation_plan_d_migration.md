@@ -3,14 +3,21 @@
 ## Current Build Status
 
 ```
-Phase 1 — 🔴 not started  (canon-route crate: RouteContext, helpers, RouteDecision, decide())
-Phase 2 — 🔴 not started  (RouteExecutor: EventConsumer in canon-route)
-Phase 3 — 🔴 not started  (simplify event_runtime.rs)
-Phase 4 — 🔴 not started  (cargo check + tests)
-Phase 5 — 🔴 not started  (line count confirmed)
+Phase 1 — ✅ complete  (canon-route crate: RouteContext, helpers, RouteDecision, decide_from_json())
+Phase 2 — ✅ complete  (RouteExecutor: EventConsumer in canon-route)
+Phase 3 — ✅ complete  (event_runtime.rs simplified: 1358 → 749 lines)
+Phase 4 — ✅ complete  (cargo check --workspace exits 0; 2 tests pass in canon-route; 1 test passes in canon-runtime)
+Phase 5 — ✅ complete  (749 lines ≤ 750 target confirmed)
 ```
 
-**Prerequisite:** `cargo check --workspace` clean (confirmed post C-migration 2026-03-21).
+**Confirmed 2026-03-21:**
+- `cargo check --workspace` — zero errors
+- `cargo test -p canon-route` — 2 tests pass (`route_state_transitions_after_loop_events`, `journal_is_bounded_to_32_lines`)
+- `cargo test -p canon-runtime` — 1 test passes (`async_consumers_preserve_order_per_consumer`)
+- `wc -l event_runtime.rs` — 749 lines (target was ≤ 750)
+- IDE diagnostic "unresolved import canon_route::RouteExecutor" is **stale** — ground truth is `cargo check`
+
+**NOTE:** The IDE showed E0432 for `canon_route::RouteExecutor` but this was a stale diagnostic. `cargo check --workspace` was already clean — the crate, dependency, and import were all correctly wired by Codex.
 
 ---
 
@@ -750,11 +757,11 @@ Breakdown of what remains:
 ## Execution Order
 
 ```
-Phase 1 — 🔴 next   (cargo check -p canon-route exits 0)
-Phase 2 — 🔴        (RouteExecutor compiles; cargo check -p canon-route exits 0)
-Phase 3 — 🔴        (cargo check -p canon-runtime exits 0)
-Phase 4 — 🔴        (cargo check --workspace exits 0; 2 tests pass in canon-route)
-Phase 5 — 🔴 last   (line count ≤ 750 confirmed)
+Phase 1 — ✅ complete
+Phase 2 — ✅ complete
+Phase 3 — ✅ complete
+Phase 4 — ✅ complete
+Phase 5 — ✅ complete
 ```
 
 ---
@@ -763,15 +770,15 @@ Phase 5 — 🔴 last   (line count ≤ 750 confirmed)
 
 | Phase | Status | File | Action |
 |-------|--------|------|--------|
-| 1 | 🔴 | `Cargo.toml` (workspace) | Add `"canon-utils/canon-route"` member |
-| 1 | 🔴 | `canon-route/Cargo.toml` | Create |
-| 1 | 🔴 | `canon-route/src/lib.rs` | Create |
-| 1 | 🔴 | `canon-route/src/context.rs` | Create: `RouteContext`, `update_from_event()`, 2 unit tests |
-| 1 | 🔴 | `canon-route/src/helpers.rs` | Create: helpers + `DirectEventEmitter` |
-| 1 | 🔴 | `canon-route/src/decision.rs` | Create: `RouteDecision`, `decide_from_json()` |
-| 2 | 🔴 | `canon-route/src/executor.rs` | Create: `RouteExecutor` EventConsumer |
-| 3 | 🔴 | `canon-runtime/Cargo.toml` | Add `canon_route` dep |
-| 3 | 🔴 | `canon-runtime/src/bin/event_runtime.rs` | Remove ~600 lines; add `RouteExecutor` to consumers |
+| 1 | ✅ | `Cargo.toml` (workspace) | Added `"canon-utils/canon-route"` member |
+| 1 | ✅ | `canon-route/Cargo.toml` | Created |
+| 1 | ✅ | `canon-route/src/lib.rs` | Created |
+| 1 | ✅ | `canon-route/src/context.rs` | Created: `RouteContext`, `update_from_event()`, 2 unit tests |
+| 1 | ✅ | `canon-route/src/helpers.rs` | Created: helpers + `DirectEventEmitter` |
+| 1 | ✅ | `canon-route/src/decision.rs` | Created: `RouteDecision`, `decide_from_json()` |
+| 2 | ✅ | `canon-route/src/executor.rs` | Created: `RouteExecutor` EventConsumer |
+| 3 | ✅ | `canon-runtime/Cargo.toml` | Added `canon_route` dep |
+| 3 | ✅ | `canon-runtime/src/bin/event_runtime.rs` | Removed ~609 lines; added `RouteExecutor` to consumers |
 
 ---
 

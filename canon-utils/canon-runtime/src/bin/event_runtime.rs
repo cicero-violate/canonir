@@ -1,20 +1,15 @@
 use anyhow::{anyhow, Result};
-use canon_decision::{JournalLine, RouteKind};
-use canon_event::{
-    CanonEvent, CapabilityResult, EventEmitter, EventEmitterHandle, LlmCall, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult, EVENT_SCHEMA_VERSION,
-};
+use canon_event::EVENT_SCHEMA_VERSION;
 use canon_event_store::replay_graph_from_tlog;
 use canon_event_store::AnyEvent;
 use canon_event_store::{extract_rustc_event, read_any_events_from_path, read_any_events_from_path_with_start_seq};
-use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
-use canon_judgment::{GuardConfig, RuntimeSignals};
+use canon_route::RouteExecutor;
 use canon_loop::LoopStageExecutor;
 use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry, prompts_dir, reload_prompt_file};
 use canon_runtime::consumers::capability_executor::CapabilityExecutor;
 use canon_runtime::consumers::check_consumer::CheckConsumer;
 use canon_runtime::consumers::error_logger::ErrorLogger;
 use canon_runtime::{spawn_kernel_processor, EventRuntime, KernelMsg};
-use canon_runtime_supervisor::judgment_loop::RouteController;
 use crossbeam_channel as cc;
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashSet;
@@ -22,7 +17,6 @@ use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -124,313 +118,18 @@ fn is_kernel_canon_event(event: &AnyEvent) -> bool {
     }
 }
 
-#[derive(Default)]
-struct RouteRuntimeState {
-    scheduler_tick: u64,
-    mission_raw: String,
-    mission_summary: String,
-    mission_goal_spec: Option<GoalSpec>,
-    context_ready: bool,
-    workspace_dirty: bool,
-    planned_pending: usize,
-    acted_unverified: bool,
-    last_action_failed: bool,
-    pending_tool_result_ids: HashSet<String>,
-    latest_tool_result: Option<serde_json::Value>,
-    finish_ready: bool,
-    last_action_kind: String,
-    journal: Vec<JournalLine>,
-}
+// Routing is now event-driven via canon-route RouteExecutor. Routing state is managed
+// internally by that consumer rather than here in the runtime binary.
 
-struct DirectEventEmitter {
-    tx: cc::Sender<CanonEvent>,
-}
-
-impl EventEmitter for DirectEventEmitter {
-    fn emit(&self, event: CanonEvent) {
-        let _ = self.tx.send(event);
-    }
-}
-
-impl RouteRuntimeState {
-    fn signals(&self) -> RuntimeSignals {
-        RuntimeSignals {
-            context_ready: self.context_ready,
-            has_queued_plan: self.planned_pending > 0,
-            workspace_dirty: self.workspace_dirty,
-            performed_recently: self.acted_unverified,
-            last_action_failed: self.last_action_failed,
-            finish_ready: self.finish_ready,
-        }
-    }
-
-    fn snapshot_text(&self) -> String {
-        format!(
-            "tick={tick}\ncontext_ready={context}\nworkspace_dirty={dirty}\nplanned_pending={pending}\nacted_unverified={unverified}\nfinish_ready={finish}\nlast_action_kind={action}",
-            tick = self.scheduler_tick,
-            context = self.context_ready,
-            dirty = self.workspace_dirty,
-            pending = self.planned_pending,
-            unverified = self.acted_unverified,
-            finish = self.finish_ready,
-            action = self.last_action_kind,
-        )
-    }
-
-    fn push_journal(&mut self, lane: impl Into<String>, summary: impl Into<String>) {
-        self.journal.push(JournalLine { lane: lane.into(), summary: summary.into(), data: serde_json::Value::Null });
-        if self.journal.len() > 32 {
-            let drop_n = self.journal.len() - 32;
-            self.journal.drain(0..drop_n);
-        }
-    }
-}
-
-fn heuristic_route_json(state: &RouteRuntimeState) -> String {
-    let route = if state.finish_ready {
-        RouteKind::Conclude
-    } else if state.planned_pending > 0 {
-        RouteKind::Execute
-    } else if state.acted_unverified {
-        RouteKind::Validate
-    } else if state.workspace_dirty {
-        RouteKind::Validate
-    } else if state.context_ready {
-        RouteKind::Shape
-    } else {
-        RouteKind::Scan
-    };
-    serde_json::json!({
-        "route": route.as_str(),
-        "rationale": "heuristic proposal from runtime state",
-        "confidence": 0.75,
-        "signals": {
-            "context_ready": state.context_ready,
-            "workspace_dirty": state.workspace_dirty,
-            "planned_pending": state.planned_pending,
-            "acted_unverified": state.acted_unverified,
-            "finish_ready": state.finish_ready,
-        }
-    })
-    .to_string()
-}
-
-fn request_route_via_llm_call(
-    workspace: &Path, prompt: String, timeout: Duration, _last_tool_result: Option<serde_json::Value>,
-) -> Result<String> {
-    let request_id = format!("route-{}", Uuid::new_v4());
-    let event = CanonEvent::Llm(LlmCall { request_id: request_id.clone(), prompt: prompt, role: Some("router".to_string()) });
-    let (tx, rx) = cc::unbounded::<CanonEvent>();
-    let emitter: EventEmitterHandle = Arc::new(DirectEventEmitter { tx });
-    let ctx = canon_exec::ExecutionContext { workspace: workspace.to_path_buf(), emitter: emitter.clone() };
-    let exec = canon_exec::ExecutableEvent::try_from(event.clone()).map_err(|_| anyhow!("llm.call not executable"))?;
-    match exec.execute(ctx)? {
-        canon_exec::ExecutionResult::Emit(e) => emitter.emit(e),
-        canon_exec::ExecutionResult::EmitMany(evs) => evs.into_iter().for_each(|e| emitter.emit(e)),
-        canon_exec::ExecutionResult::Deferred => {}
-    }
-
-    let deadline = Instant::now() + timeout;
-    loop {
-        let now = Instant::now();
-        if now >= deadline {
-            return Err(anyhow!("route llm.call timed out"));
-        }
-        let remaining = deadline.saturating_duration_since(now);
-        let event = rx.recv_timeout(remaining).map_err(|_| anyhow!("route llm.call timed out"))?;
-        match event {
-            CanonEvent::CapabilityCompleted(done) if done.request_id == request_id && done.capability == "llm.call" => match done.result {
-                CapabilityResult::Llm(res) => {
-                    if let Some(text) = res.response.get("text").and_then(|v| v.as_str()) {
-                        return Ok(text.to_string());
-                    }
-                    return Ok(res.response.to_string());
-                }
-                CapabilityResult::Process(proc) => return Ok(proc.stdout),
-                CapabilityResult::Empty => return Ok(String::new()),
-            },
-            CanonEvent::CapabilityFailed(failed) if failed.request_id == request_id && failed.capability == "llm.call" => {
-                return Err(anyhow!("route llm.call failed: {}", failed.error));
-            }
-            _ => {}
-        }
-    }
-}
-
-fn count_loc(dir: &Path) -> usize {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return 0;
-    };
-    let mut total = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            total += count_loc(&path);
-        } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                total += content.lines().count();
-            }
-        }
-    }
-    total
-}
-
-fn extract_loc_requirement(spec: &GoalSpec) -> usize {
-    for req in &spec.requirements {
-        let lower = req.to_lowercase();
-        if lower.contains("loc") {
-            let digits: String = req.chars().filter(|c| c.is_ascii_digit()).collect();
-            if let Ok(n) = digits.parse::<usize>() {
-                return n;
-            }
-        }
-    }
-    0
-}
-
-fn evaluate_goal_satisfied(spec: Option<&GoalSpec>, workspace: &Path) -> bool {
-    let Some(spec) = spec else {
-        return false;
-    };
-    let target = spec.target_path.clone().unwrap_or_else(|| workspace.join("test_rust_project_v3"));
-    if !target.is_dir() {
-        return false;
-    }
-
-    let readme = target.join("README.md");
-    let readme_non_empty = std::fs::metadata(&readme).ok().map(|m| m.is_file() && m.len() > 0).unwrap_or(false);
-    if !readme_non_empty {
-        return false;
-    }
-
-    let required_loc = extract_loc_requirement(spec);
-    if required_loc > 0 {
-        let actual_loc = count_loc(&target);
-        if actual_loc < required_loc {
-            return false;
-        }
-    }
-
-    std::process::Command::new("cargo").arg("build").current_dir(&target).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
-}
-
-fn update_route_runtime_state(route_state: &mut RouteRuntimeState, event: &CanonEvent, workspace: &Path) {
-    match event {
-        CanonEvent::LoopObserved(LoopObserved { goal_text, error_count, .. }) => {
-            let goal_present = goal_text.as_ref().map(|v| !v.trim().is_empty()).unwrap_or(false);
-            route_state.context_ready = goal_present || *error_count > 0;
-            if let Some(goal_text) = goal_text {
-                if !goal_text.trim().is_empty() {
-                    route_state.mission_raw = goal_text.clone();
-                    route_state.mission_summary = summarize_goal(&parse_agent_goal_markdown(goal_text));
-                    route_state.mission_goal_spec = Some(parse_agent_goal_markdown(goal_text));
-                }
-            }
-            route_state.push_journal("observe", format!("tick={} goal_present={} errors={}", route_state.scheduler_tick, goal_present, error_count));
-        }
-        CanonEvent::LoopPlanned(LoopPlanned { action_kind, plan_id, action_id, llm_request_id, .. }) => {
-            route_state.planned_pending = route_state.planned_pending.saturating_add(1);
-            let mut summary = format!("planned action={action_kind}");
-            if let Some(plan_id) = plan_id {
-                summary.push_str(&format!(" plan_id={plan_id}"));
-            }
-            if let Some(action_id) = action_id {
-                summary.push_str(&format!(" action_id={action_id}"));
-            }
-            if let Some(llm_request_id) = llm_request_id {
-                summary.push_str(&format!(" llm_request_id={llm_request_id}"));
-            }
-            route_state.push_journal("plan", summary);
-        }
-        CanonEvent::LoopActed(LoopActed { action_kind, capability_request_id, tool_call_id, tool_result_id, success, stderr, .. }) => {
-            route_state.planned_pending = route_state.planned_pending.saturating_sub(1);
-            route_state.acted_unverified = true;
-            if stderr != "skipped:batch_aborted" {
-                route_state.last_action_failed = !success;
-            }
-            if let Some(tool_call_id) = tool_call_id {
-                if tool_result_id.is_some() {
-                    route_state.pending_tool_result_ids.remove(tool_call_id);
-                }
-            }
-            route_state.workspace_dirty = true;
-            route_state.last_action_kind = action_kind.clone();
-            let mut summary = format!("executed action={} success={} capability_request_id={}", route_state.last_action_kind, success, capability_request_id);
-            if let Some(tool_call_id) = tool_call_id {
-                summary.push_str(&format!(" tool_call_id={tool_call_id}"));
-            }
-            if let Some(tool_result_id) = tool_result_id {
-                summary.push_str(&format!(" tool_result_id={tool_result_id}"));
-            }
-            route_state.push_journal("act", summary);
-        }
-        CanonEvent::LoopVerified(LoopVerified { passed, diagnostics, .. }) => {
-            route_state.acted_unverified = false;
-            route_state.workspace_dirty = false;
-            let system_satisfied = evaluate_goal_satisfied(route_state.mission_goal_spec.as_ref(), workspace);
-            route_state.finish_ready = *passed && system_satisfied;
-            route_state.push_journal("verify", format!("passed={} system_satisfied={} diagnostics={}", passed, system_satisfied, diagnostics.join("|")));
-        }
-        CanonEvent::LoopRewarded(LoopRewarded { halt, .. }) => {
-            if *halt {
-                route_state.finish_ready = true;
-            }
-            route_state.push_journal("reward", format!("halt={halt}"));
-        }
-        CanonEvent::ToolCall(ToolCall { tool_call_id, .. }) => {
-            // Track in-flight tool calls as soon as dispatch occurs.
-            route_state.pending_tool_result_ids.insert(tool_call_id.clone());
-            route_state.latest_tool_result = None;
-        }
-        CanonEvent::ToolResult(ToolResult { node_id, kind, success, request_id, tool_call_id, tool_result_id, output, .. }) => {
-            route_state.pending_tool_result_ids.remove(tool_call_id);
-            let mut output_text = output.to_string();
-            if output_text.len() > 512 {
-                output_text.truncate(512);
-                output_text.push_str("...<truncated>");
-            }
-            route_state.latest_tool_result = Some(serde_json::json!({
-                "node_id": node_id,
-                "kind": kind,
-                "success": success,
-                "request_id": request_id,
-                "tool_call_id": tool_call_id,
-                "tool_result_id": tool_result_id,
-                "output": output,
-            }));
-            route_state.push_journal("tool", format!("tool_result kind={kind} success={success} tool_call_id={tool_call_id} tool_result_id={tool_result_id} output={output_text}"));
-        }
-        CanonEvent::RuntimeStateUpdated(updated) => {
-            let dirty = updated.payload.get("workspace_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
-            if dirty {
-                route_state.workspace_dirty = true;
-                let crate_name = updated.payload.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown");
-                route_state.push_journal("observe", format!("workspace_dirty=true crate={crate_name}"));
-            }
-        }
-        _ => {}
-    }
-}
-
-fn apply_observed_events(runtime: &mut EventRuntime, route_state: &mut RouteRuntimeState, workspace: &Path) -> Result<()> {
-    let observed = runtime.take_observed_events();
-    if observed.is_empty() {
-        return Ok(());
-    }
-    for emitted in observed {
-        update_route_runtime_state(route_state, &emitted, workspace);
-    }
-    Ok(())
-}
+// Observed-event routing state accumulation is handled inside canon-route.
 
 fn handle_event_msg(
-    msg: EventMsg, runtime: &mut EventRuntime, route_state: &mut RouteRuntimeState, workspace: &Path, processed: &mut usize, cursor_path: &Path, tlog_path: &Path, start_seq: u64, session_id: &str,
-    last_saved: &mut Instant, last_saved_processed: &mut usize,
+    msg: EventMsg, runtime: &mut EventRuntime, processed: &mut usize, cursor_path: &Path, tlog_path: &Path, start_seq: u64, session_id: &str, last_saved: &mut Instant,
+    last_saved_processed: &mut usize,
 ) -> Result<()> {
     match msg {
         EventMsg::Event(event) => {
             runtime.process_events(std::slice::from_ref(&event))?;
-            apply_observed_events(runtime, route_state, workspace)?;
             *processed = processed.saturating_add(1);
             if *processed != *last_saved_processed
                 && last_saved.elapsed() >= Duration::from_secs(1)
@@ -443,181 +142,35 @@ fn handle_event_msg(
         EventMsg::Reset(events) => {
             runtime.reset();
             runtime.process_events(&events)?;
-            apply_observed_events(runtime, route_state, workspace)?;
             *processed = events.len();
         }
     }
     Ok(())
 }
 
-fn drain_event_queue_with_grace(
-    q_event_rx: &cc::Receiver<EventMsg>, runtime: &mut EventRuntime, route_state: &mut RouteRuntimeState, workspace: &Path, processed: &mut usize, cursor_path: &Path, tlog_path: &Path,
-    start_seq: u64, session_id: &str, last_saved: &mut Instant, last_saved_processed: &mut usize, grace: Duration,
-) -> Result<()> {
-    while let Ok(event_msg) = q_event_rx.try_recv() {
-        handle_event_msg(event_msg, runtime, route_state, workspace, processed, cursor_path, tlog_path, start_seq, session_id, last_saved, last_saved_processed)?;
-    }
-
-    let deadline = Instant::now() + grace;
-    while Instant::now() < deadline {
-        match q_event_rx.recv_timeout(Duration::from_millis(5)) {
-            Ok(event_msg) => {
-                handle_event_msg(event_msg, runtime, route_state, workspace, processed, cursor_path, tlog_path, start_seq, session_id, last_saved, last_saved_processed)?;
-            }
-            Err(cc::RecvTimeoutError::Timeout) => {
-                if q_event_rx.is_empty() {
-                    break;
-                }
-            }
-            Err(cc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    Ok(())
-}
-
 fn handle_control_msg(
-    msg: ControlMsg, q_event_rx: &cc::Receiver<EventMsg>, runtime: &mut EventRuntime, route_controller: &mut RouteController, route_state: &mut RouteRuntimeState,
-    workspace: &Path, processed: &mut usize, cursor_path: &Path, tlog_path: &Path, start_seq: u64, session_id: &str, last_saved: &mut Instant, last_saved_processed: &mut usize,
+    msg: ControlMsg, runtime: &mut EventRuntime, processed: &mut usize, cursor_path: &Path, tlog_path: &Path, start_seq: u64, session_id: &str, last_saved: &mut Instant,
+    last_saved_processed: &mut usize, scheduler_tick: &mut u64,
 ) -> Result<bool> {
     match msg {
         ControlMsg::Tick => {
-            runtime.flush_emitted_events()?;
-            apply_observed_events(runtime, route_state, workspace)?;
-
-            if !route_state.pending_tool_result_ids.is_empty() {
-                runtime.emit_debug_event(
-                    "supervisor".to_string(),
-                    "route_blocked_waiting_tool_result".to_string(),
-                    serde_json::json!({
-                        "tick": route_state.scheduler_tick,
-                        "pending_tool_call_ids": route_state.pending_tool_result_ids.iter().cloned().collect::<Vec<_>>(),
-                        "planned_pending": route_state.planned_pending,
-                        "acted_unverified": route_state.acted_unverified,
-                        "last_action_kind": route_state.last_action_kind,
-                    }),
-                )?;
-                runtime.flush_emitted_events()?;
-                apply_observed_events(runtime, route_state, workspace)?;
-                return Ok(false);
-            }
-
-            route_state.scheduler_tick = route_state.scheduler_tick.saturating_add(1);
+            *scheduler_tick = scheduler_tick.saturating_add(1);
             runtime.emit_debug_event(
                 "supervisor".to_string(),
-                "signals_snapshot".to_string(),
+                "route_tick".to_string(),
                 serde_json::json!({
-                    "tick": route_state.scheduler_tick,
-                    "context_ready": route_state.context_ready,
-                    "planned_pending": route_state.planned_pending,
-                    "has_queued_plan": route_state.planned_pending > 0,
-                    "acted_unverified": route_state.acted_unverified,
-                    "last_action_kind": route_state.last_action_kind,
-                    "last_action_failed": route_state.last_action_failed,
-                    "workspace_dirty": route_state.workspace_dirty,
-                    "finish_ready": route_state.finish_ready,
-                    "ltr_present": route_state.latest_tool_result.is_some(),
-                    "pending_tool_count": route_state.pending_tool_result_ids.len(),
+                    "tick": *scheduler_tick,
                 }),
             )?;
-            let snapshot = route_state.snapshot_text();
-            let prompt = route_controller.build_prompt(&route_state.mission_summary, &snapshot, route_state.latest_tool_result.as_ref(), &route_state.journal);
-            let model_json = match request_route_via_llm_call(workspace, prompt.clone(), Duration::from_secs(90), route_state.latest_tool_result.clone()) {
-                Ok(json) => json,
-                Err(err) => {
-                    runtime.emit_debug_event(
-                        "supervisor".to_string(),
-                        "route_llm_fallback".to_string(),
-                        serde_json::json!({
-                            "tick": route_state.scheduler_tick,
-                            "error": err.to_string(),
-                        }),
-                    )?;
-                    heuristic_route_json(route_state)
-                }
-            };
-
-            drain_event_queue_with_grace(q_event_rx, runtime, route_state, workspace, processed, cursor_path, tlog_path, start_seq, session_id, last_saved, last_saved_processed, Duration::ZERO)?;
-            apply_observed_events(runtime, route_state, workspace)?;
-            if !route_state.pending_tool_result_ids.is_empty() {
-                runtime.emit_debug_event(
-                    "supervisor".to_string(),
-                    "route_blocked_waiting_tool_result".to_string(),
-                    serde_json::json!({
-                        "tick": route_state.scheduler_tick,
-                        "reason": "tools_dispatched_during_llm_call",
-                        "pending_tool_call_ids": route_state.pending_tool_result_ids.iter().cloned().collect::<Vec<_>>(),
-                    }),
-                )?;
-                runtime.flush_emitted_events()?;
-                apply_observed_events(runtime, route_state, workspace)?;
-                return Ok(false);
-            }
-
-            let signals = route_state.signals();
-            let (selection, gate) = match route_controller.evaluate_model_output(&model_json, &signals) {
-                Ok(v) => v,
-                Err(err) => {
-                    runtime.emit_debug_event(
-                        "supervisor".to_string(),
-                        "route_error".to_string(),
-                        serde_json::json!({
-                            "tick": route_state.scheduler_tick,
-                            "error": err,
-                            "fallback": "heuristic",
-                        }),
-                    )?;
-                    let fallback_json = heuristic_route_json(route_state);
-                    match route_controller.evaluate_model_output(&fallback_json, &signals) {
-                        Ok(v) => v,
-                        Err(fallback_err) => {
-                            runtime.emit_debug_event(
-                                "supervisor".to_string(),
-                                "route_error".to_string(),
-                                serde_json::json!({
-                                    "tick": route_state.scheduler_tick,
-                                    "error": fallback_err,
-                                    "fallback": "failed",
-                                }),
-                            )?;
-                            return Ok(false);
-                        }
-                    }
-                }
-            };
-
-            let lane = gate.lane.as_str();
-            runtime.emit_debug_event(
-                "supervisor".to_string(),
-                "route_selected".to_string(),
-                serde_json::json!({
-                    "tick": route_state.scheduler_tick,
-                    "suggested_route": selection.route.as_str(),
-                    "approved_route": lane,
-                    "rationale": selection.rationale,
-                    "confidence": selection.confidence,
-                    "changed": gate.changed,
-                    "note": gate.note,
-                    "gate_rules_fired": gate.note.split("; ").filter(|s| !s.is_empty() && *s != "accepted").collect::<Vec<_>>(),
-                    "ltr_present": route_state.latest_tool_result.is_some(),
-                    "last_action_kind": route_state.last_action_kind,
-                    "last_action_failed": route_state.last_action_failed,
-                    "last_action_success": !route_state.last_action_failed,
-                    "prompt": prompt,
-                }),
-            )?;
-
-            if gate.should_stop {
-                runtime.flush_emitted_events()?;
-                apply_observed_events(runtime, route_state, workspace)?;
-                let _ = save_cursor(cursor_path, tlog_path, *processed, start_seq, session_id, runtime.next_id());
-                return Ok(true);
-            }
-
-            if matches!(gate.lane, RouteKind::Scan) {
-                runtime.emit_tick()?;
-            }
+            runtime.emit_tick()?;
             runtime.flush_emitted_events()?;
-            apply_observed_events(runtime, route_state, workspace)?;
+            if *processed != *last_saved_processed
+                && last_saved.elapsed() >= Duration::from_secs(1)
+                && save_cursor(cursor_path, tlog_path, *processed, start_seq, session_id, runtime.next_id()).is_ok()
+            {
+                *last_saved = Instant::now();
+                *last_saved_processed = *processed;
+            }
         }
     }
     Ok(false)
@@ -631,7 +184,6 @@ fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     let mut tlog_path: Option<PathBuf> = None;
     let mut once = false;
-    let start_at_tail = env::var("CANON_EVENT_RUNTIME_START_AT_TAIL").ok().map(|v| v != "0" && v.to_lowercase() != "false").unwrap_or(false);
     let cursor_path = env::var("CANON_EVENT_RUNTIME_CURSOR").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/workspace/ai_sandbox/canon/state/event_runtime.cursor.json"));
 
     let mut i = 1;
@@ -660,12 +212,8 @@ fn main() -> Result<()> {
         let _ = maybe_verify_tlog_equivalence(&tlog_path);
     }
 
-    // Use the cursor's start_seq to skip reading old tlog segments, but always
-    // start processing from the tail — consumers rebuild from scratch on each run.
-    // Goal is recovered via scan_tlog_for_goal() on first tick. This prevents
-    // stale CapabilityRequested events from being re-dispatched and avoids
-    // orphaned-pending deadlocks when the process was killed mid LLM call.
-    let _ = (start_at_tail,);
+    // Use the cursor's start_seq to skip reading old tlog segments.
+    // Consumers rebuild from scratch on each run.
     let mut cursor_state = load_cursor_state(&cursor_path, &tlog_path);
     let latest_tlog_session_id = find_last_runtime_started_session_id(&tlog_path);
     if let (Some(cursor), Some(tlog_session_id)) = (&cursor_state, &latest_tlog_session_id) {
@@ -692,6 +240,7 @@ fn main() -> Result<()> {
     let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
         Box::new(LoopStageExecutor::new(workspace.clone(), tlog_path.clone())),
+        Box::new(RouteExecutor::new(workspace.clone())),
         Box::new(ErrorLogger::new(None)),
         Box::new(CheckConsumer::new()),
     ];
@@ -916,13 +465,7 @@ fn main() -> Result<()> {
     if env!("CANON_COMMIT_ID").starts_with("unknown") {
         eprintln!("[event_runtime] warning: CANON_COMMIT_ID is unknown; build metadata is incomplete");
     }
-    let mut route_controller = RouteController::new(GuardConfig::default());
-    let mut route_state = RouteRuntimeState::default();
-    route_state.mission_raw = std::fs::read_to_string("/workspace/ai_sandbox/canon/canon-agent-prompts/AGENT_GOAL.md").unwrap_or_default();
-    let initial_spec = parse_agent_goal_markdown(&route_state.mission_raw);
-    route_state.mission_summary = summarize_goal(&initial_spec);
-    route_state.mission_goal_spec = Some(initial_spec);
-    apply_observed_events(&mut runtime, &mut route_state, &workspace)?;
+    let mut scheduler_tick: u64 = 0;
 
     // =========================================================================
     // W = 1 — single writer loop
@@ -936,8 +479,6 @@ fn main() -> Result<()> {
     // =========================================================================
     let mut last_saved = Instant::now();
     let mut last_saved_processed = processed;
-    let pre_control_grace_ms = std::env::var("CANON_PRE_CONTROL_EVENT_GRACE_MS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(50);
-    let pre_control_grace = Duration::from_millis(pre_control_grace_ms);
 
     loop {
         // Step 1: process one control message when available.
@@ -945,27 +486,9 @@ fn main() -> Result<()> {
         match q_control_rx.try_recv() {
             Ok(control_msg) => {
                 processed_control = true;
-                drain_event_queue_with_grace(
-                    &q_event_rx,
-                    &mut runtime,
-                    &mut route_state,
-                    &workspace,
-                    &mut processed,
-                    &cursor_path,
-                    &tlog_path,
-                    start_seq,
-                    &session_id,
-                    &mut last_saved,
-                    &mut last_saved_processed,
-                    pre_control_grace,
-                )?;
                 if handle_control_msg(
                     control_msg,
-                    &q_event_rx,
                     &mut runtime,
-                    &mut route_controller,
-                    &mut route_state,
-                    &workspace,
                     &mut processed,
                     &cursor_path,
                     &tlog_path,
@@ -973,6 +496,7 @@ fn main() -> Result<()> {
                     &session_id,
                     &mut last_saved,
                     &mut last_saved_processed,
+                    &mut scheduler_tick,
                 )? {
                     return Ok(());
                 }
@@ -984,27 +508,9 @@ fn main() -> Result<()> {
                     recv(q_control_rx) -> msg => {
                         if let Ok(control_msg) = msg {
                             processed_control = true;
-                            drain_event_queue_with_grace(
-                                &q_event_rx,
-                                &mut runtime,
-                                &mut route_state,
-                                &workspace,
-                                &mut processed,
-                                &cursor_path,
-                                &tlog_path,
-                                start_seq,
-                                &session_id,
-                                &mut last_saved,
-                                &mut last_saved_processed,
-                                pre_control_grace,
-                            )?;
                             if handle_control_msg(
                                 control_msg,
-                                &q_event_rx,
                                 &mut runtime,
-                                &mut route_controller,
-                                &mut route_state,
-                                &workspace,
                                 &mut processed,
                                 &cursor_path,
                                 &tlog_path,
@@ -1012,6 +518,7 @@ fn main() -> Result<()> {
                                 &session_id,
                                 &mut last_saved,
                                 &mut last_saved_processed,
+                                &mut scheduler_tick,
                             )? {
                                 return Ok(());
                             }
@@ -1022,8 +529,6 @@ fn main() -> Result<()> {
                             handle_event_msg(
                                 event_msg,
                                 &mut runtime,
-                                &mut route_state,
-                                &workspace,
                                 &mut processed,
                                 &cursor_path,
                                 &tlog_path,
@@ -1047,8 +552,6 @@ fn main() -> Result<()> {
                     handle_event_msg(
                         event_msg,
                         &mut runtime,
-                        &mut route_state,
-                        &workspace,
                         &mut processed,
                         &cursor_path,
                         &tlog_path,
@@ -1068,27 +571,9 @@ fn main() -> Result<()> {
         // so routing cadence remains responsive.
         if !processed_control && handled_events == 0 {
             if let Ok(control_msg) = q_control_rx.recv() {
-                drain_event_queue_with_grace(
-                    &q_event_rx,
-                    &mut runtime,
-                    &mut route_state,
-                    &workspace,
-                    &mut processed,
-                    &cursor_path,
-                    &tlog_path,
-                    start_seq,
-                    &session_id,
-                    &mut last_saved,
-                    &mut last_saved_processed,
-                    pre_control_grace,
-                )?;
                 if handle_control_msg(
                     control_msg,
-                    &q_event_rx,
                     &mut runtime,
-                    &mut route_controller,
-                    &mut route_state,
-                    &workspace,
                     &mut processed,
                     &cursor_path,
                     &tlog_path,
@@ -1096,6 +581,7 @@ fn main() -> Result<()> {
                     &session_id,
                     &mut last_saved,
                     &mut last_saved_processed,
+                    &mut scheduler_tick,
                 )? {
                     return Ok(());
                 }
@@ -1260,99 +746,4 @@ fn verify_tlog_equivalence(json_path: &Path, bin_path: &Path) -> Result<Vec<Stri
         diffs.push(format!("edge_set mismatch: json_only={} binary_only={}", json_edges.difference(&bin_edges).count(), bin_edges.difference(&json_edges).count()));
     }
     Ok(diffs)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn route_state_transitions_after_loop_events() {
-        let mut state = RouteRuntimeState::default();
-        let workspace = PathBuf::from("/tmp");
-
-        update_route_runtime_state(
-            &mut state,
-            &CanonEvent::LoopObserved(LoopObserved { tick: 1, error_count: 1, warning_count: 0, compiler_errors: vec![], goal_text: Some("# Agent Goal\n- Project path: `/tmp/nope`\n".to_string()) }),
-            &workspace,
-        );
-        assert!(state.context_ready);
-
-        update_route_runtime_state(
-            &mut state,
-            &CanonEvent::LoopPlanned(LoopPlanned {
-                tick: 1,
-                action_kind: "run_command".to_string(),
-                action_payload: serde_json::json!({}),
-                reason: "test".to_string(),
-                llm_request_id: Some("llm-1".to_string()),
-                trace_id: None,
-                execution_id: None,
-                span_id: None,
-                parent_span_id: None,
-                plan_id: Some("plan-1".to_string()),
-                plan_step_id: None,
-                action_id: Some("action-1".to_string()),
-            }),
-            &workspace,
-        );
-        assert_eq!(state.planned_pending, 1);
-
-        update_route_runtime_state(
-            &mut state,
-            &CanonEvent::LoopActed(LoopActed {
-                tick: 1,
-                action_kind: "run_command".to_string(),
-                capability_request_id: "cap-1".to_string(),
-                tool_call_id: Some("tool-call-1".to_string()),
-                tool_result_id: Some("tool-result-1".to_string()),
-                stdout: String::new(),
-                stderr: String::new(),
-                exit_code: Some(0),
-                duration_ms: 10,
-                success: true,
-                trace_id: None,
-                execution_id: None,
-                span_id: None,
-                parent_span_id: None,
-                plan_id: Some("plan-1".to_string()),
-                plan_step_id: None,
-                action_id: Some("action-1".to_string()),
-            }),
-            &workspace,
-        );
-        assert_eq!(state.planned_pending, 0);
-        assert!(state.acted_unverified);
-        assert_eq!(state.last_action_kind, "run_command");
-
-        update_route_runtime_state(
-            &mut state,
-            &CanonEvent::LoopVerified(LoopVerified {
-                tick: 1,
-                passed: true,
-                compiler_clean: true,
-                tlog_clean: true,
-                error_count: 0,
-                diagnostics: vec!["ok".to_string()],
-                trace_id: None,
-                execution_id: None,
-                span_id: None,
-                parent_span_id: None,
-            }),
-            &workspace,
-        );
-        assert!(!state.acted_unverified);
-        assert!(!state.finish_ready);
-        assert!(!state.journal.is_empty());
-    }
-
-    #[test]
-    fn journal_is_bounded_to_32_lines() {
-        let mut state = RouteRuntimeState::default();
-        for i in 0..64 {
-            state.push_journal("test", format!("line-{i}"));
-        }
-        assert_eq!(state.journal.len(), 32);
-        assert_eq!(state.journal[0].summary, "line-32");
-    }
 }
