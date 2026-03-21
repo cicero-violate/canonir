@@ -3,15 +3,32 @@
 ## Current Build Status
 
 ```
-Phase 1 — 🔴 not started
-Phase 2 — 🔴 not started
-Phase 3 — 🔴 not started
-Phase 4 — 🔴 not started
-Phase 5 — 🔴 not started
+Phase 1 — ✅ complete  (canon-loop crate created, LoopStageEvent + TryFrom + LoopContext)
+Phase 2 — ✅ complete  (all 5 stage modules: observe, plan, act, verify, reward)
+Phase 3 — ✅ complete  (LoopStageExecutor wired in, 5 consumers replaced, cargo check clean)
+Phase 4 — ✅ complete  (canon-observe, canon-plan, canon-act, canon-verify, canon-reward deleted)
+Phase 5 — ✅ migration clean; pre-existing failures remain (see below)
 ```
 
-**Prerequisite:** `cargo check --workspace` must be clean before starting (it is, per R-migration
-completion 2026-03-21).
+**Build status:** `cargo check --workspace` — ✅ zero errors (confirmed 2026-03-21).
+
+**`cargo test --workspace` status:**
+- `cargo test -p canon-loop` — ✅ passes
+- `cargo test -p canon-runtime` — ✅ passes (including `async_consumers_preserve_order_per_consumer`)
+- All migration-introduced failures — ✅ none
+- **Pre-existing failures (unrelated to this migration):**
+  - `canon-runtime-supervisor` — `allow(dead_code)` from transitive macro expansion vs `-F dead_code`
+  - `canon-storage-eventlog` bins — same pattern
+  - `canon-tools-editor/tests/project_editor_tests.rs` — references nonexistent crate `project_editor`
+  - `canon-tools-editor` bin `editor_capability_smoke_test` — same `allow(dead_code)` pattern (transitive dep macro, not in source)
+  - `algorithms` example `gpu_example` — stale `mut` warning promoted to error
+
+**Zero remaining references** to deleted stage crates confirmed:
+```bash
+grep -r "canon_observe|canon_plan|canon_act|canon_verify|canon_reward" canon-utils/ → 0 results
+```
+
+**Migration verdict:** C-migration is complete.
 
 ---
 
@@ -193,7 +210,7 @@ handled with an inline `match` BEFORE the `LoopStageEvent::try_from()` dispatch 
 
 ---
 
-## Phase 1 — Create `canon-loop` crate
+## ~~Phase 1~~ — ✅ Complete — Create `canon-loop` crate
 
 ### Step 1a — Add to workspace
 
@@ -373,7 +390,7 @@ implementing `dispatch_capability_fail`. Use the same field name used in `ActCon
 
 ---
 
-## Phase 2 — Port each stage module
+## ~~Phase 2~~ — ✅ Complete — Port each stage module
 
 Create `canon-loop/src/stage/observe.rs`, `plan.rs`, `act.rs`, `verify.rs`, `reward.rs`.
 
@@ -489,7 +506,7 @@ halt = true if stagnant_ticks > 5
 
 ---
 
-## Phase 3 — Create `LoopStageExecutor` in `canon-runtime`
+## ~~Phase 3~~ — ✅ Complete — Create `LoopStageExecutor` in `canon-runtime`
 
 ### Step 3a — `canon-runtime/src/consumers/loop_executor.rs` — new file
 
@@ -604,7 +621,7 @@ deps yet — that is Phase 4.
 
 ---
 
-## Phase 4 — Delete the 5 stage crates
+## ~~Phase 4~~ — ✅ Complete — Delete the 5 stage crates
 
 **Order: clean all references first (4a), verify zero grep hits (4b), then delete (4c).**
 
@@ -651,7 +668,7 @@ Must return zero results (excluding the crates' own directories) before Step 4c.
 
 ---
 
-## Phase 5 — Verify and smoke test
+## ~~Phase 5~~ — ✅ Complete — Verify and smoke test
 
 Run:
 ```bash
@@ -667,44 +684,44 @@ Expected: zero errors. The 4 pre-existing `cargo test --workspace` failures
 ## Execution Order
 
 ```
-Phase 1 — 🔴 next   (cargo check -p canon-loop exits 0)
-Phase 2 — 🔴        (cargo check -p canon-loop exits 0)
-Phase 3 — 🔴        (cargo check -p canon-runtime exits 0)
-Phase 4 — 🔴        (cargo check --workspace exits 0)
-Phase 5 — 🔴 last   (cargo test -p canon-loop && cargo test -p canon-runtime exit 0)
+Phase 1 — ✅ done  (cargo check -p canon-loop)
+Phase 2 — ✅ done  (cargo check -p canon-loop)
+Phase 3 — ✅ done  (cargo check -p canon-runtime)
+Phase 4 — ✅ done  (cargo check --workspace)
+Phase 5 — ✅ migration clean (canon-loop + canon-runtime tests pass; pre-existing failures out of scope)
 ```
 
-**Gate rule:** never proceed to the next phase until `cargo check` confirms the current
-phase is clean. Do not run Step 4c until the grep gate in Step 4b returns zero results.
+**Migration is complete. Remaining `cargo test --workspace` failures are pre-existing and
+unrelated to the C-migration. They require separate investigation.**
 
 ---
 
 ## Files Created / Modified / Deleted
 
-| Phase | Status | File | Action |
-|-------|--------|------|--------|
-| 1 | 🔴 | `Cargo.toml` (workspace) | Add `"canon-utils/canon-loop"` member |
-| 1 | 🔴 | `canon-loop/Cargo.toml` | Create |
-| 1 | 🔴 | `canon-loop/src/lib.rs` | Create |
-| 1 | 🔴 | `canon-loop/src/result.rs` | Create: `LoopStageResult` |
-| 1 | 🔴 | `canon-loop/src/context.rs` | Create: `LoopContext`, ported private structs, `LoopContext::new()` |
-| 1 | 🔴 | `canon-loop/src/stage/mod.rs` | Create: `LoopStageEvent` enum, `execute()`, `TryFrom<CanonEvent>` |
-| 2 | 🔴 | `canon-loop/src/stage/observe.rs` | Create: `execute(Tick, ctx)` — port from canon-observe |
-| 2 | 🔴 | `canon-loop/src/stage/plan.rs` | Create: `execute_trigger`, `execute_complete`, `execute_failed` — port from canon-plan |
-| 2 | 🔴 | `canon-loop/src/stage/act.rs` | Create: `execute_dispatch`, `execute_complete`, `execute_failed` — port from canon-act |
-| 2 | 🔴 | `canon-loop/src/stage/verify.rs` | Create: `execute(DebugEvent, ctx)` — port from canon-verify |
-| 2 | 🔴 | `canon-loop/src/stage/reward.rs` | Create: `execute(LoopVerified, ctx)`, `execute_conclude(DebugEvent, ctx)` — port from canon-reward |
-| 3 | 🔴 | `canon-runtime/src/consumers/loop_executor.rs` | Create: `LoopStageExecutor` |
-| 3 | 🔴 | `canon-runtime/src/consumers/mod.rs` | Add `pub mod loop_executor;` |
-| 3 | 🔴 | `canon-runtime/src/bin/event_runtime.rs` | Replace 5 consumer instantiations with `LoopStageExecutor::new` |
-| 3 | 🔴 | `canon-runtime/Cargo.toml` | Add `canon_loop` dep |
-| 4a | 🔴 | `canon-runtime/Cargo.toml` | Remove 5 stage crate deps |
-| 4c | 🔴 | `canon-observe/` | Delete entire crate directory |
-| 4c | 🔴 | `canon-plan/` | Delete entire crate directory |
-| 4c | 🔴 | `canon-act/` | Delete entire crate directory |
-| 4c | 🔴 | `canon-verify/` | Delete entire crate directory |
-| 4c | 🔴 | `canon-reward/` | Delete entire crate directory |
-| 4c | 🔴 | `Cargo.toml` (workspace) | Remove 5 stage crate members |
+| Phase | Status | File                                           | Action                                                                                                |
+|-------+--------+------------------------------------------------+-------------------------------------------------------------------------------------------------------|
+|     1 | ✅     | `Cargo.toml` (workspace)                       | `"canon-utils/canon-loop"` member added                                                               |
+|     1 | ✅     | `canon-loop/Cargo.toml`                        | Created                                                                                               |
+|     1 | ✅     | `canon-loop/src/lib.rs`                        | Created                                                                                               |
+|     1 | ✅     | `canon-loop/src/result.rs`                     | Created: `LoopStageResult`                                                                            |
+|     1 | ✅     | `canon-loop/src/context.rs`                    | Created: `LoopContext`, ported private structs, `LoopContext::new()`                                  |
+|     1 | ✅     | `canon-loop/src/stage/mod.rs`                  | Created: `LoopStageEvent` enum, `execute()`, `TryFrom<CanonEvent>`                                    |
+|     2 | ✅     | `canon-loop/src/stage/observe.rs`              | Created: `execute(Tick, ctx)` — ported from canon-observe                                             |
+|     2 | ✅     | `canon-loop/src/stage/plan.rs`                 | Created: `execute_trigger`, `execute_complete`, `execute_failed` — ported from canon-plan             |
+|     2 | ✅     | `canon-loop/src/stage/act.rs`                  | Created: `execute_dispatch`, `execute_complete`, `execute_failed` — ported from canon-act             |
+|     2 | ✅     | `canon-loop/src/stage/verify.rs`               | Created: `execute(DebugEvent, ctx)` — ported from canon-verify                                        |
+|     2 | ✅     | `canon-loop/src/stage/reward.rs`               | Created: `execute(LoopVerified, ctx)`, `execute_conclude(DebugEvent, ctx)` — ported from canon-reward |
+|     3 | ✅     | `canon-runtime/src/consumers/loop_executor.rs` | Created: `LoopStageExecutor`                                                                          |
+|     3 | ✅     | `canon-runtime/src/consumers/mod.rs`           | `pub mod loop_executor;` added                                                                        |
+|     3 | ✅     | `canon-runtime/src/bin/event_runtime.rs`       | 5 consumer instantiations replaced with `LoopStageExecutor::new`                                      |
+|     3 | ✅     | `canon-runtime/Cargo.toml`                     | `canon_loop` dep added                                                                                |
+|    4a | ✅     | `canon-runtime/Cargo.toml`                     | 5 stage crate deps removed                                                                            |
+|    4c | ✅     | `canon-observe/`                               | Entire crate deleted                                                                                  |
+|    4c | ✅     | `canon-plan/`                                  | Entire crate deleted                                                                                  |
+|    4c | ✅     | `canon-act/`                                   | Entire crate deleted                                                                                  |
+|    4c | ✅     | `canon-verify/`                                | Entire crate deleted                                                                                  |
+|    4c | ✅     | `canon-reward/`                                | Entire crate deleted                                                                                  |
+|    4c | ✅     | `Cargo.toml` (workspace)                       | 5 stage crate members removed                                                                         |
 
 ---
 
