@@ -1,8 +1,8 @@
-use canon_event::{CanonEvent, DebugEvent, LoopRewarded, LoopVerified};
+use canon_event::{RuntimeEvent, LoopRewarded, LoopVerified, RouteSelected};
 
 use crate::{context::LoopContext, result::LoopStageResult};
 
-pub fn execute_conclude(_d: DebugEvent, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+pub fn execute_conclude(_rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
     let rewarded = LoopRewarded {
         tick: 0,
         errors_before: ctx.errors_before,
@@ -15,7 +15,7 @@ pub fn execute_conclude(_d: DebugEvent, ctx: &mut LoopContext) -> anyhow::Result
         trace_id: None,
         execution_id: None,
     };
-    Ok(LoopStageResult::Emit(CanonEvent::LoopRewarded(rewarded)))
+    Ok(LoopStageResult::Emit(RuntimeEvent::LoopRewarded(rewarded)))
 }
 
 pub fn execute(v: LoopVerified, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
@@ -40,7 +40,7 @@ pub fn execute(v: LoopVerified, ctx: &mut LoopContext) -> anyhow::Result<LoopSta
     } else {
         ctx.stagnant_ticks = ctx.stagnant_ticks.saturating_add(1);
     }
-    Ok(LoopStageResult::Emit(CanonEvent::LoopRewarded(rewarded)))
+    Ok(LoopStageResult::Emit(RuntimeEvent::LoopRewarded(rewarded)))
 }
 
 fn compute_reward(ctx: &LoopContext, v: &LoopVerified) -> f32 {

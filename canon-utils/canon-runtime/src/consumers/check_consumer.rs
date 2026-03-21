@@ -1,5 +1,5 @@
 use canon_check::{default_checks, run_checks, Check, CheckResult};
-use canon_event::{CanonEvent, EventConsumer, EventEmitterHandle, EventFilter};
+use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter};
 
 pub struct CheckConsumer {
     checks: Vec<Box<dyn Check>>,
@@ -27,9 +27,9 @@ impl EventConsumer for CheckConsumer {
         self.emitter = Some(emitter);
     }
 
-    fn on_event(&mut self, event: &CanonEvent) {
+    fn on_event(&mut self, event: &RuntimeEvent) {
         // Only handle Debug events; build a minimal JSON view
-        let CanonEvent::Debug(d) = event else {
+        let RuntimeEvent::Debug(d) = event else {
             return;
         };
         if d.source == "canon_check" {

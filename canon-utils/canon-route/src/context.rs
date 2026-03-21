@@ -1,5 +1,5 @@
 use canon_decision::JournalLine;
-use canon_event::{CanonEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult};
+use canon_event::{RuntimeEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult};
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
 use canon_judgment::RuntimeSignals;
 use serde_json::json;
@@ -61,9 +61,9 @@ impl RouteContext {
         }
     }
 
-    pub fn update_from_event(&mut self, event: &CanonEvent, workspace: &Path) {
+    pub fn update_from_event(&mut self, event: &RuntimeEvent, workspace: &Path) {
         match event {
-            CanonEvent::LoopObserved(LoopObserved { goal_text, error_count, .. }) => {
+            RuntimeEvent::LoopObserved(LoopObserved { goal_text, error_count, .. }) => {
                 let goal_present = goal_text.as_ref().map(|v| !v.trim().is_empty()).unwrap_or(false);
                 self.context_ready = goal_present || *error_count > 0;
                 if let Some(goal_text) = goal_text {
@@ -75,7 +75,7 @@ impl RouteContext {
                 }
                 self.push_journal("observe", format!("tick={} goal_present={} errors={}", self.scheduler_tick, goal_present, error_count));
             }
-            CanonEvent::LoopPlanned(LoopPlanned { action_kind, plan_id, action_id, llm_request_id, .. }) => {
+            RuntimeEvent::LoopPlanned(LoopPlanned { action_kind, plan_id, action_id, llm_request_id, .. }) => {
                 self.planned_pending = self.planned_pending.saturating_add(1);
                 let mut summary = format!("planned action={action_kind}");
                 if let Some(plan_id) = plan_id {
@@ -89,7 +89,7 @@ impl RouteContext {
                 }
                 self.push_journal("plan", summary);
             }
-            CanonEvent::LoopActed(LoopActed { action_kind, capability_request_id, tool_call_id, tool_result_id, success, stderr, .. }) => {
+            RuntimeEvent::LoopActed(LoopActed { action_kind, capability_request_id, tool_call_id, tool_result_id, success, stderr, .. }) => {
                 self.planned_pending = self.planned_pending.saturating_sub(1);
                 self.acted_unverified = true;
                 if stderr != "skipped:batch_aborted" {
@@ -111,24 +111,24 @@ impl RouteContext {
                 }
                 self.push_journal("act", summary);
             }
-            CanonEvent::LoopVerified(LoopVerified { compiler_clean, diagnostics, .. }) => {
+            RuntimeEvent::LoopVerified(LoopVerified { compiler_clean, diagnostics, .. }) => {
                 self.acted_unverified = false;
                 self.workspace_dirty = false;
                 let system_satisfied = crate::helpers::evaluate_goal_satisfied(self.mission_goal_spec.as_ref(), workspace);
                 self.finish_ready = *compiler_clean && system_satisfied;
                 self.push_journal("verify", format!("passed={} system_satisfied={} diagnostics={}", compiler_clean, system_satisfied, diagnostics.join("|")));
             }
-            CanonEvent::LoopRewarded(LoopRewarded { halt, .. }) => {
+            RuntimeEvent::LoopRewarded(LoopRewarded { halt, .. }) => {
                 if *halt {
                     self.finish_ready = true;
                 }
                 self.push_journal("reward", format!("halt={halt}"));
             }
-            CanonEvent::ToolCall(ToolCall { tool_call_id, .. }) => {
+            RuntimeEvent::ToolCall(ToolCall { tool_call_id, .. }) => {
                 self.pending_tool_result_ids.insert(tool_call_id.clone());
                 self.latest_tool_result = None;
             }
-            CanonEvent::ToolResult(ToolResult { node_id, kind, success, request_id, tool_call_id, tool_result_id, output, .. }) => {
+            RuntimeEvent::ToolResult(ToolResult { node_id, kind, success, request_id, tool_call_id, tool_result_id, output, .. }) => {
                 self.pending_tool_result_ids.remove(tool_call_id);
                 let mut output_text = output.to_string();
                 if output_text.len() > 512 {
@@ -146,7 +146,7 @@ impl RouteContext {
                 }));
                 self.push_journal("tool", format!("tool_result kind={kind} success={success} tool_call_id={tool_call_id} tool_result_id={tool_result_id} output={output_text}"));
             }
-            CanonEvent::RuntimeStateUpdated(updated) => {
+            RuntimeEvent::RuntimeStateUpdated(updated) => {
                 let dirty = updated.payload.get("workspace_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
                 if dirty {
                     self.workspace_dirty = true;
@@ -179,7 +179,7 @@ mod tests {
         let mut ctx = RouteContext::default();
         let workspace = Path::new("/tmp");
         ctx.update_from_event(
-            &CanonEvent::LoopObserved(LoopObserved {
+            &RuntimeEvent::LoopObserved(LoopObserved {
                 tick: 1,
                 error_count: 0,
                 warning_count: 0,
@@ -190,7 +190,7 @@ mod tests {
         );
         assert!(ctx.context_ready);
         ctx.update_from_event(
-            &CanonEvent::LoopPlanned(LoopPlanned {
+            &RuntimeEvent::LoopPlanned(LoopPlanned {
                 tick: 1,
                 action_kind: "act".into(),
                 action_payload: json!({}),
@@ -208,7 +208,7 @@ mod tests {
         );
         assert_eq!(ctx.planned_pending, 1);
         ctx.update_from_event(
-            &CanonEvent::LoopActed(LoopActed {
+            &RuntimeEvent::LoopActed(LoopActed {
                 tick: 1,
                 action_kind: "act".into(),
                 capability_request_id: "req".into(),

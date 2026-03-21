@@ -2,7 +2,7 @@ use crate::edit::ProjectEditor;
 use crate::structured::{EditOp, FieldMutation};
 use crate::symbol_index::SymbolIndex;
 use anyhow::{anyhow, Result};
-use canon_event::{CanonEvent, EditEvent, EventConsumer, EventFilter};
+use canon_event::{RuntimeEvent, EditEvent, EventConsumer, EventFilter};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -66,8 +66,8 @@ impl EventConsumer for EditConsumer {
         EventFilter::EditOnly
     }
 
-    fn on_event(&mut self, event: &CanonEvent) {
-        let CanonEvent::Edit(edit) = event else {
+    fn on_event(&mut self, event: &RuntimeEvent) {
+        let RuntimeEvent::Edit(edit) = event else {
             return;
         };
         let _ = self.apply_event(edit.clone());

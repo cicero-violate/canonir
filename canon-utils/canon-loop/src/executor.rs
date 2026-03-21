@@ -1,4 +1,4 @@
-use canon_event::{CanonEvent, EventConsumer, EventEmitterHandle, EventFilter, Tick};
+use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, Tick};
 use crate::{context::LoopContext, result::LoopStageResult, stage::LoopStageEvent};
 use std::path::PathBuf;
 
@@ -21,10 +21,10 @@ impl EventConsumer for LoopStageExecutor {
         self.ctx.emitter = Some(emitter);
     }
 
-    fn on_event(&mut self, event: &CanonEvent) {
+    fn on_event(&mut self, event: &RuntimeEvent) {
         // State accumulation (mutations that do not emit).
         match event {
-            CanonEvent::Tick(Tick { .. }) => {
+            RuntimeEvent::Tick(Tick { .. }) => {
                 // Plan timeout check (already tracked in stage/plan via context pending)
                 if let Some(e) = crate::stage::act::check_act_timeout(&mut self.ctx) {
                     if let Some(emitter) = self.ctx.emitter.as_ref() {
@@ -37,11 +37,11 @@ impl EventConsumer for LoopStageExecutor {
                     }
                 }
             }
-            CanonEvent::LoopObserved(o) => {
+            RuntimeEvent::LoopObserved(o) => {
                 self.ctx.last_observed = Some(o.clone());
                 self.ctx.errors_before = o.error_count;
             }
-            CanonEvent::LoopActed(a) => {
+            RuntimeEvent::LoopActed(a) => {
                 self.ctx.last_acted = Some(a.clone());
                 self.ctx.last_action_kind = a.action_kind.clone();
                 self.ctx.last_action_success = a.success;
@@ -50,10 +50,10 @@ impl EventConsumer for LoopStageExecutor {
                     self.ctx.last_planned_observed_tick = None;
                 }
             }
-            CanonEvent::LoopPlanned(p) => {
+            RuntimeEvent::LoopPlanned(p) => {
                 self.ctx.act_queue.push_back(p.clone());
             }
-            CanonEvent::LoopVerified(v) => {
+            RuntimeEvent::LoopVerified(v) => {
                 self.ctx.last_verify_trace_id = v.trace_id.clone();
                 self.ctx.last_verify_execution_id = v.execution_id.clone();
                 if v.passed {
@@ -61,18 +61,19 @@ impl EventConsumer for LoopStageExecutor {
                     self.ctx.warning_count = 0;
                 }
             }
-            CanonEvent::LoopRewarded(r) => {
+            RuntimeEvent::LoopRewarded(r) => {
                 if r.halt {
                     self.ctx.halted = true;
                 }
             }
-            CanonEvent::PromptLoaded(prompt) => {
-                if let Some(content) = prompt.payload.get("content").and_then(|c| c.as_str()) {
+            RuntimeEvent::PromptLoaded(prompt) => {
+                let data = prompt.payload.get("data").unwrap_or(&prompt.payload);
+                if let Some(content) = data.get("content").and_then(|c| c.as_str()) {
                     self.ctx.goal_text = Some(content.to_string());
                     self.ctx.last_prompted_goal = Some(content.to_string());
                 }
             }
-            CanonEvent::ErrorOccurred(err) => {
+            RuntimeEvent::ErrorOccurred(err) => {
                 if err.severity == "warning" {
                     self.ctx.warning_count = self.ctx.warning_count.saturating_add(1);
                 } else {
@@ -90,7 +91,7 @@ impl EventConsumer for LoopStageExecutor {
                     self.ctx.recent_compiler_errors.drain(0..drop_n);
                 }
             }
-            CanonEvent::ToolResult(r) if r.kind != "llm.plan" => {
+            RuntimeEvent::ToolResult(r) if r.kind != "llm.plan" => {
                 self.ctx.batch_tool_results.push(r.clone());
             }
             _ => {}
@@ -105,7 +106,7 @@ impl EventConsumer for LoopStageExecutor {
             Ok(LoopStageResult::Emit(e)) => emitter.emit(e),
             Ok(LoopStageResult::EmitMany(evs)) => evs.into_iter().for_each(|e| emitter.emit(e)),
             Ok(LoopStageResult::Deferred) | Ok(LoopStageResult::Noop) => {}
-            Err(err) => emitter.emit(CanonEvent::ErrorOccurred(canon_event::new_error_occurred(
+            Err(err) => emitter.emit(RuntimeEvent::ErrorOccurred(canon_event::new_error_occurred(
                 "loop_stage_execution",
                 "loop_stage_executor",
                 err.to_string(),

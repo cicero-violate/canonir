@@ -1,4 +1,4 @@
-use canon_event::{CanonEvent, LoopObserved, Tick};
+use canon_event::{RuntimeEvent, LoopObserved, Tick};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -15,7 +15,7 @@ pub fn execute(t: Tick, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult
         compiler_errors: ctx.recent_compiler_errors.clone(),
         goal_text: ctx.goal_text.clone(),
     };
-    Ok(LoopStageResult::Emit(CanonEvent::LoopObserved(payload)))
+    Ok(LoopStageResult::Emit(RuntimeEvent::LoopObserved(payload)))
 }
 
 /// Scan tlog segments (oldest first) for latest prompt_loaded of AGENT_GOAL.
@@ -38,10 +38,11 @@ fn scan_tlog_for_goal(tlog_path: &Path) -> Option<String> {
                 continue;
             }
             let payload = v.get("payload").unwrap_or(&Value::Null);
-            let is_goal = payload.get("path").and_then(|p| p.as_str()).map(|p| p.contains("AGENT_GOAL")).unwrap_or(false)
-                || payload.get("prompt_id").and_then(|p| p.as_str()).map(|p| p == "AGENT_GOAL").unwrap_or(false);
+            let data = payload.get("data").unwrap_or(payload);
+            let is_goal = data.get("path").and_then(|p| p.as_str()).map(|p| p.contains("AGENT_GOAL")).unwrap_or(false)
+                || data.get("prompt_id").and_then(|p| p.as_str()).map(|p| p == "AGENT_GOAL").unwrap_or(false);
             if is_goal {
-                if let Some(c) = payload.get("content").and_then(|c| c.as_str()) {
+                if let Some(c) = data.get("content").and_then(|c| c.as_str()) {
                     found = Some(c.to_string());
                 }
             }

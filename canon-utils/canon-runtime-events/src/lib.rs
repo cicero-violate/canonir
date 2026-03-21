@@ -1,5 +1,6 @@
 pub mod emit;
 pub mod events;
+pub mod wire;
 pub mod macros;
 pub mod schema;
 pub mod tlog;
@@ -29,12 +30,13 @@ macro_rules! impl_rustc_consumer {
 
 pub use emit::*;
 pub use events::{
-    new_error_occurred, AgentRegistered, AnalysisEvent, AnalysisRun, AnalysisWorkspace, BashInvoke, CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityInvoked, CapabilityResolved,
-    CapabilityResult, CargoBuild, CargoCheck, CargoEvent, CargoRun, Code, DebugEvent, DeleteSymbol, EditEvent, ErrorOccurred, EventConsumer, EventEmitter, EventEmitterHandle, EventFilter, EventMask,
-    ExtractModule, FileEvent, FilePatch, FileRead, FileWrite, GoalEdgeDefined, GoalGraphCheckpointed, GoalNodeCreated, GoalNodeRetracted, GoalNodeRewritten, GoalSelected, InlineModule, LlmCall,
-    LlmResult, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, MoveSymbol, NodeCompleted, NodeFailed, NodeReady, NodeStarted, PolicyBaselineUpdated, ProcessResult, PromptLoaded,
-    RenameDir, RenameModule, RenameSymbol, RuntimeStateUpdated, RustcEventConsumer, SystemConfigLoaded, Tick, ToolCall, ToolResult, EVENT_SCHEMA_VERSION,
+    new_error_occurred, AgentRegistered, AnalysisEvent, AnalysisRun, AnalysisWorkspace, BashInvoke, CapabilityCompleted, CapabilityFailed, CapabilityInvoked, CapabilityResolved, CapabilityResult,
+    CargoBuild, CargoCheck, CargoEvent, CargoRun, Code, DebugEvent, DeleteSymbol, EditEvent, ErrorOccurred, EventConsumer, EventEmitter, EventEmitterHandle, EventFilter, EventMask, ExtractModule,
+    FileEvent, FilePatch, FileRead, FileWrite, GoalEdgeDefined, GoalGraphCheckpointed, GoalNodeCreated, GoalNodeRetracted, GoalNodeRewritten, GoalSelected, InlineModule, LlmCall, LlmResult,
+    LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, MoveSymbol, NodeCompleted, NodeFailed, NodeReady, NodeStarted, PolicyBaselineUpdated, ProcessResult, PromptLoaded,
+    RenameDir, RenameModule, RenameSymbol, RouteSelected, RouteTick, RuntimeEvent, RuntimeStateUpdated, RustcEventConsumer, SystemConfigLoaded, Tick, ToolCall, ToolResult, EVENT_SCHEMA_VERSION,
 };
+pub use wire::{CanonEvent, CanonPayload, EventMeta};
 pub use macros::emit::canon_emit;
 pub use schema::*;
 pub use tlog::{is_binary_tlog, maybe_rotate, BinarySegmentWriter, BinaryTlogWriter, RotateConfig, SegmentConfig, TlogEvent, TlogWriter};

@@ -1,5 +1,5 @@
 use canon_decision::RouteKind;
-use canon_event::{CanonEvent, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, LlmCall};
+use canon_event::{RuntimeEvent, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, LlmCall, RouteSelected};
 use canon_judgment::GuardConfig;
 use canon_runtime_supervisor::judgment_loop::RouteController;
 use std::path::PathBuf;
@@ -42,38 +42,37 @@ impl EventConsumer for RouteExecutor {
         self.emitter = Some(emitter);
     }
 
-    fn on_event(&mut self, event: &CanonEvent) {
+    fn on_event(&mut self, event: &RuntimeEvent) {
         // Always accumulate state.
         self.ctx.update_from_event(event, &self.workspace);
 
         // Route tick: launch async LLM call if none in-flight.
-        if let CanonEvent::Debug(d) = event {
-            if d.source == "supervisor" && d.kind == "route_tick" {
-                if self.pending_request_id.is_none() {
-                    let prompt = self.controller.build_prompt(
-                        &self.ctx.mission_summary,
-                        &self.ctx.snapshot_text(),
-                        self.ctx.latest_tool_result.as_ref(),
-                        &self.ctx.journal,
-                    );
-                    let request_id = format!("route-{}", Uuid::new_v4());
-                    self.pending_request_id = Some(request_id.clone());
-                    self.pending_prompt = Some(prompt.clone());
-                    if let Some(emitter) = self.emitter.as_ref() {
-                        canon_meta::canon_emit_meta!(emitter; Llm(LlmCall {
-                            request_id,
-                            prompt,
-                            role: Some("router".to_string()),
-                        }));
-                    }
+        if let RuntimeEvent::RouteTick(rt) = event {
+            self.ctx.scheduler_tick = rt.tick;
+            if self.pending_request_id.is_none() {
+                let prompt = self.controller.build_prompt(
+                    &self.ctx.mission_summary,
+                    &self.ctx.snapshot_text(),
+                    self.ctx.latest_tool_result.as_ref(),
+                    &self.ctx.journal,
+                );
+                let request_id = format!("route-{}", Uuid::new_v4());
+                self.pending_request_id = Some(request_id.clone());
+                self.pending_prompt = Some(prompt.clone());
+                if let Some(emitter) = self.emitter.as_ref() {
+                    canon_meta::canon_emit_meta!(emitter; Llm(LlmCall {
+                        request_id,
+                        prompt,
+                        role: Some("router".to_string()),
+                    }));
                 }
-                return;
             }
+            return;
         }
 
         // Handle routing LLM completion/failure.
         match event {
-            CanonEvent::CapabilityCompleted(done) => {
+            RuntimeEvent::CapabilityCompleted(done) => {
                 if Some(&done.request_id) != self.pending_request_id.as_ref() || done.capability != "llm.call" {
                     return;
                 }
@@ -87,7 +86,7 @@ impl EventConsumer for RouteExecutor {
                 };
                 self.emit_decision(&model_json, prompt);
             }
-            CanonEvent::CapabilityFailed(failed) => {
+            RuntimeEvent::CapabilityFailed(failed) => {
                 if Some(&failed.request_id) != self.pending_request_id.as_ref() || failed.capability != "llm.call" {
                     return;
                 }
@@ -117,18 +116,18 @@ impl RouteExecutor {
                 should_stop: false,
                 prompt,
             });
-        let payload = serde_json::json!({
-            "approved_route": decision.lane.as_str(),
-            "suggested_route": decision.suggested_route.as_str(),
-            "rationale": decision.rationale,
-            "confidence": decision.confidence,
-            "gate_note": decision.note,
-            "gate_rules_fired": decision.gate_rules_fired,
-            "gate_changed": decision.changed,
-            "gate_should_stop": decision.should_stop,
-            "prompt": decision.prompt,
-            "model_json": model_json,
-        });
-        canon_meta::canon_emit_meta!(emitter; "supervisor", "route_selected", payload);
+        canon_meta::canon_emit_meta!(emitter; RouteSelected(RouteSelected {
+            tick: self.ctx.scheduler_tick,
+            approved_route: decision.lane.as_str().to_string(),
+            suggested_route: decision.suggested_route.as_str().to_string(),
+            rationale: decision.rationale.clone(),
+            confidence: decision.confidence,
+            gate_note: decision.note.clone(),
+            gate_rules_fired: decision.gate_rules_fired.clone(),
+            gate_changed: decision.changed,
+            gate_should_stop: decision.should_stop,
+            prompt: decision.prompt.clone(),
+            model_json: model_json.to_string(),
+        }));
     }
 }

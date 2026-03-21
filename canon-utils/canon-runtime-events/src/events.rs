@@ -223,6 +223,22 @@ canon_event_struct!(LoopRewarded {
     #[serde(default)]
     parent_span_id: Option<String>,
 });
+canon_event_struct!(RouteTick { tick: u64 });
+canon_event_struct!(RouteSelected {
+    tick: u64,
+    approved_route: String,
+    suggested_route: String,
+    rationale: String,
+    #[serde(default)]
+    confidence: Option<f32>,
+    gate_note: String,
+    #[serde(default)]
+    gate_rules_fired: Vec<String>,
+    gate_changed: bool,
+    gate_should_stop: bool,
+    prompt: String,
+    model_json: String,
+});
 canon_event_struct!(RuntimeStateUpdated { payload: serde_json::Value });
 canon_event_struct!(PolicyBaselineUpdated { payload: serde_json::Value });
 canon_event_struct!(GoalSelected { payload: serde_json::Value });
@@ -335,7 +351,7 @@ impl Default for AnalysisEvent {
     }
 }
 
-canon_event_enum!(CanonEvent {
+canon_event_enum!(RuntimeEvent {
     Code(Code),
     Debug(DebugEvent),
     ErrorOccurred(ErrorOccurred),
@@ -346,6 +362,8 @@ canon_event_enum!(CanonEvent {
     LoopActed(LoopActed),
     LoopVerified(LoopVerified),
     LoopRewarded(LoopRewarded),
+    RouteTick(RouteTick),
+    RouteSelected(RouteSelected),
     Cargo(CargoEvent),
     File(FileEvent),
     Bash(BashInvoke),
@@ -375,7 +393,7 @@ canon_event_enum!(CanonEvent {
 });
 
 pub trait EventEmitter: Send + Sync {
-    fn emit(&self, event: CanonEvent);
+    fn emit(&self, event: RuntimeEvent);
 }
 
 pub type EventEmitterHandle = Arc<dyn EventEmitter>;
@@ -391,7 +409,7 @@ pub enum EventFilter {
 
 pub trait EventConsumer: Send + Sync {
     fn filter(&self) -> EventFilter;
-    fn on_event(&mut self, event: &CanonEvent);
+    fn on_event(&mut self, event: &RuntimeEvent);
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 }
 

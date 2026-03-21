@@ -1,15 +1,15 @@
 use anyhow::{anyhow, Result};
-use canon_event::{CanonEvent, LlmCall};
+use canon_event::{RuntimeEvent, LlmCall};
 use canon_exec::{ExecutableEvent, ExecutionContext, ExecutionResult};
 use std::path::PathBuf;
 
 struct NoopEmitter;
 impl canon_event::EventEmitter for NoopEmitter {
-    fn emit(&self, _event: CanonEvent) {}
+    fn emit(&self, _event: RuntimeEvent) {}
 }
 
 fn main() -> Result<()> {
-    let event = CanonEvent::Llm(LlmCall {
+    let event = RuntimeEvent::Llm(LlmCall {
         request_id: format!("llm-smoke-{}", std::process::id()),
         prompt: "Return the JSON: {\"ok\":true}".to_string(),
         role: None,
@@ -22,7 +22,7 @@ fn main() -> Result<()> {
             println!("llm_smoke_test: PASS (deferred to worker)");
             Ok(())
         }
-        ExecutionResult::Emit(CanonEvent::CapabilityCompleted(_)) | ExecutionResult::EmitMany(_) => Ok(()),
+        ExecutionResult::Emit(RuntimeEvent::CapabilityCompleted(_)) | ExecutionResult::EmitMany(_) => Ok(()),
         other => Err(anyhow!("unexpected result: {:?}", other)),
     }
 }

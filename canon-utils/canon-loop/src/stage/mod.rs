@@ -1,4 +1,4 @@
-use canon_event::{CapabilityCompleted, CapabilityFailed, CanonEvent, DebugEvent, LoopVerified, Tick};
+use canon_event::{CapabilityCompleted, CapabilityFailed, RuntimeEvent, LoopVerified, RouteSelected, Tick};
 
 use crate::{context::LoopContext, result::LoopStageResult};
 
@@ -10,10 +10,10 @@ pub mod reward;
 
 pub enum LoopStageEvent {
     Observe(Tick),
-    PlanTrigger(DebugEvent),
-    ActDispatch(DebugEvent),
-    VerifyTrigger(DebugEvent),
-    Conclude(DebugEvent),
+    PlanTrigger(RouteSelected),
+    ActDispatch(RouteSelected),
+    VerifyTrigger(RouteSelected),
+    Conclude(RouteSelected),
     CapabilityDone(CapabilityCompleted),
     CapabilityFail(CapabilityFailed),
     Reward(LoopVerified),
@@ -42,28 +42,21 @@ fn dispatch_capability_fail(f: CapabilityFailed, ctx: &mut LoopContext) -> anyho
     plan::execute_failed(f.clone(), ctx).or_else(|_| act::execute_failed(f, ctx))
 }
 
-impl TryFrom<CanonEvent> for LoopStageEvent {
-    type Error = CanonEvent;
-    fn try_from(e: CanonEvent) -> Result<Self, CanonEvent> {
-        fn route_lane(d: &DebugEvent) -> &str {
-            if d.kind != "route_selected" {
-                return "";
-            }
-            d.payload
-                .get("approved_route")
-                .or_else(|| d.payload.get("lane"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-        }
+impl TryFrom<RuntimeEvent> for LoopStageEvent {
+    type Error = RuntimeEvent;
+    fn try_from(e: RuntimeEvent) -> Result<Self, RuntimeEvent> {
         match e {
-            CanonEvent::Tick(t) => Ok(LoopStageEvent::Observe(t)),
-            CanonEvent::Debug(d) if route_lane(&d) == "shape" => Ok(LoopStageEvent::PlanTrigger(d)),
-            CanonEvent::Debug(d) if route_lane(&d) == "execute" => Ok(LoopStageEvent::ActDispatch(d)),
-            CanonEvent::Debug(d) if route_lane(&d) == "validate" => Ok(LoopStageEvent::VerifyTrigger(d)),
-            CanonEvent::Debug(d) if route_lane(&d) == "conclude" => Ok(LoopStageEvent::Conclude(d)),
-            CanonEvent::CapabilityCompleted(c) => Ok(LoopStageEvent::CapabilityDone(c)),
-            CanonEvent::CapabilityFailed(f) => Ok(LoopStageEvent::CapabilityFail(f)),
-            CanonEvent::LoopVerified(v) => Ok(LoopStageEvent::Reward(v)),
+            RuntimeEvent::Tick(t) => Ok(LoopStageEvent::Observe(t)),
+            RuntimeEvent::RouteSelected(rs) => match rs.approved_route.as_str() {
+                "shape" => Ok(LoopStageEvent::PlanTrigger(rs)),
+                "execute" => Ok(LoopStageEvent::ActDispatch(rs)),
+                "validate" => Ok(LoopStageEvent::VerifyTrigger(rs)),
+                "conclude" => Ok(LoopStageEvent::Conclude(rs)),
+                _ => Err(RuntimeEvent::RouteSelected(rs)),
+            },
+            RuntimeEvent::CapabilityCompleted(c) => Ok(LoopStageEvent::CapabilityDone(c)),
+            RuntimeEvent::CapabilityFailed(f) => Ok(LoopStageEvent::CapabilityFail(f)),
+            RuntimeEvent::LoopVerified(v) => Ok(LoopStageEvent::Reward(v)),
             other => Err(other),
         }
     }

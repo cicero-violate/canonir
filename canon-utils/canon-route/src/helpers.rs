@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use canon_event::{CanonEvent, CapabilityResult, EventEmitter, EventEmitterHandle, LlmCall};
+use canon_event::{RuntimeEvent, CapabilityResult, EventEmitter, EventEmitterHandle, LlmCall};
 use canon_exec::{ExecutableEvent, ExecutionContext, ExecutionResult};
 use canon_goal::GoalSpec;
 use crossbeam_channel as cc;
@@ -39,11 +39,11 @@ pub fn heuristic_route_json(ctx: &RouteContext) -> String {
 }
 
 struct DirectEventEmitter {
-    tx: cc::Sender<CanonEvent>,
+    tx: cc::Sender<RuntimeEvent>,
 }
 
 impl EventEmitter for DirectEventEmitter {
-    fn emit(&self, event: CanonEvent) {
+    fn emit(&self, event: RuntimeEvent) {
         let _ = self.tx.send(event);
     }
 }
@@ -55,8 +55,8 @@ pub fn request_route_via_llm_call(
     _last_tool_result: Option<serde_json::Value>,
 ) -> Result<String> {
     let request_id = format!("route-{}", uuid::Uuid::new_v4());
-    let event = CanonEvent::Llm(LlmCall { request_id: request_id.clone(), prompt: prompt.clone(), role: Some("router".to_string()) });
-    let (tx, rx) = cc::unbounded::<CanonEvent>();
+    let event = RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt: prompt.clone(), role: Some("router".to_string()) });
+    let (tx, rx) = cc::unbounded::<RuntimeEvent>();
     let emitter: EventEmitterHandle = std::sync::Arc::new(DirectEventEmitter { tx });
     let ctx = ExecutionContext { workspace: workspace.to_path_buf(), emitter: emitter.clone() };
     let exec = ExecutableEvent::try_from(event.clone()).map_err(|_| anyhow!("llm.call not executable"))?;
@@ -75,7 +75,7 @@ pub fn request_route_via_llm_call(
         let remaining = deadline.saturating_duration_since(now);
         let event = rx.recv_timeout(remaining).map_err(|_| anyhow!("route llm.call timed out"))?;
         match event {
-            CanonEvent::CapabilityCompleted(done) if done.request_id == request_id && done.capability == "llm.call" => match done.result {
+            RuntimeEvent::CapabilityCompleted(done) if done.request_id == request_id && done.capability == "llm.call" => match done.result {
                 CapabilityResult::Llm(res) => {
                     if let Some(text) = res.response.get("text").and_then(|v| v.as_str()) {
                         return Ok(text.to_string());
@@ -85,7 +85,7 @@ pub fn request_route_via_llm_call(
                 CapabilityResult::Process(proc) => return Ok(proc.stdout),
                 CapabilityResult::Empty => return Ok(String::new()),
             },
-            CanonEvent::CapabilityFailed(failed) if failed.request_id == request_id && failed.capability == "llm.call" => {
+            RuntimeEvent::CapabilityFailed(failed) if failed.request_id == request_id && failed.capability == "llm.call" => {
                 return Err(anyhow!("route llm.call failed: {}", failed.error));
             }
             _ => {}

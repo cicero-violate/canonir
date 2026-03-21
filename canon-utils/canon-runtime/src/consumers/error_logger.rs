@@ -1,4 +1,4 @@
-use canon_event::{new_error_occurred, CanonEvent, EventConsumer, EventEmitterHandle, EventFilter, RustcEvent};
+use canon_event::{new_error_occurred, RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, RustcEvent};
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs::{create_dir_all, OpenOptions};
@@ -43,8 +43,8 @@ impl EventConsumer for ErrorLogger {
         EventFilter::ErrorOnly
     }
 
-    fn on_event(&mut self, event: &CanonEvent) {
-        if let CanonEvent::ErrorOccurred(payload) = event {
+    fn on_event(&mut self, event: &RuntimeEvent) {
+        if let RuntimeEvent::ErrorOccurred(payload) = event {
             let value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));
             let _ = append_error_jsonl(&self.jsonl_path, &value);
             return;
@@ -88,9 +88,9 @@ fn resolve_error_jsonl_path() -> PathBuf {
     PathBuf::from("/workspace/ai_sandbox/canon/state/reports_out/workspace/errors.jsonl")
 }
 
-fn event_to_payload(event: &CanonEvent) -> Option<(String, serde_json::Value)> {
+fn event_to_payload(event: &RuntimeEvent) -> Option<(String, serde_json::Value)> {
     match event {
-        CanonEvent::CapabilityFailed(payload) => Some((
+        RuntimeEvent::CapabilityFailed(payload) => Some((
             "event-runtime".to_string(),
             serde_json::to_value(new_error_occurred(
                 "capability_failed",
@@ -105,7 +105,7 @@ fn event_to_payload(event: &CanonEvent) -> Option<(String, serde_json::Value)> {
             ))
             .unwrap_or_else(|_| json!({})),
         )),
-        CanonEvent::NodeFailed(payload) => Some((
+        RuntimeEvent::NodeFailed(payload) => Some((
             "agent-consumer".to_string(),
             serde_json::to_value(new_error_occurred(
                 "node_failed",
@@ -121,7 +121,7 @@ fn event_to_payload(event: &CanonEvent) -> Option<(String, serde_json::Value)> {
             ))
             .unwrap_or_else(|_| json!({})),
         )),
-        CanonEvent::LoopActed(payload) if !payload.success && payload.stderr != "skipped:batch_aborted" => Some((
+        RuntimeEvent::LoopActed(payload) if !payload.success && payload.stderr != "skipped:batch_aborted" => Some((
             "act".to_string(),
             serde_json::to_value(new_error_occurred(
                 "loop_acted_failed",
@@ -138,7 +138,7 @@ fn event_to_payload(event: &CanonEvent) -> Option<(String, serde_json::Value)> {
             ))
             .unwrap_or_else(|_| json!({})),
         )),
-        CanonEvent::LoopVerified(payload) if !payload.passed => Some((
+        RuntimeEvent::LoopVerified(payload) if !payload.passed => Some((
             "verify".to_string(),
             serde_json::to_value(new_error_occurred(
                 "loop_verified_failed",
@@ -155,7 +155,7 @@ fn event_to_payload(event: &CanonEvent) -> Option<(String, serde_json::Value)> {
             ))
             .unwrap_or_else(|_| json!({})),
         )),
-        CanonEvent::LoopRewarded(payload) if payload.halt => Some((
+        RuntimeEvent::LoopRewarded(payload) if payload.halt => Some((
             "reward".to_string(),
             serde_json::to_value(new_error_occurred(
                 "loop_rewarded_halt",
@@ -173,7 +173,7 @@ fn event_to_payload(event: &CanonEvent) -> Option<(String, serde_json::Value)> {
             ))
             .unwrap_or_else(|_| json!({})),
         )),
-        CanonEvent::Code(code) => match &code.delta.event {
+        RuntimeEvent::Code(code) => match &code.delta.event {
             RustcEvent::PanicCaptured(payload) => Some((
                 "rustc".to_string(),
                 json!({

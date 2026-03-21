@@ -1,4 +1,4 @@
-use canon_event::{AnalysisEvent, BashInvoke, CanonEvent, CargoEvent, EditEvent, FileEvent, LlmCall};
+use canon_event::{AnalysisEvent, BashInvoke, RuntimeEvent, CargoEvent, EditEvent, FileEvent, LlmCall};
 use canon_event::EventEmitterHandle;
 use std::path::PathBuf;
 
@@ -17,8 +17,8 @@ pub struct ExecutionContext {
 
 #[derive(Debug)]
 pub enum ExecutionResult {
-    Emit(CanonEvent),
-    EmitMany(Vec<CanonEvent>),
+    Emit(RuntimeEvent),
+    EmitMany(Vec<RuntimeEvent>),
     Deferred,
 }
 
@@ -48,16 +48,16 @@ impl ExecutableEvent {
     }
 }
 
-impl TryFrom<CanonEvent> for ExecutableEvent {
-    type Error = CanonEvent;
-    fn try_from(e: CanonEvent) -> Result<Self, CanonEvent> {
+impl TryFrom<RuntimeEvent> for ExecutableEvent {
+    type Error = RuntimeEvent;
+    fn try_from(e: RuntimeEvent) -> Result<Self, RuntimeEvent> {
         match e {
-            CanonEvent::Edit(e) => Ok(ExecutableEvent::Edit(e)),
-            CanonEvent::Cargo(e) => Ok(ExecutableEvent::Cargo(e)),
-            CanonEvent::File(e) => Ok(ExecutableEvent::File(e)),
-            CanonEvent::Bash(e) => Ok(ExecutableEvent::Bash(e)),
-            CanonEvent::Llm(e) => Ok(ExecutableEvent::Llm(e)),
-            CanonEvent::Analysis(e) => Ok(ExecutableEvent::Analysis(e)),
+            RuntimeEvent::Edit(e) => Ok(ExecutableEvent::Edit(e)),
+            RuntimeEvent::Cargo(e) => Ok(ExecutableEvent::Cargo(e)),
+            RuntimeEvent::File(e) => Ok(ExecutableEvent::File(e)),
+            RuntimeEvent::Bash(e) => Ok(ExecutableEvent::Bash(e)),
+            RuntimeEvent::Llm(e) => Ok(ExecutableEvent::Llm(e)),
+            RuntimeEvent::Analysis(e) => Ok(ExecutableEvent::Analysis(e)),
             other => Err(other),
         }
     }

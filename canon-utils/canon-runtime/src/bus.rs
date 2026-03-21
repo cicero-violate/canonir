@@ -1,10 +1,10 @@
-use canon_event::{CanonEvent, EventConsumer, EventEmitterHandle, EventFilter, EventMask, RustcEvent};
+use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, EventMask, RustcEvent};
 use crossbeam_channel::{bounded, Sender};
 use std::thread;
 
 #[derive(Clone)]
 pub struct EventMessage {
-    pub event: CanonEvent,
+    pub event: RuntimeEvent,
 }
 
 pub struct ConsumerEntry {
@@ -17,32 +17,32 @@ pub struct EventBus {
     queue_size: usize,
 }
 
-fn is_error_event(event: &CanonEvent) -> bool {
+fn is_error_event(event: &RuntimeEvent) -> bool {
     match event {
-        CanonEvent::ErrorOccurred(_) => true,
-        CanonEvent::CapabilityFailed(_) => true,
-        CanonEvent::NodeFailed(_) => true,
-        CanonEvent::LoopActed(payload) => !payload.success,
-        CanonEvent::LoopVerified(payload) => !payload.passed,
-        CanonEvent::LoopRewarded(payload) => payload.halt,
-        CanonEvent::Code(canon_event::Code { delta, .. }) => matches!(delta.event, RustcEvent::PanicCaptured(_) | RustcEvent::InvariantViolation(_)),
+        RuntimeEvent::ErrorOccurred(_) => true,
+        RuntimeEvent::CapabilityFailed(_) => true,
+        RuntimeEvent::NodeFailed(_) => true,
+        RuntimeEvent::LoopActed(payload) => !payload.success,
+        RuntimeEvent::LoopVerified(payload) => !payload.passed,
+        RuntimeEvent::LoopRewarded(payload) => payload.halt,
+        RuntimeEvent::Code(canon_event::Code { delta, .. }) => matches!(delta.event, RustcEvent::PanicCaptured(_) | RustcEvent::InvariantViolation(_)),
         _ => false,
     }
 }
 
-fn is_control_event(event: &CanonEvent) -> bool {
+fn is_control_event(event: &RuntimeEvent) -> bool {
     matches!(
         event,
-        CanonEvent::Tick(_)
-            | CanonEvent::PromptLoaded(_)
-            | CanonEvent::CapabilityCompleted(_)
-            | CanonEvent::CapabilityFailed(_)
-            | CanonEvent::LoopObserved(_)
-            | CanonEvent::LoopPlanned(_)
-            | CanonEvent::LoopActed(_)
-            | CanonEvent::LoopVerified(_)
-            | CanonEvent::LoopRewarded(_)
-            | CanonEvent::Debug(_)
+        RuntimeEvent::Tick(_)
+            | RuntimeEvent::PromptLoaded(_)
+            | RuntimeEvent::CapabilityCompleted(_)
+            | RuntimeEvent::CapabilityFailed(_)
+            | RuntimeEvent::LoopObserved(_)
+            | RuntimeEvent::LoopPlanned(_)
+            | RuntimeEvent::LoopActed(_)
+            | RuntimeEvent::LoopVerified(_)
+            | RuntimeEvent::LoopRewarded(_)
+            | RuntimeEvent::Debug(_)
     )
 }
 
@@ -65,7 +65,7 @@ impl EventBus {
         self.consumers.push(ConsumerEntry { filter, sender: tx });
     }
 
-    pub fn dispatch(&self, event: CanonEvent) {
+    pub fn dispatch(&self, event: RuntimeEvent) {
         let reliable = is_control_event(&event);
         for consumer in &self.consumers {
             match consumer.filter {
@@ -76,17 +76,17 @@ impl EventBus {
                     }
                 }
                 EventFilter::EditOnly => {
-                    if !matches!(event, CanonEvent::Edit(_)) {
+                    if !matches!(event, RuntimeEvent::Edit(_)) {
                         continue;
                     }
                 }
                 EventFilter::CapabilityOnly => {
-                    if !matches!(event, CanonEvent::CapabilityCompleted(_) | CanonEvent::CapabilityFailed(_)) {
+                    if !matches!(event, RuntimeEvent::CapabilityCompleted(_) | RuntimeEvent::CapabilityFailed(_)) {
                         continue;
                     }
                 }
                 EventFilter::Code(mask) => {
-                    let CanonEvent::Code(canon_event::Code { delta, .. }) = &event else {
+                    let RuntimeEvent::Code(canon_event::Code { delta, .. }) = &event else {
                         continue;
                     };
                     let event_mask = EventMask::for_event(&delta.event);

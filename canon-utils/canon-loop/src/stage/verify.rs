@@ -1,21 +1,11 @@
 use std::path::Path;
 use std::process::Command;
 
-use canon_event::{CanonEvent, DebugEvent, LoopVerified};
+use canon_event::{RuntimeEvent, LoopVerified, RouteSelected};
 
 use crate::{context::LoopContext, result::LoopStageResult};
 
-pub fn execute(d: DebugEvent, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
-    let lane = d
-        .payload
-        .get("approved_route")
-        .or_else(|| d.payload.get("lane"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    if lane != "validate" {
-        return Ok(LoopStageResult::Noop);
-    }
-
+pub fn execute(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
     let trace_id = Some(uuid::Uuid::new_v4().to_string());
     let execution_id = Some(uuid::Uuid::new_v4().to_string());
     ctx.last_verify_trace_id = trace_id.clone();
@@ -42,7 +32,7 @@ pub fn execute(d: DebugEvent, ctx: &mut LoopContext) -> anyhow::Result<LoopStage
     }
 
     let verified = LoopVerified {
-        tick: d.payload.get("tick").and_then(|v| v.as_u64()).unwrap_or(0),
+        tick: rs.tick,
         compiler_clean: passed,
         tlog_clean: true,
         error_count: ctx.error_count,
@@ -55,7 +45,7 @@ pub fn execute(d: DebugEvent, ctx: &mut LoopContext) -> anyhow::Result<LoopStage
     };
     ctx.last_verify_execution_id = verified.execution_id.clone();
     ctx.last_verify_trace_id = verified.trace_id.clone();
-    Ok(LoopStageResult::Emit(CanonEvent::LoopVerified(verified)))
+    Ok(LoopStageResult::Emit(RuntimeEvent::LoopVerified(verified)))
 }
 
 fn run_cargo_check(workspace: &Path) -> anyhow::Result<(bool, String)> {

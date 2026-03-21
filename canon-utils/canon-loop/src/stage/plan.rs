@@ -1,14 +1,14 @@
 use std::path::Path;
 
-use canon_event::{CapabilityCompleted, CapabilityFailed, CapabilityResult, CanonEvent, DebugEvent, LlmCall, LoopActed, LoopObserved, LoopPlanned, ToolCall, ToolResult};
+use canon_event::{CapabilityCompleted, CapabilityFailed, CapabilityResult, RuntimeEvent, LlmCall, LoopActed, LoopObserved, LoopPlanned, RouteSelected, ToolCall, ToolResult};
 use uuid::Uuid;
 
 use crate::{context::{LoopContext, PendingPlan}, result::LoopStageResult};
 
 const LLM_TIMEOUT_TICKS: u64 = 60;
 
-pub fn execute_trigger(d: DebugEvent, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
-    let tick = d.payload.get("tick").and_then(|v| v.as_u64()).unwrap_or(0);
+pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+    let tick = rs.tick;
     check_llm_timeout(ctx, tick);
     let Some(observed) = ctx.last_observed.clone() else {
         return Ok(LoopStageResult::Noop);
@@ -127,7 +127,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
     if out.is_empty() {
         return Ok(LoopStageResult::Noop);
     }
-    Ok(LoopStageResult::EmitMany(out.into_iter().map(CanonEvent::LoopPlanned).collect()))
+    Ok(LoopStageResult::EmitMany(out.into_iter().map(RuntimeEvent::LoopPlanned).collect()))
 }
 
 pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
@@ -279,7 +279,7 @@ fn check_llm_timeout(ctx: &mut LoopContext, current_tick: u64) {
 }
 
 fn emit_plan(_ctx: &LoopContext, payload: LoopPlanned) -> anyhow::Result<LoopStageResult> {
-    Ok(LoopStageResult::Emit(CanonEvent::LoopPlanned(payload)))
+    Ok(LoopStageResult::Emit(RuntimeEvent::LoopPlanned(payload)))
 }
 
 fn emit_tool_result(ctx: &LoopContext, tool_call_id: &str, request_id: &str, success: bool) -> anyhow::Result<()> {

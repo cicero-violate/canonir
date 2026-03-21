@@ -3,11 +3,13 @@
 ## Current Build Status
 
 ```
-Phase 1 — 🔴 not started  (ErrorLogger uses emitter)
-Phase 2 — 🔴 not started  (cargo check + tests)
+Phase 1 — ✅ complete  (ErrorLogger stores and uses emitter; direct fallback retained for pre-init)
+Phase 2 — ✅ complete  (cargo check --workspace exits 0; async_consumers_preserve_order_per_consumer passes)
 ```
 
-**Prerequisite:** `cargo check --workspace` clean (confirmed post D-migration 2026-03-21).
+**Confirmed 2026-03-21:**
+- `cargo check --workspace` — zero errors
+- `cargo test -p canon-runtime` — 1 test passes (`async_consumers_preserve_order_per_consumer`)
 
 ---
 
@@ -165,8 +167,8 @@ Expected:
 ## Execution Order
 
 ```
-Phase 1 — 🔴 next   (ErrorLogger stores and uses emitter; cargo check -p canon-runtime exits 0)
-Phase 2 — 🔴 last   (cargo check --workspace exits 0; tests pass)
+Phase 1 — ✅ complete
+Phase 2 — ✅ complete
 ```
 
 ---
@@ -175,7 +177,7 @@ Phase 2 — 🔴 last   (cargo check --workspace exits 0; tests pass)
 
 | Phase | Status | File | Change |
 |-------|--------|------|--------|
-| 1 | 🔴 | `canon-runtime/src/consumers/error_logger.rs` | Add `emitter` field; implement `set_emitter`; replace direct write with emitter emit, direct fallback if None |
+| 1 | ✅ | `canon-runtime/src/consumers/error_logger.rs` | Added `emitter` field; implemented `set_emitter`; replaced direct write with emitter emit, direct fallback if None |
 
 ---
 

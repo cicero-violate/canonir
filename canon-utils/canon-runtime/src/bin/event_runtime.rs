@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use canon_event::EVENT_SCHEMA_VERSION;
+use canon_event::{RuntimeEvent, RouteTick, EVENT_SCHEMA_VERSION};
 use canon_event_store::replay_graph_from_tlog;
 use canon_event_store::AnyEvent;
 use canon_event_store::{extract_rustc_event, read_any_events_from_path, read_any_events_from_path_with_start_seq};
@@ -155,13 +155,7 @@ fn handle_control_msg(
     match msg {
         ControlMsg::Tick => {
             *scheduler_tick = scheduler_tick.saturating_add(1);
-            runtime.emit_debug_event(
-                "supervisor".to_string(),
-                "route_tick".to_string(),
-                serde_json::json!({
-                    "tick": *scheduler_tick,
-                }),
-            )?;
+            runtime.emit_event(RuntimeEvent::RouteTick(RouteTick { tick: *scheduler_tick }))?;
             runtime.emit_tick()?;
             runtime.flush_emitted_events()?;
             if *processed != *last_saved_processed
@@ -412,7 +406,7 @@ fn main() -> Result<()> {
     // the file, updates the in-memory PromptRegistry (so LlmCapabilityHandler
     // picks up the new content immediately), and writes a prompt_loaded event
     // directly to the tlog. P2 then delivers it as EventMsg::Event to W, which
-    // dispatches CanonEvent::PromptLoaded to all consumers (including ObserveConsumer).
+    // dispatches RuntimeEvent::PromptLoaded to all consumers (including ObserveConsumer).
     {
         let prompts_path = PathBuf::from(prompts_dir());
         let tlog_for_prompts = tlog_path.clone();

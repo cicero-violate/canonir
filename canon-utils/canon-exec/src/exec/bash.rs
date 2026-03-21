@@ -1,12 +1,12 @@
 use super::{Executable, ExecutionContext, ExecutionResult};
-use canon_event::{BashInvoke, CanonEvent, CapabilityCompleted, CapabilityResult, ProcessResult};
+use canon_event::{BashInvoke, RuntimeEvent, CapabilityCompleted, CapabilityResult, ProcessResult};
 use std::process::Command;
 
 impl Executable for BashInvoke {
     fn execute(self, _ctx: ExecutionContext) -> anyhow::Result<ExecutionResult> {
         let cwd = self.cwd.clone().unwrap_or_else(|| ".".to_string());
         let output = Command::new("bash").arg("-lc").arg(&self.cmd).current_dir(&cwd).output()?;
-        Ok(ExecutionResult::Emit(CanonEvent::CapabilityCompleted(CapabilityCompleted {
+        Ok(ExecutionResult::Emit(RuntimeEvent::CapabilityCompleted(CapabilityCompleted {
             request_id: self.request_id,
             capability: "bash",
             result: CapabilityResult::Process(ProcessResult {

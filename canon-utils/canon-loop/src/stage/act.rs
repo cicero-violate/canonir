@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use canon_event::{
-    BashInvoke, CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityResult, DebugEvent, FileEvent, FilePatch, FileWrite, LoopActed, LoopPlanned, ProcessResult, ToolCall, ToolResult,
+    BashInvoke, RuntimeEvent, CapabilityCompleted, CapabilityFailed, CapabilityResult, FileEvent, FilePatch, FileWrite, LoopActed, LoopPlanned, ProcessResult, RouteSelected, ToolCall, ToolResult,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -11,16 +11,7 @@ use crate::{
     result::LoopStageResult,
 };
 
-pub fn execute_dispatch(d: DebugEvent, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
-    let lane = d
-        .payload
-        .get("approved_route")
-        .or_else(|| d.payload.get("lane"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    if lane != "execute" {
-        return Ok(LoopStageResult::Noop);
-    }
+pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
     if ctx.pending_act.is_some() {
         return Ok(LoopStageResult::Noop);
     }
@@ -178,14 +169,14 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                 &serde_json::json!({ "cmd": cmd, "cwd": cwd }),
             ));
             events.push(write_tool_result_pending_artifact(ctx, artifact_n, planned, "bash", &node_id, &tool_call_id, &request_id));
-            events.push(CanonEvent::ToolCall(ToolCall {
+            events.push(RuntimeEvent::ToolCall(ToolCall {
                 node_id: node_id.clone(),
                 tool_call_id: tool_call_id.clone(),
                 request_id: request_id.clone(),
                 kind: "bash".to_string(),
                 payload: serde_json::json!({ "cmd": cmd, "cwd": cwd }),
             }));
-            events.push(CanonEvent::Bash(BashInvoke { request_id: request_id.clone(), cmd: cmd.to_string(), cwd: Some(cwd.to_string()) }));
+            events.push(RuntimeEvent::Bash(BashInvoke { request_id: request_id.clone(), cmd: cmd.to_string(), cwd: Some(cwd.to_string()) }));
 
             ctx.pending_act = Some(PendingAct {
                 tick: planned.tick,
@@ -239,14 +230,14 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                 &tool_call_id,
                 &request_id,
             ));
-            events.push(CanonEvent::ToolCall(ToolCall {
+            events.push(RuntimeEvent::ToolCall(ToolCall {
                 node_id: node_id.clone(),
                 tool_call_id: tool_call_id.clone(),
                 request_id: request_id.clone(),
                 kind: "file.write".to_string(),
                 payload: serde_json::json!({ "path": path, "content": content }),
             }));
-            events.push(CanonEvent::File(FileEvent::Write(FileWrite { request_id: request_id.clone(), path: path.to_string(), content: content.to_string() })));
+            events.push(RuntimeEvent::File(FileEvent::Write(FileWrite { request_id: request_id.clone(), path: path.to_string(), content: content.to_string() })));
 
             ctx.pending_act = Some(PendingAct {
                 tick: planned.tick,
@@ -301,14 +292,14 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                 &tool_call_id,
                 &request_id,
             ));
-            events.push(CanonEvent::ToolCall(ToolCall {
+            events.push(RuntimeEvent::ToolCall(ToolCall {
                 node_id: node_id.clone(),
                 tool_call_id: tool_call_id.clone(),
                 request_id: request_id.clone(),
                 kind: "file.patch".to_string(),
                 payload: serde_json::json!({ "path": path, "old": old, "new": new }),
             }));
-            events.push(CanonEvent::File(FileEvent::Patch(FilePatch {
+            events.push(RuntimeEvent::File(FileEvent::Patch(FilePatch {
                 request_id: request_id.clone(),
                 path: path.to_string(),
                 old: old.to_string(),
@@ -341,8 +332,8 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
     }
 }
 
-fn emit_missing_args(planned: &LoopPlanned, reason: &str) -> CanonEvent {
-    CanonEvent::LoopActed(LoopActed {
+fn emit_missing_args(planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
+    RuntimeEvent::LoopActed(LoopActed {
         tick: planned.tick,
         action_kind: planned.action_kind.clone(),
         capability_request_id: String::new(),
@@ -365,8 +356,8 @@ fn emit_missing_args(planned: &LoopPlanned, reason: &str) -> CanonEvent {
 
 fn emit_acted(
     pending: PendingAct, stdout: String, stderr: String, exit_code: Option<i32>, duration_ms: u64, success: bool, tool_result_id: Option<String>,
-) -> CanonEvent {
-    CanonEvent::LoopActed(LoopActed {
+) -> RuntimeEvent {
+    RuntimeEvent::LoopActed(LoopActed {
         tick: pending.tick,
         action_kind: pending.action_kind,
         capability_request_id: pending.request_id,
@@ -387,10 +378,10 @@ fn emit_acted(
     })
 }
 
-fn emit_tool_result(ctx: &LoopContext, pending: &PendingAct, tool_result_id: String, output: CapabilityResult, success: bool) -> CanonEvent {
+fn emit_tool_result(ctx: &LoopContext, pending: &PendingAct, tool_result_id: String, output: CapabilityResult, success: bool) -> RuntimeEvent {
     let output_json = serde_json::to_value(&output).unwrap_or_else(|_| serde_json::json!({}));
     write_tool_result_artifact(ctx, pending.artifact_n, pending, &tool_result_id, &output_json, success);
-    CanonEvent::ToolResult(ToolResult {
+    RuntimeEvent::ToolResult(ToolResult {
         node_id: pending.node_id.clone(),
         tool_call_id: pending.tool_call_id.clone(),
         tool_result_id,
@@ -404,7 +395,7 @@ fn emit_tool_result(ctx: &LoopContext, pending: &PendingAct, tool_result_id: Str
 // Artifact helpers (ported)
 fn write_tool_call_artifact(
     ctx: &LoopContext, artifact_n: u32, kind: &str, node_id: &str, tool_call_id: &str, request_id: &str, payload: &Value,
-) -> CanonEvent {
+) -> RuntimeEvent {
     let value = serde_json::json!({
         "n": artifact_n,
         "status": "dispatched",
@@ -417,12 +408,12 @@ fn write_tool_call_artifact(
         "payload": payload,
     });
     append_tool_artifact(&ctx.artifact_dir, artifact_n, "tool_call", &value);
-    CanonEvent::RuntimeStateUpdated(canon_event::RuntimeStateUpdated { payload: serde_json::json!({"workspace_dirty": false}) })
+    RuntimeEvent::RuntimeStateUpdated(canon_event::RuntimeStateUpdated { payload: serde_json::json!({"workspace_dirty": false}) })
 }
 
 fn write_tool_result_pending_artifact(
     ctx: &LoopContext, artifact_n: u32, planned: &LoopPlanned, kind: &str, node_id: &str, tool_call_id: &str, request_id: &str,
-) -> CanonEvent {
+) -> RuntimeEvent {
     let value = serde_json::json!({
         "n": artifact_n,
         "status": "pending",
@@ -444,7 +435,7 @@ fn write_tool_result_pending_artifact(
         "output": {"status":"pending"}
     });
     upsert_tool_result_artifact(&ctx.artifact_dir, artifact_n, &value);
-    CanonEvent::RuntimeStateUpdated(canon_event::RuntimeStateUpdated { payload: serde_json::json!({"workspace_dirty": false}) })
+    RuntimeEvent::RuntimeStateUpdated(canon_event::RuntimeStateUpdated { payload: serde_json::json!({"workspace_dirty": false}) })
 }
 
 fn write_tool_result_artifact(ctx: &LoopContext, artifact_n: u32, pending: &PendingAct, tool_result_id: &str, output: &Value, success: bool) {
@@ -474,7 +465,7 @@ fn write_tool_result_artifact(ctx: &LoopContext, artifact_n: u32, pending: &Pend
 }
 
 // Batch tracking
-fn abort_active_batch(ctx: &mut LoopContext) -> Vec<CanonEvent> {
+fn abort_active_batch(ctx: &mut LoopContext) -> Vec<RuntimeEvent> {
     let mut events = Vec::new();
     loop {
         let Some(next) = ctx.act_queue.front() else {
@@ -503,7 +494,7 @@ fn tool_node_id(planned: &LoopPlanned) -> String {
 }
 
 // Pending timeout/reconcile helpers
-pub fn check_act_timeout(ctx: &mut LoopContext) -> Option<CanonEvent> {
+pub fn check_act_timeout(ctx: &mut LoopContext) -> Option<RuntimeEvent> {
     let Some(pending) = ctx.pending_act.take() else {
         return None;
     };
@@ -524,7 +515,7 @@ pub fn check_act_timeout(ctx: &mut LoopContext) -> Option<CanonEvent> {
     ctx.mark_batch_completion(llm_request_id.as_deref(), false);
     events.push(emit_acted(pending, String::new(), "timeout".to_string(), None, 30_000, false, Some(tool_result_id)));
     events.extend(abort_active_batch(ctx));
-    Some(CanonEvent::LoopActed(LoopActed {
+    Some(RuntimeEvent::LoopActed(LoopActed {
         tick: 0,
         action_kind: "timeout_marker".to_string(),
         capability_request_id: String::new(),
@@ -545,7 +536,7 @@ pub fn check_act_timeout(ctx: &mut LoopContext) -> Option<CanonEvent> {
     }))
 }
 
-pub fn reconcile_stale_pending_artifacts(ctx: &mut LoopContext) -> Vec<CanonEvent> {
+pub fn reconcile_stale_pending_artifacts(ctx: &mut LoopContext) -> Vec<RuntimeEvent> {
     use std::fs;
     if ctx.last_act_reconcile.is_some_and(|t| t.elapsed() < Duration::from_secs(10)) {
         return Vec::new();
@@ -601,7 +592,7 @@ pub fn reconcile_stale_pending_artifacts(ctx: &mut LoopContext) -> Vec<CanonEven
             changed = true;
 
             let tick = row.get("tick").and_then(|v| v.as_u64()).unwrap_or(0);
-            events.push(CanonEvent::ToolResult(ToolResult {
+            events.push(RuntimeEvent::ToolResult(ToolResult {
                 node_id: node_id.clone(),
                 tool_call_id: tool_call_id.clone(),
                 tool_result_id: tool_result_id.clone(),
@@ -610,7 +601,7 @@ pub fn reconcile_stale_pending_artifacts(ctx: &mut LoopContext) -> Vec<CanonEven
                 output: serde_json::json!({"error": error}),
                 success: false,
             }));
-            events.push(CanonEvent::LoopActed(LoopActed {
+            events.push(RuntimeEvent::LoopActed(LoopActed {
                 tick,
                 action_kind: row.get("action_kind").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
                 capability_request_id: request_id,

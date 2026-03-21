@@ -1,4 +1,4 @@
-use canon_event::{CanonEvent, EventConsumer, EventEmitterHandle, EventFilter, RustcEvent};
+use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, RustcEvent};
 use serde::{Deserialize, Serialize};
 use std::fs::{create_dir_all, File};
 use std::io::{Seek, Write};
@@ -38,7 +38,7 @@ impl EventConsumer for FailureStoreConsumer {
         EventFilter::ErrorOnly
     }
 
-    fn on_event(&mut self, event: &CanonEvent) {
+    fn on_event(&mut self, event: &RuntimeEvent) {
         self.store.record_event(event);
         self.persist();
     }
@@ -70,29 +70,29 @@ impl FailureStore {
         Self::default()
     }
 
-    fn record_event(&mut self, event: &CanonEvent) {
+    fn record_event(&mut self, event: &RuntimeEvent) {
         match event {
-            CanonEvent::ErrorOccurred(payload) => {
+            RuntimeEvent::ErrorOccurred(payload) => {
                 self.record_message(&payload.kind, &payload.message);
             }
-            CanonEvent::CapabilityFailed(payload) => {
+            RuntimeEvent::CapabilityFailed(payload) => {
                 self.record_message("capability_failed", &payload.error);
             }
-            CanonEvent::NodeFailed(payload) => {
+            RuntimeEvent::NodeFailed(payload) => {
                 let message = payload.error.as_deref().unwrap_or("node_failed");
                 self.record_message("node_failed", message);
             }
-            CanonEvent::LoopActed(payload) if !payload.success => {
+            RuntimeEvent::LoopActed(payload) if !payload.success => {
                 self.record_message("loop_acted_failed", &payload.stderr);
             }
-            CanonEvent::LoopVerified(payload) if !payload.passed => {
+            RuntimeEvent::LoopVerified(payload) if !payload.passed => {
                 let msg = payload.diagnostics.join("; ");
                 self.record_message("loop_verified_failed", &msg);
             }
-            CanonEvent::LoopRewarded(payload) if payload.halt => {
+            RuntimeEvent::LoopRewarded(payload) if payload.halt => {
                 self.record_message("loop_rewarded_halt", "stagnant:halt");
             }
-            CanonEvent::Code(code) => match &code.delta.event {
+            RuntimeEvent::Code(code) => match &code.delta.event {
                 RustcEvent::PanicCaptured(payload) => {
                     self.record_message("panic_captured", &payload.message);
                 }

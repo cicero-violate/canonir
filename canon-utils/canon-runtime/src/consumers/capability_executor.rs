@@ -1,4 +1,4 @@
-use canon_event::{new_error_occurred, CanonEvent, EventConsumer, EventEmitterHandle, EventFilter};
+use canon_event::{new_error_occurred, RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter};
 use canon_exec::{ExecutableEvent, ExecutionContext, ExecutionResult};
 use std::path::PathBuf;
 
@@ -22,7 +22,7 @@ impl EventConsumer for CapabilityExecutor {
         self.emitter = Some(emitter);
     }
 
-    fn on_event(&mut self, event: &CanonEvent) {
+    fn on_event(&mut self, event: &RuntimeEvent) {
         let Ok(exec) = ExecutableEvent::try_from(event.clone()) else {
             return;
         };
@@ -34,7 +34,7 @@ impl EventConsumer for CapabilityExecutor {
             Ok(ExecutionResult::Emit(e)) => emitter.emit(e),
             Ok(ExecutionResult::EmitMany(evs)) => evs.into_iter().for_each(|e| emitter.emit(e)),
             Ok(ExecutionResult::Deferred) => {}
-            Err(err) => emitter.emit(CanonEvent::ErrorOccurred(new_error_occurred(
+            Err(err) => emitter.emit(RuntimeEvent::ErrorOccurred(new_error_occurred(
                 "capability_execution",
                 "capability_executor",
                 err.to_string(),

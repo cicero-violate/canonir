@@ -1,15 +1,15 @@
 use super::{Executable, ExecutionContext, ExecutionResult};
-use canon_event::{CanonEvent, CapabilityCompleted, CapabilityResult, CargoEvent, ProcessResult, RuntimeStateUpdated};
+use canon_event::{RuntimeEvent, CapabilityCompleted, CapabilityResult, CargoEvent, ProcessResult, RuntimeStateUpdated};
 use serde_json::json;
 use std::process::Command;
 use std::time::Instant;
 
-fn runtime_log(kind: &str, payload: serde_json::Value) -> CanonEvent {
-    CanonEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload: json!({ "kind": kind, "payload": payload }) })
+fn runtime_log(kind: &str, payload: serde_json::Value) -> RuntimeEvent {
+    RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload: json!({ "kind": kind, "payload": payload }) })
 }
 
-fn completed(request_id: String, capability: &'static str, output: std::process::Output) -> CanonEvent {
-    CanonEvent::CapabilityCompleted(CapabilityCompleted {
+fn completed(request_id: String, capability: &'static str, output: std::process::Output) -> RuntimeEvent {
+    RuntimeEvent::CapabilityCompleted(CapabilityCompleted {
         request_id,
         capability,
         result: CapabilityResult::Process(ProcessResult {

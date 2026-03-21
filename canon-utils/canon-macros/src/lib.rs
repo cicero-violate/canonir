@@ -52,7 +52,7 @@ macro_rules! canon_event_enum {
 /// ```rust,ignore
 /// canon_emit!(emitter; "source", "kind", payload);
 /// ```
-/// Routes through `emitter.emit(CanonEvent::Debug(...))` → EventRuntime → canonical writer.
+/// Routes through `emitter.emit(RuntimeEvent::Debug(...))` → EventRuntime → canonical writer.
 ///
 /// **Direct form** (external processes — supervisor, tools, smoke tests):
 /// ```rust,ignore
@@ -63,15 +63,33 @@ macro_rules! canon_event_enum {
 macro_rules! canon_emit {
     // Typed variant form: canon_emit!(emitter; LoopPlanned(payload))
     ($emitter:expr; $variant:ident($inner:expr)) => {{
-        $emitter.emit(canon_event::CanonEvent::$variant($inner))
+        $emitter.emit(canon_event::RuntimeEvent::$variant($inner))
     }};
     // Emitter-routed form: routes through EventRuntime → canonical writer
     ($emitter:expr; $source:expr, $kind:expr, $payload:expr) => {{
-        $emitter.emit(canon_event::CanonEvent::Debug(canon_event::DebugEvent { source: $source.to_string(), kind: $kind.to_string(), payload: $payload }))
+        let __wrapped = serde_json::json!({
+            "meta": {
+                "file": file!(),
+                "line": line!(),
+                "module": module_path!(),
+                "crate_name": env!("CARGO_PKG_NAME"),
+            },
+            "data": $payload,
+        });
+        $emitter.emit(canon_event::RuntimeEvent::Debug(canon_event::DebugEvent { source: $source.to_string(), kind: $kind.to_string(), payload: __wrapped }))
     }};
     // Direct form: writes directly to tlog path (external processes only)
     ($source:expr, $kind:expr, $payload:expr, $path:expr) => {{
-        let __event = canon_event::TlogEvent::new($source, $kind, $payload);
+        let __wrapped = serde_json::json!({
+            "meta": {
+                "file": file!(),
+                "line": line!(),
+                "module": module_path!(),
+                "crate_name": env!("CARGO_PKG_NAME"),
+            },
+            "data": $payload,
+        });
+        let __event = canon_event::TlogEvent::new($source, $kind, __wrapped);
         canon_event::write_event_auto($path, &__event)
     }};
 }
