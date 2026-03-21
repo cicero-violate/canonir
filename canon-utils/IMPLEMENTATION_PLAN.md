@@ -12,13 +12,13 @@
 
 ### Key existing symbols
 
-| Symbol | Location | Notes |
-|---|---|---|
-| `canon_event_struct!` | `canon-macros/src/lib.rs:4` | Generates `#[derive(Debug, Clone, Serialize, Deserialize)] pub struct` |
-| `canon_emit!` | `canon-macros/src/lib.rs:51` | Two arms: emitter-routed and direct |
-| `DebugEvent` | `canon-runtime-events/src/events.rs:111` | `{ source: String, kind: String, payload: serde_json::Value }` |
-| `CanonEvent::Debug` | `canon-runtime-events/src/events.rs` | Wraps `DebugEvent` |
-| `canon_event` | lib name of `canon-runtime-events` | Used as bare path in `canon_emit!` internals |
+| Symbol                | Location                                 | Notes                                                                  |
+|-----------------------+------------------------------------------+------------------------------------------------------------------------|
+| `canon_event_struct!` | `canon-macros/src/lib.rs:4`              | Generates `#[derive(Debug, Clone, Serialize, Deserialize)] pub struct` |
+| `canon_emit!`         | `canon-macros/src/lib.rs:51`             | Two arms: emitter-routed and direct                                    |
+| `DebugEvent`          | `canon-runtime-events/src/events.rs:111` | `{ source: String, kind: String, payload: serde_json::Value }`         |
+| `CanonEvent::Debug`   | `canon-runtime-events/src/events.rs`     | Wraps `DebugEvent`                                                     |
+| `canon_event`         | lib name of `canon-runtime-events`       | Used as bare path in `canon_emit!` internals                           |
 
 ### `canon_emit!` arms (exact expansion)
 ```rust
