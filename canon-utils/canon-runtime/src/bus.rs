@@ -35,7 +35,6 @@ fn is_control_event(event: &CanonEvent) -> bool {
         event,
         CanonEvent::Tick(_)
             | CanonEvent::PromptLoaded(_)
-            | CanonEvent::CapabilityRequested(_)
             | CanonEvent::CapabilityCompleted(_)
             | CanonEvent::CapabilityFailed(_)
             | CanonEvent::LoopObserved(_)
@@ -82,7 +81,7 @@ impl EventBus {
                     }
                 }
                 EventFilter::CapabilityOnly => {
-                    if !matches!(event, CanonEvent::CapabilityRequested(_) | CanonEvent::CapabilityCompleted(_) | CanonEvent::CapabilityFailed(_)) {
+                    if !matches!(event, CanonEvent::CapabilityCompleted(_) | CanonEvent::CapabilityFailed(_)) {
                         continue;
                     }
                 }

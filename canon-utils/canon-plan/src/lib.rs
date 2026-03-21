@@ -1,5 +1,6 @@
 use canon_event::{
-    CanonEvent, CapabilityCompleted, CapabilityFailed, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopObserved, LoopPlanned, PromptLoaded, Tick, ToolCall, ToolResult, LlmCall,
+    CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, LlmCall, LoopActed, LoopObserved, LoopPlanned, PromptLoaded, Tick, ToolCall,
+    ToolResult,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -214,7 +215,7 @@ impl PlanConsumer {
         let plan_id = Uuid::new_v4().to_string();
         let include_full_goal = observed.goal_text != self.last_prompted_goal;
         let prompt = build_prompt(observed, &self.batch_acted, &self.batch_tool_results, include_full_goal, &self.workspace);
-        let last_action_results_payload: Vec<Value> = self
+        let _last_action_results_payload: Vec<Value> = self
             .batch_acted
             .iter()
             .map(|a| {
@@ -230,7 +231,7 @@ impl PlanConsumer {
                 })
             })
             .collect();
-        let last_tool_results_payload: Vec<Value> = self
+        let _last_tool_results_payload: Vec<Value> = self
             .batch_tool_results
             .iter()
             .map(|r| {
@@ -245,7 +246,7 @@ impl PlanConsumer {
                 })
             })
             .collect();
-        let llm_call = LlmCall { prompt, role: Some("planner".to_string()) };
+        let llm_call = LlmCall { request_id: request_id.clone(), prompt, role: Some("planner".to_string()) };
 
         let plan_tool_call_id = Uuid::new_v4().to_string();
         self.batch_acted.clear();
@@ -290,7 +291,10 @@ impl PlanConsumer {
         // Unblock the routing gate — matches the ToolCall emitted in handle_observed.
         self.emit_tool_result(&pending.plan_tool_call_id, &pending.request_id, true);
 
-        let actions = parse_llm_actions(&payload.result);
+        let actions = match &payload.result {
+            CapabilityResult::Llm(llm) => parse_llm_actions(&llm.response),
+            _ => Vec::new(),
+        };
         if actions.is_empty() {
             self.emit_plan(LoopPlanned {
                 tick: pending.tick,
@@ -611,18 +615,8 @@ fn build_workspace_state_section(observed: &LoopObserved, workspace: &std::path:
     if target.is_dir() {
         let cargo_toml = target.join("Cargo.toml").exists();
         let src_main = target.join("src/main.rs").exists();
-        let entries = std::fs::read_dir(&target)
-            .ok()
-            .into_iter()
-            .flat_map(|it| it.flatten())
-            .take(20)
-            .filter_map(|entry| entry.file_name().into_string().ok())
-            .collect::<Vec<_>>();
-        let contents = if entries.is_empty() {
-            "(empty)".to_string()
-        } else {
-            entries.join(", ")
-        };
+        let entries = std::fs::read_dir(&target).ok().into_iter().flat_map(|it| it.flatten()).take(20).filter_map(|entry| entry.file_name().into_string().ok()).collect::<Vec<_>>();
+        let contents = if entries.is_empty() { "(empty)".to_string() } else { entries.join(", ") };
         format!(
             "## Workspace State\nTarget directory: {} - EXISTS\nCargo.toml present: {}\nsrc/main.rs present: {}\nContents: {}\nDirective: Use `cargo init` or write files directly. Do NOT run `cargo new` for this path.\n\n",
             target.display(),
@@ -631,10 +625,7 @@ fn build_workspace_state_section(observed: &LoopObserved, workspace: &std::path:
             contents
         )
     } else {
-        format!(
-            "## Workspace State\nTarget directory: {} - DOES NOT EXIST\nDirective: Use `cargo new` or `cargo init` to create the project directory.\n\n",
-            target.display()
-        )
+        format!("## Workspace State\nTarget directory: {} - DOES NOT EXIST\nDirective: Use `cargo new` or `cargo init` to create the project directory.\n\n", target.display())
     }
 }
 
@@ -642,11 +633,7 @@ fn resolve_target_project_dir(observed: &LoopObserved, workspace: &std::path::Pa
     observed
         .goal_text
         .as_ref()
-        .and_then(|goal_text| {
-            goal_text
-                .lines()
-                .find_map(|l| l.trim().strip_prefix("- Project path:").map(|p| std::path::PathBuf::from(p.trim().trim_matches('`'))))
-        })
+        .and_then(|goal_text| goal_text.lines().find_map(|l| l.trim().strip_prefix("- Project path:").map(|p| std::path::PathBuf::from(p.trim().trim_matches('`')))))
         .unwrap_or_else(|| workspace.join("test_rust_project_v3"))
 }
 

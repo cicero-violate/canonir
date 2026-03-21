@@ -1,11 +1,16 @@
 use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityHandler};
-use canon_event::CanonEvent;
+use canon_event::{AnalysisEvent, AnalysisRun, AnalysisWorkspace, CanonEvent};
 use std::sync::mpsc;
 use std::thread;
 
+struct CrateWork {
+    crate_name: String,
+    batch_id: Option<String>,
+}
+
 enum AnalysisWork {
-    Crate(serde_json::Value),
-    Workspace(serde_json::Value),
+    Crate(CrateWork),
+    Workspace,
 }
 
 fn spawn_analysis_worker() -> mpsc::Sender<AnalysisWork> {
@@ -15,9 +20,10 @@ fn spawn_analysis_worker() -> mpsc::Sender<AnalysisWork> {
         .spawn(move || {
             for work in rx {
                 match work {
-                    AnalysisWork::Crate(args) => {
-                        let crate_name = args.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-                        let batch_id = args.get("batch_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    AnalysisWork::Crate(work) => {
+                        let crate_name = work.crate_name.clone();
+                        let batch_id = work.batch_id.clone().unwrap_or_default();
+                        let args = serde_json::json!({ "crate": crate_name, "batch_id": work.batch_id });
                         match crate::capabilities::runner::run_full_analysis(&args) {
                             Ok(outcome) => {
                                 let (status, crate_root) = match outcome {
@@ -48,7 +54,7 @@ fn spawn_analysis_worker() -> mpsc::Sender<AnalysisWork> {
                             }
                         }
                     }
-                    AnalysisWork::Workspace(args) => match crate::capabilities::runner::run_workspace_analysis(&args) {
+                    AnalysisWork::Workspace => match crate::capabilities::runner::run_workspace_analysis(&serde_json::json!({})) {
                         Ok(outcome) => {
                             let (status, workspace_dir) = match outcome {
                                 crate::capabilities::runner::RunOutcome::Ran(root) => ("complete", root),
@@ -105,12 +111,14 @@ impl CapabilityHandler for AnalysisRunCapability {
         "analysis.run"
     }
 
-    fn execute(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
-        let CanonEvent::CapabilityRequested(request) = ctx.event else {
-            anyhow::bail!("capability context missing request");
-        };
-        let _ = self.work_tx.send(AnalysisWork::Crate(request.args));
-        Ok(CapabilityExecutionResult::Deferred)
+    fn handle(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
+        match ctx.event {
+            CanonEvent::Analysis(AnalysisEvent::Run(AnalysisRun { request_id: _, crate_name, batch_id })) => {
+                let _ = self.work_tx.send(AnalysisWork::Crate(CrateWork { crate_name, batch_id }));
+                Ok(CapabilityExecutionResult::Deferred)
+            }
+            _ => Ok(CapabilityExecutionResult::NoOp),
+        }
     }
 }
 
@@ -119,12 +127,14 @@ impl CapabilityHandler for AnalysisWorkspaceCapability {
         "analysis.workspace"
     }
 
-    fn execute(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
-        let CanonEvent::CapabilityRequested(request) = ctx.event else {
-            anyhow::bail!("capability context missing request");
-        };
-        let _ = self.work_tx.send(AnalysisWork::Workspace(request.args));
-        Ok(CapabilityExecutionResult::Deferred)
+    fn handle(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
+        match ctx.event {
+            CanonEvent::Analysis(AnalysisEvent::Workspace(AnalysisWorkspace { .. })) => {
+                let _ = self.work_tx.send(AnalysisWork::Workspace);
+                Ok(CapabilityExecutionResult::Deferred)
+            }
+            _ => Ok(CapabilityExecutionResult::NoOp),
+        }
     }
 }
 

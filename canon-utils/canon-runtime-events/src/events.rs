@@ -108,6 +108,12 @@ pub struct Code {
     pub delta: canon_types::EventDelta,
     pub state: canon_types::RustcState,
 }
+
+impl Default for Code {
+    fn default() -> Self {
+        Self { delta: canon_types::EventDelta::default(), state: canon_types::RustcState::default() }
+    }
+}
 canon_event_struct!(DebugEvent { source: String, kind: String, payload: serde_json::Value });
 canon_event_struct!(ErrorOccurred {
     kind: String,
@@ -243,19 +249,20 @@ canon_event_struct!(GoalNodeRewritten {
 });
 canon_event_struct!(GoalEdgeDefined { from_node_id: String, to_node_id: String });
 canon_event_struct!(GoalGraphCheckpointed { tlog_seq: u64 });
-canon_event_struct!(CapabilityInvoked { capability_id: String, name: String, node_id: String });
+canon_event_struct!(CapabilityInvoked { capability_id: String, capability: &'static str, node_id: String });
 canon_event_struct!(CapabilityResolved { capability_id: String, success: bool, duration_ms: u64 });
 
 // Cargo capability events
-canon_event_struct!(CargoBuild { crate_name: String });
+canon_event_struct!(CargoBuild { request_id: String, crate_name: String });
 canon_event_struct!(CargoRun {
+    request_id: String,
     crate_name: String,
     #[serde(default)]
     bin: Option<String>,
     #[serde(default)]
     args: Vec<String>,
 });
-canon_event_struct!(CargoCheck { crate_name: String });
+canon_event_struct!(CargoCheck { request_id: String, crate_name: String });
 
 canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)] CargoEvent {
     Build(CargoBuild),
@@ -264,9 +271,9 @@ canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)] CargoEvent {
 });
 
 // File capability events
-canon_event_struct!(FileRead { path: String });
-canon_event_struct!(FileWrite { path: String, content: String });
-canon_event_struct!(FilePatch { path: String, old: String, new: String });
+canon_event_struct!(FileRead { request_id: String, path: String });
+canon_event_struct!(FileWrite { request_id: String, path: String, content: String });
+canon_event_struct!(FilePatch { request_id: String, path: String, old: String, new: String });
 
 canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)] FileEvent {
     Read(FileRead),
@@ -276,6 +283,7 @@ canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)] FileEvent {
 
 // Bash capability
 canon_event_struct!(BashInvoke {
+    request_id: String,
     cmd: String,
     #[serde(default)]
     cwd: Option<String>,
@@ -283,6 +291,7 @@ canon_event_struct!(BashInvoke {
 
 // LLM capability
 canon_event_struct!(LlmCall {
+    request_id: String,
     prompt: String,
     #[serde(default)]
     role: Option<String>,
@@ -290,16 +299,41 @@ canon_event_struct!(LlmCall {
 
 // Analysis capability
 canon_event_struct!(AnalysisRun {
+    request_id: String,
     crate_name: String,
     #[serde(default)]
     batch_id: Option<String>,
 });
-canon_event_struct!(AnalysisWorkspace {});
+canon_event_struct!(AnalysisWorkspace { request_id: String });
 
 canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)] AnalysisEvent {
     Run(AnalysisRun),
     Workspace(AnalysisWorkspace),
 });
+
+impl Default for EditEvent {
+    fn default() -> Self {
+        Self::RenameSymbol(Default::default())
+    }
+}
+
+impl Default for CargoEvent {
+    fn default() -> Self {
+        Self::Build(Default::default())
+    }
+}
+
+impl Default for FileEvent {
+    fn default() -> Self {
+        Self::Read(Default::default())
+    }
+}
+
+impl Default for AnalysisEvent {
+    fn default() -> Self {
+        Self::Run(Default::default())
+    }
+}
 
 canon_event_enum!(CanonEvent {
     Code(Code),
@@ -361,17 +395,15 @@ pub trait EventConsumer: Send + Sync {
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 }
 
-canon_event_struct!(CapabilityCompleted { request_id: String, name: String, result: serde_json::Value });
+canon_event_struct!(CapabilityCompleted { request_id: String, capability: &'static str, result: CapabilityResult });
 
-canon_event_struct!(CapabilityFailed { request_id: String, name: String, error: String });
+canon_event_struct!(CapabilityFailed { request_id: String, capability: &'static str, error: String });
 
 canon_event_struct!(NodeReady {
     node_id: String,
     capability: String,
     #[serde(default)]
     request_id: String,
-    #[serde(default)]
-    args: serde_json::Value,
 });
 
 canon_event_struct!(NodeStarted {
@@ -395,3 +427,31 @@ canon_event_struct!(NodeFailed {
     #[serde(default)]
     request_id: String,
 });
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ProcessResult {
+    pub status: i32,
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LlmResult {
+    pub success: bool,
+    pub duration_ms: u64,
+    pub response: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum CapabilityResult {
+    Process(ProcessResult),
+    Llm(LlmResult),
+    Empty,
+}
+
+impl Default for CapabilityResult {
+    fn default() -> Self {
+        Self::Empty
+    }
+}

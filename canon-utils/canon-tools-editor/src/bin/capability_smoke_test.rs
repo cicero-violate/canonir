@@ -1,9 +1,7 @@
 use anyhow::Result;
 use canon_capability::{CapabilityExecutionContext, CapabilityRegistry};
 use canon_editor::register_editor_capabilities;
-use canon_event::{CanonEvent, CapabilityRequested};
-
-fn synth_args(_name: &str) -> serde_json::Value { serde_json::json!({}) }
+use canon_event::{CanonEvent, EditEvent, RenameSymbol};
 
 fn main() -> Result<()> {
     let mut registry = CapabilityRegistry::new();
@@ -11,11 +9,12 @@ fn main() -> Result<()> {
 
     let mut executed = 0;
     for name in registry.names() {
-        let req = CapabilityRequested { request_id: "invariant".into(), name: name.clone(), args: synth_args(&name) };
-
-        let ctx = CapabilityExecutionContext { workspace: "/workspace/ai_sandbox/canon".into(), event: CanonEvent::CapabilityRequested(req.clone()), emitter: None };
-
-        let result = registry.execute(&req.name, ctx);
+        if name != "edit.rename_symbol" {
+            continue;
+        }
+        let event = CanonEvent::Edit(EditEvent::RenameSymbol(RenameSymbol { project: "p".into(), old: "a".into(), new: "b".into() }));
+        let ctx = CapabilityExecutionContext { workspace: "/workspace/ai_sandbox/canon".into(), event: event.clone(), emitter: None };
+        let result = registry.route(ctx);
 
         executed += 1;
 

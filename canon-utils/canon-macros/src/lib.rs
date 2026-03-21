@@ -3,7 +3,7 @@
 #[macro_export]
 macro_rules! canon_event_struct {
     ($name:ident { $($(#[$meta:meta])* $field:ident : $ty:ty),* $(,)? }) => {
-        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+        #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
         pub struct $name {
             $($(#[$meta])* pub $field: $ty),*
         }
@@ -28,6 +28,18 @@ macro_rules! canon_event_enum {
         $(#[$($attr)*])*
         pub enum $enum_name {
             $($variant($inner)),*
+        }
+
+        impl $enum_name {
+            /// Returns one sample of each variant using Default inner values.
+            pub fn sample_all() -> Vec<Self>
+            where
+                $($inner: Default),*
+            {
+                vec![
+                    $(Self::$variant(<$inner>::default())),*
+                ]
+            }
         }
     };
 }

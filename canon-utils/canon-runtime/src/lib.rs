@@ -4,15 +4,30 @@ mod bus;
 pub mod consumers;
 
 use bus::EventBus;
-use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityRegistry};
+use canon_capability::CapabilityRegistry;
 use canon_event::{
-    new_error_occurred, AgentRegistered, AnalysisEvent, AnalysisRun, AnalysisWorkspace, BashInvoke, CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityInvoked, CapabilityResolved, Code,
-    DebugEvent, ErrorOccurred, EventConsumer, EventDelta, EventEmitter, EventEmitterHandle, GoalEdgeDefined, GoalGraphCheckpointed, GoalNodeCreated, GoalNodeRetracted, GoalNodeRewritten,
-    GoalSelected, PolicyBaselineUpdated, PromptLoaded, RuntimeStateUpdated, RustcEvent, RustcState, SystemConfigLoaded, Tick, ToolCall, ToolResult,
+    new_error_occurred, AgentRegistered, AnalysisEvent, AnalysisRun, AnalysisWorkspace, CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityInvoked, CapabilityResolved, Code, DebugEvent,
+    ErrorOccurred, EventConsumer, EventDelta, EventEmitter, EventEmitterHandle, GoalEdgeDefined, GoalGraphCheckpointed, GoalNodeCreated, GoalNodeRetracted, GoalNodeRewritten, GoalSelected,
+    PolicyBaselineUpdated, PromptLoaded, RuntimeStateUpdated, RustcEvent, RustcState, SystemConfigLoaded, Tick, ToolCall, ToolResult,
 };
 use canon_event::{BinarySegmentWriter, TlogEvent};
 use canon_event::{EdgeDefined, EdgeRemoved, FileSeen, NodeDefined, NodeRemoved, NodeUpdated};
-use canon_event_store::{extract_capability_request, extract_edit_event, extract_rustc_event, extract_supervisor_event, read_any_events_from_path, AnyEvent};
+use canon_event_store::{extract_edit_event, extract_rustc_event, extract_supervisor_event, read_any_events_from_path, AnyEvent};
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct CapabilityCompletedOwned {
+    request_id: String,
+    capability: String,
+    result: canon_event::CapabilityResult,
+}
+
+#[derive(Deserialize)]
+struct CapabilityFailedOwned {
+    request_id: String,
+    capability: String,
+    error: String,
+}
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -133,7 +148,7 @@ impl EventRuntime {
         self.process_events(&events)
     }
 
-    pub fn process_events(&mut self, events: &[AnyEvent]) -> Result<usize> {
+pub fn process_events(&mut self, events: &[AnyEvent]) -> Result<usize> {
         let mut processed = 0usize;
         for event in events {
             if let AnyEvent::Canon(canon) = event {
@@ -142,9 +157,6 @@ impl EventRuntime {
                     self.drain_emitted_events()?;
                 } else if let Some(edit) = extract_edit_event(canon) {
                     self.handle_runtime_event(CanonEvent::Edit(edit))?;
-                    self.drain_emitted_events()?;
-                } else if let Some(request) = extract_capability_request(canon) {
-                    self.handle_runtime_event(CanonEvent::Analysis(AnalysisEvent::Run(AnalysisRun { crate_name: request.name.clone(), batch_id: None })))?;
                     self.drain_emitted_events()?;
                 } else if canon.kind == "runtime_state.updated" {
                     self.handle_runtime_event(CanonEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload: canon.payload.clone() }))?;
@@ -167,11 +179,12 @@ impl EventRuntime {
                         // a CompilationUnitFinished rustc_event above.
                         if canon.payload.get("byte_offset").is_some() && crate_name != "build_script_build" {
                             self.handle_runtime_event(CanonEvent::Analysis(AnalysisEvent::Run(AnalysisRun {
+                                request_id: format!("analysis-legacy-{}-{}", crate_name, self.tick),
                                 crate_name: crate_name.to_string(),
                                 batch_id: None,
                             })))?;
                             self.drain_emitted_events()?;
-                            self.handle_runtime_event(CanonEvent::Analysis(AnalysisEvent::Workspace(AnalysisWorkspace {})))?;
+                            self.handle_runtime_event(CanonEvent::Analysis(AnalysisEvent::Workspace(AnalysisWorkspace { request_id: format!("analysis-workspace-legacy-{}", self.tick) })))?;
                             self.drain_emitted_events()?;
                         }
                     }
@@ -181,15 +194,14 @@ impl EventRuntime {
                     self.handle_runtime_event(CanonEvent::PromptLoaded(PromptLoaded { payload: canon.payload.clone() }))?;
                     self.drain_emitted_events()?;
                 } else if canon.kind == "capability_completed" && canon.source != "event-runtime" {
-                    // External capability result written directly to tlog (e.g. by an external executor).
-                    // Internal results already flow through the emitter path — skip those to avoid
-                    // double-dispatch.
-                    if let Ok(payload) = serde_json::from_value::<CapabilityCompleted>(canon.payload.clone()) {
+                    if let Ok(payload_owned) = serde_json::from_value::<CapabilityCompletedOwned>(canon.payload.clone()) {
+                        let payload = CapabilityCompleted { request_id: payload_owned.request_id, capability: Box::leak(payload_owned.capability.into_boxed_str()), result: payload_owned.result };
                         self.handle_runtime_event(CanonEvent::CapabilityCompleted(payload))?;
                         self.drain_emitted_events()?;
                     }
                 } else if canon.kind == "capability_failed" && canon.source != "event-runtime" {
-                    if let Ok(payload) = serde_json::from_value::<CapabilityFailed>(canon.payload.clone()) {
+                    if let Ok(payload_owned) = serde_json::from_value::<CapabilityFailedOwned>(canon.payload.clone()) {
+                        let payload = CapabilityFailed { request_id: payload_owned.request_id, capability: Box::leak(payload_owned.capability.into_boxed_str()), error: payload_owned.error };
                         self.handle_runtime_event(CanonEvent::CapabilityFailed(payload))?;
                         self.drain_emitted_events()?;
                     }
@@ -224,10 +236,10 @@ impl EventRuntime {
         apply_delta(&mut self.state, &delta)?;
         self.handle_runtime_event(CanonEvent::Code(Code { delta, state: self.state.clone() }))?;
         if let Some(crate_name) = analysis_crate {
-            let request = CapabilityRequested { request_id: format!("analysis-{}-{}", crate_name, self.tick), name: "analysis.run".to_string(), args: serde_json::json!({ "crate": crate_name }) };
-            self.handle_runtime_event(CanonEvent::CapabilityRequested(request))?;
-            let workspace_request = CapabilityRequested { request_id: format!("analysis-workspace-{}", self.tick), name: "analysis.workspace".to_string(), args: serde_json::json!({}) };
-            self.handle_runtime_event(CanonEvent::CapabilityRequested(workspace_request))?;
+            let run = AnalysisRun { request_id: format!("analysis-{}-{}", crate_name, self.tick), crate_name, batch_id: None };
+            self.handle_runtime_event(CanonEvent::Analysis(AnalysisEvent::Run(run)))?;
+            let workspace = AnalysisWorkspace { request_id: format!("analysis-workspace-{}", self.tick) };
+            self.handle_runtime_event(CanonEvent::Analysis(AnalysisEvent::Workspace(workspace)))?;
         }
         Ok(())
     }
@@ -260,7 +272,7 @@ impl EventRuntime {
                     "error",
                     serde_json::json!({
                         "request_id": payload.request_id,
-                        "capability": payload.name,
+                        "capability": payload.capability,
                     }),
                     None,
                 ));
@@ -312,15 +324,6 @@ impl EventRuntime {
             CanonEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload }) => {
                 self.runtime_state = payload;
             }
-            CanonEvent::CapabilityRequested(request) => {
-                // execute_capabilities provides a direct synchronous execution path for
-                // capabilities NOT handled asynchronously by bus consumers (e.g. CapabilityExecutor).
-                // Skip "llm.call" here: it is always handled asynchronously by LlmCapabilityHandler
-                // via the consumer bus. Running it here too would double-enqueue every LLM request.
-                if self.execute_capabilities && request.name != "llm.call" && self.registry.lock().ok().and_then(|r| r.lookup(&request.name)).is_some() {
-                    self.handle_capability_request(request)?;
-                }
-            }
             _ => {}
         }
         Ok(())
@@ -329,75 +332,6 @@ impl EventRuntime {
     fn drain_emitted_events(&mut self) -> Result<()> {
         while let Ok(event) = self.emitter_rx.try_recv() {
             self.handle_runtime_event(event)?;
-        }
-        Ok(())
-    }
-
-    fn handle_capability_request(&mut self, request: CapabilityRequested) -> Result<()> {
-        let request_id = request.request_id.clone();
-        let request_name = request.name.clone();
-        let ctx = CapabilityExecutionContext {
-            workspace: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-            event: CanonEvent::CapabilityRequested(request.clone()),
-            emitter: Some(self.emitter.clone()),
-        };
-        let execute_result = {
-            let registry = self.registry.lock().map_err(|_| anyhow::anyhow!("capability registry lock poisoned"))?;
-            registry.execute(&request.name, ctx)
-        };
-        let result = match execute_result {
-            Ok(result) => result,
-            Err(err) => {
-                let error_event = CanonEvent::ErrorOccurred(new_error_occurred(
-                    "capability_execution",
-                    "event-runtime",
-                    err.to_string(),
-                    "error",
-                    serde_json::json!({
-                        "request_id": request_id.clone(),
-                        "capability": request_name.clone(),
-                    }),
-                    Some(request_id.clone()),
-                ));
-                self.bus.dispatch(error_event.clone());
-                self.append_runtime_event(&error_event);
-                let failed = CanonEvent::CapabilityFailed(CapabilityFailed { request_id: request_id.clone(), name: request_name.clone(), error: err.to_string() });
-                self.bus.dispatch(failed.clone());
-                self.append_runtime_event(&failed);
-                return Ok(());
-            }
-        };
-
-        let mut terminal_emitted = false;
-        let mut deferred = false;
-        match result {
-            CapabilityExecutionResult::Emit(event) => {
-                terminal_emitted = matches!(event, CanonEvent::CapabilityCompleted(_) | CanonEvent::CapabilityFailed(_));
-                if terminal_emitted {
-                    self.append_runtime_event(&event);
-                }
-                self.bus.dispatch(event);
-            }
-            CapabilityExecutionResult::EmitMany(events) => {
-                for event in events {
-                    let is_terminal = matches!(event, CanonEvent::CapabilityCompleted(_) | CanonEvent::CapabilityFailed(_));
-                    if is_terminal {
-                        terminal_emitted = true;
-                        self.append_runtime_event(&event);
-                    }
-                    self.bus.dispatch(event);
-                }
-            }
-            CapabilityExecutionResult::Deferred => {
-                deferred = true;
-            }
-            CapabilityExecutionResult::NoOp => {}
-        }
-
-        if !terminal_emitted && !deferred {
-            let completed = CanonEvent::CapabilityCompleted(CapabilityCompleted { request_id: request_id.clone(), name: request_name.clone(), result: serde_json::json!({ "status": "ok" }) });
-            self.bus.dispatch(completed.clone());
-            self.append_runtime_event(&completed);
         }
         Ok(())
     }
@@ -492,12 +426,12 @@ impl EventRuntime {
                 }),
             ),
             CanonEvent::GoalGraphCheckpointed(GoalGraphCheckpointed { tlog_seq }) => TlogEvent::new("goal_graph", "goal_graph_checkpointed", serde_json::json!({ "tlog_seq": tlog_seq })),
-            CanonEvent::CapabilityInvoked(CapabilityInvoked { capability_id, name, node_id }) => TlogEvent::new(
+            CanonEvent::CapabilityInvoked(CapabilityInvoked { capability_id, capability, node_id }) => TlogEvent::new(
                 "capability_graph",
                 "capability_invoked",
                 serde_json::json!({
                     "capability_id": capability_id,
-                    "name": name,
+                    "capability": capability,
                     "node_id": node_id,
                 }),
             ),
@@ -696,16 +630,14 @@ pub fn spawn_kernel_processor(rx: crossbeam_channel::Receiver<KernelMsg>, emitte
                         let delta = EventDelta { id: tick, tick, event: kernel };
                         let _ = apply_delta(&mut state, &delta);
                         if let Some(crate_name) = analysis_crate {
-                            canon_meta::canon_emit_meta!(emitter; CapabilityRequested(CapabilityRequested {
+                            canon_meta::canon_emit_meta!(emitter; Analysis(AnalysisEvent::Run(AnalysisRun {
                                 request_id: format!("analysis-k-{}-{}", crate_name, tick),
-                                name: "analysis.run".to_string(),
-                                args: serde_json::json!({ "crate": crate_name }),
-                            }));
-                            canon_meta::canon_emit_meta!(emitter; CapabilityRequested(CapabilityRequested {
+                                crate_name: crate_name.clone(),
+                                batch_id: None,
+                            })));
+                            canon_meta::canon_emit_meta!(emitter; Analysis(AnalysisEvent::Workspace(AnalysisWorkspace {
                                 request_id: format!("analysis-workspace-k-{}", tick),
-                                name: "analysis.workspace".to_string(),
-                                args: serde_json::json!({}),
-                            }));
+                            })));
                         }
                     }
                 }

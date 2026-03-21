@@ -1,22 +1,12 @@
 use canon_macros::canon_event_struct;
 
-canon_event_struct!(Meta {
-    file: String,
-    crate_name: String,
-    module: String,
-    line: u32,
-});
+canon_event_struct!(Meta { file: String, crate_name: String, module: String, line: u32 });
 
 /// Capture source-location metadata at the call site.
 #[macro_export]
 macro_rules! capture_meta {
     () => {
-        canon_meta::Meta {
-            file: file!().to_string(),
-            crate_name: env!("CARGO_PKG_NAME").to_string(),
-            module: module_path!().to_string(),
-            line: line!(),
-        }
+        canon_meta::Meta { file: file!().to_string(), crate_name: env!("CARGO_PKG_NAME").to_string(), module: module_path!().to_string(), line: line!() }
     };
 }
 

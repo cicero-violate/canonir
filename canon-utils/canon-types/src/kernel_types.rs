@@ -105,6 +105,12 @@ pub struct EventDelta {
     pub event: RustcEvent,
 }
 
+impl Default for EventDelta {
+    fn default() -> Self {
+        Self { id: 0, tick: 0, event: RustcEvent::SessionStart(Default::default()) }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RustcState {
     pub tick: u64,
@@ -123,6 +129,23 @@ pub struct RustcState {
     pub removed_symbols: HashSet<String>,
     #[serde(default)]
     pub removed_edges: Vec<(String, String, String)>,
+}
+
+impl Default for RustcState {
+    fn default() -> Self {
+        Self {
+            tick: 0,
+            phase: String::new(),
+            last_event_id: 0,
+            invariant_hash: String::new(),
+            graph_version: 0,
+            known_symbols: HashMap::new(),
+            known_edges: Vec::new(),
+            known_files: HashSet::new(),
+            removed_symbols: HashSet::new(),
+            removed_edges: Vec::new(),
+        }
+    }
 }
 
 canon_event_struct!(PanicFrame {

@@ -1,4 +1,3 @@
-use crate::r#trait::CapabilitySchema;
 use crate::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityHandler};
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
@@ -31,11 +30,6 @@ impl CapabilityRegistry {
         let mut names: Vec<String> = self.map.keys().cloned().collect();
         names.sort();
         names
-    }
-
-    #[allow(deprecated)]
-    pub fn schemas(&self) -> Vec<CapabilitySchema> {
-        self.map.values().map(|h| h.schema()).collect()
     }
 
     /// Route a typed capability event to handlers.

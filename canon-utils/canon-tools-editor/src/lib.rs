@@ -14,6 +14,8 @@ pub mod verify;
 use std::path::Path;
 use std::sync::Arc;
 
+use anyhow::anyhow;
+
 use crate::symbol_index::SymbolIndex;
 pub use capabilities::{register_editor_capabilities, CAP_DELETE_SYMBOL, CAP_MOVE_SYMBOL, CAP_RENAME_DIR, CAP_RENAME_MODULE, CAP_RENAME_SYMBOL};
 pub use consumer::EditConsumer;
@@ -74,8 +76,8 @@ pub fn rename_symbol_pairs_with_session(project: &Path, session: Arc<SymbolIndex
 
     let preview_output = editor
         .validate()
-        .and_then(|conflicts| if conflicts.is_empty() { Ok(()) } else { Err(anyhow::anyhow!("validation conflicts: {conflicts:?}")) })
-        .and_then(|_| editor.apply().and_then(|report| if report.conflicts.is_empty() { Ok(()) } else { Err(anyhow::anyhow!("apply conflicts: {:?}", report.conflicts)) }))
+        .and_then(|conflicts| if conflicts.is_empty() { Ok(()) } else { Err(anyhow!("validation conflicts: {conflicts:?}")) })
+        .and_then(|_| editor.apply().and_then(|report| if report.conflicts.is_empty() { Ok(()) } else { Err(anyhow!("apply conflicts: {:?}", report.conflicts)) }))
         .and_then(|_| editor.preview());
 
     match preview_output {

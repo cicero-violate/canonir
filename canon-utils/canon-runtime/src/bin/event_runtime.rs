@@ -2,11 +2,12 @@ use anyhow::{anyhow, Result};
 use canon_act::ActConsumer;
 use canon_capability::CapabilityExecutionContext;
 use canon_decision::{JournalLine, RouteKind};
-use canon_event::{CanonEvent, CapabilityRequested, EventEmitter, EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult, EVENT_SCHEMA_VERSION};
+use canon_event::{
+    CanonEvent, CapabilityResult, EventEmitter, EventEmitterHandle, LlmCall, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult, EVENT_SCHEMA_VERSION,
+};
 use canon_event_store::replay_graph_from_tlog;
 use canon_event_store::AnyEvent;
 use canon_event_store::{extract_rustc_event, read_any_events_from_path, read_any_events_from_path_with_start_seq};
-use canon_runtime::consumers::check_consumer::CheckConsumer;
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
 use canon_judgment::{GuardConfig, RuntimeSignals};
 use canon_observe::ObserveConsumer;
@@ -14,6 +15,7 @@ use canon_plan::PlanConsumer;
 use canon_reward::RewardConsumer;
 use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry, prompts_dir, reload_prompt_file};
 use canon_runtime::consumers::capability_executor::CapabilityExecutor;
+use canon_runtime::consumers::check_consumer::CheckConsumer;
 use canon_runtime::consumers::error_logger::ErrorLogger;
 use canon_runtime::consumers::llm_executor::LlmCapabilityHandler;
 use canon_runtime::{register_default_capabilities, spawn_kernel_processor, EventRuntime, KernelMsg};
@@ -220,25 +222,17 @@ fn heuristic_route_json(state: &RouteRuntimeState) -> String {
 }
 
 fn request_route_via_llm_call(
-    registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>, workspace: &Path, prompt: String, timeout: Duration, last_tool_result: Option<serde_json::Value>,
+    registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>, workspace: &Path, prompt: String, timeout: Duration, _last_tool_result: Option<serde_json::Value>,
 ) -> Result<String> {
     let request_id = format!("route-{}", Uuid::new_v4());
-    let request = CapabilityRequested {
-        request_id: request_id.clone(),
-        name: "llm.call".to_string(),
-        args: serde_json::json!({
-            "prompt": prompt,
-            "role": "router",
-            "last_tool_result": last_tool_result,
-        }),
-    };
+    let event = CanonEvent::Llm(LlmCall { request_id: request_id.clone(), prompt: prompt, role: Some("router".to_string()) });
     let (tx, rx) = cc::unbounded::<CanonEvent>();
     let emitter: EventEmitterHandle = Arc::new(DirectEventEmitter { tx });
-    let ctx = CapabilityExecutionContext { workspace: workspace.to_path_buf(), event: CanonEvent::CapabilityRequested(request.clone()), emitter: Some(emitter) };
+    let ctx = CapabilityExecutionContext { workspace: workspace.to_path_buf(), event: event.clone(), emitter: Some(emitter) };
 
     {
         let guard = registry.lock().map_err(|_| anyhow!("capability registry lock poisoned"))?;
-        guard.execute("llm.call", ctx)?;
+        guard.route(ctx)?;
     }
 
     let deadline = Instant::now() + timeout;
@@ -250,14 +244,17 @@ fn request_route_via_llm_call(
         let remaining = deadline.saturating_duration_since(now);
         let event = rx.recv_timeout(remaining).map_err(|_| anyhow!("route llm.call timed out"))?;
         match event {
-            CanonEvent::CapabilityCompleted(done) if done.request_id == request_id && done.name == "llm.call" => {
-                let value = done.result.get("result").cloned().unwrap_or(done.result);
-                if let Some(text) = value.get("text").and_then(|v| v.as_str()) {
-                    return Ok(text.to_string());
+            CanonEvent::CapabilityCompleted(done) if done.request_id == request_id && done.capability == "llm.call" => match done.result {
+                CapabilityResult::Llm(res) => {
+                    if let Some(text) = res.response.get("text").and_then(|v| v.as_str()) {
+                        return Ok(text.to_string());
+                    }
+                    return Ok(res.response.to_string());
                 }
-                return Ok(value.to_string());
-            }
-            CanonEvent::CapabilityFailed(failed) if failed.request_id == request_id && failed.name == "llm.call" => {
+                CapabilityResult::Process(proc) => return Ok(proc.stdout),
+                CapabilityResult::Empty => return Ok(String::new()),
+            },
+            CanonEvent::CapabilityFailed(failed) if failed.request_id == request_id && failed.capability == "llm.call" => {
                 return Err(anyhow!("route llm.call failed: {}", failed.error));
             }
             _ => {}

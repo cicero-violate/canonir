@@ -2,7 +2,7 @@ use canon_check::{default_checks, run_checks, Check, CheckResult};
 use canon_event::{CanonEvent, EventConsumer, EventEmitterHandle, EventFilter};
 
 pub struct CheckConsumer {
-    checks: Vec<Box<dyn Check>>, 
+    checks: Vec<Box<dyn Check>>,
     emitter: Option<EventEmitterHandle>,
 }
 

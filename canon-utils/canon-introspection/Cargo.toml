@@ -1,0 +1,12 @@
+[package]
+name = "canon-introspection"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "canon_introspection"
+path = "src/lib.rs"
+
+[dependencies]
+canon-runtime-events = { path = "../canon-runtime-events" }
+canon-capability = { path = "../canon-capability" }

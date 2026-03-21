@@ -92,7 +92,7 @@ fn event_to_payload(event: &CanonEvent) -> Option<(String, serde_json::Value)> {
                 "error",
                 json!({
                     "request_id": payload.request_id.clone(),
-                    "capability": payload.name.clone(),
+                    "capability": payload.capability,
                 }),
                 Some(payload.request_id.clone()),
             ))

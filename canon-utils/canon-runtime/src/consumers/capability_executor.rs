@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityRegistry};
-use canon_event::{new_error_occurred, CanonEvent, CapabilityFailed, EventConsumer, EventEmitterHandle, EventFilter};
+use canon_event::{new_error_occurred, CanonEvent, EventConsumer, EventEmitterHandle, EventFilter};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -22,15 +22,7 @@ impl EventConsumer for CapabilityExecutor {
     }
 
     fn on_event(&mut self, event: &CanonEvent) {
-        let is_cap_event = matches!(
-            event,
-            CanonEvent::Edit(_)
-                | CanonEvent::Cargo(_)
-                | CanonEvent::File(_)
-                | CanonEvent::Bash(_)
-                | CanonEvent::Llm(_)
-                | CanonEvent::Analysis(_)
-        );
+        let is_cap_event = matches!(event, CanonEvent::Edit(_) | CanonEvent::Cargo(_) | CanonEvent::File(_) | CanonEvent::Bash(_) | CanonEvent::Llm(_) | CanonEvent::Analysis(_));
         if !is_cap_event {
             return;
         }

@@ -1,6 +1,6 @@
 use canon_event::{
-    BashInvoke, CanonEvent, CapabilityCompleted, CapabilityFailed, CargoEvent, CargoRun, CargoCheck, CargoBuild, FileEvent, FilePatch, FileWrite, EventConsumer, EventEmitterHandle, EventFilter,
-    LoopActed, LoopPlanned, ToolCall, ToolResult,
+    BashInvoke, CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, FileEvent, FilePatch, FileWrite, LoopActed, LoopPlanned,
+    ProcessResult, ToolCall, ToolResult,
 };
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
@@ -225,6 +225,7 @@ impl ActConsumer {
                     }),
                 }));
                 canon_meta::canon_emit_meta!(emitter; Bash(BashInvoke {
+                    request_id: request_id.clone(),
                     cmd: cmd.to_string(),
                     cwd: Some(cwd.to_string()),
                 }));
@@ -285,6 +286,7 @@ impl ActConsumer {
                     }),
                 }));
                 canon_meta::canon_emit_meta!(emitter; File(FileEvent::Write(FileWrite {
+                    request_id: request_id.clone(),
                     path: path.to_string(),
                     content: content.to_string(),
                 })));
@@ -348,6 +350,7 @@ impl ActConsumer {
                     }),
                 }));
                 canon_meta::canon_emit_meta!(emitter; File(FileEvent::Patch(FilePatch {
+                    request_id: request_id.clone(),
                     path: path.to_string(),
                     old: old.to_string(),
                     new: new.to_string(),
@@ -407,7 +410,7 @@ impl ActConsumer {
         let duration_ms = pending.started_at.elapsed().as_millis() as u64;
         let llm_request_id = pending.llm_request_id.clone();
         let tool_result_id = Uuid::new_v4().to_string();
-        self.emit_tool_result(&pending, tool_result_id.clone(), serde_json::json!({ "error": payload.error }), false);
+        self.emit_tool_result(&pending, tool_result_id.clone(), CapabilityResult::Process(ProcessResult { status: -1, success: false, stdout: String::new(), stderr: payload.error.clone() }), false);
         self.mark_batch_completion(llm_request_id.as_deref(), false);
         self.emit_acted(pending, String::new(), payload.error.clone(), None, duration_ms, false, Some(tool_result_id));
         self.abort_active_batch();
@@ -423,7 +426,7 @@ impl ActConsumer {
         }
         let llm_request_id = pending.llm_request_id.clone();
         let tool_result_id = Uuid::new_v4().to_string();
-        self.emit_tool_result(&pending, tool_result_id.clone(), serde_json::json!({ "error": "timeout" }), false);
+        self.emit_tool_result(&pending, tool_result_id.clone(), CapabilityResult::Process(ProcessResult { status: -1, success: false, stdout: String::new(), stderr: "timeout".to_string() }), false);
         self.mark_batch_completion(llm_request_id.as_deref(), false);
         self.emit_acted(pending, String::new(), "timeout".to_string(), None, 30_000, false, Some(tool_result_id));
         self.abort_active_batch();
@@ -478,16 +481,17 @@ impl ActConsumer {
         self.mark_batch_inline_completion(planned, false);
     }
 
-    fn emit_tool_result(&self, pending: &PendingAct, tool_result_id: String, output: Value, success: bool) {
+    fn emit_tool_result(&self, pending: &PendingAct, tool_result_id: String, output: CapabilityResult, success: bool) {
         if let Some(emitter) = self.emitter.as_ref() {
-            self.write_tool_result_artifact(pending.artifact_n, pending, &tool_result_id, &output, success);
+            let output_json = serde_json::to_value(&output).unwrap_or_else(|_| serde_json::json!({}));
+            self.write_tool_result_artifact(pending.artifact_n, pending, &tool_result_id, &output_json, success);
             canon_meta::canon_emit_meta!(emitter; ToolResult(ToolResult {
                 node_id: pending.node_id.clone(),
                 tool_call_id: pending.tool_call_id.clone(),
                 tool_result_id,
                 request_id: pending.request_id.clone(),
                 kind: pending.tool_kind.clone(),
-                output,
+                output: output_json,
                 success,
             }));
         }
@@ -885,13 +889,19 @@ fn is_potentially_destructive(cmd: &str, workspace: &Path) -> bool {
     false
 }
 
-fn extract_result_fields(result: &Value, started_at: Instant) -> (String, String, Option<i32>, u64, bool) {
-    let stdout = result.get("stdout").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let stderr = result.get("stderr").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let exit_code = result.get("status").and_then(|v| v.as_i64()).map(|v| v as i32).or_else(|| result.get("exit_code").and_then(|v| v.as_i64()).map(|v| v as i32));
-    let duration_ms = result.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or_else(|| started_at.elapsed().as_millis() as u64);
-    let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
-    (stdout, stderr, exit_code, duration_ms, success)
+fn extract_result_fields(result: &CapabilityResult, started_at: Instant) -> (String, String, Option<i32>, u64, bool) {
+    match result {
+        CapabilityResult::Process(proc) => {
+            let duration_ms = started_at.elapsed().as_millis() as u64;
+            (proc.stdout.clone(), proc.stderr.clone(), Some(proc.status), duration_ms, proc.success)
+        }
+        CapabilityResult::Llm(llm) => {
+            let stdout = llm.response.to_string();
+            let duration_ms = llm.duration_ms;
+            (stdout, String::new(), None, duration_ms, llm.success)
+        }
+        CapabilityResult::Empty => (String::new(), String::new(), None, started_at.elapsed().as_millis() as u64, true),
+    }
 }
 
 fn default_tool_artifact_dir() -> PathBuf {
