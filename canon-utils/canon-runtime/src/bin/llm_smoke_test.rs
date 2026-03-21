@@ -1,21 +1,28 @@
 use anyhow::{anyhow, Result};
-use canon_builder::register_build_capabilities;
-use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityRegistry};
 use canon_event::{CanonEvent, LlmCall};
+use canon_exec::{ExecutableEvent, ExecutionContext, ExecutionResult};
 use std::path::PathBuf;
 
-fn main() -> Result<()> {
-    let mut registry = CapabilityRegistry::new();
-    register_build_capabilities(&mut registry);
+struct NoopEmitter;
+impl canon_event::EventEmitter for NoopEmitter {
+    fn emit(&self, _event: CanonEvent) {}
+}
 
-    let request_id = format!("llm-smoke-{}", std::process::id());
-    let event = CanonEvent::Llm(LlmCall { request_id, prompt: "Return the JSON: {\"ok\":true}".to_string(), role: None });
-    let ctx = CapabilityExecutionContext { workspace: PathBuf::from("/workspace/ai_sandbox/canon"), event, emitter: None };
-    let result = registry.route(ctx)?;
-    let completed = matches!(result, CapabilityExecutionResult::Emit(CanonEvent::CapabilityCompleted(_)) | CapabilityExecutionResult::EmitMany(_));
-    if !completed {
-        return Err(anyhow!("llm_smoke_test failed: capability did not complete"));
+fn main() -> Result<()> {
+    let event = CanonEvent::Llm(LlmCall {
+        request_id: format!("llm-smoke-{}", std::process::id()),
+        prompt: "Return the JSON: {\"ok\":true}".to_string(),
+        role: None,
+    });
+    let exec = ExecutableEvent::try_from(event).expect("llm call should be executable");
+    let ctx = ExecutionContext { workspace: PathBuf::from("/workspace/ai_sandbox/canon"), emitter: std::sync::Arc::new(NoopEmitter) };
+    let result = exec.execute(ctx)?;
+    match result {
+        ExecutionResult::Deferred => {
+            println!("llm_smoke_test: PASS (deferred to worker)");
+            Ok(())
+        }
+        ExecutionResult::Emit(CanonEvent::CapabilityCompleted(_)) | ExecutionResult::EmitMany(_) => Ok(()),
+        other => Err(anyhow!("unexpected result: {:?}", other)),
     }
-    println!("llm_smoke_test: PASS");
-    Ok(())
 }

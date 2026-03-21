@@ -27,16 +27,8 @@ test = false
 anyhow = { workspace = true }
 canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
 canon_event_store = { package = "canon-storage-eventlog", path = "../canon-storage-eventlog" }
-canon_capability = { package = "canon-capability", path = "../canon-capability" }
-canon_builder = { package = "canon-builder", path = "../canon-builder" }
-canon_llm = { package = "canon-llm-runtime", path = "../canon-llm-runtime" }
-canon_analysis = { package = "canon-tools-analysis", path = "../canon-tools-analysis" }
-canon_editor = { package = "canon-tools-editor", path = "../canon-tools-editor" }
-canon_observe = { package = "canon-observe", path = "../canon-observe" }
-canon_plan = { package = "canon-plan", path = "../canon-plan" }
-canon_act = { package = "canon-act", path = "../canon-act" }
-canon_verify = { package = "canon-verify", path = "../canon-verify" }
-canon_reward = { package = "canon-reward", path = "../canon-reward" }
+canon_exec = { package = "canon-exec", path = "../canon-exec" }
+canon_loop = { package = "canon-loop", path = "../canon-loop" }
 canon_decision = { package = "canon-decision", path = "../canon-decision" }
 canon_judgment = { package = "canon-judgment", path = "../canon-judgment" }
 canon_runtime_supervisor = { package = "canon-runtime-supervisor", path = "../canon-runtime-supervisor" }

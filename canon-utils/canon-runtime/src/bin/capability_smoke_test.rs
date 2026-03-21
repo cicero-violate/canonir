@@ -1,19 +1,24 @@
 use anyhow::{anyhow, Result};
-use canon_builder::register_build_capabilities;
-use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityRegistry};
 use canon_event::{CanonEvent, FileEvent, FileRead};
+use canon_exec::{ExecutableEvent, ExecutionContext, ExecutionResult};
 use std::path::PathBuf;
 
-fn main() -> Result<()> {
-    let mut registry = CapabilityRegistry::new();
-    register_build_capabilities(&mut registry);
+struct NoopEmitter;
+impl canon_event::EventEmitter for NoopEmitter {
+    fn emit(&self, _event: CanonEvent) {}
+}
 
-    let event = CanonEvent::File(FileEvent::Read(FileRead { request_id: "capability-smoke-read".to_string(), path: "/workspace/ai_sandbox/canon/canon-utils/README.md".to_string() }));
-    let ctx = CapabilityExecutionContext { workspace: PathBuf::from("/workspace/ai_sandbox/canon"), event, emitter: None };
-    let result = registry.route(ctx)?;
-    let completed = matches!(result, CapabilityExecutionResult::Emit(CanonEvent::CapabilityCompleted(_)) | CapabilityExecutionResult::EmitMany(_));
+fn main() -> Result<()> {
+    let event = CanonEvent::File(FileEvent::Read(FileRead {
+        request_id: "capability-smoke-read".to_string(),
+        path: "/workspace/ai_sandbox/canon/canon-utils/README.md".to_string(),
+    }));
+    let exec = ExecutableEvent::try_from(event).expect("file read should be executable");
+    let ctx = ExecutionContext { workspace: PathBuf::from("/workspace/ai_sandbox/canon"), emitter: std::sync::Arc::new(NoopEmitter) };
+    let result = exec.execute(ctx)?;
+    let completed = matches!(result, ExecutionResult::Emit(CanonEvent::CapabilityCompleted(_)) | ExecutionResult::EmitMany(_));
     if !completed {
-        return Err(anyhow!("capability_smoke_test failed: capability did not complete"));
+        return Err(anyhow!("capability_smoke_test failed: did not emit CapabilityCompleted"));
     }
     println!("capability_smoke_test: PASS");
     Ok(())

@@ -1,6 +1,4 @@
 use anyhow::{anyhow, Result};
-use canon_act::ActConsumer;
-use canon_capability::CapabilityExecutionContext;
 use canon_decision::{JournalLine, RouteKind};
 use canon_event::{
     CanonEvent, CapabilityResult, EventEmitter, EventEmitterHandle, LlmCall, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult, EVENT_SCHEMA_VERSION,
@@ -10,17 +8,13 @@ use canon_event_store::AnyEvent;
 use canon_event_store::{extract_rustc_event, read_any_events_from_path, read_any_events_from_path_with_start_seq};
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
 use canon_judgment::{GuardConfig, RuntimeSignals};
-use canon_observe::ObserveConsumer;
-use canon_plan::PlanConsumer;
-use canon_reward::RewardConsumer;
+use canon_loop::LoopStageExecutor;
 use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry, prompts_dir, reload_prompt_file};
 use canon_runtime::consumers::capability_executor::CapabilityExecutor;
 use canon_runtime::consumers::check_consumer::CheckConsumer;
 use canon_runtime::consumers::error_logger::ErrorLogger;
-use canon_runtime::consumers::llm_executor::LlmCapabilityHandler;
-use canon_runtime::{register_default_capabilities, spawn_kernel_processor, EventRuntime, KernelMsg};
+use canon_runtime::{spawn_kernel_processor, EventRuntime, KernelMsg};
 use canon_runtime_supervisor::judgment_loop::RouteController;
-use canon_verify::VerifyConsumer;
 use crossbeam_channel as cc;
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashSet;
@@ -222,17 +216,18 @@ fn heuristic_route_json(state: &RouteRuntimeState) -> String {
 }
 
 fn request_route_via_llm_call(
-    registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>, workspace: &Path, prompt: String, timeout: Duration, _last_tool_result: Option<serde_json::Value>,
+    workspace: &Path, prompt: String, timeout: Duration, _last_tool_result: Option<serde_json::Value>,
 ) -> Result<String> {
     let request_id = format!("route-{}", Uuid::new_v4());
     let event = CanonEvent::Llm(LlmCall { request_id: request_id.clone(), prompt: prompt, role: Some("router".to_string()) });
     let (tx, rx) = cc::unbounded::<CanonEvent>();
     let emitter: EventEmitterHandle = Arc::new(DirectEventEmitter { tx });
-    let ctx = CapabilityExecutionContext { workspace: workspace.to_path_buf(), event: event.clone(), emitter: Some(emitter) };
-
-    {
-        let guard = registry.lock().map_err(|_| anyhow!("capability registry lock poisoned"))?;
-        guard.route(ctx)?;
+    let ctx = canon_exec::ExecutionContext { workspace: workspace.to_path_buf(), emitter: emitter.clone() };
+    let exec = canon_exec::ExecutableEvent::try_from(event.clone()).map_err(|_| anyhow!("llm.call not executable"))?;
+    match exec.execute(ctx)? {
+        canon_exec::ExecutionResult::Emit(e) => emitter.emit(e),
+        canon_exec::ExecutionResult::EmitMany(evs) => evs.into_iter().for_each(|e| emitter.emit(e)),
+        canon_exec::ExecutionResult::Deferred => {}
     }
 
     let deadline = Instant::now() + timeout;
@@ -482,8 +477,7 @@ fn drain_event_queue_with_grace(
 
 fn handle_control_msg(
     msg: ControlMsg, q_event_rx: &cc::Receiver<EventMsg>, runtime: &mut EventRuntime, route_controller: &mut RouteController, route_state: &mut RouteRuntimeState,
-    registry: &std::sync::Arc<std::sync::Mutex<canon_capability::CapabilityRegistry>>, workspace: &Path, processed: &mut usize, cursor_path: &Path, tlog_path: &Path, start_seq: u64, session_id: &str,
-    last_saved: &mut Instant, last_saved_processed: &mut usize,
+    workspace: &Path, processed: &mut usize, cursor_path: &Path, tlog_path: &Path, start_seq: u64, session_id: &str, last_saved: &mut Instant, last_saved_processed: &mut usize,
 ) -> Result<bool> {
     match msg {
         ControlMsg::Tick => {
@@ -527,7 +521,7 @@ fn handle_control_msg(
             )?;
             let snapshot = route_state.snapshot_text();
             let prompt = route_controller.build_prompt(&route_state.mission_summary, &snapshot, route_state.latest_tool_result.as_ref(), &route_state.journal);
-            let model_json = match request_route_via_llm_call(registry, workspace, prompt.clone(), Duration::from_secs(90), route_state.latest_tool_result.clone()) {
+            let model_json = match request_route_via_llm_call(workspace, prompt.clone(), Duration::from_secs(90), route_state.latest_tool_result.clone()) {
                 Ok(json) => json,
                 Err(err) => {
                     runtime.emit_debug_event(
@@ -692,29 +686,21 @@ fn main() -> Result<()> {
     }
 
     // --- Build runtime (W owns this exclusively) ---
-    let registry = std::sync::Arc::new(std::sync::Mutex::new(canon_capability::CapabilityRegistry::new()));
     let prompt_registry = new_prompt_registry();
     bootstrap_config(&tlog_path, &prompt_registry);
 
     let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
-        Box::new(ObserveConsumer::new(workspace.clone(), tlog_path.clone())),
-        Box::new(PlanConsumer::new(workspace.clone())),
-        Box::new(ActConsumer::new(workspace.clone())),
-        Box::new(VerifyConsumer::new(workspace.clone(), tlog_path.clone())),
-        Box::new(RewardConsumer::new()),
+        Box::new(LoopStageExecutor::new(workspace.clone(), tlog_path.clone())),
         Box::new(ErrorLogger::new(None)),
         Box::new(CheckConsumer::new()),
     ];
     if event_execution_enabled {
-        consumers.push(Box::new(CapabilityExecutor::new(registry.clone(), workspace.clone())));
+        consumers.push(Box::new(CapabilityExecutor::new(workspace.clone())));
     }
-    let mut runtime = EventRuntime::new_with_registry(consumers, registry.clone());
-    {
-        let mut reg = registry.lock().expect("capability registry lock");
-        register_default_capabilities(&mut reg);
-        reg.register(Arc::new(LlmCapabilityHandler::new(prompt_registry.clone())));
-    }
+    canon_exec::init_llm_worker();
+    canon_exec::init_analysis_worker();
+    let mut runtime = EventRuntime::new(consumers);
     runtime.set_execute_capabilities(false);
     // set_tlog_path tells W where to append (L).  Only W calls this; only W writes L.
     runtime.set_tlog_path(tlog_path.clone());
@@ -736,6 +722,8 @@ fn main() -> Result<()> {
         }
         processed = bootstrap_events.len();
         let _ = save_cursor(&cursor_path, &tlog_path, processed, start_seq, &session_id, runtime.next_id());
+        canon_exec::shutdown_llm_worker();
+        canon_exec::shutdown_analysis_worker();
         return Ok(());
     }
 
@@ -977,7 +965,6 @@ fn main() -> Result<()> {
                     &mut runtime,
                     &mut route_controller,
                     &mut route_state,
-                    &registry,
                     &workspace,
                     &mut processed,
                     &cursor_path,
@@ -1017,7 +1004,6 @@ fn main() -> Result<()> {
                                 &mut runtime,
                                 &mut route_controller,
                                 &mut route_state,
-                                &registry,
                                 &workspace,
                                 &mut processed,
                                 &cursor_path,
@@ -1102,7 +1088,6 @@ fn main() -> Result<()> {
                     &mut runtime,
                     &mut route_controller,
                     &mut route_state,
-                    &registry,
                     &workspace,
                     &mut processed,
                     &cursor_path,

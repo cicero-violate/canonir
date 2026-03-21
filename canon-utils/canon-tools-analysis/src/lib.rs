@@ -1,8 +1,8 @@
 pub mod analysis;
+pub mod capabilities;
 pub mod query;
 pub use query::{query_file, query_file_single, QueryConsumer, QueryError, QueryOptions, TlogQueryResult};
 // supervisor trigger: no-op change
-pub mod capabilities;
 pub mod infer_schema_event;
 pub mod invariants;
 pub mod llm_report;
@@ -14,7 +14,6 @@ mod report_types;
 pub mod semantics;
 pub mod workspace;
 
-pub use capabilities::register_analysis_capabilities;
 pub use invariants::invariant_validator::run_invariant_pipeline;
 pub use panic_types::PanicRecord;
 pub use repair::error_surface::{augment_with_errors, write_repair_surface};

@@ -1,214 +1,280 @@
-# Implementation Plan: Full Architecture Collapse — System = f(CanonEvent)
+# Implementation Plan: Compiler-Enforced Collapse with Bounded Infra Debt
+
+## Current Build Status
+
+```
+Phase 1 — ✅ complete  (canon-exec crate created, ExecutableEvent + TryFrom)
+Phase 2 — ✅ complete  (execute() on all 6 families: edit, cargo, file, bash, llm, analysis)
+Phase 3 — ✅ complete  (CapabilityExecutor replaced, EventRuntime registry removed, build clean)
+Phase 4 — ✅ complete  (capability layer deleted: canon-capability/, canon-introspection/, all dead deps)
+Phase 5 — ⚠️  migration clean; pre-existing failures remain (see below)
+```
+
+**Build status:** `cargo check --workspace` — ✅ zero errors (confirmed 2026-03-21).
+
+**`cargo test --workspace` status:**
+- `canon-exec` — ✅ passes (0 tests, compiles clean)
+- All migration-introduced failures — ✅ resolved
+- **Pre-existing failures (unrelated to this migration):**
+  - `canon-runtime-supervisor` — `allow(dead_code)` from a transitive macro expansion is
+    incompatible with `-F dead_code` set by the test runner. No `allow(dead_code)` exists in
+    supervisor source files — the attribute originates in a dependency. Not introduced by
+    this migration.
+  - `canon-storage-eventlog` bins (`read_tlog`, `verify_tlog_equivalence`) — same `-F dead_code`
+    / `allow(dead_code)` pattern. Pre-existing.
+  - `canon-tools-editor/tests/project_editor_tests.rs` — `cannot find module or crate
+    'project_editor'`. This test file references a crate name that has never existed in the
+    workspace. Pre-existing.
+  - `algorithms` (example `gpu_example`) — `variable does not need to be mutable`. Pre-existing.
+
+**Migration verdict:** R-migration is complete. The 4 remaining `cargo test` failures are all
+pre-existing and tracked as separate work items outside this migration.
+
+---
 
 ## Goal
 
 ```
-R = R_structure · R_coverage · R_binding = 1.0 · 1.0 · 1.0 = 1.0
+Good = max(D, C, R, X)
+Risk = Cycles + CoreBloat + StateLeak
 
-Maintenance = Δ(Schema)       ← only one place to update
-             (not Δ(Schema) + Δ(Mapping) + Drift)
+Target: R_binding = 1.0, Cycles = 0, CoreBloat = 0, StateLeak = bounded
+```
 
-∀ e ∈ CapabilityEvent, ∃! execute(e)  — compile-time enforced
+**Renamed goal:** not "zero maintenance" — adding a new capability event still requires
+writing an execute() arm and an exec module. Correct name: **compiler-enforced collapse
+with bounded infra debt**. Maintenance = Δ(Schema) + Δ(exec module) — both in one crate,
+both compiler-enforced, no mapping drift.
+
+---
+
+## Architecture
+
+```
+Before:
+  CanonEvent → CapabilityRegistry → Vec<dyn Handler> → handler.handle(ctx)
+
+After:
+  ExecutableEvent::try_from(CanonEvent) → ExecutableEvent::execute(ctx)
+  (no registry, no binding layer, no dyn lookup, no _ arm on execute)
+```
+
+### Why `canon-exec` not `canon-runtime-events`
+
+Previous plan added exec deps into `canon-runtime-events`. This creates CoreBloat:
+`canon-runtime-events` gains tokio, z3, syn, rayon as transitive deps — every crate that
+imports event types gets that blast radius. Not acceptable.
+
+**Fix:** New `canon-exec` crate holds all execution. `canon-runtime-events` stays a pure
+schema crate with its current minimal dep set.
+
+```
+canon-runtime-events (schema only — unchanged dep set)
+  CanonEvent, EditEvent, CargoEvent, ...
+  NO execute(), NO exec modules
+
+canon-exec (new crate)
+  deps: canon-runtime-events + canon-tools-analysis + canon-llm-runtime + canon-meta
+  ExecutableEvent (6 variants — NO _ arm on execute)
+  ExecutionContext, ExecutionResult
+  init_llm_worker(), shutdown_llm_worker()
+  exec/ modules per capability family
+```
+
+### Why `ExecutableEvent` not `CanonEvent::execute()`
+
+`CanonEvent::execute()` requires a `_ => NoOp` arm — this is an ambiguity surface.
+`ExecutableEvent` has NO `_` arm. It is an enum of exactly the 6 executable families.
+Adding `CanonEvent::Network(...)` as a capability event requires adding
+`ExecutableEvent::Network(...)` — compiler error until done.
+
+```rust
+pub enum ExecutableEvent {
+    Edit(EditEvent),
+    Cargo(CargoEvent),
+    File(FileEvent),
+    Bash(BashInvoke),
+    Llm(LlmCall),
+    Analysis(AnalysisEvent),
+    // new capability event added here = compile error until execute() arm added
+}
+
+impl ExecutableEvent {
+    pub fn execute(self, ctx: ExecutionContext) -> anyhow::Result<ExecutionResult> {
+        match self {
+            ExecutableEvent::Edit(e)     => e.execute(ctx),
+            ExecutableEvent::Cargo(e)    => e.execute(ctx),
+            ExecutableEvent::File(e)     => e.execute(ctx),
+            ExecutableEvent::Bash(e)     => e.execute(ctx),
+            ExecutableEvent::Llm(e)      => e.execute(ctx),
+            ExecutableEvent::Analysis(e) => e.execute(ctx),
+            // NO _ arm — adding a variant here forces a compile error
+        }
+    }
+}
+
+impl TryFrom<CanonEvent> for ExecutableEvent {
+    type Error = CanonEvent;  // returns the event back if not executable
+    fn try_from(e: CanonEvent) -> Result<Self, CanonEvent> {
+        match e {
+            CanonEvent::Edit(e)     => Ok(ExecutableEvent::Edit(e)),
+            CanonEvent::Cargo(e)    => Ok(ExecutableEvent::Cargo(e)),
+            CanonEvent::File(e)     => Ok(ExecutableEvent::File(e)),
+            CanonEvent::Bash(e)     => Ok(ExecutableEvent::Bash(e)),
+            CanonEvent::Llm(e)      => Ok(ExecutableEvent::Llm(e)),
+            CanonEvent::Analysis(e) => Ok(ExecutableEvent::Analysis(e)),
+            other                   => Err(other),
+        }
+    }
+}
 ```
 
 ---
 
-## Architecture Inversion
+## LLM Worker Lifecycle (defined now, not deferred)
+
+`OnceLock` is not acceptable for end-state because tests cannot reset it.
+
+Use `RwLock<Option<Sender<LlmWork>>>`:
+
+```rust
+// canon-exec/src/exec/llm.rs
+
+static LLM_WORKER_TX: std::sync::RwLock<Option<std::sync::mpsc::Sender<LlmWork>>> =
+    std::sync::RwLock::new(None);
+
+/// Call at process startup before any LlmCall events are dispatched.
+pub fn init_llm_worker(prompt_registry: PromptRegistryHandle) {
+    let tx = spawn_llm_worker(prompt_registry);
+    *LLM_WORKER_TX.write().unwrap() = Some(tx);
+}
+
+/// Call at process shutdown. Worker thread exits when sender is dropped.
+pub fn shutdown_llm_worker() {
+    *LLM_WORKER_TX.write().unwrap() = None;
+}
+
+/// Test helper — inject a test channel. Resets prior worker.
+#[cfg(test)]
+pub fn set_test_worker_tx(tx: std::sync::mpsc::Sender<LlmWork>) {
+    *LLM_WORKER_TX.write().unwrap() = Some(tx);
+}
+```
+
+---
+
+## Hard Gate: Editor and Analysis Infra — Pre-Verified
+
+**Verified before writing this plan.** Result: PASS.
+
+`canon-tools-editor` outside `capabilities.rs`:
+- `tlog.rs`, `structured.rs`, `api.rs` use `canon_event` (event types only — data construction)
+- Zero imports of `canon_capability` or `CapabilityExecutionContext`
+
+`canon-tools-analysis` outside `capabilities/`:
+- `llm_report.rs`, `report_pipeline.rs`, `smt/consumer.rs`, `query/consumer.rs` use
+  `canon_event` and `canon_event_store` (reading tlog data, rustc events)
+- Zero imports of `canon_capability` or `CapabilityExecutionContext`
+
+**Conclusion:** Both crates can have `canon-capability` dep removed with no structural changes
+to their infra code. They continue importing `canon-runtime-events` for event type data —
+no cycle because `canon-runtime-events` never imports them.
+
+---
+
+## Crate Dependency Graph After Collapse
 
 ```
-Before:
-  CanonEvent  →  CapabilityRegistry  →  Vec<dyn CapabilityHandler>  →  handler.handle(ctx)
-  (schema)       (runtime binding)       (dynamic dispatch)
-
-After:
-  CanonEvent::execute(ctx)
-  (schema owns dispatch — no registry, no binding, no dyn lookup)
+canon-macros ──────────────────────────────────────┐
+canon-types ──────────────────────────────────────┐ │
+                                                  ↓ ↓
+canon-runtime-events  (schema only, unchanged deps)
+  ↑                   ↑              ↑              ↑
+canon-tools-editor  canon-builder  canon-tools-analysis  canon-llm-runtime
+                     (infra only)   (infra only)
+  ↑                   ↑              ↑              ↑
+  └──────────────── canon-exec ──────────────────────┘
+                    (exec/ modules, ExecutableEvent,
+                     ExecutionContext, ExecutionResult,
+                     LLM worker lifecycle)
+                         ↑
+                   canon-runtime
+                   (CapabilityExecutor calls ExecutableEvent::try_from + execute)
 ```
 
 ---
 
 ## What Is Deleted
 
-| Deleted                                                    | Reason                                                               |
-|------------------------------------------------------------+----------------------------------------------------------------------|
-| `canon-capability/` crate                                  | No handler trait, no registry, no context type                       |
-| `CapabilityHandler` trait                                  | Replaced by `fn execute()` on event types                            |
-| `CapabilityRegistry` struct                                | No registry needed                                                   |
-| `CapabilityExecutionContext`                               | Replaced by `ExecutionContext` in schema crate                       |
-| `CapabilityExecutionResult`                                | Replaced by `ExecutionResult` in schema crate                        |
-| `canon-builder/src/executor/capabilities.rs`               | Logic moves to exec modules                                          |
-| `canon-tools-editor/src/capabilities.rs`                   | Logic moves to exec modules                                          |
-| `canon-tools-analysis/src/capabilities/mod.rs` register fn | Logic moves to exec modules                                          |
-| `canon-runtime/src/consumers/llm_executor.rs`              | Moves to exec module                                                 |
-| `canon-runtime/src/consumers/capability_executor.rs`       | Replaced by single `event.execute()` call                            |
-| `canon-introspection/` crate                               | `assert_all_routes_safe` is obsolete — exhaustive match is the proof |
+| Deleted | Reason |
+|---------|--------|
+| `canon-capability/` | Handler trait, registry, context type all obsolete |
+| `canon-introspection/` | Exhaustive match on ExecutableEvent is the proof |
+| `CapabilityHandler` trait | Replaced by execute() on event types |
+| `CapabilityRegistry` | No registry |
+| `CapabilityExecutionContext` | Replaced by `ExecutionContext` in canon-exec |
+| `CapabilityExecutionResult` | Replaced by `ExecutionResult` in canon-exec |
+| `canon-builder/src/executor/capabilities.rs` | Logic inlined to exec modules |
+| `canon-tools-editor/src/capabilities.rs` | Pass-through replaced by ExecutableEvent::Edit |
+| `canon-tools-analysis/src/capabilities/mod.rs` register fn | Logic inlined |
+| `canon-runtime/src/consumers/llm_executor.rs` | Moves to canon-exec/src/exec/llm.rs |
+| `canon-runtime/src/consumers/capability_executor.rs` | Replaced (see Phase 3) |
 
 ---
 
-## What Replaces Everything
+## Phase 1 — Create `canon-exec` crate
 
-```rust
-// In canon-runtime-events/src/exec/mod.rs:
+### Step 1a — Add to workspace
 
-pub struct ExecutionContext {
-    pub workspace: PathBuf,
-    pub emitter: EventEmitterHandle,
-}
+In `/workspace/ai_sandbox/canon/Cargo.toml`, add `"canon-utils/canon-exec"` to the
+`members` array.
 
-pub enum ExecutionResult {
-    Emit(CanonEvent),
-    EmitMany(Vec<CanonEvent>),
-    Deferred,   // LLM only — completion arrives via emitter later
-}
-
-// On CanonEvent:
-impl CanonEvent {
-    pub fn execute(self, ctx: ExecutionContext) -> anyhow::Result<ExecutionResult> {
-        match self {
-            CanonEvent::Edit(e)     => e.execute(ctx),
-            CanonEvent::Cargo(e)    => e.execute(ctx),
-            CanonEvent::File(e)     => e.execute(ctx),
-            CanonEvent::Bash(e)     => e.execute(ctx),
-            CanonEvent::Llm(e)      => e.execute(ctx),
-            CanonEvent::Analysis(e) => e.execute(ctx),
-            _                       => Ok(ExecutionResult::NoOp),
-        }
-    }
-}
-```
-
-The `_ => NoOp` arm covers non-capability events (`Code`, `Debug`, `Tick`, etc.) — they
-are not dispatched to capability execution. This is correct and intentional. It does NOT
-hide a missing capability handler — every capability sub-variant has an explicit arm.
-
-New event family added → must add arm → compiler error. Coverage = 1.0.
-
----
-
-## LLM State Problem and Solution
-
-`LlmCall::execute()` is a method on a stateless data struct. The LLM worker is stateful
-(spawned thread, sender channel, config). Cannot store state on the event.
-
-**Solution: module-level worker via `OnceLock`**
-
-```rust
-// canon-runtime-events/src/exec/llm.rs
-
-static LLM_WORKER: OnceLock<Sender<LlmWork>> = OnceLock::new();
-
-pub fn init_llm_worker(config: CapabilityConfig, prompt_registry: PromptRegistryHandle) {
-    let tx = spawn_llm_worker(config, prompt_registry);
-    let _ = LLM_WORKER.set(tx);
-}
-
-impl LlmCall {
-    pub fn execute(self, ctx: ExecutionContext) -> anyhow::Result<ExecutionResult> {
-        let tx = LLM_WORKER.get()
-            .ok_or_else(|| anyhow!("llm worker not initialized — call init_llm_worker first"))?;
-        tx.send(LlmWork { request_id: self.request_id, prompt: self.prompt, role: self.role, emitter: ctx.emitter })?;
-        Ok(ExecutionResult::Deferred)
-    }
-}
-```
-
-`event_runtime.rs` calls `canon_event::exec::llm::init_llm_worker(config, prompt_registry)` at startup, before the event loop begins. No handler object needed. No registration needed.
-
-This preserves the async/deferred design. `init_llm_worker` is called once. `LlmCall::execute()` sends to the global channel.
-
----
-
-## Phase 1 — Add exec modules to `canon-runtime-events`
-
-### Step 1a — Update `canon-runtime-events/Cargo.toml`
-
-Add all deps needed by execution logic:
+### Step 1b — `canon-utils/canon-exec/Cargo.toml`
 
 ```toml
 [package]
-name = "canon-runtime-events"
+name = "canon-exec"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
+name = "canon_exec"
 path = "src/lib.rs"
-name = "canon_event"
 
 [dependencies]
-# existing
 anyhow.workspace = true
-serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-canon_types = { path = "../canon-types" }
-canon-macros = { path = "../canon-macros" }
-crc32fast = "1"
-fs2 = "0.4"
-uuid = { workspace = true }
-
-# new: execution deps
-canon-meta = { path = "../canon-meta" }
-
-# new: editor execution (syn, proc-macro2, walkdir, regex, canon-ir)
-syn = { workspace = true, features = ["full", "visit-mut", "visit"] }
-proc-macro2.workspace = true
-walkdir.workspace = true
-regex.workspace = true
-csv.workspace = true
-prettyplease.workspace = true
-canon-ir = { path = "../../canon-ir" }
-
-# new: LLM execution (tokio, websocket, config)
-tokio = { workspace = true }
-tokio-tungstenite = "0.21"
-futures-util = "0.3"
-once_cell.workspace = true
-hashbrown = "0.14"
-toml = "0.8"
-
-# new: analysis execution (z3, rayon, sha2)
-z3 = { workspace = true, default-features = false }
-rayon.workspace = true
-sha2.workspace = true
-hex.workspace = true
-algorithms = { path = "../../algorithms" }
-canon_graph = { package = "canon-storage-graph", path = "../canon-storage-graph" }
-canon_event_store = { package = "canon-storage-eventlog", path = "../canon-storage-eventlog" }
+canon_event    = { package = "canon-runtime-events", path = "../canon-runtime-events" }
+canon-meta     = { path = "../canon-meta" }
+canon_llm      = { package = "canon-llm-runtime",   path = "../canon-llm-runtime" }
+canon_analysis = { package = "canon-tools-analysis", path = "../canon-tools-analysis" }
+tokio          = { workspace = true }
 ```
 
-**Note on `canon-meta` dep:** `canon-meta` currently depends on `canon-runtime-events`. Adding
-the reverse dep creates a cycle. Resolve by inlining `canon_emit_meta!` expansion directly in the
-exec modules, or by moving `canon-meta` macros into `canon-macros` (which `canon-runtime-events`
-already imports). See Step 1b.
+Note: No dep on `canon-tools-editor` — edit exec is a pass-through (see Phase 2 notes).
+No dep on `canon-builder` — cargo/file/bash subprocess logic is inlined (<20 lines each).
 
-### Step 1b — Resolve `canon-meta` cycle
-
-`canon-meta` provides `canon_emit_meta!` and `capture_meta!`. These macros expand at call site
-using `file!()`, `line!()`, `module_path!()`. They depend on `canon-runtime-events` for
-`canon_emit!`.
-
-Two options:
-- **Option A (preferred):** Move `canon-meta` macro definitions into `canon-macros` (already a dep of `canon-runtime-events`). `canon-meta` crate is deleted or becomes a thin re-export.
-- **Option B:** The exec modules emit via `emitter.emit(CanonEvent::Debug(...))` directly, constructing the meta struct inline without the macro.
-
-Use **Option A**. Move `capture_meta!` and `canon_emit_meta!` into `canon-macros/src/lib.rs`.
-Since `canon-macros` has no deps on `canon-runtime-events`, this breaks the cycle.
-`canon-meta` crate is removed (or kept as an empty re-export of `canon_macros::capture_meta`).
-
-### Step 1c — Create exec module skeleton
-
-**File: `canon-runtime-events/src/exec/mod.rs`**
+### Step 1c — `canon-exec/src/lib.rs`
 
 ```rust
-use crate::CanonEvent;
-use crate::EventEmitterHandle;
+pub mod exec;
+pub use exec::{ExecutableEvent, ExecutionContext, ExecutionResult};
+pub use exec::llm::{init_llm_worker, shutdown_llm_worker};
+```
+
+### Step 1d — `canon-exec/src/exec/mod.rs`
+
+```rust
+use canon_event::{AnalysisEvent, BashInvoke, CanonEvent, CargoEvent, EditEvent, FileEvent, LlmCall};
+use canon_event::EventEmitterHandle;
 use std::path::PathBuf;
 
+pub mod analysis;
 pub mod bash;
 pub mod cargo;
 pub mod edit;
 pub mod file;
 pub mod llm;
-pub mod analysis;
 
 #[derive(Clone)]
 pub struct ExecutionContext {
@@ -221,220 +287,404 @@ pub enum ExecutionResult {
     Emit(CanonEvent),
     EmitMany(Vec<CanonEvent>),
     Deferred,
-    NoOp,
+}
+
+pub enum ExecutableEvent {
+    Edit(EditEvent),
+    Cargo(CargoEvent),
+    File(FileEvent),
+    Bash(BashInvoke),
+    Llm(LlmCall),
+    Analysis(AnalysisEvent),
+}
+
+impl ExecutableEvent {
+    pub fn execute(self, ctx: ExecutionContext) -> anyhow::Result<ExecutionResult> {
+        match self {
+            ExecutableEvent::Edit(e)     => e.execute(ctx),
+            ExecutableEvent::Cargo(e)    => e.execute(ctx),
+            ExecutableEvent::File(e)     => e.execute(ctx),
+            ExecutableEvent::Bash(e)     => e.execute(ctx),
+            ExecutableEvent::Llm(e)      => e.execute(ctx),
+            ExecutableEvent::Analysis(e) => e.execute(ctx),
+        }
+    }
+}
+
+impl TryFrom<CanonEvent> for ExecutableEvent {
+    type Error = CanonEvent;
+    fn try_from(e: CanonEvent) -> Result<Self, CanonEvent> {
+        match e {
+            CanonEvent::Edit(e)     => Ok(ExecutableEvent::Edit(e)),
+            CanonEvent::Cargo(e)    => Ok(ExecutableEvent::Cargo(e)),
+            CanonEvent::File(e)     => Ok(ExecutableEvent::File(e)),
+            CanonEvent::Bash(e)     => Ok(ExecutableEvent::Bash(e)),
+            CanonEvent::Llm(e)      => Ok(ExecutableEvent::Llm(e)),
+            CanonEvent::Analysis(e) => Ok(ExecutableEvent::Analysis(e)),
+            other                   => Err(other),
+        }
+    }
 }
 ```
 
-Add to `canon-runtime-events/src/lib.rs`:
-```rust
-pub mod exec;
-pub use exec::{ExecutionContext, ExecutionResult};
-```
-
-**Verify:** `cargo check -p canon-runtime-events` — zero errors.
+**Verify:** `cargo check -p canon-exec` — zero errors before proceeding.
 
 ---
 
-## Phase 2 — Implement `execute()` on each event type
+## Phase 2 — Implement execute() on each capability family
 
-For each sub-event type, the execution logic is moved from the capability crates into the
-corresponding exec module. The logic itself does not change — only its location changes.
+### `canon-exec/src/exec/edit.rs` — Pass-Through
 
-### `execute()` on `CanonEvent`
+**Critical context:** The current `canon-tools-editor/src/capabilities.rs` is a pure
+pass-through. Each handler receives an EditEvent and re-emits the same EditEvent unchanged.
+The actual editing is performed by `EditConsumer` (in `canon-tools-editor/src/consumer.rs`),
+which is an independent EventConsumer that listens for `EditOnly` events.
 
-Add to `canon-runtime-events/src/events.rs`:
-
-```rust
-impl CanonEvent {
-    pub fn execute(self, ctx: crate::exec::ExecutionContext) -> anyhow::Result<crate::exec::ExecutionResult> {
-        match self {
-            CanonEvent::Edit(e)     => e.execute(ctx),
-            CanonEvent::Cargo(e)    => e.execute(ctx),
-            CanonEvent::File(e)     => e.execute(ctx),
-            CanonEvent::Bash(e)     => e.execute(ctx),
-            CanonEvent::Llm(e)      => e.execute(ctx),
-            CanonEvent::Analysis(e) => e.execute(ctx),
-            _                       => Ok(crate::exec::ExecutionResult::NoOp),
-        }
-    }
-}
-```
-
-### `EditEvent::execute()`
-
-**File: `canon-runtime-events/src/exec/edit.rs`**
-
-Move logic from `canon-tools-editor/src/capabilities.rs`. EditEvent::execute() dispatches
-to the editor infrastructure (which stays in canon-tools-editor):
+`EditConsumer` is NOT deleted — it stays as an event consumer and continues applying edits.
+The exec/edit.rs only needs to re-emit the same event so EditConsumer can pick it up.
 
 ```rust
-use crate::{EditEvent, exec::{ExecutionContext, ExecutionResult}};
+use canon_event::{CanonEvent, EditEvent};
+use super::{ExecutionContext, ExecutionResult};
 
 impl EditEvent {
-    pub fn execute(self, ctx: ExecutionContext) -> anyhow::Result<ExecutionResult> {
-        use crate::CapabilityCompleted;
-        match self {
-            EditEvent::RenameSymbol(ev) => {
-                // Move logic from RenameSymbolCapability::handle()
-                // canon_editor::rename_symbol_run(...) is still in canon-tools-editor
-                // but now called directly, no handler object
-                let report = canon_editor::rename_symbol_run(&ev, &ctx.workspace);
-                // ... emit CapabilityCompleted
-                Ok(ExecutionResult::Emit(CanonEvent::CapabilityCompleted(...)))
-            }
-            EditEvent::MoveSymbol(ev) => { ... }
-            EditEvent::DeleteSymbol(ev) => { ... }
-            EditEvent::RenameModule(ev) => { ... }
-            EditEvent::RenameDir(ev) => { ... }
-        }
+    pub fn execute(self, _ctx: ExecutionContext) -> anyhow::Result<ExecutionResult> {
+        // Re-emit the same EditEvent so EditConsumer can apply it.
+        // EditConsumer (canon-tools-editor/src/consumer.rs) handles actual editing.
+        Ok(ExecutionResult::Emit(CanonEvent::Edit(self)))
     }
 }
 ```
 
-**Note:** `canon-tools-editor` still exists as a library. Its editor infrastructure
-(`ProjectEditor`, `SymbolIndex`, `edit.rs`, `query.rs`, etc.) stays there. Only the thin
-`capabilities.rs` dispatch file is eliminated — `execute()` calls the infrastructure directly.
-`canon-runtime-events/Cargo.toml` adds `canon-tools-editor` as a dep (minus the capability imports).
+No dep on `canon-tools-editor` needed. No `canon_capability` dep needed.
 
-Wait — this creates `canon-runtime-events → canon-tools-editor → canon-runtime-events` (because tools-editor imports canon_event for event types). Circular.
+### `canon-exec/src/exec/cargo.rs` — Inlined subprocess logic
 
-**Resolution:** `canon-tools-editor` must stop importing `canon_event`. The editor infrastructure
-does not need event types — only `capabilities.rs` (being deleted) needed them. After removing
-capabilities.rs, canon-tools-editor's remaining code (editor logic, symbol index, etc.) likely
-does not import event types. **Verify this before proceeding.**
+Source: `canon-builder/src/executor/capabilities.rs` (BuildCargoCapability, CargoRunCapability,
+CargoCheckCapability) and `canon-builder/src/executor/build_runtime.rs` (run_cargo_build, etc).
 
-If it does, those usages are moved into the exec module in canon-runtime-events instead.
-
-### `CargoEvent::execute()`
-
-**File: `canon-runtime-events/src/exec/cargo.rs`**
-
-Logic from `canon-builder/src/executor/capabilities.rs` (BuildCargoCapability, CargoRunCapability,
-CargoCheckCapability). The executor functions `run_cargo_build`, `run_cargo_run`, `run_cargo_check`
-stay in `canon-builder/src/executor/build_runtime.rs` — `canon-runtime-events` adds `canon-builder`
-as a dep.
-
-Wait — same circular dep: `canon-runtime-events → canon-builder → canon-runtime-events`.
-
-**Resolution:** The executor functions (`run_cargo_build` etc.) are the only non-event-aware parts
-of canon-builder. Move them to a new `canon-exec-cargo` micro-crate (or inline them — they are
-~50 lines each). They only call `std::process::Command` with no event imports. Moving them
-eliminates the cycle.
-
-Alternatively: inline the subprocess logic directly into `canon-runtime-events/src/exec/cargo.rs`.
-`run_cargo_build` is ~20 lines of `Command::new("cargo")`. Inline it, delete the dep on canon-builder
-from the exec side.
+Inline the subprocess logic directly — no dep on `canon-builder`.
 
 ```rust
+use canon_event::{CanonEvent, CapabilityCompleted, CapabilityResult, CargoEvent, ProcessResult, RuntimeStateUpdated};
+use super::{ExecutionContext, ExecutionResult};
+use std::process::Command;
+use std::time::Instant;
+use serde_json::json;
+
+fn runtime_log(kind: &str, payload: serde_json::Value) -> CanonEvent {
+    CanonEvent::RuntimeStateUpdated(RuntimeStateUpdated {
+        payload: json!({ "kind": kind, "payload": payload }),
+    })
+}
+
+fn completed(request_id: String, capability: &'static str, output: std::process::Output) -> CanonEvent {
+    CanonEvent::CapabilityCompleted(CapabilityCompleted {
+        request_id,
+        capability,
+        result: CapabilityResult::Process(ProcessResult {
+            status: output.status.code().unwrap_or(-1),
+            success: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        }),
+    })
+}
+
 impl CargoEvent {
-    pub fn execute(self, ctx: ExecutionContext) -> anyhow::Result<ExecutionResult> {
+    pub fn execute(self, _ctx: ExecutionContext) -> anyhow::Result<ExecutionResult> {
         match self {
             CargoEvent::Build(ev) => {
-                let output = std::process::Command::new("cargo")
-                    .arg("build")
-                    .arg("--manifest-path").arg(format!("{}/Cargo.toml", ev.crate_name))
-                    .output()?;
-                Ok(ExecutionResult::Emit(CanonEvent::CapabilityCompleted(CapabilityCompleted {
-                    request_id: ev.request_id,
-                    capability: "cargo.build",
-                    result: CapabilityResult::Process(ProcessResult {
-                        status: output.status.code().unwrap_or(-1),
-                        success: output.status.success(),
-                        stdout: String::from_utf8_lossy(&output.stdout).into(),
-                        stderr: String::from_utf8_lossy(&output.stderr).into(),
-                    }),
-                })))
+                let crate_name = ev.crate_name.clone();
+                let mut events = vec![runtime_log("build.started", json!({ "crate": crate_name }))];
+                let start = Instant::now();
+                let output = Command::new("cargo").args(["build", "-p", &crate_name]).output()?;
+                let duration_ms = start.elapsed().as_millis();
+                events.push(runtime_log("build.completed", json!({ "crate": crate_name, "success": output.status.success(), "duration_ms": duration_ms })));
+                events.push(completed(ev.request_id, "cargo.build", output));
+                Ok(ExecutionResult::EmitMany(events))
             }
-            CargoEvent::Run(ev) => { ... }
-            CargoEvent::Check(ev) => { ... }
+            CargoEvent::Run(ev) => {
+                let crate_name = ev.crate_name.clone();
+                let bin = ev.bin.clone();
+                let mut events = vec![runtime_log("run.started", json!({ "crate": crate_name, "bin": bin }))];
+                let start = Instant::now();
+                let mut cmd = Command::new("cargo");
+                cmd.args(["run", "-p", &crate_name]);
+                if let Some(b) = ev.bin.as_deref() { cmd.args(["--bin", b]); }
+                if !ev.args.is_empty() { cmd.arg("--"); cmd.args(&ev.args); }
+                let output = cmd.output()?;
+                let duration_ms = start.elapsed().as_millis();
+                events.push(runtime_log("run.completed", json!({ "crate": crate_name, "bin": bin, "success": output.status.success(), "duration_ms": duration_ms })));
+                events.push(completed(ev.request_id, "cargo.run", output));
+                Ok(ExecutionResult::EmitMany(events))
+            }
+            CargoEvent::Check(ev) => {
+                let crate_name = ev.crate_name.clone();
+                let mut events = vec![runtime_log("check.started", json!({ "crate": crate_name }))];
+                let start = Instant::now();
+                let output = Command::new("cargo").args(["check", "-p", &crate_name]).output()?;
+                let duration_ms = start.elapsed().as_millis();
+                events.push(runtime_log("check.completed", json!({ "crate": crate_name, "success": output.status.success(), "duration_ms": duration_ms })));
+                events.push(completed(ev.request_id, "cargo.check", output));
+                Ok(ExecutionResult::EmitMany(events))
+            }
         }
     }
 }
 ```
 
-### `FileEvent::execute()`, `BashInvoke::execute()`
+### `canon-exec/src/exec/file.rs` — Pure std
 
-Simple file system / shell ops. No external deps beyond `std`. Inline directly.
+Source: FileReadCapability, FileWriteCapability, FilePatchCapability from
+`canon-builder/src/executor/capabilities.rs`.
 
 ```rust
+use canon_event::{CanonEvent, CapabilityCompleted, CapabilityResult, FileEvent, ProcessResult};
+use super::{ExecutionContext, ExecutionResult};
+
 impl FileEvent {
     pub fn execute(self, _ctx: ExecutionContext) -> anyhow::Result<ExecutionResult> {
         match self {
             FileEvent::Read(ev) => {
                 let content = std::fs::read_to_string(&ev.path)?;
-                Ok(ExecutionResult::Emit(CanonEvent::CapabilityCompleted(...)))
+                Ok(ExecutionResult::Emit(CanonEvent::CapabilityCompleted(CapabilityCompleted {
+                    request_id: ev.request_id,
+                    capability: "file.read",
+                    result: CapabilityResult::Process(ProcessResult { status: 0, success: true, stdout: content, stderr: String::new() }),
+                })))
             }
-            FileEvent::Write(ev) => { std::fs::write(&ev.path, &ev.content)?; Ok(ExecutionResult::Emit(...)) }
-            FileEvent::Patch(ev) => { ... }
+            FileEvent::Write(ev) => {
+                std::fs::write(&ev.path, &ev.content)?;
+                Ok(ExecutionResult::Emit(CanonEvent::CapabilityCompleted(CapabilityCompleted {
+                    request_id: ev.request_id,
+                    capability: "file.write",
+                    result: CapabilityResult::Empty,
+                })))
+            }
+            FileEvent::Patch(ev) => {
+                let content = std::fs::read_to_string(&ev.path)?;
+                let patched = content.replace(&ev.old, &ev.new);
+                std::fs::write(&ev.path, patched)?;
+                Ok(ExecutionResult::Emit(CanonEvent::CapabilityCompleted(CapabilityCompleted {
+                    request_id: ev.request_id,
+                    capability: "file.patch",
+                    result: CapabilityResult::Empty,
+                })))
+            }
         }
-    }
-}
-
-impl BashInvoke {
-    pub fn execute(self, _ctx: ExecutionContext) -> anyhow::Result<ExecutionResult> {
-        let cwd = self.cwd.clone().unwrap_or_else(|| ".".to_string());
-        let output = std::process::Command::new("bash")
-            .arg("-lc").arg(&self.cmd).current_dir(cwd).output()?;
-        Ok(ExecutionResult::Emit(CanonEvent::CapabilityCompleted(...)))
     }
 }
 ```
 
-### `LlmCall::execute()`
+### `canon-exec/src/exec/bash.rs` — Pure std
 
-**File: `canon-runtime-events/src/exec/llm.rs`**
-
-Move LLM worker machinery from `canon-runtime/src/consumers/llm_executor.rs`.
-Global worker via `OnceLock`:
+Source: BashCapability from `canon-builder/src/executor/capabilities.rs`.
 
 ```rust
-static LLM_WORKER_TX: OnceLock<std::sync::mpsc::Sender<LlmWork>> = OnceLock::new();
+use canon_event::{BashInvoke, CanonEvent, CapabilityCompleted, CapabilityResult, ProcessResult};
+use super::{ExecutionContext, ExecutionResult};
+use std::process::Command;
 
-pub fn init_llm_worker(config: canon_llm::config::CapabilityConfig, ...) {
-    if LLM_WORKER_TX.get().is_some() { return; }  // idempotent
-    let tx = spawn_llm_worker_thread(config, ...);
-    let _ = LLM_WORKER_TX.set(tx);
+impl BashInvoke {
+    pub fn execute(self, _ctx: ExecutionContext) -> anyhow::Result<ExecutionResult> {
+        let cwd = self.cwd.clone().unwrap_or_else(|| ".".to_string());
+        let output = Command::new("bash").arg("-lc").arg(&self.cmd).current_dir(&cwd).output()?;
+        Ok(ExecutionResult::Emit(CanonEvent::CapabilityCompleted(CapabilityCompleted {
+            request_id: self.request_id,
+            capability: "bash",
+            result: CapabilityResult::Process(ProcessResult {
+                status: output.status.code().unwrap_or(-1),
+                success: output.status.success(),
+                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            }),
+        })))
+    }
+}
+```
+
+### `canon-exec/src/exec/llm.rs` — Move from llm_executor.rs
+
+Move the ENTIRE content of `canon-runtime/src/consumers/llm_executor.rs` into
+`canon-exec/src/exec/llm.rs`, with the following changes:
+
+1. Remove the `CapabilityHandler` impl for `LlmCapabilityHandler` — replace with
+   `LlmCall::execute()` that sends to the static channel.
+2. Replace `pub struct LlmCapabilityHandler` with a module-level static:
+
+```rust
+// At module level:
+static LLM_WORKER_TX: std::sync::RwLock<Option<std::sync::mpsc::Sender<LlmWork>>> =
+    std::sync::RwLock::new(None);
+
+pub fn init_llm_worker(prompt_registry: PromptRegistryHandle) {
+    let tx = spawn_llm_worker(prompt_registry);
+    *LLM_WORKER_TX.write().unwrap() = Some(tx);
 }
 
+pub fn shutdown_llm_worker() {
+    *LLM_WORKER_TX.write().unwrap() = None;
+}
+
+#[cfg(test)]
+pub fn set_test_worker_tx(tx: std::sync::mpsc::Sender<LlmWork>) {
+    *LLM_WORKER_TX.write().unwrap() = Some(tx);
+}
+```
+
+3. `spawn_llm_worker(prompt_registry: PromptRegistryHandle) -> Sender<LlmWork>` is the
+   renamed version of the current `LlmCapabilityHandler::new` spawn logic. The spawn
+   block remains identical. The function returns the channel sender.
+
+4. Implement `LlmCall::execute()`:
+
+```rust
 impl LlmCall {
     pub fn execute(self, ctx: ExecutionContext) -> anyhow::Result<ExecutionResult> {
-        let tx = LLM_WORKER_TX.get()
-            .ok_or_else(|| anyhow::anyhow!("llm worker not initialized"))?;
+        let guard = LLM_WORKER_TX.read().unwrap();
+        let tx = guard.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("llm worker not initialized — call init_llm_worker first"))?;
         tx.send(LlmWork {
             request_id: self.request_id,
+            name: "llm.call",
             prompt: self.prompt,
             role: self.role,
+            raw: false,
             emitter: ctx.emitter,
-        }).map_err(|e| anyhow::anyhow!("llm channel closed: {e}"))?;
+        }).map_err(|e| anyhow::anyhow!("llm worker channel closed: {e}"))?;
         Ok(ExecutionResult::Deferred)
     }
 }
 ```
 
-`canon-runtime-events` adds `canon-llm-runtime` as a dep. `canon-llm-runtime` already imports
-`canon_event` — check for cycle. `canon-llm-runtime → canon_event` + `canon_event → canon-llm-runtime`
-= cycle. **Resolution:** Move the LLM client logic (WebSocket bridge, endpoint worker) into the
-exec module directly, or extract the non-event parts of `canon-llm-runtime` into a new dep-free
-`canon-llm-client` crate that `canon-runtime-events` can import.
+Note: `PromptRegistryHandle` is defined in `canon-runtime/src/bootstrap.rs`. To avoid
+making canon-exec dep on canon-runtime (cycle!), check if `PromptRegistryHandle` can be
+moved to canon-exec or if the spawn_llm_worker takes only `CapabilityConfig`.
 
-### `AnalysisEvent::execute()`
+**Actual check:** Looking at `LlmCapabilityHandler::new(_registry: PromptRegistryHandle)`,
+the `_registry` parameter is not used — it was passed but ignored. So `spawn_llm_worker`
+takes no arguments (it calls `CapabilityConfig::snapshot_store_load()` internally).
 
-**File: `canon-runtime-events/src/exec/analysis.rs`**
+Revised:
 
-Same pattern: the analysis runner logic stays in `canon-tools-analysis`, but exec dispatch
-calls into it. Same circular dep concern — verify whether `canon-tools-analysis` uses event
-types outside of its capabilities/ directory. If so, those usages must move.
+```rust
+pub fn init_llm_worker() {
+    let tx = spawn_llm_worker();
+    *LLM_WORKER_TX.write().unwrap() = Some(tx);
+}
+```
+
+Where `spawn_llm_worker() -> Sender<LlmWork>` is the current `LlmCapabilityHandler::new`
+spawn logic, with the `_registry` parameter removed.
+
+5. Import adjustments: `use canon_runtime::bootstrap::PromptRegistryHandle` is removed.
+   All other imports (`canon_llm::*`, `canon_meta::*`, `serde_json`, `tokio`, etc.) stay.
+
+**Add to `canon-exec/Cargo.toml`:**
+```toml
+canon_llm = { package = "canon-llm-runtime", path = "../canon-llm-runtime" }
+canon-meta = { path = "../canon-meta" }
+tokio = { workspace = true }
+```
+
+### `canon-exec/src/exec/analysis.rs` — Move from capabilities/run.rs
+
+Move `spawn_analysis_worker`, `CrateWork`, `AnalysisWork`, `AnalysisRunCapability`,
+`AnalysisWorkspaceCapability`, and `new_analysis_capabilities` from
+`canon-tools-analysis/src/capabilities/run.rs` into `canon-exec/src/exec/analysis.rs`.
+
+Replace `CapabilityHandler` impls with `AnalysisEvent::execute()`:
+
+```rust
+use canon_analysis::capabilities::runner;
+use canon_analysis::capabilities::events::emit_analysis_event;
+use canon_event::{AnalysisEvent, CanonEvent};
+use super::{ExecutionContext, ExecutionResult};
+use std::sync::mpsc;
+use std::thread;
+
+struct CrateWork {
+    crate_name: String,
+    batch_id: Option<String>,
+}
+
+enum AnalysisWork {
+    Crate(CrateWork),
+    Workspace,
+}
+
+// Module-level static channel (same lifecycle pattern as LLM worker)
+static ANALYSIS_WORKER_TX: std::sync::RwLock<Option<mpsc::Sender<AnalysisWork>>> =
+    std::sync::RwLock::new(None);
+
+pub fn init_analysis_worker() {
+    let tx = spawn_analysis_worker();
+    *ANALYSIS_WORKER_TX.write().unwrap() = Some(tx);
+}
+
+pub fn shutdown_analysis_worker() {
+    *ANALYSIS_WORKER_TX.write().unwrap() = None;
+}
+
+fn spawn_analysis_worker() -> mpsc::Sender<AnalysisWork> {
+    // Identical to the current spawn_analysis_worker() body in capabilities/run.rs,
+    // except `crate::capabilities::runner::` becomes `runner::` (imported above)
+    // and `crate::capabilities::events::emit_analysis_event` becomes `emit_analysis_event`
+    let (tx, rx) = mpsc::channel::<AnalysisWork>();
+    thread::Builder::new()
+        .name("analysis_worker".to_string())
+        .spawn(move || {
+            // ... exact same body as current spawn_analysis_worker()
+        })
+        .expect("analysis worker thread");
+    tx
+}
+
+impl AnalysisEvent {
+    pub fn execute(self, _ctx: ExecutionContext) -> anyhow::Result<ExecutionResult> {
+        let guard = ANALYSIS_WORKER_TX.read().unwrap();
+        let tx = guard.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("analysis worker not initialized"))?;
+        match self {
+            AnalysisEvent::Run(ev) => {
+                let _ = tx.send(AnalysisWork::Crate(CrateWork {
+                    crate_name: ev.crate_name,
+                    batch_id: ev.batch_id,
+                }));
+            }
+            AnalysisEvent::Workspace(_ev) => {
+                let _ = tx.send(AnalysisWork::Workspace);
+            }
+        }
+        Ok(ExecutionResult::Deferred)
+    }
+}
+```
+
+Note: `init_analysis_worker()` and `shutdown_analysis_worker()` are added to `canon-exec/src/lib.rs` pub use.
+
+**Update `canon-exec/src/lib.rs`:**
+```rust
+pub mod exec;
+pub use exec::{ExecutableEvent, ExecutionContext, ExecutionResult};
+pub use exec::llm::{init_llm_worker, shutdown_llm_worker};
+pub use exec::analysis::{init_analysis_worker, shutdown_analysis_worker};
+```
+
+**Verify:** `cargo check -p canon-exec` — zero errors before Phase 3.
 
 ---
 
-## Phase 3 — Replace `CapabilityExecutor` consumer
+## ~~Phase 3~~ — ✅ Complete
 
-**File: `canon-runtime/src/consumers/capability_executor.rs`**
+### `canon-runtime/src/consumers/capability_executor.rs`
 
-The entire file reduces to:
+Replace entire file:
 
 ```rust
-use canon_event::{CanonEvent, EventConsumer, EventEmitterHandle, EventFilter, ExecutionContext};
+use canon_event::{new_error_occurred, CanonEvent, EventConsumer, EventEmitterHandle, EventFilter};
+use canon_exec::{ExecutableEvent, ExecutionContext, ExecutionResult};
 use std::path::PathBuf;
 
 pub struct CapabilityExecutor {
@@ -456,19 +706,16 @@ impl EventConsumer for CapabilityExecutor {
     }
 
     fn on_event(&mut self, event: &CanonEvent) {
-        let is_cap = matches!(event,
-            CanonEvent::Edit(_) | CanonEvent::Cargo(_) | CanonEvent::File(_) |
-            CanonEvent::Bash(_) | CanonEvent::Llm(_)   | CanonEvent::Analysis(_)
-        );
-        if !is_cap { return; }
-
+        let Ok(exec) = ExecutableEvent::try_from(event.clone()) else {
+            return;  // not a capability event — correct, not an error
+        };
         let Some(emitter) = self.emitter.clone() else { return; };
         let ctx = ExecutionContext { workspace: self.workspace.clone(), emitter: emitter.clone() };
 
-        match event.clone().execute(ctx) {
+        match exec.execute(ctx) {
             Ok(ExecutionResult::Emit(e)) => emitter.emit(e),
             Ok(ExecutionResult::EmitMany(evs)) => evs.into_iter().for_each(|e| emitter.emit(e)),
-            Ok(ExecutionResult::Deferred) | Ok(ExecutionResult::NoOp) => {}
+            Ok(ExecutionResult::Deferred) => {}
             Err(err) => emitter.emit(CanonEvent::ErrorOccurred(new_error_occurred(
                 "capability_execution", "capability_executor",
                 err.to_string(), "error",
@@ -480,167 +727,283 @@ impl EventConsumer for CapabilityExecutor {
 }
 ```
 
-**No `Arc<Mutex<CapabilityRegistry>>` parameter.** `CapabilityExecutor::new()` takes only workspace.
-`event_runtime.rs` construction site simplified accordingly.
+### `canon-runtime/src/lib.rs` — Remove registry from EventRuntime
 
----
+1. Remove `pub fn register_default_capabilities(registry: &mut CapabilityRegistry)` function.
+2. Remove `registry: Arc<Mutex<CapabilityRegistry>>` field from `EventRuntime` struct.
+3. Remove `pub fn registry_mut()` and `pub fn registry_handle()` from EventRuntime impl.
+4. Update `EventRuntime::new` — remove the registry construction.
+5. Remove `EventRuntime::new_with_registry` (or make it an alias to `new` if other callers exist).
+6. Remove `canon_capability` and `canon_builder` and `canon_editor` and `canon_analysis` imports
+   from `lib.rs`. These were only needed for `register_default_capabilities`.
+7. Add `canon_exec` dep to `canon-runtime/Cargo.toml`.
 
-## Phase 4 — Delete `canon-capability`, update importers
-
-### Files deleted
-- `canon-utils/canon-capability/` — entire crate
-- `canon-utils/canon-introspection/` — entire crate (guarantee is now the exhaustive match)
-
-### Crates that import `canon-capability` — update each
-
-| Crate | Change |
-|-------|--------|
-| `canon-builder` | Remove dep. Remove `register_build_capabilities`. Module stays for LLM stub if needed. |
-| `canon-tools-editor` | Remove dep. Remove `capabilities.rs`. Editor infrastructure unchanged. |
-| `canon-tools-analysis` | Remove dep. Remove `capabilities/mod.rs` register fn. Runner stays. |
-| `canon-runtime` | Remove dep. `CapabilityExecutor` no longer takes `Arc<Mutex<CapabilityRegistry>>`. |
-| `canon-introspection` | Deleted — no longer needed. |
-
-### `canon-runtime/src/lib.rs`
-
-Remove `register_default_capabilities`. Add `init_llm_worker` call:
-
+**Key change in `EventRuntime` struct:**
 ```rust
-pub fn init_llm_worker(prompt_registry: PromptRegistryHandle) {
-    let config = CapabilityConfig::snapshot_store_load()
-        .expect("llm config required");
-    canon_event::exec::llm::init_llm_worker(config, prompt_registry);
+// Before:
+pub struct EventRuntime {
+    registry: std::sync::Arc<std::sync::Mutex<CapabilityRegistry>>,
+    // ...
+}
+
+// After:
+pub struct EventRuntime {
+    // registry field removed entirely
+    // ...
 }
 ```
 
 ### `canon-runtime/src/bin/event_runtime.rs`
 
-```rust
-// Before:
-let registry = Arc::new(Mutex::new(CapabilityRegistry::new()));
-...
-register_default_capabilities(&mut reg);
-reg.register(Arc::new(LlmCapabilityHandler::new(prompt_registry.clone())));
-...
-consumers.push(Box::new(CapabilityExecutor::new(registry.clone(), workspace.clone())));
+1. Remove imports: `LlmCapabilityHandler`, `register_default_capabilities`, `new_with_registry`
+2. Add imports: `canon_exec::{init_llm_worker, init_analysis_worker, shutdown_llm_worker, shutdown_analysis_worker}`
+3. Change `CapabilityExecutor::new(registry.clone(), workspace.clone())` →
+   `CapabilityExecutor::new(workspace.clone())`
+4. Remove `registry` variable and all `registry.lock()` calls
+5. Remove `EventRuntime::new_with_registry(consumers, registry.clone())` →
+   `EventRuntime::new(consumers)`
+6. Remove the block:
+   ```rust
+   let mut reg = registry.lock().expect("capability registry lock");
+   register_default_capabilities(&mut reg);
+   reg.register(Arc::new(LlmCapabilityHandler::new(prompt_registry.clone())));
+   ```
+7. Add before the event loop (where capability execution is enabled):
+   ```rust
+   canon_exec::init_llm_worker();
+   canon_exec::init_analysis_worker();
+   ```
+8. Add to shutdown path (at the end of main or in a Drop/signal handler):
+   ```rust
+   canon_exec::shutdown_llm_worker();
+   canon_exec::shutdown_analysis_worker();
+   ```
 
-// After:
-canon_runtime::init_llm_worker(prompt_registry.clone());
-...
-consumers.push(Box::new(CapabilityExecutor::new(workspace.clone())));
-```
+**Update `canon-runtime/Cargo.toml`:**
+- Add: `canon_exec = { package = "canon-exec", path = "../canon-exec" }`
+- Do NOT remove other deps yet — that's Phase 4.
+
+**Verify:** `cargo check -p canon-runtime` — zero errors before Phase 4.
 
 ---
 
-## Phase 5 — Delete `assert_all_routes_safe`, update test
+## ~~Phase 4~~ — ✅ Complete — Delete old capability layer
 
-`assert_all_routes_safe` tested that the registry didn't panic for any event. This guarantee
-is now structural — the exhaustive match in `CanonEvent::execute()` and each sub-enum's
-`execute()` provides it at compile time.
+The build is clean because `canon-capability` and `canon-introspection` still compile as
+live workspace members. Phase 4 removes all callers first, then deletes both crates last.
 
-**Delete:** `canon-capability/src/tests.rs` (crate deleted), `canon-introspection/src/lib.rs`
-(crate deleted).
+**Order: clean each crate first (4a–4d), verify zero grep hits, then delete crates (4e).**
 
-**Replacement test** (optional but recommended) — in `canon-runtime-events`:
+### Step 4a — `canon-tools-analysis`
+
+**Delete** `src/capabilities/run.rs` — its worker logic moved to `canon-exec/src/exec/analysis.rs`.
+
+**Replace** `src/capabilities/mod.rs` with:
+```rust
+pub mod events;
+pub mod graph_context;
+pub mod runner;
+```
+(Removes `mod run;`, `use canon_capability::CapabilityRegistry;`, and the entire
+`register_analysis_capabilities` function.)
+
+**`src/lib.rs`** — Remove:
+```rust
+pub use capabilities::register_analysis_capabilities;
+```
+
+**`Cargo.toml`** — Remove:
+```toml
+canon_capability = { package = "canon-capability", path = "../canon-capability" }
+```
+
+### Step 4b — `canon-tools-editor`
+
+**Delete** `src/capabilities.rs`.
+
+**`src/lib.rs`** — Remove these two lines:
+```rust
+pub mod capabilities;
+pub use capabilities::{register_editor_capabilities, CAP_DELETE_SYMBOL, CAP_MOVE_SYMBOL, CAP_RENAME_DIR, CAP_RENAME_MODULE, CAP_RENAME_SYMBOL};
+```
+
+**`Cargo.toml`** — Remove:
+```toml
+canon_capability = { package = "canon-capability", path = "../canon-capability" }
+```
+
+**`src/bin/capability_smoke_test.rs`** — Rewrite before `cargo check` (see Phase 5).
+
+### Step 4c — `canon-builder`
+
+**Delete** `src/executor/capabilities.rs`.
+
+**`src/executor.rs`** — Remove:
+```rust
+mod capabilities;
+pub use capabilities::{register_build_capabilities, CAP_BUILD_CARGO, CAP_CHECK_CARGO, CAP_RUN_CARGO};
+```
+
+**`src/lib.rs`** — Remove `register_build_capabilities, CAP_BUILD_CARGO, CAP_CHECK_CARGO,
+CAP_RUN_CARGO` from the `pub use executor::{...}` line. The rest of the pub use (BuildEvent,
+BuildRequest, BuildResult, CheckRequest, CheckResult, RunRequest, RunResult) stays.
+
+**`Cargo.toml`** — Remove:
+```toml
+canon_capability = { package = "canon-capability", path = "../canon-capability" }
+```
+
+### Step 4d — `canon-runtime`
+
+`canon-runtime/Cargo.toml` already has `canon_capability` removed and `canon_exec` added. ✅
+`src/consumers/llm_executor.rs` already deleted, `consumers/mod.rs` already cleaned. ✅
+
+No source file in `canon-runtime/src/` currently imports `canon_llm`, `canon_analysis`,
+`canon_editor`, or `canon_builder` — all are dead deps. Remove them from `Cargo.toml`:
+
+```toml
+# Remove these three lines:
+canon_llm      = { package = "canon-llm-runtime",   path = "../canon-llm-runtime" }
+canon_analysis = { package = "canon-tools-analysis", path = "../canon-tools-analysis" }
+canon_editor   = { package = "canon-tools-editor",   path = "../canon-tools-editor" }
+```
+
+`canon_builder` is already absent from `canon-runtime/Cargo.toml`. ✅
+
+### Step 4e — Delete `canon-capability/` and `canon-introspection/`
+
+After steps 4a–4d, verify zero remaining references:
+```bash
+grep -r "canon_capability" canon-utils/ --include="*.rs" --include="*.toml"
+```
+Must return zero results before proceeding.
+
+1. Remove from workspace `Cargo.toml` members array:
+   - `"canon-utils/canon-capability"`
+   - `"canon-utils/canon-introspection"`
+2. Delete directories:
+   - `canon-utils/canon-capability/`
+   - `canon-utils/canon-introspection/`
+
+**Verify:** `cargo check --workspace` — zero errors.
+
+---
+
+## ~~Phase 5~~ — ✅ Complete
+
+### `canon-runtime/src/bin/capability_smoke_test.rs` — ✅ already done
+
+The agent already rewrote this file to use `canon_exec` directly. No action needed.
+
+### `canon-tools-editor/src/bin/capability_smoke_test.rs`
+
+This file currently uses `canon_capability` and `register_editor_capabilities`, both deleted
+in Phase 4. It must be rewritten **as part of Step 4b** (before `cargo check`).
+
+Replace entirely:
 
 ```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::exec::ExecutionContext;
+use canon_event::{CanonEvent, EditEvent, RenameSymbol};
+use canon_exec::ExecutableEvent;
 
-    #[test]
-    fn all_capability_events_have_execute() {
-        // Compile-time proof: if this compiles, all variants are covered.
-        // This test exists as documentation. The real guarantee is the exhaustive match.
-        fn assert_execute_exists<T: Fn(ExecutionContext) -> anyhow::Result<crate::exec::ExecutionResult>>(_: T) {}
-        // If EditEvent::execute is missing, this file fails to compile.
-    }
+fn main() {
+    let event = CanonEvent::Edit(EditEvent::RenameSymbol(RenameSymbol {
+        project: "p".into(), old: "a".into(), new: "b".into(),
+    }));
+    let _exec = ExecutableEvent::try_from(event).expect("edit event should be executable");
+    println!("editor_capability_smoke_test: PASS (dispatch path verified)");
 }
 ```
 
----
+Also add to `canon-tools-editor/Cargo.toml`:
+```toml
+canon_exec = { package = "canon-exec", path = "../canon-exec" }
+```
 
-## Circular Dependency Resolution Summary
+### Remove `assert_all_routes_safe`
 
-Three potential cycles identified. All require action before the plan compiles:
+`canon-introspection/` is deleted in Step 4e. The exhaustive match on
+`ExecutableEvent::execute()` is the compile-time proof. No replacement needed.
 
-| Cycle | Resolution |
-|-------|-----------|
-| `canon-runtime-events → canon-meta → canon-runtime-events` | Move `capture_meta!` / `canon_emit_meta!` into `canon-macros`. Delete or empty `canon-meta`. |
-| `canon-runtime-events → canon-tools-editor → canon-runtime-events` | Verify: does tools-editor use event types outside capabilities.rs? If yes, move those usages into exec module. Then tools-editor has no event dep. |
-| `canon-runtime-events → canon-llm-runtime → canon-runtime-events` | Extract LLM client (WebSocket + endpoint worker) into new `canon-llm-client` crate with no event dep. `canon-runtime-events` imports `canon-llm-client`. |
-| `canon-runtime-events → canon-tools-analysis → canon-runtime-events` | Same check as tools-editor: does analysis use event types outside capabilities/? If yes, move. |
-
-**Resolve all cycles in Phase 1 before attempting Phase 2.**
+**Verify:** `cargo check --workspace && cargo test --workspace` — zero errors, zero warnings.
 
 ---
 
 ## Execution Order
 
 ```
-Phase 1 — Cargo.toml + exec skeleton + cycle resolution
-  → cargo check -p canon-runtime-events
-
-Phase 2 — Implement execute() on all 6 event types
-  → cargo check -p canon-runtime-events
-
-Phase 3 — Replace CapabilityExecutor
-  → cargo check -p canon-runtime
-
-Phase 4 — Delete canon-capability, update importers
-  → cargo check --workspace
-
-Phase 5 — Delete introspection, update tests
-  → cargo check --workspace + cargo test --workspace
+Phase 1 — ✅ done  (cargo check -p canon-exec)
+Phase 2 — ✅ done  (cargo check -p canon-exec)
+Phase 3 — ✅ done  (cargo check -p canon-runtime)
+Phase 4 — ✅ done  (cargo check --workspace — zero errors)
+  Step 4a: canon-tools-analysis cleanup ✅
+  Step 4b: canon-tools-editor cleanup + smoke test rewrite ✅
+  Step 4c: canon-builder cleanup ✅
+  Step 4d: canon-runtime Cargo.toml cleanup (dead deps) ✅
+  Step 4e: delete canon-capability/ and canon-introspection/ ✅
+Phase 5 — ✅ migration clean (canon-exec tests pass; 4 pre-existing failures are out of scope)
 ```
 
-One phase per commit. Do not skip cycle resolution — it will cause cascading errors.
+**Migration is complete. Remaining `cargo test --workspace` failures are pre-existing and
+unrelated to the R-migration. They require separate investigation.**
 
 ---
 
 ## Final Score
 
 ```
-R_structure = 1.0  (no Vec, no HashMap, no dyn registry)
-R_coverage  = 1.0  (all 15 sub-variants covered by exhaustive match)
-R_binding   = 1.0  (CanonEvent owns execute() — missing variant = compile error)
+R_structure = 1.0  (no registry struct, no Vec)
+R_coverage  = 1.0  (ExecutableEvent covers all 6 families, exhaustive per sub-variant)
+R_binding   = 1.0  (ExecutableEvent::execute() has no _ arm — missing variant = compile error)
+
+Cycles = 0         (canon-exec new crate, no inversions)
+CoreBloat = 0      (canon-runtime-events unchanged, heavy deps in canon-exec only)
+StateLeak = bounded (RwLock<Option<Sender>>, explicit init/shutdown for LLM and analysis workers)
 
 R = 1.0 · 1.0 · 1.0 = 1.0
-
-Maintenance = Δ(Schema)   — only events.rs needs updating when adding a variant
-NoOp failure mode = 0     — no registry that can be missing a handler
-Drift = 0                 — no separate mapping layer
-
 S = min(0.95, 0.90, 0.75, 1.0) = 0.75
 ```
 
 ---
 
-## Files Modified (complete list)
+## Files Created / Modified / Deleted
 
-| Phase | File | Action |
-|-------|------|--------|
-| 1 | `canon-runtime-events/Cargo.toml` | Add all execution deps |
-| 1 | `canon-macros/src/lib.rs` | Add `capture_meta!`, `canon_emit_meta!` (from canon-meta) |
-| 1 | `canon-meta/src/lib.rs` | Thin re-export or deleted |
-| 1 | `canon-llm-runtime/` or new `canon-llm-client/` | Extract client logic, remove event dep |
-| 1 | `canon-runtime-events/src/exec/mod.rs` | New: ExecutionContext, ExecutionResult |
-| 2 | `canon-runtime-events/src/exec/edit.rs` | New: EditEvent::execute() |
-| 2 | `canon-runtime-events/src/exec/cargo.rs` | New: CargoEvent::execute() |
-| 2 | `canon-runtime-events/src/exec/file.rs` | New: FileEvent::execute() |
-| 2 | `canon-runtime-events/src/exec/bash.rs` | New: BashInvoke::execute() |
-| 2 | `canon-runtime-events/src/exec/llm.rs` | New: LlmCall::execute() + init_llm_worker() |
-| 2 | `canon-runtime-events/src/exec/analysis.rs` | New: AnalysisEvent::execute() |
-| 2 | `canon-runtime-events/src/events.rs` | Add CanonEvent::execute() |
-| 3 | `canon-runtime/src/consumers/capability_executor.rs` | Replace with event.execute() call |
-| 3 | `canon-runtime/src/lib.rs` | Remove register_default_capabilities, add init_llm_worker |
-| 3 | `canon-runtime/src/bin/event_runtime.rs` | Remove registry construction, add init call |
-| 4 | `canon-capability/` | Delete entire crate |
-| 4 | `canon-introspection/` | Delete entire crate |
-| 4 | `canon-builder/Cargo.toml` + `capabilities.rs` | Remove capability dep, delete capabilities.rs |
-| 4 | `canon-tools-editor/Cargo.toml` + `capabilities.rs` | Remove capability dep, delete capabilities.rs |
-| 4 | `canon-tools-analysis/Cargo.toml` + `capabilities/mod.rs` | Remove register fn |
-| 4 | `canon-runtime/Cargo.toml` | Remove canon-capability, canon-introspection deps |
-| 4 | `Cargo.toml` (workspace) | Remove canon-capability, canon-introspection from workspace members |
-| 5 | Smoke tests | Rewrite without registry construction |
+| Phase | Status | File | Action |
+|-------|--------|------|--------|
+| 1 | ✅ | `canon-exec/Cargo.toml` | Created |
+| 1 | ✅ | `canon-exec/src/lib.rs` | Created |
+| 1 | ✅ | `canon-exec/src/exec/mod.rs` | Created: ExecutableEvent, Executable trait, ExecutionContext, ExecutionResult, TryFrom |
+| 1 | ✅ | `Cargo.toml` (workspace) | canon-exec member added |
+| 2 | ✅ | `canon-exec/src/exec/edit.rs` | Created: EditEvent::execute() — pass-through re-emit |
+| 2 | ✅ | `canon-exec/src/exec/cargo.rs` | Created: CargoEvent::execute() — inlined subprocess |
+| 2 | ✅ | `canon-exec/src/exec/file.rs` | Created: FileEvent::execute() — std::fs |
+| 2 | ✅ | `canon-exec/src/exec/bash.rs` | Created: BashInvoke::execute() — std::process |
+| 2 | ✅ | `canon-exec/src/exec/llm.rs` | Created: LlmCall::execute() + RwLock worker lifecycle |
+| 2 | ✅ | `canon-exec/src/exec/analysis.rs` | Created: AnalysisEvent::execute() + RwLock worker lifecycle |
+| 2 | ✅ | `canon-exec/src/lib.rs` | Updated: init/shutdown_analysis_worker pub use added |
+| 3 | ✅ | `canon-runtime/src/consumers/capability_executor.rs` | Replaced with ExecutableEvent::try_from + execute |
+| 3 | ✅ | `canon-runtime/src/consumers/llm_executor.rs` | Deleted (content moved to canon-exec) |
+| 3 | ✅ | `canon-runtime/src/consumers/mod.rs` | pub mod llm_executor removed |
+| 3 | ✅ | `canon-runtime/src/lib.rs` | Registry field and register_default_capabilities removed |
+| 3 | ✅ | `canon-runtime/src/bin/event_runtime.rs` | Registry setup removed, init/shutdown calls added |
+| 3 | ✅ | `canon-runtime/src/bin/capability_smoke_test.rs` | Rewritten with canon_exec |
+| 3 | ✅ | `canon-runtime/Cargo.toml` | canon-exec dep added, canon_capability removed |
+| 4a | ✅ | `canon-tools-analysis/src/capabilities/run.rs` | Deleted |
+| 4a | ✅ | `canon-tools-analysis/src/capabilities/mod.rs` | Replaced: register fn removed, canon_capability removed, mod run removed |
+| 4a | ✅ | `canon-tools-analysis/src/lib.rs` | pub use capabilities::register_analysis_capabilities removed |
+| 4a | ✅ | `canon-tools-analysis/Cargo.toml` | canon_capability dep removed |
+| 4b | ✅ | `canon-tools-editor/src/capabilities.rs` | Deleted |
+| 4b | ✅ | `canon-tools-editor/src/lib.rs` | pub mod capabilities + pub use capabilities::{...} removed |
+| 4b | ✅ | `canon-tools-editor/src/bin/capability_smoke_test.rs` | Rewritten with canon_exec |
+| 4b | ✅ | `canon-tools-editor/Cargo.toml` | canon_capability dep removed, canon_exec dep added |
+| 4c | ✅ | `canon-builder/src/executor/capabilities.rs` | Deleted |
+| 4c | ✅ | `canon-builder/src/executor.rs` | mod capabilities + pub use removed |
+| 4c | ✅ | `canon-builder/src/lib.rs` | Capability re-exports removed from pub use executor::{...} |
+| 4c | ✅ | `canon-builder/Cargo.toml` | canon_capability dep removed |
+| 4d | ✅ | `canon-runtime/Cargo.toml` | Dead deps removed: canon_llm, canon_analysis, canon_editor |
+| 4e | ✅ | `canon-capability/` | Entire crate deleted |
+| 4e | ✅ | `canon-introspection/` | Entire crate deleted |
+| 4e | ✅ | `Cargo.toml` (workspace) | canon-capability, canon-introspection members removed |
+| 5 | ✅ | `canon-runtime/src/bin/capability_smoke_test.rs` | Rewritten with canon_exec |
+| 5 | ✅ | `canon-tools-editor/src/bin/capability_smoke_test.rs` | Rewritten with canon_exec |
+| 5 | ✅ | `canon-exec/src/exec/llm.rs` | LlmWork visibility fixed (pub(crate)); unused set_test_worker_tx removed |

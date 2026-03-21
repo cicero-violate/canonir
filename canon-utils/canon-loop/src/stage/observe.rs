@@ -1,0 +1,51 @@
+use canon_event::{CanonEvent, LoopObserved, Tick};
+use serde_json::Value;
+use std::path::{Path, PathBuf};
+
+use crate::{context::LoopContext, result::LoopStageResult};
+
+pub fn execute(t: Tick, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+    if ctx.goal_text.is_none() {
+        ctx.goal_text = scan_tlog_for_goal(ctx.tlog_path.as_path());
+    }
+    let payload = LoopObserved {
+        tick: t.tick,
+        error_count: ctx.error_count,
+        warning_count: ctx.warning_count,
+        compiler_errors: ctx.recent_compiler_errors.clone(),
+        goal_text: ctx.goal_text.clone(),
+    };
+    Ok(LoopStageResult::Emit(CanonEvent::LoopObserved(payload)))
+}
+
+/// Scan tlog segments (oldest first) for latest prompt_loaded of AGENT_GOAL.
+fn scan_tlog_for_goal(tlog_path: &Path) -> Option<String> {
+    let dir = if tlog_path.is_dir() { tlog_path.to_path_buf() } else { tlog_path.with_extension("tlog.d") };
+    let mut logs: Vec<PathBuf> = std::fs::read_dir(&dir).ok()?.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().and_then(|s| s.to_str()) == Some("log")).collect();
+    logs.sort();
+
+    let mut found: Option<String> = None;
+    for log_path in &logs {
+        let content = match std::fs::read_to_string(log_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        for line in content.lines() {
+            let Ok(v) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if v.get("kind").and_then(|k| k.as_str()) != Some("prompt_loaded") {
+                continue;
+            }
+            let payload = v.get("payload").unwrap_or(&Value::Null);
+            let is_goal = payload.get("path").and_then(|p| p.as_str()).map(|p| p.contains("AGENT_GOAL")).unwrap_or(false)
+                || payload.get("prompt_id").and_then(|p| p.as_str()).map(|p| p == "AGENT_GOAL").unwrap_or(false);
+            if is_goal {
+                if let Some(c) = payload.get("content").and_then(|c| c.as_str()) {
+                    found = Some(c.to_string());
+                }
+            }
+        }
+    }
+    found
+}

@@ -1,14 +1,15 @@
 [package]
-name = "canon-capability"
+name = "canon-loop"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "canon_loop"
+path = "src/lib.rs"
+
 [dependencies]
 anyhow.workspace = true
-serde.workspace = true
 serde_json.workspace = true
+uuid.workspace = true
 canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
-
-[dev-dependencies]
-canon-introspection = { path = "../canon-introspection" }
-canon-tools-editor = { path = "../canon-tools-editor" }
+canon-meta = { path = "../canon-meta" }

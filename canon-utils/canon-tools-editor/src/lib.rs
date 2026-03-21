@@ -1,5 +1,4 @@
 pub mod api;
-pub mod capabilities;
 pub mod check;
 pub mod consumer;
 pub mod edit;
@@ -17,7 +16,6 @@ use std::sync::Arc;
 use anyhow::anyhow;
 
 use crate::symbol_index::SymbolIndex;
-pub use capabilities::{register_editor_capabilities, CAP_DELETE_SYMBOL, CAP_MOVE_SYMBOL, CAP_RENAME_DIR, CAP_RENAME_MODULE, CAP_RENAME_SYMBOL};
 pub use consumer::EditConsumer;
 use edit::ProjectEditor;
 use structured::{EditOp, FieldMutation};

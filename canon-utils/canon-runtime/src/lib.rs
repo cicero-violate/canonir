@@ -4,7 +4,6 @@ mod bus;
 pub mod consumers;
 
 use bus::EventBus;
-use canon_capability::CapabilityRegistry;
 use canon_event::{
     new_error_occurred, AgentRegistered, AnalysisEvent, AnalysisRun, AnalysisWorkspace, CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityInvoked, CapabilityResolved, Code, DebugEvent,
     ErrorOccurred, EventConsumer, EventDelta, EventEmitter, EventEmitterHandle, GoalEdgeDefined, GoalGraphCheckpointed, GoalNodeCreated, GoalNodeRetracted, GoalNodeRewritten, GoalSelected,
@@ -36,7 +35,6 @@ use std::sync::Mutex as StdMutex;
 pub struct EventRuntime {
     state: RustcState,
     bus: EventBus,
-    registry: std::sync::Arc<std::sync::Mutex<CapabilityRegistry>>,
     tlog_path: Option<std::path::PathBuf>,
     /// Persistent writer for binary tlog directories.
     /// Held open to avoid recover_segment truncation on every append.
@@ -51,19 +49,8 @@ pub struct EventRuntime {
     observed_events: Vec<CanonEvent>,
 }
 
-pub fn register_default_capabilities(registry: &mut CapabilityRegistry) {
-    canon_editor::register_editor_capabilities(registry);
-    canon_analysis::register_analysis_capabilities(registry);
-    canon_builder::register_build_capabilities(registry);
-}
-
 impl EventRuntime {
     pub fn new(consumers: Vec<Box<dyn EventConsumer>>) -> Self {
-        let registry = std::sync::Arc::new(std::sync::Mutex::new(CapabilityRegistry::new()));
-        Self::new_with_registry(consumers, registry)
-    }
-
-    pub fn new_with_registry(consumers: Vec<Box<dyn EventConsumer>>, registry: std::sync::Arc<std::sync::Mutex<CapabilityRegistry>>) -> Self {
         let queue_size = std::env::var("CANON_EVENT_BUS_QUEUE").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(1024);
         let mut bus = EventBus::new(queue_size);
         let (emitter_tx, emitter_rx) = crossbeam_channel::unbounded();
@@ -75,7 +62,6 @@ impl EventRuntime {
         Self {
             state: empty_state(),
             bus,
-            registry,
             tlog_path: None,
             tlog_writer: None,
             next_id: 0,
@@ -87,14 +73,6 @@ impl EventRuntime {
             emitter_rx,
             observed_events: Vec::new(),
         }
-    }
-
-    pub fn registry_mut(&self) -> std::sync::MutexGuard<'_, CapabilityRegistry> {
-        self.registry.lock().expect("capability registry lock")
-    }
-
-    pub fn registry_handle(&self) -> std::sync::Arc<std::sync::Mutex<CapabilityRegistry>> {
-        std::sync::Arc::clone(&self.registry)
     }
 
     pub fn set_execute_capabilities(&mut self, enabled: bool) {

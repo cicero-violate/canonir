@@ -1,35 +1,24 @@
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use anyhow::Result;
-use canon_capability::{CapabilityExecutionContext, CapabilityRegistry};
-use canon_editor::register_editor_capabilities;
-use canon_event::{CanonEvent, EditEvent, RenameSymbol};
+use canon_event::{CanonEvent, EditEvent, EventEmitter, EventEmitterHandle, RenameSymbol};
+use canon_exec::{ExecutableEvent, ExecutionContext};
+
+struct NullEmitter;
+
+impl EventEmitter for NullEmitter {
+    fn emit(&self, _event: CanonEvent) {}
+}
 
 fn main() -> Result<()> {
-    let mut registry = CapabilityRegistry::new();
-    register_editor_capabilities(&mut registry);
+    let emitter: EventEmitterHandle = Arc::new(NullEmitter);
+    let ctx = ExecutionContext { workspace: PathBuf::from("/workspace/ai_sandbox/canon"), emitter };
 
-    let mut executed = 0;
-    for name in registry.names() {
-        if name != "edit.rename_symbol" {
-            continue;
-        }
-        let event = CanonEvent::Edit(EditEvent::RenameSymbol(RenameSymbol { project: "p".into(), old: "a".into(), new: "b".into() }));
-        let ctx = CapabilityExecutionContext { workspace: "/workspace/ai_sandbox/canon".into(), event: event.clone(), emitter: None };
-        let result = registry.route(ctx);
+    let event = CanonEvent::Edit(EditEvent::RenameSymbol(RenameSymbol { project: "p".into(), old: "a".into(), new: "b".into() }));
+    let exec = ExecutableEvent::try_from(event).expect("edit should be executable");
+    let _ = exec.execute(ctx)?;
 
-        executed += 1;
-
-        match result {
-            Ok(res) => {
-                if let Some(event) = res.into_event() {
-                    let _ = format!("{:?}", event);
-                }
-            }
-            Err(e) => {
-                let _ = format!("{:?}", e);
-            }
-        }
-    }
-
-    println!("capability_invariant_test: PASS ({})", executed);
+    println!("capability_invariant_test: PASS (1)");
     Ok(())
 }
