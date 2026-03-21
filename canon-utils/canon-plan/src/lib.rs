@@ -1,6 +1,5 @@
 use canon_event::{
-    CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopObserved, LoopPlanned, PromptLoaded, Tick, ToolCall,
-    ToolResult,
+    CanonEvent, CapabilityCompleted, CapabilityFailed, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopObserved, LoopPlanned, PromptLoaded, Tick, ToolCall, ToolResult, LlmCall,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -246,16 +245,7 @@ impl PlanConsumer {
                 })
             })
             .collect();
-        let request = CapabilityRequested {
-            request_id: request_id.clone(),
-            name: "llm.call".to_string(),
-            args: serde_json::json!({
-                "prompt": prompt,
-                "role": "planner",
-                "last_action_results": last_action_results_payload,
-                "last_tool_results": last_tool_results_payload,
-            }),
-        };
+        let llm_call = LlmCall { prompt, role: Some("planner".to_string()) };
 
         let plan_tool_call_id = Uuid::new_v4().to_string();
         self.batch_acted.clear();
@@ -277,11 +267,6 @@ impl PlanConsumer {
         self.last_planned_observed_tick = Some(observed.tick);
 
         if let Some(emitter) = self.emitter.as_ref() {
-            // Emit ToolCall BEFORE CapabilityRequested so the routing gate blocks
-            // immediately while the planner LLM is running. Without this the gate
-            // has no pending_tool_call_id to block on and fires 2-3 extra routing
-            // ticks during the planning window, contaminating the stateful LLM's
-            // conversation history with contradictory router prompts.
             canon_meta::canon_emit_meta!(emitter; ToolCall(ToolCall {
                 node_id: "plan_consumer".to_string(),
                 tool_call_id: plan_tool_call_id,
@@ -289,7 +274,7 @@ impl PlanConsumer {
                 kind: "llm.plan".to_string(),
                 payload: serde_json::json!({"role": "planner"}),
             }));
-            canon_meta::canon_emit_meta!(emitter; CapabilityRequested(request));
+            canon_meta::canon_emit_meta!(emitter; Llm(llm_call));
         }
     }
 

@@ -18,14 +18,23 @@ impl CapabilityExecutor {
 
 impl EventConsumer for CapabilityExecutor {
     fn filter(&self) -> EventFilter {
-        EventFilter::CapabilityOnly
+        EventFilter::All
     }
 
     fn on_event(&mut self, event: &CanonEvent) {
-        let CanonEvent::CapabilityRequested(request) = event else {
+        let is_cap_event = matches!(
+            event,
+            CanonEvent::Edit(_)
+                | CanonEvent::Cargo(_)
+                | CanonEvent::File(_)
+                | CanonEvent::Bash(_)
+                | CanonEvent::Llm(_)
+                | CanonEvent::Analysis(_)
+        );
+        if !is_cap_event {
             return;
-        };
-        let ctx = CapabilityExecutionContext { workspace: self.workspace.clone(), event: CanonEvent::CapabilityRequested(request.clone()), emitter: self.emitter.clone() };
+        }
+        let ctx = CapabilityExecutionContext { workspace: self.workspace.clone(), event: event.clone(), emitter: self.emitter.clone() };
         let result = match self.registry.lock() {
             Ok(registry) => registry.route(ctx),
             Err(err) => Err(anyhow!("capability registry lock poisoned: {err}")),
@@ -39,14 +48,10 @@ impl EventConsumer for CapabilityExecutor {
                     "capability_executor",
                     err.to_string(),
                     "error",
-                    serde_json::json!({
-                        "request_id": request.request_id.clone(),
-                        "capability": request.name.clone(),
-                    }),
-                    Some(request.request_id.clone()),
+                    serde_json::json!({ "event": format!("{:?}", event) }),
+                    None,
                 ));
-                let failed_event = CanonEvent::CapabilityFailed(CapabilityFailed { request_id: request.request_id.clone(), name: request.name.clone(), error: err.to_string() });
-                CapabilityExecutionResult::EmitMany(vec![error_event, failed_event])
+                CapabilityExecutionResult::Emit(error_event)
             }
         };
 

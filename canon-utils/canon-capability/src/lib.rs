@@ -1,5 +1,5 @@
 pub mod context;
-pub mod decode;
+// decode module removed in final state
 pub mod registry;
 pub mod result;
 pub mod r#trait;

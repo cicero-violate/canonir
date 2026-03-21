@@ -6,9 +6,9 @@ pub mod consumers;
 use bus::EventBus;
 use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityRegistry};
 use canon_event::{
-    new_error_occurred, AgentRegistered, CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityInvoked, CapabilityRequested, CapabilityResolved, Code, DebugEvent, ErrorOccurred, EventConsumer,
-    EventDelta, EventEmitter, EventEmitterHandle, GoalEdgeDefined, GoalGraphCheckpointed, GoalNodeCreated, GoalNodeRetracted, GoalNodeRewritten, GoalSelected, PolicyBaselineUpdated, PromptLoaded,
-    RuntimeStateUpdated, RustcEvent, RustcState, SystemConfigLoaded, Tick, ToolCall, ToolResult,
+    new_error_occurred, AgentRegistered, AnalysisEvent, AnalysisRun, AnalysisWorkspace, BashInvoke, CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityInvoked, CapabilityResolved, Code,
+    DebugEvent, ErrorOccurred, EventConsumer, EventDelta, EventEmitter, EventEmitterHandle, GoalEdgeDefined, GoalGraphCheckpointed, GoalNodeCreated, GoalNodeRetracted, GoalNodeRewritten,
+    GoalSelected, PolicyBaselineUpdated, PromptLoaded, RuntimeStateUpdated, RustcEvent, RustcState, SystemConfigLoaded, Tick, ToolCall, ToolResult,
 };
 use canon_event::{BinarySegmentWriter, TlogEvent};
 use canon_event::{EdgeDefined, EdgeRemoved, FileSeen, NodeDefined, NodeRemoved, NodeUpdated};
@@ -144,7 +144,7 @@ impl EventRuntime {
                     self.handle_runtime_event(CanonEvent::Edit(edit))?;
                     self.drain_emitted_events()?;
                 } else if let Some(request) = extract_capability_request(canon) {
-                    self.handle_runtime_event(CanonEvent::CapabilityRequested(request))?;
+                    self.handle_runtime_event(CanonEvent::Analysis(AnalysisEvent::Run(AnalysisRun { crate_name: request.name.clone(), batch_id: None })))?;
                     self.drain_emitted_events()?;
                 } else if canon.kind == "runtime_state.updated" {
                     self.handle_runtime_event(CanonEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload: canon.payload.clone() }))?;
@@ -166,16 +166,12 @@ impl EventRuntime {
                         // Skip build scripts and the new duplicate event already paired with
                         // a CompilationUnitFinished rustc_event above.
                         if canon.payload.get("byte_offset").is_some() && crate_name != "build_script_build" {
-                            let request = CapabilityRequested {
-                                request_id: format!("analysis-{}-{}", crate_name, self.tick),
-                                name: "analysis.run".to_string(),
-                                args: serde_json::json!({ "crate": crate_name }),
-                            };
-                            self.handle_runtime_event(CanonEvent::CapabilityRequested(request))?;
+                            self.handle_runtime_event(CanonEvent::Analysis(AnalysisEvent::Run(AnalysisRun {
+                                crate_name: crate_name.to_string(),
+                                batch_id: None,
+                            })))?;
                             self.drain_emitted_events()?;
-                            let workspace_request =
-                                CapabilityRequested { request_id: format!("analysis-workspace-{}", self.tick), name: "analysis.workspace".to_string(), args: serde_json::json!({}) };
-                            self.handle_runtime_event(CanonEvent::CapabilityRequested(workspace_request))?;
+                            self.handle_runtime_event(CanonEvent::Analysis(AnalysisEvent::Workspace(AnalysisWorkspace {})))?;
                             self.drain_emitted_events()?;
                         }
                     }

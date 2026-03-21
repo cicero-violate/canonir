@@ -246,6 +246,61 @@ canon_event_struct!(GoalGraphCheckpointed { tlog_seq: u64 });
 canon_event_struct!(CapabilityInvoked { capability_id: String, name: String, node_id: String });
 canon_event_struct!(CapabilityResolved { capability_id: String, success: bool, duration_ms: u64 });
 
+// Cargo capability events
+canon_event_struct!(CargoBuild { crate_name: String });
+canon_event_struct!(CargoRun {
+    crate_name: String,
+    #[serde(default)]
+    bin: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+});
+canon_event_struct!(CargoCheck { crate_name: String });
+
+canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)] CargoEvent {
+    Build(CargoBuild),
+    Run(CargoRun),
+    Check(CargoCheck),
+});
+
+// File capability events
+canon_event_struct!(FileRead { path: String });
+canon_event_struct!(FileWrite { path: String, content: String });
+canon_event_struct!(FilePatch { path: String, old: String, new: String });
+
+canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)] FileEvent {
+    Read(FileRead),
+    Write(FileWrite),
+    Patch(FilePatch),
+});
+
+// Bash capability
+canon_event_struct!(BashInvoke {
+    cmd: String,
+    #[serde(default)]
+    cwd: Option<String>,
+});
+
+// LLM capability
+canon_event_struct!(LlmCall {
+    prompt: String,
+    #[serde(default)]
+    role: Option<String>,
+});
+
+// Analysis capability
+canon_event_struct!(AnalysisRun {
+    crate_name: String,
+    #[serde(default)]
+    batch_id: Option<String>,
+});
+canon_event_struct!(AnalysisWorkspace {});
+
+canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)] AnalysisEvent {
+    Run(AnalysisRun),
+    Workspace(AnalysisWorkspace),
+});
+
 canon_event_enum!(CanonEvent {
     Code(Code),
     Debug(DebugEvent),
@@ -257,12 +312,16 @@ canon_event_enum!(CanonEvent {
     LoopActed(LoopActed),
     LoopVerified(LoopVerified),
     LoopRewarded(LoopRewarded),
+    Cargo(CargoEvent),
+    File(FileEvent),
+    Bash(BashInvoke),
+    Llm(LlmCall),
+    Analysis(AnalysisEvent),
     RuntimeStateUpdated(RuntimeStateUpdated),
     NodeReady(NodeReady),
     NodeStarted(NodeStarted),
     NodeCompleted(NodeCompleted),
     NodeFailed(NodeFailed),
-    CapabilityRequested(CapabilityRequested),
     CapabilityCompleted(CapabilityCompleted),
     CapabilityFailed(CapabilityFailed),
     PolicyBaselineUpdated(PolicyBaselineUpdated),
@@ -301,8 +360,6 @@ pub trait EventConsumer: Send + Sync {
     fn on_event(&mut self, event: &CanonEvent);
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 }
-
-canon_event_struct!(CapabilityRequested { request_id: String, name: String, args: serde_json::Value });
 
 canon_event_struct!(CapabilityCompleted { request_id: String, name: String, result: serde_json::Value });
 

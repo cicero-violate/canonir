@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use canon_builder::register_build_capabilities;
-use canon_event::CapabilityRequested;
+use canon_event::{CanonEvent, FileEvent, FileRead};
 use canon_event_store::read_any_events_from_path;
 use canon_runtime::EventRuntime;
 
@@ -11,14 +11,8 @@ fn main() -> Result<()> {
     }
     std::fs::create_dir_all(&tmp_dir)?;
 
-    let request = CapabilityRequested {
-        request_id: format!("smoke-{}", std::process::id()),
-        name: "file.read".to_string(),
-        args: serde_json::json!({
-            "path": "/workspace/ai_sandbox/canon/canon-utils/README.md"
-        }),
-    };
-    let payload = serde_json::to_value(&request)?;
+    let event = CanonEvent::File(FileEvent::Read(FileRead { path: "/workspace/ai_sandbox/canon/canon-utils/README.md".to_string() }));
+    let payload = serde_json::to_value(&event)?;
     canon_meta::canon_emit_meta!("smoke-test", "capability_requested", payload, &tmp_dir)?;
 
     let mut runtime = EventRuntime::new(Vec::new());

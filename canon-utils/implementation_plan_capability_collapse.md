@@ -1,429 +1,153 @@
-# Implementation Plan: Capability Collapse
+# Implementation Plan: Capability Collapse + Canon Introspection
 
-## Goal
+## Math
 
-Collapse two systems — capabilities and events — into one. Eliminate the JSON boundary between them. Events become capability input. String routing and argument parsing are removed.
+G = min(C, Z, I, A) → target G = 1
 
-P = min(U, M, R, T, I) → target P = 1
+| Variable | Meaning | Current |
+|---|---|---|
+| C | coverage of all CanonEvent variants | 0.6 — new variants added, not all wired |
+| Z | zero-maintenance | 0 — tests still manually list events |
+| I | invariant enforcement | 0 — routing not verified for all variants |
+| A | adaptability to change | 0.7 — new structs exist, no Default |
 
 ---
 
 ## Current State (Verified)
 
-### capability flow today
+`CapabilityRequested` was **already removed** from `events.rs` and `lib.rs`.
+New typed event families are **already in `events.rs`**: `CargoEvent`, `FileEvent`, `BashInvoke`, `LlmCall`, `AnalysisEvent`.
 
-```
-ActConsumer
-  → emits CanonEvent::CapabilityRequested { name: "edit.rename_symbol", args: { "project": "...", "old": "...", "new": "..." } }
-  → CapabilityExecutor.on_event matches CapabilityRequested
-  → registry.execute(&request.name, ctx)          ← string routing
-  → RenameSymbolCapability.execute(ctx)
-      → CanonEvent::CapabilityRequested(req) = ctx.event
-      → require_arg(&req.args, "project")          ← JSON parsing
-      → require_arg(&req.args, "old")
-      → require_arg(&req.args, "new")
-      → Ok(Emit(CanonEvent::Edit(EditEvent::RenameSymbol(...))))
-```
+The codebase is mid-migration. The build is broken because:
+- Emitters in `canon-act`, `canon-plan`, `canon-runtime` still reference the removed variant
+- `decode.rs` references it
+- Storage reader (`extract_capability_request`) references it
+- Tests and smoke tests reference it
 
-### end state
-
-```
-ActConsumer
-  → emits CanonEvent::Edit(EditEvent::RenameSymbol { project, old, new })
-  → CapabilityExecutor routes directly by event type
-  → handler receives typed event, no parsing
-```
-
-### files (verified paths)
-
-| File                                                 | Role                                                          |
-|------------------------------------------------------+---------------------------------------------------------------|
-| `canon-capability/src/trait.rs`                      | `CapabilityHandler`, `CapabilitySchema`, `ArgSpec`, `ArgKind` |
-| `canon-capability/src/registry.rs`                   | `CapabilityRegistry` with `execute(name, ctx)`                |
-| `canon-capability/src/context.rs`                    | `CapabilityExecutionContext { workspace, event, emitter }`    |
-| `canon-capability/src/result.rs`                     | `CapabilityExecutionResult` — untouched                       |
-| `canon-capability/src/lib.rs`                        | re-exports                                                    |
-| `canon-tools-editor/src/capabilities.rs`             | 5 handlers all using `require_arg`                            |
-| `canon-runtime/src/consumers/capability_executor.rs` | `CapabilityExecutor` on bus                                   |
+**Answer to agent:** Continue forward. Do not revert. The new event types exist — complete the wiring.
 
 ---
 
-## Migration Order (strict — do not reorder)
+## Phase Sequence
 
-1. Phase 1 — deprecate `ArgSpec`, `ArgKind`, `CapabilitySchema.args`
-2. Phase 2 — add `fn handle()` to trait; deprecate `fn execute()` and `fn schema()`
-3. Phase 3 — add `registry.route()` with decode bridge
-4. Phase 4 — refactor editor capabilities to direct dispatch (preferred form)
-5. Phase 5 — add decode layer, consolidate all JSON parsing in one place
-6. Phase 6 — update `CapabilityExecutor` to call `registry.route()`
-7. Phase 7 — zero-maintenance test
-8. Phase 8 — remove `CapabilityRequested`, `ArgSpec`, `ArgKind`, `CapabilitySchema.args`
-
-Phases 1–3 are additive. Existing code compiles at every step until Phase 8.
-
----
-
-## Phase 1 — Deprecate Arg Types
-
-**File: `canon-capability/src/trait.rs`**
-
-Mark the arg infrastructure deprecated. Keep compiling.
-
-```rust
-#[deprecated(note = "use typed CanonEvent fields directly")]
-#[derive(Debug, Clone)]
-pub struct ArgSpec {
-    pub key: &'static str,
-    pub kind: ArgKind,
-    pub required: bool,
-}
-
-#[deprecated(note = "use typed CanonEvent fields directly")]
-#[derive(Debug, Clone)]
-pub enum ArgKind {
-    String,
-    Path,
-    Symbol,
-    Json,
-}
 ```
-
-`CapabilitySchema.args` field: add `#[deprecated]` attribute on the field is not stable Rust — instead add a doc comment:
-
-```rust
-#[derive(Debug, Clone)]
-pub struct CapabilitySchema {
-    pub name: &'static str,
-    /// Deprecated. Args are encoded in the typed CanonEvent, not here.
-    pub args: Vec<ArgSpec>,
-}
+Phase 8 Fix     → repair broken emitters, storage, executor, remove decode
+canon-introspect → macro extension + Default + sample_all() + assert_all_routes_safe()
+Integration     → replace manual test with introspection loop
 ```
 
 ---
 
-## Phase 2 — Add `fn handle()`, Deprecate `fn execute()` and `fn schema()`
+# Part 1 — Phase 8: Complete the Migration
 
-**File: `canon-capability/src/trait.rs`**
+## Step 1 — Fix Emitters: `canon-act/src/lib.rs`
 
-Rename the primary method to `handle`. Keep `execute` as a deprecated default that delegates, so all existing implementors continue to compile.
+Lines 228, 292, 359 emit `CanonEvent::CapabilityRequested`. Replace each with the typed event that matches the action being dispatched at that site.
 
-```rust
-pub trait CapabilityHandler: Send + Sync {
-    fn name(&self) -> &'static str;
+Read those lines first to identify the capability name string and args, then apply the corresponding replacement:
 
-    /// Primary entrypoint. Implement this.
-    fn handle(&self, ctx: CapabilityExecutionContext) -> Result<CapabilityExecutionResult>;
+| Old capability name | Typed replacement |
+|---|---|
+| `"file.write"` | `CanonEvent::File(FileEvent::Write(FileWrite { path, content }))` |
+| `"file.read"` | `CanonEvent::File(FileEvent::Read(FileRead { path }))` |
+| `"file.patch"` | `CanonEvent::File(FileEvent::Patch(FilePatch { path, old, new }))` |
+| `"bash"` | `CanonEvent::Bash(BashInvoke { cmd, cwd })` |
+| `"cargo.build"` | `CanonEvent::Cargo(CargoEvent::Build(CargoBuild { crate_name }))` |
+| `"cargo.check"` | `CanonEvent::Cargo(CargoEvent::Check(CargoCheck { crate_name }))` |
+| `"cargo.run"` | `CanonEvent::Cargo(CargoEvent::Run(CargoRun { crate_name, bin, args }))` |
+| `"llm.call"` | `CanonEvent::Llm(LlmCall { prompt, role })` |
+| `"analysis.run"` | `CanonEvent::Analysis(AnalysisEvent::Run(AnalysisRun { crate_name, batch_id }))` |
+| `"analysis.workspace"` | `CanonEvent::Analysis(AnalysisEvent::Workspace(AnalysisWorkspace {}))` |
 
-    /// Deprecated. Calls handle(). Do not override.
-    #[deprecated(note = "implement handle() instead")]
-    fn execute(&self, ctx: CapabilityExecutionContext) -> Result<CapabilityExecutionResult> {
-        self.handle(ctx)
-    }
+Remove `use canon_event::CapabilityRequested` import from the file.
 
-    /// Deprecated. Schema is encoded in the CanonEvent type system.
-    #[deprecated(note = "schema is derived from CanonEvent variants")]
-    fn schema(&self) -> CapabilitySchema {
-        CapabilitySchema { name: self.name(), args: Vec::new() }
-    }
-}
-```
+## Step 2 — Fix Emitters: `canon-plan/src/lib.rs` and `canon-runtime/src/lib.rs`
 
-**File: `canon-capability/src/registry.rs`**
+Same substitution table as Step 1. Read each `CapabilityRequested` construction site to identify the name, then replace. Remove the imports.
 
-Update `execute` to call `handle` (not the deprecated `execute`):
+## Step 3 — Fix Storage Reader: `canon-storage-eventlog/src/reader.rs`
 
-```rust
-pub fn execute(&self, name: &str, ctx: CapabilityExecutionContext) -> Result<CapabilityExecutionResult> {
-    let capability = self.map.get(name).ok_or_else(|| anyhow!("capability not registered: {name}"))?;
-    capability.handle(ctx)
-}
-```
+The functions `extract_capability_request` and `parse_capability_request_value` parse tlog JSON into `CapabilityRequested`. Since `CapabilityRequested` no longer exists in the type system:
 
----
+- Rename `extract_capability_request` → `extract_capability_event`
+- Change return type from `Option<CapabilityRequested>` → `Option<serde_json::Value>` (raw JSON)
+- Existing tlog files on disk may contain old `CapabilityRequested` JSON — the reader should return the raw payload for legacy inspection rather than attempting typed deserialization
+- Update callers of these functions (scan `canon-runtime/src/bin/event_runtime.rs` and any other consumers of the eventlog reader for `extract_capability_request` usage)
 
-## Phase 3 — Add `registry.route()` with Decode Bridge
+## Step 4 — Fix Capability Executor: `canon-runtime/src/consumers/capability_executor.rs`
 
-**File: `canon-capability/src/registry.rs`**
-
-Add `route()` alongside `execute()`. During migration, `route()` decodes `CapabilityRequested` → typed event, then delegates to the named handler. After Phase 8, routing is purely by event type.
+The executor still guards on `CanonEvent::CapabilityRequested`. Replace:
 
 ```rust
-use canon_event::{CanonEvent, CapabilityRequested};
+// Before:
+fn filter(&self) -> EventFilter { EventFilter::CapabilityOnly }
 
-impl CapabilityRegistry {
-    /// Route a CanonEvent to the appropriate handler.
-    /// During migration: decodes CapabilityRequested → typed event via the decode layer.
-    /// After migration: routes directly by event type.
-    pub fn route(&self, ctx: CapabilityExecutionContext) -> Result<CapabilityExecutionResult> {
-        let name = match &ctx.event {
-            CanonEvent::CapabilityRequested(req) => req.name.clone(),
-            _ => return Ok(CapabilityExecutionResult::NoOp),
-        };
-
-        // Decode JSON args → typed event. Temporary bridge — removed in Phase 8.
-        let typed_event = crate::decode::decode_capability_event(&ctx.event)?;
-        let typed_ctx = CapabilityExecutionContext {
-            workspace: ctx.workspace.clone(),
-            event: typed_event,
-            emitter: ctx.emitter.clone(),
-        };
-
-        self.execute(&name, typed_ctx)
-    }
-}
-```
-
----
-
-## Phase 4 — Refactor Editor Capabilities (Direct Dispatch — Preferred)
-
-**File: `canon-tools-editor/src/capabilities.rs`**
-
-Remove `require_arg`. Each handler implements `handle()` using direct match on the typed event. No JSON parsing at call sites.
-
-Remove the `require_arg` function entirely.
-
-Replace all five handlers:
-
-```rust
-impl CapabilityHandler for RenameSymbolCapability {
-    fn name(&self) -> &'static str { CAP_RENAME_SYMBOL }
-
-    fn handle(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
-        match ctx.event {
-            CanonEvent::Edit(EditEvent::RenameSymbol(ev)) => Ok(emit_edit(EditEvent::RenameSymbol(ev))),
-            _ => Ok(CapabilityExecutionResult::NoOp),
-        }
-    }
-}
-
-impl CapabilityHandler for MoveSymbolCapability {
-    fn name(&self) -> &'static str { CAP_MOVE_SYMBOL }
-
-    fn handle(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
-        match ctx.event {
-            CanonEvent::Edit(EditEvent::MoveSymbol(ev)) => Ok(emit_edit(EditEvent::MoveSymbol(ev))),
-            _ => Ok(CapabilityExecutionResult::NoOp),
-        }
-    }
-}
-
-impl CapabilityHandler for DeleteSymbolCapability {
-    fn name(&self) -> &'static str { CAP_DELETE_SYMBOL }
-
-    fn handle(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
-        match ctx.event {
-            CanonEvent::Edit(EditEvent::DeleteSymbol(ev)) => Ok(emit_edit(EditEvent::DeleteSymbol(ev))),
-            _ => Ok(CapabilityExecutionResult::NoOp),
-        }
-    }
-}
-
-impl CapabilityHandler for RenameModuleCapability {
-    fn name(&self) -> &'static str { CAP_RENAME_MODULE }
-
-    fn handle(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
-        match ctx.event {
-            CanonEvent::Edit(EditEvent::RenameModule(ev)) => Ok(emit_edit(EditEvent::RenameModule(ev))),
-            _ => Ok(CapabilityExecutionResult::NoOp),
-        }
-    }
-}
-
-impl CapabilityHandler for RenameDirCapability {
-    fn name(&self) -> &'static str { CAP_RENAME_DIR }
-
-    fn handle(&self, ctx: CapabilityExecutionContext) -> anyhow::Result<CapabilityExecutionResult> {
-        match ctx.event {
-            CanonEvent::Edit(EditEvent::RenameDir(ev)) => Ok(emit_edit(EditEvent::RenameDir(ev))),
-            _ => Ok(CapabilityExecutionResult::NoOp),
-        }
-    }
-}
-```
-
----
-
-## Phase 5 — Add Decode Layer
-
-**New file: `canon-capability/src/decode.rs`**
-
-Consolidates all JSON → typed event conversion in one place. This is the only remaining location that reads `CapabilityRequested.args`. Removed entirely in Phase 8.
-
-```rust
-use anyhow::{anyhow, Result};
-use canon_event::{CanonEvent, EditEvent, RenameDir, RenameModule, RenameSymbol, MoveSymbol, DeleteSymbol};
-
-fn require_str<'a>(args: &'a serde_json::Value, key: &str) -> Result<&'a str> {
-    args.get(key)
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("missing or invalid arg: {key}"))
-}
-
-/// Decode a CapabilityRequested event into a typed CanonEvent.
-/// Temporary bridge during capability collapse migration.
-pub fn decode_capability_event(event: &CanonEvent) -> Result<CanonEvent> {
-    let CanonEvent::CapabilityRequested(req) = event else {
-        return Ok(event.clone());
-    };
-
-    match req.name.as_str() {
-        "edit.rename_symbol" => {
-            let project = require_str(&req.args, "project")?.to_string();
-            let old = require_str(&req.args, "old")?.to_string();
-            let new = require_str(&req.args, "new")?.to_string();
-            Ok(CanonEvent::Edit(EditEvent::RenameSymbol(RenameSymbol { project, old, new })))
-        }
-        "edit.move_symbol" => {
-            let project = require_str(&req.args, "project")?.to_string();
-            let symbol = require_str(&req.args, "symbol")?.to_string();
-            let module = require_str(&req.args, "module")?.to_string();
-            Ok(CanonEvent::Edit(EditEvent::MoveSymbol(MoveSymbol { project, symbol, module })))
-        }
-        "edit.delete_symbol" => {
-            let project = require_str(&req.args, "project")?.to_string();
-            let symbol = require_str(&req.args, "symbol")?.to_string();
-            Ok(CanonEvent::Edit(EditEvent::DeleteSymbol(DeleteSymbol { project, symbol })))
-        }
-        "edit.rename_module" => {
-            let project = require_str(&req.args, "project")?.to_string();
-            let old = require_str(&req.args, "old")?.to_string();
-            let new = require_str(&req.args, "new")?.to_string();
-            Ok(CanonEvent::Edit(EditEvent::RenameModule(RenameModule { project, old, new })))
-        }
-        "edit.rename_dir" => {
-            let project = require_str(&req.args, "project")?.to_string();
-            let old = require_str(&req.args, "old")?.to_string();
-            let new = require_str(&req.args, "new")?.to_string();
-            Ok(CanonEvent::Edit(EditEvent::RenameDir(RenameDir { project, old: old.into(), new: new.into() })))
-        }
-        name => Err(anyhow!("no decode for capability: {name}")),
-    }
-}
-```
-
-**File: `canon-capability/src/lib.rs`**
-
-Add `pub mod decode;`
-
----
-
-## Phase 6 — Update CapabilityExecutor to Use `route()`
-
-**File: `canon-runtime/src/consumers/capability_executor.rs`**
-
-Replace `registry.execute(&request.name, ctx)` with `registry.route(ctx)`. Remove the explicit name extraction — `route()` handles it.
-
-```rust
 fn on_event(&mut self, event: &CanonEvent) {
-    let CanonEvent::CapabilityRequested(_) = event else {
-        return;
-    };
+    let CanonEvent::CapabilityRequested(request) = event else { return; };
+    ...
+    let result = registry.route(ctx);
+}
+```
+
+```rust
+// After:
+fn filter(&self) -> EventFilter { EventFilter::All }
+
+fn on_event(&mut self, event: &CanonEvent) {
+    let is_capability_event = matches!(
+        event,
+        CanonEvent::Edit(_)
+        | CanonEvent::Cargo(_)
+        | CanonEvent::File(_)
+        | CanonEvent::Bash(_)
+        | CanonEvent::Llm(_)
+        | CanonEvent::Analysis(_)
+    );
+    if !is_capability_event { return; }
 
     let ctx = CapabilityExecutionContext {
         workspace: self.workspace.clone(),
         event: event.clone(),
         emitter: self.emitter.clone(),
     };
-
     let result = match self.registry.lock() {
         Ok(registry) => registry.route(ctx),
-        Err(err) => Err(anyhow!("capability registry lock poisoned: {err}")),
+        Err(err) => Err(anyhow!("registry lock poisoned: {err}")),
     };
 
-    // error handling and emission unchanged below
-    ...
-}
-```
-
----
-
-## Phase 7 — Zero-Maintenance Test
-
-**New file: `canon-capability/src/tests.rs`** (or inline with `#[cfg(test)]`)
-
-The test exercises every route call with sample events. When new capabilities are added, they add a sample event — the test loop needs no changes.
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use canon_event::{CanonEvent, CapabilityRequested, EditEvent, RenameSymbol};
-
-    fn sample_capability_events() -> Vec<CanonEvent> {
-        vec![
-            CanonEvent::CapabilityRequested(CapabilityRequested {
-                request_id: "test-1".to_string(),
-                name: "edit.rename_symbol".to_string(),
-                args: serde_json::json!({ "project": "p", "old": "foo", "new": "bar" }),
-            }),
-            CanonEvent::CapabilityRequested(CapabilityRequested {
-                request_id: "test-2".to_string(),
-                name: "edit.move_symbol".to_string(),
-                args: serde_json::json!({ "project": "p", "symbol": "foo", "module": "bar" }),
-            }),
-            CanonEvent::CapabilityRequested(CapabilityRequested {
-                request_id: "test-3".to_string(),
-                name: "edit.delete_symbol".to_string(),
-                args: serde_json::json!({ "project": "p", "symbol": "foo" }),
-            }),
-            CanonEvent::CapabilityRequested(CapabilityRequested {
-                request_id: "test-4".to_string(),
-                name: "edit.rename_module".to_string(),
-                args: serde_json::json!({ "project": "p", "old": "foo", "new": "bar" }),
-            }),
-            CanonEvent::CapabilityRequested(CapabilityRequested {
-                request_id: "test-5".to_string(),
-                name: "edit.rename_dir".to_string(),
-                args: serde_json::json!({ "project": "p", "old": "src/a", "new": "src/b" }),
-            }),
-        ]
-    }
-
-    #[test]
-    fn all_capability_routes_are_safe() {
-        use std::path::PathBuf;
-        use std::sync::Arc;
-        use crate::registry::CapabilityRegistry;
-
-        let mut registry = CapabilityRegistry::new();
-        canon_tools_editor::capabilities::register_editor_capabilities(&mut registry);
-
-        for event in sample_capability_events() {
-            let ctx = CapabilityExecutionContext {
-                workspace: PathBuf::from("/tmp"),
-                event,
-                emitter: None,
-            };
-            let result = registry.route(ctx);
-            // All routes must not panic. Result shape is not checked here.
-            let _ = format!("{:?}", result);
-        }
+    let outcome = match result {
+        Ok(r) => r,
+        Err(err) => CapabilityExecutionResult::Emit(
+            CanonEvent::ErrorOccurred(new_error_occurred(
+                "capability_execution", "capability_executor",
+                err.to_string(), "error",
+                serde_json::json!({ "event": format!("{:?}", event) }),
+                None,
+            ))
+        ),
+    };
+    let Some(emitter) = self.emitter.as_ref() else { return; };
+    match outcome {
+        CapabilityExecutionResult::Emit(e) => emitter.emit(e),
+        CapabilityExecutionResult::EmitMany(events) => { for e in events { emitter.emit(e); } }
+        CapabilityExecutionResult::Deferred | CapabilityExecutionResult::NoOp => {}
     }
 }
 ```
 
----
+## Step 5 — Fix `registry.route()`: `canon-capability/src/registry.rs`
 
-## Phase 8 — Remove CapabilityRequested (Final State)
-
-After Phase 7 passes and `ActConsumer` emits typed events directly:
-
-1. Remove `CanonEvent::CapabilityRequested` from `events.rs`
-2. Remove `CapabilityRequested` struct
-3. Remove `decode.rs`
-4. Remove `ArgSpec`, `ArgKind`, `CapabilitySchema.args`
-5. Update `registry.route()` to match typed events directly (no decode step)
-6. Remove `CapabilityExecutor` filter for `CapabilityRequested` — it becomes `EventFilter::EditOnly` or direct match
-
-**End state `registry.route()`:**
+Replace `CapabilityRequested`-based routing with type-based dispatch. Remove the decode import.
 
 ```rust
 pub fn route(&self, ctx: CapabilityExecutionContext) -> Result<CapabilityExecutionResult> {
     match &ctx.event {
-        CanonEvent::Edit(_) => {
-            // Route edit events to the editor capability suite.
-            // Handlers match their specific variant; others return NoOp.
+        CanonEvent::Edit(_)
+        | CanonEvent::Cargo(_)
+        | CanonEvent::File(_)
+        | CanonEvent::Bash(_)
+        | CanonEvent::Llm(_)
+        | CanonEvent::Analysis(_) => {
             for handler in self.map.values() {
                 let result = handler.handle(ctx.clone())?;
                 if !matches!(result, CapabilityExecutionResult::NoOp) {
@@ -437,17 +161,320 @@ pub fn route(&self, ctx: CapabilityExecutionContext) -> Result<CapabilityExecuti
 }
 ```
 
+Remove `use crate::decode` and the decode call.
+
+## Step 6 — Fix Capability Handlers: `canon-builder`, `canon-tools-analysis`, `llm_executor`
+
+Each handler in these crates currently parses JSON args from `CapabilityRequested`. Replace with direct dispatch using `fn handle()`:
+
+### `canon-builder/src/executor/capabilities.rs`
+
+```rust
+impl CapabilityHandler for CargoBuildCapability {
+    fn name(&self) -> &'static str { "cargo.build" }
+    fn handle(&self, ctx: CapabilityExecutionContext) -> Result<CapabilityExecutionResult> {
+        match ctx.event {
+            CanonEvent::Cargo(CargoEvent::Build(ev)) => {
+                // execute cargo build for ev.crate_name
+                // ... existing build logic, now using ev.crate_name instead of require_arg
+            }
+            _ => Ok(CapabilityExecutionResult::NoOp),
+        }
+    }
+}
+```
+
+Apply same pattern for: `CargoRun`, `CargoCheck`, `FileRead`, `FileWrite`, `FilePatch`, `Bash`.
+
+### `canon-tools-analysis/src/capabilities/`
+
+```rust
+match ctx.event {
+    CanonEvent::Analysis(AnalysisEvent::Run(ev)) => { /* use ev.crate_name, ev.batch_id */ }
+    CanonEvent::Analysis(AnalysisEvent::Workspace(_)) => { /* workspace analysis */ }
+    _ => Ok(CapabilityExecutionResult::NoOp),
+}
+```
+
+### `canon-runtime/src/consumers/llm_executor.rs`
+
+```rust
+match ctx.event {
+    CanonEvent::Llm(LlmCall { prompt, role }) => { /* use prompt, role */ }
+    _ => Ok(CapabilityExecutionResult::NoOp),
+}
+```
+
+## Step 7 — Delete Dead Code
+
+Once the build is clean after Steps 1–6:
+
+| Target | Action |
+|---|---|
+| `canon-capability/src/decode.rs` | Delete file |
+| `canon-capability/src/lib.rs` | Remove `pub mod decode;` |
+| `canon-capability/src/trait.rs` | Remove `ArgSpec`, `ArgKind`, deprecated `fn execute()`, deprecated `fn schema()`. Clean `CapabilitySchema` to remove `args` field. |
+| `canon-capability/src/lib.rs` | Remove `ArgKind`, `ArgSpec` from `pub use` |
+| `canon-capability/src/registry.rs` | Remove `schemas()` method |
+| `canon-tools-editor/src/bin/capability_smoke_test.rs` | Remove `CapabilityRequested` usage |
+
+## Step 8 — Verify Build
+
+```bash
+cargo check --workspace
+rg "CapabilityRequested" canon-utils --type rust   # must be zero
+rg "require_arg" canon-utils --type rust            # must be zero
+rg "ArgSpec|ArgKind" canon-utils --type rust        # must be zero
+```
+
 ---
 
-## Files Modified (complete list)
+# Part 2 — canon-introspection
 
-| File                                                 |      Phase | Action                                                                                     |
-|------------------------------------------------------+------------+--------------------------------------------------------------------------------------------|
-| `canon-capability/src/trait.rs`                      |       1, 2 | Deprecate `ArgSpec/ArgKind`, add `fn handle()`, deprecate `fn execute()` and `fn schema()` |
-| `canon-capability/src/registry.rs`                   | 2, 3, 6, 8 | Update internal call to `handle()`; add `route()`; final route by type                     |
-| `canon-capability/src/decode.rs`                     |       5, 8 | Create — JSON bridge; remove in Phase 8                                                    |
-| `canon-capability/src/lib.rs`                        |          5 | Add `pub mod decode`                                                                       |
-| `canon-tools-editor/src/capabilities.rs`             |          4 | Remove `require_arg`; implement `handle()` with direct dispatch on all 5 handlers          |
-| `canon-runtime/src/consumers/capability_executor.rs` |          6 | Replace `registry.execute(name, ctx)` with `registry.route(ctx)`                           |
-| `canon-capability/src/tests.rs`                      |          7 | Create — `sample_capability_events()` + `all_capability_routes_are_safe()`                 |
-| `canon-runtime-events/src/events.rs`                 |          8 | Remove `CapabilityRequested` variant and struct                                            |
+## Goal
+
+A system where all possible events are automatically generated, executed, and validated with zero manual maintenance. When a new `CanonEvent` variant is added, it is automatically covered by the test suite with no code changes.
+
+```
+CanonEvent::sample_all()  →  registry.route(each)  →  assert safe(result)
+```
+
+## Architecture
+
+```
+canon-macros
+  canon_event_struct! → adds Default derive (foundation)
+  canon_event_enum!   → adds sample_all() generation (zero-maintenance)
+
+canon-introspection (new crate)
+  Sampleable trait
+  assert_all_routes_safe(registry)
+
+canon-capability/src/tests.rs
+  replaces manual event list with introspection loop
+```
+
+---
+
+## Step I.1 — Extend `canon_event_struct!` to Derive Default
+
+**File: `canon-utils/canon-macros/src/lib.rs`**
+
+Add `Default` to the derive list. This is the only change needed to give all 40+ event structs a free zero-value constructor.
+
+```rust
+#[macro_export]
+macro_rules! canon_event_struct {
+    ($name:ident { $($(#[$meta:meta])* $field:ident : $ty:ty),* $(,)? }) => {
+        #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+        pub struct $name {
+            $($(#[$meta])* pub $field: $ty),*
+        }
+    };
+}
+```
+
+This gives every struct generated by the macro a `Default` impl where:
+- `String` → `""`
+- `u64`, `u32` → `0`
+- `bool` → `false`
+- `Option<T>` → `None`
+- `Vec<T>` → `vec![]`
+- `serde_json::Value` → `Value::Null`
+- `PathBuf` → empty path
+
+**Exception:** `Code { delta: EventDelta, state: RustcState }` is not generated by `canon_event_struct!` — it is a manual struct. Add `Default` impl manually in `events.rs`:
+```rust
+impl Default for Code {
+    fn default() -> Self {
+        // EventDelta and RustcState must each implement Default — add manually
+        Self { delta: EventDelta::default(), state: RustcState::default() }
+    }
+}
+```
+
+Also add `Default` to `EventDelta` and `RustcState` in `canon-types/src/kernel_types.rs` manually.
+
+## Step I.2 — Extend `canon_event_enum!` to Generate `sample_all()`
+
+**File: `canon-utils/canon-macros/src/lib.rs`**
+
+Extend the macro to generate a `sample_all()` method on every enum it produces. The method calls `Default::default()` on each inner type. When a new variant is added to `CanonEvent`, `sample_all()` automatically includes it — zero maintenance.
+
+```rust
+#[macro_export]
+macro_rules! canon_event_enum {
+    ($(#[$($attr:tt)*])* $enum_name:ident { $($variant:ident($inner:ty)),* $(,)? }) => {
+        #[derive(Debug, Clone)]
+        $(#[$($attr)*])*
+        pub enum $enum_name {
+            $($variant($inner)),*
+        }
+
+        impl $enum_name {
+            /// Returns one sample instance of every variant using Default inner values.
+            /// Auto-updated when new variants are added. Zero maintenance.
+            pub fn sample_all() -> Vec<Self>
+            where
+                $($inner: Default),*
+            {
+                vec![
+                    $(Self::$variant(<$inner>::default())),*
+                ]
+            }
+        }
+    };
+}
+```
+
+**Result:** `CanonEvent::sample_all()` is now callable and returns one instance of every variant. `EditEvent::sample_all()`, `CargoEvent::sample_all()`, etc. also get this method automatically.
+
+**Note on sub-enums:** `CanonEvent::Edit(EditEvent)` — `EditEvent::default()` must exist. Since `EditEvent` is also generated by `canon_event_enum!`, it gets `sample_all()` but NOT `Default`. Add `Default` to the sub-enum impls manually, or extend `canon_event_enum!` to also derive `Default` picking the first variant:
+
+```rust
+impl Default for EditEvent {
+    fn default() -> Self { Self::RenameSymbol(Default::default()) }
+}
+impl Default for CargoEvent {
+    fn default() -> Self { Self::Build(Default::default()) }
+}
+impl Default for FileEvent {
+    fn default() -> Self { Self::Read(Default::default()) }
+}
+impl Default for AnalysisEvent {
+    fn default() -> Self { Self::Run(Default::default()) }
+}
+```
+
+These 4 impls go in `canon-runtime-events/src/events.rs`. They are the only manual defaults needed.
+
+## Step I.3 — Create `canon-introspection` Crate
+
+**New file: `canon-utils/canon-introspection/Cargo.toml`**
+
+```toml
+[package]
+name = "canon-introspection"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+name = "canon_introspection"
+
+[dependencies]
+canon-runtime-events = { path = "../canon-runtime-events" }
+canon-capability = { path = "../canon-capability" }
+```
+
+Add `"canon-utils/canon-introspection"` to workspace `Cargo.toml` members.
+
+**New file: `canon-utils/canon-introspection/src/lib.rs`**
+
+```rust
+use canon_capability::{CapabilityExecutionContext, CapabilityExecutionResult, CapabilityRegistry};
+use canon_event::CanonEvent;
+use std::path::PathBuf;
+
+/// Verify that every CanonEvent variant can be routed without panicking.
+/// Call this from any test that registers capabilities.
+///
+/// Invariant: ∀ e ∈ CanonEvent, route(e) does not panic and result is printable.
+pub fn assert_all_routes_safe(registry: &CapabilityRegistry) {
+    for event in CanonEvent::sample_all() {
+        let ctx = CapabilityExecutionContext {
+            workspace: PathBuf::from("/tmp"),
+            event,
+            emitter: None,
+        };
+        let result = registry.route(ctx);
+        // Must not panic. Result must be Debug-printable.
+        let _ = format!("{:?}", result);
+    }
+}
+```
+
+No manual event list. No maintenance. When a new `CanonEvent` variant is added, `sample_all()` automatically includes it.
+
+## Step I.4 — Replace Manual Test with Introspection Loop
+
+**File: `canon-capability/src/tests.rs`**
+
+Replace the manual `sample_capability_events()` function and `CapabilityRequested` event list entirely.
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use canon_tools_editor::capabilities::register_editor_capabilities;
+    use std::path::PathBuf;
+
+    #[test]
+    fn all_routes_safe() {
+        let mut registry = CapabilityRegistry::new();
+        register_editor_capabilities(&mut registry);
+        // Add other capability registration here as needed.
+        // The loop automatically covers all CanonEvent variants — zero maintenance.
+        canon_introspection::assert_all_routes_safe(&registry);
+    }
+}
+```
+
+**Add `canon-introspection` to `canon-capability/Cargo.toml`:**
+```toml
+[dev-dependencies]
+canon-introspection = { path = "../canon-introspection" }
+```
+
+---
+
+# Execution Order
+
+Do not skip steps. Do not proceed if the build is broken.
+
+| Step | File(s) | Action | Compile check |
+|---|---|---|---|
+| 1 | `canon-act/src/lib.rs` | Replace `CapabilityRequested` emissions | ✓ |
+| 2 | `canon-plan/src/lib.rs`, `canon-runtime/src/lib.rs` | Replace `CapabilityRequested` emissions | ✓ |
+| 3 | `canon-storage-eventlog/src/reader.rs` | Update storage reader functions | ✓ |
+| 4 | `canon-runtime/src/consumers/capability_executor.rs` | Update filter and guard | ✓ |
+| 5 | `canon-capability/src/registry.rs` | Replace `route()` with type dispatch | ✓ |
+| 6 | `canon-builder`, `canon-tools-analysis`, `llm_executor` | Handler typed dispatch | ✓ |
+| 7 | `decode.rs`, `trait.rs`, `registry.rs` | Delete dead code | ✓ |
+| 8 | grep verify | Zero references | ✓ |
+| I.1 | `canon-macros/src/lib.rs` | Add `Default` to `canon_event_struct!` | ✓ |
+| I.2 | `canon-macros/src/lib.rs` | Add `sample_all()` to `canon_event_enum!` | ✓ |
+| I.2b | `canon-runtime-events/src/events.rs` | Add 4 sub-enum `Default` impls + `Code::default()` | ✓ |
+| I.2c | `canon-types/src/kernel_types.rs` | Add `Default` to `EventDelta`, `RustcState` | ✓ |
+| I.3 | `canon-introspection/` | Create crate | ✓ |
+| I.4 | `canon-capability/src/tests.rs` | Replace manual list with `assert_all_routes_safe` | ✓ |
+
+Steps 1–8 fix the broken build. Steps I.1–I.4 build the zero-maintenance invariant system. All independent of each other once the build is clean.
+
+---
+
+## Files Summary
+
+| File | Action |
+|---|---|
+| `canon-act/src/lib.rs` | Replace 3 `CapabilityRequested` emissions |
+| `canon-plan/src/lib.rs` | Replace 1 `CapabilityRequested` emission |
+| `canon-runtime/src/lib.rs` | Replace 2 `CapabilityRequested` emissions |
+| `canon-storage-eventlog/src/reader.rs` | Update `extract_capability_request` → raw value return |
+| `canon-runtime/src/consumers/capability_executor.rs` | Filter → All with guard; update error handling |
+| `canon-capability/src/registry.rs` | Type-based `route()`; remove decode import |
+| `canon-builder/src/executor/capabilities.rs` | Typed dispatch in all handlers |
+| `canon-tools-analysis/src/capabilities/` | Typed dispatch |
+| `canon-runtime/src/consumers/llm_executor.rs` | Typed dispatch |
+| `canon-capability/src/decode.rs` | **Delete** |
+| `canon-capability/src/trait.rs` | Remove `ArgSpec`, `ArgKind`, deprecated methods |
+| `canon-capability/src/lib.rs` | Remove dead re-exports |
+| `canon-capability/src/registry.rs` | Remove `schemas()` |
+| `canon-macros/src/lib.rs` | Add `Default` to `canon_event_struct!`; add `sample_all()` to `canon_event_enum!` |
+| `canon-runtime-events/src/events.rs` | Add 4 sub-enum `Default` impls + `Code::default()` |
+| `canon-types/src/kernel_types.rs` | Add `Default` to `EventDelta`, `RustcState` |
+| `canon-introspection/Cargo.toml` | Create |
+| `canon-introspection/src/lib.rs` | Create — `assert_all_routes_safe()` |
+| `canon-capability/src/tests.rs` | Replace manual list with introspection loop |
+| `canon-capability/Cargo.toml` | Add `canon-introspection` to dev-dependencies |
+| Root `Cargo.toml` | Add `canon-utils/canon-introspection` to members |

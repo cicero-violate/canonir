@@ -1,4 +1,7 @@
-use canon_event::{CanonEvent, CapabilityCompleted, CapabilityFailed, CapabilityRequested, EventConsumer, EventEmitterHandle, EventFilter, LoopActed, LoopPlanned, ToolCall, ToolResult};
+use canon_event::{
+    BashInvoke, CanonEvent, CapabilityCompleted, CapabilityFailed, CargoEvent, CargoRun, CargoCheck, CargoBuild, FileEvent, FilePatch, FileWrite, EventConsumer, EventEmitterHandle, EventFilter,
+    LoopActed, LoopPlanned, ToolCall, ToolResult,
+};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::env;
@@ -221,13 +224,9 @@ impl ActConsumer {
                         "cwd": cwd,
                     }),
                 }));
-                canon_meta::canon_emit_meta!(emitter; CapabilityRequested(CapabilityRequested {
-                    request_id: request_id.clone(),
-                    name: "bash".to_string(),
-                    args: serde_json::json!({
-                        "cmd": cmd,
-                        "cwd": cwd,
-                    }),
+                canon_meta::canon_emit_meta!(emitter; Bash(BashInvoke {
+                    cmd: cmd.to_string(),
+                    cwd: Some(cwd.to_string()),
                 }));
 
                 self.pending = Some(PendingAct {
@@ -285,14 +284,10 @@ impl ActConsumer {
                         "content": content,
                     }),
                 }));
-                canon_meta::canon_emit_meta!(emitter; CapabilityRequested(CapabilityRequested {
-                    request_id: request_id.clone(),
-                    name: "file.write".to_string(),
-                    args: serde_json::json!({
-                        "path": path,
-                        "content": content,
-                    }),
-                }));
+                canon_meta::canon_emit_meta!(emitter; File(FileEvent::Write(FileWrite {
+                    path: path.to_string(),
+                    content: content.to_string(),
+                })));
 
                 self.pending = Some(PendingAct {
                     tick: planned.tick,
@@ -352,15 +347,11 @@ impl ActConsumer {
                         "new": new,
                     }),
                 }));
-                canon_meta::canon_emit_meta!(emitter; CapabilityRequested(CapabilityRequested {
-                    request_id: request_id.clone(),
-                    name: "file.patch".to_string(),
-                    args: serde_json::json!({
-                        "path": path,
-                        "old": old,
-                        "new": new,
-                    }),
-                }));
+                canon_meta::canon_emit_meta!(emitter; File(FileEvent::Patch(FilePatch {
+                    path: path.to_string(),
+                    old: old.to_string(),
+                    new: new.to_string(),
+                })));
 
                 self.pending = Some(PendingAct {
                     tick: planned.tick,

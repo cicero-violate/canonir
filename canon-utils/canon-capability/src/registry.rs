@@ -38,16 +38,27 @@ impl CapabilityRegistry {
         self.map.values().map(|h| h.schema()).collect()
     }
 
-    /// Route a CanonEvent (during migration) via decode bridge.
+    /// Route a typed capability event to handlers.
     pub fn route(&self, ctx: CapabilityExecutionContext) -> Result<CapabilityExecutionResult> {
-        let name = match &ctx.event {
-            canon_event::CanonEvent::CapabilityRequested(req) => req.name.clone(),
-            _ => return Ok(CapabilityExecutionResult::NoOp),
-        };
+        let is_cap_event = matches!(
+            ctx.event,
+            canon_event::CanonEvent::Edit(_)
+                | canon_event::CanonEvent::Cargo(_)
+                | canon_event::CanonEvent::File(_)
+                | canon_event::CanonEvent::Bash(_)
+                | canon_event::CanonEvent::Llm(_)
+                | canon_event::CanonEvent::Analysis(_)
+        );
+        if !is_cap_event {
+            return Ok(CapabilityExecutionResult::NoOp);
+        }
 
-        // Decode CapabilityRequested args into typed CanonEvent
-        let typed_event = crate::decode::decode_capability_event(&ctx.event)?;
-        let ctx = CapabilityExecutionContext { event: typed_event, ..ctx };
-        self.execute(&name, ctx)
+        for handler in self.map.values() {
+            let result = handler.handle(ctx.clone())?;
+            if !matches!(result, CapabilityExecutionResult::NoOp) {
+                return Ok(result);
+            }
+        }
+        Ok(CapabilityExecutionResult::NoOp)
     }
 }
