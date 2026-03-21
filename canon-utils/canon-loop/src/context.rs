@@ -58,6 +58,24 @@ impl Default for DestructiveCmdPolicy {
     }
 }
 
+impl DestructiveCmdPolicy {
+    pub fn from_env() -> Self {
+        match std::env::var("CANON_DESTRUCTIVE_CMD_POLICY").unwrap_or_else(|_| "block".to_string()).to_ascii_lowercase().as_str() {
+            "allow" => Self::Allow,
+            "warn" => Self::Warn,
+            _ => Self::Block,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Warn => "warn",
+            Self::Block => "block",
+        }
+    }
+}
+
 pub struct LoopContext {
     pub workspace: PathBuf,
     pub tlog_path: PathBuf,
@@ -127,12 +145,12 @@ impl LoopContext {
             act_queue: VecDeque::new(),
             pending_act: None,
             artifact_dir: default_artifact_dir(&workspace),
-            artifact_counter: 0,
+            artifact_counter: next_tool_artifact_counter(&default_artifact_dir(&workspace)),
             active_batch_llm_request_id: None,
             queued_artifact_index: HashMap::new(),
             act_batch_tracker: HashMap::new(),
             last_act_reconcile: None,
-            destructive_cmd_policy: DestructiveCmdPolicy::default(),
+            destructive_cmd_policy: DestructiveCmdPolicy::from_env(),
             last_verify_trace_id: None,
             last_verify_execution_id: None,
             last_act_span_id: None,
@@ -155,4 +173,192 @@ fn default_artifact_dir(_workspace: &PathBuf) -> PathBuf {
     std::env::var("CANON_LLM_LOG_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(default_dir))
+}
+
+fn next_tool_artifact_counter(log_dir: &std::path::Path) -> u32 {
+    let mut max_seen: Option<u32> = None;
+    let Ok(entries) = std::fs::read_dir(log_dir) else {
+        return 0;
+    };
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(|s| s.to_string()) else {
+            continue;
+        };
+        let Some((n, _suffix, _ts)) = parse_artifact_name(&name) else {
+            continue;
+        };
+        max_seen = Some(max_seen.map_or(n, |m| m.max(n)));
+    }
+    max_seen.map_or(0, |m| m.saturating_add(1))
+}
+
+fn parse_artifact_name(name: &str) -> Option<(u32, String, Option<u64>)> {
+    let mut parts = name.splitn(3, '_');
+    let first = parts.next()?;
+    let second = parts.next()?;
+    let third = parts.next()?;
+
+    if let Ok(n) = first.parse::<u32>() {
+        return Some((n, format!("{}_{}", second, third), None));
+    }
+    let ts = first.parse::<u64>().ok()?;
+    let n = second.parse::<u32>().ok()?;
+    Some((n, third.to_string(), Some(ts)))
+}
+
+// ----------------- batch tracking helpers (ported) -----------------
+impl LoopContext {
+    pub fn artifact_index_for_plan(&mut self, planned: &LoopPlanned) -> u32 {
+        if let Some(request_id) = planned.llm_request_id.as_deref() {
+            if let Some(n) = find_request_index_by_request_id(&self.artifact_dir, request_id) {
+                if let Some(cache_key) = plan_cache_key(planned) {
+                    self.queued_artifact_index.insert(cache_key, n);
+                }
+                return n;
+            }
+        }
+        if let Some(cache_key) = plan_cache_key(planned) {
+            if let Some(n) = self.queued_artifact_index.get(&cache_key) {
+                return *n;
+            }
+            let n = self.next_tool_artifact_n();
+            self.queued_artifact_index.insert(cache_key, n);
+            return n;
+        }
+        self.next_tool_artifact_n()
+    }
+
+    pub fn clear_cached_artifact_index_for_plan(&mut self, planned: &LoopPlanned) {
+        if let Some(cache_key) = plan_cache_key(planned) {
+            self.queued_artifact_index.remove(&cache_key);
+        }
+    }
+
+    pub fn mark_batch_planned(&mut self, planned: &LoopPlanned, artifact_n: u32) {
+        let Some(llm_request_id) = planned.llm_request_id.clone() else {
+            return;
+        };
+        let snapshot = {
+            let status = self.act_batch_tracker.entry(llm_request_id.clone()).or_insert_with(|| BatchStatus { artifact_n, ..BatchStatus::default() });
+            if status.artifact_n == 0 {
+                status.artifact_n = artifact_n;
+            }
+            status.planned = status.planned.saturating_add(1);
+            status.clone()
+        };
+        write_batch_status_artifact(&self.artifact_dir, snapshot.artifact_n, &llm_request_id, "in_progress", &snapshot);
+    }
+
+    pub fn mark_batch_dispatched(&mut self, planned: &LoopPlanned) {
+        let Some(llm_request_id) = planned.llm_request_id.as_deref() else {
+            return;
+        };
+        let Some(status) = self.act_batch_tracker.get_mut(llm_request_id) else {
+            return;
+        };
+        status.dispatched = status.dispatched.saturating_add(1);
+        let snapshot = status.clone();
+        write_batch_status_artifact(&self.artifact_dir, snapshot.artifact_n, llm_request_id, "in_progress", &snapshot);
+    }
+
+    pub fn mark_batch_inline_completion(&mut self, planned: &LoopPlanned, success: bool) {
+        self.mark_batch_completion(planned.llm_request_id.as_deref(), success);
+    }
+
+    pub fn mark_batch_completion(&mut self, llm_request_id: Option<&str>, success: bool) {
+        let Some(llm_request_id) = llm_request_id else {
+            return;
+        };
+        let mut should_remove = false;
+        let Some(status) = self.act_batch_tracker.get_mut(llm_request_id) else {
+            return;
+        };
+        if success {
+            status.completed_ok = status.completed_ok.saturating_add(1);
+        } else {
+            status.completed_fail = status.completed_fail.saturating_add(1);
+        }
+        let finished = status.completed_ok.saturating_add(status.completed_fail) >= status.planned;
+        let status_label = if finished {
+            if status.completed_fail == 0 {
+                "completed"
+            } else {
+                "failed_partial"
+            }
+        } else {
+            "in_progress"
+        };
+        let snapshot = status.clone();
+        write_batch_status_artifact(&self.artifact_dir, snapshot.artifact_n, llm_request_id, status_label, &snapshot);
+        if finished {
+            should_remove = true;
+        }
+        if should_remove {
+            self.act_batch_tracker.remove(llm_request_id);
+        }
+    }
+
+    fn next_tool_artifact_n(&mut self) -> u32 {
+        let n = self.artifact_counter;
+        self.artifact_counter = self.artifact_counter.saturating_add(1);
+        n
+    }
+}
+
+fn plan_cache_key(planned: &LoopPlanned) -> Option<String> {
+    planned.action_id.as_ref().map(|id| format!("action:{id}")).or_else(|| planned.plan_step_id.as_ref().map(|id| format!("step:{id}")))
+}
+
+fn find_request_index_by_request_id(log_dir: &std::path::Path, request_id: &str) -> Option<u32> {
+    let entries = std::fs::read_dir(log_dir).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_str()?;
+        let Some((n, suffix, _ts)) = parse_artifact_name(name) else {
+            continue;
+        };
+        if suffix != "request.json" {
+            continue;
+        }
+        let raw = std::fs::read_to_string(entry.path()).ok()?;
+        let v = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+        if v.get("request_id").and_then(|x| x.as_str()) == Some(request_id) {
+            return Some(n);
+        }
+    }
+    None
+}
+
+fn write_batch_status_artifact(log_dir: &std::path::Path, artifact_n: u32, llm_request_id: &str, status: &str, batch: &BatchStatus) {
+    let _ = std::fs::create_dir_all(log_dir);
+    let path = artifact_path_for(log_dir, artifact_n, "batch_status");
+    let value = serde_json::json!({
+        "n": artifact_n,
+        "llm_request_id": llm_request_id,
+        "status": status,
+        "planned": batch.planned,
+        "dispatched": batch.dispatched,
+        "completed_ok": batch.completed_ok,
+        "completed_fail": batch.completed_fail,
+        "updated_ms": now_ms_u64(),
+    });
+    let serialized = serde_json::to_string_pretty(&value).unwrap_or_default();
+    write_atomic(&path, &serialized);
+}
+
+// utility share with act stage
+fn now_ms_u64() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+}
+
+fn artifact_path_for(log_dir: &std::path::Path, artifact_n: u32, suffix: &str) -> std::path::PathBuf {
+    log_dir.join(format!("{:09}_{}.json", artifact_n, suffix))
+}
+
+fn write_atomic(path: &std::path::Path, content: &str) {
+    let tmp = path.with_extension("tmp");
+    if std::fs::write(&tmp, content).is_ok() {
+        let _ = std::fs::rename(tmp, path);
+    }
 }

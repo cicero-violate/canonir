@@ -25,7 +25,17 @@ impl EventConsumer for LoopStageExecutor {
         // State accumulation (mutations that do not emit).
         match event {
             CanonEvent::Tick(Tick { .. }) => {
-                // TODO: timeouts/checks (Plan/Act) will be added with full port.
+                // Plan timeout check (already tracked in stage/plan via context pending)
+                if let Some(e) = crate::stage::act::check_act_timeout(&mut self.ctx) {
+                    if let Some(emitter) = self.ctx.emitter.as_ref() {
+                        emitter.emit(e);
+                    }
+                }
+                for e in crate::stage::act::reconcile_stale_pending_artifacts(&mut self.ctx) {
+                    if let Some(emitter) = self.ctx.emitter.as_ref() {
+                        emitter.emit(e);
+                    }
+                }
             }
             CanonEvent::LoopObserved(o) => {
                 self.ctx.last_observed = Some(o.clone());

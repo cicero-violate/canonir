@@ -29,6 +29,7 @@ canon_event = { package = "canon-runtime-events", path = "../canon-runtime-event
 canon_event_store = { package = "canon-storage-eventlog", path = "../canon-storage-eventlog" }
 canon_exec = { package = "canon-exec", path = "../canon-exec" }
 canon_loop = { package = "canon-loop", path = "../canon-loop" }
+canon_route = { package = "canon-route", path = "../canon-route" }
 canon_decision = { package = "canon-decision", path = "../canon-decision" }
 canon_judgment = { package = "canon-judgment", path = "../canon-judgment" }
 canon_runtime_supervisor = { package = "canon-runtime-supervisor", path = "../canon-runtime-supervisor" }

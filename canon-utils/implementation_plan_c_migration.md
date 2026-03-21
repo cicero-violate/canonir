@@ -28,7 +28,25 @@ Phase 5 — ✅ migration clean; pre-existing failures remain (see below)
 grep -r "canon_observe|canon_plan|canon_act|canon_verify|canon_reward" canon-utils/ → 0 results
 ```
 
-**Migration verdict:** C-migration is complete.
+**Migration verdict:** C-migration is complete — the 5 formal `EventConsumer` loop-stage
+consumers are gone and their logic lives in `canon-loop`. However, `event_runtime.rs` is
+still 1358 lines. The size is NOT from the consumers (those are removed). It comes from
+five distinct concerns that were outside this migration's scope:
+
+| Lines | Block | What it is |
+|-------|-------|------------|
+| 33–117 | LockGuard, EventMsg, ControlMsg | Process locking, queue message types |
+| 128–316 | `RouteRuntimeState` + routing helpers | Routing state machine: `planned_pending`, `context_ready`, `acted_unverified`, journal, `heuristic_route_json`, `request_route_via_llm_call` |
+| 317–413 | `update_route_runtime_state()` | **6th implicit consumer** — inline match on loop events that mirrors the consumer pattern but lives in the main loop. Updates `RouteRuntimeState` from every loop event. Was never a formal `dyn EventConsumer`. |
+| 415–624 | `handle_event_msg`, `drain_event_queue_with_grace`, `handle_control_msg` | Event dispatch, queue draining, tick handler — calls LLM for routing, emits `route_selected` |
+| 630–1107 | `main()` | Process startup, file watching (notify), cursor/session management, tlog replay, full event loop |
+| 1107–1270 | Helper utilities | Cursor state, tlog segment reading, tlog equivalence verification |
+| 1270–1358 | Tests | Unit tests |
+
+**`update_route_runtime_state()` (lines 317–413) is the next collapse candidate.** It is a
+6th implicit consumer: it receives every loop event and accumulates routing signals into
+`RouteRuntimeState`. This is a **D-migration** — routing state observer → event. Out of
+scope for C-migration. See `implementation_plan_d_migration.md` when ready.
 
 ---
 
