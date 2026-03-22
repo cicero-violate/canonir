@@ -1,5 +1,4 @@
 pub mod binary;
-pub mod event;
 pub mod rotate;
 pub mod writer;
 

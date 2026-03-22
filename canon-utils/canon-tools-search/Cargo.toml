@@ -1,0 +1,12 @@
+[package]
+name = "canon-tools-search"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+ignore = "0.4"
+nucleo-matcher = "0.3"
+crossbeam-channel = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+

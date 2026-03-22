@@ -1,4 +1,3 @@
-use super::event::TlogEvent;
 use crate::CanonEvent;
 use anyhow::Result;
 use fs2::FileExt;
@@ -253,7 +252,7 @@ fn recover_segment(dir: &Path, base_seq: u64, config: &SegmentConfig) -> Result<
             byte_pos = byte_pos.saturating_add(raw_line.len() as u64 + 1);
             continue;
         }
-        let event: TlogEvent = match serde_json::from_str(trimmed) {
+        let event: CanonEvent = match serde_json::from_str(trimmed) {
             Ok(e) => e,
             Err(_) => break,
         };
@@ -266,7 +265,7 @@ fn recover_segment(dir: &Path, base_seq: u64, config: &SegmentConfig) -> Result<
             idx_writer.write_all(&seq.to_le_bytes())?;
             idx_writer.write_all(&byte_pos.to_le_bytes())?;
         }
-        let bucket = event.ts / config.time_bucket_ms;
+        let bucket = event.meta.ts / config.time_bucket_ms;
         if last_time_bucket != Some(bucket) {
             time_writer.write_all(&bucket.to_le_bytes())?;
             time_writer.write_all(&byte_pos.to_le_bytes())?;

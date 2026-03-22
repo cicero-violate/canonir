@@ -10,6 +10,7 @@ pub mod reward;
 
 pub enum LoopStageEvent {
     Observe(Tick),
+    Scan(RouteSelected),
     PlanTrigger(RouteSelected),
     ActDispatch(RouteSelected),
     VerifyTrigger(RouteSelected),
@@ -23,6 +24,11 @@ impl LoopStageEvent {
     pub fn execute(self, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
         match self {
             LoopStageEvent::Observe(t) => observe::execute(t, ctx),
+            LoopStageEvent::Scan(rs) => {
+                // Re-observe on next loop; no-op here (route executor already ticked)
+                let tick = Tick { tick: rs.tick };
+                observe::execute(tick, ctx)
+            }
             LoopStageEvent::PlanTrigger(d) => plan::execute_trigger(d, ctx),
             LoopStageEvent::ActDispatch(d) => act::execute_dispatch(d, ctx),
             LoopStageEvent::VerifyTrigger(d) => verify::execute(d, ctx),
@@ -35,11 +41,19 @@ impl LoopStageEvent {
 }
 
 fn dispatch_capability_done(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
-    plan::execute_complete(c.clone(), ctx).or_else(|_| act::execute_complete(c, ctx))
+    let plan_result = plan::execute_complete(c.clone(), ctx)?;
+    if !matches!(plan_result, LoopStageResult::Noop) {
+        return Ok(plan_result);
+    }
+    act::execute_complete(c, ctx)
 }
 
 fn dispatch_capability_fail(f: CapabilityFailed, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
-    plan::execute_failed(f.clone(), ctx).or_else(|_| act::execute_failed(f, ctx))
+    let plan_result = plan::execute_failed(f.clone(), ctx)?;
+    if !matches!(plan_result, LoopStageResult::Noop) {
+        return Ok(plan_result);
+    }
+    act::execute_failed(f, ctx)
 }
 
 impl TryFrom<RuntimeEvent> for LoopStageEvent {
@@ -52,6 +66,7 @@ impl TryFrom<RuntimeEvent> for LoopStageEvent {
                 "execute" => Ok(LoopStageEvent::ActDispatch(rs)),
                 "validate" => Ok(LoopStageEvent::VerifyTrigger(rs)),
                 "conclude" => Ok(LoopStageEvent::Conclude(rs)),
+                "scan" => Ok(LoopStageEvent::Scan(rs)),
                 _ => Err(RuntimeEvent::RouteSelected(rs)),
             },
             RuntimeEvent::CapabilityCompleted(c) => Ok(LoopStageEvent::CapabilityDone(c)),

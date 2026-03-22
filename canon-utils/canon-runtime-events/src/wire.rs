@@ -32,6 +32,7 @@ pub enum CanonPayload {
     RuntimeStateUpdated(serde_json::Value),
     ToolCall(serde_json::Value),
     ToolResult(serde_json::Value),
+    AgentRegistered(serde_json::Value),
     RequestDispatch(serde_json::Value),
     RustcEvent(serde_json::Value),
     EditEvent(serde_json::Value),
@@ -67,6 +68,7 @@ impl CanonPayload {
             CanonPayload::RuntimeStateUpdated(_) => "runtime_state.updated",
             CanonPayload::ToolCall(_) => "tool_call",
             CanonPayload::ToolResult(_) => "tool_result",
+            CanonPayload::AgentRegistered(_) => "agent_registered",
             CanonPayload::RequestDispatch(_) => "request_dispatch",
             CanonPayload::RustcEvent(_) => "rustc_event",
             CanonPayload::EditEvent(_) => "edit_event",
@@ -101,6 +103,7 @@ impl CanonPayload {
             | CanonPayload::RuntimeStateUpdated(v)
             | CanonPayload::ToolCall(v)
             | CanonPayload::ToolResult(v)
+            | CanonPayload::AgentRegistered(v)
             | CanonPayload::RequestDispatch(v)
             | CanonPayload::RustcEvent(v)
             | CanonPayload::EditEvent(v)
@@ -135,6 +138,7 @@ impl CanonPayload {
             "runtime_state.updated" => CanonPayload::RuntimeStateUpdated(data),
             "tool_call" => CanonPayload::ToolCall(data),
             "tool_result" => CanonPayload::ToolResult(data),
+            "agent_registered" => CanonPayload::AgentRegistered(data),
             "request_dispatch" => CanonPayload::RequestDispatch(data),
             "rustc_event" => CanonPayload::RustcEvent(data),
             "edit_event" => CanonPayload::EditEvent(data),

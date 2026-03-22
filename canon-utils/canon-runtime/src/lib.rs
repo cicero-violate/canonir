@@ -45,7 +45,7 @@ pub struct EventRuntime {
     runtime_state: serde_json::Value,
     execute_capabilities: bool,
     emitter: EventEmitterHandle,
-    emitter_rx: crossbeam_channel::Receiver<RuntimeEvent>,
+    emitter_rx: crossbeam_channel::Receiver<canon_event::LocatedEvent>,
     observed_events: Vec<RuntimeEvent>,
 }
 
@@ -167,42 +167,42 @@ impl EventRuntime {
                                 self.drain_emitted_events()?;
                             }
                         }
-                        CanonPayload::LoopObserved(ev) => {
-                            self.handle_runtime_event(RuntimeEvent::LoopObserved(ev.clone()))?;
-                            self.drain_emitted_events()?;
-                        }
-                    CanonPayload::LoopPlanned(ev) => {
+                    CanonPayload::LoopObserved(ev) if canon.meta.source != "observe" => {
+                        self.handle_runtime_event(RuntimeEvent::LoopObserved(ev.clone()))?;
+                        self.drain_emitted_events()?;
+                    }
+                    CanonPayload::LoopPlanned(ev) if canon.meta.source != "plan" => {
                         if let Ok(decoded) = serde_json::from_value::<canon_event::LoopPlanned>(ev.clone()) {
                             self.handle_runtime_event(RuntimeEvent::LoopPlanned(decoded))?;
                             self.drain_emitted_events()?;
                         }
                     }
-                    CanonPayload::LoopActed(ev) => {
+                    CanonPayload::LoopActed(ev) if canon.meta.source != "act" => {
                         if let Ok(decoded) = serde_json::from_value::<canon_event::LoopActed>(ev.clone()) {
                             self.handle_runtime_event(RuntimeEvent::LoopActed(decoded))?;
                             self.drain_emitted_events()?;
                         }
                     }
-                    CanonPayload::LoopVerified(ev) => {
+                    CanonPayload::LoopVerified(ev) if canon.meta.source != "verify" => {
                         if let Ok(decoded) = serde_json::from_value::<canon_event::LoopVerified>(ev.clone()) {
                             self.handle_runtime_event(RuntimeEvent::LoopVerified(decoded))?;
                             self.drain_emitted_events()?;
                         }
                     }
-                    CanonPayload::LoopRewarded(ev) => {
+                    CanonPayload::LoopRewarded(ev) if canon.meta.source != "reward" => {
                         if let Ok(decoded) = serde_json::from_value::<canon_event::LoopRewarded>(ev.clone()) {
                             self.handle_runtime_event(RuntimeEvent::LoopRewarded(decoded))?;
                             self.drain_emitted_events()?;
                         }
                     }
-                    CanonPayload::RouteTick(ev) => {
+                    CanonPayload::RouteTick(ev) if canon.meta.source != "supervisor" => {
                         self.handle_runtime_event(RuntimeEvent::RouteTick(ev.clone()))?;
                         self.drain_emitted_events()?;
                     }
-                        CanonPayload::RouteSelected(ev) => {
-                            self.handle_runtime_event(RuntimeEvent::RouteSelected(ev.clone()))?;
-                            self.drain_emitted_events()?;
-                        }
+                    CanonPayload::RouteSelected(ev) if canon.meta.source != "supervisor" => {
+                        self.handle_runtime_event(RuntimeEvent::RouteSelected(ev.clone()))?;
+                        self.drain_emitted_events()?;
+                    }
                         _ => {}
                     }
                 }
@@ -241,28 +241,32 @@ impl EventRuntime {
 
     pub fn emit_tick(&mut self) -> Result<()> {
         self.runtime_tick = self.runtime_tick.saturating_add(1);
-        self.handle_runtime_event(RuntimeEvent::Tick(Tick { tick: self.runtime_tick }))?;
+        self.handle_runtime_event_located(RuntimeEvent::Tick(Tick { tick: self.runtime_tick }), "", 0)?;
         self.drain_emitted_events()?;
         Ok(())
     }
 
     pub fn emit_debug_event(&mut self, source: String, kind: String, payload: serde_json::Value) -> Result<()> {
-        self.handle_runtime_event(RuntimeEvent::Debug(DebugEvent { source, kind, payload }))?;
+        self.handle_runtime_event_located(RuntimeEvent::Debug(DebugEvent { source, kind, payload }), "", 0)?;
         self.drain_emitted_events()?;
         Ok(())
     }
 
     pub fn emit_event(&mut self, event: RuntimeEvent) -> Result<()> {
-        self.handle_runtime_event(event)?;
+        self.handle_runtime_event_located(event, "", 0)?;
         self.drain_emitted_events()?;
         Ok(())
     }
 
     fn handle_runtime_event(&mut self, event: RuntimeEvent) -> Result<()> {
+        self.handle_runtime_event_located(event, "", 0)
+    }
+
+    fn handle_runtime_event_located(&mut self, event: RuntimeEvent, file: &'static str, line: u32) -> Result<()> {
         self.observed_events.push(event.clone());
         self.bus.dispatch(event.clone());
         if !matches!(event, RuntimeEvent::RuntimeStateUpdated(_)) {
-            self.append_runtime_event(&event);
+            self.append_runtime_event(&event, file, line);
         }
         match event {
             RuntimeEvent::CapabilityFailed(payload) => {
@@ -278,7 +282,7 @@ impl EventRuntime {
                     None,
                 ));
                 self.bus.dispatch(error_event.clone());
-                self.append_runtime_event(&error_event);
+                self.append_runtime_event(&error_event, "", 0);
             }
             RuntimeEvent::NodeFailed(payload) => {
                 let error_event = RuntimeEvent::ErrorOccurred(new_error_occurred(
@@ -294,7 +298,7 @@ impl EventRuntime {
                     None,
                 ));
                 self.bus.dispatch(error_event.clone());
-                self.append_runtime_event(&error_event);
+                self.append_runtime_event(&error_event, "", 0);
             }
             RuntimeEvent::Code(Code { delta, .. }) => match &delta.event {
                 RustcEvent::PanicCaptured(payload) => {
@@ -313,12 +317,12 @@ impl EventRuntime {
                         None,
                     ));
                     self.bus.dispatch(error_event.clone());
-                    self.append_runtime_event(&error_event);
+                    self.append_runtime_event(&error_event, "", 0);
                 }
                 RustcEvent::InvariantViolation(payload) => {
                     let error_event = RuntimeEvent::ErrorOccurred(new_error_occurred("invariant_violation", "rustc", payload.message.clone(), "error", serde_json::json!({}), None));
                     self.bus.dispatch(error_event.clone());
-                    self.append_runtime_event(&error_event);
+                    self.append_runtime_event(&error_event, "", 0);
                 }
                 _ => {}
             },
@@ -331,13 +335,13 @@ impl EventRuntime {
     }
 
     fn drain_emitted_events(&mut self) -> Result<()> {
-        while let Ok(event) = self.emitter_rx.try_recv() {
-            self.handle_runtime_event(event)?;
+        while let Ok(located) = self.emitter_rx.try_recv() {
+            self.handle_runtime_event_located(located.event, located.file, located.line)?;
         }
         Ok(())
     }
 
-    fn append_runtime_event(&mut self, event: &RuntimeEvent) {
+    fn append_runtime_event(&mut self, event: &RuntimeEvent, file: &'static str, line: u32) {
         let Some(path) = self.tlog_path.clone() else {
             return;
         };
@@ -346,6 +350,10 @@ impl EventRuntime {
         };
         wire.event_id = Some(self.next_id);
         self.next_id = self.next_id.saturating_add(1);
+        if wire.meta.file.is_empty() && !file.is_empty() {
+            wire.meta.file = file.to_string();
+            wire.meta.line = line;
+        }
 
         if is_segment_dir_path(&path) {
             if let Some(writer_arc) = self.tlog_writer.as_ref() {
@@ -447,12 +455,12 @@ fn empty_state() -> RustcState {
 }
 
 struct RuntimeEmitterImpl {
-    sender: crossbeam_channel::Sender<RuntimeEvent>,
+    sender: crossbeam_channel::Sender<canon_event::LocatedEvent>,
 }
 
 impl EventEmitter for RuntimeEmitterImpl {
-    fn emit(&self, event: RuntimeEvent) {
-        let _ = self.sender.send(event);
+    fn emit_located(&self, event: RuntimeEvent, file: &'static str, line: u32) {
+        let _ = self.sender.send(canon_event::LocatedEvent { event, file, line });
     }
 }
 

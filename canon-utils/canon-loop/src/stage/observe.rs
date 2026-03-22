@@ -34,11 +34,10 @@ fn scan_tlog_for_goal(tlog_path: &Path) -> Option<String> {
                 continue;
             };
             if let CanonPayload::PromptLoaded(val) = ev.payload {
-                let data = val.get("data").unwrap_or(&val);
-                let is_goal = data.get("prompt_id").and_then(|v| v.as_str()) == Some("AGENT_GOAL")
-                    || data.get("path").and_then(|v| v.as_str()).map(|p| p.contains("AGENT_GOAL")).unwrap_or(false);
+                let is_goal = val.get("prompt_id").and_then(|v| v.as_str()) == Some("AGENT_GOAL")
+                    || val.get("path").and_then(|v| v.as_str()).map(|p| p.contains("AGENT_GOAL")).unwrap_or(false);
                 if is_goal {
-                    if let Some(c) = data.get("content").and_then(|v| v.as_str()) {
+                    if let Some(c) = val.get("content").and_then(|v| v.as_str()) {
                         found = Some(c.to_string());
                     }
                 }

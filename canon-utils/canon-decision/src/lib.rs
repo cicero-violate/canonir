@@ -55,6 +55,14 @@ pub struct RouteSelection {
 
 pub fn compose_routing_prompt(input: &RoutingInput) -> String {
     let routes = input.open_routes.iter().map(|r| r.as_str()).collect::<Vec<_>>().join(", ");
+    // Include only the first line of the mission to avoid re-sending the full goal on every tick.
+    let mission_summary = input.mission.lines().next().unwrap_or("(unknown goal)").trim();
+    let route_descriptions = "\
+- scan: gather more context; do not plan or execute changes.\n\
+- shape: plan the work; produce planned actions for later execution.\n\
+- execute: run the planned actions. Never pick execute if there are zero planned/queued actions — pick shape instead.\n\
+- validate: verify recent actions or state after execution.\n\
+- conclude: finish when the goal is satisfied.";
 
     let recent =
         if input.journal.is_empty() { "(none)".to_string() } else { input.journal.iter().rev().take(8).map(|line| format!("- [{}] {}", line.lane, line.summary)).collect::<Vec<_>>().join("\n") };
@@ -78,14 +86,17 @@ Snapshot:\n{snapshot}\n\n\
 Last Tool Result:\n{last_tool_result}\n\n\
 Recent Journal:\n{recent}\n\n\
 Allowed Routes: {routes}\n\n\
+Route Descriptions:\n{route_descriptions}\n\n\
+Hard rule: If there is no queued/planned work, do NOT pick \"execute\" — pick \"shape\" to create a plan first.\n\n\
 Return exactly one JSON object in one fenced ```json code block with schema:\n\
 {{\n  \"route\": \"scan|shape|execute|validate|conclude\",\n  \"rationale\": \"short reason\",\n  \"confidence\": 0.0,\n  \"signals\": {{}}\n}}\n\
 No prose outside the code block.",
-        mission = input.mission,
+        mission = mission_summary,
         snapshot = input.snapshot,
         last_tool_result = last_tool_result,
         recent = recent,
         routes = routes,
+        route_descriptions = route_descriptions,
     )
 }
 

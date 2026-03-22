@@ -13,3 +13,6 @@ serde_json.workspace = true
 uuid.workspace = true
 canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
 canon-meta = { path = "../canon-meta" }
+canon-goal = { path = "../canon-goal" }
+canon-tools-search = { path = "../canon-tools-search" }
+canon-tools-patch = { path = "../canon-tools-patch" }

@@ -73,18 +73,6 @@ impl Gatekeeper {
             }
         }
 
-        if let Some(previous) = self.state.previous_lane {
-            if previous == pick.route {
-                self.state.repeat_count = self.state.repeat_count.saturating_add(1);
-            } else {
-                self.state.repeat_count = 1;
-            }
-        } else {
-            self.state.repeat_count = 1;
-        }
-
-        self.state.previous_lane = Some(pick.route);
-
         let mut lane = pick.route;
         let mut changed = false;
         let mut notes: Vec<&str> = Vec::new();
@@ -128,7 +116,11 @@ impl Gatekeeper {
             notes.push("queued plan requires execute");
         }
 
-        if lane == RouteKind::Execute && !(signals.context_ready || signals.has_queued_plan) {
+        if lane == RouteKind::Execute && !signals.has_queued_plan {
+            lane = RouteKind::Shape;
+            changed = true;
+            notes.push("execute blocked: no queued plan; select shape to produce one");
+        } else if lane == RouteKind::Execute && !(signals.context_ready || signals.has_queued_plan) {
             lane = RouteKind::Scan;
             changed = true;
             notes.push("execute requires context_ready or queued plan");
@@ -145,6 +137,18 @@ impl Gatekeeper {
             changed = true;
             notes.push("conclude requires finish_ready");
         }
+
+        // Track repeats on the final gated lane (not the raw pick) for repeat_limit logic.
+        if let Some(previous) = self.state.previous_lane {
+            if previous == lane {
+                self.state.repeat_count = self.state.repeat_count.saturating_add(1);
+            } else {
+                self.state.repeat_count = 1;
+            }
+        } else {
+            self.state.repeat_count = 1;
+        }
+        self.state.previous_lane = Some(lane);
 
         let note = if notes.is_empty() { "accepted".to_string() } else { notes.join("; ") };
 

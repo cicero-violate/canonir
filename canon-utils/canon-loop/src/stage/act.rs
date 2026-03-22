@@ -3,6 +3,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use canon_event::{
     BashInvoke, RuntimeEvent, CapabilityCompleted, CapabilityFailed, CapabilityResult, FileEvent, FilePatch, FileWrite, LoopActed, LoopPlanned, ProcessResult, RouteSelected, ToolCall, ToolResult,
 };
+use canon_goal::parse_agent_goal_markdown;
+use canon_tools_patch::apply_patch;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -325,11 +327,174 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
             });
             Ok(LoopStageResult::EmitMany(events))
         }
+        "apply_patch" => {
+            let patch = planned.action_payload.get("patch").and_then(|v| v.as_str());
+            let Some(patch) = patch else {
+                ctx.mark_batch_inline_completion(planned, false);
+                return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_patch_body")));
+            };
+            let started = Instant::now();
+            let patch_cwd = ctx.goal_text.as_deref()
+                .and_then(|t| parse_agent_goal_markdown(t).target_path)
+                .unwrap_or_else(|| ctx.workspace.clone());
+            let result = apply_patch(patch, &patch_cwd);
+            let duration_ms = started.elapsed().as_millis() as u64;
+            let success = result.is_ok();
+            let stdout = match &result {
+                Ok(affected) => format!(
+                    "apply_patch ok: added {} modified {} deleted {}",
+                    affected.added.len(),
+                    affected.modified.len(),
+                    affected.deleted.len()
+                ),
+                Err(err) => format!("apply_patch failed: {err}"),
+            };
+            ctx.mark_batch_inline_completion(planned, success);
+            let acted = emit_acted(
+                PendingAct {
+                    tick: planned.tick,
+                    action_kind: planned.action_kind.clone(),
+                    tool_kind: "apply_patch".to_string(),
+                    request_id: String::new(),
+                    tool_call_id: String::new(),
+                    node_id: String::new(),
+                    started_at: started,
+                    trace_id: planned.trace_id.clone(),
+                    execution_id: planned.execution_id.clone(),
+                    parent_span_id: planned.span_id.clone(),
+                    plan_id: planned.plan_id.clone(),
+                    plan_step_id: planned.plan_step_id.clone(),
+                    action_id: planned.action_id.clone(),
+                    artifact_n: 0,
+                    llm_request_id: planned.llm_request_id.clone(),
+                },
+                stdout,
+                String::new(),
+                None,
+                duration_ms,
+                success,
+                None,
+            );
+            Ok(LoopStageResult::Emit(acted))
+        }
+        "read_file" => {
+            let path_str = planned.action_payload.get("path").and_then(|v| v.as_str());
+            let Some(path_str) = path_str else {
+                ctx.mark_batch_inline_completion(planned, false);
+                return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_path")));
+            };
+            let path = resolve_action_path(path_str, ctx);
+            let started = Instant::now();
+            let (stdout, success) = match std::fs::read_to_string(&path) {
+                Ok(content) => {
+                    // Truncate very large files to avoid flooding the context.
+                    let content = if content.len() > 8000 {
+                        format!("{}\n... <truncated, {} bytes total>", &content[..8000], content.len())
+                    } else {
+                        content
+                    };
+                    (format!("=== {} ===\n{}", path.display(), content), true)
+                }
+                Err(_) => (String::new(), false),
+            };
+            let stderr = if !success { format!("read_file failed: {}", path.display()) } else { String::new() };
+            let duration_ms = started.elapsed().as_millis() as u64;
+            ctx.mark_batch_inline_completion(planned, success);
+            let acted = emit_acted(
+                PendingAct {
+                    tick: planned.tick,
+                    action_kind: planned.action_kind.clone(),
+                    tool_kind: "read_file".to_string(),
+                    request_id: String::new(),
+                    tool_call_id: String::new(),
+                    node_id: String::new(),
+                    started_at: started,
+                    trace_id: planned.trace_id.clone(),
+                    execution_id: planned.execution_id.clone(),
+                    parent_span_id: planned.span_id.clone(),
+                    plan_id: planned.plan_id.clone(),
+                    plan_step_id: planned.plan_step_id.clone(),
+                    action_id: planned.action_id.clone(),
+                    artifact_n: 0,
+                    llm_request_id: planned.llm_request_id.clone(),
+                },
+                stdout,
+                stderr,
+                None,
+                duration_ms,
+                success,
+                None,
+            );
+            Ok(LoopStageResult::Emit(acted))
+        }
+        "list_dir" => {
+            let path_str = planned.action_payload.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+            let path = resolve_action_path(path_str, ctx);
+            let started = Instant::now();
+            let (stdout, success) = match std::fs::read_dir(&path) {
+                Ok(entries) => {
+                    let mut lines = vec![format!("=== {} ===", path.display())];
+                    let mut names: Vec<String> = entries
+                        .flatten()
+                        .map(|e| {
+                            let name = e.file_name().to_string_lossy().to_string();
+                            if e.path().is_dir() { format!("{}/", name) } else { name }
+                        })
+                        .collect();
+                    names.sort();
+                    lines.extend(names);
+                    (lines.join("\n"), true)
+                }
+                Err(_) => (String::new(), false),
+            };
+            let stderr = if !success { format!("list_dir failed: {}", path.display()) } else { String::new() };
+            let duration_ms = started.elapsed().as_millis() as u64;
+            ctx.mark_batch_inline_completion(planned, success);
+            let acted = emit_acted(
+                PendingAct {
+                    tick: planned.tick,
+                    action_kind: planned.action_kind.clone(),
+                    tool_kind: "list_dir".to_string(),
+                    request_id: String::new(),
+                    tool_call_id: String::new(),
+                    node_id: String::new(),
+                    started_at: started,
+                    trace_id: planned.trace_id.clone(),
+                    execution_id: planned.execution_id.clone(),
+                    parent_span_id: planned.span_id.clone(),
+                    plan_id: planned.plan_id.clone(),
+                    plan_step_id: planned.plan_step_id.clone(),
+                    action_id: planned.action_id.clone(),
+                    artifact_n: 0,
+                    llm_request_id: planned.llm_request_id.clone(),
+                },
+                stdout,
+                stderr,
+                None,
+                duration_ms,
+                success,
+                None,
+            );
+            Ok(LoopStageResult::Emit(acted))
+        }
         _ => {
             ctx.mark_batch_inline_completion(planned, false);
             Ok(LoopStageResult::Emit(emit_missing_args(planned, "unknown_action_kind")))
         }
     }
+}
+
+/// Resolve a path string: absolute paths pass through; relative paths resolve
+/// against the goal's target_path (or workspace as fallback).
+fn resolve_action_path(path_str: &str, ctx: &LoopContext) -> std::path::PathBuf {
+    let p = std::path::Path::new(path_str);
+    if p.is_absolute() {
+        return p.to_path_buf();
+    }
+    let base = ctx.goal_text.as_deref()
+        .and_then(|t| parse_agent_goal_markdown(t).target_path)
+        .unwrap_or_else(|| ctx.workspace.clone());
+    base.join(p)
 }
 
 fn emit_missing_args(planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
@@ -494,13 +659,13 @@ fn tool_node_id(planned: &LoopPlanned) -> String {
 }
 
 // Pending timeout/reconcile helpers
-pub fn check_act_timeout(ctx: &mut LoopContext) -> Option<RuntimeEvent> {
+pub fn check_act_timeout(ctx: &mut LoopContext) -> Vec<RuntimeEvent> {
     let Some(pending) = ctx.pending_act.take() else {
-        return None;
+        return Vec::new();
     };
     if pending.started_at.elapsed() <= Duration::from_secs(30) {
         ctx.pending_act = Some(pending);
-        return None;
+        return Vec::new();
     }
     let llm_request_id = pending.llm_request_id.clone();
     let tool_result_id = Uuid::new_v4().to_string();
@@ -515,7 +680,7 @@ pub fn check_act_timeout(ctx: &mut LoopContext) -> Option<RuntimeEvent> {
     ctx.mark_batch_completion(llm_request_id.as_deref(), false);
     events.push(emit_acted(pending, String::new(), "timeout".to_string(), None, 30_000, false, Some(tool_result_id)));
     events.extend(abort_active_batch(ctx));
-    Some(RuntimeEvent::LoopActed(LoopActed {
+    events.push(RuntimeEvent::LoopActed(LoopActed {
         tick: 0,
         action_kind: "timeout_marker".to_string(),
         capability_request_id: String::new(),
@@ -533,7 +698,8 @@ pub fn check_act_timeout(ctx: &mut LoopContext) -> Option<RuntimeEvent> {
         plan_id: None,
         plan_step_id: None,
         action_id: None,
-    }))
+    }));
+    events
 }
 
 pub fn reconcile_stale_pending_artifacts(ctx: &mut LoopContext) -> Vec<RuntimeEvent> {

@@ -63,7 +63,7 @@ macro_rules! canon_event_enum {
 macro_rules! canon_emit {
     // Typed variant form: canon_emit!(emitter; LoopPlanned(payload))
     ($emitter:expr; $variant:ident($inner:expr)) => {{
-        $emitter.emit(canon_event::RuntimeEvent::$variant($inner))
+        $emitter.emit_located(canon_event::RuntimeEvent::$variant($inner), file!(), line!())
     }};
     // Emitter-routed form: routes through EventRuntime → canonical writer
     ($emitter:expr; $source:expr, $kind:expr, $payload:expr) => {{
@@ -76,7 +76,11 @@ macro_rules! canon_emit {
             },
             "data": $payload,
         });
-        $emitter.emit(canon_event::RuntimeEvent::Debug(canon_event::DebugEvent { source: $source.to_string(), kind: $kind.to_string(), payload: __wrapped }))
+        $emitter.emit_located(
+            canon_event::RuntimeEvent::Debug(canon_event::DebugEvent { source: $source.to_string(), kind: $kind.to_string(), payload: __wrapped }),
+            file!(),
+            line!(),
+        )
     }};
     // Direct form: writes directly to tlog path (external processes only)
     ($source:expr, $kind:expr, $payload:expr, $path:expr) => {{

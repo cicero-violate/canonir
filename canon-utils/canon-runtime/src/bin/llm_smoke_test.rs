@@ -6,6 +6,7 @@ use std::path::PathBuf;
 struct NoopEmitter;
 impl canon_event::EventEmitter for NoopEmitter {
     fn emit(&self, _event: RuntimeEvent) {}
+    fn emit_located(&self, _event: RuntimeEvent, _file: &'static str, _line: u32) {}
 }
 
 fn main() -> Result<()> {

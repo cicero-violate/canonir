@@ -33,7 +33,7 @@ pub use events::{
     new_error_occurred, AgentRegistered, AnalysisEvent, AnalysisRun, AnalysisWorkspace, BashInvoke, CapabilityCompleted, CapabilityFailed, CapabilityInvoked, CapabilityResolved, CapabilityResult,
     CargoBuild, CargoCheck, CargoEvent, CargoRun, Code, DebugEvent, DeleteSymbol, EditEvent, ErrorOccurred, EventConsumer, EventEmitter, EventEmitterHandle, EventFilter, EventMask, ExtractModule,
     FileEvent, FilePatch, FileRead, FileWrite, GoalEdgeDefined, GoalGraphCheckpointed, GoalNodeCreated, GoalNodeRetracted, GoalNodeRewritten, GoalSelected, InlineModule, LlmCall, LlmResult,
-    LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, MoveSymbol, NodeCompleted, NodeFailed, NodeReady, NodeStarted, PolicyBaselineUpdated, ProcessResult, PromptLoaded,
+    LocatedEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, MoveSymbol, NodeCompleted, NodeFailed, NodeReady, NodeStarted, PolicyBaselineUpdated, ProcessResult, PromptLoaded,
     RenameDir, RenameModule, RenameSymbol, RouteSelected, RouteTick, RuntimeEvent, RuntimeStateUpdated, RustcEventConsumer, SystemConfigLoaded, Tick, ToolCall, ToolResult, EVENT_SCHEMA_VERSION,
 };
 pub use wire::{CanonEvent, CanonPayload, EventMeta};

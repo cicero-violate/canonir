@@ -26,7 +26,7 @@ impl EventConsumer for LoopStageExecutor {
         match event {
             RuntimeEvent::Tick(Tick { .. }) => {
                 // Plan timeout check (already tracked in stage/plan via context pending)
-                if let Some(e) = crate::stage::act::check_act_timeout(&mut self.ctx) {
+                for e in crate::stage::act::check_act_timeout(&mut self.ctx) {
                     if let Some(emitter) = self.ctx.emitter.as_ref() {
                         emitter.emit(e);
                     }
@@ -103,8 +103,8 @@ impl EventConsumer for LoopStageExecutor {
         let res = stage.execute(&mut self.ctx);
         let Some(emitter) = self.ctx.emitter.clone() else { return; };
         match res {
-            Ok(LoopStageResult::Emit(e)) => emitter.emit(e),
-            Ok(LoopStageResult::EmitMany(evs)) => evs.into_iter().for_each(|e| emitter.emit(e)),
+            Ok(LoopStageResult::Emit(e)) => emitter.emit_located(e, file!(), line!()),
+            Ok(LoopStageResult::EmitMany(evs)) => evs.into_iter().for_each(|e| emitter.emit_located(e, file!(), line!())),
             Ok(LoopStageResult::Deferred) | Ok(LoopStageResult::Noop) => {}
             Err(err) => emitter.emit(RuntimeEvent::ErrorOccurred(canon_event::new_error_occurred(
                 "loop_stage_execution",

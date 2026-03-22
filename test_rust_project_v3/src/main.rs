@@ -1,10 +1,8 @@
 mod agent;
-mod planning;
-mod execution;
+mod generated;
 
 fn main() {
-    let a = agent::Agent::new(1);
-    a.run();
-    let plan = planning::create_plan("goal");
-    execution::execute_plan(&plan);
+    let steps = agent::planner::plan("goal");
+    agent::executor::execute(&steps);
+    generated::touch();
 }

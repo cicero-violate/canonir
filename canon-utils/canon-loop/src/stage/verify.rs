@@ -2,6 +2,7 @@ use std::path::Path;
 use std::process::Command;
 
 use canon_event::{RuntimeEvent, LoopVerified, RouteSelected};
+use canon_goal::parse_agent_goal_markdown;
 
 use crate::{context::LoopContext, result::LoopStageResult};
 
@@ -14,15 +15,23 @@ pub fn execute(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopS
     let mut diagnostics: Vec<String> = Vec::new();
     let mut passed = true;
 
-    // Check tlog cleanliness (stub: if workspace_dirty flag set by runtime state updates)
-    if ctx.last_acted.as_ref().map(|a| a.success).unwrap_or(true) {
-        // run cargo check as in VerifyConsumer
-        let (ok, stderr) = run_cargo_check(&ctx.workspace)?;
-        if !ok {
-            passed = false;
-            diagnostics.push("cargo_check_failed".into());
-            diagnostics.push(stderr);
-        }
+    // Determine the target workspace from the goal spec, not the agent's own workspace.
+    let target_path = ctx
+        .goal_text
+        .as_deref()
+        .and_then(|text| {
+            let spec = parse_agent_goal_markdown(text);
+            spec.target_path
+        })
+        .unwrap_or_else(|| ctx.workspace.clone());
+
+    // Always run cargo check on the target — even when the last action failed,
+    // we need accurate verification state.
+    let (ok, stderr) = run_cargo_check(&target_path)?;
+    if !ok {
+        passed = false;
+        diagnostics.push("cargo_check_failed".into());
+        diagnostics.push(stderr);
     }
 
     // basic file_written check stub: ensure last acted not empty

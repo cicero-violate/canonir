@@ -393,10 +393,20 @@ canon_event_enum!(RuntimeEvent {
 });
 
 pub trait EventEmitter: Send + Sync {
-    fn emit(&self, event: RuntimeEvent);
+    fn emit_located(&self, event: RuntimeEvent, file: &'static str, line: u32);
+    fn emit(&self, event: RuntimeEvent) {
+        self.emit_located(event, "", 0);
+    }
 }
 
 pub type EventEmitterHandle = Arc<dyn EventEmitter>;
+
+#[derive(Debug, Clone)]
+pub struct LocatedEvent {
+    pub event: RuntimeEvent,
+    pub file: &'static str,
+    pub line: u32,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum EventFilter {

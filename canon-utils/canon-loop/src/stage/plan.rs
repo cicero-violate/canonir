@@ -1,6 +1,8 @@
 use std::path::Path;
 
 use canon_event::{CapabilityCompleted, CapabilityFailed, CapabilityResult, RuntimeEvent, LlmCall, LoopActed, LoopObserved, LoopPlanned, RouteSelected, ToolCall, ToolResult};
+use canon_goal::parse_agent_goal_markdown;
+use canon_tools_search::search_files;
 use uuid::Uuid;
 
 use crate::{context::{LoopContext, PendingPlan}, result::LoopStageResult};
@@ -69,6 +71,20 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                 plan_step_id: Some(plan_step_id.clone()),
                 action_id: Some(action_id.clone()),
             }),
+            LlmAction::ApplyPatch { patch } => out.push(LoopPlanned {
+                tick: pending.tick,
+                action_kind: "apply_patch".to_string(),
+                action_payload: serde_json::json!({ "patch": patch }),
+                reason: "llm_apply_patch".to_string(),
+                llm_request_id: Some(req_id.clone()),
+                trace_id: Some(pending.trace_id.clone()),
+                execution_id: Some(pending.execution_id.clone()),
+                span_id: Some(planned_span_id.clone()),
+                parent_span_id: Some(pending.span_id.clone()),
+                plan_id: Some(pending.plan_id.clone()),
+                plan_step_id: Some(plan_step_id.clone()),
+                action_id: Some(action_id.clone()),
+            }),
             LlmAction::Command { cmd, cwd } => out.push(LoopPlanned {
                 tick: pending.tick,
                 action_kind: "run_command".to_string(),
@@ -88,6 +104,34 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                 action_kind: "write_file".to_string(),
                 action_payload: serde_json::json!({ "path": path, "content": content }),
                 reason: "llm_write".to_string(),
+                llm_request_id: Some(req_id.clone()),
+                trace_id: Some(pending.trace_id.clone()),
+                execution_id: Some(pending.execution_id.clone()),
+                span_id: Some(planned_span_id.clone()),
+                parent_span_id: Some(pending.span_id.clone()),
+                plan_id: Some(pending.plan_id.clone()),
+                plan_step_id: Some(plan_step_id.clone()),
+                action_id: Some(action_id.clone()),
+            }),
+            LlmAction::ReadFile { path } => out.push(LoopPlanned {
+                tick: pending.tick,
+                action_kind: "read_file".to_string(),
+                action_payload: serde_json::json!({ "path": path }),
+                reason: "llm_read_file".to_string(),
+                llm_request_id: Some(req_id.clone()),
+                trace_id: Some(pending.trace_id.clone()),
+                execution_id: Some(pending.execution_id.clone()),
+                span_id: Some(planned_span_id.clone()),
+                parent_span_id: Some(pending.span_id.clone()),
+                plan_id: Some(pending.plan_id.clone()),
+                plan_step_id: Some(plan_step_id.clone()),
+                action_id: Some(action_id.clone()),
+            }),
+            LlmAction::ListDir { path } => out.push(LoopPlanned {
+                tick: pending.tick,
+                action_kind: "list_dir".to_string(),
+                action_payload: serde_json::json!({ "path": path }),
+                reason: "llm_list_dir".to_string(),
                 llm_request_id: Some(req_id.clone()),
                 trace_id: Some(pending.trace_id.clone()),
                 execution_id: Some(pending.execution_id.clone()),
@@ -302,66 +346,225 @@ enum LlmAction {
     Write { path: String, content: String },
     Command { cmd: String, cwd: Option<String> },
     Done { reason: String },
+    ApplyPatch { patch: String },
+    ReadFile { path: String },
+    ListDir { path: String },
 }
 
-fn build_prompt(observed: &LoopObserved, batch_acted: &[LoopActed], batch_tool_results: &[ToolResult], include_full_goal: bool, workspace: &Path) -> serde_json::Value {
-    let _last_action_results_payload: Vec<serde_json::Value> = batch_acted
+fn build_prompt(
+    observed: &LoopObserved,
+    batch_acted: &[LoopActed],
+    batch_tool_results: &[ToolResult],
+    _include_full_goal: bool,
+    workspace: &Path,
+) -> String {
+    let recent_actions = batch_acted
         .iter()
-        .map(|a| serde_json::json!({
-            "action_kind": a.action_kind,
-            "success": a.success,
-            "exit_code": a.exit_code,
-            "capability_request_id": a.capability_request_id,
-            "tool_call_id": a.tool_call_id,
-            "tool_result_id": a.tool_result_id,
-            "stdout": a.stdout,
-            "stderr": a.stderr,
-        }))
-        .collect();
-    let _last_tool_results_payload: Vec<serde_json::Value> = batch_tool_results
+        .rev()
+        .take(8)
+        .map(|a| {
+            let mut entry = format!(
+                "- action={} success={} exit_code={:?}",
+                a.action_kind, a.success, a.exit_code,
+            );
+            // Include actual content so the LLM can learn from failures and read results.
+            let stdout = a.stdout.trim();
+            let stderr = a.stderr.trim();
+            if !stdout.is_empty() {
+                let truncated = if stdout.len() > 800 { &stdout[..800] } else { stdout };
+                entry.push_str(&format!("\n  stdout: {truncated}"));
+            }
+            if !stderr.is_empty() {
+                let truncated = if stderr.len() > 400 { &stderr[..400] } else { stderr };
+                entry.push_str(&format!("\n  stderr: {truncated}"));
+            }
+            entry
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let recent_results = batch_tool_results
         .iter()
-        .map(|r| serde_json::json!({
-            "node_id": r.node_id,
-            "tool_call_id": r.tool_call_id,
-            "tool_result_id": r.tool_result_id,
-            "request_id": r.request_id,
-            "kind": r.kind,
-            "output": r.output,
-            "success": r.success,
-        }))
-        .collect();
-    let mut payload = serde_json::json!({
-        "goal": observed.goal_text,
-        "errors": observed.error_count,
-        "warnings": observed.warning_count,
-        "workspace_loc": count_loc_in_workspace(workspace),
-    });
-    if include_full_goal {
-        payload["full_goal"] = serde_json::json!(observed.goal_text);
+        .rev()
+        .take(4)
+        .map(|r| {
+            let content = serde_json::to_string_pretty(&r.output).unwrap_or_else(|_| r.output.to_string());
+            let truncated = if content.len() > 600 { &content[..600] } else { &content };
+            format!("- kind={} success={}\n  output: {}", r.kind, r.success, truncated)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let goal_text = observed.goal_text.clone().unwrap_or_else(|| "<no goal provided>".to_string());
+    let workspace_loc = count_loc_in_workspace(workspace);
+
+    let spec = parse_agent_goal_markdown(&goal_text);
+    let target_workspace = spec.target_path
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| workspace.display().to_string());
+
+    let search_hints = build_search_hints(&goal_text, workspace);
+
+    format!(
+        r#"You are a code-editing agent. Produce a plan as a JSON array of actions.
+
+TARGET WORKSPACE: {target_workspace}
+All relative paths resolve against TARGET WORKSPACE.
+LOC: {loc}  |  Errors: {errors}  |  Warnings: {warnings}
+
+GOAL:
+{goal}
+
+━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. list_dir — list what files/dirs exist (use BEFORE assuming project state)
+   {{"action":"list_dir","path":"."}}
+
+2. read_file — read a file's current contents (use BEFORE editing it)
+   {{"action":"read_file","path":"src/main.rs"}}
+   ⚠ Results appear in "Recent actions" on your NEXT call. Do not mix with edits.
+
+3. apply_patch — create, update, or delete files  ← ONLY tool for file edits
+   {{"action":"apply_patch","patch":"*** Begin Patch\n...\n*** End Patch"}}
+
+   Patch format (paths MUST be relative to TARGET WORKSPACE):
+
+   *** Begin Patch
+   *** Add File: path/to/new.rs        ← create new file
+   +fn hello() {{}}
+   +
+   *** Update File: path/to/existing.rs ← edit existing file
+   @@ fn main                           ← optional context (function/class name)
+    fn main() {{                        ←  space = unchanged context line
+   -    println!("old");               ← - = remove this line
+   +    println!("new");               ← + = add this line
+    }}
+   *** Delete File: path/to/remove.rs  ← delete file
+   *** End Patch
+
+   Rules:
+   - *** Add File for new files, *** Update File for existing files
+   - Include 3 lines of unchanged context around each change
+   - Multiple file ops can be in one patch
+   - NEVER use absolute paths inside the patch string
+
+4. run_command — run a shell command
+   {{"action":"run_command","cmd":"cargo build","cwd":"{target_workspace}"}}
+   cwd must be absolute. Use TARGET WORKSPACE or a subdir.
+
+5. done — declare goal complete
+   {{"action":"done","reason":"..."}}
+
+━━━ WORKFLOW ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Step 1 — Discover (when unsure of project state):
+  Emit ONLY list_dir and/or read_file. Do NOT mix with edits.
+  → Results appear in "Recent actions" on your next call.
+
+Step 2 — Create/Edit (after seeing discovery results):
+  Use apply_patch (*** Add File for new, *** Update File for existing).
+  Use run_command for cargo/shell operations.
+
+NEVER use "write" or "patch_file" — they are removed. Use apply_patch.
+NEVER assume a directory/project exists without checking with list_dir first.
+
+━━━ CONTEXT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Relevant files:{search_hints}
+
+Recent actions (most recent first — read_file stdout contains file contents):
+{recent_actions}
+
+Recent tool results:
+{recent_results}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Return ONLY a single ```json array. No prose outside the code block.
+"#,
+        target_workspace = target_workspace,
+        goal = goal_text,
+        loc = workspace_loc,
+        errors = observed.error_count,
+        warnings = observed.warning_count,
+        search_hints = search_hints,
+        recent_actions = if recent_actions.is_empty() { "(none)".to_string() } else { recent_actions }.to_string(),
+        recent_results = if recent_results.is_empty() { "(none)".to_string() } else { recent_results }.to_string(),
+    )
+}
+
+fn build_search_hints(goal_text: &str, workspace: &Path) -> String {
+    let spec = parse_agent_goal_markdown(goal_text);
+    let target_root = spec.target_path.clone().map(|p| workspace.join(p)).unwrap_or_else(|| workspace.to_path_buf());
+    if !target_root.exists() {
+        return " (none)".to_string();
     }
-    payload
+
+    let keywords = extract_goal_keywords(&spec);
+    if keywords.is_empty() {
+        return " (none)".to_string();
+    }
+
+    let mut lines = Vec::new();
+    for kw in keywords.into_iter().take(3) {
+        if let Ok(results) = search_files(&kw, &target_root, 5) {
+            for r in results {
+                lines.push(format!("\n- {kw}: {}", r.path.display()));
+            }
+        }
+    }
+    if lines.is_empty() {
+        " (none)".to_string()
+    } else {
+        lines.join("")
+    }
+}
+
+fn extract_goal_keywords(spec: &canon_goal::GoalSpec) -> Vec<String> {
+    let mut out = Vec::new();
+    for req in &spec.requirements {
+        for token in req.split(|c: char| !c.is_alphanumeric() && c != '.' && c != '_' && c != '/' ) {
+            if token.len() >= 4 || token.contains('.') || token.contains('/') {
+                out.push(token.to_string());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// Extract fenced json blocks and parse actions.
 fn parse_llm_actions(result: &serde_json::Value) -> Vec<LlmAction> {
-    let value = result.clone();
-    let Some(text) = value.get("text").and_then(|v| v.as_str()) else {
+    // Case 1: response IS a JSON array already (normalize_llm_output stripped the fence).
+    if let Some(arr) = result.as_array() {
+        return arr.iter()
+            .filter_map(|v| parse_value_to_action(v.clone()))
+            .collect();
+    }
+
+    // Case 2: response is a single action object.
+    if result.is_object() && result.get("action").is_some() {
+        if let Some(action) = parse_value_to_action(result.clone()) {
+            return vec![action];
+        }
+    }
+
+    // Case 3: response is {"text":"```json\n[...]\n```"} — extract fenced blocks.
+    let Some(text) = result.get("text").and_then(|v| v.as_str()) else {
         return Vec::new();
     };
     let blocks = extract_fenced_blocks(text);
     let mut actions = Vec::new();
     for block in blocks {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&block) {
-            if let Some(action) = parse_value_to_action(parsed) {
-                actions.push(action);
-            }
-            continue;
-        }
         if let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(&block) {
             for value in parsed {
                 if let Some(action) = parse_value_to_action(value) {
                     actions.push(action);
                 }
+            }
+        } else if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&block) {
+            if let Some(action) = parse_value_to_action(parsed) {
+                actions.push(action);
             }
         }
     }
@@ -427,6 +630,45 @@ fn extract_fenced_blocks(text: &str) -> Vec<String> {
 }
 
 fn parse_value_to_action(value: serde_json::Value) -> Option<LlmAction> {
+    // Handle "action" discriminator format (used by planner GPT)
+    if let Some(action_str) = value.get("action").and_then(|v| v.as_str()) {
+        match action_str {
+            "done" => {
+                let reason = value.get("reason").and_then(|v| v.as_str()).unwrap_or("done").to_string();
+                return Some(LlmAction::Done { reason });
+            }
+            "apply_patch" => {
+                let patch = value.get("patch").and_then(|v| v.as_str())?;
+                return Some(LlmAction::ApplyPatch { patch: patch.to_string() });
+            }
+            "write" | "write_file" => {
+                let path = value.get("path").and_then(|v| v.as_str())?;
+                let content = value.get("content").and_then(|v| v.as_str())?;
+                return Some(LlmAction::Write { path: path.to_string(), content: content.to_string() });
+            }
+            "run_command" | "command" => {
+                let cmd = value.get("cmd").and_then(|v| v.as_str())?;
+                let cwd = value.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
+                return Some(LlmAction::Command { cmd: cmd.to_string(), cwd });
+            }
+            "patch_file" | "patch" => {
+                let path = value.get("path").and_then(|v| v.as_str())?;
+                let old = value.get("old").and_then(|v| v.as_str())?;
+                let new = value.get("new").and_then(|v| v.as_str())?;
+                return Some(LlmAction::Patch { path: path.to_string(), old: old.to_string(), new: new.to_string() });
+            }
+            "read_file" => {
+                let path = value.get("path").and_then(|v| v.as_str())?;
+                return Some(LlmAction::ReadFile { path: path.to_string() });
+            }
+            "list_dir" => {
+                let path = value.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+                return Some(LlmAction::ListDir { path: path.to_string() });
+            }
+            _ => return None,
+        }
+    }
+    // Fallback: key-based schema (no "action" field)
     if value.get("done").and_then(|v| v.as_bool()) == Some(true) {
         let reason = value.get("reason").and_then(|v| v.as_str()).unwrap_or("done").to_string();
         return Some(LlmAction::Done { reason });
@@ -434,6 +676,9 @@ fn parse_value_to_action(value: serde_json::Value) -> Option<LlmAction> {
     if let Some(cmd) = value.get("cmd").and_then(|v| v.as_str()) {
         let cwd = value.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
         return Some(LlmAction::Command { cmd: cmd.to_string(), cwd });
+    }
+    if let Some(patch) = value.get("patch").and_then(|v| v.as_str()) {
+        return Some(LlmAction::ApplyPatch { patch: patch.to_string() });
     }
     if let (Some(write_path), Some(content)) = (value.get("write").and_then(|v| v.as_str()), value.get("content").and_then(|v| v.as_str())) {
         return Some(LlmAction::Write { path: write_path.to_string(), content: content.to_string() });

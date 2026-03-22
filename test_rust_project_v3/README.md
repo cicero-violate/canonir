@@ -1,15 +1,8 @@
-# test_rust_project_v3
-
-This is a test Rust binary crate.
+# Test Rust Project v3
 
 ## Build
-
-```bash
 cargo build
-```
 
 ## Run
-
-```bash
 cargo run
-```
+
