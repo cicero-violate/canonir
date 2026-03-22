@@ -11,6 +11,5 @@ The directory has been deleted. You have to start again.
 - Use `cargo new` to initialize the crate.
 - Ensure `cargo build` succeeds in the new project directory.
 - Add a short `README.md` describing how to build and run the project.
-- 50000+ LOC
 - implements codex level agentic capabilities
 
