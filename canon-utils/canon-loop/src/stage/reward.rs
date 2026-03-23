@@ -4,7 +4,7 @@ use crate::{context::LoopContext, result::LoopStageResult};
 
 pub fn execute_conclude(_rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
     let rewarded = LoopRewarded {
-        tick: 0,
+        tick: ctx.current_tick,
         errors_before: ctx.errors_before,
         errors_after: ctx.error_count,
         stagnant_ticks: ctx.stagnant_ticks,
