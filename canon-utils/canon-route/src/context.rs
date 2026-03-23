@@ -74,6 +74,7 @@ impl RouteContext {
             performed_recently: self.acted_unverified,
             last_action_failed: self.last_action_failed,
             finish_ready: self.finish_ready && self.workspace_dirty_tracker.all_clean(),
+            last_action_kind: self.last_action_kind.clone(),
             llm_signals: self.last_llm_signals.as_ref().map(LlmSignals::from_value),
             goodness: self.goodness,
             delta_g: self.delta_g,

@@ -88,6 +88,8 @@ pub struct RuntimeSignals {
     pub last_action_failed: bool,
     pub finish_ready: bool,
     #[serde(default)]
+    pub last_action_kind: String,
+    #[serde(default)]
     pub llm_signals: Option<LlmSignals>,
     #[serde(default)]
     pub goodness: Option<f32>,
@@ -370,7 +372,7 @@ impl Gatekeeper {
             notes.push("act requires context_ready or queued plan");
         }
 
-        if lane == RouteKind::Verify && !(signals.performed_recently || signals.workspace_dirty) {
+        if lane == RouteKind::Verify && !(signals.performed_recently || signals.workspace_dirty || signals.last_action_kind == "done") {
             lane = RouteKind::Plan;
             changed = true;
             notes.push("verify requires performed_recently or workspace_dirty");
