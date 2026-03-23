@@ -59,75 +59,47 @@ pub fn compose_routing_prompt(input: &RoutingInput) -> String {
     let routes = input.open_routes.iter().map(|r| r.as_str()).collect::<Vec<_>>().join(", ");
     // Include only the first line of the mission to avoid re-sending the full goal on every tick.
     let mission_summary = input.mission.lines().next().unwrap_or("(unknown goal)").trim();
-    let route_descriptions = "\
-- observe: gather more context; do not plan or execute changes.\n\
-- plan: produce planned actions for later execution (calls plan::execute_trigger).\n\
-- act: run the planned actions (calls act::execute_dispatch). Never pick act if there are zero queued actions — pick plan instead.\n\
-- verify: run cargo check and verify state after execution (calls verify::execute).\n\
-- conclude: select this when finish_ready=true in the snapshot. This terminates the loop. Only select conclude when the workspace is verified and the goal requirements are met.\n\
-- decompose: split the goal into parallel sub-tasks and emit RequestDispatch events.";
 
-    let recent_tool_results_text = if input.recent_tool_results.is_empty() {
-        "(none)".to_string()
-    } else {
-        input.recent_tool_results.iter().enumerate().map(|(i, value)| {
-            let mut text = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
-            if text.len() > 800 {
-                text.truncate(800);
+    // Only describe routes that are actually available.
+    let route_descriptions = input.open_routes.iter().map(|r| match r {
+        RouteKind::Observe  => "- observe: gather context; do not plan or execute.",
+        RouteKind::Plan     => "- plan: ask the LLM to plan the next action.",
+        RouteKind::Act      => "- act: execute the queued planned actions. Only when planned_pending>0.",
+        RouteKind::Verify   => "- verify: run cargo check after execution.",
+        RouteKind::Conclude => "- conclude: terminate. Only when finish_ready=true.",
+        RouteKind::Decompose => "- decompose: split goal into parallel sub-tasks.",
+    }).collect::<Vec<_>>().join("\n");
+
+    // Strip internal tracking IDs; skip empty llm.plan entries.
+    const STRIP_KEYS: &[&str] = &["tool_call_id", "tool_result_id", "node_id", "llm_request_id", "request_id"];
+    let recent_tool_results_text = {
+        let entries: Vec<String> = input.recent_tool_results.iter().enumerate().filter_map(|(i, value)| {
+            if value.get("kind").and_then(|v| v.as_str()) == Some("llm.plan") {
+                return None;
+            }
+            let slim: serde_json::Map<String, serde_json::Value> = value
+                .as_object()
+                .map(|m| m.iter().filter(|(k, _)| !STRIP_KEYS.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect())
+                .unwrap_or_default();
+            let mut text = serde_json::to_string_pretty(&serde_json::Value::Object(slim)).unwrap_or_else(|_| value.to_string());
+            if text.len() > 600 {
+                text.truncate(600);
                 text.push_str("\n...<truncated>");
             }
-            format!("[{}] {}", i + 1, text)
-        }).collect::<Vec<_>>().join("\n")
+            Some(format!("[{}] {}", i + 1, text))
+        }).collect();
+        if entries.is_empty() { "(none)".to_string() } else { entries.join("\n") }
     };
 
     format!(
-        "You are the runtime route selector. Pick exactly one next route.\n\n\
-Mission:\n{mission}\n\n\
+        "Mission: {mission}\n\n\
 Snapshot:\n{snapshot}\n\n\
-Recent Tool Results:\n{recent_tool_results_text}\n\n\
-Allowed Routes: {routes}
-
-
-ROUTING RULE: If finish_ready=true, you MUST select conclude. Do not select plan or act when finish_ready=true.
-
-ROUTING RULE: Never choose execute if planned_pending=0 (nothing to run). Prefer shape.
-
-Route Descriptions:
-{route_descriptions}
-
-Return exactly one JSON object in one fenced ```json code block with schema:\n\
-{{\n\
-  \"route\": \"observe|plan|act|verify|conclude|decompose\",\n\
-  \"rationale\": \"short reason\",\n\
-  \"confidence\": 0.0,\n\
-  \"signals\": {{\n\
-    \"goal_alignment_score\": 0.0,\n\
-    \"confidence\": 0.0,\n\
-    \"task_completion_likelihood\": 0.0,\n\
-    \"error_likelihood\": 0.0,\n\
-    \"plan_validity\": 0.0,\n\
-    \"state_consistency\": 0.0,\n\
-    \"action_effectiveness\": 0.0,\n\
-    \"progress_score\": 0.0,\n\
-    \"blocking_severity\": 0.0,\n\
-    \"ambiguity_level\": 0.0,\n\
-    \"context_completeness\": 0.0,\n\
-    \"plan_optimality\": 0.0,\n\
-    \"redundancy_level\": 0.0,\n\
-    \"recovery_difficulty\": 0.0,\n\
-    \"tool_reliability\": 0.0,\n\
-    \"execution_risk\": 0.0,\n\
-    \"verification_coverage\": 0.0,\n\
-    \"change_impact\": 0.0,\n\
-    \"stability_score\": 0.0,\n\
-    \"iteration_efficiency\": 0.0,\n\
-    \"novelty_score\": 0.0,\n\
-    \"dependency_health\": 0.0,\n\
-    \"resource_efficiency\": 0.0,\n\
-    \"termination_readiness\": 0.0\n\
-  }}\n\
-}}\n\
-No prose outside the code block.",
+Recent Actions:\n{recent_tool_results_text}\n\n\
+Routes: {routes}\n\
+RULE: finish_ready=true → conclude. planned_pending=0 → do not select act.\n\n\
+{route_descriptions}\n\n\
+Respond with one fenced ```json block:\n\
+{{\n  \"route\": \"{routes}\",\n  \"rationale\": \"...\",\n  \"confidence\": 0.0\n}}",
         mission = mission_summary,
         snapshot = input.snapshot,
         routes = routes,
