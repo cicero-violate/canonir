@@ -10,7 +10,7 @@
 
 ## Canonical `.log` — Allowed Entries
 
-8. Only registered `CanonPayload` variants may be written. The allowed kinds are: `LoopObserved`, `LoopPlanned`, `LoopActed`, `LoopVerified`, `LoopRewarded`, `RouteTick`, `RouteSelected`, `CapabilityCompleted`, `CapabilityFailed`, `CapabilityInvoked`, `CapabilityResolved`, `CapabilityRequested`, `ToolCall`, `ToolResult`, `ErrorOccurred`, `Debug`, `PromptLoaded`, `RuntimeStarted`, `RuntimeStateUpdated`, `AgentRegistered`, `RequestDispatch`, `RustcEvent`, `EditEvent`, `SupervisorEvent`, `GoalNodeCreated`, `GoalNodeRetracted`, `GoalNodeRewritten`, `GoalEdgeDefined`, `GoalGraphCheckpointed`.
+8. Only registered `CanonPayload` variants may be written.
 9. Each entry is one complete JSON object per line, append-only. Entries are never modified or deleted after writing.
 10. Every entry must carry `meta.ts` (unix ms), `meta.source` (emitting component). `event_id` is assigned by the segment writer — callers set it to `None`.
 11. A new event kind requires a new variant in `CanonPayload` (`wire.rs`) and a re-export in `lib.rs`. Raw JSON must not be injected under an unregistered kind.
