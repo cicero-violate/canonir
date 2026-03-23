@@ -7,16 +7,16 @@
 
 ## Status Summary
 
-| Plan     | Title                              | Status      | Notes                                                     |
-|----------|------------------------------------|-------------|-----------------------------------------------------------|
-| MAGENT-1 | agent_id on LlmCall                | IMPLEMENTED | Field exists; always None in practice                     |
-| MAGENT-2 | RequestDispatch fan-out            | PARTIAL     | Structs + consumer exist; nothing emits RequestDispatch   |
-| MAGENT-3 | DecomposeStage                     | NOT IMPLEMENTED | No decompose.rs, no RouteKind::Decompose              |
-| MAGENT-4 | Sub-Agent Loop Spawning            | NOT IMPLEMENTED | No spawn logic anywhere                                   |
-| MAGENT-5 | Agent Registry Consumer            | IMPLEMENTED | Consumer works; not registered in runtime bootstrap       |
-| MAGENT-6 | GoalNode DAG wiring                | NOT IMPLEMENTED | Events defined, never emitted, no consumer                |
-| MAGENT-7 | capability_config.toml agents      | PARTIAL     | Agent cards exist; no role-based dispatch routing         |
-| MAGENT-8 | Result merging into orchestrator   | PARTIAL     | ContextMerger exists; no actual SubTaskResult flow        |
+| Plan     | Title                            | Status          | Notes                                                   |
+|----------+----------------------------------+-----------------+---------------------------------------------------------|
+| MAGENT-1 | agent_id on LlmCall              | IMPLEMENTED     | Field exists; always None in practice                   |
+| MAGENT-2 | RequestDispatch fan-out          | PARTIAL         | Structs + consumer exist; nothing emits RequestDispatch |
+| MAGENT-3 | DecomposeStage                   | NOT IMPLEMENTED | No decompose.rs, no RouteKind::Decompose                |
+| MAGENT-4 | Sub-Agent Loop Spawning          | NOT IMPLEMENTED | No spawn logic anywhere                                 |
+| MAGENT-5 | Agent Registry Consumer          | IMPLEMENTED     | Consumer works; not registered in runtime bootstrap     |
+| MAGENT-6 | GoalNode DAG wiring              | NOT IMPLEMENTED | Events defined, never emitted, no consumer              |
+| MAGENT-7 | capability_config.toml agents    | PARTIAL         | Agent cards exist; no role-based dispatch routing       |
+| MAGENT-8 | Result merging into orchestrator | PARTIAL         | ContextMerger exists; no actual SubTaskResult flow      |
 
 ---
 
