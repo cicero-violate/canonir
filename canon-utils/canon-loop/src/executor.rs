@@ -97,6 +97,10 @@ impl EventConsumer for LoopStageExecutor {
             _ => {}
         }
 
+        if self.ctx.halted {
+            return;
+        }
+
         let Ok(stage) = LoopStageEvent::try_from(event.clone()) else {
             return;
         };

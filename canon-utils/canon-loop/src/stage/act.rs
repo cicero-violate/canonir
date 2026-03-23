@@ -56,13 +56,14 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
         return Ok(LoopStageResult::Noop);
     }
     let (stdout, stderr, exit_code, duration_ms, success) = extract_result_fields(&c.result, pending.started_at);
+    let action_kind = pending.action_kind.clone();
     let llm_request_id = pending.llm_request_id.clone();
     let tool_result_id = Uuid::new_v4().to_string();
     let mut events = Vec::new();
     events.push(emit_tool_result(ctx, &pending, tool_result_id.clone(), c.result.clone(), success));
     ctx.mark_batch_completion(llm_request_id.as_deref(), success);
     events.push(emit_acted(pending, stdout, stderr, exit_code, duration_ms, success, Some(tool_result_id)));
-    if !success {
+    if !success && action_kind == "run_command" {
         events.extend(abort_active_batch(ctx));
     }
     Ok(LoopStageResult::EmitMany(events))
@@ -77,6 +78,7 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext) -> anyhow::Res
         return Ok(LoopStageResult::Noop);
     }
     let duration_ms = pending.started_at.elapsed().as_millis() as u64;
+    let action_kind = pending.action_kind.clone();
     let llm_request_id = pending.llm_request_id.clone();
     let tool_result_id = Uuid::new_v4().to_string();
     let mut events = Vec::new();
@@ -89,7 +91,9 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext) -> anyhow::Res
     ));
     ctx.mark_batch_completion(llm_request_id.as_deref(), false);
     events.push(emit_acted(pending, String::new(), f.error.clone(), None, duration_ms, false, Some(tool_result_id)));
-    events.extend(abort_active_batch(ctx));
+    if action_kind == "run_command" {
+        events.extend(abort_active_batch(ctx));
+    }
     Ok(LoopStageResult::EmitMany(events))
 }
 
@@ -667,6 +671,7 @@ pub fn check_act_timeout(ctx: &mut LoopContext) -> Vec<RuntimeEvent> {
         ctx.pending_act = Some(pending);
         return Vec::new();
     }
+    let action_kind = pending.action_kind.clone();
     let llm_request_id = pending.llm_request_id.clone();
     let tool_result_id = Uuid::new_v4().to_string();
     let mut events = Vec::new();
@@ -679,7 +684,9 @@ pub fn check_act_timeout(ctx: &mut LoopContext) -> Vec<RuntimeEvent> {
     ));
     ctx.mark_batch_completion(llm_request_id.as_deref(), false);
     events.push(emit_acted(pending, String::new(), "timeout".to_string(), None, 30_000, false, Some(tool_result_id)));
-    events.extend(abort_active_batch(ctx));
+    if action_kind == "run_command" {
+        events.extend(abort_active_batch(ctx));
+    }
     events.push(RuntimeEvent::LoopActed(LoopActed {
         tick: 0,
         action_kind: "timeout_marker".to_string(),

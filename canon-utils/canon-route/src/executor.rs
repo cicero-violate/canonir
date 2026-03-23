@@ -1,5 +1,5 @@
 use canon_decision::RouteKind;
-use canon_event::{RuntimeEvent, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, LlmCall, RouteSelected};
+use canon_event::{RuntimeEvent, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, LlmCall, RouteSelected, ToolBatchSettled};
 use canon_judgment::GuardConfig;
 use canon_runtime_supervisor::judgment_loop::RouteController;
 use std::path::PathBuf;
@@ -31,6 +31,28 @@ impl RouteExecutor {
             pending_prompt: None,
         }
     }
+
+    fn try_dispatch_route(&mut self) {
+        if self.ctx.halted { return; }
+        if !self.ctx.context_ready { return; }
+        if self.pending_request_id.is_some() { return; }
+        let prompt = self.controller.build_prompt(
+            &self.ctx.mission_summary,
+            &self.ctx.snapshot_text(),
+            &self.ctx.recent_tool_results,
+            &self.ctx.journal,
+        );
+        let request_id = format!("route-{}", Uuid::new_v4());
+        self.pending_request_id = Some(request_id.clone());
+        self.pending_prompt = Some(prompt.clone());
+        if let Some(emitter) = self.emitter.as_ref() {
+            canon_meta::canon_emit_meta!(emitter; Llm(LlmCall {
+                request_id,
+                prompt,
+                role: Some("router".to_string()),
+            }));
+        }
+    }
 }
 
 impl EventConsumer for RouteExecutor {
@@ -46,26 +68,28 @@ impl EventConsumer for RouteExecutor {
         // Always accumulate state.
         self.ctx.update_from_event(event, &self.workspace);
 
-        // Route tick: launch async LLM call if none in-flight.
+        // Check if the batch just settled — emit the event and trigger routing.
+        if let Some((result_count, any_failed)) = self.ctx.batch_settled.take() {
+            if let Some(emitter) = self.emitter.as_ref() {
+                canon_meta::canon_emit_meta!(emitter; ToolBatchSettled(ToolBatchSettled {
+                    tick: self.ctx.scheduler_tick,
+                    result_count,
+                    any_failed,
+                }));
+            }
+            self.try_dispatch_route();
+            return;
+        }
+
+        // RouteTick: fallback trigger for the initial state (no actions have run yet)
+        // and for cases where the batch settled before any ToolCalls were tracked.
         if let RuntimeEvent::RouteTick(rt) = event {
             self.ctx.scheduler_tick = rt.tick;
-            if self.pending_request_id.is_none() {
-                let prompt = self.controller.build_prompt(
-                    &self.ctx.mission_summary,
-                    &self.ctx.snapshot_text(),
-                    self.ctx.latest_tool_result.as_ref(),
-                    &self.ctx.journal,
-                );
-                let request_id = format!("route-{}", Uuid::new_v4());
-                self.pending_request_id = Some(request_id.clone());
-                self.pending_prompt = Some(prompt.clone());
-                if let Some(emitter) = self.emitter.as_ref() {
-                    canon_meta::canon_emit_meta!(emitter; Llm(LlmCall {
-                        request_id,
-                        prompt,
-                        role: Some("router".to_string()),
-                    }));
-                }
+            // Only fire on tick if no actions are in-flight (batch-settled path handles the rest).
+            let idle = self.ctx.planned_pending == 0
+                && self.ctx.pending_tool_result_ids.is_empty();
+            if idle {
+                self.try_dispatch_route();
             }
             return;
         }
@@ -106,8 +130,8 @@ impl RouteExecutor {
         let Some(emitter) = self.emitter.as_ref() else { return; };
         let decision = decide_from_json(&self.ctx, model_json, prompt.clone(), &mut self.controller)
             .unwrap_or_else(|e| RouteDecision {
-                lane: RouteKind::Shape,
-                suggested_route: RouteKind::Shape,
+                lane: RouteKind::Plan,
+                suggested_route: RouteKind::Plan,
                 rationale: format!("gatekeeper error: {e}"),
                 confidence: None,
                 changed: false,

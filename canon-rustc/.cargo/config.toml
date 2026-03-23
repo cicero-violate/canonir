@@ -1,0 +1,24 @@
+[build]
+# rustflags = ["-Awarnings"]
+rustflags = [
+"-Dwarnings",
+"-Dunused",
+"-Dunused-attributes",
+"-Dunused-imports",
+"-Dunused-variables",
+"-Fdead-code",
+"-Dclippy::allow_attributes",
+"-Dclippy::allow_attributes_without_reason"
+]
+
+[target.'cfg(all())']
+rustflags = [
+  "-Dwarnings",
+  "-Fdead-code",
+  "-Dclippy::allow_attributes",
+  "-Dclippy::allow_attributes_without_reason"
+]
+
+
+[env]
+RUST_BACKTRACE = "full"

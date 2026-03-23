@@ -34,7 +34,7 @@ pub use events::{
     CargoBuild, CargoCheck, CargoEvent, CargoRun, Code, DebugEvent, DeleteSymbol, EditEvent, ErrorOccurred, EventConsumer, EventEmitter, EventEmitterHandle, EventFilter, EventMask, ExtractModule,
     FileEvent, FilePatch, FileRead, FileWrite, GoalEdgeDefined, GoalGraphCheckpointed, GoalNodeCreated, GoalNodeRetracted, GoalNodeRewritten, GoalSelected, InlineModule, LlmCall, LlmResult,
     LocatedEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, MoveSymbol, NodeCompleted, NodeFailed, NodeReady, NodeStarted, PolicyBaselineUpdated, ProcessResult, PromptLoaded,
-    RenameDir, RenameModule, RenameSymbol, RouteSelected, RouteTick, RuntimeEvent, RuntimeStateUpdated, RustcEventConsumer, SystemConfigLoaded, Tick, ToolCall, ToolResult, EVENT_SCHEMA_VERSION,
+    RenameDir, RenameModule, RenameSymbol, RouteSelected, RouteTick, RuntimeEvent, RuntimeStateUpdated, RustcEventConsumer, SystemConfigLoaded, Tick, ToolBatchSettled, ToolCall, ToolResult, EVENT_SCHEMA_VERSION,
 };
 pub use wire::{CanonEvent, CanonPayload, EventMeta};
 pub use macros::emit::canon_emit;

@@ -149,6 +149,8 @@ canon_event_struct!(LoopPlanned {
     reason: String,
     llm_request_id: Option<String>,
     #[serde(default)]
+    signals: Option<serde_json::Value>,
+    #[serde(default)]
     trace_id: Option<String>,
     #[serde(default)]
     execution_id: Option<String>,
@@ -247,6 +249,10 @@ canon_event_struct!(AgentRegistered { payload: serde_json::Value });
 canon_event_struct!(PromptLoaded { payload: serde_json::Value });
 canon_event_struct!(ToolCall { node_id: String, tool_call_id: String, request_id: String, kind: String, payload: serde_json::Value });
 canon_event_struct!(ToolResult { node_id: String, tool_call_id: String, tool_result_id: String, request_id: String, kind: String, output: serde_json::Value, success: bool });
+// Emitted once when all pending tool results for a batch have landed (pending set → empty).
+// The router uses this as the trigger to snapshot state and dispatch its next LLM call,
+// ensuring it never decides on stale pre-execution state.
+canon_event_struct!(ToolBatchSettled { tick: u64, result_count: u32, any_failed: bool });
 canon_event_struct!(GoalNodeCreated {
     node_id: String,
     description: String,
@@ -383,6 +389,7 @@ canon_event_enum!(RuntimeEvent {
     PromptLoaded(PromptLoaded),
     ToolCall(ToolCall),
     ToolResult(ToolResult),
+    ToolBatchSettled(ToolBatchSettled),
     GoalNodeCreated(GoalNodeCreated),
     GoalNodeRetracted(GoalNodeRetracted),
     GoalNodeRewritten(GoalNodeRewritten),

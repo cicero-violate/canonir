@@ -62,11 +62,11 @@ impl TryFrom<RuntimeEvent> for LoopStageEvent {
         match e {
             RuntimeEvent::Tick(t) => Ok(LoopStageEvent::Observe(t)),
             RuntimeEvent::RouteSelected(rs) => match rs.approved_route.as_str() {
-                "shape" => Ok(LoopStageEvent::PlanTrigger(rs)),
-                "execute" => Ok(LoopStageEvent::ActDispatch(rs)),
-                "validate" => Ok(LoopStageEvent::VerifyTrigger(rs)),
+                "plan" => Ok(LoopStageEvent::PlanTrigger(rs)),
+                "act" => Ok(LoopStageEvent::ActDispatch(rs)),
+                "verify" => Ok(LoopStageEvent::VerifyTrigger(rs)),
                 "conclude" => Ok(LoopStageEvent::Conclude(rs)),
-                "scan" => Ok(LoopStageEvent::Scan(rs)),
+                "observe" => Ok(LoopStageEvent::Scan(rs)),
                 _ => Err(RuntimeEvent::RouteSelected(rs)),
             },
             RuntimeEvent::CapabilityCompleted(c) => Ok(LoopStageEvent::CapabilityDone(c)),

@@ -22,7 +22,7 @@ pub fn execute(v: LoopVerified, ctx: &mut LoopContext) -> anyhow::Result<LoopSta
     ctx.last_reward_trace_id = v.trace_id.clone();
     ctx.last_reward_execution_id = v.execution_id.clone();
     let reward = compute_reward(ctx, &v);
-    let halt = !v.compiler_clean || ctx.stagnant_ticks > 10;
+    let halt = ctx.stagnant_ticks > 10;
     let rewarded = LoopRewarded {
         tick: v.tick,
         errors_before: ctx.errors_before,
@@ -39,6 +39,8 @@ pub fn execute(v: LoopVerified, ctx: &mut LoopContext) -> anyhow::Result<LoopSta
         ctx.stagnant_ticks = 0;
     } else {
         ctx.stagnant_ticks = ctx.stagnant_ticks.saturating_add(1);
+        // Compiler failed — the LLM's "done" was premature. Force replanning.
+        ctx.last_done_goal = None;
     }
     Ok(LoopStageResult::Emit(RuntimeEvent::LoopRewarded(rewarded)))
 }

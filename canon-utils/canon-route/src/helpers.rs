@@ -13,15 +13,15 @@ pub fn heuristic_route_json(ctx: &RouteContext) -> String {
     let route = if ctx.finish_ready {
         canon_decision::RouteKind::Conclude
     } else if ctx.planned_pending > 0 {
-        canon_decision::RouteKind::Execute
+        canon_decision::RouteKind::Act
     } else if ctx.acted_unverified {
-        canon_decision::RouteKind::Validate
+        canon_decision::RouteKind::Verify
     } else if ctx.workspace_dirty {
-        canon_decision::RouteKind::Execute
+        canon_decision::RouteKind::Act
     } else if ctx.context_ready {
-        canon_decision::RouteKind::Shape
+        canon_decision::RouteKind::Plan
     } else {
-        canon_decision::RouteKind::Scan
+        canon_decision::RouteKind::Observe
     };
     serde_json::json!({
         "route": route.as_str(),

@@ -29,10 +29,11 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
 
     emit_tool_result(ctx, &pending.plan_tool_call_id, &pending.request_id, true)?;
 
-    let actions = match &c.result {
+    let (actions, signals) = match &c.result {
         CapabilityResult::Llm(llm) => parse_llm_actions(&llm.response),
-        _ => Vec::new(),
+        _ => (Vec::new(), None::<serde_json::Value>),
     };
+    ctx.last_llm_signals = signals.clone();
     if actions.is_empty() {
         return emit_plan(ctx, LoopPlanned {
             tick: pending.tick,
@@ -40,6 +41,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
             action_payload: serde_json::json!({}),
             reason: "llm_parse_failed".to_string(),
             llm_request_id: Some(pending.request_id.clone()),
+            signals: signals.clone(),
             trace_id: Some(pending.trace_id.clone()),
             execution_id: Some(pending.execution_id.clone()),
             span_id: None,
@@ -70,6 +72,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                 plan_id: Some(pending.plan_id.clone()),
                 plan_step_id: Some(plan_step_id.clone()),
                 action_id: Some(action_id.clone()),
+                signals: signals.clone(),
             }),
             LlmAction::ApplyPatch { patch } => out.push(LoopPlanned {
                 tick: pending.tick,
@@ -84,6 +87,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                 plan_id: Some(pending.plan_id.clone()),
                 plan_step_id: Some(plan_step_id.clone()),
                 action_id: Some(action_id.clone()),
+                signals: signals.clone(),
             }),
             LlmAction::Command { cmd, cwd } => out.push(LoopPlanned {
                 tick: pending.tick,
@@ -98,6 +102,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                 plan_id: Some(pending.plan_id.clone()),
                 plan_step_id: Some(plan_step_id.clone()),
                 action_id: Some(action_id.clone()),
+                signals: signals.clone(),
             }),
             LlmAction::Write { path, content } => out.push(LoopPlanned {
                 tick: pending.tick,
@@ -112,6 +117,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                 plan_id: Some(pending.plan_id.clone()),
                 plan_step_id: Some(plan_step_id.clone()),
                 action_id: Some(action_id.clone()),
+                signals: signals.clone(),
             }),
             LlmAction::ReadFile { path } => out.push(LoopPlanned {
                 tick: pending.tick,
@@ -126,6 +132,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                 plan_id: Some(pending.plan_id.clone()),
                 plan_step_id: Some(plan_step_id.clone()),
                 action_id: Some(action_id.clone()),
+                signals: signals.clone(),
             }),
             LlmAction::ListDir { path } => out.push(LoopPlanned {
                 tick: pending.tick,
@@ -140,6 +147,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                 plan_id: Some(pending.plan_id.clone()),
                 plan_step_id: Some(plan_step_id.clone()),
                 action_id: Some(action_id.clone()),
+                signals: signals.clone(),
             }),
             LlmAction::Done { reason } => {
                 if let Some(goal_text) = &pending.goal_text {
@@ -164,6 +172,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                     plan_id: Some(pending.plan_id.clone()),
                     plan_step_id: Some(plan_step_id.clone()),
                     action_id: Some(action_id.clone()),
+                    signals: signals.clone(),
                 });
             }
         }
@@ -196,6 +205,7 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext) -> anyhow::Res
         plan_id: Some(pending.plan_id),
         plan_step_id: None,
         action_id: None,
+        signals: None,
     })
 }
 
@@ -217,6 +227,7 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
             plan_id: None,
             plan_step_id: None,
             action_id: None,
+            signals: None,
         });
     }
     if observed.error_count == 0 && ctx.last_done_goal.is_some() && ctx.last_done_goal == observed.goal_text {
@@ -227,6 +238,7 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
                 action_payload: serde_json::json!({}),
                 reason: "goal_complete".to_string(),
                 llm_request_id: None,
+                signals: None,
                 trace_id: None,
                 execution_id: None,
                 span_id: None,
@@ -312,6 +324,7 @@ fn check_llm_timeout(ctx: &mut LoopContext, current_tick: u64) {
         action_payload: serde_json::json!({}),
         reason: "llm_timeout".to_string(),
         llm_request_id: None,
+        signals: None,
         trace_id: None,
         execution_id: None,
         span_id: None,
@@ -404,6 +417,13 @@ fn build_prompt(
         .unwrap_or_else(|| workspace.display().to_string());
 
     let search_hints = build_search_hints(&goal_text, workspace);
+    let workspace_tree = build_workspace_tree(std::path::Path::new(&target_workspace), 3, 0);
+    let destructive_warning = batch_acted.iter().any(|a| a.stderr.trim() == "rejected_destructive_command");
+    let destructive_note = if destructive_warning {
+        "\nWARNING: A previous plan was blocked as destructive. Do NOT include destructive commands; they will fail.\n"
+    } else {
+        "\n"
+    };
 
     format!(
         r#"You are a code-editing agent. Produce a plan as a JSON array of actions.
@@ -411,9 +431,12 @@ fn build_prompt(
 TARGET WORKSPACE: {target_workspace}
 All relative paths resolve against TARGET WORKSPACE.
 LOC: {loc}  |  Errors: {errors}  |  Warnings: {warnings}
-
+{destructive_note}
 GOAL:
 {goal}
+
+## Workspace State
+{workspace_tree}
 
 ━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -467,6 +490,8 @@ Step 2 — Create/Edit (after seeing discovery results):
 
 NEVER use "write" or "patch_file" — they are removed. Use apply_patch.
 NEVER assume a directory/project exists without checking with list_dir first.
+WORKSPACE RULE: If the target project directory already exists in the workspace tree, use `cargo init --name <name>` instead of `cargo new`. `cargo new` fails when the directory exists.
+SAFETY RULE: The following commands are BLOCKED and will always fail. Do NOT plan them: rm -rf, git reset --hard, git clean -f, dd if=, mkfs, shred, >/dev/sd.
 
 ━━━ CONTEXT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -479,13 +504,45 @@ Recent tool results:
 {recent_results}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Return ONLY a single ```json array. No prose outside the code block.
+Return a single ```json object with this exact shape (all signal values 0.0–1.0):
+{{
+  "signals": {{
+    "goal_alignment_score": 0.0,
+    "confidence": 0.0,
+    "task_completion_likelihood": 0.0,
+    "error_likelihood": 0.0,
+    "plan_validity": 0.0,
+    "state_consistency": 0.0,
+    "action_effectiveness": 0.0,
+    "progress_score": 0.0,
+    "blocking_severity": 0.0,
+    "ambiguity_level": 0.0,
+    "context_completeness": 0.0,
+    "plan_optimality": 0.0,
+    "redundancy_level": 0.0,
+    "recovery_difficulty": 0.0,
+    "tool_reliability": 0.0,
+    "execution_risk": 0.0,
+    "verification_coverage": 0.0,
+    "change_impact": 0.0,
+    "stability_score": 0.0,
+    "iteration_efficiency": 0.0,
+    "novelty_score": 0.0,
+    "dependency_health": 0.0,
+    "resource_efficiency": 0.0,
+    "termination_readiness": 0.0
+  }},
+  "actions": [ ...one or more action objects... ]
+}}
+No prose outside the code block.
 "#,
         target_workspace = target_workspace,
         goal = goal_text,
+        workspace_tree = workspace_tree,
         loc = workspace_loc,
         errors = observed.error_count,
         warnings = observed.warning_count,
+        destructive_note = destructive_note,
         search_hints = search_hints,
         recent_actions = if recent_actions.is_empty() { "(none)".to_string() } else { recent_actions }.to_string(),
         recent_results = if recent_results.is_empty() { "(none)".to_string() } else { recent_results }.to_string(),
@@ -533,42 +590,63 @@ fn extract_goal_keywords(spec: &canon_goal::GoalSpec) -> Vec<String> {
     out
 }
 
-/// Extract fenced json blocks and parse actions.
-fn parse_llm_actions(result: &serde_json::Value) -> Vec<LlmAction> {
-    // Case 1: response IS a JSON array already (normalize_llm_output stripped the fence).
-    if let Some(arr) = result.as_array() {
-        return arr.iter()
-            .filter_map(|v| parse_value_to_action(v.clone()))
-            .collect();
+/// Parse LLM response into actions and an optional signals object.
+/// Supports three response shapes:
+///   A) {"signals":{...},"actions":[...]}  — wrapper format (preferred)
+///   B) bare JSON array                    — legacy / fence-stripped
+///   C) {"text":"```json\n...\n```"}       — text wrapper with fenced blocks
+fn parse_llm_actions(result: &serde_json::Value) -> (Vec<LlmAction>, Option<serde_json::Value>) {
+    // Shape A: wrapper object with "actions" key
+    if result.is_object() && result.get("actions").is_some() {
+        let signals = result.get("signals").cloned();
+        let actions = result["actions"].as_array()
+            .map(|arr| arr.iter().filter_map(|v| parse_value_to_action(v.clone())).collect())
+            .unwrap_or_default();
+        return (actions, signals);
     }
 
-    // Case 2: response is a single action object.
+    // Shape B: bare JSON array
+    if let Some(arr) = result.as_array() {
+        let actions = arr.iter().filter_map(|v| parse_value_to_action(v.clone())).collect();
+        return (actions, None);
+    }
+
+    // Shape B: single action object
     if result.is_object() && result.get("action").is_some() {
         if let Some(action) = parse_value_to_action(result.clone()) {
-            return vec![action];
+            return (vec![action], None);
         }
     }
 
-    // Case 3: response is {"text":"```json\n[...]\n```"} — extract fenced blocks.
+    // Shape C: {"text":"```json\n...\n```"} — extract fenced blocks
     let Some(text) = result.get("text").and_then(|v| v.as_str()) else {
-        return Vec::new();
+        return (Vec::new(), None);
     };
     let blocks = extract_fenced_blocks(text);
     let mut actions = Vec::new();
+    let mut signals: Option<serde_json::Value> = None;
     for block in blocks {
-        if let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(&block) {
-            for value in parsed {
-                if let Some(action) = parse_value_to_action(value) {
-                    actions.push(action);
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&block) {
+            // Check for wrapper shape inside fenced block
+            if parsed.is_object() && parsed.get("actions").is_some() {
+                signals = parsed.get("signals").cloned();
+                if let Some(arr) = parsed["actions"].as_array() {
+                    for v in arr {
+                        if let Some(a) = parse_value_to_action(v.clone()) { actions.push(a); }
+                    }
                 }
+                continue;
             }
-        } else if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&block) {
-            if let Some(action) = parse_value_to_action(parsed) {
-                actions.push(action);
+            if let Some(arr) = parsed.as_array() {
+                for v in arr {
+                    if let Some(a) = parse_value_to_action(v.clone()) { actions.push(a); }
+                }
+            } else if let Some(a) = parse_value_to_action(parsed) {
+                actions.push(a);
             }
         }
     }
-    actions
+    (actions, signals)
 }
 
 fn extract_required_loc(goal_text: &str) -> usize {
@@ -598,6 +676,44 @@ fn count_loc_in_workspace(dir: &Path) -> usize {
         }
     }
     total
+}
+
+/// Build a compact directory tree (depth-limited, capped at 40 lines).
+/// Skips hidden dirs (`.git`, `target`, `node_modules`).
+fn build_workspace_tree(dir: &Path, max_depth: usize, depth: usize) -> String {
+    const MAX_LINES: usize = 40;
+    let mut lines: Vec<String> = Vec::new();
+    build_workspace_tree_inner(dir, depth, max_depth, &mut lines, MAX_LINES);
+    if lines.is_empty() {
+        "(directory not found or empty)".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn build_workspace_tree_inner(dir: &Path, depth: usize, max_depth: usize, lines: &mut Vec<String>, cap: usize) {
+    if lines.len() >= cap { return; }
+    let Ok(entries) = std::fs::read_dir(dir) else { return; };
+    let indent = "  ".repeat(depth);
+    let mut items: Vec<_> = entries
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+    items.sort();
+    for path in items {
+        if lines.len() >= cap { break; }
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        // Skip hidden and build dirs
+        if name.starts_with('.') || name == "target" || name == "node_modules" { continue; }
+        if path.is_dir() {
+            lines.push(format!("{indent}{name}/"));
+            if depth < max_depth {
+                build_workspace_tree_inner(&path, depth + 1, max_depth, lines, cap);
+            }
+        } else {
+            lines.push(format!("{indent}{name}"));
+        }
+    }
 }
 
 fn extract_fenced_blocks(text: &str) -> Vec<String> {

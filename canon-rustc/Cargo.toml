@@ -1,0 +1,26 @@
+[package]
+name = "canon-rustc"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "canon-rustc"
+path = "src/bin/canon_rustc.rs"
+
+
+[dependencies]
+anyhow = "1"
+csv = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+backtrace = "0.3"
+canon-ir = { path = "../canon-ir" }
+algorithms = { path = "../algorithms" }
+rustc-hash = "1"
+toml = "0.8"
+canon_event = { package = "canon-runtime-events", path = "../canon-utils/canon-runtime-events" }
+canon_types = { path = "../canon-utils/canon-types" }

@@ -10,3 +10,4 @@ name = "canon_judgment"
 [dependencies]
 canon_decision = { package = "canon-decision", path = "../canon-decision" }
 serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true

@@ -1,7 +1,7 @@
 use canon_decision::JournalLine;
 use canon_event::{RuntimeEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult};
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
-use canon_judgment::RuntimeSignals;
+use canon_judgment::{LlmSignals, RuntimeSignals};
 use serde_json::json;
 use std::collections::HashSet;
 use std::path::Path;
@@ -18,10 +18,16 @@ pub struct RouteContext {
     pub acted_unverified: bool,
     pub last_action_failed: bool,
     pub pending_tool_result_ids: HashSet<String>,
-    pub latest_tool_result: Option<serde_json::Value>,
+    pub recent_tool_results: Vec<serde_json::Value>,
     pub finish_ready: bool,
     pub last_action_kind: String,
     pub journal: Vec<JournalLine>,
+    pub last_llm_signals: Option<serde_json::Value>,
+    pub halted: bool,
+    /// Set to Some(...) when the last pending tool result lands; cleared after the executor emits ToolBatchSettled.
+    pub batch_settled: Option<(u32, bool)>, // (result_count, any_failed)
+    batch_result_count: u32,
+    batch_any_failed: bool,
 }
 
 impl RouteContext {
@@ -37,6 +43,7 @@ impl RouteContext {
             performed_recently: self.acted_unverified,
             last_action_failed: self.last_action_failed,
             finish_ready: self.finish_ready,
+            llm_signals: self.last_llm_signals.as_ref().map(LlmSignals::from_value),
         }
     }
 
@@ -75,8 +82,13 @@ impl RouteContext {
                 }
                 self.push_journal("observe", format!("tick={} goal_present={} errors={}", self.scheduler_tick, goal_present, error_count));
             }
-            RuntimeEvent::LoopPlanned(LoopPlanned { action_kind, plan_id, action_id, llm_request_id, .. }) => {
-                self.planned_pending = self.planned_pending.saturating_add(1);
+            RuntimeEvent::LoopPlanned(LoopPlanned { action_kind, plan_id, action_id, llm_request_id, signals, .. }) => {
+                if action_kind != "no_op" {
+                    self.planned_pending = self.planned_pending.saturating_add(1);
+                }
+                if let Some(sig) = signals {
+                    self.last_llm_signals = Some(sig.clone());
+                }
                 let mut summary = format!("planned action={action_kind}");
                 if let Some(plan_id) = plan_id {
                     summary.push_str(&format!(" plan_id={plan_id}"));
@@ -120,22 +132,31 @@ impl RouteContext {
             }
             RuntimeEvent::LoopRewarded(LoopRewarded { halt, .. }) => {
                 if *halt {
-                    self.finish_ready = true;
+                    self.halted = true;
                 }
                 self.push_journal("reward", format!("halt={halt}"));
             }
             RuntimeEvent::ToolCall(ToolCall { tool_call_id, .. }) => {
+                // Opening a new call: if set was empty this starts a new batch.
+                if self.pending_tool_result_ids.is_empty() {
+                    self.batch_result_count = 0;
+                    self.batch_any_failed = false;
+                    self.batch_settled = None;
+                }
                 self.pending_tool_result_ids.insert(tool_call_id.clone());
-                self.latest_tool_result = None;
             }
             RuntimeEvent::ToolResult(ToolResult { node_id, kind, success, request_id, tool_call_id, tool_result_id, output, .. }) => {
                 self.pending_tool_result_ids.remove(tool_call_id);
+                self.batch_result_count += 1;
+                if !success {
+                    self.batch_any_failed = true;
+                }
                 let mut output_text = output.to_string();
                 if output_text.len() > 512 {
                     output_text.truncate(512);
                     output_text.push_str("...<truncated>");
                 }
-                self.latest_tool_result = Some(json!({
+                self.recent_tool_results.push(json!({
                     "node_id": node_id,
                     "kind": kind,
                     "success": success,
@@ -144,6 +165,13 @@ impl RouteContext {
                     "tool_result_id": tool_result_id,
                     "output": output,
                 }));
+                if self.recent_tool_results.len() > 8 {
+                    self.recent_tool_results.remove(0);
+                }
+                // If all pending calls have now resolved, mark the batch as settled.
+                if self.pending_tool_result_ids.is_empty() && self.planned_pending == 0 {
+                    self.batch_settled = Some((self.batch_result_count, self.batch_any_failed));
+                }
                 self.push_journal("tool", format!("tool_result kind={kind} success={success} tool_call_id={tool_call_id} tool_result_id={tool_result_id} output={output_text}"));
             }
             RuntimeEvent::RuntimeStateUpdated(updated) => {
@@ -196,6 +224,7 @@ mod tests {
                 action_payload: json!({}),
                 reason: "r".into(),
                 llm_request_id: Some("req".into()),
+                signals: None,
                 trace_id: None,
                 execution_id: None,
                 span_id: None,

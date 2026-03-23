@@ -5,20 +5,20 @@ use serde_json::Value;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum RouteKind {
-    Scan,
-    Shape,
-    Execute,
-    Validate,
+    Observe,
+    Plan,
+    Act,
+    Verify,
     Conclude,
 }
 
 impl RouteKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            RouteKind::Scan => "scan",
-            RouteKind::Shape => "shape",
-            RouteKind::Execute => "execute",
-            RouteKind::Validate => "validate",
+            RouteKind::Observe => "observe",
+            RouteKind::Plan => "plan",
+            RouteKind::Act => "act",
+            RouteKind::Verify => "verify",
             RouteKind::Conclude => "conclude",
         }
     }
@@ -37,7 +37,7 @@ pub struct RoutingInput {
     pub mission: String,
     pub snapshot: String,
     #[serde(default)]
-    pub last_tool_result: Option<Value>,
+    pub recent_tool_results: Vec<Value>,
     #[serde(default)]
     pub journal: Vec<JournalLine>,
     pub open_routes: Vec<RouteKind>,
@@ -58,43 +58,75 @@ pub fn compose_routing_prompt(input: &RoutingInput) -> String {
     // Include only the first line of the mission to avoid re-sending the full goal on every tick.
     let mission_summary = input.mission.lines().next().unwrap_or("(unknown goal)").trim();
     let route_descriptions = "\
-- scan: gather more context; do not plan or execute changes.\n\
-- shape: plan the work; produce planned actions for later execution.\n\
-- execute: run the planned actions. Never pick execute if there are zero planned/queued actions — pick shape instead.\n\
-- validate: verify recent actions or state after execution.\n\
-- conclude: finish when the goal is satisfied.";
+- observe: gather more context; do not plan or execute changes.\n\
+- plan: produce planned actions for later execution (calls plan::execute_trigger).\n\
+- act: run the planned actions (calls act::execute_dispatch). Never pick act if there are zero queued actions — pick plan instead.\n\
+- verify: run cargo check and verify state after execution (calls verify::execute).\n\
+- conclude: select this when finish_ready=true in the snapshot. This terminates the loop. Only select conclude when the workspace is verified and the goal requirements are met.";
 
-    let recent =
-        if input.journal.is_empty() { "(none)".to_string() } else { input.journal.iter().rev().take(8).map(|line| format!("- [{}] {}", line.lane, line.summary)).collect::<Vec<_>>().join("\n") };
-    let last_tool_result = input
-        .last_tool_result
-        .as_ref()
-        .map(|value| {
+    let recent_tool_results_text = if input.recent_tool_results.is_empty() {
+        "(none)".to_string()
+    } else {
+        input.recent_tool_results.iter().enumerate().map(|(i, value)| {
             let mut text = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
-            if text.len() > 2000 {
-                text.truncate(2000);
+            if text.len() > 800 {
+                text.truncate(800);
                 text.push_str("\n...<truncated>");
             }
-            text
-        })
-        .unwrap_or_else(|| "(none)".to_string());
+            format!("[{}] {}", i + 1, text)
+        }).collect::<Vec<_>>().join("\n")
+    };
 
     format!(
         "You are the runtime route selector. Pick exactly one next route.\n\n\
 Mission:\n{mission}\n\n\
 Snapshot:\n{snapshot}\n\n\
-Last Tool Result:\n{last_tool_result}\n\n\
-Recent Journal:\n{recent}\n\n\
-Allowed Routes: {routes}\n\n\
-Route Descriptions:\n{route_descriptions}\n\n\
-Hard rule: If there is no queued/planned work, do NOT pick \"execute\" — pick \"shape\" to create a plan first.\n\n\
+Recent Tool Results:\n{recent_tool_results_text}\n\n\
+Allowed Routes: {routes}
+
+
+ROUTING RULE: If finish_ready=true, you MUST select conclude. Do not select plan or act when finish_ready=true.
+
+ROUTING RULE: Never choose execute if planned_pending=0 (nothing to run). Prefer shape.
+
+Route Descriptions:
+{route_descriptions}
+
 Return exactly one JSON object in one fenced ```json code block with schema:\n\
-{{\n  \"route\": \"scan|shape|execute|validate|conclude\",\n  \"rationale\": \"short reason\",\n  \"confidence\": 0.0,\n  \"signals\": {{}}\n}}\n\
+{{\n\
+  \"route\": \"observe|plan|act|verify|conclude\",\n\
+  \"rationale\": \"short reason\",\n\
+  \"confidence\": 0.0,\n\
+  \"signals\": {{\n\
+    \"goal_alignment_score\": 0.0,\n\
+    \"confidence\": 0.0,\n\
+    \"task_completion_likelihood\": 0.0,\n\
+    \"error_likelihood\": 0.0,\n\
+    \"plan_validity\": 0.0,\n\
+    \"state_consistency\": 0.0,\n\
+    \"action_effectiveness\": 0.0,\n\
+    \"progress_score\": 0.0,\n\
+    \"blocking_severity\": 0.0,\n\
+    \"ambiguity_level\": 0.0,\n\
+    \"context_completeness\": 0.0,\n\
+    \"plan_optimality\": 0.0,\n\
+    \"redundancy_level\": 0.0,\n\
+    \"recovery_difficulty\": 0.0,\n\
+    \"tool_reliability\": 0.0,\n\
+    \"execution_risk\": 0.0,\n\
+    \"verification_coverage\": 0.0,\n\
+    \"change_impact\": 0.0,\n\
+    \"stability_score\": 0.0,\n\
+    \"iteration_efficiency\": 0.0,\n\
+    \"novelty_score\": 0.0,\n\
+    \"dependency_health\": 0.0,\n\
+    \"resource_efficiency\": 0.0,\n\
+    \"termination_readiness\": 0.0\n\
+  }}\n\
+}}\n\
 No prose outside the code block.",
         mission = mission_summary,
         snapshot = input.snapshot,
-        last_tool_result = last_tool_result,
-        recent = recent,
         routes = routes,
         route_descriptions = route_descriptions,
     )

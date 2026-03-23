@@ -89,6 +89,7 @@ pub struct LoopContext {
 
     // Plan
     pub pending_plan: Option<PendingPlan>,
+    pub last_llm_signals: Option<serde_json::Value>,
     pub last_observed: Option<LoopObserved>,
     pub last_planned_observed_tick: Option<u64>,
     pub last_done_goal: Option<String>,
@@ -136,6 +137,7 @@ impl LoopContext {
             error_count: 0,
             warning_count: 0,
             pending_plan: None,
+            last_llm_signals: None,
             last_observed: None,
             last_planned_observed_tick: None,
             last_done_goal: None,
