@@ -1,6 +1,6 @@
 # test_rust_project_v3
 
-This is a Rust binary crate demonstrating extended agentic capabilities.
+This is a Rust binary crate with agent-style architecture (planner, executor, tools).
 
 ## Build
 
@@ -14,9 +14,7 @@ cargo build
 cargo run
 ```
 
-## Features
+## Notes
 
-- Modular agent system
-- Task planning and execution scaffolding
-- Extensible architecture (~2000 LOC target)
+This project is being expanded incrementally toward ~2000 LOC with codex-like agentic capabilities.
 

@@ -2,15 +2,11 @@ pub struct Planner;
 
 impl Planner {
     pub fn new() -> Self {
-        Planner
+        Self
     }
 
-    pub fn create_plan(&self, goal: &str) -> Vec<String> {
-        let mut steps = Vec::new();
-        for i in 0..50 {
-            steps.push(format!("Step {} for {}", i, goal));
-        }
-        steps
+    pub fn plan(&self, input: &str) -> Vec<String> {
+        vec![format!("Process input: {}", input)]
     }
 }
 

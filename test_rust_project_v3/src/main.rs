@@ -6,7 +6,6 @@ mod tools;
 use agent::Agent;
 
 fn main() {
-    let mut agent = Agent::new();
-    agent.run();
+    let agent = Agent::new();
+    agent.run("test input");
 }
-

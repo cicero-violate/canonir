@@ -14,11 +14,10 @@ impl Agent {
         }
     }
 
-    pub fn run(&mut self) {
-        let plan = self.planner.create_plan("default task");
-        self.executor.execute(plan);
-        // Use tools to avoid dead code warnings
-        let outputs = crate::tools::generate_bulk();
-        println!("Generated {} tool outputs", outputs.len());
+    pub fn run(&self, input: &str) {
+        let plan = self.planner.plan(input);
+        let result = self.executor.execute(plan);
+        println!("Agent result: {}", result);
     }
 }
+
