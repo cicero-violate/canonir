@@ -1,4 +1,4 @@
-use canon_event::{CapabilityCompleted, CapabilityResult, RuntimeEvent, RouteSelected, RequestDispatch, LlmCall};
+use canon_event::{CapabilityCompleted, CapabilityResult, RuntimeEvent, RouteSelected, RequestDispatch, LlmCall, GoalNodeCreated, GoalEdgeDefined};
 use crate::{context::LoopContext, result::LoopStageResult};
 use uuid::Uuid;
 
@@ -27,7 +27,7 @@ pub fn execute(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopS
         request_id,
         prompt,
         role: Some("decompose".to_string()),
-        agent_id: None,
+        agent_id: ctx.agent_id.clone(),
     }));
 
     let _ = rs; // tick used for tracing only
@@ -60,7 +60,25 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
         return Ok(LoopStageResult::EmitMany(vec![RuntimeEvent::RequestDispatch(fallback)]));
     }
 
-    let events: Vec<RuntimeEvent> = dispatches.into_iter().map(RuntimeEvent::RequestDispatch).collect();
+    let mut events: Vec<RuntimeEvent> = Vec::new();
+    for dispatch in &dispatches {
+        events.push(RuntimeEvent::GoalNodeCreated(GoalNodeCreated {
+            node_id:     dispatch.dispatch_id.clone(),
+            description: dispatch.task_prompt.clone(),
+            deps:        dispatch.deps.clone(),
+            caps:        vec![dispatch.task_kind.clone()],
+            node_type:   "sub_task".to_string(),
+            priority:    128,
+            budget:      None,
+        }));
+        for dep_id in &dispatch.deps {
+            events.push(RuntimeEvent::GoalEdgeDefined(GoalEdgeDefined {
+                from_node_id: dep_id.clone(),
+                to_node_id:   dispatch.dispatch_id.clone(),
+            }));
+        }
+        events.push(RuntimeEvent::RequestDispatch(dispatch.clone()));
+    }
     Ok(LoopStageResult::EmitMany(events))
 }
 

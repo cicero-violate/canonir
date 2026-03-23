@@ -11,6 +11,7 @@ use canon_runtime::consumers::capability_executor::CapabilityExecutor;
 use canon_runtime::consumers::check_consumer::CheckConsumer;
 use canon_runtime::consumers::error_logger::ErrorLogger;
 use canon_runtime::consumers::dispatch_consumer::DispatchConsumer;
+use canon_runtime::consumers::goal_graph_consumer::GoalGraphConsumer;
 use canon_runtime::{spawn_kernel_processor, EventRuntime, KernelMsg};
 use crossbeam_channel as cc;
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
@@ -241,6 +242,7 @@ fn main() -> Result<()> {
         Box::new(CheckConsumer::new()),
         Box::new(AgentRegistryConsumer::new(agent_registry.clone())),
         Box::new(DispatchConsumer::new()),
+        Box::new(GoalGraphConsumer::new()),
     ];
     // Goodness consumer logs metrics and emits GoodnessSnapshot on LoopVerified.
     let goodness_root = tlog_path.parent().map(|p| p.to_path_buf());

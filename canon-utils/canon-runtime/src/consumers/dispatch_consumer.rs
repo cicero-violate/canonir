@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use canon_event::{
     EventConsumer, EventEmitterHandle, EventFilter, LoopObserved,
-    RuntimeEvent, RequestDispatch, SubTaskResult,
+    RuntimeEvent, RequestDispatch, SubTaskResult, GoalNodeRetracted,
 };
 use canon_loop::LoopStageExecutor;
 use canon_route::RouteExecutor;
@@ -82,7 +82,8 @@ fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_
     let actions_taken: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
     let consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
-        Box::new(LoopStageExecutor::new(workspace.clone(), tlog.clone())),
+        Box::new(LoopStageExecutor::new(workspace.clone(), tlog.clone())
+            .with_agent_id(req.agent_id.clone())),
         Box::new(RouteExecutor::new(workspace.clone())),
         Box::new(CapabilityExecutor::new(workspace.clone())),
         Box::new(HaltDetectorConsumer { halted: halted.clone() }),
@@ -113,6 +114,12 @@ fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_
 
     let success = halted.load(Ordering::Relaxed);
     let taken = actions_taken.lock().map(|v| v.clone()).unwrap_or_default();
+
+    if !success {
+        parent_emitter.emit(RuntimeEvent::GoalNodeRetracted(GoalNodeRetracted {
+            node_id: req.dispatch_id.clone(),
+        }));
+    }
 
     parent_emitter.emit(RuntimeEvent::SubTaskResult(SubTaskResult {
         dispatch_id: req.dispatch_id,

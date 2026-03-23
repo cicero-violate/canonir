@@ -279,7 +279,7 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
         &ctx.workspace,
         &ctx.context_merger.prompt_section(),
     );
-    let llm_call = LlmCall { request_id: request_id.clone(), prompt: prompt.to_string(), role: Some("planner".to_string()), agent_id: None };
+    let llm_call = LlmCall { request_id: request_id.clone(), prompt: prompt.to_string(), role: Some("planner".to_string()), agent_id: ctx.agent_id.clone() };
 
     let plan_tool_call_id = Uuid::new_v4().to_string();
     ctx.batch_acted.clear();
@@ -312,7 +312,7 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
             request_id,
             prompt: llm_call.prompt,
             role: llm_call.role,
-            agent_id: None,
+            agent_id: llm_call.agent_id,
         }));
     }
 

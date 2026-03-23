@@ -117,6 +117,7 @@ pub struct LoopContext {
 
     // Decompose
     pub pending_decompose_request_id: Option<String>,
+    pub agent_id: Option<String>,
 
     // Verify
     pub last_verify_trace_id: Option<String>,
@@ -174,6 +175,7 @@ impl LoopContext {
             dirty_tracker: WorkspaceDirtyTracker::default(),
             context_merger: ContextMerger::default(),
             pending_decompose_request_id: None,
+            agent_id: None,
             last_verify_trace_id: None,
             last_verify_execution_id: None,
             last_act_span_id: None,

@@ -12,6 +12,11 @@ impl LoopStageExecutor {
     pub fn new(workspace: PathBuf, tlog_path: PathBuf) -> Self {
         Self { ctx: LoopContext::new(workspace, tlog_path) }
     }
+
+    pub fn with_agent_id(mut self, id: String) -> Self {
+        self.ctx.agent_id = Some(id);
+        self
+    }
 }
 
 impl EventConsumer for LoopStageExecutor {

@@ -189,6 +189,10 @@ impl RouteContext {
                 if *success {
                     self.acted_unverified = true;
                 }
+                update_causal_graph(&mut self.causal_graph, event);
+            }
+            RuntimeEvent::RequestDispatch(_) => {
+                update_causal_graph(&mut self.causal_graph, event);
             }
             RuntimeEvent::ToolCall(ToolCall { tool_call_id, kind, .. }) => {
                 // Opening a new call: if set was empty this starts a new batch.

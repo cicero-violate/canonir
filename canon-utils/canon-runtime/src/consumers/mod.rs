@@ -4,3 +4,4 @@ pub mod error_logger;
 pub mod failure_store;
 pub mod agent_registry;
 pub mod dispatch_consumer;
+pub mod goal_graph_consumer;
