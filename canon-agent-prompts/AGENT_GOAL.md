@@ -1,7 +1,7 @@
 # Agent Goal
 
 Here create another new test Rust project in `/workspace/ai_sandbox/canon` here
-The directory has been deleted. You have to start again.
+
 
 ## Target
 - Project path: `/workspace/ai_sandbox/canon/test_rust_project_v3`
