@@ -2,7 +2,6 @@
 
 Here create another new test Rust project in `/workspace/ai_sandbox/canon` here
 
-
 ## Target
 - Project path: `/workspace/ai_sandbox/canon/test_rust_project_v3`
 - Type: binary crate
