@@ -3,6 +3,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+
 use crate::{context::LoopContext, result::LoopStageResult};
 
 /// Emit a LoopObserved if state has changed since the last observation.
@@ -17,14 +18,21 @@ pub fn execute(ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
         ctx.goal_text.hash(&mut h);
         h.finish()
     };
-    let state_changed = (ctx.error_count as u64) != ctx.last_observed_error_count || goal_hash != ctx.last_observed_goal_hash;
+    let workspace_facts = build_workspace_facts(&ctx.goal_text);
+    let facts_hash = {
+        let mut h = DefaultHasher::new();
+        workspace_facts.hash(&mut h);
+        h.finish()
+    };
+    let state_changed = (ctx.error_count as u64) != ctx.last_observed_error_count
+        || goal_hash != ctx.last_observed_goal_hash
+        || facts_hash != ctx.last_observed_facts_hash;
     if !state_changed {
         return Ok(LoopStageResult::Noop);
     }
     ctx.last_observed_error_count = ctx.error_count as u64;
     ctx.last_observed_goal_hash = goal_hash;
-
-    let workspace_facts = build_workspace_facts(&ctx.goal_text);
+    ctx.last_observed_facts_hash = facts_hash;
     let payload = LoopObserved {
         tick: ctx.current_tick,
         error_count: ctx.error_count,

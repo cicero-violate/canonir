@@ -139,6 +139,7 @@ pub struct LoopContext {
     pub delta_g: Option<f32>,
     pub last_observed_error_count: u64,
     pub last_observed_goal_hash: u64,
+    pub last_observed_facts_hash: u64,
     pub current_tick: u64,
 }
 
@@ -193,6 +194,7 @@ impl LoopContext {
             delta_g: None,
             last_observed_error_count: 0,
             last_observed_goal_hash: 0,
+            last_observed_facts_hash: 0,
             current_tick: 0,
         }
     }

@@ -1,0 +1,19 @@
+[[task]]
+name = "fmt"
+cmd = "cargo fmt --check"
+
+[[task]]
+name = "lint"
+cmd = "cargo clippy -- -D warnings"
+depends_on = ["fmt"]
+
+[[task]]
+name = "test"
+cmd = "cargo test"
+depends_on = ["lint"]
+
+[[task]]
+name = "build"
+cmd = "cargo build --release"
+depends_on = ["test"]
+

@@ -1,5 +1,6 @@
 use crate::planner::Planner;
 use crate::executor::Executor;
+use crate::tools::echo_tool;
 
 pub struct Agent {
     planner: Planner,
@@ -17,7 +18,7 @@ impl Agent {
     pub fn run(&self, input: &str) {
         let plan = self.planner.plan(input);
         let result = self.executor.execute(plan);
-        println!("Agent result: {}", result);
+        let echoed = echo_tool(&result);
+        println!("Agent result: {}", echoed);
     }
 }
-
