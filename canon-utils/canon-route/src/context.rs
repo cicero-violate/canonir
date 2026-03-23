@@ -24,6 +24,8 @@ pub struct RouteContext {
     pub journal: Vec<JournalLine>,
     pub last_llm_signals: Option<serde_json::Value>,
     pub halted: bool,
+    pub goodness: Option<f32>,
+    pub delta_g: Option<f32>,
     /// Set to Some(...) when the last pending tool result lands; cleared after the executor emits ToolBatchSettled.
     pub batch_settled: Option<(u32, bool)>, // (result_count, any_failed)
     batch_result_count: u32,
@@ -44,12 +46,14 @@ impl RouteContext {
             last_action_failed: self.last_action_failed,
             finish_ready: self.finish_ready,
             llm_signals: self.last_llm_signals.as_ref().map(LlmSignals::from_value),
+            goodness: self.goodness,
+            delta_g: self.delta_g,
         }
     }
 
     pub fn snapshot_text(&self) -> String {
         format!(
-            "tick={tick}\ncontext_ready={context}\nworkspace_dirty={dirty}\nplanned_pending={pending}\nacted_unverified={unverified}\nfinish_ready={finish}\nlast_action_kind={action}",
+            "tick={tick}\ncontext_ready={context}\nworkspace_dirty={dirty}\nplanned_pending={pending}\nacted_unverified={unverified}\nfinish_ready={finish}\nlast_action_kind={action}\ngoodness={goodness}\ndelta_g={delta_g}",
             tick = self.scheduler_tick,
             context = self.context_ready,
             dirty = self.workspace_dirty,
@@ -57,6 +61,8 @@ impl RouteContext {
             unverified = self.acted_unverified,
             finish = self.finish_ready,
             action = self.last_action_kind,
+            goodness = self.goodness.map(|v| v.to_string()).unwrap_or_else(|| "NA".into()),
+            delta_g = self.delta_g.map(|v| v.to_string()).unwrap_or_else(|| "NA".into()),
         )
     }
 
@@ -181,6 +187,11 @@ impl RouteContext {
                     let crate_name = updated.payload.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown");
                     self.push_journal("observe", format!("workspace_dirty=true crate={crate_name}"));
                 }
+            }
+            RuntimeEvent::GoodnessSnapshot(g) => {
+                self.goodness = Some(g.g);
+                self.delta_g = Some(g.delta_g);
+                self.push_journal("goodness", format!("g={} delta={}", g.g, g.delta_g));
             }
             _ => {}
         }

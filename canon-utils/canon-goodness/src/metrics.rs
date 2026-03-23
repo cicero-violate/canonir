@@ -8,8 +8,6 @@ pub struct Metrics {
     pub p: f32,
     pub s: f32,
     pub d: f32,
-    pub t: f32,
-    pub k: f32,
     pub x: f32,
     pub b: f32,
     pub l: f32,
@@ -18,9 +16,9 @@ pub struct Metrics {
 }
 
 impl Metrics {
-    pub fn as_array(&self) -> [f32; 15] {
+    pub fn as_array(&self) -> [f32; 13] {
         [
-            self.i, self.e, self.c, self.a, self.r, self.p, self.s, self.d, self.t, self.k, self.x, self.b, self.l, self.f, self.lambda,
+            self.i, self.e, self.c, self.a, self.r, self.p, self.s, self.d, self.x, self.b, self.l, self.f, self.lambda,
         ]
     }
 }

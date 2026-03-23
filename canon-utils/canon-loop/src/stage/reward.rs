@@ -12,6 +12,8 @@ pub fn execute_conclude(_rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Re
         parent_span_id: None,
         reward: 1.0_f32,
         halt: true,
+        goodness: ctx.goodness.unwrap_or(1.0),
+        delta_g: ctx.delta_g.unwrap_or(0.0),
         trace_id: None,
         execution_id: None,
     };
@@ -32,6 +34,8 @@ pub fn execute(v: LoopVerified, ctx: &mut LoopContext) -> anyhow::Result<LoopSta
         parent_span_id: v.parent_span_id.clone(),
         reward,
         halt,
+        goodness: ctx.goodness.unwrap_or(1.0),
+        delta_g: ctx.delta_g.unwrap_or(0.0),
         trace_id: v.trace_id.clone(),
         execution_id: v.execution_id.clone(),
     };

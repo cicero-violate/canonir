@@ -217,6 +217,10 @@ canon_event_struct!(LoopRewarded {
     stagnant_ticks: u32,
     halt: bool,
     #[serde(default)]
+    goodness: f32,
+    #[serde(default)]
+    delta_g: f32,
+    #[serde(default)]
     trace_id: Option<String>,
     #[serde(default)]
     execution_id: Option<String>,
@@ -224,6 +228,12 @@ canon_event_struct!(LoopRewarded {
     span_id: Option<String>,
     #[serde(default)]
     parent_span_id: Option<String>,
+});
+canon_event_struct!(GoodnessSnapshot {
+    tick: u64,
+    g: f32,
+    delta_g: f32,
+    metrics: serde_json::Value,
 });
 canon_event_struct!(RouteTick { tick: u64 });
 canon_event_struct!(RouteSelected {
@@ -368,6 +378,7 @@ canon_event_enum!(RuntimeEvent {
     LoopActed(LoopActed),
     LoopVerified(LoopVerified),
     LoopRewarded(LoopRewarded),
+    GoodnessSnapshot(GoodnessSnapshot),
     RouteTick(RouteTick),
     RouteSelected(RouteSelected),
     Cargo(CargoEvent),
@@ -488,5 +499,23 @@ pub enum CapabilityResult {
 impl Default for CapabilityResult {
     fn default() -> Self {
         Self::Empty
+    }
+}
+
+impl CapabilityResult {
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            CapabilityResult::Process(_) => "process",
+            CapabilityResult::Llm(_) => "llm.call",
+            CapabilityResult::Empty => "empty",
+        }
+    }
+
+    pub fn duration_ms(&self) -> Option<u64> {
+        match self {
+            CapabilityResult::Process(_) => None,
+            CapabilityResult::Llm(llm) => Some(llm.duration_ms),
+            CapabilityResult::Empty => None,
+        }
     }
 }

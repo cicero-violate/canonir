@@ -238,6 +238,9 @@ fn main() -> Result<()> {
         Box::new(ErrorLogger::new(None)),
         Box::new(CheckConsumer::new()),
     ];
+    // Goodness consumer logs metrics and emits GoodnessSnapshot on LoopVerified.
+    let goodness_root = tlog_path.parent().map(|p| p.to_path_buf());
+    consumers.push(Box::new(canon_goodness::GoodnessConsumer::new(goodness_root)));
     if event_execution_enabled {
         consumers.push(Box::new(CapabilityExecutor::new(workspace.clone())));
     }

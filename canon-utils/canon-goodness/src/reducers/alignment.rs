@@ -1,4 +1,4 @@
-use canon_runtime_events::RuntimeEvent;
+use canon_event::RuntimeEvent;
 
 use crate::Reducer;
 
@@ -14,8 +14,8 @@ impl Reducer for Alignment {
     fn update(&mut self, event: &RuntimeEvent) {
         match event {
             RuntimeEvent::RouteSelected(r) => {
-                if let Some(sig) = r.signals.as_ref().and_then(|v| v.get("goal_alignment_score")).and_then(|v| v.as_f64()) {
-                    self.score_sum += sig as f32;
+                if let Some(conf) = r.confidence {
+                    self.score_sum += conf;
                     self.score_count = self.score_count.saturating_add(1);
                 }
             }
@@ -44,4 +44,3 @@ impl Reducer for Alignment {
         *self = Self::default();
     }
 }
-

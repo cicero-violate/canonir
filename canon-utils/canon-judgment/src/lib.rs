@@ -89,6 +89,10 @@ pub struct RuntimeSignals {
     pub finish_ready: bool,
     #[serde(default)]
     pub llm_signals: Option<LlmSignals>,
+    #[serde(default)]
+    pub goodness: Option<f32>,
+    #[serde(default)]
+    pub delta_g: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -297,6 +301,14 @@ impl Gatekeeper {
                 lane = RouteKind::Conclude;
                 changed = true;
                 notes.push("sig:term_ready>0.9+coverage_ok → conclude");
+            }
+        }
+        // ΔG gate: sustained negative goodness delta forces replanning.
+        if let Some(delta_g) = signals.delta_g {
+            if delta_g < 0.0 && !signals.has_queued_plan {
+                lane = RouteKind::Plan;
+                changed = true;
+                notes.push("delta_g<0 → plan");
             }
         }
         // ─────────────────────────────────────────────────────────────────────

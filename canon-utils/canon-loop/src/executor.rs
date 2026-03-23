@@ -66,6 +66,10 @@ impl EventConsumer for LoopStageExecutor {
                     self.ctx.halted = true;
                 }
             }
+            RuntimeEvent::GoodnessSnapshot(g) => {
+                self.ctx.goodness = Some(g.g);
+                self.ctx.delta_g = Some(g.delta_g);
+            }
             RuntimeEvent::PromptLoaded(prompt) => {
                 let data = prompt.payload.get("data").unwrap_or(&prompt.payload);
                 if let Some(content) = data.get("content").and_then(|c| c.as_str()) {

@@ -42,6 +42,7 @@ pub enum CanonPayload {
     GoalNodeRewritten(serde_json::Value),
     GoalEdgeDefined(serde_json::Value),
     GoalGraphCheckpointed(serde_json::Value),
+    GoodnessSnapshot(serde_json::Value),
     #[serde(other)]
     Unknown,
 }
@@ -78,6 +79,7 @@ impl CanonPayload {
             CanonPayload::GoalNodeRewritten(_) => "goal_node_rewritten",
             CanonPayload::GoalEdgeDefined(_) => "goal_edge_defined",
             CanonPayload::GoalGraphCheckpointed(_) => "goal_graph_checkpointed",
+            CanonPayload::GoodnessSnapshot(_) => "goodness_snapshot",
             CanonPayload::Unknown => "unknown",
         }
     }
@@ -112,7 +114,8 @@ impl CanonPayload {
             | CanonPayload::GoalNodeRetracted(v)
             | CanonPayload::GoalNodeRewritten(v)
             | CanonPayload::GoalEdgeDefined(v)
-            | CanonPayload::GoalGraphCheckpointed(v) => Some(v.clone()),
+            | CanonPayload::GoalGraphCheckpointed(v)
+            | CanonPayload::GoodnessSnapshot(v) => Some(v.clone()),
             CanonPayload::Unknown => None,
         }
     }
@@ -148,6 +151,7 @@ impl CanonPayload {
             "goal_node_rewritten" => CanonPayload::GoalNodeRewritten(data),
             "goal_edge_defined" => CanonPayload::GoalEdgeDefined(data),
             "goal_graph_checkpointed" => CanonPayload::GoalGraphCheckpointed(data),
+            "goodness_snapshot" => CanonPayload::GoodnessSnapshot(data),
             _ => CanonPayload::Unknown,
         }
     }

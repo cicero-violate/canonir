@@ -1,4 +1,4 @@
-use canon_runtime_events::{RouteTick, RuntimeEvent};
+use canon_event::{RouteTick, RuntimeEvent};
 
 use crate::Reducer;
 

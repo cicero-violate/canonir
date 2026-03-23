@@ -6,15 +6,13 @@ mod robustness;
 mod performance;
 mod scalability;
 mod determinism;
-mod transparency;
-mod knowledge;
 mod execution;
 mod benefit;
 mod learning;
 mod future;
 mod love;
 
-use canon_runtime_events::RuntimeEvent;
+use canon_event::RuntimeEvent;
 
 use crate::Metrics;
 use crate::Reducer;
@@ -28,8 +26,6 @@ pub struct AllReducers {
     pub p: performance::Performance,
     pub s: scalability::Scalability,
     pub d: determinism::Determinism,
-    pub t: transparency::Transparency,
-    pub k: knowledge::Knowledge,
     pub x: execution::Execution,
     pub b: benefit::Benefit,
     pub l: learning::Learning,
@@ -48,9 +44,7 @@ impl AllReducers {
             p: performance::Performance::default(),
             s: scalability::Scalability::default(),
             d: determinism::Determinism::default(),
-            t: transparency::Transparency::default(),
-            k: knowledge::Knowledge::default(),
-            x: execution::Execution::default(),
+        x: execution::Execution::default(),
             b: benefit::Benefit::default(),
             l: learning::Learning::default(),
             f: future::FutureProof::default(),
@@ -67,8 +61,6 @@ impl AllReducers {
         self.p.update(event);
         self.s.update(event);
         self.d.update(event);
-        self.t.update(event);
-        self.k.update(event);
         self.x.update(event);
         self.b.update(event);
         self.l.update(event);
@@ -86,8 +78,6 @@ impl AllReducers {
             p: self.p.value(),
             s: self.s.value(),
             d: self.d.value(),
-            t: self.t.value(),
-            k: self.k.value(),
             x: self.x.value(),
             b: self.b.value(),
             l: self.l.value(),
@@ -105,11 +95,8 @@ pub use efficiency::Efficiency;
 pub use execution::Execution;
 pub use future::FutureProof;
 pub use intelligence::Intelligence;
-pub use knowledge::Knowledge;
 pub use learning::Learning;
 pub use love::Love;
 pub use performance::Performance;
 pub use robustness::Robustness;
 pub use scalability::Scalability;
-pub use transparency::Transparency;
-

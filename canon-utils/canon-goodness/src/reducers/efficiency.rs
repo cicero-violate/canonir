@@ -1,4 +1,4 @@
-use canon_runtime_events::RuntimeEvent;
+use canon_event::RuntimeEvent;
 
 use crate::Reducer;
 
