@@ -13,7 +13,7 @@ impl GoodnessConsumer {
     pub fn new(storage_root: Option<std::path::PathBuf>) -> Self {
         Self {
             reducers: AllReducers::new(),
-            g_prev: 1.0,
+            g_prev: 0.0,
             storage: storage_root.map(|p| MetricsStorage::new(&p)),
             emitter: None,
         }
