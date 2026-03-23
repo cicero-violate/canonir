@@ -126,6 +126,8 @@ pub struct LoopContext {
     pub last_reward_verify_span_id: Option<String>,
     pub goodness: Option<f32>,
     pub delta_g: Option<f32>,
+    pub last_observed_error_count: u64,
+    pub last_observed_goal_hash: u64,
 }
 
 impl LoopContext {
@@ -170,6 +172,8 @@ impl LoopContext {
             last_reward_verify_span_id: None,
             goodness: None,
             delta_g: None,
+            last_observed_error_count: 0,
+            last_observed_goal_hash: 0,
         }
     }
 }

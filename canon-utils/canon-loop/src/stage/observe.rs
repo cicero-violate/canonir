@@ -1,4 +1,6 @@
 use canon_event::{CanonEvent, CanonPayload, RuntimeEvent, LoopObserved, Tick};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::{context::LoopContext, result::LoopStageResult};
@@ -7,12 +9,27 @@ pub fn execute(t: Tick, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult
     if ctx.goal_text.is_none() {
         ctx.goal_text = scan_tlog_for_goal(ctx.tlog_path.as_path());
     }
+
+    let goal_hash = {
+        let mut h = DefaultHasher::new();
+        ctx.goal_text.hash(&mut h);
+        h.finish()
+    };
+    let state_changed = (ctx.error_count as u64) != ctx.last_observed_error_count || goal_hash != ctx.last_observed_goal_hash;
+    if !state_changed {
+        return Ok(LoopStageResult::Noop);
+    }
+    ctx.last_observed_error_count = ctx.error_count as u64;
+    ctx.last_observed_goal_hash = goal_hash;
+
+    let workspace_facts = build_workspace_facts(&ctx.goal_text);
     let payload = LoopObserved {
         tick: t.tick,
         error_count: ctx.error_count,
         warning_count: ctx.warning_count,
         compiler_errors: ctx.recent_compiler_errors.clone(),
         goal_text: ctx.goal_text.clone(),
+        workspace_facts,
     };
     Ok(LoopStageResult::Emit(RuntimeEvent::LoopObserved(payload)))
 }
@@ -45,4 +62,33 @@ fn scan_tlog_for_goal(tlog_path: &Path) -> Option<String> {
         }
     }
     found
+}
+
+fn build_workspace_facts(goal_text: &Option<String>) -> Vec<String> {
+    let Some(goal) = goal_text else {
+        return Vec::new();
+    };
+    let target_path = extract_target_path(goal);
+    match target_path {
+        Some(p) => {
+            let exists = Path::new(&p).exists();
+            vec![format!("target_path_exists={} path={}", exists, p)]
+        }
+        None => Vec::new(),
+    }
+}
+
+fn extract_target_path(goal: &str) -> Option<String> {
+    goal.lines()
+        .find_map(|line| {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("Target:") {
+                return Some(rest.trim().to_string());
+            }
+            if let Some(rest) = trimmed.strip_prefix("target:") {
+                return Some(rest.trim().to_string());
+            }
+            None
+        })
+        .filter(|s| !s.is_empty())
 }

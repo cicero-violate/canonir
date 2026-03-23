@@ -130,5 +130,8 @@ pub fn evaluate_goal_satisfied(spec: Option<&GoalSpec>, workspace: &Path) -> boo
         return false;
     };
     let required_loc = extract_loc_requirement(spec);
-    required_loc == 0 || count_loc(workspace) >= required_loc
+    if required_loc == 0 {
+        return false;
+    }
+    count_loc(workspace) >= required_loc
 }

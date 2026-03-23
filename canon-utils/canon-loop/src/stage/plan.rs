@@ -29,11 +29,14 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
 
     emit_tool_result(ctx, &pending.plan_tool_call_id, &pending.request_id, true)?;
 
-    let (actions, signals) = match &c.result {
+    let (mut actions, signals) = match &c.result {
         CapabilityResult::Llm(llm) => parse_llm_actions(&llm.response),
         _ => (Vec::new(), None::<serde_json::Value>),
     };
     ctx.last_llm_signals = signals.clone();
+    if actions.len() > 1 && actions.iter().any(|a| matches!(a, LlmAction::Done { .. })) {
+        actions.retain(|a| !matches!(a, LlmAction::Done { .. }));
+    }
     if actions.is_empty() {
         return emit_plan(ctx, LoopPlanned {
             tick: pending.tick,
@@ -418,6 +421,11 @@ fn build_prompt(
 
     let search_hints = build_search_hints(&goal_text, workspace);
     let workspace_tree = build_workspace_tree(std::path::Path::new(&target_workspace), 3, 0);
+    let workspace_facts = if observed.workspace_facts.is_empty() {
+        " (none)".to_string()
+    } else {
+        observed.workspace_facts.iter().map(|f| format!("- {f}")).collect::<Vec<_>>().join("\n")
+    };
     let destructive_warning = batch_acted.iter().any(|a| a.stderr.trim() == "rejected_destructive_command");
     let destructive_note = if destructive_warning {
         "\nWARNING: A previous plan was blocked as destructive. Do NOT include destructive commands; they will fail.\n"
@@ -437,6 +445,9 @@ GOAL:
 
 ## Workspace State
 {workspace_tree}
+
+Workspace facts:
+{workspace_facts}
 
 ━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -487,6 +498,7 @@ Step 1 — Discover (when unsure of project state):
 Step 2 — Create/Edit (after seeing discovery results):
   Use apply_patch (*** Add File for new, *** Update File for existing).
   Use run_command for cargo/shell operations.
+  The "done" action must be the ONLY action in a batch, and only after verification has shown the goal is met.
 
 NEVER use "write" or "patch_file" — they are removed. Use apply_patch.
 NEVER assume a directory/project exists without checking with list_dir first.
@@ -504,36 +516,16 @@ Recent tool results:
 {recent_results}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Return a single ```json object with this exact shape (all signal values 0.0–1.0):
-{{
-  "signals": {{
-    "goal_alignment_score": 0.0,
-    "confidence": 0.0,
-    "task_completion_likelihood": 0.0,
-    "error_likelihood": 0.0,
-    "plan_validity": 0.0,
-    "state_consistency": 0.0,
-    "action_effectiveness": 0.0,
-    "progress_score": 0.0,
-    "blocking_severity": 0.0,
-    "ambiguity_level": 0.0,
-    "context_completeness": 0.0,
-    "plan_optimality": 0.0,
-    "redundancy_level": 0.0,
-    "recovery_difficulty": 0.0,
-    "tool_reliability": 0.0,
-    "execution_risk": 0.0,
-    "verification_coverage": 0.0,
-    "change_impact": 0.0,
-    "stability_score": 0.0,
-    "iteration_efficiency": 0.0,
-    "novelty_score": 0.0,
-    "dependency_health": 0.0,
-    "resource_efficiency": 0.0,
-    "termination_readiness": 0.0
-  }},
-  "actions": [ ...one or more action objects... ]
-}}
+Return ONLY a JSON array of action objects. Do NOT wrap in an object. Do NOT include a "signals" key.
+Example:
+[
+  {{"action":"list_dir","path":"."}},
+  {{"action":"run_command","cmd":"cargo build","cwd":"{target_workspace}"}}
+]
+
+Rules:
+- If you believe the goal is complete, the array must contain exactly one item: {{"action":"done","reason":"..."}}
+- Never include "done" alongside any other action.
 No prose outside the code block.
 "#,
         target_workspace = target_workspace,
@@ -546,6 +538,7 @@ No prose outside the code block.
         search_hints = search_hints,
         recent_actions = if recent_actions.is_empty() { "(none)".to_string() } else { recent_actions }.to_string(),
         recent_results = if recent_results.is_empty() { "(none)".to_string() } else { recent_results }.to_string(),
+        workspace_facts = workspace_facts,
     )
 }
 

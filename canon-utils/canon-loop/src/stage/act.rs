@@ -65,6 +65,18 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
     events.push(emit_acted(pending, stdout, stderr, exit_code, duration_ms, success, Some(tool_result_id)));
     if !success && action_kind == "run_command" {
         events.extend(abort_active_batch(ctx));
+    } else {
+        // Continue dispatching remaining same-batch actions.
+        while ctx.pending_act.is_none() {
+            let Some(next) = ctx.act_queue.front() else { break; };
+            if next.llm_request_id != llm_request_id { break; }
+            let next = ctx.act_queue.pop_front().expect("front exists");
+            match dispatch_plan(ctx, &next)? {
+                LoopStageResult::Emit(e) => events.push(e),
+                LoopStageResult::EmitMany(evs) => events.extend(evs),
+                _ => {}
+            }
+        }
     }
     Ok(LoopStageResult::EmitMany(events))
 }

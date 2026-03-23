@@ -311,6 +311,14 @@ impl Gatekeeper {
                 notes.push("delta_g<0 → plan");
             }
         }
+        // ── FINISH: hard conclude gate ─────────────────────────────────────────
+        // Once finish_ready=true and no queued plan remains, force conclude.
+        // This eliminates the extra LLM round-trip after verify sets finish_ready.
+        if signals.finish_ready && !signals.has_queued_plan {
+            lane = RouteKind::Conclude;
+            changed = true;
+            notes.push("finish_ready=true → conclude");
+        }
         // ─────────────────────────────────────────────────────────────────────
 
         if let Some(minimum) = self.cfg.minimum_confidence {

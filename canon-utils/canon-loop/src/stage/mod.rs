@@ -24,11 +24,7 @@ impl LoopStageEvent {
     pub fn execute(self, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
         match self {
             LoopStageEvent::Observe(t) => observe::execute(t, ctx),
-            LoopStageEvent::Scan(rs) => {
-                // Re-observe on next loop; no-op here (route executor already ticked)
-                let tick = Tick { tick: rs.tick };
-                observe::execute(tick, ctx)
-            }
+            LoopStageEvent::Scan(_rs) => Ok(LoopStageResult::Noop),
             LoopStageEvent::PlanTrigger(d) => plan::execute_trigger(d, ctx),
             LoopStageEvent::ActDispatch(d) => act::execute_dispatch(d, ctx),
             LoopStageEvent::VerifyTrigger(d) => verify::execute(d, ctx),

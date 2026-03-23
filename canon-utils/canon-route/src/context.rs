@@ -109,7 +109,12 @@ impl RouteContext {
             }
             RuntimeEvent::LoopActed(LoopActed { action_kind, capability_request_id, tool_call_id, tool_result_id, success, stderr, .. }) => {
                 self.planned_pending = self.planned_pending.saturating_sub(1);
-                self.acted_unverified = true;
+                // Only mark dirty/acted_unverified for mutating actions.
+                const READ_ONLY_ACTIONS: &[&str] = &["list_dir", "read_file", "search_files"];
+                if !READ_ONLY_ACTIONS.contains(&action_kind.as_str()) {
+                    self.acted_unverified = true;
+                    self.workspace_dirty = true;
+                }
                 if stderr != "skipped:batch_aborted" {
                     self.last_action_failed = !success;
                 }
@@ -118,7 +123,6 @@ impl RouteContext {
                         self.pending_tool_result_ids.remove(tool_call_id);
                     }
                 }
-                self.workspace_dirty = true;
                 self.last_action_kind = action_kind.clone();
                 let mut summary = format!("executed action={} success={} capability_request_id={}", self.last_action_kind, success, capability_request_id);
                 if let Some(tool_call_id) = tool_call_id {
@@ -224,6 +228,7 @@ mod tests {
                 warning_count: 0,
                 compiler_errors: Vec::new(),
                 goal_text: Some("goal".into()),
+                workspace_facts: Vec::new(),
             }),
             workspace,
         );

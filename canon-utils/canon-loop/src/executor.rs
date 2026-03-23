@@ -46,9 +46,7 @@ impl EventConsumer for LoopStageExecutor {
                 self.ctx.last_action_kind = a.action_kind.clone();
                 self.ctx.last_action_success = a.success;
                 self.ctx.batch_acted.push(a.clone());
-                if !a.success {
-                    self.ctx.last_planned_observed_tick = None;
-                }
+                self.ctx.last_planned_observed_tick = None;
             }
             RuntimeEvent::LoopPlanned(p) => {
                 self.ctx.act_queue.push_back(p.clone());

@@ -141,6 +141,8 @@ canon_event_struct!(LoopObserved {
     warning_count: usize,
     compiler_errors: Vec<serde_json::Value>,
     goal_text: Option<String>,
+    #[serde(default)]
+    workspace_facts: Vec<String>,
 });
 canon_event_struct!(LoopPlanned {
     tick: u64,
