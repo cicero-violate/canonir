@@ -24,7 +24,7 @@ members = [
 "canon-utils/canon-tools-analysis", "canon-utils/canon-llm-runtime",
   "canon-utils/canon-builder", "test_rust_project", "canon-utils/canon-meta", "canon-utils/canon-check",
   "canon-utils/canon-exec", "canon-utils/canon-loop", "canon-utils/canon-route",
-  "canon-utils/canon-tools-search", "canon-utils/canon-tools-patch", "canon-utils/canon-goodness", 
+  "canon-utils/canon-tools-search", "canon-utils/canon-tools-patch", "canon-utils/canon-goodness",
 ]
 exclude = [
   "test_projects",
