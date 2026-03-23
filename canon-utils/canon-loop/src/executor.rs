@@ -1,4 +1,4 @@
-use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, Tick};
+use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, Tick, GoalEdgeDefined, AgentRegistered};
 use crate::{context::LoopContext, result::LoopStageResult, stage::LoopStageEvent, scheduler::{ScheduledTask, infer_priority}};
 use std::time::Instant;
 use crate::stage::observe;
@@ -46,6 +46,12 @@ impl EventConsumer for LoopStageExecutor {
                     }
                 }
             }
+            RuntimeEvent::AgentRegistered(AgentRegistered { payload }) => {
+                if let Some(id) = payload.get("agent_id").and_then(|v| v.as_str()) {
+                    let cap = payload.get("capacity").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+                    self.ctx.scheduler.agent_capacity.insert(id.to_string(), cap);
+                }
+            }
             RuntimeEvent::LoopObserved(o) => {
                 self.ctx.last_observed = Some(o.clone());
                 self.ctx.errors_before = o.error_count;
@@ -89,6 +95,16 @@ impl EventConsumer for LoopStageExecutor {
                 let priority = infer_priority(p, self.ctx.goodness, self.ctx.delta_g);
                 let task = ScheduledTask { priority, enqueued_at: Instant::now(), seq: 0, agent_id: None, plan: p.clone() };
                 if !p.depends_on.is_empty() {
+                    if let Some(emitter) = self.ctx.emitter.as_ref() {
+                        if let Some(child) = p.action_id.as_ref() {
+                            for dep in &p.depends_on {
+                                emitter.emit(RuntimeEvent::GoalEdgeDefined(GoalEdgeDefined {
+                                    from_node_id: dep.clone(),
+                                    to_node_id: child.clone(),
+                                }));
+                            }
+                        }
+                    }
                     self.ctx.dep_tracker.add(task);
                 } else {
                     self.ctx.scheduler.push(task);

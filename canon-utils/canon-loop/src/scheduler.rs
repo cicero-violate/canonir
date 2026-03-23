@@ -25,6 +25,8 @@ pub struct ScheduledTask {
 pub struct Scheduler {
     heap: BinaryHeap<Queued>,
     seq: u64,
+    pub agent_capacity: HashMap<String, usize>,
+    pub agent_active: HashMap<String, usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +84,15 @@ impl Scheduler {
     }
 
     pub fn pop_any(&mut self) -> Option<ScheduledTask> {
-        self.heap.pop().map(|q| self.to_task(q))
+        let q = self.heap.pop()?;
+        if let Some(agent) = q.agent_id.as_deref() {
+            if !self.has_capacity(agent) {
+                self.heap.push(q);
+                return None;
+            }
+            *self.agent_active.entry(agent.to_string()).or_insert(0) += 1;
+        }
+        Some(self.to_task(q))
     }
 
     pub fn pop_for_llm(&mut self, llm_request_id: Option<&str>) -> Option<ScheduledTask> {
@@ -103,15 +113,35 @@ impl Scheduler {
         for q in stash {
             self.heap.push(q);
         }
-        found.map(|q| self.to_task(q))
+        if let Some(q) = found {
+            if let Some(agent) = q.agent_id.as_deref() {
+                if !self.has_capacity(agent) {
+                    self.heap.push(q);
+                    return None;
+                }
+                *self.agent_active.entry(agent.to_string()).or_insert(0) += 1;
+            }
+            return Some(self.to_task(q));
+        }
+        None
     }
 
     pub fn complete(&mut self, agent_id: Option<&str>) {
-        let _ = agent_id;
+        if let Some(agent) = agent_id {
+            if let Some(active) = self.agent_active.get_mut(agent) {
+                *active = active.saturating_sub(1);
+            }
+        }
     }
 
     pub fn peek_llm_request_id(&self) -> Option<String> {
         self.heap.peek().and_then(|q| q.plan.llm_request_id.clone())
+    }
+
+    pub fn has_capacity(&self, agent_id: &str) -> bool {
+        let cap = self.agent_capacity.get(agent_id).copied().unwrap_or(usize::MAX);
+        let active = self.agent_active.get(agent_id).copied().unwrap_or(0);
+        active < cap
     }
 
     fn to_task(&self, q: Queued) -> ScheduledTask {

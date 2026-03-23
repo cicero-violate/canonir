@@ -110,24 +110,30 @@ fn bootstrap_prompts(tlog_path: &Path, registry: &PromptRegistryHandle) {
 // ---------------------------------------------------------------------------
 
 fn bootstrap_agents(tlog_path: &Path) {
+    for payload in load_agent_cards() {
+        write_boot_event(tlog_path, "agent_registered", payload);
+    }
+}
+
+/// Returns the agent cards from capability_config.toml as JSON values.
+/// Used by event_runtime.rs to emit AgentRegistered events to the live bus at startup.
+pub fn load_agent_cards() -> Vec<serde_json::Value> {
     let text = match std::fs::read_to_string(AGENT_CONFIG_TOML) {
         Ok(t) => t,
-        Err(_) => return,
+        Err(_) => return vec![],
     };
     let config: AgentConfigRaw = match toml::from_str(&text) {
         Ok(c) => c,
-        Err(_) => return,
+        Err(_) => return vec![],
     };
-    for card in &config.agents.cards {
-        let payload = serde_json::json!({
-            "agent_id": card.agent_id,
-            "agent_url": card.agent_url,
-            "role": card.role,
-            "goal": card.goal,
-            "tool_capabilities": card.tool_capabilities,
-        });
-        write_boot_event(tlog_path, "agent_registered", payload);
-    }
+    config.agents.cards.iter().map(|card| serde_json::json!({
+        "agent_id": card.agent_id,
+        "agent_url": card.agent_url,
+        "role": card.role,
+        "goal": card.goal,
+        "tool_capabilities": card.tool_capabilities,
+        "capacity": 1,
+    })).collect()
 }
 
 // ---------------------------------------------------------------------------

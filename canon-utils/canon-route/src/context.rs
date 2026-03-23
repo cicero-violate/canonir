@@ -1,6 +1,7 @@
 use canon_decision::JournalLine;
 use canon_event::{RuntimeEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult, SubTaskResult};
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
+use crate::causal::update_causal_graph;
 use canon_judgment::{LlmSignals, RuntimeSignals};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -57,6 +58,7 @@ pub struct RouteContext {
     pub batch_is_plan_only: bool,
     /// Maps action_id → (action_kind, llm_request_id) for enriching ToolResult metadata.
     action_meta: HashMap<String, (String, Option<String>)>,
+    pub causal_graph: crate::causal::CausalGraph,
 }
 
 impl RouteContext {
@@ -119,6 +121,7 @@ impl RouteContext {
                 if action_kind != "no_op" {
                     self.planned_pending = self.planned_pending.saturating_add(1);
                 }
+                update_causal_graph(&mut self.causal_graph, event);
                 if let Some(sig) = signals {
                     self.last_llm_signals = Some(sig.clone());
                 }
@@ -140,6 +143,7 @@ impl RouteContext {
             }
             RuntimeEvent::LoopActed(LoopActed { action_kind, capability_request_id, tool_call_id, tool_result_id, success, stderr, action_id, .. }) => {
                 self.planned_pending = self.planned_pending.saturating_sub(1);
+                update_causal_graph(&mut self.causal_graph, event);
                 // Only mark dirty/acted_unverified for mutating actions.
                 const READ_ONLY_ACTIONS: &[&str] = &["list_dir", "read_file", "search_files", "done"];
                 if !READ_ONLY_ACTIONS.contains(&action_kind.as_str()) {
@@ -197,6 +201,7 @@ impl RouteContext {
                     self.batch_is_plan_only = false;
                 }
                 self.pending_tool_result_ids.insert(tool_call_id.clone());
+                update_causal_graph(&mut self.causal_graph, event);
             }
             RuntimeEvent::ToolResult(ToolResult { node_id, kind, success, request_id, tool_call_id, tool_result_id, output, .. }) => {
                 self.pending_tool_result_ids.remove(tool_call_id);
@@ -204,6 +209,7 @@ impl RouteContext {
                 if !success {
                     self.batch_any_failed = true;
                 }
+                update_causal_graph(&mut self.causal_graph, event);
                 let mut output_text = output.to_string();
                 if output_text.len() > 512 {
                     output_text.truncate(512);
@@ -298,6 +304,7 @@ mod tests {
                 plan_id: None,
                 plan_step_id: None,
                 action_id: None,
+                depends_on: vec![],
             }),
             workspace,
         );

@@ -7,12 +7,14 @@ pub mod plan;
 pub mod act;
 pub mod verify;
 pub mod reward;
+pub mod decompose;
 
 pub enum LoopStageEvent {
     Scan(RouteSelected),
     PlanTrigger(RouteSelected),
     ActDispatch(RouteSelected),
     VerifyTrigger(RouteSelected),
+    Decompose(RouteSelected),
     Conclude(RouteSelected),
     CapabilityDone(CapabilityCompleted),
     CapabilityFail(CapabilityFailed),
@@ -26,6 +28,7 @@ impl LoopStageEvent {
             LoopStageEvent::PlanTrigger(d) => plan::execute_trigger(d, ctx),
             LoopStageEvent::ActDispatch(d) => act::execute_dispatch(d, ctx),
             LoopStageEvent::VerifyTrigger(d) => verify::execute(d, ctx),
+            LoopStageEvent::Decompose(d) => decompose::execute(d, ctx),
             LoopStageEvent::Conclude(d) => reward::execute_conclude(d, ctx),
             LoopStageEvent::CapabilityDone(c) => dispatch_capability_done(c, ctx),
             LoopStageEvent::CapabilityFail(f) => dispatch_capability_fail(f, ctx),
@@ -35,6 +38,10 @@ impl LoopStageEvent {
 }
 
 fn dispatch_capability_done(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+    let decompose_result = decompose::execute_complete(c.clone(), ctx)?;
+    if !matches!(decompose_result, LoopStageResult::Noop) {
+        return Ok(decompose_result);
+    }
     let plan_result = plan::execute_complete(c.clone(), ctx)?;
     if !matches!(plan_result, LoopStageResult::Noop) {
         return Ok(plan_result);
@@ -58,6 +65,7 @@ impl TryFrom<RuntimeEvent> for LoopStageEvent {
                 "plan" => Ok(LoopStageEvent::PlanTrigger(rs)),
                 "act" => Ok(LoopStageEvent::ActDispatch(rs)),
                 "verify" => Ok(LoopStageEvent::VerifyTrigger(rs)),
+                "decompose" => Ok(LoopStageEvent::Decompose(rs)),
                 "conclude" => Ok(LoopStageEvent::Conclude(rs)),
                 "observe" => Ok(LoopStageEvent::Scan(rs)),
                 _ => Err(RuntimeEvent::RouteSelected(rs)),

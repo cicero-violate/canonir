@@ -557,6 +557,7 @@ Example:
 Rules:
 - If you believe the goal is complete, the array must contain exactly one item: {{"action":"done","reason":"..."}}
 - Never include "done" alongside any other action.
+- Optional on any action: `"depends_on": ["<action_id>"]` to defer dispatch until those actions succeed.
 No prose outside the code block.
 "#,
         target_workspace = target_workspace,
@@ -770,41 +771,46 @@ fn extract_fenced_blocks(text: &str) -> Vec<String> {
     blocks
 }
 
-fn parse_value_to_action(value: serde_json::Value) -> Option<LlmAction> {
+fn parse_value_to_action(value: serde_json::Value) -> Option<ActionPlan> {
     // Handle "action" discriminator format (used by planner GPT)
     if let Some(action_str) = value.get("action").and_then(|v| v.as_str()) {
+        let depends_on = value
+            .get("depends_on")
+            .and_then(|d| d.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
         match action_str {
             "done" => {
                 let reason = value.get("reason").and_then(|v| v.as_str()).unwrap_or("done").to_string();
-                return Some(LlmAction::Done { reason });
+                return Some(ActionPlan { action: LlmAction::Done { reason }, depends_on });
             }
             "apply_patch" => {
                 let patch = value.get("patch").and_then(|v| v.as_str())?;
-                return Some(LlmAction::ApplyPatch { patch: patch.to_string() });
+                return Some(ActionPlan { action: LlmAction::ApplyPatch { patch: patch.to_string() }, depends_on });
             }
             "write" | "write_file" => {
                 let path = value.get("path").and_then(|v| v.as_str())?;
                 let content = value.get("content").and_then(|v| v.as_str())?;
-                return Some(LlmAction::Write { path: path.to_string(), content: content.to_string() });
+                return Some(ActionPlan { action: LlmAction::Write { path: path.to_string(), content: content.to_string() }, depends_on });
             }
             "run_command" | "command" => {
                 let cmd = value.get("cmd").and_then(|v| v.as_str())?;
                 let cwd = value.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
-                return Some(LlmAction::Command { cmd: cmd.to_string(), cwd });
+                return Some(ActionPlan { action: LlmAction::Command { cmd: cmd.to_string(), cwd }, depends_on });
             }
             "patch_file" | "patch" => {
                 let path = value.get("path").and_then(|v| v.as_str())?;
                 let old = value.get("old").and_then(|v| v.as_str())?;
                 let new = value.get("new").and_then(|v| v.as_str())?;
-                return Some(LlmAction::Patch { path: path.to_string(), old: old.to_string(), new: new.to_string() });
+                return Some(ActionPlan { action: LlmAction::Patch { path: path.to_string(), old: old.to_string(), new: new.to_string() }, depends_on });
             }
             "read_file" => {
                 let path = value.get("path").and_then(|v| v.as_str())?;
-                return Some(LlmAction::ReadFile { path: path.to_string() });
+                return Some(ActionPlan { action: LlmAction::ReadFile { path: path.to_string() }, depends_on });
             }
             "list_dir" => {
                 let path = value.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-                return Some(LlmAction::ListDir { path: path.to_string() });
+                return Some(ActionPlan { action: LlmAction::ListDir { path: path.to_string() }, depends_on });
             }
             _ => return None,
         }
@@ -812,22 +818,22 @@ fn parse_value_to_action(value: serde_json::Value) -> Option<LlmAction> {
     // Fallback: key-based schema (no "action" field)
     if value.get("done").and_then(|v| v.as_bool()) == Some(true) {
         let reason = value.get("reason").and_then(|v| v.as_str()).unwrap_or("done").to_string();
-        return Some(LlmAction::Done { reason });
+        return Some(ActionPlan { action: LlmAction::Done { reason }, depends_on: Vec::new() });
     }
     if let Some(cmd) = value.get("cmd").and_then(|v| v.as_str()) {
         let cwd = value.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
-        return Some(LlmAction::Command { cmd: cmd.to_string(), cwd });
+        return Some(ActionPlan { action: LlmAction::Command { cmd: cmd.to_string(), cwd }, depends_on: Vec::new() });
     }
     if let Some(patch) = value.get("patch").and_then(|v| v.as_str()) {
-        return Some(LlmAction::ApplyPatch { patch: patch.to_string() });
+        return Some(ActionPlan { action: LlmAction::ApplyPatch { patch: patch.to_string() }, depends_on: Vec::new() });
     }
     if let (Some(write_path), Some(content)) = (value.get("write").and_then(|v| v.as_str()), value.get("content").and_then(|v| v.as_str())) {
-        return Some(LlmAction::Write { path: write_path.to_string(), content: content.to_string() });
+        return Some(ActionPlan { action: LlmAction::Write { path: write_path.to_string(), content: content.to_string() }, depends_on: Vec::new() });
     }
     let path = value.get("path").and_then(|v| v.as_str())?;
     let old = value.get("old").and_then(|v| v.as_str())?;
     let new = value.get("new").and_then(|v| v.as_str())?;
-    Some(LlmAction::Patch { path: path.to_string(), old: old.to_string(), new: new.to_string() })
+    Some(ActionPlan { action: LlmAction::Patch { path: path.to_string(), old: old.to_string(), new: new.to_string() }, depends_on: Vec::new() })
 }
 
 fn action_payload_with_cwd(cmd: String, cwd: Option<String>) -> serde_json::Value {

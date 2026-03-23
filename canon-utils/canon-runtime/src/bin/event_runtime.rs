@@ -10,6 +10,7 @@ use canon_runtime::consumers::agent_registry::{AgentRegistryConsumer, AgentRegis
 use canon_runtime::consumers::capability_executor::CapabilityExecutor;
 use canon_runtime::consumers::check_consumer::CheckConsumer;
 use canon_runtime::consumers::error_logger::ErrorLogger;
+use canon_runtime::consumers::dispatch_consumer::DispatchConsumer;
 use canon_runtime::{spawn_kernel_processor, EventRuntime, KernelMsg};
 use crossbeam_channel as cc;
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
@@ -239,6 +240,7 @@ fn main() -> Result<()> {
         Box::new(ErrorLogger::new(None)),
         Box::new(CheckConsumer::new()),
         Box::new(AgentRegistryConsumer::new(agent_registry.clone())),
+        Box::new(DispatchConsumer::new()),
     ];
     // Goodness consumer logs metrics and emits GoodnessSnapshot on LoopVerified.
     let goodness_root = tlog_path.parent().map(|p| p.to_path_buf());
@@ -253,6 +255,14 @@ fn main() -> Result<()> {
     // set_tlog_path tells W where to append (L).  Only W calls this; only W writes L.
     runtime.set_tlog_path(tlog_path.clone());
     runtime.set_next_id(resumed_next_id);
+
+    // Emit AgentRegistered for each card in capability_config.toml so that
+    // AgentRegistryConsumer and DispatchConsumer see agents before any work arrives.
+    for payload in canon_runtime::bootstrap::load_agent_cards() {
+        runtime.emit_event(canon_event::RuntimeEvent::AgentRegistered(
+            canon_event::AgentRegistered { payload }
+        )).ok();
+    }
 
     // Read events that already exist in L at startup (in-memory after this point).
     let bootstrap_events: Vec<AnyEvent> = if tlog_path.exists() { read_any_events_from_path_with_start_seq(&tlog_path, start_seq).unwrap_or_default() } else { vec![] };

@@ -10,6 +10,7 @@ pub enum RouteKind {
     Act,
     Verify,
     Conclude,
+    Decompose,
 }
 
 impl RouteKind {
@@ -20,6 +21,7 @@ impl RouteKind {
             RouteKind::Act => "act",
             RouteKind::Verify => "verify",
             RouteKind::Conclude => "conclude",
+            RouteKind::Decompose => "decompose",
         }
     }
 }
@@ -62,7 +64,8 @@ pub fn compose_routing_prompt(input: &RoutingInput) -> String {
 - plan: produce planned actions for later execution (calls plan::execute_trigger).\n\
 - act: run the planned actions (calls act::execute_dispatch). Never pick act if there are zero queued actions — pick plan instead.\n\
 - verify: run cargo check and verify state after execution (calls verify::execute).\n\
-- conclude: select this when finish_ready=true in the snapshot. This terminates the loop. Only select conclude when the workspace is verified and the goal requirements are met.";
+- conclude: select this when finish_ready=true in the snapshot. This terminates the loop. Only select conclude when the workspace is verified and the goal requirements are met.\n\
+- decompose: split the goal into parallel sub-tasks and emit RequestDispatch events.";
 
     let recent_tool_results_text = if input.recent_tool_results.is_empty() {
         "(none)".to_string()
@@ -94,7 +97,7 @@ Route Descriptions:
 
 Return exactly one JSON object in one fenced ```json code block with schema:\n\
 {{\n\
-  \"route\": \"observe|plan|act|verify|conclude\",\n\
+  \"route\": \"observe|plan|act|verify|conclude|decompose\",\n\
   \"rationale\": \"short reason\",\n\
   \"confidence\": 0.0,\n\
   \"signals\": {{\n\

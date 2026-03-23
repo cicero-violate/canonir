@@ -195,6 +195,12 @@ impl EventRuntime {
                             self.drain_emitted_events()?;
                         }
                     }
+                    CanonPayload::AgentRegistered(ev) => {
+                        if let Ok(decoded) = serde_json::from_value::<canon_event::AgentRegistered>(ev.clone()) {
+                            self.handle_runtime_event(RuntimeEvent::AgentRegistered(decoded))?;
+                            self.drain_emitted_events()?;
+                        }
+                    }
                     CanonPayload::RequestDispatch(ev) => {
                         if let Ok(decoded) = serde_json::from_value::<canon_event::RequestDispatch>(ev.clone()) {
                             self.handle_runtime_event(RuntimeEvent::RequestDispatch(decoded))?;
