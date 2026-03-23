@@ -11,4 +11,5 @@ Here create another new test Rust project in `/workspace/ai_sandbox/canon` here
 - Ensure `cargo build` succeeds in the new project directory.
 - Add a short `README.md` describing how to build and run the project.
 - implements codex level agentic capabilities
+- 2000 LOC
 
