@@ -34,8 +34,8 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
         _ => (Vec::new(), None::<serde_json::Value>),
     };
     ctx.last_llm_signals = signals.clone();
-    if actions.len() > 1 && actions.iter().any(|a| matches!(a, LlmAction::Done { .. })) {
-        actions.retain(|a| !matches!(a, LlmAction::Done { .. }));
+    if actions.len() > 1 && actions.iter().any(|a| matches!(a.action, LlmAction::Done { .. })) {
+        actions.retain(|a| !matches!(a.action, LlmAction::Done { .. }));
     }
     if actions.is_empty() {
         return emit_plan(ctx, LoopPlanned {
@@ -52,6 +52,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
             plan_id: Some(pending.plan_id.clone()),
             plan_step_id: None,
             action_id: None,
+            depends_on: Vec::new(),
         });
     }
 
@@ -61,7 +62,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
         let plan_step_id = Uuid::new_v4().to_string();
         let action_id = plan_step_id.clone();
         let planned_span_id = Uuid::new_v4().to_string();
-        match action {
+        match action.action {
             LlmAction::Patch { path, old, new } => out.push(LoopPlanned {
                 tick: pending.tick,
                 action_kind: "patch_file".to_string(),
@@ -76,6 +77,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                 plan_step_id: Some(plan_step_id.clone()),
                 action_id: Some(action_id.clone()),
                 signals: signals.clone(),
+                depends_on: action.depends_on.clone(),
             }),
             LlmAction::ApplyPatch { patch } => out.push(LoopPlanned {
                 tick: pending.tick,
@@ -91,6 +93,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                 plan_step_id: Some(plan_step_id.clone()),
                 action_id: Some(action_id.clone()),
                 signals: signals.clone(),
+                depends_on: action.depends_on.clone(),
             }),
             LlmAction::Command { cmd, cwd } => out.push(LoopPlanned {
                 tick: pending.tick,
@@ -106,6 +109,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                 plan_step_id: Some(plan_step_id.clone()),
                 action_id: Some(action_id.clone()),
                 signals: signals.clone(),
+                depends_on: action.depends_on.clone(),
             }),
             LlmAction::Write { path, content } => out.push(LoopPlanned {
                 tick: pending.tick,
@@ -121,6 +125,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                 plan_step_id: Some(plan_step_id.clone()),
                 action_id: Some(action_id.clone()),
                 signals: signals.clone(),
+                depends_on: action.depends_on.clone(),
             }),
             LlmAction::ReadFile { path } => out.push(LoopPlanned {
                 tick: pending.tick,
@@ -136,6 +141,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                 plan_step_id: Some(plan_step_id.clone()),
                 action_id: Some(action_id.clone()),
                 signals: signals.clone(),
+                depends_on: action.depends_on.clone(),
             }),
             LlmAction::ListDir { path } => out.push(LoopPlanned {
                 tick: pending.tick,
@@ -151,6 +157,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                 plan_step_id: Some(plan_step_id.clone()),
                 action_id: Some(action_id.clone()),
                 signals: signals.clone(),
+                depends_on: action.depends_on.clone(),
             }),
             LlmAction::Done { reason } => {
                 if let Some(goal_text) = &pending.goal_text {
@@ -176,6 +183,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                     plan_step_id: Some(plan_step_id.clone()),
                     action_id: Some(action_id.clone()),
                     signals: signals.clone(),
+                    depends_on: action.depends_on.clone(),
                 });
             }
         }
@@ -209,6 +217,7 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext) -> anyhow::Res
         plan_step_id: None,
         action_id: None,
         signals: None,
+        depends_on: Vec::new(),
     })
 }
 
@@ -231,6 +240,7 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
             plan_step_id: None,
             action_id: None,
             signals: None,
+            depends_on: Vec::new(),
         });
     }
     if observed.error_count == 0 && ctx.last_done_goal.is_some() && ctx.last_done_goal == observed.goal_text {
@@ -249,6 +259,7 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
                 plan_id: None,
                 plan_step_id: None,
                 action_id: None,
+                depends_on: Vec::new(),
             });
         }
         ctx.last_done_goal = None;
@@ -260,8 +271,15 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
     let span_id = Uuid::new_v4().to_string();
     let plan_id = Uuid::new_v4().to_string();
     let include_full_goal = observed.goal_text != ctx.last_prompted_goal;
-    let prompt = build_prompt(observed, &ctx.batch_acted, &ctx.batch_tool_results, include_full_goal, &ctx.workspace);
-    let llm_call = LlmCall { request_id: request_id.clone(), prompt: prompt.to_string(), role: Some("planner".to_string()) };
+    let prompt = build_prompt(
+        observed,
+        &ctx.batch_acted,
+        &ctx.batch_tool_results,
+        include_full_goal,
+        &ctx.workspace,
+        &ctx.context_merger.prompt_section(),
+    );
+    let llm_call = LlmCall { request_id: request_id.clone(), prompt: prompt.to_string(), role: Some("planner".to_string()), agent_id: None };
 
     let plan_tool_call_id = Uuid::new_v4().to_string();
     ctx.batch_acted.clear();
@@ -294,6 +312,7 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
             request_id,
             prompt: llm_call.prompt,
             role: llm_call.role,
+            agent_id: None,
         }));
     }
 
@@ -335,6 +354,7 @@ fn check_llm_timeout(ctx: &mut LoopContext, current_tick: u64) {
         plan_id: None,
         plan_step_id: None,
         action_id: None,
+        depends_on: Vec::new(),
     });
 }
 
@@ -357,6 +377,7 @@ fn emit_tool_result(ctx: &LoopContext, tool_call_id: &str, request_id: &str, suc
     Ok(())
 }
 
+#[derive(Clone)]
 enum LlmAction {
     Patch { path: String, old: String, new: String },
     Write { path: String, content: String },
@@ -367,12 +388,20 @@ enum LlmAction {
     ListDir { path: String },
 }
 
+#[derive(Clone)]
+struct ActionPlan {
+    action: LlmAction,
+    depends_on: Vec<String>,
+}
+
+
 fn build_prompt(
     observed: &LoopObserved,
     batch_acted: &[LoopActed],
     batch_tool_results: &[ToolResult],
     _include_full_goal: bool,
     workspace: &Path,
+    sub_agent_section: &str,
 ) -> String {
     let recent_actions = batch_acted
         .iter()
@@ -515,6 +544,8 @@ Recent actions (most recent first — read_file stdout contains file contents):
 Recent tool results:
 {recent_results}
 
+{sub_agent_section}
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Return ONLY a JSON array of action objects. Do NOT wrap in an object. Do NOT include a "signals" key.
 Example:
@@ -539,6 +570,7 @@ No prose outside the code block.
         recent_actions = if recent_actions.is_empty() { "(none)".to_string() } else { recent_actions }.to_string(),
         recent_results = if recent_results.is_empty() { "(none)".to_string() } else { recent_results }.to_string(),
         workspace_facts = workspace_facts,
+        sub_agent_section = sub_agent_section,
     )
 }
 
@@ -588,7 +620,7 @@ fn extract_goal_keywords(spec: &canon_goal::GoalSpec) -> Vec<String> {
 ///   A) {"signals":{...},"actions":[...]}  — wrapper format (preferred)
 ///   B) bare JSON array                    — legacy / fence-stripped
 ///   C) {"text":"```json\n...\n```"}       — text wrapper with fenced blocks
-fn parse_llm_actions(result: &serde_json::Value) -> (Vec<LlmAction>, Option<serde_json::Value>) {
+fn parse_llm_actions(result: &serde_json::Value) -> (Vec<ActionPlan>, Option<serde_json::Value>) {
     // Shape A: wrapper object with "actions" key
     if result.is_object() && result.get("actions").is_some() {
         let signals = result.get("signals").cloned();

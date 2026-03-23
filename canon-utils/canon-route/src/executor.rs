@@ -36,6 +36,35 @@ impl RouteExecutor {
         if self.ctx.halted { return; }
         if !self.ctx.context_ready { return; }
         if self.pending_request_id.is_some() { return; }
+        // finish_ready with no pending work always routes to conclude.
+        if self.ctx.finish_ready && self.ctx.planned_pending == 0 {
+            let json = heuristic_route_json(&self.ctx);
+            self.emit_decision(&json, "deterministic:finish_ready".to_string());
+            return;
+        }
+        // Queued planned actions always route to act — the gatekeeper enforces this
+        // unconditionally, so skip the LLM round-trip entirely.
+        // Use a sentinel request_id so the guard above suppresses duplicate emissions
+        // for the remaining LoopPlanned events in the same batch.
+        if self.ctx.planned_pending > 0 {
+            let json = heuristic_route_json(&self.ctx);
+            self.pending_request_id = Some("deterministic".to_string());
+            self.emit_decision(&json, "deterministic:queued_plan".to_string());
+            return;
+        }
+        // Idle state: nothing pending, nothing mutated, nothing to verify.
+        // The only sensible next step is plan. Gatekeeper would reach the same
+        // conclusion regardless of what the LLM returns.
+        if self.ctx.planned_pending == 0
+            && !self.ctx.acted_unverified
+            && !self.ctx.workspace_dirty_tracker.any_dirty()
+            && !self.ctx.finish_ready
+            && self.ctx.context_ready
+        {
+            let json = heuristic_route_json(&self.ctx);
+            self.emit_decision(&json, "deterministic:idle_plan".to_string());
+            return;
+        }
         let prompt = self.controller.build_prompt(
             &self.ctx.mission_summary,
             &self.ctx.snapshot_text(),
@@ -50,6 +79,7 @@ impl RouteExecutor {
                 request_id,
                 prompt,
                 role: Some("router".to_string()),
+                agent_id: None,
             }));
         }
     }
@@ -81,17 +111,58 @@ impl EventConsumer for RouteExecutor {
             return;
         }
 
-        // RouteTick: fallback trigger for the initial state (no actions have run yet)
-        // and for cases where the batch settled before any ToolCalls were tracked.
-        if let RuntimeEvent::RouteTick(rt) = event {
-            self.ctx.scheduler_tick = rt.tick;
-            // Only fire on tick if no actions are in-flight (batch-settled path handles the rest).
+        // Event-driven dispatch: fire immediately when the system becomes idle or context arrives.
+        // This eliminates up to 1s of RouteTick latency on each transition.
+        // After a `done` action, force verify so finish_ready can be set correctly.
+        if let RuntimeEvent::LoopActed(a) = event {
+            if a.action_kind == "done" && self.ctx.planned_pending == 0 {
+                if self.pending_request_id.as_deref() == Some("deterministic") {
+                    self.pending_request_id = None;
+                }
+                let json = serde_json::json!({
+                    "route": "verify",
+                    "rationale": "done action executed; verify to confirm goal completion",
+                    "confidence": 0.99,
+                }).to_string();
+                self.emit_decision(&json, "deterministic:done_verify".to_string());
+                return;
+            }
+        }
+
+        let should_try = match event {
+            // New observation may have set context_ready=true for the first time.
+            RuntimeEvent::LoopObserved(_) => true,
+            // Action completed — planned_pending may have dropped to 0 (sync actions have no ToolResult).
+            RuntimeEvent::LoopActed(_) => true,
+            // Verify completed — acted_unverified/workspace_dirty cleared, new route needed.
+            RuntimeEvent::LoopVerified(_) => true,
+            _ => false,
+        };
+        if should_try {
             let idle = self.ctx.planned_pending == 0
                 && self.ctx.pending_tool_result_ids.is_empty();
             if idle {
+                // Clear the deterministic sentinel so the next dispatch is not suppressed.
+                if self.pending_request_id.as_deref() == Some("deterministic") {
+                    self.pending_request_id = None;
+                }
                 self.try_dispatch_route();
+                return;
             }
-            return;
+        }
+
+        // Planning completed — planned_pending > 0 and all tools resolved.
+        // batch_settled is suppressed for plan-only batches so we trigger here instead.
+        if let RuntimeEvent::LoopPlanned(_) = event {
+            if self.ctx.planned_pending > 0 && self.ctx.pending_tool_result_ids.is_empty() {
+                self.try_dispatch_route();
+                return;
+            }
+        }
+
+        // Track tick counter from Tick events (replaces RouteTick).
+        if let RuntimeEvent::Tick(t) = event {
+            self.ctx.scheduler_tick = t.tick;
         }
 
         // Handle routing LLM completion/failure.

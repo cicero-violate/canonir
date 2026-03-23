@@ -195,6 +195,18 @@ impl EventRuntime {
                             self.drain_emitted_events()?;
                         }
                     }
+                    CanonPayload::RequestDispatch(ev) => {
+                        if let Ok(decoded) = serde_json::from_value::<canon_event::RequestDispatch>(ev.clone()) {
+                            self.handle_runtime_event(RuntimeEvent::RequestDispatch(decoded))?;
+                            self.drain_emitted_events()?;
+                        }
+                    }
+                    CanonPayload::SubTaskResult(ev) => {
+                        if let Ok(decoded) = serde_json::from_value::<canon_event::SubTaskResult>(ev.clone()) {
+                            self.handle_runtime_event(RuntimeEvent::SubTaskResult(decoded))?;
+                            self.drain_emitted_events()?;
+                        }
+                    }
                     CanonPayload::RouteTick(ev) if canon.meta.source != "supervisor" => {
                         self.handle_runtime_event(RuntimeEvent::RouteTick(ev.clone()))?;
                         self.drain_emitted_events()?;
@@ -248,6 +260,12 @@ impl EventRuntime {
 
     pub fn emit_debug_event(&mut self, source: String, kind: String, payload: serde_json::Value) -> Result<()> {
         self.handle_runtime_event_located(RuntimeEvent::Debug(DebugEvent { source, kind, payload }), "", 0)?;
+        self.drain_emitted_events()?;
+        Ok(())
+    }
+
+    pub fn emit_event_located(&mut self, event: RuntimeEvent, file: &'static str, line: u32) -> Result<()> {
+        self.handle_runtime_event_located(event, file, line)?;
         self.drain_emitted_events()?;
         Ok(())
     }
@@ -409,6 +427,7 @@ fn runtime_event_to_wire(event: &RuntimeEvent) -> Option<canon_event::CanonEvent
         RuntimeEvent::GoalNodeRewritten(p) => CanonPayload::GoalNodeRewritten(serde_json::to_value(p).ok()?),
         RuntimeEvent::GoalEdgeDefined(p) => CanonPayload::GoalEdgeDefined(serde_json::to_value(p).ok()?),
         RuntimeEvent::GoalGraphCheckpointed(p) => CanonPayload::GoalGraphCheckpointed(serde_json::to_value(p).ok()?),
+        RuntimeEvent::Llm(p) => CanonPayload::Llm(serde_json::to_value(p).ok()?),
         _ => return None,
     };
     let source = match event {

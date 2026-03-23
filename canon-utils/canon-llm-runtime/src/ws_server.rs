@@ -145,15 +145,6 @@ impl ServerState {
 // Public bridge handle
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Emit helper — fire-and-forget; no-op if emitter not yet populated.
-// ---------------------------------------------------------------------------
-
-fn emit(cell: &OnceLock<EventEmitterHandle>, source: &'static str, kind: &'static str, payload: Value) {
-    if let Some(e) = cell.get() {
-        canon_meta::canon_emit_meta!(e; source, kind, payload);
-    }
-}
 
 #[derive(Clone)]
 pub struct WsBridge {
@@ -293,16 +284,15 @@ impl WsBridge {
 /// executor worker.  It is populated by the first LLM job so ws_server can
 /// emit bridge-level events (connection, tab lifecycle) as P→Q producers
 /// for the full process lifetime — independent of any single capability request.
-pub fn spawn(addr: SocketAddr, response_timeout_secs: u64, emitter: Arc<OnceLock<EventEmitterHandle>>) -> WsBridge {
+pub fn spawn(addr: SocketAddr, response_timeout_secs: u64, _emitter: Arc<OnceLock<EventEmitterHandle>>) -> WsBridge {
     let state = Arc::new(Mutex::new(ServerState::new()));
-    let emitter_task = emitter.clone();
     let bridge = WsBridge { state: state.clone(), next_req_id: Arc::new(AtomicU64::new(1)), next_turn_id: Arc::new(AtomicU64::new(1)), response_timeout_secs };
 
     tokio::spawn(async move {
         loop {
             match TcpListener::bind(addr).await {
                 Ok(listener) => {
-                    accept_loop(listener, state.clone(), emitter_task.clone()).await;
+                    accept_loop(listener, state.clone()).await;
                 }
                 Err(_e) => {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -314,18 +304,18 @@ pub fn spawn(addr: SocketAddr, response_timeout_secs: u64, emitter: Arc<OnceLock
     bridge
 }
 
-async fn accept_loop(listener: TcpListener, state: Arc<Mutex<ServerState>>, emitter: Arc<OnceLock<EventEmitterHandle>>) {
+async fn accept_loop(listener: TcpListener, state: Arc<Mutex<ServerState>>) {
     loop {
         match listener.accept().await {
             Ok((stream, _peer)) => {
-                handle_connection(stream, state.clone(), emitter.clone()).await;
+                handle_connection(stream, state.clone()).await;
             }
             Err(_e) => {}
         }
     }
 }
 
-async fn handle_connection(stream: TcpStream, state: Arc<Mutex<ServerState>>, emitter: Arc<OnceLock<EventEmitterHandle>>) {
+async fn handle_connection(stream: TcpStream, state: Arc<Mutex<ServerState>>) {
     let ws = match accept_async(stream).await {
         Ok(ws) => ws,
         Err(_e) => {
@@ -341,15 +331,8 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<ServerState>>, em
         st.out_tx = Some(tx_out.clone());
 
         // Drain any TURN frames that were buffered while the socket was down.
-        let queued: Vec<Value> = st.turn_replay_queue.drain(..).collect();
-        let queued_count = queued.len();
-        for frame in queued {
+        for frame in st.turn_replay_queue.drain(..) {
             let _ = tx_out.try_send(Message::Text(frame.to_string().into()));
-        }
-
-        emit(&emitter, "ws_bridge", "ws_connected", json!({}));
-        if queued_count > 0 {
-            emit(&emitter, "ws_bridge", "turns_replayed", json!({ "count": queued_count }));
         }
     }
 
@@ -366,7 +349,7 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<ServerState>>, em
 
     while let Some(result) = source.next().await {
         match result {
-            Ok(Message::Text(text)) => handle_inbound(text.as_str(), &state, &emitter).await,
+            Ok(Message::Text(text)) => handle_inbound(text.as_str(), &state).await,
             Ok(Message::Close(_)) | Err(_) => break,
             _ => {}
         }
@@ -378,14 +361,13 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<ServerState>>, em
         let mut st = state.lock().await;
         st.out_tx = None;
     }
-    emit(&emitter, "ws_bridge", "ws_disconnected", json!({}));
 }
 
 // ---------------------------------------------------------------------------
 // Inbound frame handler
 // ---------------------------------------------------------------------------
 
-async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>, emitter: &Arc<OnceLock<EventEmitterHandle>>) {
+async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
     let msg: Value = match serde_json::from_str(raw) {
         Ok(v) => v,
         Err(_) => {
@@ -409,7 +391,6 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>, emitter: &Ar
             st.live_tabs.insert(tab_id);
             let site = SiteType::from_url(url);
             st.tab_assemblers.entry(tab_id).and_modify(|asm| asm.set_site(site)).or_insert_with(|| FrameAssembler::new(site));
-            emit(emitter, "ws_bridge", "tab_opened", json!({ "tab_id": tab_id, "url": url }));
         }
 
         "TAB_CLOSED" => {
@@ -423,7 +404,6 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>, emitter: &Ar
             st.pending.remove(&tab_id);
             st.pending_turn_id.remove(&tab_id);
             st.pending_new_chat.remove(&tab_id);
-            emit(emitter, "ws_bridge", "tab_closed", json!({ "tab_id": tab_id }));
         }
 
         "TAB_READY" => {
@@ -443,7 +423,6 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>, emitter: &Ar
                     let _ = tx.send(tab_id);
                 }
             }
-            emit(emitter, "ws_bridge", "tab_ready", json!({ "tab_id": tab_id, "url": url }));
         }
 
         "INBOUND_MESSAGE" => {
@@ -524,7 +503,6 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>, emitter: &Ar
             if let Some(tx) = st.pending_new_chat.remove(&tab_id) {
                 let _ = tx.send(());
             }
-            emit(emitter, "ws_bridge", "new_chat_done", json!({ "tab_id": tab_id }));
         }
         "TEMP_CHAT_DONE" => {
             let tab_id = match msg.get("tabId").and_then(|v| v.as_u64()) {
@@ -535,7 +513,6 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>, emitter: &Ar
             if let Some(tx) = st.pending_temp_chat.remove(&tab_id) {
                 let _ = tx.send(());
             }
-            emit(emitter, "ws_bridge", "temp_chat_done", json!({ "tab_id": tab_id }));
         }
 
         _other => {}

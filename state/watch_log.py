@@ -71,10 +71,15 @@ def open_tail(path: str):
 
 
 def watch_file() -> None:
-    current = latest_log()
-    if not current:
-        print(f"no logs found in {DIR}")
-        return
+    def wait_for_log() -> str:
+        print(f"waiting for logs in {DIR} ...", flush=True)
+        while True:
+            current_log = latest_log()
+            if current_log:
+                return current_log
+            time.sleep(0.2)
+
+    current = latest_log() or wait_for_log()
 
     print(f"watching {DIR} (filtering rustc events)")
     f = open_tail(current)

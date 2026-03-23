@@ -166,6 +166,8 @@ canon_event_struct!(LoopPlanned {
     plan_step_id: Option<String>,
     #[serde(default)]
     action_id: Option<String>,
+    #[serde(default)]
+    depends_on: Vec<String>,
 });
 canon_event_struct!(LoopActed {
     tick: u64,
@@ -329,6 +331,29 @@ canon_event_struct!(LlmCall {
     prompt: String,
     #[serde(default)]
     role: Option<String>,
+    #[serde(default)]
+    agent_id: Option<String>,
+});
+canon_event_struct!(RequestDispatch {
+    dispatch_id: String,
+    parent_request_id: String,
+    agent_id: String,
+    task_prompt: String,
+    task_kind: String,
+    #[serde(default)]
+    deps: Vec<String>,
+    #[serde(default)]
+    workspace_scope: Option<String>,
+});
+canon_event_struct!(SubTaskResult {
+    dispatch_id: String,
+    agent_id: String,
+    parent_request_id: String,
+    success: bool,
+    output: serde_json::Value,
+    actions_taken: Vec<String>,
+    #[serde(default)]
+    error: Option<String>,
 });
 
 // Analysis capability
@@ -387,6 +412,8 @@ canon_event_enum!(RuntimeEvent {
     File(FileEvent),
     Bash(BashInvoke),
     Llm(LlmCall),
+    RequestDispatch(RequestDispatch),
+    SubTaskResult(SubTaskResult),
     Analysis(AnalysisEvent),
     RuntimeStateUpdated(RuntimeStateUpdated),
     NodeReady(NodeReady),

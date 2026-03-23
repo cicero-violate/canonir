@@ -1,5 +1,7 @@
 use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, Tick};
-use crate::{context::LoopContext, result::LoopStageResult, stage::LoopStageEvent};
+use crate::{context::LoopContext, result::LoopStageResult, stage::LoopStageEvent, scheduler::{ScheduledTask, infer_priority}};
+use std::time::Instant;
+use crate::stage::observe;
 use std::path::PathBuf;
 
 pub struct LoopStageExecutor {
@@ -23,9 +25,16 @@ impl EventConsumer for LoopStageExecutor {
 
     fn on_event(&mut self, event: &RuntimeEvent) {
         // State accumulation (mutations that do not emit).
+        let mut trigger_observe = false;
         match event {
-            RuntimeEvent::Tick(Tick { .. }) => {
-                // Plan timeout check (already tracked in stage/plan via context pending)
+            RuntimeEvent::Tick(Tick { tick, .. }) => {
+                self.ctx.current_tick = *tick;
+                // Bootstrap: PromptLoaded fires before this consumer registers.
+                // Trigger one observe via tlog scan so the route executor gets context_ready.
+                // The dedup guard in observe::execute suppresses subsequent identical states.
+                if self.ctx.last_observed.is_none() {
+                    trigger_observe = true;
+                }
                 for e in crate::stage::act::check_act_timeout(&mut self.ctx) {
                     if let Some(emitter) = self.ctx.emitter.as_ref() {
                         emitter.emit(e);
@@ -47,9 +56,22 @@ impl EventConsumer for LoopStageExecutor {
                 self.ctx.last_action_success = a.success;
                 self.ctx.batch_acted.push(a.clone());
                 self.ctx.last_planned_observed_tick = None;
-            }
-            RuntimeEvent::LoopPlanned(p) => {
-                self.ctx.act_queue.push_back(p.clone());
+                if let Some(action_id) = a.action_id.clone() {
+                    if let Some(paths) = self.ctx.write_paths_by_action.remove(&action_id) {
+                        for p in paths {
+                            self.ctx.file_write_tracker.release(&p);
+                        }
+                    }
+                    // Mark workspace dirty for mutating actions.
+                    const READ_ONLY_ACTIONS: &[&str] = &["list_dir", "read_file", "search_files", "done"];
+                    if !READ_ONLY_ACTIONS.contains(&a.action_kind.as_str()) {
+                        self.ctx.dirty_tracker.mark_dirty("orchestrator", Some(&action_id));
+                    }
+                    // Release dependency waits
+                    for task in self.ctx.dep_tracker.complete(&action_id) {
+                        self.ctx.scheduler.push(task);
+                    }
+                }
             }
             RuntimeEvent::LoopVerified(v) => {
                 self.ctx.last_verify_trace_id = v.trace_id.clone();
@@ -57,6 +79,19 @@ impl EventConsumer for LoopStageExecutor {
                 if v.passed {
                     self.ctx.error_count = 0;
                     self.ctx.warning_count = 0;
+                    self.ctx.dirty_tracker.mark_verified("orchestrator");
+                }
+            }
+            RuntimeEvent::SubTaskResult(r) => {
+                self.ctx.context_merger.absorb(r, &r.agent_id);
+            }
+            RuntimeEvent::LoopPlanned(p) => {
+                let priority = infer_priority(p, self.ctx.goodness, self.ctx.delta_g);
+                let task = ScheduledTask { priority, enqueued_at: Instant::now(), seq: 0, agent_id: None, plan: p.clone() };
+                if !p.depends_on.is_empty() {
+                    self.ctx.dep_tracker.add(task);
+                } else {
+                    self.ctx.scheduler.push(task);
                 }
             }
             RuntimeEvent::LoopRewarded(r) => {
@@ -73,6 +108,7 @@ impl EventConsumer for LoopStageExecutor {
                 if let Some(content) = data.get("content").and_then(|c| c.as_str()) {
                     self.ctx.goal_text = Some(content.to_string());
                     self.ctx.last_prompted_goal = Some(content.to_string());
+                    trigger_observe = true;
                 }
             }
             RuntimeEvent::ErrorOccurred(err) => {
@@ -92,11 +128,21 @@ impl EventConsumer for LoopStageExecutor {
                     let drop_n = self.ctx.recent_compiler_errors.len() - 16;
                     self.ctx.recent_compiler_errors.drain(0..drop_n);
                 }
+                trigger_observe = true;
             }
             RuntimeEvent::ToolResult(r) if r.kind != "llm.plan" => {
                 self.ctx.batch_tool_results.push(r.clone());
             }
             _ => {}
+        }
+
+        // Emit LoopObserved when state changes (event-driven, not tick-driven).
+        if trigger_observe && !self.ctx.halted {
+            if let Ok(LoopStageResult::Emit(e)) = observe::execute(&mut self.ctx) {
+                if let Some(emitter) = self.ctx.emitter.as_ref() {
+                    emitter.emit_located(e, file!(), line!());
+                }
+            }
         }
 
         if self.ctx.halted {

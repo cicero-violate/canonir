@@ -1,4 +1,4 @@
-use canon_event::{RouteTick, RuntimeEvent};
+use canon_event::RuntimeEvent;
 
 use crate::Reducer;
 
@@ -12,8 +12,8 @@ pub struct Performance {
 impl Reducer for Performance {
     fn update(&mut self, event: &RuntimeEvent) {
         match event {
-            RuntimeEvent::RouteTick(RouteTick { tick }) => {
-                self.last_tick = *tick;
+            RuntimeEvent::Tick(t) => {
+                self.last_tick = t.tick;
                 // drop old entries beyond 10 tick window
                 self.actions_window.retain(|(t, _)| self.last_tick.saturating_sub(*t) <= 10);
             }

@@ -1,4 +1,4 @@
-use canon_event::{CapabilityCompleted, CapabilityFailed, RuntimeEvent, LoopVerified, RouteSelected, Tick};
+use canon_event::{CapabilityCompleted, CapabilityFailed, RuntimeEvent, LoopVerified, RouteSelected};
 
 use crate::{context::LoopContext, result::LoopStageResult};
 
@@ -9,7 +9,6 @@ pub mod verify;
 pub mod reward;
 
 pub enum LoopStageEvent {
-    Observe(Tick),
     Scan(RouteSelected),
     PlanTrigger(RouteSelected),
     ActDispatch(RouteSelected),
@@ -23,7 +22,6 @@ pub enum LoopStageEvent {
 impl LoopStageEvent {
     pub fn execute(self, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
         match self {
-            LoopStageEvent::Observe(t) => observe::execute(t, ctx),
             LoopStageEvent::Scan(_rs) => Ok(LoopStageResult::Noop),
             LoopStageEvent::PlanTrigger(d) => plan::execute_trigger(d, ctx),
             LoopStageEvent::ActDispatch(d) => act::execute_dispatch(d, ctx),
@@ -56,7 +54,6 @@ impl TryFrom<RuntimeEvent> for LoopStageEvent {
     type Error = RuntimeEvent;
     fn try_from(e: RuntimeEvent) -> Result<Self, RuntimeEvent> {
         match e {
-            RuntimeEvent::Tick(t) => Ok(LoopStageEvent::Observe(t)),
             RuntimeEvent::RouteSelected(rs) => match rs.approved_route.as_str() {
                 "plan" => Ok(LoopStageEvent::PlanTrigger(rs)),
                 "act" => Ok(LoopStageEvent::ActDispatch(rs)),

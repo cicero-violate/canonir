@@ -2,6 +2,8 @@ pub mod context;
 pub mod result;
 pub mod stage;
 pub mod executor;
+pub mod scheduler;
+pub mod merge;
 
 pub use context::LoopContext;
 pub use executor::LoopStageExecutor;

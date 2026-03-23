@@ -1,11 +1,12 @@
 use anyhow::{anyhow, Result};
-use canon_event::{RuntimeEvent, RouteTick, EVENT_SCHEMA_VERSION};
+use canon_event::EVENT_SCHEMA_VERSION;
 use canon_event_store::replay_graph_from_tlog;
 use canon_event_store::AnyEvent;
 use canon_event_store::{extract_rustc_event, read_any_events_from_path, read_any_events_from_path_with_start_seq};
 use canon_route::RouteExecutor;
 use canon_loop::LoopStageExecutor;
 use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry, prompts_dir, reload_prompt_file};
+use canon_runtime::consumers::agent_registry::{AgentRegistryConsumer, AgentRegistryHandle};
 use canon_runtime::consumers::capability_executor::CapabilityExecutor;
 use canon_runtime::consumers::check_consumer::CheckConsumer;
 use canon_runtime::consumers::error_logger::ErrorLogger;
@@ -155,7 +156,6 @@ fn handle_control_msg(
     match msg {
         ControlMsg::Tick => {
             *scheduler_tick = scheduler_tick.saturating_add(1);
-            runtime.emit_event(RuntimeEvent::RouteTick(RouteTick { tick: *scheduler_tick }))?;
             runtime.emit_tick()?;
             runtime.flush_emitted_events()?;
             if *processed != *last_saved_processed
@@ -232,11 +232,13 @@ fn main() -> Result<()> {
     bootstrap_config(&tlog_path, &prompt_registry);
 
     let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let agent_registry = AgentRegistryHandle::default();
     let mut consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
         Box::new(LoopStageExecutor::new(workspace.clone(), tlog_path.clone())),
         Box::new(RouteExecutor::new(workspace.clone())),
         Box::new(ErrorLogger::new(None)),
         Box::new(CheckConsumer::new()),
+        Box::new(AgentRegistryConsumer::new(agent_registry.clone())),
     ];
     // Goodness consumer logs metrics and emits GoodnessSnapshot on LoopVerified.
     let goodness_root = tlog_path.parent().map(|p| p.to_path_buf());

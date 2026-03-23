@@ -34,6 +34,7 @@ pub enum CanonPayload {
     ToolResult(serde_json::Value),
     AgentRegistered(serde_json::Value),
     RequestDispatch(serde_json::Value),
+    SubTaskResult(serde_json::Value),
     RustcEvent(serde_json::Value),
     EditEvent(serde_json::Value),
     SupervisorEvent(serde_json::Value),
@@ -43,6 +44,7 @@ pub enum CanonPayload {
     GoalEdgeDefined(serde_json::Value),
     GoalGraphCheckpointed(serde_json::Value),
     GoodnessSnapshot(serde_json::Value),
+    Llm(serde_json::Value),
     #[serde(other)]
     Unknown,
 }
@@ -71,6 +73,7 @@ impl CanonPayload {
             CanonPayload::ToolResult(_) => "tool_result",
             CanonPayload::AgentRegistered(_) => "agent_registered",
             CanonPayload::RequestDispatch(_) => "request_dispatch",
+            CanonPayload::SubTaskResult(_) => "sub_task_result",
             CanonPayload::RustcEvent(_) => "rustc_event",
             CanonPayload::EditEvent(_) => "edit_event",
             CanonPayload::SupervisorEvent(_) => "supervisor_event",
@@ -80,6 +83,7 @@ impl CanonPayload {
             CanonPayload::GoalEdgeDefined(_) => "goal_edge_defined",
             CanonPayload::GoalGraphCheckpointed(_) => "goal_graph_checkpointed",
             CanonPayload::GoodnessSnapshot(_) => "goodness_snapshot",
+            CanonPayload::Llm(_) => "llm_call",
             CanonPayload::Unknown => "unknown",
         }
     }
@@ -107,6 +111,7 @@ impl CanonPayload {
             | CanonPayload::ToolResult(v)
             | CanonPayload::AgentRegistered(v)
             | CanonPayload::RequestDispatch(v)
+            | CanonPayload::SubTaskResult(v)
             | CanonPayload::RustcEvent(v)
             | CanonPayload::EditEvent(v)
             | CanonPayload::SupervisorEvent(v)
@@ -115,7 +120,8 @@ impl CanonPayload {
             | CanonPayload::GoalNodeRewritten(v)
             | CanonPayload::GoalEdgeDefined(v)
             | CanonPayload::GoalGraphCheckpointed(v)
-            | CanonPayload::GoodnessSnapshot(v) => Some(v.clone()),
+            | CanonPayload::GoodnessSnapshot(v)
+            | CanonPayload::Llm(v) => Some(v.clone()),
             CanonPayload::Unknown => None,
         }
     }
@@ -143,6 +149,7 @@ impl CanonPayload {
             "tool_result" => CanonPayload::ToolResult(data),
             "agent_registered" => CanonPayload::AgentRegistered(data),
             "request_dispatch" => CanonPayload::RequestDispatch(data),
+            "sub_task_result" => CanonPayload::SubTaskResult(data),
             "rustc_event" => CanonPayload::RustcEvent(data),
             "edit_event" => CanonPayload::EditEvent(data),
             "supervisor_event" => CanonPayload::SupervisorEvent(data),
@@ -152,6 +159,7 @@ impl CanonPayload {
             "goal_edge_defined" => CanonPayload::GoalEdgeDefined(data),
             "goal_graph_checkpointed" => CanonPayload::GoalGraphCheckpointed(data),
             "goodness_snapshot" => CanonPayload::GoodnessSnapshot(data),
+            "llm_call" => CanonPayload::Llm(data),
             _ => CanonPayload::Unknown,
         }
     }

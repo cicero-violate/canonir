@@ -1,10 +1,33 @@
 use canon_decision::JournalLine;
-use canon_event::{RuntimeEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult};
+use canon_event::{RuntimeEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult, SubTaskResult};
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
 use canon_judgment::{LlmSignals, RuntimeSignals};
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
+
+#[derive(Default, Clone)]
+pub struct WorkspaceDirtyTracker {
+    dirty_by_agent: HashMap<String, Vec<String>>,
+}
+
+impl WorkspaceDirtyTracker {
+    pub fn mark_dirty(&mut self, agent: &str, action_id: Option<&str>) {
+        let entry = self.dirty_by_agent.entry(agent.to_string()).or_default();
+        if let Some(a) = action_id {
+            entry.push(a.to_string());
+        }
+    }
+    pub fn mark_verified(&mut self, agent: &str) {
+        self.dirty_by_agent.remove(agent);
+    }
+    pub fn any_dirty(&self) -> bool {
+        !self.dirty_by_agent.is_empty()
+    }
+    pub fn all_clean(&self) -> bool {
+        self.dirty_by_agent.is_empty()
+    }
+}
 
 #[derive(Default)]
 pub struct RouteContext {
@@ -13,7 +36,7 @@ pub struct RouteContext {
     pub mission_summary: String,
     pub mission_goal_spec: Option<GoalSpec>,
     pub context_ready: bool,
-    pub workspace_dirty: bool,
+    pub workspace_dirty_tracker: WorkspaceDirtyTracker,
     pub planned_pending: usize,
     pub acted_unverified: bool,
     pub last_action_failed: bool,
@@ -30,6 +53,10 @@ pub struct RouteContext {
     pub batch_settled: Option<(u32, bool)>, // (result_count, any_failed)
     batch_result_count: u32,
     batch_any_failed: bool,
+    /// True when the current batch contains only llm.plan calls — routing deferred to LoopPlanned.
+    pub batch_is_plan_only: bool,
+    /// Maps action_id → (action_kind, llm_request_id) for enriching ToolResult metadata.
+    action_meta: HashMap<String, (String, Option<String>)>,
 }
 
 impl RouteContext {
@@ -41,10 +68,10 @@ impl RouteContext {
         RuntimeSignals {
             context_ready: self.context_ready,
             has_queued_plan: self.planned_pending > 0,
-            workspace_dirty: self.workspace_dirty,
+            workspace_dirty: self.workspace_dirty_tracker.any_dirty(),
             performed_recently: self.acted_unverified,
             last_action_failed: self.last_action_failed,
-            finish_ready: self.finish_ready,
+            finish_ready: self.finish_ready && self.workspace_dirty_tracker.all_clean(),
             llm_signals: self.last_llm_signals.as_ref().map(LlmSignals::from_value),
             goodness: self.goodness,
             delta_g: self.delta_g,
@@ -56,7 +83,7 @@ impl RouteContext {
             "tick={tick}\ncontext_ready={context}\nworkspace_dirty={dirty}\nplanned_pending={pending}\nacted_unverified={unverified}\nfinish_ready={finish}\nlast_action_kind={action}\ngoodness={goodness}\ndelta_g={delta_g}",
             tick = self.scheduler_tick,
             context = self.context_ready,
-            dirty = self.workspace_dirty,
+            dirty = self.workspace_dirty_tracker.any_dirty(),
             pending = self.planned_pending,
             unverified = self.acted_unverified,
             finish = self.finish_ready,
@@ -95,6 +122,10 @@ impl RouteContext {
                 if let Some(sig) = signals {
                     self.last_llm_signals = Some(sig.clone());
                 }
+                // Record action_id → (action_kind, llm_request_id) for ToolResult enrichment.
+                if let Some(aid) = action_id {
+                    self.action_meta.insert(aid.clone(), (action_kind.clone(), llm_request_id.clone()));
+                }
                 let mut summary = format!("planned action={action_kind}");
                 if let Some(plan_id) = plan_id {
                     summary.push_str(&format!(" plan_id={plan_id}"));
@@ -107,13 +138,13 @@ impl RouteContext {
                 }
                 self.push_journal("plan", summary);
             }
-            RuntimeEvent::LoopActed(LoopActed { action_kind, capability_request_id, tool_call_id, tool_result_id, success, stderr, .. }) => {
+            RuntimeEvent::LoopActed(LoopActed { action_kind, capability_request_id, tool_call_id, tool_result_id, success, stderr, action_id, .. }) => {
                 self.planned_pending = self.planned_pending.saturating_sub(1);
                 // Only mark dirty/acted_unverified for mutating actions.
-                const READ_ONLY_ACTIONS: &[&str] = &["list_dir", "read_file", "search_files"];
+                const READ_ONLY_ACTIONS: &[&str] = &["list_dir", "read_file", "search_files", "done"];
                 if !READ_ONLY_ACTIONS.contains(&action_kind.as_str()) {
                     self.acted_unverified = true;
-                    self.workspace_dirty = true;
+                    self.workspace_dirty_tracker.mark_dirty("orchestrator", action_id.as_deref());
                 }
                 if stderr != "skipped:batch_aborted" {
                     self.last_action_failed = !success;
@@ -133,12 +164,14 @@ impl RouteContext {
                 }
                 self.push_journal("act", summary);
             }
-            RuntimeEvent::LoopVerified(LoopVerified { compiler_clean, diagnostics, .. }) => {
+            RuntimeEvent::LoopVerified(LoopVerified { compiler_clean, passed, diagnostics, .. }) => {
                 self.acted_unverified = false;
-                self.workspace_dirty = false;
-                let system_satisfied = crate::helpers::evaluate_goal_satisfied(self.mission_goal_spec.as_ref(), workspace);
+                self.workspace_dirty_tracker.mark_verified("orchestrator");
+                let done_action = self.last_action_kind == "done";
+                let system_satisfied = done_action && *passed
+                    || crate::helpers::evaluate_goal_satisfied(self.mission_goal_spec.as_ref(), workspace);
                 self.finish_ready = *compiler_clean && system_satisfied;
-                self.push_journal("verify", format!("passed={} system_satisfied={} diagnostics={}", compiler_clean, system_satisfied, diagnostics.join("|")));
+                self.push_journal("verify", format!("passed={} done_action={done_action} system_satisfied={} diagnostics={}", compiler_clean, system_satisfied, diagnostics.join("|")));
             }
             RuntimeEvent::LoopRewarded(LoopRewarded { halt, .. }) => {
                 if *halt {
@@ -146,12 +179,22 @@ impl RouteContext {
                 }
                 self.push_journal("reward", format!("halt={halt}"));
             }
-            RuntimeEvent::ToolCall(ToolCall { tool_call_id, .. }) => {
+            RuntimeEvent::SubTaskResult(SubTaskResult { agent_id, success, .. }) => {
+                // Treat sub-task results with writes as dirty until reconcile; conservative: any sub-task success toggles acted_unverified.
+                self.workspace_dirty_tracker.mark_dirty(agent_id, None);
+                if *success {
+                    self.acted_unverified = true;
+                }
+            }
+            RuntimeEvent::ToolCall(ToolCall { tool_call_id, kind, .. }) => {
                 // Opening a new call: if set was empty this starts a new batch.
                 if self.pending_tool_result_ids.is_empty() {
                     self.batch_result_count = 0;
                     self.batch_any_failed = false;
                     self.batch_settled = None;
+                    self.batch_is_plan_only = kind == "llm.plan";
+                } else if kind != "llm.plan" {
+                    self.batch_is_plan_only = false;
                 }
                 self.pending_tool_result_ids.insert(tool_call_id.clone());
             }
@@ -166,9 +209,14 @@ impl RouteContext {
                     output_text.truncate(512);
                     output_text.push_str("...<truncated>");
                 }
+                let (action_kind, llm_request_id) = self.action_meta.get(node_id)
+                    .cloned()
+                    .unwrap_or_default();
                 self.recent_tool_results.push(json!({
                     "node_id": node_id,
                     "kind": kind,
+                    "action": action_kind,
+                    "llm_request_id": llm_request_id,
                     "success": success,
                     "request_id": request_id,
                     "tool_call_id": tool_call_id,
@@ -179,7 +227,9 @@ impl RouteContext {
                     self.recent_tool_results.remove(0);
                 }
                 // If all pending calls have now resolved, mark the batch as settled.
-                if self.pending_tool_result_ids.is_empty() && self.planned_pending == 0 {
+                // Skip for plan-only batches — routing is deferred to LoopPlanned so that
+                // planned_pending is already updated when the route is selected.
+                if self.pending_tool_result_ids.is_empty() && self.planned_pending == 0 && !self.batch_is_plan_only {
                     self.batch_settled = Some((self.batch_result_count, self.batch_any_failed));
                 }
                 self.push_journal("tool", format!("tool_result kind={kind} success={success} tool_call_id={tool_call_id} tool_result_id={tool_result_id} output={output_text}"));
@@ -187,7 +237,7 @@ impl RouteContext {
             RuntimeEvent::RuntimeStateUpdated(updated) => {
                 let dirty = updated.payload.get("workspace_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
                 if dirty {
-                    self.workspace_dirty = true;
+                    self.workspace_dirty_tracker.mark_dirty("orchestrator", None);
                     let crate_name = updated.payload.get("crate").and_then(|v| v.as_str()).unwrap_or("unknown");
                     self.push_journal("observe", format!("workspace_dirty=true crate={crate_name}"));
                 }

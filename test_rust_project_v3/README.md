@@ -1,20 +1,22 @@
 # test_rust_project_v3
 
-A simple Rust binary crate created for testing agentic workflows.
+This is a Rust binary crate demonstrating extended agentic capabilities.
 
 ## Build
 
-```bash
+```sh
 cargo build
 ```
 
 ## Run
 
-```bash
+```sh
 cargo run
 ```
 
-## Description
+## Features
 
-This project demonstrates a minimal Rust setup and can be extended with agent-like capabilities.
+- Modular agent system
+- Task planning and execution scaffolding
+- Extensible architecture (~2000 LOC target)
 

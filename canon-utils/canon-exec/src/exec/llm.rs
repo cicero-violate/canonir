@@ -14,6 +14,7 @@ pub(crate) struct LlmWork {
     name: &'static str,
     prompt: String,
     role: Option<String>,
+    agent_id: Option<String>,
     raw: bool,
     emitter: EventEmitterHandle,
 }
@@ -69,15 +70,19 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                 let _ = std::fs::create_dir_all(&llm_log_dir);
                 let mut llm_call_counter: u32 = next_llm_call_counter(&llm_log_dir);
                 for job in work_rx.iter() {
-                    let LlmWork { request_id, name, prompt, role, raw, emitter } = job;
+                    let LlmWork { request_id, name, prompt, role, agent_id, raw, emitter } = job;
                     let _ = ws_emitter_thread.set(emitter.clone());
                     let start = Instant::now();
-                    canon_meta::canon_emit_meta!(emitter; "llm_executor", "request_start",
-                        json!({ "request_id": request_id, "name": name }));
                     let is_planner_role = role.as_deref() == Some("planner");
                     let bust_cache = config.planner_refine_on_cache && is_planner_role;
                     let requested_role = role.clone().unwrap_or_default();
-                    let selected = if let Some(role_name) = role.as_deref() {
+                    let selected = if let Some(aid) = agent_id.as_deref() {
+                        config
+                            .llm_endpoints
+                            .iter()
+                            .find(|e| e.id == aid)
+                            .or_else(|| config.llm_endpoints.iter().find(|e| e.url.contains(aid)))
+                    } else if let Some(role_name) = role.as_deref() {
                         config
                             .llm_endpoints
                             .iter()
@@ -107,14 +112,9 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                     let delay = config.llm_retry_delay_secs;
                     let role_content = default_role_content(role.as_deref().or(endpoint.role.as_deref()), &endpoint.id);
                     let prompt_with_request_id = format!("{{\"request_id\":\"{}\"}}\n{}", request_id, prompt);
-                    canon_meta::canon_emit_meta!(emitter; "llm_executor", "request_dispatch",
-                    json!({
-                        "request_id": request_id,
-                        "endpoint": endpoint.id,
-                        "url": endpoint.url
-                    }));
                     let dispatched_ms = now_ms();
                     let call_n = llm_call_counter;
+
                     llm_call_counter += 1;
                     let req_tag = format!("{dispatched_ms}_{call_n:04}");
                     let req_path = format!("{}/{}_request.json", llm_log_dir, req_tag);
@@ -216,24 +216,11 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                 "finalized_ms": finalized_ms,
                             });
                             let _ = std::fs::write(&req_path, serde_json::to_string_pretty(&req_done).unwrap_or_default());
-                            canon_meta::canon_emit_meta!(emitter; "llm_executor", "llm_response",
-                            json!({
-                                "request_id": request_id,
-                                "endpoint":   endpoint.id,
-                                "duration_ms": elapsed_ms,
-                                "bytes":      payload.to_string().len(),
-                                "parse_ok":   parse.parse_ok,
-                                "parse_mode": parse.parse_mode,
-                                "parse_blocks": parse.block_count,
-                                "valid_action_count": parse.valid_action_count,
-                            }));
                             canon_meta::canon_emit_meta!(emitter; CapabilityCompleted(canon_event::CapabilityCompleted {
                                 request_id: request_id.clone(),
                                 capability: name,
                                 result: CapabilityResult::Llm(LlmResult { success: true, duration_ms: elapsed_ms, response: payload.clone() }),
                             }));
-                            canon_meta::canon_emit_meta!(emitter; "llm_executor", "request_completed",
-                                json!({ "request_id": request_id }));
                         }
                         Err(err) => {
                             let finalized_ms = now_ms();
@@ -269,8 +256,6 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                 Some(request_id.clone()),
                             )));
                             canon_meta::canon_emit_meta!(emitter; CapabilityFailed(canon_event::CapabilityFailed { request_id: request_id.clone(), capability: name, error: err.to_string() }));
-                            canon_meta::canon_emit_meta!(emitter; "llm_executor", "request_failed",
-                                json!({ "request_id": request_id, "error": err.to_string() }));
                         }
                     }
                 }
@@ -291,6 +276,7 @@ impl Executable for LlmCall {
             name: "llm.call",
             prompt: self.prompt,
             role: self.role,
+            agent_id: self.agent_id,
             raw: false,
             emitter: ctx.emitter,
         })

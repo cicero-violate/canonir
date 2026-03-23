@@ -14,6 +14,7 @@ fn main() -> Result<()> {
         request_id: format!("llm-smoke-{}", std::process::id()),
         prompt: "Return the JSON: {\"ok\":true}".to_string(),
         role: None,
+        agent_id: None,
     });
     let exec = ExecutableEvent::try_from(event).expect("llm call should be executable");
     let ctx = ExecutionContext { workspace: PathBuf::from("/workspace/ai_sandbox/canon"), emitter: std::sync::Arc::new(NoopEmitter) };

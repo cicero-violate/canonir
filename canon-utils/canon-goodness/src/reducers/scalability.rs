@@ -25,7 +25,7 @@ impl Reducer for Scalability {
             RuntimeEvent::LoopActed(a) if a.success => {
                 self.completed = self.completed.saturating_add(1);
             }
-            RuntimeEvent::RouteTick(t) => {
+            RuntimeEvent::Tick(t) => {
                 self.ticks = t.tick;
             }
             _ => {}

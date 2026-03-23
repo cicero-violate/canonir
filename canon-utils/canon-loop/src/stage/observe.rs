@@ -1,11 +1,13 @@
-use canon_event::{CanonEvent, CanonPayload, RuntimeEvent, LoopObserved, Tick};
+use canon_event::{CanonEvent, CanonPayload, RuntimeEvent, LoopObserved};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::{context::LoopContext, result::LoopStageResult};
 
-pub fn execute(t: Tick, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+/// Emit a LoopObserved if state has changed since the last observation.
+/// Called directly from the executor on state-changing events, not on every tick.
+pub fn execute(ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
     if ctx.goal_text.is_none() {
         ctx.goal_text = scan_tlog_for_goal(ctx.tlog_path.as_path());
     }
@@ -24,7 +26,7 @@ pub fn execute(t: Tick, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult
 
     let workspace_facts = build_workspace_facts(&ctx.goal_text);
     let payload = LoopObserved {
-        tick: t.tick,
+        tick: ctx.current_tick,
         error_count: ctx.error_count,
         warning_count: ctx.warning_count,
         compiler_errors: ctx.recent_compiler_errors.clone(),
@@ -82,11 +84,19 @@ fn extract_target_path(goal: &str) -> Option<String> {
     goal.lines()
         .find_map(|line| {
             let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("Target:") {
-                return Some(rest.trim().to_string());
+            // "Target: /path" or "target: /path"
+            for prefix in &["Target:", "target:"] {
+                if let Some(rest) = trimmed.strip_prefix(prefix) {
+                    let v = rest.trim().to_string();
+                    if !v.is_empty() { return Some(v); }
+                }
             }
-            if let Some(rest) = trimmed.strip_prefix("target:") {
-                return Some(rest.trim().to_string());
+            // "- Project path: /path" (markdown list under ## Target)
+            for prefix in &["- Project path:", "- project path:", "Project path:"] {
+                if let Some(rest) = trimmed.strip_prefix(prefix) {
+                    let v = rest.trim().trim_matches('`').to_string();
+                    if !v.is_empty() { return Some(v); }
+                }
             }
             None
         })

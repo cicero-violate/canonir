@@ -16,7 +16,7 @@ pub fn heuristic_route_json(ctx: &RouteContext) -> String {
         canon_decision::RouteKind::Act
     } else if ctx.acted_unverified {
         canon_decision::RouteKind::Verify
-    } else if ctx.workspace_dirty {
+    } else if ctx.workspace_dirty_tracker.any_dirty() {
         canon_decision::RouteKind::Act
     } else if ctx.context_ready {
         canon_decision::RouteKind::Plan
@@ -29,7 +29,7 @@ pub fn heuristic_route_json(ctx: &RouteContext) -> String {
         "confidence": 0.75,
         "signals": {
             "context_ready": ctx.context_ready,
-            "workspace_dirty": ctx.workspace_dirty,
+            "workspace_dirty": ctx.workspace_dirty_tracker.any_dirty(),
             "planned_pending": ctx.planned_pending,
             "acted_unverified": ctx.acted_unverified,
             "finish_ready": ctx.finish_ready,
@@ -58,7 +58,7 @@ pub fn request_route_via_llm_call(
     _last_tool_result: Option<serde_json::Value>,
 ) -> Result<String> {
     let request_id = format!("route-{}", uuid::Uuid::new_v4());
-    let event = RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt: prompt.clone(), role: Some("router".to_string()) });
+    let event = RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt: prompt.clone(), role: Some("router".to_string()), agent_id: None });
     let (tx, rx) = cc::unbounded::<RuntimeEvent>();
     let emitter: EventEmitterHandle = std::sync::Arc::new(DirectEventEmitter { tx });
     let ctx = ExecutionContext { workspace: workspace.to_path_buf(), emitter: emitter.clone() };

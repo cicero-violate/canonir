@@ -1,7 +1,9 @@
 use canon_event::{EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, ToolResult};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
+use crate::scheduler::{Scheduler, DependencyTracker};
+use crate::merge::{FileWriteTracker, ContextMerger, WorkspaceDirtyTracker};
 
 #[derive(Clone, Default)]
 pub struct PendingPlan {
@@ -98,7 +100,8 @@ pub struct LoopContext {
     pub last_prompted_goal: Option<String>,
 
     // Act
-    pub act_queue: VecDeque<LoopPlanned>,
+    pub scheduler: Scheduler,
+    pub dep_tracker: DependencyTracker,
     pub pending_act: Option<PendingAct>,
     pub artifact_dir: PathBuf,
     pub artifact_counter: u32,
@@ -107,6 +110,10 @@ pub struct LoopContext {
     pub act_batch_tracker: HashMap<String, BatchStatus>,
     pub last_act_reconcile: Option<Instant>,
     pub destructive_cmd_policy: DestructiveCmdPolicy,
+    pub file_write_tracker: FileWriteTracker,
+    pub write_paths_by_action: HashMap<String, Vec<PathBuf>>,
+    pub dirty_tracker: WorkspaceDirtyTracker,
+    pub context_merger: ContextMerger,
 
     // Verify
     pub last_verify_trace_id: Option<String>,
@@ -128,6 +135,7 @@ pub struct LoopContext {
     pub delta_g: Option<f32>,
     pub last_observed_error_count: u64,
     pub last_observed_goal_hash: u64,
+    pub current_tick: u64,
 }
 
 impl LoopContext {
@@ -148,7 +156,8 @@ impl LoopContext {
             batch_acted: Vec::new(),
             batch_tool_results: Vec::new(),
             last_prompted_goal: None,
-            act_queue: VecDeque::new(),
+            scheduler: Scheduler::new(),
+            dep_tracker: DependencyTracker::default(),
             pending_act: None,
             artifact_dir: default_artifact_dir(&workspace),
             artifact_counter: next_tool_artifact_counter(&default_artifact_dir(&workspace)),
@@ -157,6 +166,10 @@ impl LoopContext {
             act_batch_tracker: HashMap::new(),
             last_act_reconcile: None,
             destructive_cmd_policy: DestructiveCmdPolicy::from_env(),
+            file_write_tracker: FileWriteTracker::default(),
+            write_paths_by_action: HashMap::new(),
+            dirty_tracker: WorkspaceDirtyTracker::default(),
+            context_merger: ContextMerger::default(),
             last_verify_trace_id: None,
             last_verify_execution_id: None,
             last_act_span_id: None,
@@ -174,6 +187,7 @@ impl LoopContext {
             delta_g: None,
             last_observed_error_count: 0,
             last_observed_goal_hash: 0,
+            current_tick: 0,
         }
     }
 }

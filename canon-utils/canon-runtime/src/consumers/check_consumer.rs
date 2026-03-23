@@ -1,4 +1,4 @@
-use canon_check::{default_checks, run_checks, Check, CheckResult};
+use canon_check::{default_checks, run_checks, Check};
 use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter};
 
 pub struct CheckConsumer {
@@ -36,25 +36,6 @@ impl EventConsumer for CheckConsumer {
             return;
         }
         let value = serde_json::json!({ "source": d.source, "kind": d.kind, "payload": d.payload });
-
-        let Some(emitter) = self.emitter.as_ref() else {
-            return;
-        };
-
-        for result in run_checks(&self.checks, &value) {
-            let (severity, items): (&str, Vec<(&str, &str)>) = match &result {
-                CheckResult::Warn(w) => ("warn", w.iter().map(|x| (x.check, x.message.as_str())).collect()),
-                CheckResult::Err(e) => ("error", e.iter().map(|x| (x.check, x.message.as_str())).collect()),
-                CheckResult::Ok => continue,
-            };
-            for (check, message) in items {
-                let payload = serde_json::json!({
-                    "check": check,
-                    "severity": severity,
-                    "message": message,
-                });
-                let _ = canon_meta::canon_emit_meta!(emitter; "canon_check", severity, payload);
-            }
-        }
+        let _ = run_checks(&self.checks, &value);
     }
 }

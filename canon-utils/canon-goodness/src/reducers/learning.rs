@@ -1,4 +1,4 @@
-use canon_event::{RouteTick, RuntimeEvent};
+use canon_event::{Tick, RuntimeEvent};
 
 use crate::Reducer;
 
@@ -10,7 +10,7 @@ pub struct Learning {
 
 impl Reducer for Learning {
     fn update(&mut self, event: &RuntimeEvent) {
-        if let RuntimeEvent::RouteTick(RouteTick { tick }) = event {
+        if let RuntimeEvent::Tick(Tick { tick }) = event {
             self.tick = *tick;
         }
         if let RuntimeEvent::LoopActed(a) = event {

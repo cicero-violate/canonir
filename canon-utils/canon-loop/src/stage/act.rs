@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::{
     context::{DestructiveCmdPolicy, LoopContext, PendingAct},
+    merge::extract_written_paths,
     result::LoopStageResult,
 };
 
@@ -17,24 +18,23 @@ pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Re
     if ctx.pending_act.is_some() {
         return Ok(LoopStageResult::Noop);
     }
-    if ctx.act_queue.is_empty() {
+    if ctx.scheduler.is_empty() {
         ctx.active_batch_llm_request_id = None;
         return Ok(LoopStageResult::Noop);
     }
-    // set active batch
-    ctx.active_batch_llm_request_id = ctx.act_queue.front().and_then(|p| p.llm_request_id.clone());
     let mut events = Vec::new();
     while ctx.pending_act.is_none() {
-        let Some(next) = ctx.act_queue.front() else {
+        let task = if let Some(batch_id) = ctx.active_batch_llm_request_id.as_deref() {
+            ctx.scheduler.pop_for_llm(Some(batch_id))
+        } else {
+            ctx.scheduler.pop_any()
+        };
+        let Some(task) = task else {
             ctx.active_batch_llm_request_id = None;
             break;
         };
-        let same_batch = next.llm_request_id == ctx.active_batch_llm_request_id;
-        if !same_batch {
-            break;
-        }
-        let next = ctx.act_queue.pop_front().expect("front exists");
-        match dispatch_plan(ctx, &next)? {
+        ctx.active_batch_llm_request_id = task.plan.llm_request_id.clone();
+        match dispatch_plan(ctx, &task.plan)? {
             LoopStageResult::Emit(e) => events.push(e),
             LoopStageResult::EmitMany(evs) => events.extend(evs),
             LoopStageResult::Deferred | LoopStageResult::Noop => {}
@@ -68,9 +68,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
     } else {
         // Continue dispatching remaining same-batch actions.
         while ctx.pending_act.is_none() {
-            let Some(next) = ctx.act_queue.front() else { break; };
-            if next.llm_request_id != llm_request_id { break; }
-            let next = ctx.act_queue.pop_front().expect("front exists");
+            let Some(next) = ctx.scheduler.pop_for_llm(llm_request_id.as_deref()).map(|t| t.plan) else { break; };
             match dispatch_plan(ctx, &next)? {
                 LoopStageResult::Emit(e) => events.push(e),
                 LoopStageResult::EmitMany(evs) => events.extend(evs),
@@ -105,6 +103,15 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext) -> anyhow::Res
     events.push(emit_acted(pending, String::new(), f.error.clone(), None, duration_ms, false, Some(tool_result_id)));
     if action_kind == "run_command" {
         events.extend(abort_active_batch(ctx));
+    } else {
+        while ctx.pending_act.is_none() {
+            let Some(next) = ctx.scheduler.pop_for_llm(llm_request_id.as_deref()).map(|t| t.plan) else { break; };
+            match dispatch_plan(ctx, &next)? {
+                LoopStageResult::Emit(e) => events.push(e),
+                LoopStageResult::EmitMany(evs) => events.extend(evs),
+                _ => {}
+            }
+        }
     }
     Ok(LoopStageResult::EmitMany(events))
 }
@@ -222,6 +229,13 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                 ctx.mark_batch_inline_completion(planned, false);
                 return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_path_or_content")));
             };
+            let resolved = resolve_action_path(path, ctx);
+            let action_key = planned.action_id.clone().unwrap_or_else(|| tool_node_id(planned));
+            if let Some((agent, action)) = ctx.file_write_tracker.claim(&resolved, "orchestrator", &action_key) {
+                ctx.mark_batch_inline_completion(planned, false);
+                return Ok(LoopStageResult::Emit(emit_conflict(planned, &agent, &action, resolved.to_string_lossy().as_ref())));
+            }
+            ctx.write_paths_by_action.insert(action_key.clone(), vec![resolved.clone()]);
             let request_id = Uuid::new_v4().to_string();
             let tool_call_id = Uuid::new_v4().to_string();
             let node_id = tool_node_id(planned);
@@ -349,10 +363,24 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                 ctx.mark_batch_inline_completion(planned, false);
                 return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_patch_body")));
             };
-            let started = Instant::now();
             let patch_cwd = ctx.goal_text.as_deref()
                 .and_then(|t| parse_agent_goal_markdown(t).target_path)
                 .unwrap_or_else(|| ctx.workspace.clone());
+            let touched_paths: Vec<_> = extract_written_paths("apply_patch", &planned.action_payload)
+                .into_iter()
+                .map(|p| if p.is_absolute() { p } else { patch_cwd.join(p) })
+                .collect();
+            let action_key = planned.action_id.clone().unwrap_or_else(|| tool_node_id(planned));
+            for path in &touched_paths {
+                if let Some((agent, action)) = ctx.file_write_tracker.claim(path, "orchestrator", &action_key) {
+                    ctx.mark_batch_inline_completion(planned, false);
+                    return Ok(LoopStageResult::Emit(emit_conflict(planned, &agent, &action, path.to_string_lossy().as_ref())));
+                }
+            }
+            if !touched_paths.is_empty() {
+                ctx.write_paths_by_action.insert(action_key.clone(), touched_paths.clone());
+            }
+            let started = Instant::now();
             let result = apply_patch(patch, &patch_cwd);
             let duration_ms = started.elapsed().as_millis() as u64;
             let success = result.is_ok();
@@ -535,6 +563,28 @@ fn emit_missing_args(planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
     })
 }
 
+fn emit_conflict(planned: &LoopPlanned, agent: &str, action: &str, path: &str) -> RuntimeEvent {
+    RuntimeEvent::LoopActed(LoopActed {
+        tick: planned.tick,
+        action_kind: planned.action_kind.clone(),
+        capability_request_id: String::new(),
+        tool_call_id: None,
+        tool_result_id: None,
+        stdout: String::new(),
+        stderr: format!("conflict: {path} already claimed by agent={agent} action={action}"),
+        exit_code: None,
+        duration_ms: 0,
+        success: false,
+        trace_id: planned.trace_id.clone(),
+        execution_id: planned.execution_id.clone(),
+        span_id: Some(Uuid::new_v4().to_string()),
+        parent_span_id: planned.span_id.clone(),
+        plan_id: planned.plan_id.clone(),
+        plan_step_id: planned.plan_step_id.clone(),
+        action_id: planned.action_id.clone(),
+    })
+}
+
 fn emit_acted(
     pending: PendingAct, stdout: String, stderr: String, exit_code: Option<i32>, duration_ms: u64, success: bool, tool_result_id: Option<String>,
 ) -> RuntimeEvent {
@@ -648,15 +698,12 @@ fn write_tool_result_artifact(ctx: &LoopContext, artifact_n: u32, pending: &Pend
 // Batch tracking
 fn abort_active_batch(ctx: &mut LoopContext) -> Vec<RuntimeEvent> {
     let mut events = Vec::new();
-    loop {
-        let Some(next) = ctx.act_queue.front() else {
-            break;
-        };
-        let same_batch = next.llm_request_id == ctx.active_batch_llm_request_id;
-        if !same_batch {
-            break;
-        }
-        let next = ctx.act_queue.pop_front().expect("front exists");
+    while let Some(next) = ctx
+        .active_batch_llm_request_id
+        .as_deref()
+        .and_then(|id| ctx.scheduler.pop_for_llm(Some(id)))
+        .map(|t| t.plan)
+    {
         ctx.mark_batch_inline_completion(&next, false);
         events.push(emit_missing_args(&next, "skipped:batch_aborted"));
     }
@@ -815,9 +862,7 @@ pub fn reconcile_stale_pending_artifacts(ctx: &mut LoopContext) -> Vec<RuntimeEv
         }
     }
     if !events.is_empty() {
-        if let Some(next) = ctx.act_queue.front() {
-            ctx.active_batch_llm_request_id = next.llm_request_id.clone();
-        }
+        ctx.active_batch_llm_request_id = ctx.scheduler.peek_llm_request_id();
     }
     events
 }
