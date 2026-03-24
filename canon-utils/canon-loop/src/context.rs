@@ -1,9 +1,9 @@
+use crate::merge::{ContextMerger, FileWriteTracker, WorkspaceDirtyTracker};
+use crate::scheduler::{DependencyTracker, Scheduler};
 use canon_event::{EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, ToolResult};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
-use crate::scheduler::{Scheduler, DependencyTracker};
-use crate::merge::{FileWriteTracker, ContextMerger, WorkspaceDirtyTracker};
 
 #[derive(Clone, Default)]
 pub struct PendingPlan {
@@ -36,7 +36,6 @@ pub struct PendingAct {
     pub artifact_n: u32,
     pub llm_request_id: Option<String>,
 }
-
 
 #[derive(Clone, Default)]
 pub struct BatchStatus {
@@ -93,6 +92,8 @@ pub struct LoopContext {
     pub pending_plan: Option<PendingPlan>,
     pub last_llm_signals: Option<serde_json::Value>,
     pub last_observed: Option<LoopObserved>,
+    pub last_observed_tick: Option<u64>,
+    pub last_handled_observed_hash: Option<u64>,
     pub last_planned_observed_tick: Option<u64>,
     pub last_done_goal: Option<String>,
     pub batch_acted: Vec<LoopActed>,
@@ -156,6 +157,8 @@ impl LoopContext {
             pending_plan: None,
             last_llm_signals: None,
             last_observed: None,
+            last_observed_tick: None,
+            last_handled_observed_hash: None,
             last_planned_observed_tick: None,
             last_done_goal: None,
             batch_acted: Vec::new(),
@@ -202,9 +205,7 @@ impl LoopContext {
 
 fn default_artifact_dir(_workspace: &PathBuf) -> PathBuf {
     let default_dir = "/workspace/ai_sandbox/canon/canon-utils/state/reports_out/llm";
-    std::env::var("CANON_LLM_LOG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(default_dir))
+    std::env::var("CANON_LLM_LOG_DIR").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from(default_dir))
 }
 
 fn next_tool_artifact_counter(log_dir: &std::path::Path) -> u32 {

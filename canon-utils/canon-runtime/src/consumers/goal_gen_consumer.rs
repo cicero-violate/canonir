@@ -1,46 +1,11 @@
-use canon_event::{
-    EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, RuntimeEvent, LlmCall, CapabilityResult,
-    new_error_occurred,
-};
+use canon_event::{new_error_occurred, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, LlmCall, RuntimeEvent};
 use canon_proc_macros::must_emit;
+use canon_skills::global_registry;
 use std::path::PathBuf;
 use uuid::Uuid;
 
 const AGENT_GOAL_PATH: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts/AGENT_GOAL.md";
 const GOALGEN_PROJECTS_DIR: &str = "/workspace/ai_sandbox/canon/test_projects/goalgen";
-
-// Prompt instructs planner LLM to generate a single Rust project goal in the canonical AGENT_GOAL.md format.
-const GOAL_GEN_PROMPT: &str = "You are a software engineering challenge generator for a multi-agent Rust coding system.\n\
-\n\
-Generate a SINGLE complex Rust project specification.\n\
-\n\
-CRITICAL FORMATTING RULES — violating any of these causes your output to be discarded:\n\
-- Output RAW markdown ONLY. Do NOT wrap in any code fence (no ```markdown, no ``` , nothing).\n\
-- Your output MUST start with \"# \" (a level-1 heading).\n\
-- The section heading must be written EXACTLY as: ## Requirements\n\
-- The project path line must be written EXACTLY as:\n\
-  - Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/<slug>`\n\
-  where <slug> is a short lowercase hyphenated identifier for your project.\n\
-\n\
-PROJECT RULES:\n\
-- Rust binary crate\n\
-- 800+ lines of real implementation across multiple modules\n\
-- Self-contained: only crates.io dependencies, no workspace deps\n\
-- `cargo check` passing is the sole success criterion\n\
-- Choose a different category each time (VM, parser, CLI tool, scheduler, graph lib, etc.)\n\
-\n\
-REQUIRED OUTPUT STRUCTURE (copy headings verbatim, replace <...> content):\n\
-\n\
-# <Project Title>\n\
-\n\
-<One paragraph describing what the project does and why it is interesting.>\n\
-\n\
-## Target\n\
-- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/<slug>`\n\
-\n\
-## Requirements\n\
-\n\
-<numbered list of 8-12 specific, concrete implementation requirements>\n";
 
 enum State {
     Waiting,
@@ -49,6 +14,7 @@ enum State {
 }
 
 const MAX_RETRIES: u32 = 5;
+const TIMEOUT_TICKS: u64 = 30;
 
 pub struct GoalGenConsumer {
     tlog_path: PathBuf,
@@ -73,7 +39,9 @@ impl GoalGenConsumer {
 }
 
 impl EventConsumer for GoalGenConsumer {
-    fn filter(&self) -> EventFilter { EventFilter::All }
+    fn filter(&self) -> EventFilter {
+        EventFilter::All
+    }
 
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
@@ -83,18 +51,27 @@ impl EventConsumer for GoalGenConsumer {
             (State::Waiting, RuntimeEvent::Tick(_)) => {
                 let request_id = Uuid::new_v4().to_string();
                 self.state = State::Pending { request_id: request_id.clone(), ticks_waiting: 0 };
-                EventOutcome::Emit(RuntimeEvent::Llm(LlmCall {
-                    request_id: request_id.clone(),
-                    prompt: GOAL_GEN_PROMPT.to_string(),
-                    role: Some("goal_gen".to_string()),
-                    agent_id: Some("goal_gen_chatgpt".to_string()),
-                }))
+                let prompt = match global_registry().load("goal_gen/generate_goal") {
+                    Ok(skill) => skill.prompt.clone(),
+                    Err(e) => {
+                        eprintln!("[goal_gen] failed to load skill: {e}");
+                        self.state = State::Done;
+                        return EventOutcome::NoOp("goal_gen_skill_load_failed");
+                    }
+                };
+                EventOutcome::Emit(RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt, role: Some("goal_gen".to_string()), agent_id: Some("goal_gen_chatgpt".to_string()) }))
             }
             (State::Pending { request_id: expected_id, ticks_waiting }, RuntimeEvent::Tick(_)) => {
                 let new_ticks = ticks_waiting.saturating_add(1);
-                if new_ticks >= 30 {
-                    self.state = State::Waiting;
-                    EventOutcome::NoOp("goal_gen_timeout_retry")
+                if new_ticks >= TIMEOUT_TICKS {
+                    // Fallback: if the LLM is unresponsive, synthesize a deterministic goal
+                    // to keep the system moving.
+                    let fallback = synthesize_fallback_goal();
+                    let _ = std::fs::write(AGENT_GOAL_PATH, &fallback);
+                    crate::bootstrap::write_prompt_loaded_to_tlog(&self.tlog_path, &fallback);
+                    eprintln!("[goal_gen] fallback goal emitted after {TIMEOUT_TICKS} ticks without LLM completion");
+                    self.state = State::Done;
+                    EventOutcome::NoOp("goal_gen_timeout_fallback")
                 } else {
                     self.state = State::Pending { request_id: expected_id.clone(), ticks_waiting: new_ticks };
                     EventOutcome::NoOp("goal_gen_awaiting_llm")
@@ -112,18 +89,12 @@ impl EventConsumer for GoalGenConsumer {
                         } else if let Some(s) = res.response.as_str() {
                             s.to_string()
                         } else if let Some(obj) = res.response.as_object() {
-                            obj.values()
-                                .find_map(|v| v.as_str().filter(|s| !s.is_empty()))
-                                .unwrap_or("")
-                                .to_string()
+                            obj.values().find_map(|v| v.as_str().filter(|s| !s.is_empty())).unwrap_or("").to_string()
                         } else {
                             String::new()
                         };
                         if raw.is_empty() {
-                            eprintln!(
-                                "[goal_gen] LLM returned empty response (response shape: {})",
-                                res.response.to_string().chars().take(200).collect::<String>()
-                            );
+                            eprintln!("[goal_gen] LLM returned empty response (response shape: {})", res.response.to_string().chars().take(200).collect::<String>());
                             warn_events.push(RuntimeEvent::ErrorOccurred(new_error_occurred(
                                 "goal_gen_empty_response",
                                 "goal_gen_consumer",
@@ -152,11 +123,7 @@ impl EventConsumer for GoalGenConsumer {
                 } else {
                     self.retries += 1;
                     if self.retries >= MAX_RETRIES {
-                        let msg = format!(
-                            "goal_gen gave up after {MAX_RETRIES} retries — last content was {} bytes: {}",
-                            content.len(),
-                            &content[..content.len().min(200)]
-                        );
+                        let msg = format!("goal_gen gave up after {MAX_RETRIES} retries — last content was {} bytes: {}", content.len(), &content[..content.len().min(200)]);
                         eprintln!("[goal_gen] {msg}");
                         self.state = State::Done;
                         return EventOutcome::Error(RuntimeEvent::ErrorOccurred(new_error_occurred(
@@ -201,8 +168,7 @@ impl EventConsumer for GoalGenConsumer {
                 }
                 EventOutcome::NoOp("goal_gen_failure_retry")
             }
-            (State::Waiting, RuntimeEvent::CapabilityCompleted(_))
-            | (State::Waiting, RuntimeEvent::CapabilityFailed(_)) => EventOutcome::NoOp("goal_gen_waiting_unrelated"),
+            (State::Waiting, RuntimeEvent::CapabilityCompleted(_)) | (State::Waiting, RuntimeEvent::CapabilityFailed(_)) => EventOutcome::NoOp("goal_gen_waiting_unrelated"),
             (State::Done, _) => EventOutcome::NoOp("goal_gen_noop"),
             (_, RuntimeEvent::Code(_))
             | (_, RuntimeEvent::Debug(_))
@@ -242,8 +208,7 @@ impl EventConsumer for GoalGenConsumer {
             | (_, RuntimeEvent::GoalEdgeDefined(_))
             | (_, RuntimeEvent::GoalGraphCheckpointed(_))
             | (_, RuntimeEvent::CapabilityInvoked(_))
-            | (_, RuntimeEvent::CapabilityResolved(_))
-                => EventOutcome::NoOp("goal_gen_noop"),
+            | (_, RuntimeEvent::CapabilityResolved(_)) => EventOutcome::NoOp("goal_gen_noop"),
         }
     }
 }
@@ -280,10 +245,14 @@ fn validate_goal(content: &str) -> bool {
 
     let ok = has_path && has_requirements && has_heading;
     if !ok {
-        eprintln!(
-            "[goal_gen] validation failed: has_path={has_path} has_requirements={has_requirements} has_heading={has_heading} | preview: {:?}",
-            &content[..content.len().min(300)]
-        );
+        eprintln!("[goal_gen] validation failed: has_path={has_path} has_requirements={has_requirements} has_heading={has_heading} | preview: {:?}", &content[..content.len().min(300)]);
     }
     ok
+}
+
+fn synthesize_fallback_goal() -> String {
+    format!(
+        "# Fallback Rust CLI Toolbox\n\nA small but valid placeholder goal emitted locally when goal_gen LLM is unavailable. Builds a binary crate with a couple of modules and a CLI entrypoint so the planner can proceed.\n\n## Target\n- Project path: `{base}/fallback_toolbox`\n\n## Requirements\n1. Create a Rust binary crate with modules `cli`, `core`, and `utils`.\n2. Implement a CLI using `clap` with a `run` command that prints a greeting.\n3. Add a `core::add(a, b)` function with a unit test.\n4. Add a `utils::slugify` helper with a unit test.\n5. Wire `main` to call into `cli::run()`.\n6. Ensure `cargo check` passes.\n",
+        base = GOALGEN_PROJECTS_DIR
+    )
 }

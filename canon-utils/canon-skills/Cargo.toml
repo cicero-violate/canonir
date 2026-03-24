@@ -1,0 +1,11 @@
+[package]
+name = "canon-skills"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow.workspace = true
+once_cell.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_yaml = "0.9"

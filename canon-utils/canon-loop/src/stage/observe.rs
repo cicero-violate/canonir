@@ -1,8 +1,7 @@
-use canon_event::{CanonEvent, CanonPayload, RuntimeEvent, LoopObserved};
+use canon_event::{CanonEvent, CanonPayload, LoopObserved, RuntimeEvent};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-
 
 use crate::{context::LoopContext, result::LoopStageResult};
 
@@ -24,11 +23,13 @@ pub fn execute(ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
         workspace_facts.hash(&mut h);
         h.finish()
     };
-    let state_changed = (ctx.error_count as u64) != ctx.last_observed_error_count
-        || goal_hash != ctx.last_observed_goal_hash
-        || facts_hash != ctx.last_observed_facts_hash;
-    if !state_changed {
+    let state_changed = (ctx.error_count as u64) != ctx.last_observed_error_count || goal_hash != ctx.last_observed_goal_hash || facts_hash != ctx.last_observed_facts_hash;
+    let stale = ctx.last_observed_tick.map(|t| ctx.current_tick.saturating_sub(t) >= 5).unwrap_or(true);
+    if !state_changed && !stale {
         return Ok(LoopStageResult::Noop);
+    }
+    if !state_changed {
+        // Emit a heartbeat observation to keep the loop alive even when state is stable.
     }
     ctx.last_observed_error_count = ctx.error_count as u64;
     ctx.last_observed_goal_hash = goal_hash;
@@ -61,8 +62,7 @@ fn scan_tlog_for_goal(tlog_path: &Path) -> Option<String> {
                 continue;
             };
             if let CanonPayload::PromptLoaded(val) = ev.payload {
-                let is_goal = val.get("prompt_id").and_then(|v| v.as_str()) == Some("AGENT_GOAL")
-                    || val.get("path").and_then(|v| v.as_str()).map(|p| p.contains("AGENT_GOAL")).unwrap_or(false);
+                let is_goal = val.get("prompt_id").and_then(|v| v.as_str()) == Some("AGENT_GOAL") || val.get("path").and_then(|v| v.as_str()).map(|p| p.contains("AGENT_GOAL")).unwrap_or(false);
                 if is_goal {
                     if let Some(c) = val.get("content").and_then(|v| v.as_str()) {
                         found = Some(c.to_string());
@@ -96,14 +96,18 @@ fn extract_target_path(goal: &str) -> Option<String> {
             for prefix in &["Target:", "target:"] {
                 if let Some(rest) = trimmed.strip_prefix(prefix) {
                     let v = rest.trim().to_string();
-                    if !v.is_empty() { return Some(v); }
+                    if !v.is_empty() {
+                        return Some(v);
+                    }
                 }
             }
             // "- Project path: /path" (markdown list under ## Target)
             for prefix in &["- Project path:", "- project path:", "Project path:"] {
                 if let Some(rest) = trimmed.strip_prefix(prefix) {
                     let v = rest.trim().trim_matches('`').to_string();
-                    if !v.is_empty() { return Some(v); }
+                    if !v.is_empty() {
+                        return Some(v);
+                    }
                 }
             }
             None

@@ -1,9 +1,14 @@
-use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, Tick, GoalEdgeDefined, AgentRegistered};
-use canon_proc_macros::must_emit;
-use crate::{context::LoopContext, result::LoopStageResult, stage::LoopStageEvent, scheduler::{ScheduledTask, infer_priority}};
-use std::time::Instant;
 use crate::stage::observe;
+use crate::{
+    context::LoopContext,
+    result::LoopStageResult,
+    scheduler::{infer_priority, ScheduledTask},
+    stage::LoopStageEvent,
+};
+use canon_event::{AgentRegistered, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, GoalEdgeDefined, RuntimeEvent, Tick};
+use canon_proc_macros::must_emit;
 use std::path::PathBuf;
+use std::time::Instant;
 
 pub struct LoopStageExecutor {
     ctx: LoopContext,
@@ -36,12 +41,8 @@ impl EventConsumer for LoopStageExecutor {
         match event {
             RuntimeEvent::Tick(Tick { tick, .. }) => {
                 self.ctx.current_tick = *tick;
-                // Bootstrap: PromptLoaded fires before this consumer registers.
-                // Trigger one observe via tlog scan so the route executor gets context_ready.
-                // The dedup guard in observe::execute suppresses subsequent identical states.
-                if self.ctx.last_observed.is_none() {
-                    trigger_observe = true;
-                }
+                // Always try to observe on every tick; observe::execute will dedup unchanged state.
+                trigger_observe = true;
                 for e in crate::stage::act::check_act_timeout(&mut self.ctx) {
                     if let Some(emitter) = self.ctx.emitter.as_ref() {
                         emitter.emit(e);
@@ -61,6 +62,7 @@ impl EventConsumer for LoopStageExecutor {
             }
             RuntimeEvent::LoopObserved(o) => {
                 self.ctx.last_observed = Some(o.clone());
+                self.ctx.last_observed_tick = Some(o.tick);
                 self.ctx.errors_before = o.error_count;
             }
             RuntimeEvent::LoopActed(a) => {
@@ -105,10 +107,7 @@ impl EventConsumer for LoopStageExecutor {
                     if let Some(emitter) = self.ctx.emitter.as_ref() {
                         if let Some(child) = p.action_id.as_ref() {
                             for dep in &p.depends_on {
-                                emitter.emit(RuntimeEvent::GoalEdgeDefined(GoalEdgeDefined {
-                                    from_node_id: dep.clone(),
-                                    to_node_id: child.clone(),
-                                }));
+                                emitter.emit(RuntimeEvent::GoalEdgeDefined(GoalEdgeDefined { from_node_id: dep.clone(), to_node_id: child.clone() }));
                             }
                         }
                     }
@@ -186,8 +185,7 @@ impl EventConsumer for LoopStageExecutor {
             | RuntimeEvent::GoalEdgeDefined(_)
             | RuntimeEvent::GoalGraphCheckpointed(_)
             | RuntimeEvent::CapabilityInvoked(_)
-            | RuntimeEvent::CapabilityResolved(_)
-                => {}
+            | RuntimeEvent::CapabilityResolved(_) => {}
         }
 
         // Emit LoopObserved when state changes (event-driven, not tick-driven).
@@ -207,7 +205,9 @@ impl EventConsumer for LoopStageExecutor {
             return EventOutcome::NoOp("loop_stage_not_stage_event");
         };
         let res = stage.execute(&mut self.ctx);
-        let Some(emitter) = self.ctx.emitter.clone() else { return EventOutcome::NoOp("loop_stage_no_emitter"); };
+        let Some(emitter) = self.ctx.emitter.clone() else {
+            return EventOutcome::NoOp("loop_stage_no_emitter");
+        };
         match res {
             Ok(LoopStageResult::Emit(e)) => emitter.emit_located(e, file!(), line!()),
             Ok(LoopStageResult::EmitMany(evs)) => evs.into_iter().for_each(|e| emitter.emit_located(e, file!(), line!())),

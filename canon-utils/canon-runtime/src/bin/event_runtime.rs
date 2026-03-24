@@ -14,11 +14,13 @@ use canon_runtime::consumers::dispatch_consumer::DispatchConsumer;
 use canon_runtime::consumers::goal_gen_consumer::GoalGenConsumer;
 use canon_runtime::consumers::goal_graph_consumer::GoalGraphConsumer;
 use canon_runtime::consumers::watchdog_consumer::WatchdogConsumer;
-use canon_runtime::hooks::{HookChain, CapabilityRateLimitHook, CostCapHook, AuditLogHook, WatchdogPreHook};
+use canon_runtime::hooks::{HookChain, CapabilityRateLimitHook, CostCapHook, AuditLogHook};
 use canon_runtime::consumers::analyst_consumer::AnalystConsumer;
 use canon_runtime::{spawn_kernel_processor, EventRuntime, KernelMsg};
 use crossbeam_channel as cc;
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
+use signal_hook::consts::signal::SIGHUP;
+use signal_hook::iterator::Signals;
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File, OpenOptions};
@@ -288,6 +290,20 @@ fn main() -> Result<()> {
             .expect("heartbeat thread");
     }
 
+    // Hot-reload skills on SIGHUP.
+    {
+        let mut signals = Signals::new([SIGHUP]).expect("signals");
+        std::thread::Builder::new()
+            .name("canon_skill_reload".to_string())
+            .spawn(move || {
+                for _ in signals.forever() {
+                    canon_skills::global_registry().invalidate_all();
+                    eprintln!("[event_runtime] skill cache invalidated (SIGHUP)");
+                }
+            })
+            .expect("skill reload thread");
+    }
+
     let agent_registry = AgentRegistryHandle::default();
     let mut consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
         Box::new(GoalGenConsumer::new(tlog_path.clone())),
@@ -309,13 +325,13 @@ fn main() -> Result<()> {
     }
     canon_exec::init_llm_worker();
     canon_exec::init_analysis_worker();
+    canon_exec::init_bash_worker();
     let mut runtime = EventRuntime::new(consumers);
     // Hooks / middleware chain.
     if let Ok(cfg) = canon_llm::config::CapabilityConfig::snapshot_store_load() {
         let mut hooks = HookChain::new();
         hooks.add_pre(Box::new(CapabilityRateLimitHook::from_config(&cfg)));
         hooks.add_pre(Box::new(CostCapHook::from_config(&cfg)));
-        hooks.add_pre(Box::new(WatchdogPreHook::new()));
         hooks.add_post(Box::new(AuditLogHook::new()));
         runtime.set_hooks(std::sync::Arc::new(hooks));
     }
@@ -350,6 +366,7 @@ fn main() -> Result<()> {
         let _ = save_cursor(&cursor_path, &tlog_path, processed, start_seq, &session_id, runtime.next_id());
         canon_exec::shutdown_llm_worker();
         canon_exec::shutdown_analysis_worker();
+        canon_exec::shutdown_bash_worker();
         return Ok(());
     }
 

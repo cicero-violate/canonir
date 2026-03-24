@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use canon_event::{
-    BashInvoke, RuntimeEvent, CapabilityCompleted, CapabilityFailed, CapabilityResult, FileEvent, FilePatch, FileWrite, LoopActed, LoopPlanned, ProcessResult, RouteSelected, ToolCall, ToolResult,
+    BashInvoke, CapabilityCompleted, CapabilityFailed, CapabilityResult, FileEvent, FilePatch, FileWrite, LoopActed, LoopPlanned, ProcessResult, RouteSelected, RuntimeEvent, ToolCall, ToolResult,
 };
 use canon_goal::parse_agent_goal_markdown;
 use canon_tools_patch::apply_patch;
@@ -24,11 +24,7 @@ pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Re
     }
     let mut events = Vec::new();
     while ctx.pending_act.is_none() {
-        let task = if let Some(batch_id) = ctx.active_batch_llm_request_id.as_deref() {
-            ctx.scheduler.pop_for_llm(Some(batch_id))
-        } else {
-            ctx.scheduler.pop_any()
-        };
+        let task = if let Some(batch_id) = ctx.active_batch_llm_request_id.as_deref() { ctx.scheduler.pop_for_llm(Some(batch_id)) } else { ctx.scheduler.pop_any() };
         let Some(task) = task else {
             ctx.active_batch_llm_request_id = None;
             break;
@@ -68,7 +64,9 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
     } else {
         // Continue dispatching remaining same-batch actions.
         while ctx.pending_act.is_none() {
-            let Some(next) = ctx.scheduler.pop_for_llm(llm_request_id.as_deref()).map(|t| t.plan) else { break; };
+            let Some(next) = ctx.scheduler.pop_for_llm(llm_request_id.as_deref()).map(|t| t.plan) else {
+                break;
+            };
             match dispatch_plan(ctx, &next)? {
                 LoopStageResult::Emit(e) => events.push(e),
                 LoopStageResult::EmitMany(evs) => events.extend(evs),
@@ -105,7 +103,9 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext) -> anyhow::Res
         events.extend(abort_active_batch(ctx));
     } else {
         while ctx.pending_act.is_none() {
-            let Some(next) = ctx.scheduler.pop_for_llm(llm_request_id.as_deref()).map(|t| t.plan) else { break; };
+            let Some(next) = ctx.scheduler.pop_for_llm(llm_request_id.as_deref()).map(|t| t.plan) else {
+                break;
+            };
             match dispatch_plan(ctx, &next)? {
                 LoopStageResult::Emit(e) => events.push(e),
                 LoopStageResult::EmitMany(evs) => events.extend(evs),
@@ -184,15 +184,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
             ctx.mark_batch_dispatched(planned);
 
             let mut events = Vec::new();
-            events.push(write_tool_call_artifact(
-                ctx,
-                artifact_n,
-                "bash",
-                &node_id,
-                &tool_call_id,
-                &request_id,
-                &serde_json::json!({ "cmd": cmd, "cwd": cwd }),
-            ));
+            events.push(write_tool_call_artifact(ctx, artifact_n, "bash", &node_id, &tool_call_id, &request_id, &serde_json::json!({ "cmd": cmd, "cwd": cwd })));
             events.push(write_tool_result_pending_artifact(ctx, artifact_n, planned, "bash", &node_id, &tool_call_id, &request_id));
             events.push(RuntimeEvent::ToolCall(ToolCall {
                 node_id: node_id.clone(),
@@ -244,24 +236,8 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
             ctx.mark_batch_dispatched(planned);
 
             let mut events = Vec::new();
-            events.push(write_tool_call_artifact(
-                ctx,
-                artifact_n,
-                "file.write",
-                &node_id,
-                &tool_call_id,
-                &request_id,
-                &serde_json::json!({ "path": path, "content": content }),
-            ));
-            events.push(write_tool_result_pending_artifact(
-                ctx,
-                artifact_n,
-                planned,
-                "file.write",
-                &node_id,
-                &tool_call_id,
-                &request_id,
-            ));
+            events.push(write_tool_call_artifact(ctx, artifact_n, "file.write", &node_id, &tool_call_id, &request_id, &serde_json::json!({ "path": path, "content": content })));
+            events.push(write_tool_result_pending_artifact(ctx, artifact_n, planned, "file.write", &node_id, &tool_call_id, &request_id));
             events.push(RuntimeEvent::ToolCall(ToolCall {
                 node_id: node_id.clone(),
                 tool_call_id: tool_call_id.clone(),
@@ -306,24 +282,8 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
             ctx.mark_batch_dispatched(planned);
 
             let mut events = Vec::new();
-            events.push(write_tool_call_artifact(
-                ctx,
-                artifact_n,
-                "file.patch",
-                &node_id,
-                &tool_call_id,
-                &request_id,
-                &serde_json::json!({ "path": path, "old": old, "new": new }),
-            ));
-            events.push(write_tool_result_pending_artifact(
-                ctx,
-                artifact_n,
-                planned,
-                "file.patch",
-                &node_id,
-                &tool_call_id,
-                &request_id,
-            ));
+            events.push(write_tool_call_artifact(ctx, artifact_n, "file.patch", &node_id, &tool_call_id, &request_id, &serde_json::json!({ "path": path, "old": old, "new": new })));
+            events.push(write_tool_result_pending_artifact(ctx, artifact_n, planned, "file.patch", &node_id, &tool_call_id, &request_id));
             events.push(RuntimeEvent::ToolCall(ToolCall {
                 node_id: node_id.clone(),
                 tool_call_id: tool_call_id.clone(),
@@ -331,12 +291,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                 kind: "file.patch".to_string(),
                 payload: serde_json::json!({ "path": path, "old": old, "new": new }),
             }));
-            events.push(RuntimeEvent::File(FileEvent::Patch(FilePatch {
-                request_id: request_id.clone(),
-                path: path.to_string(),
-                old: old.to_string(),
-                new: new.to_string(),
-            })));
+            events.push(RuntimeEvent::File(FileEvent::Patch(FilePatch { request_id: request_id.clone(), path: path.to_string(), old: old.to_string(), new: new.to_string() })));
 
             ctx.pending_act = Some(PendingAct {
                 tick: planned.tick,
@@ -363,13 +318,9 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                 ctx.mark_batch_inline_completion(planned, false);
                 return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_patch_body")));
             };
-            let patch_cwd = ctx.goal_text.as_deref()
-                .and_then(|t| parse_agent_goal_markdown(t).target_path)
-                .unwrap_or_else(|| ctx.workspace.clone());
-            let touched_paths: Vec<_> = extract_written_paths("apply_patch", &planned.action_payload)
-                .into_iter()
-                .map(|p| if p.is_absolute() { p } else { patch_cwd.join(p) })
-                .collect();
+            let node_id = tool_node_id(planned);
+            let patch_cwd = ctx.goal_text.as_deref().and_then(|t| parse_agent_goal_markdown(t).target_path).unwrap_or_else(|| ctx.workspace.clone());
+            let touched_paths: Vec<_> = extract_written_paths("apply_patch", &planned.action_payload).into_iter().map(|p| if p.is_absolute() { p } else { patch_cwd.join(p) }).collect();
             let action_key = planned.action_id.clone().unwrap_or_else(|| tool_node_id(planned));
             for path in &touched_paths {
                 if let Some((agent, action)) = ctx.file_write_tracker.claim(path, "orchestrator", &action_key) {
@@ -381,19 +332,27 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                 ctx.write_paths_by_action.insert(action_key.clone(), touched_paths.clone());
             }
             let started = Instant::now();
+            std::fs::create_dir_all(&patch_cwd).ok();
             let result = apply_patch(patch, &patch_cwd);
             let duration_ms = started.elapsed().as_millis() as u64;
             let success = result.is_ok();
             let stdout = match &result {
-                Ok(affected) => format!(
-                    "apply_patch ok: added {} modified {} deleted {}",
-                    affected.added.len(),
-                    affected.modified.len(),
-                    affected.deleted.len()
-                ),
+                Ok(affected) => format!("apply_patch ok: added {} modified {} deleted {}", affected.added.len(), affected.modified.len(), affected.deleted.len()),
                 Err(err) => format!("apply_patch failed: {err}"),
             };
             ctx.mark_batch_inline_completion(planned, success);
+            let tool_result = inline_tool_result(
+                "apply_patch",
+                &node_id,
+                serde_json::json!({
+                    "stdout": stdout,
+                    "stderr": "",
+                    "duration_ms": duration_ms,
+                    "touched_paths": touched_paths.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>(),
+                    "success": success,
+                }),
+                success,
+            );
             let acted = emit_acted(
                 PendingAct {
                     tick: planned.tick,
@@ -401,7 +360,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                     tool_kind: "apply_patch".to_string(),
                     request_id: String::new(),
                     tool_call_id: String::new(),
-                    node_id: String::new(),
+                    node_id: node_id.clone(),
                     started_at: started,
                     trace_id: planned.trace_id.clone(),
                     execution_id: planned.execution_id.clone(),
@@ -419,7 +378,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                 success,
                 None,
             );
-            Ok(LoopStageResult::Emit(acted))
+            Ok(LoopStageResult::EmitMany(vec![tool_result, acted]))
         }
         "read_file" => {
             let path_str = planned.action_payload.get("path").and_then(|v| v.as_str());
@@ -428,15 +387,12 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                 return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_path")));
             };
             let path = resolve_action_path(path_str, ctx);
+            let node_id = tool_node_id(planned);
             let started = Instant::now();
             let (stdout, success) = match std::fs::read_to_string(&path) {
                 Ok(content) => {
                     // Truncate very large files to avoid flooding the context.
-                    let content = if content.len() > 8000 {
-                        format!("{}\n... <truncated, {} bytes total>", &content[..8000], content.len())
-                    } else {
-                        content
-                    };
+                    let content = if content.len() > 8000 { format!("{}\n... <truncated, {} bytes total>", &content[..8000], content.len()) } else { content };
                     (format!("=== {} ===\n{}", path.display(), content), true)
                 }
                 Err(_) => (String::new(), false),
@@ -444,6 +400,18 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
             let stderr = if !success { format!("read_file failed: {}", path.display()) } else { String::new() };
             let duration_ms = started.elapsed().as_millis() as u64;
             ctx.mark_batch_inline_completion(planned, success);
+            let tool_result = inline_tool_result(
+                "read_file",
+                &node_id,
+                serde_json::json!({
+                    "path": path.display().to_string(),
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "duration_ms": duration_ms,
+                    "success": success,
+                }),
+                success,
+            );
             let acted = emit_acted(
                 PendingAct {
                     tick: planned.tick,
@@ -451,7 +419,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                     tool_kind: "read_file".to_string(),
                     request_id: String::new(),
                     tool_call_id: String::new(),
-                    node_id: String::new(),
+                    node_id: node_id.clone(),
                     started_at: started,
                     trace_id: planned.trace_id.clone(),
                     execution_id: planned.execution_id.clone(),
@@ -469,11 +437,12 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                 success,
                 None,
             );
-            Ok(LoopStageResult::Emit(acted))
+            Ok(LoopStageResult::EmitMany(vec![tool_result, acted]))
         }
         "list_dir" => {
             let path_str = planned.action_payload.get("path").and_then(|v| v.as_str()).unwrap_or(".");
             let path = resolve_action_path(path_str, ctx);
+            let node_id = tool_node_id(planned);
             let started = Instant::now();
             let (stdout, success) = match std::fs::read_dir(&path) {
                 Ok(entries) => {
@@ -482,7 +451,11 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                         .flatten()
                         .map(|e| {
                             let name = e.file_name().to_string_lossy().to_string();
-                            if e.path().is_dir() { format!("{}/", name) } else { name }
+                            if e.path().is_dir() {
+                                format!("{}/", name)
+                            } else {
+                                name
+                            }
                         })
                         .collect();
                     names.sort();
@@ -494,6 +467,18 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
             let stderr = if !success { format!("list_dir failed: {}", path.display()) } else { String::new() };
             let duration_ms = started.elapsed().as_millis() as u64;
             ctx.mark_batch_inline_completion(planned, success);
+            let tool_result = inline_tool_result(
+                "list_dir",
+                &node_id,
+                serde_json::json!({
+                    "path": path.display().to_string(),
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "duration_ms": duration_ms,
+                    "success": success,
+                }),
+                success,
+            );
             let acted = emit_acted(
                 PendingAct {
                     tick: planned.tick,
@@ -501,7 +486,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                     tool_kind: "list_dir".to_string(),
                     request_id: String::new(),
                     tool_call_id: String::new(),
-                    node_id: String::new(),
+                    node_id: node_id.clone(),
                     started_at: started,
                     trace_id: planned.trace_id.clone(),
                     execution_id: planned.execution_id.clone(),
@@ -519,7 +504,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                 success,
                 None,
             );
-            Ok(LoopStageResult::Emit(acted))
+            Ok(LoopStageResult::EmitMany(vec![tool_result, acted]))
         }
         _ => {
             ctx.mark_batch_inline_completion(planned, false);
@@ -535,9 +520,7 @@ fn resolve_action_path(path_str: &str, ctx: &LoopContext) -> std::path::PathBuf 
     if p.is_absolute() {
         return p.to_path_buf();
     }
-    let base = ctx.goal_text.as_deref()
-        .and_then(|t| parse_agent_goal_markdown(t).target_path)
-        .unwrap_or_else(|| ctx.workspace.clone());
+    let base = ctx.goal_text.as_deref().and_then(|t| parse_agent_goal_markdown(t).target_path).unwrap_or_else(|| ctx.workspace.clone());
     base.join(p)
 }
 
@@ -585,9 +568,7 @@ fn emit_conflict(planned: &LoopPlanned, agent: &str, action: &str, path: &str) -
     })
 }
 
-fn emit_acted(
-    pending: PendingAct, stdout: String, stderr: String, exit_code: Option<i32>, duration_ms: u64, success: bool, tool_result_id: Option<String>,
-) -> RuntimeEvent {
+fn emit_acted(pending: PendingAct, stdout: String, stderr: String, exit_code: Option<i32>, duration_ms: u64, success: bool, tool_result_id: Option<String>) -> RuntimeEvent {
     RuntimeEvent::LoopActed(LoopActed {
         tick: pending.tick,
         action_kind: pending.action_kind,
@@ -623,10 +604,20 @@ fn emit_tool_result(ctx: &LoopContext, pending: &PendingAct, tool_result_id: Str
     })
 }
 
+fn inline_tool_result(kind: &str, node_id: &str, output: serde_json::Value, success: bool) -> RuntimeEvent {
+    RuntimeEvent::ToolResult(ToolResult {
+        node_id: node_id.to_string(),
+        tool_call_id: Uuid::new_v4().to_string(),
+        tool_result_id: Uuid::new_v4().to_string(),
+        request_id: Uuid::new_v4().to_string(),
+        kind: kind.to_string(),
+        output,
+        success,
+    })
+}
+
 // Artifact helpers (ported)
-fn write_tool_call_artifact(
-    ctx: &LoopContext, artifact_n: u32, kind: &str, node_id: &str, tool_call_id: &str, request_id: &str, payload: &Value,
-) -> RuntimeEvent {
+fn write_tool_call_artifact(ctx: &LoopContext, artifact_n: u32, kind: &str, node_id: &str, tool_call_id: &str, request_id: &str, payload: &Value) -> RuntimeEvent {
     let value = serde_json::json!({
         "n": artifact_n,
         "status": "dispatched",
@@ -642,9 +633,7 @@ fn write_tool_call_artifact(
     RuntimeEvent::RuntimeStateUpdated(canon_event::RuntimeStateUpdated { payload: serde_json::json!({"workspace_dirty": false}) })
 }
 
-fn write_tool_result_pending_artifact(
-    ctx: &LoopContext, artifact_n: u32, planned: &LoopPlanned, kind: &str, node_id: &str, tool_call_id: &str, request_id: &str,
-) -> RuntimeEvent {
+fn write_tool_result_pending_artifact(ctx: &LoopContext, artifact_n: u32, planned: &LoopPlanned, kind: &str, node_id: &str, tool_call_id: &str, request_id: &str) -> RuntimeEvent {
     let value = serde_json::json!({
         "n": artifact_n,
         "status": "pending",
@@ -698,12 +687,7 @@ fn write_tool_result_artifact(ctx: &LoopContext, artifact_n: u32, pending: &Pend
 // Batch tracking
 fn abort_active_batch(ctx: &mut LoopContext) -> Vec<RuntimeEvent> {
     let mut events = Vec::new();
-    while let Some(next) = ctx
-        .active_batch_llm_request_id
-        .as_deref()
-        .and_then(|id| ctx.scheduler.pop_for_llm(Some(id)))
-        .map(|t| t.plan)
-    {
+    while let Some(next) = ctx.active_batch_llm_request_id.as_deref().and_then(|id| ctx.scheduler.pop_for_llm(Some(id))).map(|t| t.plan) {
         ctx.mark_batch_inline_completion(&next, false);
         events.push(emit_missing_args(&next, "skipped:batch_aborted"));
     }

@@ -1,11 +1,16 @@
 use std::path::Path;
 
-use canon_event::{CapabilityCompleted, CapabilityFailed, CapabilityResult, RuntimeEvent, LlmCall, LoopActed, LoopObserved, LoopPlanned, RouteSelected, ToolCall, ToolResult};
+use canon_event::{CapabilityCompleted, CapabilityFailed, CapabilityResult, LlmCall, LoopActed, LoopObserved, LoopPlanned, RouteSelected, RuntimeEvent, ToolCall, ToolResult};
 use canon_goal::parse_agent_goal_markdown;
 use canon_tools_search::search_files;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use uuid::Uuid;
 
-use crate::{context::{LoopContext, PendingPlan}, result::LoopStageResult};
+use crate::{
+    context::{LoopContext, PendingPlan},
+    result::LoopStageResult,
+};
 
 const LLM_TIMEOUT_TICKS: u64 = 60;
 const PLACEHOLDER_GOAL: &str = "goal-pending";
@@ -42,11 +47,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
 
     // If the observed goal is placeholder/empty, ignore any actions (especially "done")
     // and allow routing to re-trigger goal acquisition on next tick.
-    let goal_placeholder = pending
-        .goal_text
-        .as_ref()
-        .map(|g| is_placeholder_goal(g))
-        .unwrap_or(true);
+    let goal_placeholder = pending.goal_text.as_ref().map(|g| is_placeholder_goal(g)).unwrap_or(true);
     if goal_placeholder {
         ctx.last_planned_observed_tick = None;
         return Ok(LoopStageResult::Noop);
@@ -100,22 +101,32 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
                 signals: signals.clone(),
                 depends_on: action.depends_on.clone(),
             }),
-            LlmAction::Command { cmd, cwd } => out.push(LoopPlanned {
-                tick: pending.tick,
-                action_kind: "run_command".to_string(),
-                action_payload: action_payload_with_cwd(cmd, cwd),
-                reason: "llm_command".to_string(),
-                llm_request_id: Some(req_id.clone()),
-                trace_id: Some(pending.trace_id.clone()),
-                execution_id: Some(pending.execution_id.clone()),
-                span_id: Some(planned_span_id.clone()),
-                parent_span_id: Some(pending.span_id.clone()),
-                plan_id: Some(pending.plan_id.clone()),
-                plan_step_id: Some(plan_step_id.clone()),
-                action_id: Some(action_id.clone()),
-                signals: signals.clone(),
-                depends_on: action.depends_on.clone(),
-            }),
+            LlmAction::Command { cmd, cwd } => {
+                let cwd_raw = cwd.as_deref();
+                let cwd_default = pending
+                    .goal_text
+                    .as_deref()
+                    .and_then(|t| canon_goal::parse_agent_goal_markdown(t).target_path)
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| ctx.workspace.display().to_string());
+                let resolved_cwd = cwd_raw.unwrap_or(cwd_default.as_str());
+                out.push(LoopPlanned {
+                    tick: pending.tick,
+                    action_kind: "run_command".to_string(),
+                    action_payload: action_payload_with_cwd(cmd, Some(resolved_cwd.to_string())),
+                    reason: "llm_command".to_string(),
+                    llm_request_id: Some(req_id.clone()),
+                    trace_id: Some(pending.trace_id.clone()),
+                    execution_id: Some(pending.execution_id.clone()),
+                    span_id: Some(planned_span_id.clone()),
+                    parent_span_id: Some(pending.span_id.clone()),
+                    plan_id: Some(pending.plan_id.clone()),
+                    plan_step_id: Some(plan_step_id.clone()),
+                    action_id: Some(action_id.clone()),
+                    signals: signals.clone(),
+                    depends_on: action.depends_on.clone(),
+                })
+            }
             LlmAction::Write { path, content } => out.push(LoopPlanned {
                 tick: pending.tick,
                 action_kind: "write_file".to_string(),
@@ -208,55 +219,44 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext) -> anyhow::Res
         return Ok(LoopStageResult::Noop);
     }
     emit_tool_result(ctx, &pending.plan_tool_call_id, &pending.request_id, false)?;
-    emit_plan(ctx, LoopPlanned {
-        tick: pending.tick,
-        action_kind: "no_op".to_string(),
-        action_payload: serde_json::json!({}),
-        reason: "llm_failed".to_string(),
-        llm_request_id: Some(pending.request_id),
-        trace_id: Some(pending.trace_id),
-        execution_id: Some(pending.execution_id),
-        span_id: None,
-        parent_span_id: Some(pending.span_id),
-        plan_id: Some(pending.plan_id),
-        plan_step_id: None,
-        action_id: None,
-        signals: None,
-        depends_on: Vec::new(),
-    })
+    emit_plan(
+        ctx,
+        LoopPlanned {
+            tick: pending.tick,
+            action_kind: "no_op".to_string(),
+            action_payload: serde_json::json!({}),
+            reason: "llm_failed".to_string(),
+            llm_request_id: Some(pending.request_id),
+            trace_id: Some(pending.trace_id),
+            execution_id: Some(pending.execution_id),
+            span_id: None,
+            parent_span_id: Some(pending.span_id),
+            plan_id: Some(pending.plan_id),
+            plan_step_id: None,
+            action_id: None,
+            signals: None,
+            depends_on: Vec::new(),
+        },
+    )
 }
 
 fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Result<LoopStageResult> {
     if ctx.pending_plan.is_some() || ctx.last_planned_observed_tick == Some(observed.tick) {
         return Ok(LoopStageResult::Noop);
     }
-    if observed.goal_text.as_ref().map(|g| is_placeholder_goal(g)).unwrap_or(true) && observed.error_count == 0 {
-        return emit_plan(ctx, LoopPlanned {
-            tick: observed.tick,
-            action_kind: "no_op".to_string(),
-            action_payload: serde_json::json!({}),
-            reason: "no_goal".to_string(),
-            llm_request_id: None,
-            trace_id: None,
-            execution_id: None,
-            span_id: None,
-            parent_span_id: None,
-            plan_id: None,
-            plan_step_id: None,
-            action_id: None,
-            signals: None,
-            depends_on: Vec::new(),
-        });
+    let observed_hash = hash_observed(observed);
+    if ctx.last_handled_observed_hash == Some(observed_hash) {
+        return Ok(LoopStageResult::Noop);
     }
-    if observed.error_count == 0 && ctx.last_done_goal.is_some() && ctx.last_done_goal == observed.goal_text {
-        if requirements_satisfied(ctx, observed) {
-            return emit_plan(ctx, LoopPlanned {
+    if observed.goal_text.as_ref().map(|g| is_placeholder_goal(g)).unwrap_or(true) && observed.error_count == 0 {
+        return emit_plan(
+            ctx,
+            LoopPlanned {
                 tick: observed.tick,
                 action_kind: "no_op".to_string(),
                 action_payload: serde_json::json!({}),
-                reason: "goal_complete".to_string(),
+                reason: "no_goal".to_string(),
                 llm_request_id: None,
-                signals: None,
                 trace_id: None,
                 execution_id: None,
                 span_id: None,
@@ -264,11 +264,36 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
                 plan_id: None,
                 plan_step_id: None,
                 action_id: None,
+                signals: None,
                 depends_on: Vec::new(),
-            });
+            },
+        );
+    }
+    if observed.error_count == 0 && ctx.last_done_goal.is_some() && ctx.last_done_goal == observed.goal_text {
+        if requirements_satisfied(ctx, observed) {
+            return emit_plan(
+                ctx,
+                LoopPlanned {
+                    tick: observed.tick,
+                    action_kind: "no_op".to_string(),
+                    action_payload: serde_json::json!({}),
+                    reason: "goal_complete".to_string(),
+                    llm_request_id: None,
+                    signals: None,
+                    trace_id: None,
+                    execution_id: None,
+                    span_id: None,
+                    parent_span_id: None,
+                    plan_id: None,
+                    plan_step_id: None,
+                    action_id: None,
+                    depends_on: Vec::new(),
+                },
+            );
         }
         ctx.last_done_goal = None;
     }
+    ctx.last_handled_observed_hash = Some(observed_hash);
 
     let request_id = Uuid::new_v4().to_string();
     let trace_id = Uuid::new_v4().to_string();
@@ -276,14 +301,7 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
     let span_id = Uuid::new_v4().to_string();
     let plan_id = Uuid::new_v4().to_string();
     let include_full_goal = observed.goal_text != ctx.last_prompted_goal;
-    let prompt = build_prompt(
-        observed,
-        &ctx.batch_acted,
-        &ctx.batch_tool_results,
-        include_full_goal,
-        &ctx.workspace,
-        &ctx.context_merger.prompt_section(),
-    );
+    let prompt = build_prompt(observed, &ctx.batch_acted, &ctx.batch_tool_results, include_full_goal, &ctx.workspace, &ctx.context_merger.prompt_section());
     let llm_call = LlmCall { request_id: request_id.clone(), prompt: prompt.to_string(), role: Some("planner".to_string()), agent_id: ctx.agent_id.clone() };
 
     let plan_tool_call_id = Uuid::new_v4().to_string();
@@ -324,6 +342,15 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
     Ok(LoopStageResult::Deferred)
 }
 
+fn hash_observed(observed: &LoopObserved) -> u64 {
+    let mut h = DefaultHasher::new();
+    observed.error_count.hash(&mut h);
+    observed.warning_count.hash(&mut h);
+    observed.goal_text.hash(&mut h);
+    observed.workspace_facts.hash(&mut h);
+    h.finish()
+}
+
 fn requirements_satisfied(ctx: &LoopContext, observed: &LoopObserved) -> bool {
     let Some(goal_text) = observed.goal_text.as_ref() else {
         return false;
@@ -345,22 +372,25 @@ fn check_llm_timeout(ctx: &mut LoopContext, current_tick: u64) {
     }
     let tick = pending.tick;
     ctx.pending_plan = None;
-    let _ = emit_plan(ctx, LoopPlanned {
-        tick,
-        action_kind: "no_op".to_string(),
-        action_payload: serde_json::json!({}),
-        reason: "llm_timeout".to_string(),
-        llm_request_id: None,
-        signals: None,
-        trace_id: None,
-        execution_id: None,
-        span_id: None,
-        parent_span_id: None,
-        plan_id: None,
-        plan_step_id: None,
-        action_id: None,
-        depends_on: Vec::new(),
-    });
+    let _ = emit_plan(
+        ctx,
+        LoopPlanned {
+            tick,
+            action_kind: "no_op".to_string(),
+            action_payload: serde_json::json!({}),
+            reason: "llm_timeout".to_string(),
+            llm_request_id: None,
+            signals: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            depends_on: Vec::new(),
+        },
+    );
 }
 
 fn emit_plan(_ctx: &LoopContext, payload: LoopPlanned) -> anyhow::Result<LoopStageResult> {
@@ -399,24 +429,13 @@ struct ActionPlan {
     depends_on: Vec<String>,
 }
 
-
-fn build_prompt(
-    observed: &LoopObserved,
-    batch_acted: &[LoopActed],
-    batch_tool_results: &[ToolResult],
-    _include_full_goal: bool,
-    workspace: &Path,
-    sub_agent_section: &str,
-) -> String {
+fn build_prompt(observed: &LoopObserved, batch_acted: &[LoopActed], batch_tool_results: &[ToolResult], _include_full_goal: bool, workspace: &Path, sub_agent_section: &str) -> String {
     let recent_actions = batch_acted
         .iter()
         .rev()
-        .take(8)
+        .take(24)
         .map(|a| {
-            let mut entry = format!(
-                "- action={} success={} exit_code={:?}",
-                a.action_kind, a.success, a.exit_code,
-            );
+            let mut entry = format!("- action={} success={} exit_code={:?}", a.action_kind, a.success, a.exit_code,);
             // Include actual content so the LLM can learn from failures and read results.
             let stdout = a.stdout.trim();
             let stderr = a.stderr.trim();
@@ -436,7 +455,7 @@ fn build_prompt(
     let recent_results = batch_tool_results
         .iter()
         .rev()
-        .take(4)
+        .take(12)
         .map(|r| {
             let content = serde_json::to_string_pretty(&r.output).unwrap_or_else(|_| r.output.to_string());
             let truncated = if content.len() > 600 { &content[..600] } else { &content };
@@ -449,29 +468,19 @@ fn build_prompt(
     let workspace_loc = count_loc_in_workspace(workspace);
 
     let spec = parse_agent_goal_markdown(&goal_text);
-    let target_workspace = spec.target_path
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| workspace.display().to_string());
+    let target_workspace = spec.target_path.map(|p| p.display().to_string()).unwrap_or_else(|| workspace.display().to_string());
 
     let search_hints = build_search_hints(&goal_text, workspace);
     let workspace_tree = build_workspace_tree(std::path::Path::new(&target_workspace), 3, 0);
-    let workspace_facts = if observed.workspace_facts.is_empty() {
-        " (none)".to_string()
-    } else {
-        observed.workspace_facts.iter().map(|f| format!("- {f}")).collect::<Vec<_>>().join("\n")
-    };
+    let workspace_facts = if observed.workspace_facts.is_empty() { " (none)".to_string() } else { observed.workspace_facts.iter().map(|f| format!("- {f}")).collect::<Vec<_>>().join("\n") };
     let destructive_warning = batch_acted.iter().any(|a| a.stderr.trim() == "rejected_destructive_command");
-    let destructive_note = if destructive_warning {
-        "\nWARNING: A previous plan was blocked as destructive. Do NOT include destructive commands; they will fail.\n"
-    } else {
-        "\n"
-    };
+    let destructive_note = if destructive_warning { "\nWARNING: A previous plan was blocked as destructive. Do NOT include destructive commands; they will fail.\n" } else { "\n" };
 
     format!(
         r#"You are a code-editing agent. Produce a plan as a JSON array of actions.
 
 TARGET WORKSPACE: {target_workspace}
-All relative paths resolve against TARGET WORKSPACE.
+All relative paths resolve against TARGET WORKSPACE (not its parent).
 LOC: {loc}  |  Errors: {errors}  |  Warnings: {warnings}
 {destructive_note}
 GOAL:
@@ -515,6 +524,7 @@ Workspace facts:
    - Include 3 lines of unchanged context around each change
    - Multiple file ops can be in one patch
    - NEVER use absolute paths inside the patch string
+   - NEVER prefix paths with the project directory name (use `src/main.rs`, NOT `myproject/src/main.rs`)
 
 4. run_command — run a shell command
    {{"action":"run_command","cmd":"cargo build","cwd":"{target_workspace}"}}
@@ -610,7 +620,7 @@ fn build_search_hints(goal_text: &str, workspace: &Path) -> String {
 fn extract_goal_keywords(spec: &canon_goal::GoalSpec) -> Vec<String> {
     let mut out = Vec::new();
     for req in &spec.requirements {
-        for token in req.split(|c: char| !c.is_alphanumeric() && c != '.' && c != '_' && c != '/' ) {
+        for token in req.split(|c: char| !c.is_alphanumeric() && c != '.' && c != '_' && c != '/') {
             if token.len() >= 4 || token.contains('.') || token.contains('/') {
                 out.push(token.to_string());
             }
@@ -630,9 +640,7 @@ fn parse_llm_actions(result: &serde_json::Value) -> (Vec<ActionPlan>, Option<ser
     // Shape A: wrapper object with "actions" key
     if result.is_object() && result.get("actions").is_some() {
         let signals = result.get("signals").cloned();
-        let actions = result["actions"].as_array()
-            .map(|arr| arr.iter().filter_map(|v| parse_value_to_action(v.clone())).collect())
-            .unwrap_or_default();
+        let actions = result["actions"].as_array().map(|arr| arr.iter().filter_map(|v| parse_value_to_action(v.clone())).collect()).unwrap_or_default();
         return (actions, signals);
     }
 
@@ -663,14 +671,18 @@ fn parse_llm_actions(result: &serde_json::Value) -> (Vec<ActionPlan>, Option<ser
                 signals = parsed.get("signals").cloned();
                 if let Some(arr) = parsed["actions"].as_array() {
                     for v in arr {
-                        if let Some(a) = parse_value_to_action(v.clone()) { actions.push(a); }
+                        if let Some(a) = parse_value_to_action(v.clone()) {
+                            actions.push(a);
+                        }
                     }
                 }
                 continue;
             }
             if let Some(arr) = parsed.as_array() {
                 for v in arr {
-                    if let Some(a) = parse_value_to_action(v.clone()) { actions.push(a); }
+                    if let Some(a) = parse_value_to_action(v.clone()) {
+                        actions.push(a);
+                    }
                 }
             } else if let Some(a) = parse_value_to_action(parsed) {
                 actions.push(a);
@@ -723,19 +735,24 @@ fn build_workspace_tree(dir: &Path, max_depth: usize, depth: usize) -> String {
 }
 
 fn build_workspace_tree_inner(dir: &Path, depth: usize, max_depth: usize, lines: &mut Vec<String>, cap: usize) {
-    if lines.len() >= cap { return; }
-    let Ok(entries) = std::fs::read_dir(dir) else { return; };
+    if lines.len() >= cap {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     let indent = "  ".repeat(depth);
-    let mut items: Vec<_> = entries
-        .flatten()
-        .map(|e| e.path())
-        .collect();
+    let mut items: Vec<_> = entries.flatten().map(|e| e.path()).collect();
     items.sort();
     for path in items {
-        if lines.len() >= cap { break; }
+        if lines.len() >= cap {
+            break;
+        }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         // Skip hidden and build dirs
-        if name.starts_with('.') || name == "target" || name == "node_modules" { continue; }
+        if name.starts_with('.') || name == "target" || name == "node_modules" {
+            continue;
+        }
         if path.is_dir() {
             lines.push(format!("{indent}{name}/"));
             if depth < max_depth {
@@ -779,11 +796,7 @@ fn extract_fenced_blocks(text: &str) -> Vec<String> {
 fn parse_value_to_action(value: serde_json::Value) -> Option<ActionPlan> {
     // Handle "action" discriminator format (used by planner GPT)
     if let Some(action_str) = value.get("action").and_then(|v| v.as_str()) {
-        let depends_on = value
-            .get("depends_on")
-            .and_then(|d| d.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-            .unwrap_or_default();
+        let depends_on = value.get("depends_on").and_then(|d| d.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
         match action_str {
             "done" => {
                 let reason = value.get("reason").and_then(|v| v.as_str()).unwrap_or("done").to_string();
