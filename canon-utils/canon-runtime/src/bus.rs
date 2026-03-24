@@ -1,4 +1,4 @@
-use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, EventMask, RustcEvent};
+use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, EventMask, EventOutcome, RustcEvent};
 use crossbeam_channel::{bounded, Sender};
 use std::thread;
 
@@ -52,6 +52,7 @@ impl EventBus {
     }
 
     pub fn register(&mut self, name: String, mut consumer: Box<dyn EventConsumer>, emitter: EventEmitterHandle) {
+        let emitter_for_loop = emitter.clone();
         consumer.set_emitter(emitter);
         let filter = consumer.filter();
         let (tx, rx) = bounded::<EventMessage>(self.queue_size);
@@ -59,7 +60,16 @@ impl EventBus {
         let _ = thread::Builder::new().name(thread_name.clone()).spawn(move || {
             let mut consumer = consumer;
             for msg in rx.iter() {
-                consumer.on_event(&msg.event);
+                match consumer.on_event(&msg.event) {
+                    EventOutcome::Emit(e) => emitter_for_loop.emit(e),
+                    EventOutcome::EmitMany(list) => {
+                        for e in list {
+                            emitter_for_loop.emit(e);
+                        }
+                    }
+                    EventOutcome::NoOp(_) => {}
+                    EventOutcome::Error(e) => emitter_for_loop.emit(e),
+                }
             }
         });
         self.consumers.push(ConsumerEntry { filter, sender: tx });

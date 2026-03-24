@@ -9,6 +9,10 @@ let pingInterval = null;
 
 // tabId → reqId: tracks which reqId to attach when content signals READY
 const pendingOpenReqIds = new Map();
+// tabId → original URL from OPEN_TAB (for custom GPT navigate-back on NEW_CHAT).
+const tabOriginalUrls = new Map();
+// tabId → true while a navigate-back NEW_CHAT is in flight.
+const pendingNewChatNavigations = new Map();
 
 function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
@@ -98,6 +102,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "CONTENT_READY") {
+    if (pendingNewChatNavigations.get(tabId)) {
+      pendingNewChatNavigations.delete(tabId);
+      console.log("[BG] CONTENT_READY after navigate-back, sending NEW_CHAT_DONE", { tabId });
+      sendToRust({ type: "NEW_CHAT_DONE", tabId });
+      sendResponse({ ok: true });
+      return true;
+    }
     const reqId = pendingOpenReqIds.get(tabId) ?? null;
     pendingOpenReqIds.delete(tabId);
     sendToRust({ type: "TAB_READY", tabId, url: message.url, reqId });
@@ -130,6 +141,7 @@ function handleRustMessage(msg) {
     chrome.tabs.create({ url: msg.url, active: false }, (tab) => {
       if (!tab?.id) return;
       const newTabId = tab.id;
+      tabOriginalUrls.set(newTabId, msg.url);
       // Prevent Chrome from discarding background ChatGPT tabs.
       try {
         chrome.tabs.update(newTabId, { autoDiscardable: false });
@@ -158,6 +170,13 @@ function handleRustMessage(msg) {
   if (msg?.type === "NEW_CHAT") {
     const targetTabId = msg.tabId;
     if (!targetTabId) return;
+    const originalUrl = tabOriginalUrls.get(targetTabId) ?? "";
+    const isCustomGpt = originalUrl.includes("/gg/") || originalUrl.includes("chatgpt.com/g/");
+    if (isCustomGpt) {
+      pendingNewChatNavigations.set(targetTabId, true);
+      chrome.tabs.update(targetTabId, { url: originalUrl }, () => void chrome.runtime.lastError);
+      return;
+    }
     sendToTab(targetTabId, { type: "NEW_CHAT" });
     return;
   }
@@ -208,6 +227,8 @@ function handleRustMessage(msg) {
 // ── Tab lifecycle ────────────────────────────────────────────────────────
 chrome.tabs.onRemoved.addListener((tabId) => {
   pendingOpenReqIds.delete(tabId);
+  tabOriginalUrls.delete(tabId);
+  pendingNewChatNavigations.delete(tabId);
   sendToRust({ type: "TAB_CLOSED", tabId });
 });
 

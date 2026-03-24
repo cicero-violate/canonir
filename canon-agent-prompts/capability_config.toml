@@ -85,7 +85,7 @@ id = "analyst_chatgpt"
 url = "https://chatgpt.com/gg/69c22949e1e881948abaf7016ef8be4c"
 role_markdown = "builtin:planner"
 role = "analyst"
-stateful = false
+stateful = true
 max_tabs = 1
 
 [llm.roles.analyst.weights]

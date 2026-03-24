@@ -424,6 +424,7 @@ fn default_role_content(role: Option<&str>, endpoint_id: &str) -> String {
     match role.unwrap_or("exec") {
         "planner" => "You are a planning agent. Return only JSON inside fenced ```json code block(s) with no prose.".to_string(),
         "router" => "You are a routing selector. Choose exactly one next route and return only one fenced ```json code block with no prose.".to_string(),
+        "analyst" => String::new(),
         _ => "You are an execution agent. Return only JSON inside fenced ```json code block(s) with no prose.".to_string(),
     }
 }

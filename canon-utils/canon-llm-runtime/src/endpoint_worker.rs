@@ -87,7 +87,12 @@ impl LlmWorker {
             prompt
         };
         let full_prompt = if raw_prompt.len() > 120_000 {
-            let cut = raw_prompt[..120_000].rfind('\n').unwrap_or(120_000);
+            // Walk back from byte 120_000 to the nearest valid char boundary.
+            let mut safe = 120_000usize;
+            while safe > 0 && !raw_prompt.is_char_boundary(safe) {
+                safe -= 1;
+            }
+            let cut = raw_prompt[..safe].rfind('\n').unwrap_or(safe);
             let mut s = raw_prompt[..cut].to_string();
             s.push_str("\n... [prompt truncated]\n");
             s
@@ -139,15 +144,7 @@ impl LlmWorker {
                     return Err(anyhow::anyhow!("new_chat timeout"));
                 }
             }
-            let _ = self.bridge.temp_chat(tab_id).await;
-            match self.bridge.wait_temp_chat(tab_id, 20).await {
-                Ok(()) => tab_manager_log_llm(format!("phase={} endpoint={} tab={} temp_chat_done", phase, self.endpoint_id, tab_id)),
-                Err(e) => {
-                    tab_manager_mark_tab_in_flight(&self.tabs, tab_id, true).await;
-                    tab_manager_log_llm(format!("phase={} endpoint={} tab={} temp_chat_timeout={}", phase, self.endpoint_id, tab_id, e));
-                    return Err(anyhow::anyhow!("temp_chat timeout"));
-                }
-            }
+            // temp_chat removed: redirect to temporary-chat UI races with prompt injection.
         }
         if self.tab_cooldown_ms > 0 {
             tab_manager_mark_tab_cooldown(&self.tabs, tab_id, self.tab_cooldown_ms).await;

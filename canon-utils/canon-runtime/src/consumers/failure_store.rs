@@ -1,4 +1,4 @@
-use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, RustcEvent};
+use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, RustcEvent};
 use serde::{Deserialize, Serialize};
 use std::fs::{create_dir_all, File};
 use std::io::{Seek, Write};
@@ -34,13 +34,12 @@ impl FailureStoreConsumer {
 }
 
 impl EventConsumer for FailureStoreConsumer {
-    fn filter(&self) -> EventFilter {
-        EventFilter::ErrorOnly
-    }
+    fn filter(&self) -> EventFilter { EventFilter::ErrorOnly }
 
-    fn on_event(&mut self, event: &RuntimeEvent) {
+    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         self.store.record_event(event);
         self.persist();
+        EventOutcome::NoOp("failure_store_recorded")
     }
 
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}

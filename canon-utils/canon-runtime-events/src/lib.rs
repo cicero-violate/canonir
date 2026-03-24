@@ -31,7 +31,7 @@ macro_rules! impl_rustc_consumer {
 pub use emit::*;
 pub use events::{
     new_error_occurred, AgentRegistered, AnalysisEvent, AnalysisRun, AnalysisWorkspace, BashInvoke, CapabilityCompleted, CapabilityFailed, CapabilityInvoked, CapabilityResolved, CapabilityResult,
-    CargoBuild, CargoCheck, CargoEvent, CargoRun, Code, DebugEvent, DeleteSymbol, EditEvent, ErrorOccurred, EventConsumer, EventEmitter, EventEmitterHandle, EventFilter, EventMask, ExtractModule,
+    CargoBuild, CargoCheck, CargoEvent, CargoRun, Code, DebugEvent, DeleteSymbol, EditEvent, ErrorOccurred, EventConsumer, EventEmitter, EventEmitterHandle, EventFilter, EventMask, EventOutcome, ExtractModule,
     FileEvent, FilePatch, FileRead, FileWrite, GoalEdgeDefined, GoalGraphCheckpointed, GoalNodeCreated, GoalNodeRetracted, GoalNodeRewritten, GoalSelected, InlineModule, LlmCall, LlmResult,
     LocatedEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, MoveSymbol, NodeCompleted, NodeFailed, NodeReady, NodeStarted, PolicyBaselineUpdated, ProcessResult, PromptLoaded,
     RenameDir, RenameModule, RenameSymbol, RequestDispatch, RouteSelected, RouteTick, RuntimeEvent, RuntimeStateUpdated, RustcEventConsumer, SubTaskResult, SystemConfigLoaded, Tick, ToolBatchSettled,

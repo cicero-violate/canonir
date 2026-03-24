@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::{context::{LoopContext, PendingPlan}, result::LoopStageResult};
 
 const LLM_TIMEOUT_TICKS: u64 = 60;
+const PLACEHOLDER_GOAL: &str = "goal-pending";
 
 pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
     let tick = rs.tick;
@@ -16,6 +17,11 @@ pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Resu
         return Ok(LoopStageResult::Noop);
     };
     handle_observed(ctx, &observed)
+}
+
+fn is_placeholder_goal(goal: &str) -> bool {
+    let trimmed = goal.trim();
+    trimmed.is_empty() || trimmed.contains(PLACEHOLDER_GOAL)
 }
 
 pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
@@ -33,6 +39,18 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
         CapabilityResult::Llm(llm) => parse_llm_actions(&llm.response),
         _ => (Vec::new(), None::<serde_json::Value>),
     };
+
+    // If the observed goal is placeholder/empty, ignore any actions (especially "done")
+    // and allow routing to re-trigger goal acquisition on next tick.
+    let goal_placeholder = pending
+        .goal_text
+        .as_ref()
+        .map(|g| is_placeholder_goal(g))
+        .unwrap_or(true);
+    if goal_placeholder {
+        ctx.last_planned_observed_tick = None;
+        return Ok(LoopStageResult::Noop);
+    }
     ctx.last_llm_signals = signals.clone();
     if actions.len() > 1 && actions.iter().any(|a| matches!(a.action, LlmAction::Done { .. })) {
         actions.retain(|a| !matches!(a.action, LlmAction::Done { .. }));
@@ -212,7 +230,7 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
     if ctx.pending_plan.is_some() || ctx.last_planned_observed_tick == Some(observed.tick) {
         return Ok(LoopStageResult::Noop);
     }
-    if observed.goal_text.is_none() && observed.error_count == 0 {
+    if observed.goal_text.as_ref().map(|g| is_placeholder_goal(g)).unwrap_or(true) && observed.error_count == 0 {
         return emit_plan(ctx, LoopPlanned {
             tick: observed.tick,
             action_kind: "no_op".to_string(),

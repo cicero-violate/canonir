@@ -1,6 +1,5 @@
 mod agent;
 mod python;
-mod tlog;
 
 use anyhow::Result;
 
@@ -19,6 +18,5 @@ async fn main() -> Result<()> {
             .to_string()
     });
 
-    let tlog_summary = tlog::summarise(TLOG_PATH)?;
-    agent::run(&question, &tlog_summary, TLOG_PATH).await
+    agent::run(&question, TLOG_PATH).await
 }

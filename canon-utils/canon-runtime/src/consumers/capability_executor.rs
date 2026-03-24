@@ -1,4 +1,4 @@
-use canon_event::{new_error_occurred, RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter};
+use canon_event::{new_error_occurred, RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome};
 use canon_exec::{ExecutableEvent, ExecutionContext, ExecutionResult};
 use std::path::PathBuf;
 
@@ -22,12 +22,12 @@ impl EventConsumer for CapabilityExecutor {
         self.emitter = Some(emitter);
     }
 
-    fn on_event(&mut self, event: &RuntimeEvent) {
+    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         let Ok(exec) = ExecutableEvent::try_from(event.clone()) else {
-            return;
+            return EventOutcome::NoOp("capability_executor_not_executable");
         };
         let Some(emitter) = self.emitter.clone() else {
-            return;
+            return EventOutcome::NoOp("capability_executor_no_emitter");
         };
         let ctx = ExecutionContext { workspace: self.workspace.clone(), emitter: emitter.clone() };
         match exec.execute(ctx) {
@@ -43,5 +43,6 @@ impl EventConsumer for CapabilityExecutor {
                 None,
             ))),
         }
+        EventOutcome::NoOp("capability_executor_async")
     }
 }

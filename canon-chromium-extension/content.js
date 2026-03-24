@@ -19,12 +19,10 @@
     injectScript("request_gemini.js");
   } else {
     injectScript("inject.js");
-    // Inject the correct request hook based on path
-    if (location.pathname.startsWith("/gg/")) {
-      injectScript("request_hook_group.js");
-    } else {
-      injectScript("request_hook_private.js");
-    }
+    // Inject both hooks — SPA navigation can change /gg/ → /c/ after load,
+    // so both must be present from the start. Targets don't overlap.
+    injectScript("request_hook_private.js");
+    injectScript("request_hook_group.js");
   }
 
   // inject.js → content.js: bridge installed signal

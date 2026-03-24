@@ -7,37 +7,24 @@ use crate::python;
 const ANALYST_ENDPOINT_ID: &str = "analyst_chatgpt";
 const ANALYST_ROLE: &str = "analyst";
 const MAX_TURNS: usize = 6;
+const MAX_PROMPT_CHARS: usize = 100_000; // stay below the 120k hard cap in endpoint_worker
 
-const SYSTEM_PROMPT: &str = r#"You are a systems analyst for the Canon multi-agent Rust runtime.
-
-You have read-only access to the system's event log (tlog) via Python.
-Use Python code blocks to query and analyse the log. When you have enough
-information, write a clear diagnosis and actionable recommendations.
-
-## Tools available to you
-
-To run Python code, output a fenced block exactly like this:
-
-```python
-import json, os
-tlog = os.environ["CANON_TLOG"]
-# ... your analysis code ...
-print(result)
-```
-
-Rules:
-- One Python block per turn. Wait for the result before continuing.
-- When you have enough information, write your final analysis with NO python block.
-- Keep code focused: extract specific metrics, counts, timings, or error patterns.
-- The tlog is newline-delimited JSON. Each line is one event.
-- Useful event kinds: LoopObserved, RouteSelected, LoopPlanned, LoopActed,
-  LoopVerified, LoopRewarded, CapabilityCompleted, CapabilityFailed, ErrorOccurred.
-"#;
+const SYSTEM_PROMPT: &str = "\
+You are a systems analyst for the Canon runtime.\n\n\
+Query the tlog with Python:\n\
+```python\n\
+import json, os\n\
+tlog = os.environ[\"CANON_TLOG\"]\n\
+# your code\n\
+print(result)\n\
+```\n\
+One Python block per turn. Wait for the result before writing more.\n\
+No code block = final answer.";
 
 /// Run the analyst agent loop.
-/// Sends the question + tlog summary to the analyst LLM, executes any Python
-/// it emits, feeds results back, and repeats until the LLM stops emitting code.
-pub async fn run(question: &str, tlog_summary: &str, tlog_path: &str) -> Result<()> {
+/// Sends the question to the analyst LLM, executes any Python it emits, feeds
+/// results back, and repeats until the LLM stops emitting code.
+pub async fn run(question: &str, tlog_path: &str) -> Result<()> {
     let config = CapabilityConfig::snapshot_store_load()?;
 
     let endpoint = config
@@ -59,11 +46,9 @@ pub async fn run(question: &str, tlog_summary: &str, tlog_path: &str) -> Result<
     let tabs = llm_worker_new_tabs();
 
     // Build the initial prompt.
-    let mut conversation: Vec<String> = Vec::new();
-    let first_prompt = format!(
-        "{SYSTEM_PROMPT}\n\n---\n\n## Question\n{question}\n\n---\n\n{tlog_summary}"
-    );
-    conversation.push(first_prompt.clone());
+    let first_prompt = format!("{SYSTEM_PROMPT}\n\n{question}");
+    let mut history: Vec<(String, String)> = Vec::new(); // (llm_response, python_result)
+    let mut last_python_result = String::new();
 
     println!("=== Canon Analyst ===");
     println!("Question: {question}\n");
@@ -76,7 +61,15 @@ pub async fn run(question: &str, tlog_summary: &str, tlog_path: &str) -> Result<
             break;
         }
 
-        let prompt = conversation.join("\n\n---\n\n");
+        let prompt = if turn == 1 {
+            first_prompt.clone()
+        } else if endpoint.stateful {
+            // Stateful endpoints retain the chat history; send only the latest Python result.
+            last_python_result.clone()
+        } else {
+            build_non_stateful_prompt(&first_prompt, &history)
+        };
+
         let raw = llm_worker_send_request(
             &bridge,
             &endpoint.id,
@@ -105,8 +98,8 @@ pub async fn run(question: &str, tlog_summary: &str, tlog_path: &str) -> Result<
                 let block = result.to_context_block();
                 println!("[python result]\n{block}");
                 // Feed result back as next turn context.
-                conversation.push(raw);
-                conversation.push(format!("## Python result\n```\n{block}\n```"));
+                last_python_result = format!("## Python result\n```\n{block}\n```");
+                history.push((raw, last_python_result.clone()));
             }
             None => {
                 // No python block = final analysis. Done.
@@ -125,4 +118,28 @@ fn extract_python_block(text: &str) -> Option<String> {
     let end = after.find("```")?;
     let code = after[..end].trim().to_string();
     if code.is_empty() { None } else { Some(code) }
+}
+
+/// Build a bounded prompt for non-stateful endpoints by replaying the
+/// first prompt plus (llm, python) pairs, dropping oldest pairs to stay under the limit.
+fn build_non_stateful_prompt(first: &str, history: &[(String, String)]) -> String {
+    let sep = "\n\n---\n\n";
+    let mut parts: Vec<&str> = vec![first];
+    for (llm_turn, py_result) in history {
+        parts.push(llm_turn.as_str());
+        parts.push(py_result.as_str());
+    }
+    loop {
+        let total: usize = parts.iter().map(|s| s.len() + sep.len()).sum();
+        if total <= MAX_PROMPT_CHARS || parts.len() <= 1 {
+            break;
+        }
+        if parts.len() >= 3 {
+            parts.remove(1);
+            parts.remove(1);
+        } else {
+            break;
+        }
+    }
+    parts.join(sep)
 }

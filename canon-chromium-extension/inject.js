@@ -108,6 +108,7 @@
       return;
     }
     console.log("[INJ] editor not yet in DOM, waiting via MutationObserver");
+    const observeTarget = document.body || document.documentElement;
     const observer = new MutationObserver(() => {
       const ed = document.querySelector('div[contenteditable="true"]');
       if (ed) {
@@ -116,7 +117,7 @@
         window.postMessage({ type: "BRIDGE_READY" }, "*");
       }
     });
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(observeTarget, { childList: true, subtree: true });
   }
   signalReadyWhenEditorExists();
 
@@ -278,6 +279,11 @@
       waitStream();
     }
     if (event.data?.type === "TEMP_CHAT") {
+      // Custom GPT tabs do not support temporary chat; acknowledge immediately.
+      if (location.pathname.startsWith("/gg/")) {
+        window.postMessage({ type: "TEMP_CHAT_DONE" }, "*");
+        return;
+      }
       const deadline = Date.now() + 10000;
       const tryEnable = () => {
         if (isTempChatEnabled()) {
@@ -288,6 +294,7 @@
         if (Date.now() < deadline) {
           setTimeout(tryEnable, 300);
         } else {
+          // Timed out — acknowledge so Rust does not hang.
           window.postMessage({ type: "TEMP_CHAT_DONE" }, "*");
         }
       };

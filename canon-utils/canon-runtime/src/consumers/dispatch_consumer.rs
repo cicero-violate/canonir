@@ -5,7 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use canon_event::{
-    EventConsumer, EventEmitterHandle, EventFilter, LoopObserved,
+    EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, LoopObserved,
     RuntimeEvent, RequestDispatch, SubTaskResult, GoalNodeRetracted,
 };
 use canon_loop::LoopStageExecutor;
@@ -41,12 +41,13 @@ struct HaltDetectorConsumer {
 impl EventConsumer for HaltDetectorConsumer {
     fn filter(&self) -> EventFilter { EventFilter::All }
     fn set_emitter(&mut self, _: EventEmitterHandle) {}
-    fn on_event(&mut self, event: &RuntimeEvent) {
+    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         if let RuntimeEvent::LoopRewarded(r) = event {
             if r.halt {
                 self.halted.store(true, Ordering::Relaxed);
             }
         }
+        EventOutcome::NoOp("halt_detector_checked")
     }
 }
 
@@ -64,7 +65,7 @@ struct ForwardConsumer {
 impl EventConsumer for ForwardConsumer {
     fn filter(&self) -> EventFilter { EventFilter::All }
     fn set_emitter(&mut self, _: EventEmitterHandle) {}
-    fn on_event(&mut self, event: &RuntimeEvent) {
+    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         match event {
             RuntimeEvent::LoopObserved(_) => self.parent.emit(event.clone()),
             RuntimeEvent::LoopPlanned(p) => {
@@ -97,6 +98,7 @@ impl EventConsumer for ForwardConsumer {
             }
             _ => {}
         }
+        EventOutcome::NoOp("forward_consumer_forwarded")
     }
 }
 
@@ -211,9 +213,9 @@ impl EventConsumer for DispatchConsumer {
         self.emitter = Some(emitter);
     }
 
-    fn on_event(&mut self, event: &RuntimeEvent) {
-        let RuntimeEvent::RequestDispatch(req) = event else { return; };
-        let Some(emitter) = self.emitter.clone() else { return; };
+    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
+        let RuntimeEvent::RequestDispatch(req) = event else { return EventOutcome::NoOp("dispatch_consumer_non_dispatch"); };
+        let Some(emitter) = self.emitter.clone() else { return EventOutcome::NoOp("dispatch_consumer_no_emitter"); };
         // Resolve the generic role ("exec") to a specific endpoint ID so that
         // all LlmCalls within this sub-agent use the same tab (stateful conversation).
         let mut req = req.clone();
@@ -225,5 +227,6 @@ impl EventConsumer for DispatchConsumer {
                 run_sub_agent(req, emitter, base);
             })
             .expect("dispatch worker thread");
+        EventOutcome::NoOp("dispatch_consumer_spawned")
     }
 }

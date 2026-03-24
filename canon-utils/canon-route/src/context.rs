@@ -66,6 +66,11 @@ impl RouteContext {
         Self::default()
     }
 
+    fn goal_is_placeholder(goal: &str) -> bool {
+        let trimmed = goal.trim();
+        trimmed.is_empty() || trimmed.contains("goal-pending")
+    }
+
     pub fn signals(&self) -> RuntimeSignals {
         RuntimeSignals {
             context_ready: self.context_ready,
@@ -107,10 +112,13 @@ impl RouteContext {
     pub fn update_from_event(&mut self, event: &RuntimeEvent, workspace: &Path) {
         match event {
             RuntimeEvent::LoopObserved(LoopObserved { goal_text, error_count, .. }) => {
-                let goal_present = goal_text.as_ref().map(|v| !v.trim().is_empty()).unwrap_or(false);
+                let goal_present = goal_text
+                    .as_ref()
+                    .map(|v| !Self::goal_is_placeholder(v))
+                    .unwrap_or(false);
                 self.context_ready = goal_present || *error_count > 0;
                 if let Some(goal_text) = goal_text {
-                    if !goal_text.trim().is_empty() {
+                    if !Self::goal_is_placeholder(goal_text) {
                         self.mission_raw = goal_text.clone();
                         self.mission_summary = summarize_goal(&parse_agent_goal_markdown(goal_text));
                         self.mission_goal_spec = Some(parse_agent_goal_markdown(goal_text));

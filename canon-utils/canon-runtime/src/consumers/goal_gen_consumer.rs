@@ -1,4 +1,7 @@
-use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, RuntimeEvent, LlmCall, CapabilityResult};
+use canon_event::{
+    EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, RuntimeEvent, LlmCall, CapabilityResult,
+    new_error_occurred,
+};
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -6,33 +9,37 @@ const AGENT_GOAL_PATH: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts/A
 const GOALGEN_PROJECTS_DIR: &str = "/workspace/ai_sandbox/canon/test_projects/goalgen";
 
 // Prompt instructs planner LLM to generate a single Rust project goal in the canonical AGENT_GOAL.md format.
-const GOAL_GEN_PROMPT: &str = r#"
-You are a software engineering challenge generator for a multi-agent Rust coding system.
-
-Generate a SINGLE complex Rust project specification in EXACTLY the format shown below.
-Output ONLY the markdown — no preamble, no explanation, nothing else.
-
-Rules:
-- The project MUST be a Rust binary crate
-- Must require 800+ lines of real implementation across multiple modules
-- Must be self-contained — only crates.io dependencies, no workspace deps
-- Target path MUST be under /workspace/ai_sandbox/canon/test_projects/goalgen/<slug>
-- `cargo check` passing is the sole success criterion
-- Choose a different project category each time (VM, parser, CLI tool, scheduler, graph lib, etc.)
-
-OUTPUT FORMAT (replace <...> placeholders):
-
-# <Project Title>
-
-<One paragraph describing what the project does and why it is interesting.>
-
-## Target
-- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/<slug>`
-
-## Requirements
-
-<numbered list of 8–12 specific, concrete implementation requirements>
-"#;
+const GOAL_GEN_PROMPT: &str = "You are a software engineering challenge generator for a multi-agent Rust coding system.\n\
+\n\
+Generate a SINGLE complex Rust project specification.\n\
+\n\
+CRITICAL FORMATTING RULES — violating any of these causes your output to be discarded:\n\
+- Output RAW markdown ONLY. Do NOT wrap in any code fence (no ```markdown, no ``` , nothing).\n\
+- Your output MUST start with \"# \" (a level-1 heading).\n\
+- The section heading must be written EXACTLY as: ## Requirements\n\
+- The project path line must be written EXACTLY as:\n\
+  - Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/<slug>`\n\
+  where <slug> is a short lowercase hyphenated identifier for your project.\n\
+\n\
+PROJECT RULES:\n\
+- Rust binary crate\n\
+- 800+ lines of real implementation across multiple modules\n\
+- Self-contained: only crates.io dependencies, no workspace deps\n\
+- `cargo check` passing is the sole success criterion\n\
+- Choose a different category each time (VM, parser, CLI tool, scheduler, graph lib, etc.)\n\
+\n\
+REQUIRED OUTPUT STRUCTURE (copy headings verbatim, replace <...> content):\n\
+\n\
+# <Project Title>\n\
+\n\
+<One paragraph describing what the project does and why it is interesting.>\n\
+\n\
+## Target\n\
+- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/<slug>`\n\
+\n\
+## Requirements\n\
+\n\
+<numbered list of 8-12 specific, concrete implementation requirements>\n";
 
 enum State {
     Waiting,
@@ -40,48 +47,84 @@ enum State {
     Done,
 }
 
+const MAX_RETRIES: u32 = 5;
+
 pub struct GoalGenConsumer {
     tlog_path: PathBuf,
-    emitter: Option<EventEmitterHandle>,
     state: State,
+    retries: u32,
 }
 
 impl GoalGenConsumer {
     pub fn new(tlog_path: PathBuf) -> Self {
-        Self { tlog_path, emitter: None, state: State::Waiting }
+        let initial_state = if let Ok(existing) = std::fs::read_to_string(AGENT_GOAL_PATH) {
+            if validate_goal(&existing) {
+                eprintln!("[goal_gen] valid goal already on disk, skipping generation");
+                State::Done
+            } else {
+                State::Waiting
+            }
+        } else {
+            State::Waiting
+        };
+        Self { tlog_path, state: initial_state, retries: 0 }
     }
 }
 
 impl EventConsumer for GoalGenConsumer {
     fn filter(&self) -> EventFilter { EventFilter::All }
 
-    fn set_emitter(&mut self, emitter: EventEmitterHandle) {
-        self.emitter = Some(emitter);
-    }
+    fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
-    fn on_event(&mut self, event: &RuntimeEvent) {
+    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         match (&self.state, event) {
             (State::Waiting, RuntimeEvent::Tick(_)) => {
-                let Some(emitter) = &self.emitter else { return; };
                 let request_id = Uuid::new_v4().to_string();
-                emitter.emit(RuntimeEvent::Llm(LlmCall {
+                self.state = State::Pending(request_id.clone());
+                EventOutcome::Emit(RuntimeEvent::Llm(LlmCall {
                     request_id: request_id.clone(),
                     prompt: GOAL_GEN_PROMPT.to_string(),
                     role: Some("goal_gen".to_string()),
                     agent_id: Some("goal_gen_chatgpt".to_string()),
-                }));
-                self.state = State::Pending(request_id);
+                }))
             }
             (State::Pending(expected_id), RuntimeEvent::CapabilityCompleted(done)) => {
                 if done.request_id != *expected_id || done.capability != "llm.call" {
-                    return;
+                    return EventOutcome::NoOp("goal_gen_unrelated_completion");
                 }
+                let mut warn_events: Vec<RuntimeEvent> = Vec::new();
                 let content = match &done.result {
                     CapabilityResult::Llm(res) => {
-                        let raw = res.response.get("text")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_else(|| res.response.as_str().unwrap_or(""));
-                        extract_goal_text(raw)
+                        let raw: String = if let Some(s) = res.response.get("text").and_then(|v| v.as_str()) {
+                            s.to_string()
+                        } else if let Some(s) = res.response.as_str() {
+                            s.to_string()
+                        } else if let Some(obj) = res.response.as_object() {
+                            obj.values()
+                                .find_map(|v| v.as_str().filter(|s| !s.is_empty()))
+                                .unwrap_or("")
+                                .to_string()
+                        } else {
+                            String::new()
+                        };
+                        if raw.is_empty() {
+                            eprintln!(
+                                "[goal_gen] LLM returned empty response (response shape: {})",
+                                res.response.to_string().chars().take(200).collect::<String>()
+                            );
+                            warn_events.push(RuntimeEvent::ErrorOccurred(new_error_occurred(
+                                "goal_gen_empty_response",
+                                "goal_gen_consumer",
+                                "LLM returned empty or unparseable content for goal generation",
+                                "warning",
+                                serde_json::json!({
+                                    "retry": self.retries,
+                                    "response_shape": res.response.to_string().chars().take(200).collect::<String>(),
+                                }),
+                                Some(done.request_id.clone()),
+                            )));
+                        }
+                        extract_goal_text(&raw)
                     }
                     _ => String::new(),
                 };
@@ -89,31 +132,104 @@ impl EventConsumer for GoalGenConsumer {
                     let _ = std::fs::write(AGENT_GOAL_PATH, &content);
                     crate::bootstrap::write_prompt_loaded_to_tlog(&self.tlog_path, &content);
                     self.state = State::Done;
+                    if warn_events.is_empty() {
+                        EventOutcome::NoOp("goal_gen_done")
+                    } else {
+                        EventOutcome::EmitMany(warn_events)
+                    }
                 } else {
-                    // Invalid output — retry on next tick.
-                    self.state = State::Waiting;
+                    self.retries += 1;
+                    if self.retries >= MAX_RETRIES {
+                        let msg = format!(
+                            "goal_gen gave up after {MAX_RETRIES} retries — last content was {} bytes: {}",
+                            content.len(),
+                            &content[..content.len().min(200)]
+                        );
+                        eprintln!("[goal_gen] {msg}");
+                        self.state = State::Done;
+                        return EventOutcome::Error(RuntimeEvent::ErrorOccurred(new_error_occurred(
+                            "goal_gen_exhausted",
+                            "goal_gen_consumer",
+                            &msg,
+                            "error",
+                            serde_json::json!({ "retries": MAX_RETRIES, "content_bytes": content.len() }),
+                            None,
+                        )));
+                    } else {
+                        eprintln!("[goal_gen] retry {}/{}", self.retries, MAX_RETRIES);
+                        self.state = State::Waiting;
+                    }
+                    if warn_events.is_empty() {
+                        EventOutcome::NoOp("goal_gen_retrying")
+                    } else {
+                        EventOutcome::EmitMany(warn_events)
+                    }
                 }
             }
-            _ => {}
+            (State::Pending(expected_id), RuntimeEvent::CapabilityFailed(fail)) => {
+                if fail.request_id != *expected_id || fail.capability != "llm.call" {
+                    return EventOutcome::NoOp("goal_gen_unrelated_failure");
+                }
+                self.retries += 1;
+                let msg = format!("goal_gen LLM call failed: {}", fail.error);
+                eprintln!("[goal_gen] {msg} (retry {}/{})", self.retries, MAX_RETRIES);
+                if self.retries >= MAX_RETRIES {
+                    eprintln!("[goal_gen] gave up after {MAX_RETRIES} retries due to capability failures");
+                    self.state = State::Done;
+                    return EventOutcome::Error(RuntimeEvent::ErrorOccurred(new_error_occurred(
+                        "goal_gen_exhausted",
+                        "goal_gen_consumer",
+                        &msg,
+                        "error",
+                        serde_json::json!({ "retries": MAX_RETRIES, "last_error": fail.error }),
+                        None,
+                    )));
+                } else {
+                    self.state = State::Waiting;
+                }
+                EventOutcome::NoOp("goal_gen_failure_retry")
+            }
+            _ => EventOutcome::NoOp("goal_gen_noop"),
         }
     }
 }
 
 fn extract_goal_text(raw: &str) -> String {
     let trimmed = raw.trim();
-    if let Some(inner) = trimmed.strip_prefix("```markdown") {
-        if let Some(inner) = inner.strip_suffix("```") {
-            return inner.trim().to_string();
+
+    // If there is a fenced code block anywhere, extract its content.
+    for fence_label in &["```markdown\n", "```md\n", "```\n", "``` \n"] {
+        if let Some(start) = trimmed.find(fence_label) {
+            let after_fence = &trimmed[start + fence_label.len()..];
+            if let Some(end) = after_fence.find("\n```") {
+                let inner = after_fence[..end].trim();
+                if !inner.is_empty() {
+                    return inner.to_string();
+                }
+            }
         }
     }
-    if let Some(inner) = trimmed.strip_prefix("```") {
-        if let Some(inner) = inner.strip_suffix("```") {
-            return inner.trim().to_string();
-        }
+
+    // No fence — strip any leading prose before the first heading.
+    if let Some(heading_start) = if trimmed.starts_with("# ") { Some(0) } else { trimmed.find("\n# ") } {
+        return trimmed[heading_start..].trim_start().to_string();
     }
+
     trimmed.to_string()
 }
 
 fn validate_goal(content: &str) -> bool {
-    content.contains(GOALGEN_PROJECTS_DIR) && content.contains("## Requirements")
+    let has_path = content.contains(GOALGEN_PROJECTS_DIR);
+    let lower = content.to_lowercase();
+    let has_requirements = lower.contains("## requirements");
+    let has_heading = content.trim_start().starts_with('#');
+
+    let ok = has_path && has_requirements && has_heading;
+    if !ok {
+        eprintln!(
+            "[goal_gen] validation failed: has_path={has_path} has_requirements={has_requirements} has_heading={has_heading} | preview: {:?}",
+            &content[..content.len().min(300)]
+        );
+    }
+    ok
 }

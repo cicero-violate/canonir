@@ -1,4 +1,4 @@
-use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, Tick, GoalEdgeDefined, AgentRegistered};
+use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, Tick, GoalEdgeDefined, AgentRegistered};
 use crate::{context::LoopContext, result::LoopStageResult, stage::LoopStageEvent, scheduler::{ScheduledTask, infer_priority}};
 use std::time::Instant;
 use crate::stage::observe;
@@ -28,7 +28,7 @@ impl EventConsumer for LoopStageExecutor {
         self.ctx.emitter = Some(emitter);
     }
 
-    fn on_event(&mut self, event: &RuntimeEvent) {
+    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         // State accumulation (mutations that do not emit).
         let mut trigger_observe = false;
         match event {
@@ -167,14 +167,14 @@ impl EventConsumer for LoopStageExecutor {
         }
 
         if self.ctx.halted {
-            return;
+            return EventOutcome::NoOp("loop_stage_halted");
         }
 
         let Ok(stage) = LoopStageEvent::try_from(event.clone()) else {
-            return;
+            return EventOutcome::NoOp("loop_stage_not_stage_event");
         };
         let res = stage.execute(&mut self.ctx);
-        let Some(emitter) = self.ctx.emitter.clone() else { return; };
+        let Some(emitter) = self.ctx.emitter.clone() else { return EventOutcome::NoOp("loop_stage_no_emitter"); };
         match res {
             Ok(LoopStageResult::Emit(e)) => emitter.emit_located(e, file!(), line!()),
             Ok(LoopStageResult::EmitMany(evs)) => evs.into_iter().for_each(|e| emitter.emit_located(e, file!(), line!())),
@@ -188,5 +188,6 @@ impl EventConsumer for LoopStageExecutor {
                 None,
             ))),
         }
+        EventOutcome::NoOp("loop_stage_async")
     }
 }

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use canon_event::{
-    EventConsumer, EventEmitterHandle, EventFilter, GoalGraphCheckpointed, RuntimeEvent,
+    EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, GoalGraphCheckpointed, RuntimeEvent,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -59,13 +59,12 @@ impl GoalGraph {
 
 pub struct GoalGraphConsumer {
     graph: GoalGraph,
-    emitter: Option<EventEmitterHandle>,
     last_checkpoint_seq: u64,
 }
 
 impl GoalGraphConsumer {
     pub fn new() -> Self {
-        Self { graph: GoalGraph::default(), emitter: None, last_checkpoint_seq: 0 }
+        Self { graph: GoalGraph::default(), last_checkpoint_seq: 0 }
     }
 
     pub fn graph(&self) -> &GoalGraph { &self.graph }
@@ -74,11 +73,9 @@ impl GoalGraphConsumer {
 impl EventConsumer for GoalGraphConsumer {
     fn filter(&self) -> EventFilter { EventFilter::All }
 
-    fn set_emitter(&mut self, emitter: EventEmitterHandle) {
-        self.emitter = Some(emitter);
-    }
+    fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
-    fn on_event(&mut self, event: &RuntimeEvent) {
+    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         self.graph.apply(event);
         match event {
             RuntimeEvent::GoalNodeCreated(_)
@@ -86,13 +83,12 @@ impl EventConsumer for GoalGraphConsumer {
             | RuntimeEvent::GoalNodeRewritten(_)
             | RuntimeEvent::GoalEdgeDefined(_) => {
                 self.last_checkpoint_seq += 1;
-                if let Some(emitter) = &self.emitter {
-                    emitter.emit(RuntimeEvent::GoalGraphCheckpointed(GoalGraphCheckpointed {
-                        tlog_seq: self.last_checkpoint_seq,
-                    }));
-                }
+                return EventOutcome::Emit(RuntimeEvent::GoalGraphCheckpointed(GoalGraphCheckpointed {
+                    tlog_seq: self.last_checkpoint_seq,
+                }));
             }
             _ => {}
         }
+        EventOutcome::NoOp("goal_graph_noop")
     }
 }

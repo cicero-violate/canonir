@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use canon_event::{AgentRegistered, EventConsumer, EventEmitterHandle, EventFilter, RequestDispatch, RuntimeEvent, SubTaskResult};
+use canon_event::{AgentRegistered, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, RequestDispatch, RuntimeEvent, SubTaskResult};
 
 #[derive(Clone, Debug)]
 pub struct AgentRegistryHandle(pub Arc<RwLock<AgentRegistry>>);
@@ -94,25 +94,30 @@ impl AgentRegistryConsumer {
 }
 
 impl EventConsumer for AgentRegistryConsumer {
-    fn filter(&self) -> EventFilter {
-        EventFilter::All
-    }
+    fn filter(&self) -> EventFilter { EventFilter::All }
 
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
-    fn on_event(&mut self, event: &RuntimeEvent) {
-        let Ok(mut reg) = self.registry.0.write() else { return; };
+    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
+        let Ok(mut reg) = self.registry.0.write() else { return EventOutcome::NoOp("agent_registry_poisoned"); };
         match event {
-            RuntimeEvent::AgentRegistered(AgentRegistered { payload }) => reg.upsert_card(payload),
-            RuntimeEvent::RequestDispatch(RequestDispatch { agent_id, dispatch_id, .. }) => reg.mark_busy(agent_id, dispatch_id),
+            RuntimeEvent::AgentRegistered(AgentRegistered { payload }) => {
+                reg.upsert_card(payload);
+                EventOutcome::NoOp("agent_registered")
+            }
+            RuntimeEvent::RequestDispatch(RequestDispatch { agent_id, dispatch_id, .. }) => {
+                reg.mark_busy(agent_id, dispatch_id);
+                EventOutcome::NoOp("agent_mark_busy")
+            }
             RuntimeEvent::SubTaskResult(SubTaskResult { agent_id, success, error, .. }) => {
                 if *success {
                     reg.mark_idle(agent_id);
                 } else {
                     reg.mark_failed(agent_id, error.clone().unwrap_or_else(|| "unknown sub-task failure".to_string()));
                 }
+                EventOutcome::NoOp("agent_mark_result")
             }
-            _ => {}
+            _ => EventOutcome::NoOp("agent_registry_ignored"),
         }
     }
 }

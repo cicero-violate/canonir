@@ -83,6 +83,7 @@
         init.body = JSON.stringify(payload);
         if (window.__promptInjectionMode === "auto") {
           window.__pendingPromptInjection = null;
+          window.__promptInjectionQueue = [];
         }
       } catch (err) {
         console.warn('[RequestHook] Request modification failed', err);

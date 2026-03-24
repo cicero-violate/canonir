@@ -1,4 +1,4 @@
-use canon_event::{canon_emit, EventConsumer, EventEmitterHandle, EventFilter, RuntimeEvent};
+use canon_event::{canon_emit, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, RuntimeEvent};
 
 use crate::{aggregator::{compute_g, compute_reward}, reducers::AllReducers, MetricsStorage};
 
@@ -33,7 +33,7 @@ impl EventConsumer for GoodnessConsumer {
         self.emitter = Some(emitter);
     }
 
-    fn on_event(&mut self, event: &RuntimeEvent) {
+    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         self.reducers.update_all(event);
 
         if let RuntimeEvent::LoopVerified(v) = event {
@@ -55,6 +55,8 @@ impl EventConsumer for GoodnessConsumer {
                     metrics: serde_json::to_value(&metrics).unwrap_or_default(),
                 }));
             }
+            return EventOutcome::NoOp("goodness_snapshot_emitted");
         }
+        EventOutcome::NoOp("goodness_noop")
     }
 }

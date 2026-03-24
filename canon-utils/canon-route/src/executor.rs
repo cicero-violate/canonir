@@ -1,5 +1,5 @@
 use canon_decision::RouteKind;
-use canon_event::{RuntimeEvent, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, LlmCall, RouteSelected, ToolBatchSettled};
+use canon_event::{RuntimeEvent, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, LlmCall, RouteSelected, ToolBatchSettled};
 use canon_judgment::GuardConfig;
 use canon_runtime_supervisor::judgment_loop::RouteController;
 use std::path::PathBuf;
@@ -94,7 +94,7 @@ impl EventConsumer for RouteExecutor {
         self.emitter = Some(emitter);
     }
 
-    fn on_event(&mut self, event: &RuntimeEvent) {
+    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         // Always accumulate state.
         self.ctx.update_from_event(event, &self.workspace);
 
@@ -108,7 +108,7 @@ impl EventConsumer for RouteExecutor {
                 }));
             }
             self.try_dispatch_route();
-            return;
+            return EventOutcome::NoOp("route_executor_batch_settled");
         }
 
         // Event-driven dispatch: fire immediately when the system becomes idle or context arrives.
@@ -125,7 +125,7 @@ impl EventConsumer for RouteExecutor {
                     "confidence": 0.99,
                 }).to_string();
                 self.emit_decision(&json, "deterministic:done_verify".to_string());
-                return;
+                return EventOutcome::NoOp("route_executor_done_verify");
             }
         }
 
@@ -147,7 +147,7 @@ impl EventConsumer for RouteExecutor {
                     self.pending_request_id = None;
                 }
                 self.try_dispatch_route();
-                return;
+                return EventOutcome::NoOp("route_executor_idle_dispatch");
             }
         }
 
@@ -156,7 +156,7 @@ impl EventConsumer for RouteExecutor {
         if let RuntimeEvent::LoopPlanned(_) = event {
             if self.ctx.planned_pending > 0 && self.ctx.pending_tool_result_ids.is_empty() {
                 self.try_dispatch_route();
-                return;
+                return EventOutcome::NoOp("route_executor_plan_dispatch");
             }
         }
 
@@ -169,7 +169,7 @@ impl EventConsumer for RouteExecutor {
         match event {
             RuntimeEvent::CapabilityCompleted(done) => {
                 if Some(&done.request_id) != self.pending_request_id.as_ref() || done.capability != "llm.call" {
-                    return;
+                    return EventOutcome::NoOp("route_executor_unrelated_completion");
                 }
                 let prompt = self.pending_prompt.clone().unwrap_or_default();
                 self.pending_request_id = None;
@@ -180,18 +180,20 @@ impl EventConsumer for RouteExecutor {
                     CapabilityResult::Empty => String::new(),
                 };
                 self.emit_decision(&model_json, prompt);
+                EventOutcome::NoOp("route_executor_completion")
             }
             RuntimeEvent::CapabilityFailed(failed) => {
                 if Some(&failed.request_id) != self.pending_request_id.as_ref() || failed.capability != "llm.call" {
-                    return;
+                    return EventOutcome::NoOp("route_executor_unrelated_failure");
                 }
                 let prompt = self.pending_prompt.clone().unwrap_or_default();
                 self.pending_request_id = None;
                 self.pending_prompt = None;
                 let model_json = heuristic_route_json(&self.ctx);
                 self.emit_decision(&model_json, prompt);
+                EventOutcome::NoOp("route_executor_failure_reroute")
             }
-            _ => {}
+            _ => EventOutcome::NoOp("route_executor_noop"),
         }
     }
 }

@@ -464,9 +464,24 @@ pub enum EventFilter {
     CapabilityOnly,
 }
 
+/// The outcome every consumer must return from `on_event`.
+/// Returning unit `()` is a compile error; every path must declare intent.
+#[derive(Debug)]
+pub enum EventOutcome {
+    /// Emit one event onto the bus.
+    Emit(RuntimeEvent),
+    /// Emit multiple events onto the bus (ordered).
+    EmitMany(Vec<RuntimeEvent>),
+    /// This consumer explicitly took no action this cycle.
+    /// The &'static str is a required reason string — no silent no-ops.
+    NoOp(&'static str),
+    /// Emit an error event; the consumer's internal state is unchanged.
+    Error(RuntimeEvent),
+}
+
 pub trait EventConsumer: Send + Sync {
     fn filter(&self) -> EventFilter;
-    fn on_event(&mut self, event: &RuntimeEvent);
+    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome;
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 }
 

@@ -1,4 +1,4 @@
-use canon_event::{new_error_occurred, RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, RustcEvent};
+use canon_event::{new_error_occurred, RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, RustcEvent};
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs::{create_dir_all, OpenOptions};
@@ -11,7 +11,6 @@ use uuid::Uuid;
 pub struct ErrorLogger {
     jsonl_path: PathBuf,
     seen: HashMap<u64, Instant>,
-    emitter: Option<EventEmitterHandle>,
 }
 
 impl ErrorLogger {
@@ -20,7 +19,7 @@ impl ErrorLogger {
         if let Some(parent) = jsonl_path.parent() {
             let _ = create_dir_all(parent);
         }
-        Self { jsonl_path, seen: HashMap::new(), emitter: None }
+        Self { jsonl_path, seen: HashMap::new() }
     }
 
     fn should_emit(&mut self, source: &str, message: &str) -> bool {
@@ -36,30 +35,27 @@ impl ErrorLogger {
 }
 
 impl EventConsumer for ErrorLogger {
-    fn filter(&self) -> EventFilter {
-        EventFilter::ErrorOnly
-    }
+    fn filter(&self) -> EventFilter { EventFilter::ErrorOnly }
 
-    fn on_event(&mut self, event: &RuntimeEvent) {
+    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         if let RuntimeEvent::ErrorOccurred(payload) = event {
             let value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));
             let _ = append_error_jsonl(&self.jsonl_path, &value);
-            return;
+            return EventOutcome::NoOp("error_logger_recorded");
         }
         let (source, payload) = match event_to_payload(event) {
             Some(record) => record,
-            None => return,
+            None => return EventOutcome::NoOp("error_logger_not_error"),
         };
         let message = payload.get("message").and_then(|v| v.as_str()).unwrap_or("");
         if !self.should_emit(&source, message) {
-            return;
+            return EventOutcome::NoOp("error_logger_deduped");
         }
         let _ = append_error_jsonl(&self.jsonl_path, &payload);
+        EventOutcome::NoOp("error_logger_recorded")
     }
 
-    fn set_emitter(&mut self, emitter: EventEmitterHandle) {
-        self.emitter = Some(emitter);
-    }
+    fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 }
 
 fn dedup_key(source: &str, message: &str) -> u64 {

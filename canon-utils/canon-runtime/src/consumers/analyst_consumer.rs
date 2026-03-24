@@ -1,4 +1,4 @@
-use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, RuntimeEvent, LlmCall, CapabilityResult};
+use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, RuntimeEvent, LlmCall, CapabilityResult};
 use std::io::Write as _;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -8,152 +8,213 @@ const STAGNANT_THRESHOLD: u64 = 20;
 /// After the analyst finishes a report, suppress re-firing for this many ticks.
 const COOLDOWN_TICKS: u64 = 50;
 /// Maximum LLM turns per analysis session.
-const MAX_TURNS: usize = 6;
+const MAX_TURNS: usize = 16;
 
 const ANALYST_ROLE: &str = "analyst";
 const ANALYST_AGENT_ID: &str = "analyst_chatgpt";
 const REPORTS_DIR: &str = "/workspace/ai_sandbox/canon/state/reports_out/analyst";
 
-const SYSTEM_PROMPT: &str = r#"You are a systems analyst for the Canon multi-agent Rust runtime.
+const SYSTEM_PROMPT: &str = r#"You are a senior systems analyst for the Canon multi-agent Rust runtime.
+Diagnose issues by querying the event log with Python. Every claim must be backed by data.
 
-You have read-only access to the system's event log (tlog) via Python.
-Use Python code blocks to query and analyse the log. When you have enough
-information, write a clear diagnosis and actionable recommendations.
+## Tool
 
-## Tools available to you
-
-To run Python code, output a fenced block exactly like this:
+Emit exactly one fenced Python block per turn and wait for the result:
 
 ```python
-import json, os
-tlog = os.environ["CANON_TLOG"]
-# ... your analysis code ...
+import json, os, collections
+events = [json.loads(l) for l in open(os.environ["CANON_TLOG"]) if l.strip()]
+# your analysis
 print(result)
 ```
 
-Rules:
-- One Python block per turn. Wait for the result before continuing.
-- When you have enough information, write your final analysis with NO python block.
-- Keep code focused: extract specific metrics, counts, timings, or error patterns.
-- The tlog is newline-delimited JSON. Each line is one event.
-- Useful event kinds: LoopObserved, RouteSelected, LoopPlanned, LoopActed,
-  LoopVerified, LoopRewarded, CapabilityCompleted, CapabilityFailed, ErrorOccurred.
-"#;
+A message with NO code block is treated as your final written report.
+Do NOT write the final report until you have explicitly marked every phase below as done.
+
+## Mandatory phases — work through them in order
+
+After EACH Python result, begin your reply with:
+  ✓ Completed: Phase N — <name>
+  → Next: Phase N+1 — <name>
+
+### Phase 0 — Schema discovery  ← START HERE
+Discover the actual shape of the tlog. Run:
+
+```python
+import json, os
+events = [json.loads(l) for l in open(os.environ["CANON_TLOG"]) if l.strip()]
+seen = {}
+for e in events:
+    k = e.get("kind")
+    if k not in seen:
+        seen[k] = e.get("data", {})
+for k, sample in sorted(seen.items()):
+    print(k, "->", json.dumps(sample)[:200])
+```
+
+Use the actual field names you discover. Never assume field names.
+
+### Phase 1 — Event inventory
+Count every event kind. Note total count and time span (first vs last ts).
+
+### Phase 2 — Loop health
+Track LoopObserved → LoopPlanned → LoopActed → LoopVerified → LoopRewarded per cycle.
+Count completed vs stalled cycles. Show action_kind distribution and verification pass rate.
+
+### Phase 3 — Capability pipeline
+Count CapabilityCompleted vs CapabilityFailed by capability name. Extract error messages.
+State success rate per capability and identify the bottleneck.
+
+### Phase 4 — Error analysis
+Collect all ErrorOccurred events. Group by kind and source. Show the 5 most frequent
+error messages verbatim.
+
+### Phase 5 — LLM call timing
+Pair LlmCall events with their CapabilityCompleted/Failed outcomes. Compute min, max,
+median duration. List any timed-out calls and their endpoint.
+
+### Phase 6 — Goal and route state
+Show the goal text (PromptLoaded), route selections (RouteSelected), whether the planner
+is stuck on one route, and whether goal-pending is ever resolved.
+
+### Phase 7 — Stall detection
+Find the longest gap (ms) between consecutive events, the longest streak of identical
+LoopPlanned action_kinds, and the last event before silence.
+
+### Phase 8 — Synthesis  ← ONLY after phases 0-7 are done
+Write the final report:
+- **Root cause** (one sentence)
+- **Evidence** (bullet points with exact counts/values)
+- **Contributing factors** (ranked by impact)
+- **Recommended fixes** (specific, actionable, with file/function references)
+
+You must have written "✓ Completed: Phase 7" before writing Phase 8."#;
 
 enum State {
     Idle { ticks_since_reward: u64, cooldown_ticks: u64 },
-    PendingLlm { request_id: String, turn: usize, conversation: Vec<String> },
+    PendingLlm { request_id: String, turn: usize },
 }
 
 pub struct AnalystConsumer {
     tlog_path: PathBuf,
-    emitter: Option<EventEmitterHandle>,
     state: State,
 }
 
 impl AnalystConsumer {
     pub fn new(tlog_path: PathBuf) -> Self {
-        Self { tlog_path, emitter: None, state: State::Idle { ticks_since_reward: 0, cooldown_ticks: 0 } }
+        Self { tlog_path, state: State::Idle { ticks_since_reward: 0, cooldown_ticks: 0 } }
     }
 
     fn tlog_str(&self) -> String {
         self.tlog_path.to_string_lossy().into_owned()
     }
 
-    fn start_session(&mut self, question: &str) {
-        let Some(emitter) = &self.emitter else { return; };
-        let summary = tlog_summarise(&self.tlog_str()).unwrap_or_else(|e| format!("(tlog read error: {e})"));
-        let first_prompt = format!("{SYSTEM_PROMPT}\n\n---\n\n## Question\n{question}\n\n---\n\n{summary}");
+    fn start_session(&mut self, question: &str) -> EventOutcome {
+        let first_prompt = format!("{SYSTEM_PROMPT}\n\n{question}");
         let request_id = Uuid::new_v4().to_string();
-        emitter.emit(RuntimeEvent::Llm(LlmCall {
+        self.state = State::PendingLlm { request_id: request_id.clone(), turn: 1 };
+        EventOutcome::Emit(RuntimeEvent::Llm(LlmCall {
             request_id: request_id.clone(),
-            prompt: first_prompt.clone(),
+            prompt: first_prompt,
             role: Some(ANALYST_ROLE.to_string()),
             agent_id: Some(ANALYST_AGENT_ID.to_string()),
-        }));
-        self.state = State::PendingLlm { request_id, turn: 1, conversation: vec![first_prompt] };
+        }))
     }
 
-    fn continue_session(&mut self, llm_response: String, code: String, turn: usize, mut conversation: Vec<String>) {
-        let Some(emitter) = &self.emitter else {
-            self.state = State::Idle { ticks_since_reward: 0, cooldown_ticks: 0 };
-            return;
-        };
+    fn continue_session(&mut self, code: String, turn: usize) -> EventOutcome {
         let tlog = self.tlog_str();
         let result_block = match python_run(&code, &tlog) {
             Ok(r) => r.to_context_block(),
             Err(e) => format!("error running python: {e}"),
         };
-        conversation.push(llm_response);
-        conversation.push(format!("## Python result\n```\n{result_block}\n```"));
-        let prompt = conversation.join("\n\n---\n\n");
+
+        let prompt = format!("## Python result\n```\n{result_block}\n```");
         let request_id = Uuid::new_v4().to_string();
-        emitter.emit(RuntimeEvent::Llm(LlmCall {
-            request_id: request_id.clone(),
+        self.state = State::PendingLlm { request_id: request_id.clone(), turn: turn + 1 };
+        EventOutcome::Emit(RuntimeEvent::Llm(LlmCall {
+            request_id,
             prompt,
             role: Some(ANALYST_ROLE.to_string()),
             agent_id: Some(ANALYST_AGENT_ID.to_string()),
-        }));
-        self.state = State::PendingLlm { request_id, turn: turn + 1, conversation };
+        }))
     }
 
-    fn finish_session(&mut self, report: String) {
-        write_report(&report);
+    fn continue_session_no_python(&mut self, turn: usize) -> EventOutcome {
+        let nudge = "You skipped mandatory phases. You must not write the final report until you have marked Phase 7 complete. Resume from the next unfinished phase and emit a Python block.";
+        let prompt = nudge.to_string();
+        let request_id = Uuid::new_v4().to_string();
+        self.state = State::PendingLlm { request_id: request_id.clone(), turn: turn + 1 };
+        EventOutcome::Emit(RuntimeEvent::Llm(LlmCall {
+            request_id,
+            prompt,
+            role: Some(ANALYST_ROLE.to_string()),
+            agent_id: Some(ANALYST_AGENT_ID.to_string()),
+        }))
+    }
+
+    fn finish_session(&mut self, report: String) -> EventOutcome {
+        if !report.trim().is_empty() {
+            write_report(&report);
+        }
         self.state = State::Idle { ticks_since_reward: 0, cooldown_ticks: COOLDOWN_TICKS };
+        EventOutcome::NoOp("analyst_finished")
     }
 }
 
 impl EventConsumer for AnalystConsumer {
     fn filter(&self) -> EventFilter { EventFilter::All }
 
-    fn set_emitter(&mut self, emitter: EventEmitterHandle) {
-        self.emitter = Some(emitter);
-    }
+    fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
-    fn on_event(&mut self, event: &RuntimeEvent) {
+    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         match event {
             RuntimeEvent::LoopRewarded(_) => {
                 if let State::Idle { ticks_since_reward, cooldown_ticks } = &mut self.state {
                     *ticks_since_reward = 0;
                     *cooldown_ticks = cooldown_ticks.saturating_sub(1);
                 }
+                EventOutcome::NoOp("analyst_reward_seen")
             }
             RuntimeEvent::Tick(_) => {
                 let (tsr, cooldown) = match &mut self.state {
                     State::Idle { ticks_since_reward, cooldown_ticks } => (ticks_since_reward, cooldown_ticks),
-                    _ => return,
+                    _ => return EventOutcome::NoOp("analyst_not_idle"),
                 };
                 if *cooldown > 0 {
                     *cooldown -= 1;
-                    return;
+                    return EventOutcome::NoOp("analyst_cooldown");
                 }
                 *tsr += 1;
                 if *tsr >= STAGNANT_THRESHOLD {
                     *tsr = 0;
-                    self.start_session("The system appears stagnant. Diagnose why progress has halted and suggest fixes.");
+                    return self.start_session("The system appears stagnant. Diagnose why progress has halted and suggest fixes.");
                 }
+                EventOutcome::NoOp("analyst_not_stagnant")
             }
             RuntimeEvent::CapabilityCompleted(done) => {
-                if done.capability != "llm.call" { return; }
-                let (expected_id, turn, conversation) = match &self.state {
-                    State::PendingLlm { request_id, turn, conversation } => (request_id.clone(), *turn, conversation.clone()),
-                    _ => return,
+                if done.capability != "llm.call" { return EventOutcome::NoOp("analyst_non_llm_capability"); }
+                let (expected_id, turn) = match &self.state {
+                    State::PendingLlm { request_id, turn } => (request_id.clone(), *turn),
+                    _ => return EventOutcome::NoOp("analyst_not_pending"),
                 };
-                if done.request_id != expected_id { return; }
+                if done.request_id != expected_id { return EventOutcome::NoOp("analyst_request_mismatch"); }
                 let response_text = match &done.result {
-                    CapabilityResult::Llm(res) => res.response.get("text")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_else(|| res.response.as_str().unwrap_or(""))
-                        .to_string(),
-                    _ => return,
+                    CapabilityResult::Llm(res) => extract_response_text(&res.response),
+                    _ => return EventOutcome::NoOp("analyst_wrong_result_type"),
                 };
                 if turn >= MAX_TURNS {
-                    self.finish_session(response_text);
-                    return;
+                    return self.finish_session(response_text);
                 }
                 match extract_python_block(&response_text) {
-                    Some(code) => self.continue_session(response_text, code, turn, conversation),
-                    None => self.finish_session(response_text),
+                    Some(code) => return self.continue_session(code, turn),
+                    None => {
+                        if turn < 5 && !response_text.contains("Completed: Phase 7") {
+                            eprintln!("[analyst_consumer] LLM skipped phases at turn {turn}, re-prompting");
+                            return self.continue_session_no_python(turn);
+                        } else {
+                            return self.finish_session(response_text);
+                        }
+                    }
                 }
             }
             RuntimeEvent::CapabilityFailed(fail) => {
@@ -161,10 +222,12 @@ impl EventConsumer for AnalystConsumer {
                     if fail.request_id == *request_id {
                         eprintln!("[analyst_consumer] LLM capability failed: {:?}", fail.error);
                         self.state = State::Idle { ticks_since_reward: 0, cooldown_ticks: COOLDOWN_TICKS };
+                        return EventOutcome::NoOp("analyst_capability_failed");
                     }
                 }
+                EventOutcome::NoOp("analyst_other_capability_failed")
             }
-            _ => {}
+            _ => EventOutcome::NoOp("analyst_ignored_event"),
         }
     }
 }
@@ -175,6 +238,25 @@ fn extract_python_block(text: &str) -> Option<String> {
     let end = after.find("```")?;
     let code = after[..end].trim().to_string();
     if code.is_empty() { None } else { Some(code) }
+}
+
+fn extract_response_text(v: &serde_json::Value) -> String {
+    if let Some(s) = v.get("text").and_then(|t| t.as_str()) {
+        return s.to_string();
+    }
+    if let Some(s) = v.as_str() {
+        return s.to_string();
+    }
+    if let Some(obj) = v.as_object() {
+        for val in obj.values() {
+            if let Some(s) = val.as_str() {
+                if !s.is_empty() {
+                    return s.to_string();
+                }
+            }
+        }
+    }
+    String::new()
 }
 
 fn write_report(content: &str) {
@@ -210,12 +292,34 @@ impl PythonResult {
 
 fn python_run(code: &str, tlog_path: &str) -> anyhow::Result<PythonResult> {
     use std::process::{Command, Stdio};
+
+    // If tlog_path is a directory (segmented tlog), flatten all .log files into
+    // a single temp file so Python can open it with a normal file handle.
+    let flat_tlog;
+    let effective_tlog: &str = if std::path::Path::new(tlog_path).is_dir() {
+        let mut flat = tempfile::NamedTempFile::new()?;
+        let mut entries: Vec<_> = std::fs::read_dir(tlog_path)?
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("log"))
+            .collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let contents = std::fs::read(entry.path())?;
+            flat.write_all(&contents)?;
+        }
+        flat.flush()?;
+        flat_tlog = flat;
+        flat_tlog.path().to_str().unwrap_or(tlog_path)
+    } else {
+        tlog_path
+    };
+
     let mut tmp = tempfile::NamedTempFile::new()?;
     tmp.write_all(code.as_bytes())?;
     tmp.flush()?;
     let output = Command::new("python3")
         .arg(tmp.path())
-        .env("CANON_TLOG", tlog_path)
+        .env("CANON_TLOG", effective_tlog)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()?;
@@ -228,53 +332,4 @@ fn python_run(code: &str, tlog_path: &str) -> anyhow::Result<PythonResult> {
 
 fn truncate(s: &str, max: usize) -> &str {
     if s.len() <= max { s } else { &s[..max] }
-}
-
-fn tlog_summarise(path: &str) -> anyhow::Result<String> {
-    use std::collections::BTreeMap;
-    // Support both single-file and segmented (directory) tlogs.
-    let lines: Vec<String> = if std::path::Path::new(path).is_dir() {
-        let events = canon_event_store::read_any_events_from_path(std::path::Path::new(path))?;
-        events
-            .iter()
-            .filter_map(|e| match e {
-                canon_event_store::AnyEvent::Canon(c) => serde_json::to_string(c).ok(),
-                canon_event_store::AnyEvent::Code(r) => serde_json::to_string(r).ok(),
-            })
-            .collect()
-    } else {
-        std::fs::read_to_string(path)?.lines().map(|s| s.to_string()).collect()
-    };
-    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    let mut last_verified: Option<String> = None;
-    let mut last_planned: Option<String> = None;
-    let mut last_rewarded: Option<String> = None;
-    for line in lines.iter() {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        let kind = v["kind"].as_str().unwrap_or("unknown").to_string();
-        *counts.entry(kind.clone()).or_insert(0) += 1;
-        match kind.as_str() {
-            "LoopVerified" => last_verified = Some(line.to_string()),
-            "LoopPlanned" => last_planned = Some(line.to_string()),
-            "LoopRewarded" => last_rewarded = Some(line.to_string()),
-            _ => {}
-        }
-    }
-    let total = lines.len();
-    let mut out = format!("## Tlog summary ({total} events)\n\n### Event counts\n");
-    for (k, n) in &counts { out.push_str(&format!("- {k}: {n}\n")); }
-    out.push_str("\n### Most recent key events\n");
-    for (label, ev) in [("LoopVerified", &last_verified), ("LoopPlanned", &last_planned), ("LoopRewarded", &last_rewarded)] {
-        match ev {
-            Some(s) => out.push_str(&format!("\n**{label}**\n```json\n{s}\n```\n")),
-            None => out.push_str(&format!("\n**{label}**: (none)\n")),
-        }
-    }
-    out.push_str("\n### Last 40 raw events\n```\n");
-    for line in lines.iter().rev().take(40).rev() {
-        out.push_str(line);
-        out.push('\n');
-    }
-    out.push_str("```\n");
-    Ok(out)
 }
