@@ -1,4 +1,4 @@
-use canon_event::{new_error_occurred, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, LlmCall, RuntimeEvent};
+use canon_event::{new_error_occurred, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, LlmCall, PromptLoaded, RuntimeEvent};
 use canon_proc_macros::must_emit;
 use canon_skills::global_registry;
 use std::path::PathBuf;
@@ -20,6 +20,7 @@ pub struct GoalGenConsumer {
     tlog_path: PathBuf,
     state: State,
     retries: u32,
+    emitter: Option<EventEmitterHandle>,
 }
 
 impl GoalGenConsumer {
@@ -34,7 +35,7 @@ impl GoalGenConsumer {
         } else {
             State::Waiting
         };
-        Self { tlog_path, state: initial_state, retries: 0 }
+        Self { tlog_path, state: initial_state, retries: 0, emitter: None }
     }
 }
 
@@ -43,7 +44,9 @@ impl EventConsumer for GoalGenConsumer {
         EventFilter::All
     }
 
-    fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
+    fn set_emitter(&mut self, emitter: EventEmitterHandle) {
+        self.emitter = Some(emitter);
+    }
 
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
@@ -69,6 +72,7 @@ impl EventConsumer for GoalGenConsumer {
                     let fallback = synthesize_fallback_goal();
                     let _ = std::fs::write(AGENT_GOAL_PATH, &fallback);
                     crate::bootstrap::write_prompt_loaded_to_tlog(&self.tlog_path, &fallback);
+                    emit_prompt_loaded(&self.emitter, &fallback);
                     eprintln!("[goal_gen] fallback goal emitted after {TIMEOUT_TICKS} ticks without LLM completion");
                     self.state = State::Done;
                     EventOutcome::NoOp("goal_gen_timeout_fallback")
@@ -114,6 +118,7 @@ impl EventConsumer for GoalGenConsumer {
                 if validate_goal(&content) {
                     let _ = std::fs::write(AGENT_GOAL_PATH, &content);
                     crate::bootstrap::write_prompt_loaded_to_tlog(&self.tlog_path, &content);
+                    emit_prompt_loaded(&self.emitter, &content);
                     self.state = State::Done;
                     if warn_events.is_empty() {
                         EventOutcome::NoOp("goal_gen_done")
@@ -255,4 +260,16 @@ fn synthesize_fallback_goal() -> String {
         "# Fallback Rust CLI Toolbox\n\nA small but valid placeholder goal emitted locally when goal_gen LLM is unavailable. Builds a binary crate with a couple of modules and a CLI entrypoint so the planner can proceed.\n\n## Target\n- Project path: `{base}/fallback_toolbox`\n\n## Requirements\n1. Create a Rust binary crate with modules `cli`, `core`, and `utils`.\n2. Implement a CLI using `clap` with a `run` command that prints a greeting.\n3. Add a `core::add(a, b)` function with a unit test.\n4. Add a `utils::slugify` helper with a unit test.\n5. Wire `main` to call into `cli::run()`.\n6. Ensure `cargo check` passes.\n",
         base = GOALGEN_PROJECTS_DIR
     )
+}
+
+fn emit_prompt_loaded(emitter: &Option<EventEmitterHandle>, content: &str) {
+    if let Some(em) = emitter {
+        em.emit(RuntimeEvent::PromptLoaded(PromptLoaded {
+            payload: serde_json::json!({
+                "prompt_id": "AGENT_GOAL",
+                "path": AGENT_GOAL_PATH,
+                "content": content,
+            }),
+        }));
+    }
 }
