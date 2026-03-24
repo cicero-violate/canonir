@@ -232,13 +232,24 @@ fn truncate(s: &str, max: usize) -> &str {
 
 fn tlog_summarise(path: &str) -> anyhow::Result<String> {
     use std::collections::BTreeMap;
-    let raw = std::fs::read_to_string(path)?;
-    let lines: Vec<&str> = raw.lines().collect();
+    // Support both single-file and segmented (directory) tlogs.
+    let lines: Vec<String> = if std::path::Path::new(path).is_dir() {
+        let events = canon_event_store::read_any_events_from_path(std::path::Path::new(path))?;
+        events
+            .iter()
+            .filter_map(|e| match e {
+                canon_event_store::AnyEvent::Canon(c) => serde_json::to_string(c).ok(),
+                canon_event_store::AnyEvent::Code(r) => serde_json::to_string(r).ok(),
+            })
+            .collect()
+    } else {
+        std::fs::read_to_string(path)?.lines().map(|s| s.to_string()).collect()
+    };
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut last_verified: Option<String> = None;
     let mut last_planned: Option<String> = None;
     let mut last_rewarded: Option<String> = None;
-    for line in &lines {
+    for line in lines.iter() {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
         let kind = v["kind"].as_str().unwrap_or("unknown").to_string();
         *counts.entry(kind.clone()).or_insert(0) += 1;
