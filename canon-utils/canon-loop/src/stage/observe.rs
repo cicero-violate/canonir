@@ -8,7 +8,7 @@ use crate::{context::LoopContext, result::LoopStageResult};
 /// Emit a LoopObserved if state has changed since the last observation.
 /// Called directly from the executor on state-changing events, not on every tick.
 pub fn execute(ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
-    if ctx.goal_text.is_none() {
+    if ctx.goal_text.is_none() || ctx.goal_text.as_deref().map(is_placeholder_goal).unwrap_or(false) {
         ctx.goal_text = scan_tlog_for_goal(ctx.tlog_path.as_path());
     }
 
@@ -43,6 +43,11 @@ pub fn execute(ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
         workspace_facts,
     };
     Ok(LoopStageResult::Emit(RuntimeEvent::LoopObserved(payload)))
+}
+
+fn is_placeholder_goal(goal: &str) -> bool {
+    let trimmed = goal.trim();
+    trimmed.is_empty() || trimmed.contains("goal-pending")
 }
 
 /// Scan tlog segments (oldest first) for latest prompt_loaded of AGENT_GOAL.

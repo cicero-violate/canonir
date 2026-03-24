@@ -14,7 +14,7 @@ enum State {
 }
 
 const MAX_RETRIES: u32 = 5;
-const TIMEOUT_TICKS: u64 = 30;
+const TIMEOUT_TICKS: u64 = 5;
 
 pub struct GoalGenConsumer {
     tlog_path: PathBuf,
