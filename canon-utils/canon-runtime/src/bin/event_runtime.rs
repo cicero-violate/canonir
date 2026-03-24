@@ -13,6 +13,8 @@ use canon_runtime::consumers::error_logger::ErrorLogger;
 use canon_runtime::consumers::dispatch_consumer::DispatchConsumer;
 use canon_runtime::consumers::goal_gen_consumer::GoalGenConsumer;
 use canon_runtime::consumers::goal_graph_consumer::GoalGraphConsumer;
+use canon_runtime::consumers::watchdog_consumer::WatchdogConsumer;
+use canon_runtime::hooks::{HookChain, CapabilityRateLimitHook, CostCapHook, AuditLogHook, WatchdogPreHook};
 use canon_runtime::consumers::analyst_consumer::AnalystConsumer;
 use canon_runtime::{spawn_kernel_processor, EventRuntime, KernelMsg};
 use crossbeam_channel as cc;
@@ -252,6 +254,40 @@ fn main() -> Result<()> {
     bootstrap_config(&tlog_path, &prompt_registry);
 
     let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+    // Heartbeat thread: inject a Tick into the tlog every 5s so WatchdogConsumer
+    // can detect stalls even if the main loop stops ticking.
+    {
+        let heartbeat_tlog = tlog_path.clone();
+        std::thread::Builder::new()
+            .name("canon_heartbeat".to_string())
+            .spawn(move || {
+                use std::time::{Duration, SystemTime, UNIX_EPOCH};
+                let mut tick: u64 = u64::MAX / 2; // high base to avoid overlap with main ticks
+                loop {
+                    std::thread::sleep(Duration::from_secs(5));
+                    tick = tick.wrapping_add(1);
+                    let _ = canon_event::write_canon_event_auto(
+                        &heartbeat_tlog,
+                        &canon_event::CanonEvent {
+                            event_id: None,
+                            meta: canon_event::EventMeta {
+                                ts: SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .map(|d| d.as_millis() as u64)
+                                    .unwrap_or(0),
+                                source: "heartbeat".to_string(),
+                                file: String::new(),
+                                line: 0,
+                            },
+                            payload: canon_event::CanonPayload::from_kind("Tick", serde_json::json!({ "tick": tick })),
+                        },
+                    );
+                }
+            })
+            .expect("heartbeat thread");
+    }
+
     let agent_registry = AgentRegistryHandle::default();
     let mut consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
         Box::new(GoalGenConsumer::new(tlog_path.clone())),
@@ -263,6 +299,7 @@ fn main() -> Result<()> {
         Box::new(AgentRegistryConsumer::new(agent_registry.clone())),
         Box::new(DispatchConsumer::new()),
         Box::new(GoalGraphConsumer::new()),
+        Box::new(WatchdogConsumer::new()),
     ];
     // Goodness consumer logs metrics and emits GoodnessSnapshot on LoopVerified.
     let goodness_root = tlog_path.parent().map(|p| p.to_path_buf());
@@ -273,6 +310,15 @@ fn main() -> Result<()> {
     canon_exec::init_llm_worker();
     canon_exec::init_analysis_worker();
     let mut runtime = EventRuntime::new(consumers);
+    // Hooks / middleware chain.
+    if let Ok(cfg) = canon_llm::config::CapabilityConfig::snapshot_store_load() {
+        let mut hooks = HookChain::new();
+        hooks.add_pre(Box::new(CapabilityRateLimitHook::from_config(&cfg)));
+        hooks.add_pre(Box::new(CostCapHook::from_config(&cfg)));
+        hooks.add_pre(Box::new(WatchdogPreHook::new()));
+        hooks.add_post(Box::new(AuditLogHook::new()));
+        runtime.set_hooks(std::sync::Arc::new(hooks));
+    }
     runtime.set_execute_capabilities(false);
     // set_tlog_path tells W where to append (L).  Only W calls this; only W writes L.
     runtime.set_tlog_path(tlog_path.clone());

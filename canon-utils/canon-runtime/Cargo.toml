@@ -35,6 +35,7 @@ canon_decision = { package = "canon-decision", path = "../canon-decision" }
 canon_judgment = { package = "canon-judgment", path = "../canon-judgment" }
 canon_runtime_supervisor = { package = "canon-runtime-supervisor", path = "../canon-runtime-supervisor" }
 canon_goal = { package = "canon-goal", path = "../canon-goal" }
+canon-proc-macros = { path = "../canon-proc-macros" }
 canon-meta = { path = "../canon-meta" }
 canon-check = { path = "../canon-check" }
 canon-goodness = { path = "../canon-goodness" }

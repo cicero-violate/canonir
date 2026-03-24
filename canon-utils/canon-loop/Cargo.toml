@@ -16,3 +16,4 @@ canon-meta = { path = "../canon-meta" }
 canon-goal = { path = "../canon-goal" }
 canon-tools-search = { path = "../canon-tools-search" }
 canon-tools-patch = { path = "../canon-tools-patch" }
+canon-proc-macros = { path = "../canon-proc-macros" }

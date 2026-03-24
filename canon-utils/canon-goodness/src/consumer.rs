@@ -1,4 +1,5 @@
 use canon_event::{canon_emit, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, RuntimeEvent};
+use canon_proc_macros::must_emit;
 
 use crate::{aggregator::{compute_g, compute_reward}, reducers::AllReducers, MetricsStorage};
 
@@ -33,6 +34,7 @@ impl EventConsumer for GoodnessConsumer {
         self.emitter = Some(emitter);
     }
 
+    #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         self.reducers.update_all(event);
 

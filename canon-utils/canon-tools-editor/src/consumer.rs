@@ -3,6 +3,7 @@ use crate::structured::{EditOp, FieldMutation};
 use crate::symbol_index::SymbolIndex;
 use anyhow::{anyhow, Result};
 use canon_event::{RuntimeEvent, EditEvent, EventConsumer, EventFilter, EventOutcome};
+use canon_proc_macros::must_emit;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -66,6 +67,7 @@ impl EventConsumer for EditConsumer {
         EventFilter::EditOnly
     }
 
+    #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         let RuntimeEvent::Edit(edit) = event else {
             return EventOutcome::NoOp("edit_consumer_non_edit");

@@ -8,6 +8,7 @@ use canon_event::{
     EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, LoopObserved,
     RuntimeEvent, RequestDispatch, SubTaskResult, GoalNodeRetracted,
 };
+use canon_proc_macros::must_emit;
 use canon_loop::LoopStageExecutor;
 use canon_route::RouteExecutor;
 use crate::consumers::capability_executor::CapabilityExecutor;
@@ -41,6 +42,7 @@ struct HaltDetectorConsumer {
 impl EventConsumer for HaltDetectorConsumer {
     fn filter(&self) -> EventFilter { EventFilter::All }
     fn set_emitter(&mut self, _: EventEmitterHandle) {}
+    #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         if let RuntimeEvent::LoopRewarded(r) = event {
             if r.halt {
@@ -65,6 +67,7 @@ struct ForwardConsumer {
 impl EventConsumer for ForwardConsumer {
     fn filter(&self) -> EventFilter { EventFilter::All }
     fn set_emitter(&mut self, _: EventEmitterHandle) {}
+    #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         match event {
             RuntimeEvent::LoopObserved(_) => self.parent.emit(event.clone()),
@@ -96,7 +99,41 @@ impl EventConsumer for ForwardConsumer {
                 }
                 self.parent.emit(event.clone());
             }
-            _ => {}
+            RuntimeEvent::Code(_)
+            | RuntimeEvent::Debug(_)
+            | RuntimeEvent::Edit(_)
+            | RuntimeEvent::ErrorOccurred(_)
+            | RuntimeEvent::Tick(_)
+            | RuntimeEvent::GoodnessSnapshot(_)
+            | RuntimeEvent::RouteTick(_)
+            | RuntimeEvent::RouteSelected(_)
+            | RuntimeEvent::Cargo(_)
+            | RuntimeEvent::File(_)
+            | RuntimeEvent::Bash(_)
+            | RuntimeEvent::Llm(_)
+            | RuntimeEvent::RequestDispatch(_)
+            | RuntimeEvent::SubTaskResult(_)
+            | RuntimeEvent::Analysis(_)
+            | RuntimeEvent::RuntimeStateUpdated(_)
+            | RuntimeEvent::NodeReady(_)
+            | RuntimeEvent::NodeStarted(_)
+            | RuntimeEvent::NodeCompleted(_)
+            | RuntimeEvent::NodeFailed(_)
+            | RuntimeEvent::CapabilityCompleted(_)
+            | RuntimeEvent::CapabilityFailed(_)
+            | RuntimeEvent::PolicyBaselineUpdated(_)
+            | RuntimeEvent::GoalSelected(_)
+            | RuntimeEvent::SystemConfigLoaded(_)
+            | RuntimeEvent::AgentRegistered(_)
+            | RuntimeEvent::PromptLoaded(_)
+            | RuntimeEvent::GoalNodeCreated(_)
+            | RuntimeEvent::GoalNodeRetracted(_)
+            | RuntimeEvent::GoalNodeRewritten(_)
+            | RuntimeEvent::GoalEdgeDefined(_)
+            | RuntimeEvent::GoalGraphCheckpointed(_)
+            | RuntimeEvent::CapabilityInvoked(_)
+            | RuntimeEvent::CapabilityResolved(_)
+                => {}
         }
         EventOutcome::NoOp("forward_consumer_forwarded")
     }
@@ -213,6 +250,7 @@ impl EventConsumer for DispatchConsumer {
         self.emitter = Some(emitter);
     }
 
+    #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         let RuntimeEvent::RequestDispatch(req) = event else { return EventOutcome::NoOp("dispatch_consumer_non_dispatch"); };
         let Some(emitter) = self.emitter.clone() else { return EventOutcome::NoOp("dispatch_consumer_no_emitter"); };

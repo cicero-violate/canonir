@@ -2,6 +2,8 @@
 name = "canon-tools-editor"
 version = "0.1.0"
 edition = "2021"
+autotests = false
+autobins = false
 
 [lib]
 path = "src/lib.rs"
@@ -23,6 +25,7 @@ canon-ir = { path = "../../canon-ir" }
 canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
 canon-meta = { path = "../canon-meta" }
 canon-exec = { path = "../canon-exec" }
+canon-proc-macros = { path = "../canon-proc-macros" }
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -30,3 +33,6 @@ tempfile.workspace = true
 [[bin]]
 name = "editor_capability_smoke_test"
 path = "src/bin/capability_smoke_test.rs"
+test = false
+bench = false
+doctest = false

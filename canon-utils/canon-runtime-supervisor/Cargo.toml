@@ -2,6 +2,8 @@
 name = "canon-runtime-supervisor"
 version = "0.1.0"
 edition = "2021"
+autotests = false
+autobins = false
 
 [dependencies]
 anyhow.workspace = true
@@ -15,3 +17,6 @@ signal-hook = "0.3"
 [[bin]]
 name = "canon-runtime-supervisor"
 path = "src/bin/supervisor.rs"
+test = false
+bench = false
+doctest = false

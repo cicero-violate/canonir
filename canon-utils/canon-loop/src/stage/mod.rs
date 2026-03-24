@@ -24,7 +24,7 @@ pub enum LoopStageEvent {
 impl LoopStageEvent {
     pub fn execute(self, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
         match self {
-            LoopStageEvent::Scan(_rs) => Ok(LoopStageResult::Noop),
+            LoopStageEvent::Scan(_rs) => observe::execute(ctx),
             LoopStageEvent::PlanTrigger(d) => plan::execute_trigger(d, ctx),
             LoopStageEvent::ActDispatch(d) => act::execute_dispatch(d, ctx),
             LoopStageEvent::VerifyTrigger(d) => verify::execute(d, ctx),

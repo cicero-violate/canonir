@@ -1,4 +1,5 @@
 use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, Tick, GoalEdgeDefined, AgentRegistered};
+use canon_proc_macros::must_emit;
 use crate::{context::LoopContext, result::LoopStageResult, stage::LoopStageEvent, scheduler::{ScheduledTask, infer_priority}};
 use std::time::Instant;
 use crate::stage::observe;
@@ -28,6 +29,7 @@ impl EventConsumer for LoopStageExecutor {
         self.ctx.emitter = Some(emitter);
     }
 
+    #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         // State accumulation (mutations that do not emit).
         let mut trigger_observe = false;
@@ -154,7 +156,38 @@ impl EventConsumer for LoopStageExecutor {
             RuntimeEvent::ToolResult(r) if r.kind != "llm.plan" => {
                 self.ctx.batch_tool_results.push(r.clone());
             }
-            _ => {}
+            RuntimeEvent::Code(_)
+            | RuntimeEvent::Debug(_)
+            | RuntimeEvent::Edit(_)
+            | RuntimeEvent::RouteTick(_)
+            | RuntimeEvent::RouteSelected(_)
+            | RuntimeEvent::Cargo(_)
+            | RuntimeEvent::File(_)
+            | RuntimeEvent::Bash(_)
+            | RuntimeEvent::Llm(_)
+            | RuntimeEvent::RequestDispatch(_)
+            | RuntimeEvent::Analysis(_)
+            | RuntimeEvent::RuntimeStateUpdated(_)
+            | RuntimeEvent::NodeReady(_)
+            | RuntimeEvent::NodeStarted(_)
+            | RuntimeEvent::NodeCompleted(_)
+            | RuntimeEvent::NodeFailed(_)
+            | RuntimeEvent::CapabilityCompleted(_)
+            | RuntimeEvent::CapabilityFailed(_)
+            | RuntimeEvent::PolicyBaselineUpdated(_)
+            | RuntimeEvent::GoalSelected(_)
+            | RuntimeEvent::SystemConfigLoaded(_)
+            | RuntimeEvent::ToolCall(_)
+            | RuntimeEvent::ToolResult(_)
+            | RuntimeEvent::ToolBatchSettled(_)
+            | RuntimeEvent::GoalNodeCreated(_)
+            | RuntimeEvent::GoalNodeRetracted(_)
+            | RuntimeEvent::GoalNodeRewritten(_)
+            | RuntimeEvent::GoalEdgeDefined(_)
+            | RuntimeEvent::GoalGraphCheckpointed(_)
+            | RuntimeEvent::CapabilityInvoked(_)
+            | RuntimeEvent::CapabilityResolved(_)
+                => {}
         }
 
         // Emit LoopObserved when state changes (event-driven, not tick-driven).

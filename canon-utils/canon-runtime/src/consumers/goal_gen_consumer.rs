@@ -2,6 +2,7 @@ use canon_event::{
     EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, RuntimeEvent, LlmCall, CapabilityResult,
     new_error_occurred,
 };
+use canon_proc_macros::must_emit;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -43,7 +44,7 @@ REQUIRED OUTPUT STRUCTURE (copy headings verbatim, replace <...> content):\n\
 
 enum State {
     Waiting,
-    Pending(String), // request_id
+    Pending { request_id: String, ticks_waiting: u64 },
     Done,
 }
 
@@ -76,11 +77,12 @@ impl EventConsumer for GoalGenConsumer {
 
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
+    #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         match (&self.state, event) {
             (State::Waiting, RuntimeEvent::Tick(_)) => {
                 let request_id = Uuid::new_v4().to_string();
-                self.state = State::Pending(request_id.clone());
+                self.state = State::Pending { request_id: request_id.clone(), ticks_waiting: 0 };
                 EventOutcome::Emit(RuntimeEvent::Llm(LlmCall {
                     request_id: request_id.clone(),
                     prompt: GOAL_GEN_PROMPT.to_string(),
@@ -88,7 +90,17 @@ impl EventConsumer for GoalGenConsumer {
                     agent_id: Some("goal_gen_chatgpt".to_string()),
                 }))
             }
-            (State::Pending(expected_id), RuntimeEvent::CapabilityCompleted(done)) => {
+            (State::Pending { request_id: expected_id, ticks_waiting }, RuntimeEvent::Tick(_)) => {
+                let new_ticks = ticks_waiting.saturating_add(1);
+                if new_ticks >= 30 {
+                    self.state = State::Waiting;
+                    EventOutcome::NoOp("goal_gen_timeout_retry")
+                } else {
+                    self.state = State::Pending { request_id: expected_id.clone(), ticks_waiting: new_ticks };
+                    EventOutcome::NoOp("goal_gen_awaiting_llm")
+                }
+            }
+            (State::Pending { request_id: expected_id, .. }, RuntimeEvent::CapabilityCompleted(done)) => {
                 if done.request_id != *expected_id || done.capability != "llm.call" {
                     return EventOutcome::NoOp("goal_gen_unrelated_completion");
                 }
@@ -166,7 +178,7 @@ impl EventConsumer for GoalGenConsumer {
                     }
                 }
             }
-            (State::Pending(expected_id), RuntimeEvent::CapabilityFailed(fail)) => {
+            (State::Pending { request_id: expected_id, .. }, RuntimeEvent::CapabilityFailed(fail)) => {
                 if fail.request_id != *expected_id || fail.capability != "llm.call" {
                     return EventOutcome::NoOp("goal_gen_unrelated_failure");
                 }
@@ -189,7 +201,49 @@ impl EventConsumer for GoalGenConsumer {
                 }
                 EventOutcome::NoOp("goal_gen_failure_retry")
             }
-            _ => EventOutcome::NoOp("goal_gen_noop"),
+            (State::Waiting, RuntimeEvent::CapabilityCompleted(_))
+            | (State::Waiting, RuntimeEvent::CapabilityFailed(_)) => EventOutcome::NoOp("goal_gen_waiting_unrelated"),
+            (State::Done, _) => EventOutcome::NoOp("goal_gen_noop"),
+            (_, RuntimeEvent::Code(_))
+            | (_, RuntimeEvent::Debug(_))
+            | (_, RuntimeEvent::Edit(_))
+            | (_, RuntimeEvent::ErrorOccurred(_))
+            | (_, RuntimeEvent::LoopObserved(_))
+            | (_, RuntimeEvent::LoopPlanned(_))
+            | (_, RuntimeEvent::LoopActed(_))
+            | (_, RuntimeEvent::LoopVerified(_))
+            | (_, RuntimeEvent::LoopRewarded(_))
+            | (_, RuntimeEvent::GoodnessSnapshot(_))
+            | (_, RuntimeEvent::RouteTick(_))
+            | (_, RuntimeEvent::RouteSelected(_))
+            | (_, RuntimeEvent::Cargo(_))
+            | (_, RuntimeEvent::File(_))
+            | (_, RuntimeEvent::Bash(_))
+            | (_, RuntimeEvent::Llm(_))
+            | (_, RuntimeEvent::RequestDispatch(_))
+            | (_, RuntimeEvent::SubTaskResult(_))
+            | (_, RuntimeEvent::Analysis(_))
+            | (_, RuntimeEvent::RuntimeStateUpdated(_))
+            | (_, RuntimeEvent::NodeReady(_))
+            | (_, RuntimeEvent::NodeStarted(_))
+            | (_, RuntimeEvent::NodeCompleted(_))
+            | (_, RuntimeEvent::NodeFailed(_))
+            | (_, RuntimeEvent::PolicyBaselineUpdated(_))
+            | (_, RuntimeEvent::GoalSelected(_))
+            | (_, RuntimeEvent::SystemConfigLoaded(_))
+            | (_, RuntimeEvent::AgentRegistered(_))
+            | (_, RuntimeEvent::PromptLoaded(_))
+            | (_, RuntimeEvent::ToolCall(_))
+            | (_, RuntimeEvent::ToolResult(_))
+            | (_, RuntimeEvent::ToolBatchSettled(_))
+            | (_, RuntimeEvent::GoalNodeCreated(_))
+            | (_, RuntimeEvent::GoalNodeRetracted(_))
+            | (_, RuntimeEvent::GoalNodeRewritten(_))
+            | (_, RuntimeEvent::GoalEdgeDefined(_))
+            | (_, RuntimeEvent::GoalGraphCheckpointed(_))
+            | (_, RuntimeEvent::CapabilityInvoked(_))
+            | (_, RuntimeEvent::CapabilityResolved(_))
+                => EventOutcome::NoOp("goal_gen_noop"),
         }
     }
 }

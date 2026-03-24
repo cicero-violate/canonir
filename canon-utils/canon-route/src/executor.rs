@@ -1,5 +1,6 @@
 use canon_decision::RouteKind;
 use canon_event::{RuntimeEvent, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, LlmCall, RouteSelected, ToolBatchSettled};
+use canon_proc_macros::must_emit;
 use canon_judgment::GuardConfig;
 use canon_runtime_supervisor::judgment_loop::RouteController;
 use std::path::PathBuf;
@@ -94,6 +95,7 @@ impl EventConsumer for RouteExecutor {
         self.emitter = Some(emitter);
     }
 
+    #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         // Always accumulate state.
         self.ctx.update_from_event(event, &self.workspace);
@@ -129,15 +131,12 @@ impl EventConsumer for RouteExecutor {
             }
         }
 
-        let should_try = match event {
-            // New observation may have set context_ready=true for the first time.
-            RuntimeEvent::LoopObserved(_) => true,
-            // Action completed — planned_pending may have dropped to 0 (sync actions have no ToolResult).
-            RuntimeEvent::LoopActed(_) => true,
-            // Verify completed — acted_unverified/workspace_dirty cleared, new route needed.
-            RuntimeEvent::LoopVerified(_) => true,
-            _ => false,
-        };
+        let should_try = matches!(
+            event,
+            RuntimeEvent::LoopObserved(_)
+                | RuntimeEvent::LoopActed(_)
+                | RuntimeEvent::LoopVerified(_)
+        );
         if should_try {
             let idle = self.ctx.planned_pending == 0
                 && self.ctx.pending_tool_result_ids.is_empty();
@@ -193,7 +192,47 @@ impl EventConsumer for RouteExecutor {
                 self.emit_decision(&model_json, prompt);
                 EventOutcome::NoOp("route_executor_failure_reroute")
             }
-            _ => EventOutcome::NoOp("route_executor_noop"),
+            RuntimeEvent::Code(_)
+            | RuntimeEvent::Debug(_)
+            | RuntimeEvent::Edit(_)
+            | RuntimeEvent::ErrorOccurred(_)
+            | RuntimeEvent::Tick(_)
+            | RuntimeEvent::GoodnessSnapshot(_)
+            | RuntimeEvent::RouteTick(_)
+            | RuntimeEvent::Cargo(_)
+            | RuntimeEvent::File(_)
+            | RuntimeEvent::Bash(_)
+            | RuntimeEvent::Llm(_)
+            | RuntimeEvent::RequestDispatch(_)
+            | RuntimeEvent::SubTaskResult(_)
+            | RuntimeEvent::Analysis(_)
+            | RuntimeEvent::RuntimeStateUpdated(_)
+            | RuntimeEvent::NodeReady(_)
+            | RuntimeEvent::NodeStarted(_)
+            | RuntimeEvent::NodeCompleted(_)
+            | RuntimeEvent::NodeFailed(_)
+            | RuntimeEvent::PolicyBaselineUpdated(_)
+            | RuntimeEvent::GoalSelected(_)
+            | RuntimeEvent::SystemConfigLoaded(_)
+            | RuntimeEvent::AgentRegistered(_)
+            | RuntimeEvent::PromptLoaded(_)
+            | RuntimeEvent::ToolCall(_)
+            | RuntimeEvent::ToolResult(_)
+            | RuntimeEvent::ToolBatchSettled(_)
+            | RuntimeEvent::GoalNodeCreated(_)
+            | RuntimeEvent::GoalNodeRetracted(_)
+            | RuntimeEvent::GoalNodeRewritten(_)
+            | RuntimeEvent::GoalEdgeDefined(_)
+            | RuntimeEvent::GoalGraphCheckpointed(_)
+            | RuntimeEvent::CapabilityInvoked(_)
+            | RuntimeEvent::CapabilityResolved(_)
+            | RuntimeEvent::LoopObserved(_)
+            | RuntimeEvent::LoopPlanned(_)
+            | RuntimeEvent::LoopActed(_)
+            | RuntimeEvent::LoopVerified(_)
+            | RuntimeEvent::LoopRewarded(_)
+            | RuntimeEvent::RouteSelected(_)
+                => EventOutcome::NoOp("route_executor_noop"),
         }
     }
 }

@@ -1,4 +1,5 @@
 use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, RustcEvent};
+use canon_proc_macros::must_emit;
 use serde::{Deserialize, Serialize};
 use std::fs::{create_dir_all, File};
 use std::io::{Seek, Write};
@@ -36,6 +37,7 @@ impl FailureStoreConsumer {
 impl EventConsumer for FailureStoreConsumer {
     fn filter(&self) -> EventFilter { EventFilter::ErrorOnly }
 
+    #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         self.store.record_event(event);
         self.persist();

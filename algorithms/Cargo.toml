@@ -2,6 +2,9 @@
 name = "algorithms"
 version = "0.1.0"
 edition = "2024"
+autotests = false
+autobenches = false
+autoexamples = false
 
 [dependencies]
 sha2.workspace = true
@@ -10,3 +13,9 @@ serde_json.workspace = true
 [features]
 default = ["cuda"]
 cuda = []
+[[example]]
+name = "gpu_example"
+path = "examples/gpu_example.rs"
+test = false
+bench = false
+doctest = false

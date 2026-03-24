@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use canon_event::{AgentRegistered, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, RequestDispatch, RuntimeEvent, SubTaskResult};
+use canon_proc_macros::must_emit;
 
 #[derive(Clone, Debug)]
 pub struct AgentRegistryHandle(pub Arc<RwLock<AgentRegistry>>);
@@ -98,6 +99,7 @@ impl EventConsumer for AgentRegistryConsumer {
 
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
+    #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         let Ok(mut reg) = self.registry.0.write() else { return EventOutcome::NoOp("agent_registry_poisoned"); };
         match event {
@@ -117,7 +119,46 @@ impl EventConsumer for AgentRegistryConsumer {
                 }
                 EventOutcome::NoOp("agent_mark_result")
             }
-            _ => EventOutcome::NoOp("agent_registry_ignored"),
+            RuntimeEvent::Code(_)
+            | RuntimeEvent::Debug(_)
+            | RuntimeEvent::Edit(_)
+            | RuntimeEvent::ErrorOccurred(_)
+            | RuntimeEvent::Tick(_)
+            | RuntimeEvent::LoopObserved(_)
+            | RuntimeEvent::LoopPlanned(_)
+            | RuntimeEvent::LoopActed(_)
+            | RuntimeEvent::LoopVerified(_)
+            | RuntimeEvent::LoopRewarded(_)
+            | RuntimeEvent::GoodnessSnapshot(_)
+            | RuntimeEvent::RouteTick(_)
+            | RuntimeEvent::RouteSelected(_)
+            | RuntimeEvent::Cargo(_)
+            | RuntimeEvent::File(_)
+            | RuntimeEvent::Bash(_)
+            | RuntimeEvent::Llm(_)
+            | RuntimeEvent::Analysis(_)
+            | RuntimeEvent::RuntimeStateUpdated(_)
+            | RuntimeEvent::NodeReady(_)
+            | RuntimeEvent::NodeStarted(_)
+            | RuntimeEvent::NodeCompleted(_)
+            | RuntimeEvent::NodeFailed(_)
+            | RuntimeEvent::CapabilityCompleted(_)
+            | RuntimeEvent::CapabilityFailed(_)
+            | RuntimeEvent::PolicyBaselineUpdated(_)
+            | RuntimeEvent::GoalSelected(_)
+            | RuntimeEvent::SystemConfigLoaded(_)
+            | RuntimeEvent::PromptLoaded(_)
+            | RuntimeEvent::ToolCall(_)
+            | RuntimeEvent::ToolResult(_)
+            | RuntimeEvent::ToolBatchSettled(_)
+            | RuntimeEvent::GoalNodeCreated(_)
+            | RuntimeEvent::GoalNodeRetracted(_)
+            | RuntimeEvent::GoalNodeRewritten(_)
+            | RuntimeEvent::GoalEdgeDefined(_)
+            | RuntimeEvent::GoalGraphCheckpointed(_)
+            | RuntimeEvent::CapabilityInvoked(_)
+            | RuntimeEvent::CapabilityResolved(_)
+                => EventOutcome::NoOp("agent_registry_ignored"),
         }
     }
 }

@@ -58,6 +58,9 @@ pub fn execute(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopS
 }
 
 fn run_cargo_check(workspace: &Path) -> anyhow::Result<(bool, String)> {
+    if !workspace.exists() {
+        return Ok((false, format!("target path does not exist: {}", workspace.display())));
+    }
     let output = Command::new("cargo").arg("check").current_dir(workspace).output()?;
     let success = output.status.success();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();

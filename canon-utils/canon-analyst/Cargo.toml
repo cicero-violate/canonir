@@ -2,10 +2,15 @@
 name = "canon-analyst"
 version = "0.1.0"
 edition = "2021"
+autotests = false
+autobins = false
 
 [[bin]]
 name = "canon-analyst"
 path = "src/main.rs"
+test = false
+bench = false
+doctest = false
 
 [dependencies]
 anyhow = { workspace = true }

@@ -2,6 +2,8 @@
 name = "canon-storage-eventlog"
 version = "0.1.0"
 edition = "2021"
+autotests = false
+autobins = false
 
 [lib]
 path = "src/lib.rs"
@@ -15,3 +17,17 @@ memmap2.workspace = true
 rkyv.workspace = true
 crc32fast = "1"
 canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
+
+[[bin]]
+name = "read_tlog"
+path = "src/bin/read_tlog.rs"
+test = false
+bench = false
+doctest = false
+
+[[bin]]
+name = "verify_tlog_equivalence"
+path = "src/bin/verify_tlog_equivalence.rs"
+test = false
+bench = false
+doctest = false

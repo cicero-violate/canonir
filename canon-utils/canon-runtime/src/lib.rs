@@ -2,6 +2,7 @@ use anyhow::Result;
 pub mod bootstrap;
 mod bus;
 pub mod consumers;
+pub mod hooks;
 
 use bus::EventBus;
 use canon_event::{
@@ -52,7 +53,8 @@ pub struct EventRuntime {
 impl EventRuntime {
     pub fn new(consumers: Vec<Box<dyn EventConsumer>>) -> Self {
         let queue_size = std::env::var("CANON_EVENT_BUS_QUEUE").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(1024);
-        let mut bus = EventBus::new(queue_size);
+        let hooks = Arc::new(crate::hooks::HookChain::new());
+        let mut bus = EventBus::new(queue_size, hooks.clone());
         let (emitter_tx, emitter_rx) = crossbeam_channel::unbounded();
         let emitter: EventEmitterHandle = Arc::new(RuntimeEmitterImpl { sender: emitter_tx });
         for (idx, consumer) in consumers.into_iter().enumerate() {
@@ -77,6 +79,10 @@ impl EventRuntime {
 
     pub fn set_execute_capabilities(&mut self, enabled: bool) {
         self.execute_capabilities = enabled;
+    }
+
+    pub fn set_hooks(&mut self, hooks: Arc<crate::hooks::HookChain>) {
+        self.bus.set_hooks(hooks);
     }
 
     pub fn set_next_id(&mut self, next_id: u64) {

@@ -1,5 +1,6 @@
 use canon_check::{default_checks, run_checks, Check};
 use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome};
+use canon_proc_macros::must_emit;
 
 pub struct CheckConsumer {
     checks: Vec<Box<dyn Check>>,
@@ -22,6 +23,7 @@ impl EventConsumer for CheckConsumer {
 
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
+    #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         let RuntimeEvent::Debug(d) = event else {
             return EventOutcome::NoOp("check_consumer_non_debug");

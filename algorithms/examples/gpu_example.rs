@@ -220,7 +220,7 @@ fn main() {
         // ── 5. Dominators (GPU) ──────────────────────────────────────────────
         // CFG: 0 -> 1, 0 -> 2, 1 -> 3, 2 -> 3
         println!("\n=== GPU Dominators ===");
-        let mut pred_adj: Vec<Vec<usize>> = vec![vec![], vec![0], vec![0], vec![1, 2]];
+        let pred_adj: Vec<Vec<usize>> = vec![vec![], vec![0], vec![0], vec![1, 2]];
         let pred_csr = algorithms::graph::csr::Csr::from_adj(&pred_adj);
         let dom_bits = dominators_gpu(&pred_csr, 0, 4);
         let words = (4 + 63) / 64;
@@ -248,7 +248,7 @@ fn main() {
         let def_count = 2;
         let words = (def_count + 63) / 64;
         let mut r#gen = vec![0u64; block_count * words];
-        let mut kill = vec![0u64; block_count * words];
+        let kill = vec![0u64; block_count * words];
         r#gen[0] |= 1u64 << 0;
         r#gen[1] |= 1u64 << 1;
         let out_bits = reaching_definitions_gpu(&pred_csr, block_count, def_count, &r#gen, &kill);

@@ -1,4 +1,5 @@
 use canon_event::{new_error_occurred, RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, RustcEvent};
+use canon_proc_macros::must_emit;
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs::{create_dir_all, OpenOptions};
@@ -37,6 +38,7 @@ impl ErrorLogger {
 impl EventConsumer for ErrorLogger {
     fn filter(&self) -> EventFilter { EventFilter::ErrorOnly }
 
+    #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         if let RuntimeEvent::ErrorOccurred(payload) = event {
             let value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));

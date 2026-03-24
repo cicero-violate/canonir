@@ -1,4 +1,5 @@
 use canon_event::{new_error_occurred, RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome};
+use canon_proc_macros::must_emit;
 use canon_exec::{ExecutableEvent, ExecutionContext, ExecutionResult};
 use std::path::PathBuf;
 
@@ -22,6 +23,7 @@ impl EventConsumer for CapabilityExecutor {
         self.emitter = Some(emitter);
     }
 
+    #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         let Ok(exec) = ExecutableEvent::try_from(event.clone()) else {
             return EventOutcome::NoOp("capability_executor_not_executable");

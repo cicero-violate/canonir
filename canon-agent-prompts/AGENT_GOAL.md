@@ -1,21 +1,21 @@
-# Entity Component System (ECS) Game Engine Core with Scheduling and Query System
+# Incremental Build System with Dependency Graph, Change Detection, and Parallel Execution
 
-This project implements a core Entity Component System (ECS) engine in Rust, providing a flexible and high-performance architecture for building games and simulations. It includes entity management, component storage, system scheduling, and query execution over large datasets. The engine supports parallel system execution and archetype-based storage for cache-efficient processing. This project is interesting because it combines data-oriented design, scheduling, memory layout optimization, and query systems into a modern game engine foundation.
+This project implements an incremental build system in Rust similar to tools like Make or Bazel (simplified). It tracks file dependencies, detects changes, and rebuilds only the necessary parts of a project using a dependency graph. The system supports rule definitions, caching of build artifacts, and parallel execution of independent tasks. This project is interesting because it combines graph algorithms, file system monitoring, hashing, and scheduling into a practical developer productivity tool.
 
 ## Target
-- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/ecs_engine`
+- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/incremental_build_system`
 
 ## Requirements
 
-1. Implement a Rust binary crate structured into modules such as `entity`, `component`, `storage`, `archetype`, `world`, `query`, `system`, `scheduler`, `resource`, `executor`, `cli`, and `errors`.
-2. Design an entity system that generates unique entity IDs and supports creation, deletion, and reuse of IDs.
-3. Implement component storage using archetype-based layout grouping entities by component sets for efficient iteration.
-4. Build a type-safe component registration system using generics and `TypeId` to store heterogeneous components.
-5. Implement a query system that allows filtering entities by component combinations and iterating efficiently over matching archetypes.
-6. Design a system abstraction where systems define logic over queries and can access shared resources.
-7. Implement a scheduler that determines execution order based on system dependencies and resource access patterns.
-8. Support parallel execution of systems using thread pools (e.g., via `rayon`) while avoiding data races.
-9. Implement resource management for global state (e.g., time, configuration) accessible by systems.
-10. Provide change detection or event tracking for components to allow systems to react only to updates.
-11. Provide a CLI using `clap` with commands like `run`, `benchmark`, `inspect-world`, and `profile`.
-12. Integrate structured logging with `tracing` to trace entity lifecycle, system execution, scheduling decisions, and query performance, and ensure the implementation spans at least 800 lines of real Rust code across modules and compiles successfully with `cargo check` without requiring external services.
+1. Implement a Rust binary crate structured into modules such as `graph`, `node`, `edge`, `rule`, `parser`, `executor`, `scheduler`, `cache`, `hasher`, `filesystem`, `cli`, and `errors`.
+2. Design a build rule format (e.g., JSON/TOML using `serde`) that defines targets, inputs, outputs, and commands.
+3. Build a dependency graph where nodes represent targets and edges represent dependencies between them.
+4. Implement change detection using file metadata (timestamps) and content hashing (e.g., SHA-256) to determine if a target is stale.
+5. Develop a caching mechanism that stores build outputs and metadata to avoid redundant work.
+6. Implement a topological sort and cycle detection to ensure valid build order and detect dependency loops.
+7. Build a scheduler that executes independent build tasks in parallel using threads or async execution.
+8. Implement an execution engine that runs shell commands or simulated tasks and captures output and errors.
+9. Support incremental rebuilds where only affected nodes in the graph are re-executed.
+10. Provide detailed build logs, including timing, cache hits/misses, and executed commands.
+11. Provide a CLI using `clap` with commands like `build <target>`, `clean`, `graph`, and `status`.
+12. Integrate structured logging with `tracing` to trace dependency resolution, scheduling decisions, cache usage, and execution results, and ensure the implementation spans at least 800 lines of real Rust code across modules and compiles successfully with `cargo check` without requiring external services.
