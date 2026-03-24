@@ -9,6 +9,22 @@ use crate::ws_server::WsBridge;
 /// 3. Parse as JSON → return `Value` on success
 /// 4. Fallback: log `LLM_NORMALIZE_FALLBACK` and return `{"text": <raw>}`
 pub fn normalize_llm_output(raw: &str) -> Value {
+    // 1) Try the raw string first — handles properly escaped JSON directly.
+    let trimmed = raw.trim();
+    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+        return v;
+    }
+    if let Some(v) = try_parse_lenient_json(trimmed) {
+        return v;
+    }
+
+    // 2) Strip markdown fence without touching escapes.
+    let fenced = strip_json_fence(trimmed).trim();
+    if let Ok(v) = serde_json::from_str::<Value>(fenced) {
+        return v;
+    }
+
+    // 3) Apply escape-heuristic only as a last resort for doubly-escaped payloads.
     let s = raw.replace("\\n", "\n").replace("\\\"", "\"");
     let cleaned = strip_json_fence(s.trim()).trim();
     if let Ok(v) = serde_json::from_str::<Value>(cleaned) {

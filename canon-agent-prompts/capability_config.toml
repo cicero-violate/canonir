@@ -72,6 +72,28 @@ role = "router"
 stateful = true
 max_tabs = 1
 
+[llm.endpoints.goal_gen]
+id = "goal_gen_chatgpt"
+url = "https://chatgpt.com/gg/69c229260fa08194ad30bb0e1f57105a"
+role_markdown = "builtin:planner"
+role = "goal_gen"
+stateful = false
+max_tabs = 1
+
+[llm.endpoints.analyst]
+id = "analyst_chatgpt"
+url = "https://chatgpt.com/gg/69c22949e1e881948abaf7016ef8be4c"
+role_markdown = "builtin:planner"
+role = "analyst"
+stateful = false
+max_tabs = 1
+
+[llm.roles.analyst.weights]
+analyst_chatgpt = 100
+
+[llm.roles.analyst]
+burst = 1
+
 [llm.endpoints.exec_chatgpt_a]
 id = "exec_chatgpt_a"
 url = "https://chatgpt.com/gg/699c50e06bc881a3aa5ac1866bf15679"
@@ -143,6 +165,12 @@ router_chatgpt_group = 100
 [llm.roles.router]
 burst = 4
 
+[llm.roles.goal_gen.weights]
+goal_gen_chatgpt = 100
+
+[llm.roles.goal_gen]
+burst = 1
+
 [llm.roles.exec.weights]
 exec_chatgpt_a = 100
 exec_chatgpt_b = 100
@@ -168,6 +196,13 @@ tool_capabilities = []
 [[agents.cards]]
 agent_url = "https://chatgpt.com/gg/69bb5dbc591c819cb924366acba795bd"
 agent_id = "router"
+role = "builtin:planner"
+goal = "AGENT_GOAL.md"
+tool_capabilities = []
+
+[[agents.cards]]
+agent_url = "https://chatgpt.com/gg/69c229260fa08194ad30bb0e1f57105a"
+agent_id = "goal_gen"
 role = "builtin:planner"
 goal = "AGENT_GOAL.md"
 tool_capabilities = []
@@ -213,3 +248,10 @@ agent_id = "exec_f"
 role = "builtin:exec"
 goal = "AGENT_GOAL.md"
 tool_capabilities = ["apply_patch", "bash"]
+
+[[agents.cards]]
+agent_url = "https://chatgpt.com/gg/69c22949e1e881948abaf7016ef8be4c"
+agent_id = "analyst_chatgpt"
+role = "builtin:planner"
+goal = "AGENT_GOAL.md"
+tool_capabilities = []

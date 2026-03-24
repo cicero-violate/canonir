@@ -5,3 +5,5 @@ pub mod failure_store;
 pub mod agent_registry;
 pub mod dispatch_consumer;
 pub mod goal_graph_consumer;
+pub mod goal_gen_consumer;
+pub mod analyst_consumer;

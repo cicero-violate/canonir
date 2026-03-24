@@ -1,0 +1,18 @@
+[package]
+name = "canon-analyst"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "canon-analyst"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+canon_llm = { package = "canon-llm-runtime", path = "../canon-llm-runtime" }
+canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
+tokio = { workspace = true, features = ["full"] }
+uuid = { workspace = true }
+tempfile = { workspace = true }

@@ -27,10 +27,11 @@ members = [
   "canon-utils/canon-tools-search",
   "canon-utils/canon-tools-patch",
   "canon-utils/canon-goodness",
-  "test_rust_project_v3", 
+  "canon-utils/canon-analyst",
+  "test_rust_project_v3",
 ]
 exclude = [
-  "test_projects",
+  "test_projects",       # keep all test projects in their own workspace (test_projects/Cargo.toml)
   "canon-rustc",
 ]
 resolver = "2"

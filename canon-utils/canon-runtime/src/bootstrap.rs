@@ -144,6 +144,19 @@ fn write_boot_event(tlog_path: &Path, kind: &str, payload: serde_json::Value) {
     let _ = canon_meta::canon_emit_meta!("bootstrap", kind, payload, tlog_path);
 }
 
+/// Helper for emitting a PromptLoaded event to the tlog. Used by bootstrap
+/// and GoalGenConsumer to avoid duplicating the payload shape.
+pub fn write_prompt_loaded_to_tlog(tlog_path: &Path, content: &str) {
+    let hash = content_hash(content);
+    let payload = serde_json::json!({
+        "prompt_id": "AGENT_GOAL",
+        "path": GOAL_PROMPT_FILE,
+        "hash": hash,
+        "content": content,
+    });
+    write_boot_event(tlog_path, "prompt_loaded", payload);
+}
+
 // ---------------------------------------------------------------------------
 // Hot-reload: re-read one prompt file, update registry, write tlog event.
 // Called by the prompt-directory watcher (P4) at runtime.

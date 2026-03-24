@@ -38,22 +38,9 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
         actions.retain(|a| !matches!(a.action, LlmAction::Done { .. }));
     }
     if actions.is_empty() {
-        return emit_plan(ctx, LoopPlanned {
-            tick: pending.tick,
-            action_kind: "no_op".to_string(),
-            action_payload: serde_json::json!({}),
-            reason: "llm_parse_failed".to_string(),
-            llm_request_id: Some(pending.request_id.clone()),
-            signals: signals.clone(),
-            trace_id: Some(pending.trace_id.clone()),
-            execution_id: Some(pending.execution_id.clone()),
-            span_id: None,
-            parent_span_id: Some(pending.span_id.clone()),
-            plan_id: Some(pending.plan_id.clone()),
-            plan_step_id: None,
-            action_id: None,
-            depends_on: Vec::new(),
-        });
+        // Parsing failed; clear the planned tick so the next route can re-issue a plan.
+        ctx.last_planned_observed_tick = None;
+        return Ok(LoopStageResult::Noop);
     }
 
     let req_id = pending.request_id.clone();

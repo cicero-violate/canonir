@@ -11,7 +11,9 @@ use canon_runtime::consumers::capability_executor::CapabilityExecutor;
 use canon_runtime::consumers::check_consumer::CheckConsumer;
 use canon_runtime::consumers::error_logger::ErrorLogger;
 use canon_runtime::consumers::dispatch_consumer::DispatchConsumer;
+use canon_runtime::consumers::goal_gen_consumer::GoalGenConsumer;
 use canon_runtime::consumers::goal_graph_consumer::GoalGraphConsumer;
+use canon_runtime::consumers::analyst_consumer::AnalystConsumer;
 use canon_runtime::{spawn_kernel_processor, EventRuntime, KernelMsg};
 use crossbeam_channel as cc;
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
@@ -22,6 +24,10 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+
+// Goal-gen projects live under a dedicated subdir so cleaning does not wipe user test projects.
+const GOALGEN_PROJECTS_DIR: &str = "/workspace/ai_sandbox/canon/test_projects/goalgen";
+const AGENT_GOAL_PATH: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts/AGENT_GOAL.md";
 
 // ---------------------------------------------------------------------------
 // Lock guard — ensures only one instance runs against a given tlog path.
@@ -87,6 +93,16 @@ fn acquire_lock(path: &Path) -> Result<Option<LockGuard>> {
     let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
     let _ = file.write_all(format!("pid={}\n", std::process::id()).as_bytes());
     Ok(Some(LockGuard { path: path.to_path_buf(), _file: file }))
+}
+
+fn clean_test_projects() {
+    let p = Path::new(GOALGEN_PROJECTS_DIR);
+    let _ = fs::remove_dir_all(p);
+    let _ = fs::create_dir_all(p);
+}
+
+fn clear_agent_goal() {
+    let _ = fs::write(AGENT_GOAL_PATH, "# goal-pending\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -231,12 +247,16 @@ fn main() -> Result<()> {
 
     // --- Build runtime (W owns this exclusively) ---
     let prompt_registry = new_prompt_registry();
+    clean_test_projects();
+    clear_agent_goal();
     bootstrap_config(&tlog_path, &prompt_registry);
 
     let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let agent_registry = AgentRegistryHandle::default();
     let mut consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
-        Box::new(LoopStageExecutor::new(workspace.clone(), tlog_path.clone())),
+        Box::new(GoalGenConsumer::new(tlog_path.clone())),
+        Box::new(AnalystConsumer::new(tlog_path.clone())),
+        Box::new(LoopStageExecutor::new(workspace.clone(), tlog_path.clone()).with_agent_id("planner_chatgpt_group".to_string())),
         Box::new(RouteExecutor::new(workspace.clone())),
         Box::new(ErrorLogger::new(None)),
         Box::new(CheckConsumer::new()),

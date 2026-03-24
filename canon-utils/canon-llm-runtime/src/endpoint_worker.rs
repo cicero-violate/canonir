@@ -39,6 +39,10 @@ struct LlmWorker {
     tabs: TabManagerHandle,
     seen_hashes: HashSet<u64>,
     cache: HashMap<u64, String>,
+    /// Tracks which tab IDs have already received the role/system prompt.
+    /// For stateful endpoints we send the role_schema only on the first turn;
+    /// subsequent turns carry only the user prompt, saving tokens.
+    tabs_with_role_sent: HashSet<u32>,
 }
 impl LlmWorker {
     async fn handle_request(&mut self, req: LlmWorkItem) {
@@ -55,23 +59,11 @@ impl LlmWorker {
                 return;
             }
         }
-        let full_prompt = if req.role_schema.trim().is_empty() { req.prompt } else { format!("{}\n\n{}", req.role_schema.trim_end(), req.prompt) };
-        let prompt_chars = full_prompt.len();
-        let full_prompt = if prompt_chars > 120_000 {
-            let truncated = &full_prompt[..120_000];
-            let cut = truncated.rfind('\n').unwrap_or(120_000);
-            let mut s = full_prompt[..cut].to_string();
-            s.push_str("\n... [prompt truncated]\n");
-            s
-        } else {
-            full_prompt
-        };
-        let _ = prompt_chars;
         if let Some(node_id) = req.node_id.as_deref() {
             response_router::response_router_register(req.req_id, node_id).await;
         }
         tab_manager_log_llm(format!("phase={} endpoint={} req_id={} send_turn_start", req.phase, self.endpoint_id, req.req_id));
-        let result = self.send_turn(&req.phase, req.req_id, req.allow_req_id_mismatch, full_prompt).await;
+        let result = self.send_turn(&req.phase, req.req_id, req.allow_req_id_mismatch, req.prompt, req.role_schema).await;
         if let Ok(raw) = result.as_ref() {
             if let Some(key) = req.cache_key {
                 self.cache.insert(key, raw.clone());
@@ -80,8 +72,29 @@ impl LlmWorker {
         // telemetry removed
         let _ = req.response.send(result);
     }
-    async fn send_turn(&mut self, phase: &str, req_id: u64, allow_req_id_mismatch: bool, full_prompt: String) -> Result<String> {
+    async fn send_turn(&mut self, phase: &str, req_id: u64, allow_req_id_mismatch: bool, prompt: String, role_schema: String) -> Result<String> {
         let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, &self.url, &self.tabs, self.max_tabs).await?;
+
+        // For stateful endpoints, send the role/system prompt only on the first
+        // turn to this tab; all subsequent turns carry only the user prompt.
+        // For non-stateful endpoints the role_schema is always prepended (each
+        // call starts a fresh context).
+        let include_role = !role_schema.trim().is_empty()
+            && (!self.stateful || self.tabs_with_role_sent.insert(tab_id));
+        let raw_prompt = if include_role {
+            format!("{}\n\n{}", role_schema.trim_end(), prompt)
+        } else {
+            prompt
+        };
+        let full_prompt = if raw_prompt.len() > 120_000 {
+            let cut = raw_prompt[..120_000].rfind('\n').unwrap_or(120_000);
+            let mut s = raw_prompt[..cut].to_string();
+            s.push_str("\n... [prompt truncated]\n");
+            s
+        } else {
+            raw_prompt
+        };
+
         tab_manager_mark_tab_sent(&self.tabs, tab_id).await;
         tab_manager_log_llm(format!("phase={} endpoint={} tab={} send", phase, self.endpoint_id, tab_id));
         let raw = match self.bridge.send_turn(tab_id, &self.url, full_prompt).await {
@@ -89,6 +102,8 @@ impl LlmWorker {
             Err(e) => {
                 tab_manager_mark_tab_in_flight(&self.tabs, tab_id, false).await;
                 tab_manager_drop_tab(&self.tabs, &self.endpoint_id, tab_id).await;
+                // Tab is gone — clear role_sent so the next fresh tab gets the role_schema again.
+                self.tabs_with_role_sent.remove(&tab_id);
                 tab_manager_log_llm(format!("phase={} endpoint={} tab={} send_error={}", phase, self.endpoint_id, tab_id, e));
                 return Err(anyhow::anyhow!("llm send_turn error: {e}"));
             }
@@ -178,6 +193,7 @@ pub async fn llm_worker_send_request_with_req_id(
             tabs: tabs.clone(),
             seen_hashes: HashSet::new(),
             cache: HashMap::new(),
+            tabs_with_role_sent: HashSet::new(),
         };
         tokio::spawn(llm_worker_run_worker(worker, rx_worker));
         workers.insert(worker_key, tx_worker.clone());
@@ -216,6 +232,7 @@ pub async fn llm_worker_init_workers(bridge: &WsBridge, config: &CapabilityConfi
             tabs: tabs.clone(),
             seen_hashes: HashSet::new(),
             cache: HashMap::new(),
+            tabs_with_role_sent: HashSet::new(),
         };
         tokio::spawn(llm_worker_run_worker(worker, rx_worker));
         workers.insert(worker_key, tx_worker);

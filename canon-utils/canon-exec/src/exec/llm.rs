@@ -82,6 +82,8 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                             .iter()
                             .find(|e| e.id == aid)
                             .or_else(|| config.llm_endpoints.iter().find(|e| e.url.contains(aid)))
+                            // Fallback: treat agent_id as a role name (e.g., "exec" → first exec endpoint).
+                            .or_else(|| config.llm_endpoints.iter().find(|e| e.role.as_deref() == Some(aid)))
                     } else if let Some(role_name) = role.as_deref() {
                         config
                             .llm_endpoints

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,7 +12,20 @@ use canon_loop::LoopStageExecutor;
 use canon_route::RouteExecutor;
 use crate::consumers::capability_executor::CapabilityExecutor;
 use crate::EventRuntime;
-use crossbeam_channel as cc;
+
+/// Load exec endpoint IDs from capability_config.toml at startup.
+fn load_exec_endpoint_ids() -> Vec<String> {
+    canon_llm::config::CapabilityConfig::snapshot_store_load()
+        .ok()
+        .map(|c| {
+            c.llm_endpoints
+                .iter()
+                .filter(|e| e.role.as_deref() == Some("exec"))
+                .map(|e| e.id.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 const SUB_AGENT_TIMEOUT_SECS: u64 = 300;
 const TICK_INTERVAL_MS: u64 = 100;
@@ -46,6 +58,7 @@ impl EventConsumer for HaltDetectorConsumer {
 struct ForwardConsumer {
     parent: EventEmitterHandle,
     actions_taken: Arc<Mutex<Vec<String>>>,
+    halted: Arc<AtomicBool>,
 }
 
 impl EventConsumer for ForwardConsumer {
@@ -53,6 +66,7 @@ impl EventConsumer for ForwardConsumer {
     fn set_emitter(&mut self, _: EventEmitterHandle) {}
     fn on_event(&mut self, event: &RuntimeEvent) {
         match event {
+            RuntimeEvent::LoopObserved(_) => self.parent.emit(event.clone()),
             RuntimeEvent::LoopPlanned(p) => {
                 if let Some(id) = &p.action_id {
                     if let Ok(mut v) = self.actions_taken.lock() {
@@ -61,7 +75,24 @@ impl EventConsumer for ForwardConsumer {
                 }
                 self.parent.emit(event.clone());
             }
-            RuntimeEvent::LoopActed(_) | RuntimeEvent::LoopVerified(_) => {
+            RuntimeEvent::LoopActed(a) => {
+                if let Some(id) = &a.action_id {
+                    if let Ok(mut v) = self.actions_taken.lock() {
+                        v.push(id.clone());
+                    }
+                }
+                self.parent.emit(event.clone());
+            }
+            RuntimeEvent::LoopVerified(_) |
+            RuntimeEvent::ToolCall(_) |
+            RuntimeEvent::ToolResult(_) |
+            RuntimeEvent::ToolBatchSettled(_) => {
+                self.parent.emit(event.clone());
+            }
+            RuntimeEvent::LoopRewarded(r) => {
+                if r.halt {
+                    self.halted.store(true, Ordering::Relaxed);
+                }
                 self.parent.emit(event.clone());
             }
             _ => {}
@@ -90,6 +121,7 @@ fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_
         Box::new(ForwardConsumer {
             parent: parent_emitter.clone(),
             actions_taken: actions_taken.clone(),
+            halted: halted.clone(),
         }),
     ];
 
@@ -138,31 +170,38 @@ fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_
 
 pub struct DispatchConsumer {
     emitter: Option<EventEmitterHandle>,
-    workers: HashMap<String, cc::Sender<RequestDispatch>>,
     workspace: PathBuf,
+    /// Exec endpoint IDs loaded from capability_config.toml (e.g., exec_chatgpt_a…f).
+    exec_endpoints: Vec<String>,
+    /// Round-robin cursor for endpoint assignment.
+    next_exec_idx: usize,
 }
 
 impl DispatchConsumer {
     pub fn new() -> Self {
         let workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        Self { emitter: None, workers: HashMap::new(), workspace }
+        let exec_endpoints = load_exec_endpoint_ids();
+        Self { emitter: None, workspace, exec_endpoints, next_exec_idx: 0 }
     }
 
-    fn ensure_worker(&mut self, agent_id: &str, parent_emitter: EventEmitterHandle) -> &cc::Sender<RequestDispatch> {
-        let base = self.workspace.clone();
-        self.workers.entry(agent_id.to_string()).or_insert_with(|| {
-            let (tx, rx) = cc::unbounded::<RequestDispatch>();
-            thread::Builder::new()
-                .name(format!("dispatch-worker-{agent_id}"))
-                .spawn(move || {
-                    for req in rx.iter() {
-                        run_sub_agent(req, parent_emitter.clone(), base.clone());
-                    }
-                })
-                .expect("dispatch worker thread");
-            tx
-        })
+    /// Map a generic role string (e.g., "exec") to a specific endpoint ID
+    /// from the configured pool, round-robin. If `agent_id` is already a
+    /// known endpoint ID it is returned unchanged.
+    fn assign_endpoint(&mut self, agent_id: &str) -> String {
+        // Already a concrete endpoint ID — use it directly.
+        if self.exec_endpoints.contains(&agent_id.to_string()) {
+            return agent_id.to_string();
+        }
+        // Pool is empty (config not loaded or no exec endpoints) — fall through.
+        if self.exec_endpoints.is_empty() {
+            return agent_id.to_string();
+        }
+        // Round-robin pick from pool.
+        let idx = self.next_exec_idx % self.exec_endpoints.len();
+        self.next_exec_idx += 1;
+        self.exec_endpoints[idx].clone()
     }
+
 }
 
 impl EventConsumer for DispatchConsumer {
@@ -175,7 +214,16 @@ impl EventConsumer for DispatchConsumer {
     fn on_event(&mut self, event: &RuntimeEvent) {
         let RuntimeEvent::RequestDispatch(req) = event else { return; };
         let Some(emitter) = self.emitter.clone() else { return; };
-        let tx = self.ensure_worker(&req.agent_id, emitter);
-        let _ = tx.send(req.clone());
+        // Resolve the generic role ("exec") to a specific endpoint ID so that
+        // all LlmCalls within this sub-agent use the same tab (stateful conversation).
+        let mut req = req.clone();
+        req.agent_id = self.assign_endpoint(&req.agent_id);
+        let base = self.workspace.clone();
+        thread::Builder::new()
+            .name(format!("dispatch-worker-{}", req.dispatch_id))
+            .spawn(move || {
+                run_sub_agent(req, emitter, base);
+            })
+            .expect("dispatch worker thread");
     }
 }

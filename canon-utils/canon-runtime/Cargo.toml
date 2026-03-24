@@ -28,6 +28,7 @@ anyhow = { workspace = true }
 canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
 canon_event_store = { package = "canon-storage-eventlog", path = "../canon-storage-eventlog" }
 canon_exec = { package = "canon-exec", path = "../canon-exec" }
+canon_llm = { package = "canon-llm-runtime", path = "../canon-llm-runtime" }
 canon_loop = { package = "canon-loop", path = "../canon-loop" }
 canon_route = { package = "canon-route", path = "../canon-route" }
 canon_decision = { package = "canon-decision", path = "../canon-decision" }
@@ -45,3 +46,4 @@ notify = { workspace = true }
 tokio = { workspace = true }
 signal-hook = { workspace = true }
 uuid = { workspace = true }
+tempfile = { workspace = true }

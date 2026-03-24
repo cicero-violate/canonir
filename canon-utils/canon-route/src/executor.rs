@@ -79,7 +79,7 @@ impl RouteExecutor {
                 request_id,
                 prompt,
                 role: Some("router".to_string()),
-                agent_id: None,
+                agent_id: Some("router_chatgpt_group".to_string()),
             }));
         }
     }
