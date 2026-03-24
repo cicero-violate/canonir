@@ -1,4 +1,5 @@
-use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, RuntimeEvent, LlmCall, CapabilityResult};
+use canon_event::{CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, LlmCall, RuntimeEvent};
+use canon_proc_macros::must_emit;
 use std::io::Write as _;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -113,12 +114,7 @@ impl AnalystConsumer {
         let first_prompt = format!("{SYSTEM_PROMPT}\n\n{question}");
         let request_id = Uuid::new_v4().to_string();
         self.state = State::PendingLlm { request_id: request_id.clone(), turn: 1 };
-        EventOutcome::Emit(RuntimeEvent::Llm(LlmCall {
-            request_id: request_id.clone(),
-            prompt: first_prompt,
-            role: Some(ANALYST_ROLE.to_string()),
-            agent_id: Some(ANALYST_AGENT_ID.to_string()),
-        }))
+        EventOutcome::Emit(RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt: first_prompt, role: Some(ANALYST_ROLE.to_string()), agent_id: Some(ANALYST_AGENT_ID.to_string()) }))
     }
 
     fn continue_session(&mut self, code: String, turn: usize) -> EventOutcome {
@@ -131,12 +127,7 @@ impl AnalystConsumer {
         let prompt = format!("## Python result\n```\n{result_block}\n```");
         let request_id = Uuid::new_v4().to_string();
         self.state = State::PendingLlm { request_id: request_id.clone(), turn: turn + 1 };
-        EventOutcome::Emit(RuntimeEvent::Llm(LlmCall {
-            request_id,
-            prompt,
-            role: Some(ANALYST_ROLE.to_string()),
-            agent_id: Some(ANALYST_AGENT_ID.to_string()),
-        }))
+        EventOutcome::Emit(RuntimeEvent::Llm(LlmCall { request_id, prompt, role: Some(ANALYST_ROLE.to_string()), agent_id: Some(ANALYST_AGENT_ID.to_string()) }))
     }
 
     fn continue_session_no_python(&mut self, turn: usize) -> EventOutcome {
@@ -144,12 +135,7 @@ impl AnalystConsumer {
         let prompt = nudge.to_string();
         let request_id = Uuid::new_v4().to_string();
         self.state = State::PendingLlm { request_id: request_id.clone(), turn: turn + 1 };
-        EventOutcome::Emit(RuntimeEvent::Llm(LlmCall {
-            request_id,
-            prompt,
-            role: Some(ANALYST_ROLE.to_string()),
-            agent_id: Some(ANALYST_AGENT_ID.to_string()),
-        }))
+        EventOutcome::Emit(RuntimeEvent::Llm(LlmCall { request_id, prompt, role: Some(ANALYST_ROLE.to_string()), agent_id: Some(ANALYST_AGENT_ID.to_string()) }))
     }
 
     fn finish_session(&mut self, report: String) -> EventOutcome {
@@ -162,10 +148,13 @@ impl AnalystConsumer {
 }
 
 impl EventConsumer for AnalystConsumer {
-    fn filter(&self) -> EventFilter { EventFilter::All }
+    fn filter(&self) -> EventFilter {
+        EventFilter::All
+    }
 
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
+    #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         match event {
             RuntimeEvent::LoopRewarded(_) => {
@@ -187,17 +176,21 @@ impl EventConsumer for AnalystConsumer {
                 *tsr += 1;
                 if *tsr >= STAGNANT_THRESHOLD {
                     *tsr = 0;
-                    return self.start_session("The system appears stagnant. Diagnose why progress has halted and suggest fixes.");
+                    return self.start_session("The system appears stagnant. Diagnose why progress has halted.");
                 }
                 EventOutcome::NoOp("analyst_not_stagnant")
             }
             RuntimeEvent::CapabilityCompleted(done) => {
-                if done.capability != "llm.call" { return EventOutcome::NoOp("analyst_non_llm_capability"); }
+                if done.capability != "llm.call" {
+                    return EventOutcome::NoOp("analyst_non_llm_capability");
+                }
                 let (expected_id, turn) = match &self.state {
                     State::PendingLlm { request_id, turn } => (request_id.clone(), *turn),
                     _ => return EventOutcome::NoOp("analyst_not_pending"),
                 };
-                if done.request_id != expected_id { return EventOutcome::NoOp("analyst_request_mismatch"); }
+                if done.request_id != expected_id {
+                    return EventOutcome::NoOp("analyst_request_mismatch");
+                }
                 let response_text = match &done.result {
                     CapabilityResult::Llm(res) => extract_response_text(&res.response),
                     _ => return EventOutcome::NoOp("analyst_wrong_result_type"),
@@ -227,7 +220,44 @@ impl EventConsumer for AnalystConsumer {
                 }
                 EventOutcome::NoOp("analyst_other_capability_failed")
             }
-            _ => EventOutcome::NoOp("analyst_ignored_event"),
+            RuntimeEvent::Code(_)
+            | RuntimeEvent::Debug(_)
+            | RuntimeEvent::Edit(_)
+            | RuntimeEvent::ErrorOccurred(_)
+            | RuntimeEvent::GoodnessSnapshot(_)
+            | RuntimeEvent::RouteTick(_)
+            | RuntimeEvent::RouteSelected(_)
+            | RuntimeEvent::Cargo(_)
+            | RuntimeEvent::File(_)
+            | RuntimeEvent::Bash(_)
+            | RuntimeEvent::Llm(_)
+            | RuntimeEvent::RequestDispatch(_)
+            | RuntimeEvent::SubTaskResult(_)
+            | RuntimeEvent::Analysis(_)
+            | RuntimeEvent::RuntimeStateUpdated(_)
+            | RuntimeEvent::NodeReady(_)
+            | RuntimeEvent::NodeStarted(_)
+            | RuntimeEvent::NodeCompleted(_)
+            | RuntimeEvent::NodeFailed(_)
+            | RuntimeEvent::PolicyBaselineUpdated(_)
+            | RuntimeEvent::GoalSelected(_)
+            | RuntimeEvent::SystemConfigLoaded(_)
+            | RuntimeEvent::AgentRegistered(_)
+            | RuntimeEvent::PromptLoaded(_)
+            | RuntimeEvent::ToolCall(_)
+            | RuntimeEvent::ToolResult(_)
+            | RuntimeEvent::ToolBatchSettled(_)
+            | RuntimeEvent::GoalNodeCreated(_)
+            | RuntimeEvent::GoalNodeRetracted(_)
+            | RuntimeEvent::GoalNodeRewritten(_)
+            | RuntimeEvent::GoalEdgeDefined(_)
+            | RuntimeEvent::GoalGraphCheckpointed(_)
+            | RuntimeEvent::CapabilityInvoked(_)
+            | RuntimeEvent::CapabilityResolved(_)
+            | RuntimeEvent::LoopObserved(_)
+            | RuntimeEvent::LoopPlanned(_)
+            | RuntimeEvent::LoopActed(_)
+            | RuntimeEvent::LoopVerified(_) => EventOutcome::NoOp("analyst_ignored_event"),
         }
     }
 }
@@ -237,7 +267,11 @@ fn extract_python_block(text: &str) -> Option<String> {
     let after = &text[start + 9..];
     let end = after.find("```")?;
     let code = after[..end].trim().to_string();
-    if code.is_empty() { None } else { Some(code) }
+    if code.is_empty() {
+        None
+    } else {
+        Some(code)
+    }
 }
 
 fn extract_response_text(v: &serde_json::Value) -> String {
@@ -298,10 +332,7 @@ fn python_run(code: &str, tlog_path: &str) -> anyhow::Result<PythonResult> {
     let flat_tlog;
     let effective_tlog: &str = if std::path::Path::new(tlog_path).is_dir() {
         let mut flat = tempfile::NamedTempFile::new()?;
-        let mut entries: Vec<_> = std::fs::read_dir(tlog_path)?
-            .flatten()
-            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("log"))
-            .collect();
+        let mut entries: Vec<_> = std::fs::read_dir(tlog_path)?.flatten().filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("log")).collect();
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {
             let contents = std::fs::read(entry.path())?;
@@ -317,19 +348,14 @@ fn python_run(code: &str, tlog_path: &str) -> anyhow::Result<PythonResult> {
     let mut tmp = tempfile::NamedTempFile::new()?;
     tmp.write_all(code.as_bytes())?;
     tmp.flush()?;
-    let output = Command::new("python3")
-        .arg(tmp.path())
-        .env("CANON_TLOG", effective_tlog)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()?;
-    Ok(PythonResult {
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        exit_code: output.status.code().unwrap_or(-1),
-    })
+    let output = Command::new("python3").arg(tmp.path()).env("CANON_TLOG", effective_tlog).stdout(Stdio::piped()).stderr(Stdio::piped()).output()?;
+    Ok(PythonResult { stdout: String::from_utf8_lossy(&output.stdout).into_owned(), stderr: String::from_utf8_lossy(&output.stderr).into_owned(), exit_code: output.status.code().unwrap_or(-1) })
 }
 
 fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max { s } else { &s[..max] }
+    if s.len() <= max {
+        s
+    } else {
+        &s[..max]
+    }
 }
