@@ -176,7 +176,7 @@ impl EventConsumer for AnalystConsumer {
                 *tsr += 1;
                 if *tsr >= STAGNANT_THRESHOLD {
                     *tsr = 0;
-                    return self.start_session("The system appears stagnant. Diagnose why progress has halted.");
+                    return self.start_session("The system appears stagnant. Diagnose why progress has halted. DO NOT PROVIDE SOLUTIONS");
                 }
                 EventOutcome::NoOp("analyst_not_stagnant")
             }
