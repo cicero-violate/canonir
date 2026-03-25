@@ -1,4 +1,4 @@
-use canon_event::{CanonEvent, CanonPayload, LoopObserved, RuntimeEvent};
+use canon_event::{CanonEvent, EventKind, LoopObserved, RuntimeEvent};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -66,12 +66,15 @@ fn scan_tlog_for_goal(tlog_path: &Path) -> Option<String> {
             let Ok(ev) = serde_json::from_str::<CanonEvent>(line) else {
                 continue;
             };
-            if let CanonPayload::PromptLoaded(val) = ev.payload {
-                let is_goal = val.get("prompt_id").and_then(|v| v.as_str()) == Some("AGENT_GOAL") || val.get("path").and_then(|v| v.as_str()).map(|p| p.contains("AGENT_GOAL")).unwrap_or(false);
-                if is_goal {
-                    if let Some(c) = val.get("content").and_then(|v| v.as_str()) {
-                        found = Some(c.to_string());
-                    }
+            if ev.kind != EventKind::PromptLoaded {
+                continue;
+            }
+            let val = &ev.payload.data;
+            let is_goal = val.get("prompt_id").and_then(|v| v.as_str()) == Some("AGENT_GOAL")
+                || val.get("path").and_then(|v| v.as_str()).map(|p| p.contains("AGENT_GOAL")).unwrap_or(false);
+            if is_goal {
+                if let Some(c) = val.get("content").and_then(|v| v.as_str()) {
+                    found = Some(c.to_string());
                 }
             }
         }

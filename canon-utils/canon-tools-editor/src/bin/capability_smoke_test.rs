@@ -10,6 +10,7 @@ struct NullEmitter;
 impl EventEmitter for NullEmitter {
     fn emit(&self, _event: RuntimeEvent) {}
     fn emit_located(&self, _event: RuntimeEvent, _file: &'static str, _line: u32) {}
+    fn emit_with_parents(&self, _event: RuntimeEvent, _parents: Vec<canon_event::EventId>, _file: &'static str, _line: u32) {}
 }
 
 fn main() -> Result<()> {

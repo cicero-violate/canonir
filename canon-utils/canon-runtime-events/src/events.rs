@@ -1,7 +1,7 @@
 use canon_types::{EventDelta, RustcEvent, RustcState};
 use std::sync::Arc;
 
-use canon_macros::{canon_event_enum, canon_event_struct};
+use canon_proc_macros::{canon_event_enum, canon_event_struct};
 
 pub const EVENT_SCHEMA_VERSION: &str = "1";
 
@@ -441,6 +441,9 @@ canon_event_enum!(RuntimeEvent {
 
 pub trait EventEmitter: Send + Sync {
     fn emit_located(&self, event: RuntimeEvent, file: &'static str, line: u32);
+    fn emit_with_parents(&self, event: RuntimeEvent, _parents: Vec<crate::EventId>, file: &'static str, line: u32) {
+        self.emit_located(event, file, line);
+    }
     fn emit(&self, event: RuntimeEvent) {
         self.emit_located(event, "", 0);
     }

@@ -3,19 +3,19 @@ use canon_event::EVENT_SCHEMA_VERSION;
 use canon_event_store::replay_graph_from_tlog;
 use canon_event_store::AnyEvent;
 use canon_event_store::{extract_rustc_event, read_any_events_from_path, read_any_events_from_path_with_start_seq};
-use canon_route::RouteExecutor;
 use canon_loop::LoopStageExecutor;
+use canon_route::RouteExecutor;
 use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry, prompts_dir, reload_prompt_file};
 use canon_runtime::consumers::agent_registry::{AgentRegistryConsumer, AgentRegistryHandle};
+use canon_runtime::consumers::analyst_consumer::AnalystConsumer;
 use canon_runtime::consumers::capability_executor::CapabilityExecutor;
 use canon_runtime::consumers::check_consumer::CheckConsumer;
-use canon_runtime::consumers::error_logger::ErrorLogger;
 use canon_runtime::consumers::dispatch_consumer::DispatchConsumer;
+use canon_runtime::consumers::error_logger::ErrorLogger;
 use canon_runtime::consumers::goal_gen_consumer::GoalGenConsumer;
 use canon_runtime::consumers::goal_graph_consumer::GoalGraphConsumer;
 use canon_runtime::consumers::watchdog_consumer::WatchdogConsumer;
-use canon_runtime::hooks::{HookChain, CapabilityRateLimitHook, CostCapHook, AuditLogHook};
-use canon_runtime::consumers::analyst_consumer::AnalystConsumer;
+use canon_runtime::hooks::{AuditLogHook, CapabilityRateLimitHook, CostCapHook, HookChain};
 use canon_runtime::{spawn_kernel_processor, EventRuntime, KernelMsg};
 use crossbeam_channel as cc;
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
@@ -269,21 +269,24 @@ fn main() -> Result<()> {
                 loop {
                     std::thread::sleep(Duration::from_secs(5));
                     tick = tick.wrapping_add(1);
+                    let payload = canon_event::CanonPayload::from_data(
+                        serde_json::json!({}),
+                        serde_json::json!({}),
+                        serde_json::json!({}),
+                        canon_event::CanonPayloadMeta { file: "heartbeat".to_string(), line: 0 },
+                        serde_json::json!({ "tick": tick }),
+                    );
                     let _ = canon_event::write_canon_event_auto(
                         &heartbeat_tlog,
-                        &canon_event::CanonEvent {
-                            event_id: None,
-                            meta: canon_event::EventMeta {
-                                ts: SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .map(|d| d.as_millis() as u64)
-                                    .unwrap_or(0),
-                                source: "heartbeat".to_string(),
-                                file: String::new(),
-                                line: 0,
-                            },
-                            payload: canon_event::CanonPayload::from_kind("Tick", serde_json::json!({ "tick": tick })),
-                        },
+                        &canon_event::CanonEvent::new(
+                            canon_event::EventId::new(canon_event::new_event_id()),
+                            Vec::new(),
+                            "heartbeat",
+                            canon_event::EventKind::Debug,
+                            SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+                            payload,
+                            true,
+                        ),
                     );
                 }
             })
@@ -343,9 +346,7 @@ fn main() -> Result<()> {
     // Emit AgentRegistered for each card in capability_config.toml so that
     // AgentRegistryConsumer and DispatchConsumer see agents before any work arrives.
     for payload in canon_runtime::bootstrap::load_agent_cards() {
-        runtime.emit_event(canon_event::RuntimeEvent::AgentRegistered(
-            canon_event::AgentRegistered { payload }
-        )).ok();
+        runtime.emit_event(canon_event::RuntimeEvent::AgentRegistered(canon_event::AgentRegistered { payload })).ok();
     }
 
     // Read events that already exist in L at startup (in-memory after this point).
@@ -580,18 +581,7 @@ fn main() -> Result<()> {
         match q_control_rx.try_recv() {
             Ok(control_msg) => {
                 processed_control = true;
-                if handle_control_msg(
-                    control_msg,
-                    &mut runtime,
-                    &mut processed,
-                    &cursor_path,
-                    &tlog_path,
-                    start_seq,
-                    &session_id,
-                    &mut last_saved,
-                    &mut last_saved_processed,
-                    &mut scheduler_tick,
-                )? {
+                if handle_control_msg(control_msg, &mut runtime, &mut processed, &cursor_path, &tlog_path, start_seq, &session_id, &mut last_saved, &mut last_saved_processed, &mut scheduler_tick)? {
                     return Ok(());
                 }
             }
@@ -643,17 +633,7 @@ fn main() -> Result<()> {
         while handled_events < event_budget_per_cycle {
             match q_event_rx.try_recv() {
                 Ok(event_msg) => {
-                    handle_event_msg(
-                        event_msg,
-                        &mut runtime,
-                        &mut processed,
-                        &cursor_path,
-                        &tlog_path,
-                        start_seq,
-                        &session_id,
-                        &mut last_saved,
-                        &mut last_saved_processed,
-                    )?;
+                    handle_event_msg(event_msg, &mut runtime, &mut processed, &cursor_path, &tlog_path, start_seq, &session_id, &mut last_saved, &mut last_saved_processed)?;
                     handled_events = handled_events.saturating_add(1);
                 }
                 Err(cc::TryRecvError::Empty) => break,
@@ -665,18 +645,7 @@ fn main() -> Result<()> {
         // so routing cadence remains responsive.
         if !processed_control && handled_events == 0 {
             if let Ok(control_msg) = q_control_rx.recv() {
-                if handle_control_msg(
-                    control_msg,
-                    &mut runtime,
-                    &mut processed,
-                    &cursor_path,
-                    &tlog_path,
-                    start_seq,
-                    &session_id,
-                    &mut last_saved,
-                    &mut last_saved_processed,
-                    &mut scheduler_tick,
-                )? {
+                if handle_control_msg(control_msg, &mut runtime, &mut processed, &cursor_path, &tlog_path, start_seq, &session_id, &mut last_saved, &mut last_saved_processed, &mut scheduler_tick)? {
                     return Ok(());
                 }
             }
@@ -795,10 +764,10 @@ fn find_last_runtime_started_payload(tlog_path: &Path) -> Option<serde_json::Val
         let AnyEvent::Canon(canon) = event else {
             return None;
         };
-        if canon.payload.kind_str() != "runtime_started" {
+        if canon.kind != canon_event::EventKind::RuntimeStarted {
             return None;
         }
-        canon.payload.as_value()
+        Some(canon.payload.data.clone())
     })
 }
 

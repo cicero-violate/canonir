@@ -1,6 +1,6 @@
-use canon_event::{new_error_occurred, RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome};
-use canon_proc_macros::must_emit;
+use canon_event::{new_error_occurred, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, RuntimeEvent};
 use canon_exec::{ExecutableEvent, ExecutionContext, ExecutionResult};
+use canon_proc_macros::must_emit;
 use std::path::PathBuf;
 
 pub struct CapabilityExecutor {

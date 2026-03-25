@@ -64,8 +64,8 @@ fn main() -> anyhow::Result<()> {
         let AnyEvent::Canon(canon) = event else {
             continue;
         };
-        let kind = canon.payload.kind_str();
-        let Some(payload) = canon.payload.as_value() else { continue };
+        let kind = canon.kind.as_str();
+        let payload = &canon.payload.data;
         if kind == "runtime_started" {
             if let Some(session) = event_runtime_session(&payload) {
                 current_session = Some(session);
@@ -95,21 +95,25 @@ fn main() -> anyhow::Result<()> {
         }
 
         if args.check_event_id {
-            if let (Some(session), Some(event_id)) = (session_for_event.as_deref(), canon.event_id) {
+            if let (Some(session), event_id) = (session_for_event.as_deref(), canon.id.as_str()) {
                 if let Some(last) = last_event_by_session.get(session) {
-                    if event_id <= *last {
-                        eprintln!("event_id regression for session {}: current={} previous={}", session, event_id, last);
+                    if let Ok(eid_num) = event_id.parse::<u64>() {
+                        if eid_num <= *last {
+                            eprintln!("event_id regression for session {}: current={} previous={}", session, eid_num, last);
+                        }
                     }
                 }
-                last_event_by_session.insert(session.to_string(), event_id);
+                if let Ok(eid_num) = event_id.parse::<u64>() {
+                    last_event_by_session.insert(session.to_string(), eid_num);
+                }
             }
         }
 
         let out = serde_json::json!({
             "session_id": session_for_event,
-            "event_id": canon.event_id,
-            "ts": canon.meta.ts,
-            "source": canon.meta.source,
+            "event_id": canon.id,
+            "ts": canon.ts,
+            "source": canon.actor,
             "kind": kind,
             "payload": payload,
         });

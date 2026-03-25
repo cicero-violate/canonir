@@ -49,6 +49,9 @@ impl EventEmitter for DirectEventEmitter {
     fn emit_located(&self, event: RuntimeEvent, _file: &'static str, _line: u32) {
         let _ = self.tx.send(event);
     }
+    fn emit_with_parents(&self, event: RuntimeEvent, _parents: Vec<canon_event::EventId>, _file: &'static str, _line: u32) {
+        let _ = self.tx.send(event);
+    }
 }
 
 pub fn request_route_via_llm_call(

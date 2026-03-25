@@ -126,14 +126,21 @@ pub fn load_agent_cards() -> Vec<serde_json::Value> {
         Ok(c) => c,
         Err(_) => return vec![],
     };
-    config.agents.cards.iter().map(|card| serde_json::json!({
-        "agent_id": card.agent_id,
-        "agent_url": card.agent_url,
-        "role": card.role,
-        "goal": card.goal,
-        "tool_capabilities": card.tool_capabilities,
-        "capacity": 1,
-    })).collect()
+    config
+        .agents
+        .cards
+        .iter()
+        .map(|card| {
+            serde_json::json!({
+                "agent_id": card.agent_id,
+                "agent_url": card.agent_url,
+                "role": card.role,
+                "goal": card.goal,
+                "tool_capabilities": card.tool_capabilities,
+                "capacity": 1,
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

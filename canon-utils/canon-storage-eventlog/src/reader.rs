@@ -1,4 +1,4 @@
-use canon_event::{CanonEvent, CanonPayload, EditEvent, RustcEvent};
+use canon_event::{CanonEvent, CanonPayload, CanonPayloadMeta, EditEvent, RustcEvent};
 use std::fs;
 use std::io::{BufRead, Read};
 use std::path::Path;
@@ -25,6 +25,9 @@ pub fn parse_any_event(line: &str) -> Option<AnyEvent> {
     if let Ok(event) = serde_json::from_str::<CanonEvent>(trimmed) {
         return Some(AnyEvent::Canon(event));
     }
+    if let Ok(legacy) = serde_json::from_str::<LegacyCanonEvent>(trimmed) {
+        return Some(AnyEvent::Canon(upgrade_legacy_event(legacy)));
+    }
     None
 }
 
@@ -37,19 +40,17 @@ pub fn parse_edit_event_value(value: &serde_json::Value) -> Option<EditEvent> {
 }
 
 pub fn extract_rustc_event(canon: &CanonEvent) -> Option<RustcEvent> {
-    match &canon.payload {
-        CanonPayload::RustcEvent(val) => parse_rustc_event_value(val),
-        CanonPayload::Unknown => None,
-        _ => None,
+    if canon.kind == canon_event::EventKind::RustcEvent {
+        return parse_rustc_event_value(&canon.payload.data);
     }
+    None
 }
 
 pub fn extract_edit_event(canon: &CanonEvent) -> Option<EditEvent> {
-    match &canon.payload {
-        CanonPayload::EditEvent(val) => parse_edit_event_value(val),
-        CanonPayload::Unknown => None,
-        _ => None,
+    if canon.kind == canon_event::EventKind::EditEvent {
+        return parse_edit_event_value(&canon.payload.data);
     }
+    None
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -60,10 +61,10 @@ pub struct SupervisorEvent {
 }
 
 pub fn extract_supervisor_event(canon: &CanonEvent) -> Option<SupervisorEvent> {
-    match &canon.payload {
-        CanonPayload::SupervisorEvent(val) => serde_json::from_value(val.clone()).ok(),
-        _ => None,
+    if canon.kind == canon_event::EventKind::SupervisorEvent {
+        return serde_json::from_value(canon.payload.data.clone()).ok();
     }
+    None
 }
 
 pub fn detect_tlog_format(path: &Path) -> TlogFormat {
@@ -81,6 +82,41 @@ pub fn detect_tlog_format(path: &Path) -> TlogFormat {
         }
     }
     TlogFormat::Jsonl
+}
+
+// Legacy schema support ------------------------------------------------
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct LegacyCanonEvent {
+    pub event_id: Option<u64>,
+    pub meta: LegacyEventMeta,
+    pub kind: String,
+    pub data: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct LegacyEventMeta {
+    pub ts: u64,
+    pub source: String,
+    pub file: String,
+    pub line: u32,
+}
+
+fn upgrade_legacy_event(old: LegacyCanonEvent) -> CanonEvent {
+    CanonEvent {
+        id: canon_event::EventId::new(old.event_id.map(|v| v.to_string()).unwrap_or_else(|| canon_event::new_event_id())),
+        parent_ids: Vec::new(),
+        actor: old.meta.source,
+        kind: serde_json::from_str::<canon_event::EventKind>(&format!("\"{}\"", old.kind)).unwrap_or(canon_event::EventKind::Debug),
+        ts: old.meta.ts,
+        payload: CanonPayload {
+            input: serde_json::json!({}),
+            output: serde_json::json!({}),
+            delta: serde_json::json!({}),
+            meta: CanonPayloadMeta { file: old.meta.file, line: old.meta.line },
+            data: old.data.unwrap_or_else(|| serde_json::json!({})),
+        },
+    }
 }
 
 pub fn read_any_events(path: &Path) -> anyhow::Result<Vec<AnyEvent>> {

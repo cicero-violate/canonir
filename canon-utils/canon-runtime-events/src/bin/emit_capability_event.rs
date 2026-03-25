@@ -58,5 +58,5 @@ fn main() -> Result<()> {
         "name": name,
         "args": args_value,
     });
-    canon_emit!("event-runtime", "capability_requested", payload, &tlog_path)
+    canon_emit!(root; "event-runtime", "capability_requested", payload, &tlog_path)
 }

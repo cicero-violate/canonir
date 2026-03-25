@@ -5,11 +5,11 @@ pub mod consumers;
 pub mod hooks;
 
 use bus::EventBus;
+use canon_event::BinarySegmentWriter;
 use canon_event::{
-    new_error_occurred, AnalysisEvent, AnalysisRun, AnalysisWorkspace, CanonPayload, CapabilityCompleted, CapabilityFailed, Code, DebugEvent, ErrorOccurred, EventConsumer, EventDelta, EventEmitter,
+    new_error_occurred, AnalysisEvent, AnalysisRun, AnalysisWorkspace, CapabilityCompleted, CapabilityFailed, Code, DebugEvent, ErrorOccurred, EventConsumer, EventDelta, EventEmitter,
     EventEmitterHandle, PromptLoaded, RuntimeEvent, RuntimeStateUpdated, RustcEvent, RustcState, Tick,
 };
-use canon_event::BinarySegmentWriter;
 use canon_event::{EdgeDefined, EdgeRemoved, FileSeen, NodeDefined, NodeRemoved, NodeUpdated};
 use canon_event_store::{extract_edit_event, extract_rustc_event, read_any_events_from_path, AnyEvent};
 use serde::Deserialize;
@@ -143,90 +143,99 @@ impl EventRuntime {
                     self.handle_runtime_event(RuntimeEvent::Edit(edit))?;
                     self.drain_emitted_events()?;
                 } else {
-                    match &canon.payload {
-                        CanonPayload::RuntimeStateUpdated(val) => {
-                            self.handle_runtime_event(RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload: val.clone() }))?;
+                    let data = canon.payload.data.clone();
+                    let actor = canon.actor.as_str();
+                    match canon.kind.as_str() {
+                        "runtime_state.updated" => {
+                            self.handle_runtime_event(RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload: data.clone() }))?;
                             self.drain_emitted_events()?;
                         }
-                        CanonPayload::PromptLoaded(val) if canon.meta.source != "event-runtime" => {
-                            let data = val.get("data").unwrap_or(val);
-                            self.handle_runtime_event(RuntimeEvent::PromptLoaded(PromptLoaded { payload: data.clone() }))?;
+                        "prompt_loaded" if actor != "event-runtime" => {
+                            let payload = data.get("data").unwrap_or(&data).clone();
+                            self.handle_runtime_event(RuntimeEvent::PromptLoaded(PromptLoaded { payload }))?;
                             self.drain_emitted_events()?;
                         }
-                        CanonPayload::CapabilityCompleted(val) if canon.meta.source != "event-runtime" => {
-                            if let Ok(payload_owned) = serde_json::from_value::<CapabilityCompletedOwned>(val.clone()) {
-                                let payload = CapabilityCompleted { request_id: payload_owned.request_id, capability: Box::leak(payload_owned.capability.into_boxed_str()), result: payload_owned.result };
+                        "capability_completed" if actor != "event-runtime" => {
+                            if let Ok(payload_owned) = serde_json::from_value::<CapabilityCompletedOwned>(data.clone()) {
+                                let payload =
+                                    CapabilityCompleted { request_id: payload_owned.request_id, capability: Box::leak(payload_owned.capability.into_boxed_str()), result: payload_owned.result };
                                 self.handle_runtime_event(RuntimeEvent::CapabilityCompleted(payload))?;
                                 self.drain_emitted_events()?;
                             }
                         }
-                        CanonPayload::CapabilityFailed(val) if canon.meta.source != "event-runtime" => {
-                            if let Ok(payload_owned) = serde_json::from_value::<CapabilityFailedOwned>(val.clone()) {
+                        "capability_failed" if actor != "event-runtime" => {
+                            if let Ok(payload_owned) = serde_json::from_value::<CapabilityFailedOwned>(data.clone()) {
                                 let payload = CapabilityFailed { request_id: payload_owned.request_id, capability: Box::leak(payload_owned.capability.into_boxed_str()), error: payload_owned.error };
                                 self.handle_runtime_event(RuntimeEvent::CapabilityFailed(payload))?;
                                 self.drain_emitted_events()?;
                             }
                         }
-                        CanonPayload::ErrorOccurred(val) if canon.meta.source != "event-runtime" => {
-                            if let Ok(payload) = serde_json::from_value::<ErrorOccurred>(val.clone()) {
+                        "error_occurred" if actor != "event-runtime" => {
+                            if let Ok(payload) = serde_json::from_value::<ErrorOccurred>(data.clone()) {
                                 self.handle_runtime_event(RuntimeEvent::ErrorOccurred(payload))?;
                                 self.drain_emitted_events()?;
                             }
                         }
-                    CanonPayload::LoopObserved(ev) if canon.meta.source != "observe" => {
-                        self.handle_runtime_event(RuntimeEvent::LoopObserved(ev.clone()))?;
-                        self.drain_emitted_events()?;
-                    }
-                    CanonPayload::LoopPlanned(ev) if canon.meta.source != "plan" => {
-                        if let Ok(decoded) = serde_json::from_value::<canon_event::LoopPlanned>(ev.clone()) {
-                            self.handle_runtime_event(RuntimeEvent::LoopPlanned(decoded))?;
-                            self.drain_emitted_events()?;
+                        "loop_observed" if actor != "observe" => {
+                            if let Ok(decoded) = serde_json::from_value::<canon_event::LoopObserved>(data.clone()) {
+                                self.handle_runtime_event(RuntimeEvent::LoopObserved(decoded))?;
+                                self.drain_emitted_events()?;
+                            }
                         }
-                    }
-                    CanonPayload::LoopActed(ev) if canon.meta.source != "act" => {
-                        if let Ok(decoded) = serde_json::from_value::<canon_event::LoopActed>(ev.clone()) {
-                            self.handle_runtime_event(RuntimeEvent::LoopActed(decoded))?;
-                            self.drain_emitted_events()?;
+                        "loop_planned" if actor != "plan" => {
+                            if let Ok(decoded) = serde_json::from_value::<canon_event::LoopPlanned>(data.clone()) {
+                                self.handle_runtime_event(RuntimeEvent::LoopPlanned(decoded))?;
+                                self.drain_emitted_events()?;
+                            }
                         }
-                    }
-                    CanonPayload::LoopVerified(ev) if canon.meta.source != "verify" => {
-                        if let Ok(decoded) = serde_json::from_value::<canon_event::LoopVerified>(ev.clone()) {
-                            self.handle_runtime_event(RuntimeEvent::LoopVerified(decoded))?;
-                            self.drain_emitted_events()?;
+                        "loop_acted" if actor != "act" => {
+                            if let Ok(decoded) = serde_json::from_value::<canon_event::LoopActed>(data.clone()) {
+                                self.handle_runtime_event(RuntimeEvent::LoopActed(decoded))?;
+                                self.drain_emitted_events()?;
+                            }
                         }
-                    }
-                    CanonPayload::LoopRewarded(ev) if canon.meta.source != "reward" => {
-                        if let Ok(decoded) = serde_json::from_value::<canon_event::LoopRewarded>(ev.clone()) {
-                            self.handle_runtime_event(RuntimeEvent::LoopRewarded(decoded))?;
-                            self.drain_emitted_events()?;
+                        "loop_verified" if actor != "verify" => {
+                            if let Ok(decoded) = serde_json::from_value::<canon_event::LoopVerified>(data.clone()) {
+                                self.handle_runtime_event(RuntimeEvent::LoopVerified(decoded))?;
+                                self.drain_emitted_events()?;
+                            }
                         }
-                    }
-                    CanonPayload::AgentRegistered(ev) => {
-                        if let Ok(decoded) = serde_json::from_value::<canon_event::AgentRegistered>(ev.clone()) {
-                            self.handle_runtime_event(RuntimeEvent::AgentRegistered(decoded))?;
-                            self.drain_emitted_events()?;
+                        "loop_rewarded" if actor != "reward" => {
+                            if let Ok(decoded) = serde_json::from_value::<canon_event::LoopRewarded>(data.clone()) {
+                                self.handle_runtime_event(RuntimeEvent::LoopRewarded(decoded))?;
+                                self.drain_emitted_events()?;
+                            }
                         }
-                    }
-                    CanonPayload::RequestDispatch(ev) => {
-                        if let Ok(decoded) = serde_json::from_value::<canon_event::RequestDispatch>(ev.clone()) {
-                            self.handle_runtime_event(RuntimeEvent::RequestDispatch(decoded))?;
-                            self.drain_emitted_events()?;
+                        "agent_registered" => {
+                            if let Ok(decoded) = serde_json::from_value::<canon_event::AgentRegistered>(data.clone()) {
+                                self.handle_runtime_event(RuntimeEvent::AgentRegistered(decoded))?;
+                                self.drain_emitted_events()?;
+                            }
                         }
-                    }
-                    CanonPayload::SubTaskResult(ev) => {
-                        if let Ok(decoded) = serde_json::from_value::<canon_event::SubTaskResult>(ev.clone()) {
-                            self.handle_runtime_event(RuntimeEvent::SubTaskResult(decoded))?;
-                            self.drain_emitted_events()?;
+                        "request_dispatch" => {
+                            if let Ok(decoded) = serde_json::from_value::<canon_event::RequestDispatch>(data.clone()) {
+                                self.handle_runtime_event(RuntimeEvent::RequestDispatch(decoded))?;
+                                self.drain_emitted_events()?;
+                            }
                         }
-                    }
-                    CanonPayload::RouteTick(ev) if canon.meta.source != "supervisor" => {
-                        self.handle_runtime_event(RuntimeEvent::RouteTick(ev.clone()))?;
-                        self.drain_emitted_events()?;
-                    }
-                    CanonPayload::RouteSelected(ev) if canon.meta.source != "supervisor" => {
-                        self.handle_runtime_event(RuntimeEvent::RouteSelected(ev.clone()))?;
-                        self.drain_emitted_events()?;
-                    }
+                        "sub_task_result" => {
+                            if let Ok(decoded) = serde_json::from_value::<canon_event::SubTaskResult>(data.clone()) {
+                                self.handle_runtime_event(RuntimeEvent::SubTaskResult(decoded))?;
+                                self.drain_emitted_events()?;
+                            }
+                        }
+                        "route_tick" if actor != "supervisor" => {
+                            if let Ok(decoded) = serde_json::from_value::<canon_event::RouteTick>(data.clone()) {
+                                self.handle_runtime_event(RuntimeEvent::RouteTick(decoded))?;
+                                self.drain_emitted_events()?;
+                            }
+                        }
+                        "route_selected" if actor != "supervisor" => {
+                            if let Ok(decoded) = serde_json::from_value::<canon_event::RouteSelected>(data.clone()) {
+                                self.handle_runtime_event(RuntimeEvent::RouteSelected(decoded))?;
+                                self.drain_emitted_events()?;
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -371,20 +380,13 @@ impl EventRuntime {
         Ok(())
     }
 
-    fn append_runtime_event(&mut self, event: &RuntimeEvent, file: &'static str, line: u32) {
+    fn append_runtime_event(&mut self, event: &RuntimeEvent, _file: &'static str, _line: u32) {
         let Some(path) = self.tlog_path.clone() else {
             return;
         };
-        let Some(mut wire) = runtime_event_to_wire(event) else {
+        let Some(wire) = runtime_event_to_wire(event) else {
             return;
         };
-        wire.event_id = Some(self.next_id);
-        self.next_id = self.next_id.saturating_add(1);
-        if wire.meta.file.is_empty() && !file.is_empty() {
-            wire.meta.file = file.to_string();
-            wire.meta.line = line;
-        }
-
         if is_segment_dir_path(&path) {
             if let Some(writer_arc) = self.tlog_writer.as_ref() {
                 let needs_reopen = if let Ok(w) = writer_arc.lock() {
@@ -412,37 +414,45 @@ impl EventRuntime {
     }
 }
 
+fn payload_from_shape<T: canon_event::CanonPayloadShape>(val: &T) -> canon_event::CanonPayload {
+    canon_event::CanonPayload {
+        input: val.payload_input(),
+        output: val.payload_output(),
+        delta: val.payload_delta(),
+        meta: canon_event::CanonPayloadMeta { file: String::new(), line: 0 },
+        data: val.payload_data(),
+    }
+}
+
 fn runtime_event_to_wire(event: &RuntimeEvent) -> Option<canon_event::CanonEvent> {
-    use canon_event::{CanonEvent as WireEvent, CanonPayload, EventMeta};
-    let ts: u64 = now_ms().try_into().unwrap_or(u64::MAX);
-    let mk_meta = |source: &str| EventMeta { ts, source: source.to_string(), file: String::new(), line: 0 };
-    let payload = match event {
-        RuntimeEvent::LoopObserved(p) => CanonPayload::LoopObserved(p.clone()),
-        RuntimeEvent::LoopPlanned(p) => CanonPayload::LoopPlanned(serde_json::to_value(p).ok()?),
-        RuntimeEvent::LoopActed(p) => CanonPayload::LoopActed(serde_json::to_value(p).ok()?),
-        RuntimeEvent::LoopVerified(p) => CanonPayload::LoopVerified(serde_json::to_value(p).ok()?),
-        RuntimeEvent::LoopRewarded(p) => CanonPayload::LoopRewarded(serde_json::to_value(p).ok()?),
-        RuntimeEvent::RouteTick(p) => CanonPayload::RouteTick(p.clone()),
-        RuntimeEvent::RouteSelected(p) => CanonPayload::RouteSelected(p.clone()),
-        RuntimeEvent::CapabilityCompleted(p) => CanonPayload::CapabilityCompleted(serde_json::to_value(p).ok()?),
-        RuntimeEvent::CapabilityFailed(p) => CanonPayload::CapabilityFailed(serde_json::to_value(p).ok()?),
-        RuntimeEvent::CapabilityInvoked(p) => CanonPayload::CapabilityInvoked(serde_json::to_value(p).ok()?),
-        RuntimeEvent::CapabilityResolved(p) => CanonPayload::CapabilityResolved(serde_json::to_value(p).ok()?),
-        RuntimeEvent::ErrorOccurred(p) => CanonPayload::ErrorOccurred(serde_json::to_value(p).ok()?),
-        RuntimeEvent::Debug(d) => CanonPayload::Debug(d.payload.clone()),
-        RuntimeEvent::PromptLoaded(p) => CanonPayload::PromptLoaded(p.payload.clone()),
-        RuntimeEvent::RuntimeStateUpdated(p) => CanonPayload::RuntimeStateUpdated(p.payload.clone()),
-        RuntimeEvent::ToolCall(p) => CanonPayload::ToolCall(serde_json::to_value(p).ok()?),
-        RuntimeEvent::ToolResult(p) => CanonPayload::ToolResult(serde_json::to_value(p).ok()?),
-        RuntimeEvent::GoalNodeCreated(p) => CanonPayload::GoalNodeCreated(serde_json::to_value(p).ok()?),
-        RuntimeEvent::GoalNodeRetracted(p) => CanonPayload::GoalNodeRetracted(serde_json::to_value(p).ok()?),
-        RuntimeEvent::GoalNodeRewritten(p) => CanonPayload::GoalNodeRewritten(serde_json::to_value(p).ok()?),
-        RuntimeEvent::GoalEdgeDefined(p) => CanonPayload::GoalEdgeDefined(serde_json::to_value(p).ok()?),
-        RuntimeEvent::GoalGraphCheckpointed(p) => CanonPayload::GoalGraphCheckpointed(serde_json::to_value(p).ok()?),
-        RuntimeEvent::Llm(p) => CanonPayload::Llm(serde_json::to_value(p).ok()?),
+    let (kind, payload) = match event {
+        RuntimeEvent::LoopObserved(p) => (canon_event::EventKind::LoopObserved, payload_from_shape(p)),
+        RuntimeEvent::LoopPlanned(p) => (canon_event::EventKind::LoopPlanned, payload_from_shape(p)),
+        RuntimeEvent::LoopActed(p) => (canon_event::EventKind::LoopActed, payload_from_shape(p)),
+        RuntimeEvent::LoopVerified(p) => (canon_event::EventKind::LoopVerified, payload_from_shape(p)),
+        RuntimeEvent::LoopRewarded(p) => (canon_event::EventKind::LoopRewarded, payload_from_shape(p)),
+        RuntimeEvent::RouteTick(p) => (canon_event::EventKind::RouteTick, payload_from_shape(p)),
+        RuntimeEvent::RouteSelected(p) => (canon_event::EventKind::RouteSelected, payload_from_shape(p)),
+        RuntimeEvent::CapabilityCompleted(p) => (canon_event::EventKind::CapabilityCompleted, payload_from_shape(p)),
+        RuntimeEvent::CapabilityFailed(p) => (canon_event::EventKind::CapabilityFailed, payload_from_shape(p)),
+        RuntimeEvent::CapabilityInvoked(p) => (canon_event::EventKind::CapabilityInvoked, payload_from_shape(p)),
+        RuntimeEvent::CapabilityResolved(p) => (canon_event::EventKind::CapabilityResolved, payload_from_shape(p)),
+        RuntimeEvent::ErrorOccurred(p) => (canon_event::EventKind::ErrorOccurred, payload_from_shape(p)),
+        RuntimeEvent::Debug(d) => (canon_event::EventKind::Debug, payload_from_shape(d)),
+        RuntimeEvent::PromptLoaded(p) => (canon_event::EventKind::PromptLoaded, payload_from_shape(p)),
+        RuntimeEvent::RuntimeStateUpdated(p) => (canon_event::EventKind::RuntimeStateUpdated, payload_from_shape(p)),
+        RuntimeEvent::ToolCall(p) => (canon_event::EventKind::ToolCall, payload_from_shape(p)),
+        RuntimeEvent::ToolResult(p) => (canon_event::EventKind::ToolResult, payload_from_shape(p)),
+        RuntimeEvent::GoalNodeCreated(p) => (canon_event::EventKind::GoalNodeCreated, payload_from_shape(p)),
+        RuntimeEvent::GoalNodeRetracted(p) => (canon_event::EventKind::GoalNodeRetracted, payload_from_shape(p)),
+        RuntimeEvent::GoalNodeRewritten(p) => (canon_event::EventKind::GoalNodeRewritten, payload_from_shape(p)),
+        RuntimeEvent::GoalEdgeDefined(p) => (canon_event::EventKind::GoalEdgeDefined, payload_from_shape(p)),
+        RuntimeEvent::GoalGraphCheckpointed(p) => (canon_event::EventKind::GoalGraphCheckpointed, payload_from_shape(p)),
+        RuntimeEvent::GoodnessSnapshot(p) => (canon_event::EventKind::GoodnessSnapshot, payload_from_shape(p)),
+        RuntimeEvent::Llm(p) => (canon_event::EventKind::LlmCall, payload_from_shape(p)),
         _ => return None,
     };
-    let source = match event {
+    let actor = match event {
         RuntimeEvent::LoopObserved(_) => "observe",
         RuntimeEvent::LoopPlanned(_) => "plan",
         RuntimeEvent::LoopActed(_) => "act",
@@ -459,9 +469,18 @@ fn runtime_event_to_wire(event: &RuntimeEvent) -> Option<canon_event::CanonEvent
         RuntimeEvent::GoalNodeCreated(_) | RuntimeEvent::GoalNodeRetracted(_) | RuntimeEvent::GoalNodeRewritten(_) | RuntimeEvent::GoalEdgeDefined(_) | RuntimeEvent::GoalGraphCheckpointed(_) => {
             "goal_graph"
         }
+        RuntimeEvent::GoodnessSnapshot(_) => "event-runtime",
         _ => "event-runtime",
     };
-    Some(WireEvent { event_id: None, meta: mk_meta(source), payload })
+    Some(canon_event::CanonEvent::new(
+        canon_event::EventId::new(canon_event::new_event_id()),
+        Vec::new(),
+        actor.to_string(),
+        kind,
+        now_ms(),
+        payload,
+        true,
+    ))
 }
 
 /// Returns true for paths that should use `BinarySegmentWriter`:
@@ -492,6 +511,10 @@ struct RuntimeEmitterImpl {
 impl EventEmitter for RuntimeEmitterImpl {
     fn emit_located(&self, event: RuntimeEvent, file: &'static str, line: u32) {
         let _ = self.sender.send(canon_event::LocatedEvent { event, file, line });
+    }
+
+    fn emit_with_parents(&self, event: RuntimeEvent, _parents: Vec<canon_event::EventId>, file: &'static str, line: u32) {
+        self.emit_located(event, file, line);
     }
 }
 
@@ -607,6 +630,6 @@ pub fn spawn_kernel_processor(rx: crossbeam_channel::Receiver<KernelMsg>, emitte
         .expect("kernel processor thread")
 }
 
-fn now_ms() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
 }

@@ -8,7 +8,6 @@ path = "src/lib.rs"
 name = "canon_meta"
 
 [dependencies]
-canon-macros = { path = "../canon-macros" }
 canon-runtime-events = { path = "../canon-runtime-events" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

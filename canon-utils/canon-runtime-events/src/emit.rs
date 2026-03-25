@@ -1,5 +1,5 @@
 use crate::tlog::{emit_canon_event_json, BinarySegmentWriter};
-use crate::{CanonEvent, CanonPayload, EventMeta};
+use crate::{CanonEvent, CanonPayload, CanonPayloadMeta, EventId, EventKind};
 use anyhow::Result;
 use serde_json::Value;
 use std::cell::RefCell;
@@ -26,17 +26,20 @@ pub fn resolve_tlog_path(project_root: Option<&Path>, override_env: Option<&str>
 }
 
 pub(crate) fn emit_event(source: &str, kind: &str, payload: Value, tlog_path: &Path) -> Result<()> {
-    let meta = EventMeta {
-        ts: {
-            use std::time::{SystemTime, UNIX_EPOCH};
-            SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
-        },
-        source: source.to_string(),
-        file: file!().to_string(),
-        line: line!(),
+    let payload_json = serde_json::to_value(payload).expect("emit_event payload serialization failed");
+    let payload = CanonPayload {
+        input: serde_json::json!({}),
+        output: serde_json::json!({}),
+        delta: serde_json::json!({}),
+        meta: CanonPayloadMeta { file: file!().to_string(), line: line!() },
+        data: payload_json,
     };
-    let payload = CanonPayload::from_kind(kind, serde_json::to_value(payload).unwrap_or_default());
-    let event = CanonEvent { event_id: None, meta, payload };
+    let kind_enum = match kind {
+        "edit_event" => EventKind::EditEvent,
+        "runtime_started" => EventKind::RuntimeStarted,
+        _ => EventKind::Debug,
+    };
+    let event = CanonEvent::new(EventId::new(new_event_id()), Vec::new(), source.to_string(), kind_enum, now_millis(), payload, true);
     write_canon_event_auto(tlog_path, &event)
 }
 
@@ -63,4 +66,13 @@ pub fn write_canon_event_auto(path: &Path, event: &CanonEvent) -> Result<()> {
     } else {
         emit_canon_event_json(path, event)
     }
+}
+
+pub fn new_event_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+pub fn now_millis() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }

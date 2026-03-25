@@ -1,5 +1,6 @@
 use anyhow::Result;
-use canon_event::CanonEvent;
+use canon_event::{CanonEvent, CanonPayload, CanonPayloadMeta};
+use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 //
@@ -26,9 +27,12 @@ pub fn read_binary_events(path: &Path) -> Result<Vec<CanonEvent>> {
         if trimmed.is_empty() {
             continue;
         }
-        match serde_json::from_str::<CanonEvent>(trimmed) {
-            Ok(e) => events.push(e),
-            Err(_) => continue,
+        if let Ok(e) = serde_json::from_str::<CanonEvent>(trimmed) {
+            events.push(e);
+            continue;
+        }
+        if let Ok(legacy) = serde_json::from_str::<LegacyCanonEvent>(trimmed) {
+            events.push(upgrade_legacy_event(legacy));
         }
     }
     Ok(events)
@@ -69,10 +73,46 @@ pub fn read_binary_events_from_segment_with_start_seq(log_path: &Path, start_seq
         if trimmed.is_empty() {
             continue;
         }
-        match serde_json::from_str::<CanonEvent>(trimmed) {
-            Ok(e) => events.push(e),
-            Err(_) => continue,
+        if let Ok(e) = serde_json::from_str::<CanonEvent>(trimmed) {
+            events.push(e);
+            continue;
+        }
+        if let Ok(legacy) = serde_json::from_str::<LegacyCanonEvent>(trimmed) {
+            events.push(upgrade_legacy_event(legacy));
         }
     }
     Ok(events)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct LegacyCanonEvent {
+    pub event_id: Option<u64>,
+    pub meta: LegacyEventMeta,
+    pub kind: String,
+    pub data: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct LegacyEventMeta {
+    pub ts: u64,
+    pub source: String,
+    pub file: String,
+    pub line: u32,
+}
+
+fn upgrade_legacy_event(old: LegacyCanonEvent) -> CanonEvent {
+    CanonEvent {
+        id: canon_event::EventId::new(old.event_id.map(|v| v.to_string()).unwrap_or_else(|| canon_event::new_event_id())),
+        parent_ids: Vec::new(),
+        actor: old.meta.source,
+        kind: serde_json::from_str::<canon_event::EventKind>(&format!("\"{}\"", old.kind)).unwrap_or(canon_event::EventKind::Debug),
+        ts: old.meta.ts,
+        payload: CanonPayload {
+            input: serde_json::json!({}),
+            output: serde_json::json!({}),
+            delta: serde_json::json!({}),
+            meta: CanonPayloadMeta { file: old.meta.file, line: old.meta.line },
+            data: old.data.unwrap_or_else(|| serde_json::json!({})),
+        },
+    }
 }

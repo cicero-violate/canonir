@@ -36,17 +36,17 @@ pub enum AgentStatus {
 
 impl AgentRegistry {
     pub fn upsert_card(&mut self, payload: &serde_json::Value) {
-        let Some(obj) = payload.as_object() else { return; };
-        let Some(agent_id) = obj.get("agent_id").and_then(|v| v.as_str()).map(|s| s.to_string()) else { return; };
+        let Some(obj) = payload.as_object() else {
+            return;
+        };
+        let Some(agent_id) = obj.get("agent_id").and_then(|v| v.as_str()).map(|s| s.to_string()) else {
+            return;
+        };
         let card = AgentCard {
             agent_id: agent_id.clone(),
             agent_url: obj.get("agent_url").and_then(|v| v.as_str()).map(|s| s.to_string()),
             role: obj.get("role").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            tool_capabilities: obj
-                .get("tool_capabilities")
-                .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-                .unwrap_or_default(),
+            tool_capabilities: obj.get("tool_capabilities").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default(),
             status: AgentStatus::Idle,
         };
         self.agents.insert(agent_id, card);
@@ -71,12 +71,7 @@ impl AgentRegistry {
     }
 
     pub fn available_agents(&self, role: &str) -> Vec<AgentCard> {
-        self.agents
-            .values()
-            .filter(|card| card.role.as_deref() == Some(role))
-            .filter(|card| matches!(card.status, AgentStatus::Idle))
-            .cloned()
-            .collect()
+        self.agents.values().filter(|card| card.role.as_deref() == Some(role)).filter(|card| matches!(card.status, AgentStatus::Idle)).cloned().collect()
     }
 }
 
@@ -95,13 +90,17 @@ impl AgentRegistryConsumer {
 }
 
 impl EventConsumer for AgentRegistryConsumer {
-    fn filter(&self) -> EventFilter { EventFilter::All }
+    fn filter(&self) -> EventFilter {
+        EventFilter::All
+    }
 
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
-        let Ok(mut reg) = self.registry.0.write() else { return EventOutcome::NoOp("agent_registry_poisoned"); };
+        let Ok(mut reg) = self.registry.0.write() else {
+            return EventOutcome::NoOp("agent_registry_poisoned");
+        };
         match event {
             RuntimeEvent::AgentRegistered(AgentRegistered { payload }) => {
                 reg.upsert_card(payload);
@@ -157,8 +156,7 @@ impl EventConsumer for AgentRegistryConsumer {
             | RuntimeEvent::GoalEdgeDefined(_)
             | RuntimeEvent::GoalGraphCheckpointed(_)
             | RuntimeEvent::CapabilityInvoked(_)
-            | RuntimeEvent::CapabilityResolved(_)
-                => EventOutcome::NoOp("agent_registry_ignored"),
+            | RuntimeEvent::CapabilityResolved(_) => EventOutcome::NoOp("agent_registry_ignored"),
         }
     }
 }

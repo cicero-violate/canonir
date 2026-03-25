@@ -1,10 +1,10 @@
+pub mod agent_registry;
+pub mod analyst_consumer;
 pub mod capability_executor;
 pub mod check_consumer;
+pub mod dispatch_consumer;
 pub mod error_logger;
 pub mod failure_store;
-pub mod agent_registry;
-pub mod dispatch_consumer;
-pub mod goal_graph_consumer;
 pub mod goal_gen_consumer;
-pub mod analyst_consumer;
+pub mod goal_graph_consumer;
 pub mod watchdog_consumer;

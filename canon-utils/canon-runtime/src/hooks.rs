@@ -29,9 +29,15 @@ pub struct HookChain {
 }
 
 impl HookChain {
-    pub fn new() -> Self { Self { pre: Vec::new(), post: Vec::new() } }
-    pub fn add_pre(&mut self, h: Box<dyn PreHook>) { self.pre.push(h); }
-    pub fn add_post(&mut self, h: Box<dyn PostHook>) { self.post.push(h); }
+    pub fn new() -> Self {
+        Self { pre: Vec::new(), post: Vec::new() }
+    }
+    pub fn add_pre(&mut self, h: Box<dyn PreHook>) {
+        self.pre.push(h);
+    }
+    pub fn add_post(&mut self, h: Box<dyn PostHook>) {
+        self.post.push(h);
+    }
 
     pub fn run_pre(&self, event: &RuntimeEvent) -> HookDecision {
         for hook in &self.pre {
@@ -91,9 +97,13 @@ impl CapabilityRateLimitHook {
 }
 
 impl PreHook for CapabilityRateLimitHook {
-    fn name(&self) -> &'static str { "capability_rate_limit" }
+    fn name(&self) -> &'static str {
+        "capability_rate_limit"
+    }
     fn on_pre(&self, event: &RuntimeEvent) -> HookDecision {
-        let RuntimeEvent::CapabilityInvoked(cap) = event else { return HookDecision::Allow; };
+        let RuntimeEvent::CapabilityInvoked(cap) = event else {
+            return HookDecision::Allow;
+        };
         let mut guard = self.buckets.lock().unwrap();
         let bucket = guard.entry(cap.capability.to_string()).or_insert_with(|| TokenBucket::new(self.max_per_sec));
         if bucket.allow() {
@@ -118,7 +128,9 @@ impl CostCapHook {
 }
 
 impl PreHook for CostCapHook {
-    fn name(&self) -> &'static str { "cost_cap" }
+    fn name(&self) -> &'static str {
+        "cost_cap"
+    }
     fn on_pre(&self, event: &RuntimeEvent) -> HookDecision {
         if !matches!(event, RuntimeEvent::Llm(_)) {
             return HookDecision::Allow;
@@ -147,13 +159,12 @@ impl AuditLogHook {
                 let path = std::path::PathBuf::from("/workspace/ai_sandbox/canon/state/audit.log");
                 let _ = std::fs::create_dir_all(path.parent().unwrap_or_else(|| std::path::Path::new(".")));
                 while let Ok((kind, outcome)) = rx.recv() {
-                    let ts = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis())
-                        .unwrap_or(0);
+                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
                     let line = serde_json::json!({ "ts": ts, "event_kind": kind, "outcome": outcome }).to_string();
-                    let _ = std::fs::OpenOptions::new().create(true).append(true).open(&path)
-                        .and_then(|mut f| { use std::io::Write; writeln!(f, "{line}") });
+                    let _ = std::fs::OpenOptions::new().create(true).append(true).open(&path).and_then(|mut f| {
+                        use std::io::Write;
+                        writeln!(f, "{line}")
+                    });
                 }
             })
             .expect("audit log thread");
@@ -162,7 +173,9 @@ impl AuditLogHook {
 }
 
 impl PostHook for AuditLogHook {
-    fn name(&self) -> &'static str { "audit_log" }
+    fn name(&self) -> &'static str {
+        "audit_log"
+    }
     fn on_post(&self, event: &RuntimeEvent, outcome: &EventOutcome) {
         let kind = format!("{event:?}");
         let outcome_kind = match outcome {
@@ -182,13 +195,7 @@ pub struct WatchdogPreHook {
     current_tick: std::sync::atomic::AtomicU64,
 }
 
-const WD_THRESHOLDS: &[(&str, u64)] = &[
-    ("observed", 10),
-    ("planned", 15),
-    ("acted", 15),
-    ("verified", 20),
-    ("rewarded", 25),
-];
+const WD_THRESHOLDS: &[(&str, u64)] = &[("observed", 10), ("planned", 15), ("acted", 15), ("verified", 20), ("rewarded", 25)];
 
 impl WatchdogPreHook {
     pub fn new() -> Self {
@@ -201,7 +208,9 @@ impl WatchdogPreHook {
 }
 
 impl PreHook for WatchdogPreHook {
-    fn name(&self) -> &'static str { "watchdog_pre" }
+    fn name(&self) -> &'static str {
+        "watchdog_pre"
+    }
     fn on_pre(&self, event: &RuntimeEvent) -> HookDecision {
         match event {
             RuntimeEvent::Tick(t) => {
@@ -209,11 +218,18 @@ impl PreHook for WatchdogPreHook {
                 let now = t.tick;
                 let stalled: Vec<(String, u64)> = {
                     let guard = self.last_stage.lock().unwrap();
-                    WD_THRESHOLDS.iter().filter_map(|(stage, thr)| {
-                        let last = guard.get(stage).copied().unwrap_or(0);
-                        let idle = now.saturating_sub(last);
-                        if idle >= *thr { Some((stage.to_string(), idle)) } else { None }
-                    }).collect()
+                    WD_THRESHOLDS
+                        .iter()
+                        .filter_map(|(stage, thr)| {
+                            let last = guard.get(stage).copied().unwrap_or(0);
+                            let idle = now.saturating_sub(last);
+                            if idle >= *thr {
+                                Some((stage.to_string(), idle))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
                 };
                 if stalled.is_empty() {
                     HookDecision::Allow
@@ -222,11 +238,26 @@ impl PreHook for WatchdogPreHook {
                     HookDecision::Deny { reason: format!("watchdog_stall:{msg}") }
                 }
             }
-            RuntimeEvent::LoopObserved(_) => { self.last_stage.lock().unwrap().insert("observed", self.current_tick.load(std::sync::atomic::Ordering::SeqCst)); HookDecision::Allow }
-            RuntimeEvent::LoopPlanned(_) => { self.last_stage.lock().unwrap().insert("planned", self.current_tick.load(std::sync::atomic::Ordering::SeqCst)); HookDecision::Allow }
-            RuntimeEvent::LoopActed(_) => { self.last_stage.lock().unwrap().insert("acted", self.current_tick.load(std::sync::atomic::Ordering::SeqCst)); HookDecision::Allow }
-            RuntimeEvent::LoopVerified(_) => { self.last_stage.lock().unwrap().insert("verified", self.current_tick.load(std::sync::atomic::Ordering::SeqCst)); HookDecision::Allow }
-            RuntimeEvent::LoopRewarded(_) => { self.last_stage.lock().unwrap().insert("rewarded", self.current_tick.load(std::sync::atomic::Ordering::SeqCst)); HookDecision::Allow }
+            RuntimeEvent::LoopObserved(_) => {
+                self.last_stage.lock().unwrap().insert("observed", self.current_tick.load(std::sync::atomic::Ordering::SeqCst));
+                HookDecision::Allow
+            }
+            RuntimeEvent::LoopPlanned(_) => {
+                self.last_stage.lock().unwrap().insert("planned", self.current_tick.load(std::sync::atomic::Ordering::SeqCst));
+                HookDecision::Allow
+            }
+            RuntimeEvent::LoopActed(_) => {
+                self.last_stage.lock().unwrap().insert("acted", self.current_tick.load(std::sync::atomic::Ordering::SeqCst));
+                HookDecision::Allow
+            }
+            RuntimeEvent::LoopVerified(_) => {
+                self.last_stage.lock().unwrap().insert("verified", self.current_tick.load(std::sync::atomic::Ordering::SeqCst));
+                HookDecision::Allow
+            }
+            RuntimeEvent::LoopRewarded(_) => {
+                self.last_stage.lock().unwrap().insert("rewarded", self.current_tick.load(std::sync::atomic::Ordering::SeqCst));
+                HookDecision::Allow
+            }
             _ => HookDecision::Allow,
         }
     }
@@ -234,12 +265,5 @@ impl PreHook for WatchdogPreHook {
 
 // Helper for ErrorOccurred emission
 pub fn hook_denied_event(reason: &str) -> RuntimeEvent {
-    RuntimeEvent::ErrorOccurred(new_error_occurred(
-        "hook_denied",
-        "hook_chain",
-        reason,
-        "error",
-        serde_json::json!({ "reason": reason }),
-        None,
-    ))
+    RuntimeEvent::ErrorOccurred(new_error_occurred("hook_denied", "hook_chain", reason, "error", serde_json::json!({ "reason": reason }), None))
 }

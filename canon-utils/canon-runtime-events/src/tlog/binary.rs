@@ -65,6 +65,7 @@ pub struct BinarySegmentWriter {
     dir: PathBuf,
     config: SegmentConfig,
     seq: AtomicU64,
+    last_ts: AtomicU64,
     fsync: bool,
     inner: Mutex<SegmentFiles>,
 }
@@ -88,7 +89,7 @@ impl BinarySegmentWriter {
         if let Some(keep) = config.retain_segments {
             apply_retention(dir, keep)?;
         }
-        Ok(Self { dir: dir.to_path_buf(), config, seq: AtomicU64::new(next_seq), fsync: false, inner: Mutex::new(files) })
+        Ok(Self { dir: dir.to_path_buf(), config, seq: AtomicU64::new(next_seq), last_ts: AtomicU64::new(0), fsync: false, inner: Mutex::new(files) })
     }
 
     pub fn with_fsync(mut self, enabled: bool) -> Self {
@@ -97,6 +98,13 @@ impl BinarySegmentWriter {
     }
 
     pub fn write_canon_event(&self, event: &CanonEvent) -> Result<()> {
+        let prev = self.last_ts.fetch_max(event.ts, Ordering::Relaxed);
+        if event.ts < prev {
+            return Err(anyhow::anyhow!("non-monotonic timestamp: {} < prev {}", event.ts, prev));
+        }
+        if event.payload.input.is_null() || event.payload.output.is_null() || event.payload.delta.is_null() {
+            return Err(anyhow::anyhow!("CanonPayload input/output/delta must not be null"));
+        }
         let mut line = serde_json::to_vec(event)?;
         line.push(b'\n');
         let line_len = line.len() as u64;
@@ -126,7 +134,7 @@ impl BinarySegmentWriter {
             guard.idx.write_all(&record_pos.to_le_bytes())?;
         }
 
-        let bucket = event.meta.ts / self.config.time_bucket_ms;
+        let bucket = event.ts / self.config.time_bucket_ms;
         if guard.last_time_bucket != Some(bucket) {
             guard.time.write_all(&bucket.to_le_bytes())?;
             guard.time.write_all(&record_pos.to_le_bytes())?;
@@ -265,7 +273,7 @@ fn recover_segment(dir: &Path, base_seq: u64, config: &SegmentConfig) -> Result<
             idx_writer.write_all(&seq.to_le_bytes())?;
             idx_writer.write_all(&byte_pos.to_le_bytes())?;
         }
-        let bucket = event.meta.ts / config.time_bucket_ms;
+        let bucket = event.ts / config.time_bucket_ms;
         if last_time_bucket != Some(bucket) {
             time_writer.write_all(&bucket.to_le_bytes())?;
             time_writer.write_all(&byte_pos.to_le_bytes())?;

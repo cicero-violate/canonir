@@ -1,7 +1,7 @@
-use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, EventMask, EventOutcome, RustcEvent};
-use std::sync::Arc;
-use crate::hooks::{HookChain, HookDecision, hook_denied_event};
+use crate::hooks::{hook_denied_event, HookChain, HookDecision};
+use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventMask, EventOutcome, RuntimeEvent, RustcEvent};
 use crossbeam_channel::{bounded, Sender};
+use std::sync::Arc;
 use std::thread;
 
 #[derive(Clone)]

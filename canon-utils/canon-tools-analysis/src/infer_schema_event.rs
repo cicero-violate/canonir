@@ -24,9 +24,8 @@ pub fn write_event_schema_report(tlog_path: &Path, out_dir: &Path) -> anyhow::Re
     let events = read_any_events_from_path(tlog_path)?;
     for event in events {
         if let AnyEvent::Canon(canon) = event {
-            if let Some(payload) = canon.payload.as_value() {
-                ingest(&mut state, canon.payload.kind_str(), &payload);
-            }
+            let payload = &canon.payload.data;
+            ingest(&mut state, canon.kind.as_str(), payload);
         }
     }
     let text = render(&state);

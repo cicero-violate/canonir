@@ -1,31 +1,19 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use canon_event::{
-    EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, LoopObserved,
-    RuntimeEvent, RequestDispatch, SubTaskResult, GoalNodeRetracted,
-};
-use canon_proc_macros::must_emit;
-use canon_loop::LoopStageExecutor;
-use canon_route::RouteExecutor;
 use crate::consumers::capability_executor::CapabilityExecutor;
 use crate::EventRuntime;
+use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, GoalNodeRetracted, LoopObserved, RequestDispatch, RuntimeEvent, SubTaskResult};
+use canon_loop::LoopStageExecutor;
+use canon_proc_macros::must_emit;
+use canon_route::RouteExecutor;
 
 /// Load exec endpoint IDs from capability_config.toml at startup.
 fn load_exec_endpoint_ids() -> Vec<String> {
-    canon_llm::config::CapabilityConfig::snapshot_store_load()
-        .ok()
-        .map(|c| {
-            c.llm_endpoints
-                .iter()
-                .filter(|e| e.role.as_deref() == Some("exec"))
-                .map(|e| e.id.clone())
-                .collect()
-        })
-        .unwrap_or_default()
+    canon_llm::config::CapabilityConfig::snapshot_store_load().ok().map(|c| c.llm_endpoints.iter().filter(|e| e.role.as_deref() == Some("exec")).map(|e| e.id.clone()).collect()).unwrap_or_default()
 }
 
 const SUB_AGENT_TIMEOUT_SECS: u64 = 300;
@@ -40,7 +28,9 @@ struct HaltDetectorConsumer {
 }
 
 impl EventConsumer for HaltDetectorConsumer {
-    fn filter(&self) -> EventFilter { EventFilter::All }
+    fn filter(&self) -> EventFilter {
+        EventFilter::All
+    }
     fn set_emitter(&mut self, _: EventEmitterHandle) {}
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
@@ -65,7 +55,9 @@ struct ForwardConsumer {
 }
 
 impl EventConsumer for ForwardConsumer {
-    fn filter(&self) -> EventFilter { EventFilter::All }
+    fn filter(&self) -> EventFilter {
+        EventFilter::All
+    }
     fn set_emitter(&mut self, _: EventEmitterHandle) {}
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
@@ -87,10 +79,7 @@ impl EventConsumer for ForwardConsumer {
                 }
                 self.parent.emit(event.clone());
             }
-            RuntimeEvent::LoopVerified(_) |
-            RuntimeEvent::ToolCall(_) |
-            RuntimeEvent::ToolResult(_) |
-            RuntimeEvent::ToolBatchSettled(_) => {
+            RuntimeEvent::LoopVerified(_) | RuntimeEvent::ToolCall(_) | RuntimeEvent::ToolResult(_) | RuntimeEvent::ToolBatchSettled(_) => {
                 self.parent.emit(event.clone());
             }
             RuntimeEvent::LoopRewarded(r) => {
@@ -132,8 +121,7 @@ impl EventConsumer for ForwardConsumer {
             | RuntimeEvent::GoalEdgeDefined(_)
             | RuntimeEvent::GoalGraphCheckpointed(_)
             | RuntimeEvent::CapabilityInvoked(_)
-            | RuntimeEvent::CapabilityResolved(_)
-                => {}
+            | RuntimeEvent::CapabilityResolved(_) => {}
         }
         EventOutcome::NoOp("forward_consumer_forwarded")
     }
@@ -152,30 +140,20 @@ fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_
     let actions_taken: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
     let consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
-        Box::new(LoopStageExecutor::new(workspace.clone(), tlog.clone())
-            .with_agent_id(req.agent_id.clone())),
+        Box::new(LoopStageExecutor::new(workspace.clone(), tlog.clone()).with_agent_id(req.agent_id.clone())),
         Box::new(RouteExecutor::new(workspace.clone())),
         Box::new(CapabilityExecutor::new(workspace.clone())),
         Box::new(HaltDetectorConsumer { halted: halted.clone() }),
-        Box::new(ForwardConsumer {
-            parent: parent_emitter.clone(),
-            actions_taken: actions_taken.clone(),
-            halted: halted.clone(),
-        }),
+        Box::new(ForwardConsumer { parent: parent_emitter.clone(), actions_taken: actions_taken.clone(), halted: halted.clone() }),
     ];
 
     let mut runtime = EventRuntime::new(consumers);
     runtime.set_tlog_path(tlog);
 
     // Prime the sub-agent with its goal.
-    runtime.emit_event(RuntimeEvent::LoopObserved(LoopObserved {
-        tick: 0,
-        goal_text: Some(req.task_prompt.clone()),
-        error_count: 0,
-        warning_count: 0,
-        compiler_errors: vec![],
-        workspace_facts: vec![],
-    })).ok();
+    runtime
+        .emit_event(RuntimeEvent::LoopObserved(LoopObserved { tick: 0, goal_text: Some(req.task_prompt.clone()), error_count: 0, warning_count: 0, compiler_errors: vec![], workspace_facts: vec![] }))
+        .ok();
 
     let deadline = Instant::now() + Duration::from_secs(SUB_AGENT_TIMEOUT_SECS);
     while !halted.load(Ordering::Relaxed) && Instant::now() < deadline {
@@ -187,9 +165,7 @@ fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_
     let taken = actions_taken.lock().map(|v| v.clone()).unwrap_or_default();
 
     if !success {
-        parent_emitter.emit(RuntimeEvent::GoalNodeRetracted(GoalNodeRetracted {
-            node_id: req.dispatch_id.clone(),
-        }));
+        parent_emitter.emit(RuntimeEvent::GoalNodeRetracted(GoalNodeRetracted { node_id: req.dispatch_id.clone() }));
     }
 
     parent_emitter.emit(RuntimeEvent::SubTaskResult(SubTaskResult {
@@ -240,11 +216,12 @@ impl DispatchConsumer {
         self.next_exec_idx += 1;
         self.exec_endpoints[idx].clone()
     }
-
 }
 
 impl EventConsumer for DispatchConsumer {
-    fn filter(&self) -> EventFilter { EventFilter::All }
+    fn filter(&self) -> EventFilter {
+        EventFilter::All
+    }
 
     fn set_emitter(&mut self, emitter: EventEmitterHandle) {
         self.emitter = Some(emitter);
@@ -252,8 +229,12 @@ impl EventConsumer for DispatchConsumer {
 
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
-        let RuntimeEvent::RequestDispatch(req) = event else { return EventOutcome::NoOp("dispatch_consumer_non_dispatch"); };
-        let Some(emitter) = self.emitter.clone() else { return EventOutcome::NoOp("dispatch_consumer_no_emitter"); };
+        let RuntimeEvent::RequestDispatch(req) = event else {
+            return EventOutcome::NoOp("dispatch_consumer_non_dispatch");
+        };
+        let Some(emitter) = self.emitter.clone() else {
+            return EventOutcome::NoOp("dispatch_consumer_no_emitter");
+        };
         // Resolve the generic role ("exec") to a specific endpoint ID so that
         // all LlmCalls within this sub-agent use the same tab (stateful conversation).
         let mut req = req.clone();

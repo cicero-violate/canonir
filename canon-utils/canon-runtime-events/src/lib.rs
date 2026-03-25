@@ -38,7 +38,7 @@ pub use events::{
     ToolCall, ToolResult, GoodnessSnapshot,
     EVENT_SCHEMA_VERSION,
 };
-pub use wire::{CanonEvent, CanonPayload, EventMeta};
+pub use wire::{CanonEvent, CanonPayload, CanonPayloadMeta, EventId, EventKind, CanonPayloadShape};
 pub use macros::emit::canon_emit;
 pub use schema::*;
 pub use tlog::{is_binary_tlog, maybe_rotate, BinarySegmentWriter, RotateConfig, SegmentConfig};

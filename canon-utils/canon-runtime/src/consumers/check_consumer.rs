@@ -1,5 +1,5 @@
 use canon_check::{default_checks, run_checks, Check};
-use canon_event::{RuntimeEvent, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome};
+use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, RuntimeEvent};
 use canon_proc_macros::must_emit;
 
 pub struct CheckConsumer {
@@ -19,7 +19,9 @@ impl Default for CheckConsumer {
 }
 
 impl EventConsumer for CheckConsumer {
-    fn filter(&self) -> EventFilter { EventFilter::All }
+    fn filter(&self) -> EventFilter {
+        EventFilter::All
+    }
 
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 

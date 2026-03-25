@@ -1,4 +1,5 @@
 use crate::reader::{read_any_events_from_path_with_start_seq, AnyEvent};
+use canon_event::EventKind;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -35,10 +36,11 @@ pub fn replay_goal_graph_incremental(tlog_path: &Path, start_seq: u64, mut state
 
 fn apply_planning_event(event: &AnyEvent, state: &mut GoalGraphState) {
     let AnyEvent::Canon(canon) = event else { return };
-    let kind = canon.payload.kind_str();
-    let Some(payload) = canon.payload.as_value() else { return };
+    let kind = canon.kind;
+    let kind_str = kind.as_str();
+    let payload = &canon.payload.data;
     match kind {
-        "goal_node_created" => {
+        EventKind::GoalNodeCreated => {
             let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
             if node_id.is_empty() {
                 return;
@@ -57,12 +59,12 @@ fn apply_planning_event(event: &AnyEvent, state: &mut GoalGraphState) {
                 },
             );
         }
-        "goal_node_retracted" => {
+        EventKind::GoalNodeRetracted => {
             let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("");
             state.nodes.remove(node_id);
             state.edges.retain(|(f, t)| f != node_id && t != node_id);
         }
-        "goal_node_rewritten" => {
+        EventKind::GoalNodeRewritten => {
             let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
             if let Some(node) = state.nodes.get_mut(&node_id) {
                 if let Some(d) = payload.get("new_description").and_then(|v| v.as_str()) {
@@ -74,34 +76,38 @@ fn apply_planning_event(event: &AnyEvent, state: &mut GoalGraphState) {
                 node.status = "pending".to_string();
             }
         }
-        "goal_edge_defined" => {
+        EventKind::GoalEdgeDefined => {
             let from = payload.get("from_node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let to = payload.get("to_node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
             if !from.is_empty() && !to.is_empty() && !state.edges.contains(&(from.clone(), to.clone())) {
                 state.edges.push((from, to));
             }
         }
-        "node_started" => {
-            let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            if let Some(node) = state.nodes.get_mut(&node_id) {
-                node.status = "running".to_string();
+        _ => {
+            match kind_str {
+                "node_started" => {
+                    let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    if let Some(node) = state.nodes.get_mut(&node_id) {
+                        node.status = "running".to_string();
+                    }
+                }
+                "node_completed" => {
+                    let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    if let Some(node) = state.nodes.get_mut(&node_id) {
+                        node.status = "completed".to_string();
+                    }
+                }
+                "node_failed" => {
+                    let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    if let Some(node) = state.nodes.get_mut(&node_id) {
+                        node.status = "failed".to_string();
+                    }
+                }
+                _ => {}
             }
         }
-        "node_completed" => {
-            let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            if let Some(node) = state.nodes.get_mut(&node_id) {
-                node.status = "completed".to_string();
-            }
-        }
-        "node_failed" => {
-            let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            if let Some(node) = state.nodes.get_mut(&node_id) {
-                node.status = "failed".to_string();
-            }
-        }
-        _ => {}
     }
-    if canon.meta.ts > state.seq_processed {
-        state.seq_processed = canon.meta.ts;
+    if canon.ts > state.seq_processed {
+        state.seq_processed = canon.ts;
     }
 }

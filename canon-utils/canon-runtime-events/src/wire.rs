@@ -1,174 +1,209 @@
-use crate::{LoopObserved, RouteSelected, RouteTick};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+
+/// Canonical event identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EventId(String);
+
+impl EventId {
+    pub fn new(v: impl Into<String>) -> Self {
+        Self(v.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Canonical event kind (snake_case on the wire).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventKind {
+    LoopObserved,
+    LoopPlanned,
+    LoopActed,
+    LoopVerified,
+    LoopRewarded,
+    RuntimeStarted,
+    RouteTick,
+    RouteSelected,
+    CapabilityCompleted,
+    CapabilityFailed,
+    CapabilityInvoked,
+    CapabilityResolved,
+    CapabilityRequested,
+    ErrorOccurred,
+    Debug,
+    PromptLoaded,
+    RuntimeStateUpdated,
+    ToolCall,
+    ToolResult,
+    AgentRegistered,
+    RequestDispatch,
+    SubTaskResult,
+    RustcEvent,
+    EditEvent,
+    SupervisorEvent,
+    GoalNodeCreated,
+    GoalNodeRetracted,
+    GoalNodeRewritten,
+    GoalEdgeDefined,
+    GoalGraphCheckpointed,
+    GoodnessSnapshot,
+    LlmCall,
+}
+
+impl EventKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EventKind::LoopObserved => "loop_observed",
+            EventKind::LoopPlanned => "loop_planned",
+            EventKind::LoopActed => "loop_acted",
+            EventKind::LoopVerified => "loop_verified",
+            EventKind::LoopRewarded => "loop_rewarded",
+            EventKind::RuntimeStarted => "runtime_started",
+            EventKind::RouteTick => "route_tick",
+            EventKind::RouteSelected => "route_selected",
+            EventKind::CapabilityCompleted => "capability_completed",
+            EventKind::CapabilityFailed => "capability_failed",
+            EventKind::CapabilityInvoked => "capability_invoked",
+            EventKind::CapabilityResolved => "capability_resolved",
+            EventKind::CapabilityRequested => "capability_requested",
+            EventKind::ErrorOccurred => "error_occurred",
+            EventKind::Debug => "debug",
+            EventKind::PromptLoaded => "prompt_loaded",
+            EventKind::RuntimeStateUpdated => "runtime_state.updated",
+            EventKind::ToolCall => "tool_call",
+            EventKind::ToolResult => "tool_result",
+            EventKind::AgentRegistered => "agent_registered",
+            EventKind::RequestDispatch => "request_dispatch",
+            EventKind::SubTaskResult => "sub_task_result",
+            EventKind::RustcEvent => "rustc_event",
+            EventKind::EditEvent => "edit_event",
+            EventKind::SupervisorEvent => "supervisor_event",
+            EventKind::GoalNodeCreated => "goal_node_created",
+            EventKind::GoalNodeRetracted => "goal_node_retracted",
+            EventKind::GoalNodeRewritten => "goal_node_rewritten",
+            EventKind::GoalEdgeDefined => "goal_edge_defined",
+            EventKind::GoalGraphCheckpointed => "goal_graph_checkpointed",
+            EventKind::GoodnessSnapshot => "goodness_snapshot",
+            EventKind::LlmCall => "llm_call",
+        }
+    }
+}
+
+impl std::fmt::Display for EventKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for EventKind {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "loop_observed" => Ok(EventKind::LoopObserved),
+            "loop_planned" => Ok(EventKind::LoopPlanned),
+            "loop_acted" => Ok(EventKind::LoopActed),
+            "loop_verified" => Ok(EventKind::LoopVerified),
+            "loop_rewarded" => Ok(EventKind::LoopRewarded),
+            "runtime_started" => Ok(EventKind::RuntimeStarted),
+            "route_tick" => Ok(EventKind::RouteTick),
+            "route_selected" => Ok(EventKind::RouteSelected),
+            "capability_completed" => Ok(EventKind::CapabilityCompleted),
+            "capability_failed" => Ok(EventKind::CapabilityFailed),
+            "capability_invoked" => Ok(EventKind::CapabilityInvoked),
+            "capability_resolved" => Ok(EventKind::CapabilityResolved),
+            "capability_requested" => Ok(EventKind::CapabilityRequested),
+            "error_occurred" => Ok(EventKind::ErrorOccurred),
+            "debug" => Ok(EventKind::Debug),
+            "prompt_loaded" => Ok(EventKind::PromptLoaded),
+            "runtime_state.updated" => Ok(EventKind::RuntimeStateUpdated),
+            "tool_call" => Ok(EventKind::ToolCall),
+            "tool_result" => Ok(EventKind::ToolResult),
+            "agent_registered" => Ok(EventKind::AgentRegistered),
+            "request_dispatch" => Ok(EventKind::RequestDispatch),
+            "sub_task_result" => Ok(EventKind::SubTaskResult),
+            "rustc_event" => Ok(EventKind::RustcEvent),
+            "edit_event" => Ok(EventKind::EditEvent),
+            "supervisor_event" => Ok(EventKind::SupervisorEvent),
+            "goal_node_created" => Ok(EventKind::GoalNodeCreated),
+            "goal_node_retracted" => Ok(EventKind::GoalNodeRetracted),
+            "goal_node_rewritten" => Ok(EventKind::GoalNodeRewritten),
+            "goal_edge_defined" => Ok(EventKind::GoalEdgeDefined),
+            "goal_graph_checkpointed" => Ok(EventKind::GoalGraphCheckpointed),
+            "goodness_snapshot" => Ok(EventKind::GoodnessSnapshot),
+            "llm_call" => Ok(EventKind::LlmCall),
+            _ => Err(()),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EventMeta {
-    pub ts: u64,
-    pub source: String,
+pub struct CanonPayloadMeta {
     pub file: String,
     pub line: u32,
 }
 
+/// Canonical payload with non-null slots.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "data")]
-pub enum CanonPayload {
-    LoopObserved(LoopObserved),
-    LoopPlanned(serde_json::Value),
-    LoopActed(serde_json::Value),
-    LoopVerified(serde_json::Value),
-    LoopRewarded(serde_json::Value),
-    RuntimeStarted(serde_json::Value),
-    RouteTick(RouteTick),
-    RouteSelected(RouteSelected),
-    CapabilityCompleted(serde_json::Value),
-    CapabilityFailed(serde_json::Value),
-    CapabilityInvoked(serde_json::Value),
-    CapabilityResolved(serde_json::Value),
-    CapabilityRequested(serde_json::Value),
-    ErrorOccurred(serde_json::Value),
-    Debug(serde_json::Value),
-    PromptLoaded(serde_json::Value),
-    RuntimeStateUpdated(serde_json::Value),
-    ToolCall(serde_json::Value),
-    ToolResult(serde_json::Value),
-    AgentRegistered(serde_json::Value),
-    RequestDispatch(serde_json::Value),
-    SubTaskResult(serde_json::Value),
-    RustcEvent(serde_json::Value),
-    EditEvent(serde_json::Value),
-    SupervisorEvent(serde_json::Value),
-    GoalNodeCreated(serde_json::Value),
-    GoalNodeRetracted(serde_json::Value),
-    GoalNodeRewritten(serde_json::Value),
-    GoalEdgeDefined(serde_json::Value),
-    GoalGraphCheckpointed(serde_json::Value),
-    GoodnessSnapshot(serde_json::Value),
-    Llm(serde_json::Value),
-    #[serde(other)]
-    Unknown,
+pub struct CanonPayload {
+    pub input: serde_json::Value,
+    pub output: serde_json::Value,
+    pub delta: serde_json::Value,
+    pub meta: CanonPayloadMeta,
+    pub data: serde_json::Value,
 }
 
 impl CanonPayload {
-    pub fn kind_str(&self) -> &'static str {
-        match self {
-            CanonPayload::LoopObserved(_) => "loop_observed",
-            CanonPayload::LoopPlanned(_) => "loop_planned",
-            CanonPayload::LoopActed(_) => "loop_acted",
-            CanonPayload::LoopVerified(_) => "loop_verified",
-            CanonPayload::LoopRewarded(_) => "loop_rewarded",
-            CanonPayload::RuntimeStarted(_) => "runtime_started",
-            CanonPayload::RouteTick(_) => "route_tick",
-            CanonPayload::RouteSelected(_) => "route_selected",
-            CanonPayload::CapabilityCompleted(_) => "capability_completed",
-            CanonPayload::CapabilityFailed(_) => "capability_failed",
-            CanonPayload::CapabilityInvoked(_) => "capability_invoked",
-            CanonPayload::CapabilityResolved(_) => "capability_resolved",
-            CanonPayload::CapabilityRequested(_) => "capability_requested",
-            CanonPayload::ErrorOccurred(_) => "error_occurred",
-            CanonPayload::Debug(_) => "debug",
-            CanonPayload::PromptLoaded(_) => "prompt_loaded",
-            CanonPayload::RuntimeStateUpdated(_) => "runtime_state.updated",
-            CanonPayload::ToolCall(_) => "tool_call",
-            CanonPayload::ToolResult(_) => "tool_result",
-            CanonPayload::AgentRegistered(_) => "agent_registered",
-            CanonPayload::RequestDispatch(_) => "request_dispatch",
-            CanonPayload::SubTaskResult(_) => "sub_task_result",
-            CanonPayload::RustcEvent(_) => "rustc_event",
-            CanonPayload::EditEvent(_) => "edit_event",
-            CanonPayload::SupervisorEvent(_) => "supervisor_event",
-            CanonPayload::GoalNodeCreated(_) => "goal_node_created",
-            CanonPayload::GoalNodeRetracted(_) => "goal_node_retracted",
-            CanonPayload::GoalNodeRewritten(_) => "goal_node_rewritten",
-            CanonPayload::GoalEdgeDefined(_) => "goal_edge_defined",
-            CanonPayload::GoalGraphCheckpointed(_) => "goal_graph_checkpointed",
-            CanonPayload::GoodnessSnapshot(_) => "goodness_snapshot",
-            CanonPayload::Llm(_) => "llm_call",
-            CanonPayload::Unknown => "unknown",
-        }
-    }
-
-    pub fn as_value(&self) -> Option<Value> {
-        match self {
-            CanonPayload::LoopObserved(v) => serde_json::to_value(v).ok(),
-            CanonPayload::RuntimeStarted(v) => Some(v.clone()),
-            CanonPayload::RouteTick(v) => serde_json::to_value(v).ok(),
-            CanonPayload::RouteSelected(v) => serde_json::to_value(v).ok(),
-            CanonPayload::LoopPlanned(v)
-            | CanonPayload::LoopActed(v)
-            | CanonPayload::LoopVerified(v)
-            | CanonPayload::LoopRewarded(v)
-            | CanonPayload::CapabilityCompleted(v)
-            | CanonPayload::CapabilityFailed(v)
-            | CanonPayload::CapabilityInvoked(v)
-            | CanonPayload::CapabilityResolved(v)
-            | CanonPayload::CapabilityRequested(v)
-            | CanonPayload::ErrorOccurred(v)
-            | CanonPayload::Debug(v)
-            | CanonPayload::PromptLoaded(v)
-            | CanonPayload::RuntimeStateUpdated(v)
-            | CanonPayload::ToolCall(v)
-            | CanonPayload::ToolResult(v)
-            | CanonPayload::AgentRegistered(v)
-            | CanonPayload::RequestDispatch(v)
-            | CanonPayload::SubTaskResult(v)
-            | CanonPayload::RustcEvent(v)
-            | CanonPayload::EditEvent(v)
-            | CanonPayload::SupervisorEvent(v)
-            | CanonPayload::GoalNodeCreated(v)
-            | CanonPayload::GoalNodeRetracted(v)
-            | CanonPayload::GoalNodeRewritten(v)
-            | CanonPayload::GoalEdgeDefined(v)
-            | CanonPayload::GoalGraphCheckpointed(v)
-            | CanonPayload::GoodnessSnapshot(v)
-            | CanonPayload::Llm(v) => Some(v.clone()),
-            CanonPayload::Unknown => None,
-        }
-    }
-
-    pub fn from_kind(kind: &str, data: serde_json::Value) -> Self {
-        match kind {
-            "loop_observed" => CanonPayload::LoopObserved(serde_json::from_value(data).unwrap_or_default()),
-            "loop_planned" => CanonPayload::LoopPlanned(data),
-            "loop_acted" => CanonPayload::LoopActed(data),
-            "loop_verified" => CanonPayload::LoopVerified(data),
-            "loop_rewarded" => CanonPayload::LoopRewarded(data),
-            "runtime_started" => CanonPayload::RuntimeStarted(data),
-            "route_tick" => CanonPayload::RouteTick(serde_json::from_value(data).unwrap_or_default()),
-            "route_selected" => CanonPayload::RouteSelected(serde_json::from_value(data).unwrap_or_default()),
-            "capability_completed" => CanonPayload::CapabilityCompleted(data),
-            "capability_failed" => CanonPayload::CapabilityFailed(data),
-            "capability_invoked" => CanonPayload::CapabilityInvoked(data),
-            "capability_resolved" => CanonPayload::CapabilityResolved(data),
-            "capability_requested" => CanonPayload::CapabilityRequested(data),
-            "error_occurred" => CanonPayload::ErrorOccurred(data),
-            "debug" => CanonPayload::Debug(data),
-            "prompt_loaded" => CanonPayload::PromptLoaded(data),
-            "runtime_state.updated" => CanonPayload::RuntimeStateUpdated(data),
-            "tool_call" => CanonPayload::ToolCall(data),
-            "tool_result" => CanonPayload::ToolResult(data),
-            "agent_registered" => CanonPayload::AgentRegistered(data),
-            "request_dispatch" => CanonPayload::RequestDispatch(data),
-            "sub_task_result" => CanonPayload::SubTaskResult(data),
-            "rustc_event" => CanonPayload::RustcEvent(data),
-            "edit_event" => CanonPayload::EditEvent(data),
-            "supervisor_event" => CanonPayload::SupervisorEvent(data),
-            "goal_node_created" => CanonPayload::GoalNodeCreated(data),
-            "goal_node_retracted" => CanonPayload::GoalNodeRetracted(data),
-            "goal_node_rewritten" => CanonPayload::GoalNodeRewritten(data),
-            "goal_edge_defined" => CanonPayload::GoalEdgeDefined(data),
-            "goal_graph_checkpointed" => CanonPayload::GoalGraphCheckpointed(data),
-            "goodness_snapshot" => CanonPayload::GoodnessSnapshot(data),
-            "llm_call" => CanonPayload::Llm(data),
-            _ => CanonPayload::Unknown,
-        }
+    pub fn from_data(input: serde_json::Value, output: serde_json::Value, delta: serde_json::Value, meta: CanonPayloadMeta, data: serde_json::Value) -> Self {
+        assert!(!input.is_null(), "CanonPayload.input must not be null");
+        assert!(!output.is_null(), "CanonPayload.output must not be null");
+        assert!(!delta.is_null(), "CanonPayload.delta must not be null");
+        Self { input, output, delta, meta, data }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanonEvent {
-    pub event_id: Option<u64>,
-    pub meta: EventMeta,
-    #[serde(flatten)]
+    pub id: EventId,
+    pub parent_ids: Vec<EventId>,
+    pub actor: String,
+    pub kind: EventKind,
+    pub ts: u64,
     pub payload: CanonPayload,
+}
+
+impl CanonEvent {
+    pub fn new(id: EventId, parent_ids: Vec<EventId>, actor: impl Into<String>, kind: EventKind, ts: u64, payload: CanonPayload, root: bool) -> Self {
+        if !root {
+            assert!(!parent_ids.is_empty(), "CanonEvent requires at least one parent_id unless root=true");
+        }
+        Self { id, parent_ids, actor: actor.into(), kind, ts, payload }
+    }
+}
+/// Trait describing how to populate CanonPayload slots from an event struct.
+pub trait CanonPayloadShape {
+    fn payload_input(&self) -> serde_json::Value;
+    fn payload_output(&self) -> serde_json::Value;
+    fn payload_delta(&self) -> serde_json::Value;
+    fn payload_data(&self) -> serde_json::Value;
+}
+
+impl<T> CanonPayloadShape for T
+where
+    T: serde::Serialize,
+{
+    fn payload_input(&self) -> serde_json::Value {
+        serde_json::Value::Object(serde_json::Map::new())
+    }
+    fn payload_output(&self) -> serde_json::Value {
+        serde_json::Value::Object(serde_json::Map::new())
+    }
+    fn payload_delta(&self) -> serde_json::Value {
+        serde_json::Value::Object(serde_json::Map::new())
+    }
+    fn payload_data(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
+    }
 }

@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use canon_event::{CanonEvent, CanonPayload, EventMeta, RustcEvent};
+use canon_event::{CanonEvent, CanonPayload, CanonPayloadMeta, RustcEvent};
 use canon_event_store::{extract_rustc_event, read_any_events_from_path, replay_graph_from_tlog, AnyEvent};
 use std::collections::HashSet;
 use std::env;
@@ -125,40 +125,55 @@ fn run_stress(json_path: &Path, bin_path: &Path) -> Result<()> {
 
     let session = RustcEvent::SessionStart(canon_event::SessionStart { project: "stress".to_string(), schema: 2, byte_offset: 0 });
     let session_json = serde_json::to_value(&session)?;
-    let canon = make_canon("rustc", CanonPayload::RustcEvent(session_json.clone()));
+    let canon = make_canon("rustc", "rustc_event", session_json.clone());
     let line = serde_json::to_string(&canon)?;
     std::io::Write::write_all(&mut json_writer, line.as_bytes())?;
     std::io::Write::write_all(&mut json_writer, b"\n")?;
-    let _ = bin_writer.write_canon_event(&make_canon("rustc", CanonPayload::RustcEvent(session_json)));
+    let _ = bin_writer.write_canon_event(&make_canon("rustc", "rustc_event", session_json));
 
     for i in 0..10_000u32 {
         let node = RustcEvent::NodeDefined(canon_event::NodeDefined { symbol: format!("node_{i}"), kind: "FUNCTION".to_string(), file: "src/lib.rs".to_string(), line: 1, col: 1, lo: 0, hi: 0 });
         let val = serde_json::to_value(&node)?;
-        let canon = make_canon("rustc", CanonPayload::RustcEvent(val.clone()));
+        let canon = make_canon("rustc", "rustc_event", val.clone());
         let line = serde_json::to_string(&canon)?;
         std::io::Write::write_all(&mut json_writer, line.as_bytes())?;
         std::io::Write::write_all(&mut json_writer, b"\n")?;
-        let _ = bin_writer.write_canon_event(&make_canon("rustc", CanonPayload::RustcEvent(val)));
+        let _ = bin_writer.write_canon_event(&make_canon("rustc", "rustc_event", val));
     }
     for i in 0..50_000u32 {
         let src = format!("node_{}", i % 10_000);
         let dst = format!("node_{}", (i * 7) % 10_000);
         let edge = RustcEvent::EdgeDefined(canon_event::EdgeDefined { src, dst, kind: "CALL".to_string() });
         let val = serde_json::to_value(&edge)?;
-        let canon = make_canon("rustc", CanonPayload::RustcEvent(val.clone()));
+        let canon = make_canon("rustc", "rustc_event", val.clone());
         let line = serde_json::to_string(&canon)?;
         std::io::Write::write_all(&mut json_writer, line.as_bytes())?;
         std::io::Write::write_all(&mut json_writer, b"\n")?;
-        let _ = bin_writer.write_canon_event(&make_canon("rustc", CanonPayload::RustcEvent(val)));
+        let _ = bin_writer.write_canon_event(&make_canon("rustc", "rustc_event", val));
     }
     json_writer.flush()?;
     let _ = 0;
     Ok(())
 }
 
-fn make_canon(source: &str, payload: CanonPayload) -> CanonEvent {
-    let meta = EventMeta { ts: now_ms(), source: source.to_string(), file: String::new(), line: 0 };
-    CanonEvent { event_id: None, meta, payload }
+fn make_canon(source: &str, kind: &str, data: serde_json::Value) -> CanonEvent {
+    let kind_enum = ::std::str::FromStr::from_str(kind).unwrap_or(canon_event::EventKind::Debug);
+    let payload = CanonPayload {
+        input: serde_json::Value::Null,
+        output: serde_json::Value::Null,
+        delta: serde_json::Value::Null,
+        meta: CanonPayloadMeta { file: String::new(), line: 0 },
+        data,
+    };
+    CanonEvent::new(
+        canon_event::EventId::new(canon_event::new_event_id()),
+        Vec::new(),
+        source.to_string(),
+        kind_enum,
+        now_ms(),
+        payload,
+        true,
+    )
 }
 
 fn now_ms() -> u64 {

@@ -1,4 +1,4 @@
-use canon_event::CapabilityResult;
+use canon_event::{CapabilityResult, EventKind};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -37,17 +37,17 @@ pub fn write_llm_reports_from_tlog(tlog_path: &Path, reports_root: &Path) -> any
     for event in events {
         let AnyEvent::Canon(canon) = event else { continue };
 
-        let kind = canon.payload.kind_str();
-        let Some(payload) = canon.payload.as_value() else { continue };
+        let kind = canon.kind;
+        let payload = &canon.payload.data;
         match kind {
-            "request_dispatch" if canon.meta.source == "llm_executor" => {
+            EventKind::RequestDispatch if canon.actor == "llm_executor" => {
                 if let Some(id) = payload.get("request_id").and_then(|v| v.as_str()) {
                     let entry = by_id.entry(id.to_string()).or_insert_with(|| LlmRecord { request_id: id.to_string(), ..Default::default() });
                     entry.endpoint = payload.get("endpoint").and_then(|v| v.as_str()).map(|s| s.to_string());
                     entry.url = payload.get("url").and_then(|v| v.as_str()).map(|s| s.to_string());
                 }
             }
-            "capability_completed" => {
+            EventKind::CapabilityCompleted => {
                 if let Ok(done) = serde_json::from_value::<CapabilityCompletedOwned>(payload.clone()) {
                     if done.capability == "llm.call" {
                         let entry = by_id.entry(done.request_id.clone()).or_insert_with(|| LlmRecord { request_id: done.request_id.clone(), ..Default::default() });
@@ -57,7 +57,7 @@ pub fn write_llm_reports_from_tlog(tlog_path: &Path, reports_root: &Path) -> any
                     }
                 }
             }
-            "capability_failed" => {
+            EventKind::CapabilityFailed => {
                 if let Ok(failed) = serde_json::from_value::<CapabilityFailedOwned>(payload.clone()) {
                     if failed.capability == "llm.call" {
                         let entry = by_id.entry(failed.request_id.clone()).or_insert_with(|| LlmRecord { request_id: failed.request_id.clone(), ..Default::default() });

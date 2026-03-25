@@ -1,14 +1,8 @@
-use canon_event::{EventConsumer, EventFilter, EventOutcome, RuntimeEvent, new_error_occurred};
+use canon_event::{new_error_occurred, EventConsumer, EventFilter, EventOutcome, RuntimeEvent};
 use canon_proc_macros::must_emit;
 use std::collections::HashMap;
 
-const STAGE_THRESHOLDS: &[(&str, u64)] = &[
-    ("observed", 10),
-    ("planned", 15),
-    ("acted", 15),
-    ("verified", 20),
-    ("rewarded", 25),
-];
+const STAGE_THRESHOLDS: &[(&str, u64)] = &[("observed", 10), ("planned", 15), ("acted", 15), ("verified", 20), ("rewarded", 25)];
 
 pub struct WatchdogConsumer {
     current_tick: u64,
@@ -26,14 +20,17 @@ impl WatchdogConsumer {
 }
 
 impl EventConsumer for WatchdogConsumer {
-    fn filter(&self) -> EventFilter { EventFilter::All }
+    fn filter(&self) -> EventFilter {
+        EventFilter::All
+    }
 
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         match event {
             RuntimeEvent::Tick(t) => {
                 self.current_tick = t.tick;
-                let stalled: Vec<RuntimeEvent> = STAGE_THRESHOLDS.iter()
+                let stalled: Vec<RuntimeEvent> = STAGE_THRESHOLDS
+                    .iter()
                     .filter_map(|(stage, threshold)| {
                         let last = self.last_stage_tick.get(stage).copied().unwrap_or(0);
                         let idle = self.current_tick.saturating_sub(last);
@@ -57,11 +54,26 @@ impl EventConsumer for WatchdogConsumer {
                     EventOutcome::EmitMany(stalled)
                 }
             }
-            RuntimeEvent::LoopObserved(_) => { self.last_stage_tick.insert("observed", self.current_tick); EventOutcome::NoOp("watchdog_stage_reset") }
-            RuntimeEvent::LoopPlanned(_)  => { self.last_stage_tick.insert("planned",  self.current_tick); EventOutcome::NoOp("watchdog_stage_reset") }
-            RuntimeEvent::LoopActed(_)    => { self.last_stage_tick.insert("acted",    self.current_tick); EventOutcome::NoOp("watchdog_stage_reset") }
-            RuntimeEvent::LoopVerified(_) => { self.last_stage_tick.insert("verified", self.current_tick); EventOutcome::NoOp("watchdog_stage_reset") }
-            RuntimeEvent::LoopRewarded(_) => { self.last_stage_tick.insert("rewarded", self.current_tick); EventOutcome::NoOp("watchdog_stage_reset") }
+            RuntimeEvent::LoopObserved(_) => {
+                self.last_stage_tick.insert("observed", self.current_tick);
+                EventOutcome::NoOp("watchdog_stage_reset")
+            }
+            RuntimeEvent::LoopPlanned(_) => {
+                self.last_stage_tick.insert("planned", self.current_tick);
+                EventOutcome::NoOp("watchdog_stage_reset")
+            }
+            RuntimeEvent::LoopActed(_) => {
+                self.last_stage_tick.insert("acted", self.current_tick);
+                EventOutcome::NoOp("watchdog_stage_reset")
+            }
+            RuntimeEvent::LoopVerified(_) => {
+                self.last_stage_tick.insert("verified", self.current_tick);
+                EventOutcome::NoOp("watchdog_stage_reset")
+            }
+            RuntimeEvent::LoopRewarded(_) => {
+                self.last_stage_tick.insert("rewarded", self.current_tick);
+                EventOutcome::NoOp("watchdog_stage_reset")
+            }
             RuntimeEvent::Code(_)
             | RuntimeEvent::Debug(_)
             | RuntimeEvent::Edit(_)
@@ -97,8 +109,7 @@ impl EventConsumer for WatchdogConsumer {
             | RuntimeEvent::GoalEdgeDefined(_)
             | RuntimeEvent::GoalGraphCheckpointed(_)
             | RuntimeEvent::CapabilityInvoked(_)
-            | RuntimeEvent::CapabilityResolved(_)
-                => EventOutcome::NoOp("watchdog_not_a_stage_event"),
+            | RuntimeEvent::CapabilityResolved(_) => EventOutcome::NoOp("watchdog_not_a_stage_event"),
         }
     }
 }

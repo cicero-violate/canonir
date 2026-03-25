@@ -1,18 +1,16 @@
-use std::collections::HashMap;
-use canon_event::{
-    EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, GoalGraphCheckpointed, RuntimeEvent,
-};
+use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, GoalGraphCheckpointed, RuntimeEvent};
 use canon_proc_macros::must_emit;
+use std::collections::HashMap;
 
 #[derive(Clone, Debug, Default)]
 pub struct GoalNode {
-    pub node_id:     String,
+    pub node_id: String,
     pub description: String,
-    pub deps:        Vec<String>,
-    pub caps:        Vec<String>,
-    pub node_type:   String,
-    pub priority:    u8,
-    pub retracted:   bool,
+    pub deps: Vec<String>,
+    pub caps: Vec<String>,
+    pub node_type: String,
+    pub priority: u8,
+    pub retracted: bool,
 }
 
 #[derive(Default)]
@@ -25,15 +23,18 @@ impl GoalGraph {
     pub fn apply(&mut self, event: &RuntimeEvent) {
         match event {
             RuntimeEvent::GoalNodeCreated(e) => {
-                self.nodes.insert(e.node_id.clone(), GoalNode {
-                    node_id:     e.node_id.clone(),
-                    description: e.description.clone(),
-                    deps:        e.deps.clone(),
-                    caps:        e.caps.clone(),
-                    node_type:   e.node_type.clone(),
-                    priority:    e.priority,
-                    retracted:   false,
-                });
+                self.nodes.insert(
+                    e.node_id.clone(),
+                    GoalNode {
+                        node_id: e.node_id.clone(),
+                        description: e.description.clone(),
+                        deps: e.deps.clone(),
+                        caps: e.caps.clone(),
+                        node_type: e.node_type.clone(),
+                        priority: e.priority,
+                        retracted: false,
+                    },
+                );
             }
             RuntimeEvent::GoalNodeRetracted(e) => {
                 if let Some(n) = self.nodes.get_mut(&e.node_id) {
@@ -68,11 +69,15 @@ impl GoalGraphConsumer {
         Self { graph: GoalGraph::default(), last_checkpoint_seq: 0 }
     }
 
-    pub fn graph(&self) -> &GoalGraph { &self.graph }
+    pub fn graph(&self) -> &GoalGraph {
+        &self.graph
+    }
 }
 
 impl EventConsumer for GoalGraphConsumer {
-    fn filter(&self) -> EventFilter { EventFilter::All }
+    fn filter(&self) -> EventFilter {
+        EventFilter::All
+    }
 
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
@@ -80,14 +85,9 @@ impl EventConsumer for GoalGraphConsumer {
     fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
         self.graph.apply(event);
         match event {
-            RuntimeEvent::GoalNodeCreated(_)
-            | RuntimeEvent::GoalNodeRetracted(_)
-            | RuntimeEvent::GoalNodeRewritten(_)
-            | RuntimeEvent::GoalEdgeDefined(_) => {
+            RuntimeEvent::GoalNodeCreated(_) | RuntimeEvent::GoalNodeRetracted(_) | RuntimeEvent::GoalNodeRewritten(_) | RuntimeEvent::GoalEdgeDefined(_) => {
                 self.last_checkpoint_seq += 1;
-                return EventOutcome::Emit(RuntimeEvent::GoalGraphCheckpointed(GoalGraphCheckpointed {
-                    tlog_seq: self.last_checkpoint_seq,
-                }));
+                return EventOutcome::Emit(RuntimeEvent::GoalGraphCheckpointed(GoalGraphCheckpointed { tlog_seq: self.last_checkpoint_seq }));
             }
             RuntimeEvent::Code(_)
             | RuntimeEvent::Debug(_)
@@ -126,8 +126,7 @@ impl EventConsumer for GoalGraphConsumer {
             | RuntimeEvent::ToolBatchSettled(_)
             | RuntimeEvent::GoalGraphCheckpointed(_)
             | RuntimeEvent::CapabilityInvoked(_)
-            | RuntimeEvent::CapabilityResolved(_)
-                => {}
+            | RuntimeEvent::CapabilityResolved(_) => {}
         }
         EventOutcome::NoOp("goal_graph_noop")
     }

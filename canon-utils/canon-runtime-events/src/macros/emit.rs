@@ -1,1 +1,1 @@
-pub use canon_macros::canon_emit;
+pub use canon_proc_macros::canon_emit;
