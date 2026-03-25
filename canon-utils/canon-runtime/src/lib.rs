@@ -264,9 +264,9 @@ impl EventRuntime {
         apply_delta(&mut self.state, &delta)?;
         self.handle_runtime_event(RuntimeEvent::Code(Code { delta, state: self.state.clone() }))?;
         if let Some(crate_name) = analysis_crate {
-            let run = AnalysisRun { request_id: format!("analysis-{}-{}", crate_name, self.tick), crate_name, batch_id: None };
+            let run = AnalysisRun { request_id: format!("analysis-{}-{}", crate_name, self.tick), crate_name, batch_id: None, queued: true };
             self.handle_runtime_event(RuntimeEvent::Analysis(AnalysisEvent::Run(run)))?;
-            let workspace = AnalysisWorkspace { request_id: format!("analysis-workspace-{}", self.tick) };
+            let workspace = AnalysisWorkspace { request_id: format!("analysis-workspace-{}", self.tick), queued: true };
             self.handle_runtime_event(RuntimeEvent::Analysis(AnalysisEvent::Workspace(workspace)))?;
         }
         Ok(())
@@ -274,7 +274,7 @@ impl EventRuntime {
 
     pub fn emit_tick(&mut self) -> Result<()> {
         self.runtime_tick = self.runtime_tick.saturating_add(1);
-        self.handle_runtime_event_located(RuntimeEvent::Tick(Tick { tick: self.runtime_tick }), "", 0)?;
+        self.handle_runtime_event_located(RuntimeEvent::Tick(Tick { tick: self.runtime_tick, emitted: true }), "", 0)?;
         self.drain_emitted_events()?;
         Ok(())
     }
@@ -298,93 +298,92 @@ impl EventRuntime {
     }
 
     fn handle_runtime_event(&mut self, event: RuntimeEvent) -> Result<()> {
-        self.handle_runtime_event_located(event, "", 0)
+        self.handle_runtime_event_located_with_parents(event, "", 0, Vec::new())
     }
 
     fn handle_runtime_event_located(&mut self, event: RuntimeEvent, file: &'static str, line: u32) -> Result<()> {
+        self.handle_runtime_event_located_with_parents(event, file, line, Vec::new())
+    }
+
+    fn handle_runtime_event_located_with_parents(&mut self, event: RuntimeEvent, file: &'static str, line: u32, parent_ids: Vec<canon_event::EventId>) -> Result<()> {
         self.observed_events.push(event.clone());
-        self.bus.dispatch(event.clone());
+        // Pre-generate canonical ID so consumers and tlog share the same ID.
+        let event_id = canon_event::EventId::new(canon_event::new_event_id());
+        self.bus.dispatch(event.clone(), event_id.clone());
         if !matches!(event, RuntimeEvent::RuntimeStateUpdated(_)) {
-            self.append_runtime_event(&event, file, line);
+            self.append_runtime_event(&event, file, line, parent_ids, event_id.clone());
         }
-        match event {
-            RuntimeEvent::CapabilityFailed(payload) => {
-                let error_event = RuntimeEvent::ErrorOccurred(new_error_occurred(
-                    "capability_failed",
-                    "event-runtime",
-                    payload.error.clone(),
-                    "error",
-                    serde_json::json!({
-                        "request_id": payload.request_id,
-                        "capability": payload.capability,
-                    }),
-                    None,
-                ));
-                self.bus.dispatch(error_event.clone());
-                self.append_runtime_event(&error_event, "", 0);
-            }
-            RuntimeEvent::NodeFailed(payload) => {
-                let error_event = RuntimeEvent::ErrorOccurred(new_error_occurred(
-                    "node_failed",
-                    "agent-consumer",
-                    payload.error.clone().unwrap_or_else(|| "node_failed".to_string()),
-                    "error",
-                    serde_json::json!({
-                        "node_id": payload.node_id,
-                        "capability": payload.capability,
-                        "request_id": payload.request_id,
-                    }),
-                    None,
-                ));
-                self.bus.dispatch(error_event.clone());
-                self.append_runtime_event(&error_event, "", 0);
-            }
+        // Synthetic error events — derive from primary and parent to it.
+        let derived: Option<RuntimeEvent> = match &event {
+            RuntimeEvent::CapabilityFailed(payload) => Some(RuntimeEvent::ErrorOccurred(new_error_occurred(
+                "capability_failed",
+                "event-runtime",
+                payload.error.clone(),
+                "error",
+                serde_json::json!({
+                    "request_id": payload.request_id,
+                    "capability": payload.capability,
+                }),
+                None,
+            ))),
+            RuntimeEvent::NodeFailed(payload) => Some(RuntimeEvent::ErrorOccurred(new_error_occurred(
+                "node_failed",
+                "agent-consumer",
+                payload.error.clone().unwrap_or_else(|| "node_failed".to_string()),
+                "error",
+                serde_json::json!({
+                    "node_id": payload.node_id,
+                    "capability": payload.capability,
+                    "request_id": payload.request_id,
+                }),
+                None,
+            ))),
             RuntimeEvent::Code(Code { delta, .. }) => match &delta.event {
-                RustcEvent::PanicCaptured(payload) => {
-                    let error_event = RuntimeEvent::ErrorOccurred(new_error_occurred(
-                        "panic_captured",
-                        "rustc",
-                        payload.message.clone(),
-                        "error",
-                        serde_json::json!({
-                            "def_id": payload.def_id,
-                            "mir_variant": payload.mir_variant,
-                            "lowering_stage": payload.lowering_stage,
-                            "file": payload.file,
-                            "span": payload.span,
-                        }),
-                        None,
-                    ));
-                    self.bus.dispatch(error_event.clone());
-                    self.append_runtime_event(&error_event, "", 0);
-                }
-                RustcEvent::InvariantViolation(payload) => {
-                    let error_event = RuntimeEvent::ErrorOccurred(new_error_occurred("invariant_violation", "rustc", payload.message.clone(), "error", serde_json::json!({}), None));
-                    self.bus.dispatch(error_event.clone());
-                    self.append_runtime_event(&error_event, "", 0);
-                }
-                _ => {}
+                RustcEvent::PanicCaptured(payload) => Some(RuntimeEvent::ErrorOccurred(new_error_occurred(
+                    "panic_captured",
+                    "rustc",
+                    payload.message.clone(),
+                    "error",
+                    serde_json::json!({
+                        "def_id": payload.def_id,
+                        "mir_variant": payload.mir_variant,
+                        "lowering_stage": payload.lowering_stage,
+                        "file": payload.file,
+                        "span": payload.span,
+                    }),
+                    None,
+                ))),
+                RustcEvent::InvariantViolation(payload) => Some(RuntimeEvent::ErrorOccurred(new_error_occurred(
+                    "invariant_violation", "rustc", payload.message.clone(), "error", serde_json::json!({}), None,
+                ))),
+                _ => None,
             },
             RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload }) => {
-                self.runtime_state = payload;
+                self.runtime_state = payload.clone();
+                None
             }
-            _ => {}
+            _ => None,
+        };
+        if let Some(err_event) = derived {
+            let err_id = canon_event::EventId::new(canon_event::new_event_id());
+            self.bus.dispatch(err_event.clone(), err_id.clone());
+            self.append_runtime_event(&err_event, "", 0, vec![event_id], err_id);
         }
         Ok(())
     }
 
     fn drain_emitted_events(&mut self) -> Result<()> {
         while let Ok(located) = self.emitter_rx.try_recv() {
-            self.handle_runtime_event_located(located.event, located.file, located.line)?;
+            self.handle_runtime_event_located_with_parents(located.event, located.file, located.line, located.parent_ids)?;
         }
         Ok(())
     }
 
-    fn append_runtime_event(&mut self, event: &RuntimeEvent, _file: &'static str, _line: u32) {
+    fn append_runtime_event(&mut self, event: &RuntimeEvent, _file: &'static str, _line: u32, parent_ids: Vec<canon_event::EventId>, event_id: canon_event::EventId) {
         let Some(path) = self.tlog_path.clone() else {
             return;
         };
-        let Some(wire) = runtime_event_to_wire(event) else {
+        let Some(wire) = runtime_event_to_wire(event, parent_ids, event_id) else {
             return;
         };
         if is_segment_dir_path(&path) {
@@ -424,7 +423,7 @@ fn payload_from_shape<T: canon_event::CanonPayloadShape>(val: &T) -> canon_event
     }
 }
 
-fn runtime_event_to_wire(event: &RuntimeEvent) -> Option<canon_event::CanonEvent> {
+fn runtime_event_to_wire(event: &RuntimeEvent, parent_ids: Vec<canon_event::EventId>, event_id: canon_event::EventId) -> Option<canon_event::CanonEvent> {
     let (kind, payload) = match event {
         RuntimeEvent::LoopObserved(p) => (canon_event::EventKind::LoopObserved, payload_from_shape(p)),
         RuntimeEvent::LoopPlanned(p) => (canon_event::EventKind::LoopPlanned, payload_from_shape(p)),
@@ -449,7 +448,7 @@ fn runtime_event_to_wire(event: &RuntimeEvent) -> Option<canon_event::CanonEvent
         RuntimeEvent::GoalEdgeDefined(p) => (canon_event::EventKind::GoalEdgeDefined, payload_from_shape(p)),
         RuntimeEvent::GoalGraphCheckpointed(p) => (canon_event::EventKind::GoalGraphCheckpointed, payload_from_shape(p)),
         RuntimeEvent::GoodnessSnapshot(p) => (canon_event::EventKind::GoodnessSnapshot, payload_from_shape(p)),
-        RuntimeEvent::Llm(p) => (canon_event::EventKind::LlmCall, payload_from_shape(p)),
+        RuntimeEvent::Llm(p) => (canon_event::EventKind::Llm, payload_from_shape(p)),
         _ => return None,
     };
     let actor = match event {
@@ -472,14 +471,15 @@ fn runtime_event_to_wire(event: &RuntimeEvent) -> Option<canon_event::CanonEvent
         RuntimeEvent::GoodnessSnapshot(_) => "event-runtime",
         _ => "event-runtime",
     };
+    let root = parent_ids.is_empty();
     Some(canon_event::CanonEvent::new(
-        canon_event::EventId::new(canon_event::new_event_id()),
-        Vec::new(),
+        event_id,
+        parent_ids,
         actor.to_string(),
         kind,
         now_ms(),
         payload,
-        true,
+        root,
     ))
 }
 
@@ -510,11 +510,11 @@ struct RuntimeEmitterImpl {
 
 impl EventEmitter for RuntimeEmitterImpl {
     fn emit_located(&self, event: RuntimeEvent, file: &'static str, line: u32) {
-        let _ = self.sender.send(canon_event::LocatedEvent { event, file, line });
+        let _ = self.sender.send(canon_event::LocatedEvent { event, file, line, parent_ids: Vec::new() });
     }
 
-    fn emit_with_parents(&self, event: RuntimeEvent, _parents: Vec<canon_event::EventId>, file: &'static str, line: u32) {
-        self.emit_located(event, file, line);
+    fn emit_with_parents(&self, event: RuntimeEvent, parents: Vec<canon_event::EventId>, file: &'static str, line: u32) {
+        let _ = self.sender.send(canon_event::LocatedEvent { event, file, line, parent_ids: parents });
     }
 }
 
@@ -541,19 +541,19 @@ fn apply_delta(state: &mut RustcState, delta: &EventDelta) -> Result<()> {
             state.known_symbols.insert(symbol.clone(), kind.clone());
             state.removed_symbols.remove(symbol);
         }
-        RustcEvent::NodeRemoved(NodeRemoved { symbol }) => {
+        RustcEvent::NodeRemoved(NodeRemoved { symbol, .. }) => {
             state.known_symbols.remove(symbol);
             state.removed_symbols.insert(symbol.clone());
         }
-        RustcEvent::EdgeDefined(EdgeDefined { src, dst, kind }) => {
+        RustcEvent::EdgeDefined(EdgeDefined { src, dst, kind, .. }) => {
             state.known_edges.push((src.clone(), dst.clone(), kind.clone()));
             state.removed_edges.retain(|e| e != &(src.clone(), dst.clone(), kind.clone()));
         }
-        RustcEvent::EdgeRemoved(EdgeRemoved { src, dst, kind }) => {
+        RustcEvent::EdgeRemoved(EdgeRemoved { src, dst, kind, .. }) => {
             state.known_edges.retain(|e| e != &(src.clone(), dst.clone(), kind.clone()));
             state.removed_edges.push((src.clone(), dst.clone(), kind.clone()));
         }
-        RustcEvent::FileSeen(FileSeen { path }) => {
+        RustcEvent::FileSeen(FileSeen { path, .. }) => {
             state.known_files.insert(path.clone());
         }
         RustcEvent::CallsiteObserved(_) => {}
@@ -618,9 +618,11 @@ pub fn spawn_kernel_processor(rx: crossbeam_channel::Receiver<KernelMsg>, emitte
                                 request_id: format!("analysis-k-{}-{}", crate_name, tick),
                                 crate_name: crate_name.clone(),
                                 batch_id: None,
+                                queued: true,
                             })));
                             canon_meta::canon_emit_meta!(emitter; Analysis(AnalysisEvent::Workspace(AnalysisWorkspace {
                                 request_id: format!("analysis-workspace-k-{}", tick),
+                                queued: true,
                             })));
                         }
                     }

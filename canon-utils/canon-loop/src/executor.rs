@@ -107,7 +107,7 @@ impl EventConsumer for LoopStageExecutor {
                     if let Some(emitter) = self.ctx.emitter.as_ref() {
                         if let Some(child) = p.action_id.as_ref() {
                             for dep in &p.depends_on {
-                                emitter.emit(RuntimeEvent::GoalEdgeDefined(GoalEdgeDefined { from_node_id: dep.clone(), to_node_id: child.clone() }));
+                                emitter.emit(RuntimeEvent::GoalEdgeDefined(GoalEdgeDefined { from_node_id: dep.clone(), to_node_id: child.clone(), created: true }));
                             }
                         }
                     }

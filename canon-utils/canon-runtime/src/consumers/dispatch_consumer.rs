@@ -165,7 +165,7 @@ fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_
     let taken = actions_taken.lock().map(|v| v.clone()).unwrap_or_default();
 
     if !success {
-        parent_emitter.emit(RuntimeEvent::GoalNodeRetracted(GoalNodeRetracted { node_id: req.dispatch_id.clone() }));
+        parent_emitter.emit(RuntimeEvent::GoalNodeRetracted(GoalNodeRetracted { node_id: req.dispatch_id.clone(), retracted: true }));
     }
 
     parent_emitter.emit(RuntimeEvent::SubTaskResult(SubTaskResult {

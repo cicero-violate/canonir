@@ -40,14 +40,14 @@ pub fn parse_edit_event_value(value: &serde_json::Value) -> Option<EditEvent> {
 }
 
 pub fn extract_rustc_event(canon: &CanonEvent) -> Option<RustcEvent> {
-    if canon.kind == canon_event::EventKind::RustcEvent {
+    if canon.kind == canon_event::EventKind::Code {
         return parse_rustc_event_value(&canon.payload.data);
     }
     None
 }
 
 pub fn extract_edit_event(canon: &CanonEvent) -> Option<EditEvent> {
-    if canon.kind == canon_event::EventKind::EditEvent {
+    if canon.kind == canon_event::EventKind::Edit {
         return parse_edit_event_value(&canon.payload.data);
     }
     None

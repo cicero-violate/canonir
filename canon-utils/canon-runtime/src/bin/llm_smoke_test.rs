@@ -15,6 +15,7 @@ fn main() -> Result<()> {
         prompt: "Return the JSON: {\"ok\":true}".to_string(),
         role: None,
         agent_id: None,
+        dispatched: true,
     });
     let exec = ExecutableEvent::try_from(event).expect("llm call should be executable");
     let ctx = ExecutionContext { workspace: PathBuf::from("/workspace/ai_sandbox/canon"), emitter: std::sync::Arc::new(NoopEmitter) };

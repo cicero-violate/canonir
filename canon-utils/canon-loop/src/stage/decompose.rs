@@ -28,6 +28,7 @@ pub fn execute(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopS
         prompt,
         role: Some("decompose".to_string()),
         agent_id: ctx.agent_id.clone(),
+        dispatched: true,
     }));
 
     let _ = rs; // tick used for tracing only
@@ -70,11 +71,13 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
             node_type:   "sub_task".to_string(),
             priority:    128,
             budget:      None,
+            created:     true,
         }));
         for dep_id in &dispatch.deps {
             events.push(RuntimeEvent::GoalEdgeDefined(GoalEdgeDefined {
                 from_node_id: dep_id.clone(),
                 to_node_id:   dispatch.dispatch_id.clone(),
+                created:      true,
             }));
         }
         events.push(RuntimeEvent::RequestDispatch(dispatch.clone()));
@@ -157,6 +160,7 @@ fn parse_decompose_tasks(response: &str, parent_request_id: &str) -> Vec<Request
             task_kind,
             deps,
             workspace_scope: None,
+            dispatched: true,
         })
     }).collect()
 }
@@ -170,5 +174,6 @@ fn fallback_dispatch(goal: &str, parent_request_id: &str) -> RequestDispatch {
         task_kind: "implement".to_string(),
         deps: vec![],
         workspace_scope: None,
+        dispatched: true,
     }
 }

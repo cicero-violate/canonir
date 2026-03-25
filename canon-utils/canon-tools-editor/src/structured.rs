@@ -41,7 +41,7 @@ impl EditOp {
             EditOp::MoveSymbol { symbol_id, new_module_path, .. } => {
                 canon_event::EditEvent::MoveSymbol(canon_event::MoveSymbol { project: project.to_string(), symbol: symbol_id, module: new_module_path })
             }
-            EditOp::DeleteSymbol { symbol_id, .. } => canon_event::EditEvent::DeleteSymbol(canon_event::DeleteSymbol { project: project.to_string(), symbol: symbol_id }),
+            EditOp::DeleteSymbol { symbol_id, .. } => canon_event::EditEvent::DeleteSymbol(canon_event::DeleteSymbol { project: project.to_string(), symbol: symbol_id, success: true }),
         }
     }
 }

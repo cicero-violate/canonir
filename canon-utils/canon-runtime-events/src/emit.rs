@@ -35,7 +35,7 @@ pub(crate) fn emit_event(source: &str, kind: &str, payload: Value, tlog_path: &P
         data: payload_json,
     };
     let kind_enum = match kind {
-        "edit_event" => EventKind::EditEvent,
+        "edit_event" | "edit" => EventKind::Edit,
         "runtime_started" => EventKind::RuntimeStarted,
         _ => EventKind::Debug,
     };

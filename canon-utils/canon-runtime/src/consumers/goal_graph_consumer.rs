@@ -87,7 +87,7 @@ impl EventConsumer for GoalGraphConsumer {
         match event {
             RuntimeEvent::GoalNodeCreated(_) | RuntimeEvent::GoalNodeRetracted(_) | RuntimeEvent::GoalNodeRewritten(_) | RuntimeEvent::GoalEdgeDefined(_) => {
                 self.last_checkpoint_seq += 1;
-                return EventOutcome::Emit(RuntimeEvent::GoalGraphCheckpointed(GoalGraphCheckpointed { tlog_seq: self.last_checkpoint_seq }));
+                return EventOutcome::Emit(RuntimeEvent::GoalGraphCheckpointed(GoalGraphCheckpointed { tlog_seq: self.last_checkpoint_seq, checkpointed: true }));
             }
             RuntimeEvent::Code(_)
             | RuntimeEvent::Debug(_)

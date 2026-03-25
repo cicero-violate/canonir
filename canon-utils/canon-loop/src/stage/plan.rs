@@ -302,7 +302,7 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
     let plan_id = Uuid::new_v4().to_string();
     let include_full_goal = observed.goal_text != ctx.last_prompted_goal;
     let prompt = build_prompt(observed, &ctx.batch_acted, &ctx.batch_tool_results, include_full_goal, &ctx.workspace, &ctx.context_merger.prompt_section());
-    let llm_call = LlmCall { request_id: request_id.clone(), prompt: prompt.to_string(), role: Some("planner".to_string()), agent_id: ctx.agent_id.clone() };
+    let llm_call = LlmCall { request_id: request_id.clone(), prompt: prompt.to_string(), role: Some("planner".to_string()), agent_id: ctx.agent_id.clone(), dispatched: true };
 
     let plan_tool_call_id = Uuid::new_v4().to_string();
     ctx.batch_acted.clear();
@@ -330,12 +330,14 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
             request_id: request_id.clone(),
             kind: "llm.plan".to_string(),
             payload: serde_json::json!({"role": "planner"}),
+            accepted: true,
         }));
         canon_meta::canon_emit_meta!(emitter; Llm(LlmCall {
             request_id,
             prompt: llm_call.prompt,
             role: llm_call.role,
             agent_id: llm_call.agent_id,
+            dispatched: true,
         }));
     }
 

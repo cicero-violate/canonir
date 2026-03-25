@@ -1,5 +1,5 @@
 use crate::hooks::{hook_denied_event, HookChain, HookDecision};
-use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventMask, EventOutcome, RuntimeEvent, RustcEvent};
+use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventId, EventMask, EventOutcome, RuntimeEvent, RustcEvent};
 use crossbeam_channel::{bounded, Sender};
 use std::sync::Arc;
 use std::thread;
@@ -7,6 +7,7 @@ use std::thread;
 #[derive(Clone)]
 pub struct EventMessage {
     pub event: RuntimeEvent,
+    pub event_id: EventId,
 }
 
 pub struct ConsumerEntry {
@@ -68,24 +69,31 @@ impl EventBus {
         let _ = thread::Builder::new().name(thread_name.clone()).spawn(move || {
             let mut consumer = consumer;
             for msg in rx.iter() {
+                let parent_id = msg.event_id.clone();
+                canon_event::set_current_dispatch_id(Some(parent_id.clone()));
                 let outcome = consumer.on_event(&msg.event);
+                canon_event::set_current_dispatch_id(None);
                 hooks.run_post(&msg.event, &outcome);
                 match outcome {
-                    EventOutcome::Emit(e) => emitter_for_loop.emit(e),
+                    EventOutcome::Emit(e) => {
+                        emitter_for_loop.emit_with_parents(e, vec![parent_id], "", 0);
+                    }
                     EventOutcome::EmitMany(list) => {
                         for e in list {
-                            emitter_for_loop.emit(e);
+                            emitter_for_loop.emit_with_parents(e, vec![parent_id.clone()], "", 0);
                         }
                     }
                     EventOutcome::NoOp(_) => {}
-                    EventOutcome::Error(e) => emitter_for_loop.emit(e),
+                    EventOutcome::Error(e) => {
+                        emitter_for_loop.emit_with_parents(e, vec![parent_id], "", 0);
+                    }
                 }
             }
         });
         self.consumers.push(ConsumerEntry { filter, sender: tx });
     }
 
-    pub fn dispatch(&self, event: RuntimeEvent) {
+    pub fn dispatch(&self, event: RuntimeEvent, event_id: EventId) {
         let base_event = match self.hooks.run_pre(&event) {
             HookDecision::Allow => event,
             HookDecision::Mutate { replacement } => replacement,
@@ -124,9 +132,9 @@ impl EventBus {
                 }
             }
             if reliable {
-                let _ = consumer.sender.send(EventMessage { event: base_event.clone() });
+                let _ = consumer.sender.send(EventMessage { event: base_event.clone(), event_id: event_id.clone() });
             } else {
-                let _ = consumer.sender.try_send(EventMessage { event: base_event.clone() });
+                let _ = consumer.sender.try_send(EventMessage { event: base_event.clone(), event_id: event_id.clone() });
             }
         }
     }

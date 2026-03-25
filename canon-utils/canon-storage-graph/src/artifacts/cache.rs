@@ -106,7 +106,7 @@ fn apply_cache_event(event: RustcEvent, cache: &mut GraphCache) {
                 cache.type_nodes.insert(sym.to_string(), TypeNodeCache { kind: kind.to_string(), file: file.to_string(), line });
             }
         }
-        RustcEvent::NodeRemoved(canon_types::NodeRemoved { symbol }) => {
+        RustcEvent::NodeRemoved(canon_types::NodeRemoved { symbol, .. }) => {
             let sym = symbol.as_str();
             if sym.is_empty() {
                 return;
@@ -115,7 +115,7 @@ fn apply_cache_event(event: RustcEvent, cache: &mut GraphCache) {
             cache.type_nodes.remove(sym);
             cache.type_edges.retain(|edge| edge.src != sym && edge.dst != sym);
         }
-        RustcEvent::EdgeDefined(canon_types::EdgeDefined { src, dst, kind }) => {
+        RustcEvent::EdgeDefined(canon_types::EdgeDefined { src, dst, kind, .. }) => {
             let rel_kinds = ["HAS_FIELD", "HAS_METHOD", "IMPLEMENTS", "FOR_TYPE", "USES_TYPE", "BOUNDS"];
             let kind = kind.as_str();
             if !rel_kinds.contains(&kind) {
@@ -128,7 +128,7 @@ fn apply_cache_event(event: RustcEvent, cache: &mut GraphCache) {
             }
             cache.type_edges.insert(TypeEdgeCache { src: src_sym.to_string(), dst: dst_sym.to_string(), rel: kind.to_string() });
         }
-        RustcEvent::EdgeRemoved(canon_types::EdgeRemoved { src, dst, kind }) => {
+        RustcEvent::EdgeRemoved(canon_types::EdgeRemoved { src, dst, kind, .. }) => {
             let rel_kinds = ["HAS_FIELD", "HAS_METHOD", "IMPLEMENTS", "FOR_TYPE", "USES_TYPE", "BOUNDS"];
             let kind = kind.as_str();
             if !rel_kinds.contains(&kind) {

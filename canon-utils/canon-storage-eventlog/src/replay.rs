@@ -262,7 +262,7 @@ pub fn apply_rustc_event_to_graph(event: RustcEvent, graph: &mut CodeGraphProjec
             }
             true
         }
-        RustcEvent::EdgeDefined(canon_event::EdgeDefined { src, dst, kind }) => {
+        RustcEvent::EdgeDefined(canon_event::EdgeDefined { src, dst, kind, .. }) => {
             let src_sym = src.as_str();
             let dst_sym = dst.as_str();
             let kind = kind.as_str();
@@ -275,14 +275,14 @@ pub fn apply_rustc_event_to_graph(event: RustcEvent, graph: &mut CodeGraphProjec
             graph.edges.push(CodeGraphEdge { src, dst, kind: kind.to_string() });
             true
         }
-        RustcEvent::NodeRemoved(canon_event::NodeRemoved { symbol }) => {
+        RustcEvent::NodeRemoved(canon_event::NodeRemoved { symbol, .. }) => {
             let sym = symbol.as_str();
             let Some(&id) = symbol_to_id.get(sym) else {
                 return false;
             };
             delete_node(id, graph, symbol_to_id)
         }
-        RustcEvent::EdgeRemoved(canon_event::EdgeRemoved { src, dst, kind }) => {
+        RustcEvent::EdgeRemoved(canon_event::EdgeRemoved { src, dst, kind, .. }) => {
             let src_sym = src.as_str();
             let dst_sym = dst.as_str();
             let kind = kind.as_str();
@@ -296,7 +296,7 @@ pub fn apply_rustc_event_to_graph(event: RustcEvent, graph: &mut CodeGraphProjec
             graph.edges.retain(|e| !(e.src == src && e.dst == dst && e.kind == kind));
             before != graph.edges.len()
         }
-        RustcEvent::FileSeen(canon_event::FileSeen { path }) => {
+        RustcEvent::FileSeen(canon_event::FileSeen { path, .. }) => {
             let path = path.as_str();
             if !path.is_empty() && !graph.files.iter().any(|p| p == path) {
                 graph.files.push(path.to_string());

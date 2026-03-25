@@ -62,7 +62,7 @@ impl EventConsumer for GoalGenConsumer {
                         return EventOutcome::NoOp("goal_gen_skill_load_failed");
                     }
                 };
-                EventOutcome::Emit(RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt, role: Some("goal_gen".to_string()), agent_id: Some("goal_gen_chatgpt".to_string()) }))
+                EventOutcome::Emit(RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt, role: Some("goal_gen".to_string()), agent_id: Some("goal_gen_chatgpt".to_string()), dispatched: true }))
             }
             (State::Pending { request_id: expected_id, ticks_waiting }, RuntimeEvent::Tick(_)) => {
                 let new_ticks = ticks_waiting.saturating_add(1);

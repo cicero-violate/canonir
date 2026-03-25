@@ -19,7 +19,7 @@ impl QueryConsumer {
             RustcEvent::NodeDefined(canon_types::NodeDefined { symbol, kind, .. }) => {
                 self.symbols.insert(symbol.clone(), kind.clone());
             }
-            RustcEvent::FileSeen(canon_types::FileSeen { path }) => {
+            RustcEvent::FileSeen(canon_types::FileSeen { path, .. }) => {
                 self.files.insert(path.clone());
             }
             RustcEvent::EdgeDefined(_) => {}

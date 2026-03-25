@@ -3,16 +3,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 canon_event_struct!(SessionStart {
-    project: String,
+    #[input] project: String,
     #[serde(default)]
-    schema: u64,
+    #[output] schema: u64,
     #[serde(default)]
     byte_offset: u64,
 });
 
 canon_event_struct!(NodeDefined {
-    symbol: String,
-    kind: String,
+    #[input] symbol: String,
+    #[input] kind: String,
     #[serde(default)]
     file: String,
     #[serde(default)]
@@ -22,12 +22,12 @@ canon_event_struct!(NodeDefined {
     #[serde(default)]
     lo: u32,
     #[serde(default)]
-    hi: u32,
+    #[output] hi: u32,
 });
 
 canon_event_struct!(NodeUpdated {
-    symbol: String,
-    kind: String,
+    #[input] symbol: String,
+    #[input] kind: String,
     #[serde(default)]
     file: String,
     #[serde(default)]
@@ -37,18 +37,46 @@ canon_event_struct!(NodeUpdated {
     #[serde(default)]
     lo: u32,
     #[serde(default)]
-    hi: u32,
+    #[output] hi: u32,
 });
 
-canon_event_struct!(NodeRemoved { symbol: String });
-canon_event_struct!(EdgeDefined { src: String, dst: String, kind: String });
-canon_event_struct!(EdgeRemoved { src: String, dst: String, kind: String });
-canon_event_struct!(FileSeen { path: String });
-canon_event_struct!(CallsiteObserved { kind: String, resolved: bool });
-canon_event_struct!(SymbolDefined { symbol: String, kind: String });
+canon_event_struct!(NodeRemoved {
+    #[input] symbol: String,
+    #[output] removed: bool,
+});
+
+canon_event_struct!(EdgeDefined {
+    #[input] src: String,
+    #[input] dst: String,
+    #[input] kind: String,
+    #[output] defined: bool,
+});
+
+canon_event_struct!(EdgeRemoved {
+    #[input] src: String,
+    #[input] dst: String,
+    #[input] kind: String,
+    #[output] removed: bool,
+});
+
+canon_event_struct!(FileSeen {
+    #[input] path: String,
+    #[output] seen: bool,
+});
+
+canon_event_struct!(CallsiteObserved {
+    #[input] kind: String,
+    #[output] resolved: bool,
+});
+
+canon_event_struct!(SymbolDefined {
+    #[input] symbol: String,
+    #[input] kind: String,
+    #[output] defined: bool,
+});
 
 canon_event_struct!(SpanDefined {
-    symbol: String,
+    #[input] symbol: String,
     #[serde(default)]
     file: String,
     #[serde(default)]
@@ -58,12 +86,12 @@ canon_event_struct!(SpanDefined {
     #[serde(default)]
     lo: u32,
     #[serde(default)]
-    hi: u32,
+    #[output] hi: u32,
 });
 
 canon_event_struct!(PanicCaptured {
-    def_id: String,
-    message: String,
+    #[input] def_id: String,
+    #[input] message: String,
     #[serde(default)]
     mir_variant: Option<String>,
     #[serde(default)]
@@ -73,12 +101,23 @@ canon_event_struct!(PanicCaptured {
     #[serde(default)]
     span: Option<String>,
     #[serde(default)]
-    frames: Vec<PanicFrame>,
+    #[output] frames: Vec<PanicFrame>,
 });
 
-canon_event_struct!(WarningCaptured { message: String });
-canon_event_struct!(CompilationUnitFinished { crate_name: String });
-canon_event_struct!(InvariantViolation { message: String });
+canon_event_struct!(WarningCaptured {
+    #[input] message: String,
+    #[output] captured: bool,
+});
+
+canon_event_struct!(CompilationUnitFinished {
+    #[input] crate_name: String,
+    #[output] finished: bool,
+});
+
+canon_event_struct!(InvariantViolation {
+    #[input] message: String,
+    #[output] recorded: bool,
+});
 
 canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)]
 RustcEvent {
@@ -98,7 +137,7 @@ RustcEvent {
     InvariantViolation(InvariantViolation),
 });
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventDelta {
     pub id: u64,
     pub tick: u64,
@@ -107,7 +146,15 @@ pub struct EventDelta {
 
 impl Default for EventDelta {
     fn default() -> Self {
-        Self { id: 0, tick: 0, event: RustcEvent::SessionStart(Default::default()) }
+        Self {
+            id: 0,
+            tick: 0,
+            event: RustcEvent::SessionStart(SessionStart {
+                project: String::new(),
+                schema: 0,
+                byte_offset: 0,
+            }),
+        }
     }
 }
 
@@ -149,14 +196,14 @@ impl Default for RustcState {
 }
 
 canon_event_struct!(PanicFrame {
-    frame_index: usize,
-    symbols: Vec<PanicSymbol>,
+    #[input] frame_index: usize,
+    #[output] symbols: Vec<PanicSymbol>,
 });
 
 canon_event_struct!(PanicSymbol {
-    symbol: String,
+    #[input] symbol: String,
     #[serde(default)]
-    file: Option<String>,
+    #[output] file: Option<String>,
     #[serde(default)]
     line: Option<u32>,
 });

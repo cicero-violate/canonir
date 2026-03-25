@@ -10,7 +10,7 @@ pub struct Learning {
 
 impl Reducer for Learning {
     fn update(&mut self, event: &RuntimeEvent) {
-        if let RuntimeEvent::Tick(Tick { tick }) = event {
+        if let RuntimeEvent::Tick(Tick { tick, .. }) = event {
             self.tick = *tick;
         }
         if let RuntimeEvent::LoopActed(a) = event {

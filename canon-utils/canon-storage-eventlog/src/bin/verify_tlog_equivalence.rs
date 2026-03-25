@@ -143,7 +143,7 @@ fn run_stress(json_path: &Path, bin_path: &Path) -> Result<()> {
     for i in 0..50_000u32 {
         let src = format!("node_{}", i % 10_000);
         let dst = format!("node_{}", (i * 7) % 10_000);
-        let edge = RustcEvent::EdgeDefined(canon_event::EdgeDefined { src, dst, kind: "CALL".to_string() });
+        let edge = RustcEvent::EdgeDefined(canon_event::EdgeDefined { src, dst, kind: "CALL".to_string(), defined: true });
         let val = serde_json::to_value(&edge)?;
         let canon = make_canon("rustc", "rustc_event", val.clone());
         let line = serde_json::to_string(&canon)?;

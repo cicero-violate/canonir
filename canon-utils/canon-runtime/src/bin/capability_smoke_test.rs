@@ -13,6 +13,7 @@ fn main() -> Result<()> {
     let event = RuntimeEvent::File(FileEvent::Read(FileRead {
         request_id: "capability-smoke-read".to_string(),
         path: "/workspace/ai_sandbox/canon/canon-utils/README.md".to_string(),
+        queued: true,
     }));
     let exec = ExecutableEvent::try_from(event).expect("file read should be executable");
     let ctx = ExecutionContext { workspace: PathBuf::from("/workspace/ai_sandbox/canon"), emitter: std::sync::Arc::new(NoopEmitter) };

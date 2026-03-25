@@ -192,8 +192,9 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                 request_id: request_id.clone(),
                 kind: "bash".to_string(),
                 payload: serde_json::json!({ "cmd": cmd, "cwd": cwd }),
+                accepted: true,
             }));
-            events.push(RuntimeEvent::Bash(BashInvoke { request_id: request_id.clone(), cmd: cmd.to_string(), cwd: Some(cwd.to_string()) }));
+            events.push(RuntimeEvent::Bash(BashInvoke { request_id: request_id.clone(), cmd: cmd.to_string(), cwd: Some(cwd.to_string()), queued: true }));
 
             ctx.pending_act = Some(PendingAct {
                 tick: planned.tick,
@@ -244,8 +245,9 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                 request_id: request_id.clone(),
                 kind: "file.write".to_string(),
                 payload: serde_json::json!({ "path": path, "content": content }),
+                accepted: true,
             }));
-            events.push(RuntimeEvent::File(FileEvent::Write(FileWrite { request_id: request_id.clone(), path: path.to_string(), content: content.to_string() })));
+            events.push(RuntimeEvent::File(FileEvent::Write(FileWrite { request_id: request_id.clone(), path: path.to_string(), content: content.to_string(), queued: true })));
 
             ctx.pending_act = Some(PendingAct {
                 tick: planned.tick,
@@ -290,8 +292,9 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                 request_id: request_id.clone(),
                 kind: "file.patch".to_string(),
                 payload: serde_json::json!({ "path": path, "old": old, "new": new }),
+                accepted: true,
             }));
-            events.push(RuntimeEvent::File(FileEvent::Patch(FilePatch { request_id: request_id.clone(), path: path.to_string(), old: old.to_string(), new: new.to_string() })));
+            events.push(RuntimeEvent::File(FileEvent::Patch(FilePatch { request_id: request_id.clone(), path: path.to_string(), old: old.to_string(), new: new.to_string(), queued: true })));
 
             ctx.pending_act = Some(PendingAct {
                 tick: planned.tick,

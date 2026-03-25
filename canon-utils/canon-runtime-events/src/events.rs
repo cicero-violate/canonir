@@ -5,13 +5,72 @@ use canon_proc_macros::{canon_event_enum, canon_event_struct};
 
 pub const EVENT_SCHEMA_VERSION: &str = "1";
 
-canon_event_struct!(RenameSymbol { project: String, old: String, new: String });
-canon_event_struct!(MoveSymbol { project: String, symbol: String, module: String });
-canon_event_struct!(DeleteSymbol { project: String, symbol: String });
-canon_event_struct!(RenameModule { project: String, old: String, new: String });
-canon_event_struct!(RenameDir { project: String, old: std::path::PathBuf, new: std::path::PathBuf });
-canon_event_struct!(InlineModule { project: String, module: String });
-canon_event_struct!(ExtractModule { project: String, symbol: String, module: String });
+// ---------------------------------------------------------------------------
+// Edit events
+// ---------------------------------------------------------------------------
+
+canon_event_struct!(
+    #[impl_shape]
+    RenameSymbol {
+        project: String,
+        #[input] old: String,
+        #[output] new: String,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    MoveSymbol {
+        project: String,
+        #[input] symbol: String,
+        #[output] module: String,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    DeleteSymbol {
+        project: String,
+        #[input] symbol: String,
+        #[output] success: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    RenameModule {
+        project: String,
+        #[input] old: String,
+        #[output] new: String,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    RenameDir {
+        project: String,
+        #[input] old: std::path::PathBuf,
+        #[output] new: std::path::PathBuf,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    InlineModule {
+        project: String,
+        #[input] module: String,
+        #[output] success: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    ExtractModule {
+        project: String,
+        #[input] symbol: String,
+        #[output] module: String,
+    }
+);
 
 canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)]
 EditEvent {
@@ -23,6 +82,10 @@ EditEvent {
     InlineModule(InlineModule),
     ExtractModule(ExtractModule),
 });
+
+// ---------------------------------------------------------------------------
+// EventMask (for rustc consumers)
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EventMask(pub(crate) u16);
@@ -86,7 +149,6 @@ impl EventMask {
 
 impl std::ops::BitOr for EventMask {
     type Output = EventMask;
-
     fn bitor(self, rhs: EventMask) -> EventMask {
         EventMask(self.0 | rhs.0)
     }
@@ -103,6 +165,10 @@ pub trait RustcEventConsumer: Send + Sync {
     fn on_event(&mut self, delta: &EventDelta, state: &RustcState);
 }
 
+// ---------------------------------------------------------------------------
+// Code event (wraps rustc output — manual CanonPayloadShape)
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone)]
 pub struct Code {
     pub delta: canon_types::EventDelta,
@@ -114,191 +180,444 @@ impl Default for Code {
         Self { delta: canon_types::EventDelta::default(), state: canon_types::RustcState::default() }
     }
 }
-canon_event_struct!(DebugEvent { source: String, kind: String, payload: serde_json::Value });
-canon_event_struct!(ErrorOccurred {
-    kind: String,
-    source: String,
-    message: String,
-    #[serde(default)]
-    severity: String,
-    #[serde(default)]
-    context: serde_json::Value,
-    #[serde(default)]
-    trace_id: Option<String>,
-    #[serde(default)]
-    error_id: Option<String>,
-});
+
+impl crate::CanonPayloadShape for Code {
+    fn payload_input(&self) -> serde_json::Value {
+        serde_json::json!({ "tick": self.delta.tick, "id": self.delta.id })
+    }
+    fn payload_output(&self) -> serde_json::Value {
+        serde_json::to_value(&self.delta.event).unwrap_or_else(|_| serde_json::json!({}))
+    }
+    fn payload_delta(&self) -> serde_json::Value {
+        serde_json::json!({ "graph_version": self.state.graph_version })
+    }
+    fn payload_data(&self) -> serde_json::Value {
+        serde_json::json!({
+            "delta": serde_json::to_value(&self.delta).unwrap_or_default(),
+            "state": serde_json::to_value(&self.state).unwrap_or_default(),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime / loop events
+// ---------------------------------------------------------------------------
+
+canon_event_struct!(
+    #[impl_shape]
+    DebugEvent {
+        #[input] source: String,
+        #[input] kind: String,
+        #[output] payload: serde_json::Value,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    ErrorOccurred {
+        #[input] kind: String,
+        #[input] source: String,
+        #[input] message: String,
+        #[serde(default)]
+        severity: String,
+        #[serde(default)]
+        context: serde_json::Value,
+        #[serde(default)]
+        trace_id: Option<String>,
+        #[serde(default)]
+        error_id: Option<String>,
+        #[output] captured: bool,
+    }
+);
 
 pub fn new_error_occurred(
-    kind: impl Into<String>, source: impl Into<String>, message: impl Into<String>, severity: impl Into<String>, context: serde_json::Value, trace_id: Option<String>,
+    kind: impl Into<String>,
+    source: impl Into<String>,
+    message: impl Into<String>,
+    severity: impl Into<String>,
+    context: serde_json::Value,
+    trace_id: Option<String>,
 ) -> ErrorOccurred {
-    ErrorOccurred { kind: kind.into(), source: source.into(), message: message.into(), severity: severity.into(), context, trace_id, error_id: Some(uuid::Uuid::new_v4().to_string()) }
+    ErrorOccurred {
+        kind: kind.into(),
+        source: source.into(),
+        message: message.into(),
+        severity: severity.into(),
+        context,
+        trace_id,
+        error_id: Some(uuid::Uuid::new_v4().to_string()),
+        captured: true,
+    }
 }
-canon_event_struct!(Tick { tick: u64 });
-canon_event_struct!(LoopObserved {
-    tick: u64,
-    error_count: usize,
-    warning_count: usize,
-    compiler_errors: Vec<serde_json::Value>,
-    goal_text: Option<String>,
-    #[serde(default)]
-    workspace_facts: Vec<String>,
-});
-canon_event_struct!(LoopPlanned {
-    tick: u64,
-    action_kind: String,
-    action_payload: serde_json::Value,
-    reason: String,
-    llm_request_id: Option<String>,
-    #[serde(default)]
-    signals: Option<serde_json::Value>,
-    #[serde(default)]
-    trace_id: Option<String>,
-    #[serde(default)]
-    execution_id: Option<String>,
-    #[serde(default)]
-    span_id: Option<String>,
-    #[serde(default)]
-    parent_span_id: Option<String>,
-    #[serde(default)]
-    plan_id: Option<String>,
-    #[serde(default)]
-    plan_step_id: Option<String>,
-    #[serde(default)]
-    action_id: Option<String>,
-    #[serde(default)]
-    depends_on: Vec<String>,
-});
-canon_event_struct!(LoopActed {
-    tick: u64,
-    action_kind: String,
-    capability_request_id: String,
-    #[serde(default)]
-    tool_call_id: Option<String>,
-    #[serde(default)]
-    tool_result_id: Option<String>,
-    stdout: String,
-    stderr: String,
-    exit_code: Option<i32>,
-    duration_ms: u64,
-    success: bool,
-    #[serde(default)]
-    trace_id: Option<String>,
-    #[serde(default)]
-    execution_id: Option<String>,
-    #[serde(default)]
-    span_id: Option<String>,
-    #[serde(default)]
-    parent_span_id: Option<String>,
-    #[serde(default)]
-    plan_id: Option<String>,
-    #[serde(default)]
-    plan_step_id: Option<String>,
-    #[serde(default)]
-    action_id: Option<String>,
-});
-canon_event_struct!(LoopVerified {
-    tick: u64,
-    passed: bool,
-    compiler_clean: bool,
-    tlog_clean: bool,
-    error_count: usize,
-    diagnostics: Vec<String>,
-    #[serde(default)]
-    trace_id: Option<String>,
-    #[serde(default)]
-    execution_id: Option<String>,
-    #[serde(default)]
-    span_id: Option<String>,
-    #[serde(default)]
-    parent_span_id: Option<String>,
-});
-canon_event_struct!(LoopRewarded {
-    tick: u64,
-    reward: f32,
-    errors_before: usize,
-    errors_after: usize,
-    stagnant_ticks: u32,
-    halt: bool,
-    #[serde(default)]
-    goodness: f32,
-    #[serde(default)]
-    delta_g: f32,
-    #[serde(default)]
-    trace_id: Option<String>,
-    #[serde(default)]
-    execution_id: Option<String>,
-    #[serde(default)]
-    span_id: Option<String>,
-    #[serde(default)]
-    parent_span_id: Option<String>,
-});
-canon_event_struct!(GoodnessSnapshot {
-    tick: u64,
-    g: f32,
-    delta_g: f32,
-    metrics: serde_json::Value,
-});
-canon_event_struct!(RouteTick { tick: u64 });
-canon_event_struct!(RouteSelected {
-    tick: u64,
-    approved_route: String,
-    suggested_route: String,
-    rationale: String,
-    #[serde(default)]
-    confidence: Option<f32>,
-    gate_note: String,
-    #[serde(default)]
-    gate_rules_fired: Vec<String>,
-    gate_changed: bool,
-    gate_should_stop: bool,
-    prompt: String,
-    model_json: String,
-});
-canon_event_struct!(RuntimeStateUpdated { payload: serde_json::Value });
-canon_event_struct!(PolicyBaselineUpdated { payload: serde_json::Value });
-canon_event_struct!(GoalSelected { payload: serde_json::Value });
-canon_event_struct!(SystemConfigLoaded { payload: serde_json::Value });
-canon_event_struct!(AgentRegistered { payload: serde_json::Value });
-canon_event_struct!(PromptLoaded { payload: serde_json::Value });
-canon_event_struct!(ToolCall { node_id: String, tool_call_id: String, request_id: String, kind: String, payload: serde_json::Value });
-canon_event_struct!(ToolResult { node_id: String, tool_call_id: String, tool_result_id: String, request_id: String, kind: String, output: serde_json::Value, success: bool });
-// Emitted once when all pending tool results for a batch have landed (pending set → empty).
-// The router uses this as the trigger to snapshot state and dispatch its next LLM call,
-// ensuring it never decides on stale pre-execution state.
-canon_event_struct!(ToolBatchSettled { tick: u64, result_count: u32, any_failed: bool });
-canon_event_struct!(GoalNodeCreated {
-    node_id: String,
-    description: String,
-    deps: Vec<String>,
-    caps: Vec<String>,
-    node_type: String,
-    priority: u8,
-    #[serde(default)]
-    budget: Option<u32>,
-});
-canon_event_struct!(GoalNodeRetracted { node_id: String });
-canon_event_struct!(GoalNodeRewritten {
-    node_id: String,
-    new_description: String,
-    new_caps: Vec<String>,
-});
-canon_event_struct!(GoalEdgeDefined { from_node_id: String, to_node_id: String });
-canon_event_struct!(GoalGraphCheckpointed { tlog_seq: u64 });
-canon_event_struct!(CapabilityInvoked { capability_id: String, capability: &'static str, node_id: String });
-canon_event_struct!(CapabilityResolved { capability_id: String, success: bool, duration_ms: u64 });
 
+canon_event_struct!(
+    #[impl_shape]
+    Tick {
+        #[input] tick: u64,
+        #[output] emitted: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    LoopObserved {
+        #[input] tick: u64,
+        #[output] error_count: usize,
+        #[output] warning_count: usize,
+        #[delta] compiler_errors: Vec<serde_json::Value>,
+        #[input] goal_text: Option<String>,
+        #[serde(default)]
+        workspace_facts: Vec<String>,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    LoopPlanned {
+        #[input] tick: u64,
+        #[input] action_kind: String,
+        #[input] action_payload: serde_json::Value,
+        #[output] reason: String,
+        llm_request_id: Option<String>,
+        #[serde(default)]
+        #[delta] signals: Option<serde_json::Value>,
+        #[serde(default)]
+        trace_id: Option<String>,
+        #[serde(default)]
+        execution_id: Option<String>,
+        #[serde(default)]
+        span_id: Option<String>,
+        #[serde(default)]
+        parent_span_id: Option<String>,
+        #[serde(default)]
+        plan_id: Option<String>,
+        #[serde(default)]
+        plan_step_id: Option<String>,
+        #[serde(default)]
+        action_id: Option<String>,
+        #[serde(default)]
+        depends_on: Vec<String>,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    LoopActed {
+        #[input] tick: u64,
+        #[input] action_kind: String,
+        #[input] capability_request_id: String,
+        #[serde(default)]
+        tool_call_id: Option<String>,
+        #[serde(default)]
+        tool_result_id: Option<String>,
+        #[output] stdout: String,
+        #[delta] stderr: String,
+        #[output] exit_code: Option<i32>,
+        duration_ms: u64,
+        #[output] success: bool,
+        #[serde(default)]
+        trace_id: Option<String>,
+        #[serde(default)]
+        execution_id: Option<String>,
+        #[serde(default)]
+        span_id: Option<String>,
+        #[serde(default)]
+        parent_span_id: Option<String>,
+        #[serde(default)]
+        plan_id: Option<String>,
+        #[serde(default)]
+        plan_step_id: Option<String>,
+        #[serde(default)]
+        action_id: Option<String>,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    LoopVerified {
+        #[input] tick: u64,
+        #[output] passed: bool,
+        #[output] compiler_clean: bool,
+        tlog_clean: bool,
+        #[delta] error_count: usize,
+        #[delta] diagnostics: Vec<String>,
+        #[serde(default)]
+        trace_id: Option<String>,
+        #[serde(default)]
+        execution_id: Option<String>,
+        #[serde(default)]
+        span_id: Option<String>,
+        #[serde(default)]
+        parent_span_id: Option<String>,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    LoopRewarded {
+        #[input] tick: u64,
+        #[input] errors_before: usize,
+        #[delta] errors_after: usize,
+        stagnant_ticks: u32,
+        #[output] halt: bool,
+        #[serde(default)]
+        goodness: f32,
+        #[output] reward: f32,
+        #[serde(default)]
+        #[delta] delta_g: f32,
+        #[serde(default)]
+        trace_id: Option<String>,
+        #[serde(default)]
+        execution_id: Option<String>,
+        #[serde(default)]
+        span_id: Option<String>,
+        #[serde(default)]
+        parent_span_id: Option<String>,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    GoodnessSnapshot {
+        #[input] tick: u64,
+        #[output] g: f32,
+        #[delta] delta_g: f32,
+        metrics: serde_json::Value,
+    }
+);
+
+// ---------------------------------------------------------------------------
+// Routing events
+// ---------------------------------------------------------------------------
+
+canon_event_struct!(
+    #[impl_shape]
+    RouteTick {
+        #[input] tick: u64,
+        #[output] emitted: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    RouteSelected {
+        #[input] tick: u64,
+        #[input] suggested_route: String,
+        #[input] prompt: String,
+        #[output] approved_route: String,
+        #[output] rationale: String,
+        #[serde(default)]
+        confidence: Option<f32>,
+        gate_note: String,
+        #[serde(default)]
+        gate_rules_fired: Vec<String>,
+        #[delta] gate_changed: bool,
+        gate_should_stop: bool,
+        model_json: String,
+    }
+);
+
+// ---------------------------------------------------------------------------
+// State update events (no natural input — payload IS the new state)
+// ---------------------------------------------------------------------------
+
+canon_event_struct!(
+    #[no_input]
+    #[impl_shape]
+    RuntimeStateUpdated {
+        #[output] payload: serde_json::Value,
+    }
+);
+
+canon_event_struct!(
+    #[no_input]
+    #[impl_shape]
+    PolicyBaselineUpdated {
+        #[output] payload: serde_json::Value,
+    }
+);
+
+canon_event_struct!(
+    #[no_input]
+    #[impl_shape]
+    GoalSelected {
+        #[output] payload: serde_json::Value,
+    }
+);
+
+canon_event_struct!(
+    #[no_input]
+    #[impl_shape]
+    SystemConfigLoaded {
+        #[output] payload: serde_json::Value,
+    }
+);
+
+canon_event_struct!(
+    #[no_input]
+    #[impl_shape]
+    AgentRegistered {
+        #[output] payload: serde_json::Value,
+    }
+);
+
+canon_event_struct!(
+    #[no_input]
+    #[impl_shape]
+    PromptLoaded {
+        #[output] payload: serde_json::Value,
+    }
+);
+
+// ---------------------------------------------------------------------------
+// Tool events
+// ---------------------------------------------------------------------------
+
+canon_event_struct!(
+    #[impl_shape]
+    ToolCall {
+        node_id: String,
+        #[input] tool_call_id: String,
+        request_id: String,
+        #[input] kind: String,
+        #[input] payload: serde_json::Value,
+        #[output] accepted: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    ToolResult {
+        node_id: String,
+        #[input] tool_call_id: String,
+        tool_result_id: String,
+        request_id: String,
+        #[input] kind: String,
+        #[output] output: serde_json::Value,
+        #[output] success: bool,
+    }
+);
+
+// Emitted once when all pending tool results for a batch have landed.
+canon_event_struct!(
+    #[impl_shape]
+    ToolBatchSettled {
+        #[input] tick: u64,
+        #[input] result_count: u32,
+        #[output] any_failed: bool,
+    }
+);
+
+// ---------------------------------------------------------------------------
+// Goal graph events
+// ---------------------------------------------------------------------------
+
+canon_event_struct!(
+    #[impl_shape]
+    GoalNodeCreated {
+        #[input] node_id: String,
+        #[input] description: String,
+        #[input] deps: Vec<String>,
+        #[delta] caps: Vec<String>,
+        node_type: String,
+        priority: u8,
+        #[serde(default)]
+        budget: Option<u32>,
+        #[output] created: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    GoalNodeRetracted {
+        #[input] node_id: String,
+        #[output] retracted: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    GoalNodeRewritten {
+        #[input] node_id: String,
+        #[output] new_description: String,
+        #[delta] new_caps: Vec<String>,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    GoalEdgeDefined {
+        #[input] from_node_id: String,
+        #[input] to_node_id: String,
+        #[output] created: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    GoalGraphCheckpointed {
+        #[input] tlog_seq: u64,
+        #[output] checkpointed: bool,
+    }
+);
+
+// ---------------------------------------------------------------------------
+// Capability events
+// ---------------------------------------------------------------------------
+
+canon_event_struct!(
+    #[impl_shape]
+    CapabilityInvoked {
+        #[input] capability_id: String,
+        #[input] capability: &'static str,
+        #[input] node_id: String,
+        #[output] invoked: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    CapabilityResolved {
+        #[input] capability_id: String,
+        #[output] success: bool,
+        duration_ms: u64,
+    }
+);
+
+// ---------------------------------------------------------------------------
 // Cargo capability events
-canon_event_struct!(CargoBuild { request_id: String, crate_name: String });
-canon_event_struct!(CargoRun {
-    request_id: String,
-    crate_name: String,
-    #[serde(default)]
-    bin: Option<String>,
-    #[serde(default)]
-    args: Vec<String>,
-});
-canon_event_struct!(CargoCheck { request_id: String, crate_name: String });
+// ---------------------------------------------------------------------------
+
+canon_event_struct!(
+    #[impl_shape]
+    CargoBuild {
+        #[input] request_id: String,
+        #[input] crate_name: String,
+        #[output] queued: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    CargoRun {
+        #[input] request_id: String,
+        #[input] crate_name: String,
+        #[serde(default)]
+        bin: Option<String>,
+        #[serde(default)]
+        args: Vec<String>,
+        #[output] queued: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    CargoCheck {
+        #[input] request_id: String,
+        #[input] crate_name: String,
+        #[output] queued: bool,
+    }
+);
 
 canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)] CargoEvent {
     Build(CargoBuild),
@@ -306,10 +625,39 @@ canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)] CargoEvent {
     Check(CargoCheck),
 });
 
+// ---------------------------------------------------------------------------
 // File capability events
-canon_event_struct!(FileRead { request_id: String, path: String });
-canon_event_struct!(FileWrite { request_id: String, path: String, content: String });
-canon_event_struct!(FilePatch { request_id: String, path: String, old: String, new: String });
+// ---------------------------------------------------------------------------
+
+canon_event_struct!(
+    #[impl_shape]
+    FileRead {
+        #[input] request_id: String,
+        #[input] path: String,
+        #[output] queued: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    FileWrite {
+        #[input] request_id: String,
+        #[input] path: String,
+        #[input] content: String,
+        #[output] queued: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    FilePatch {
+        #[input] request_id: String,
+        #[input] path: String,
+        #[input] old: String,
+        #[output] new: String,
+        #[output] queued: bool,
+    }
+);
 
 canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)] FileEvent {
     Read(FileRead),
@@ -317,82 +665,127 @@ canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)] FileEvent {
     Patch(FilePatch),
 });
 
+// ---------------------------------------------------------------------------
 // Bash capability
-canon_event_struct!(BashInvoke {
-    request_id: String,
-    cmd: String,
-    #[serde(default)]
-    cwd: Option<String>,
-});
+// ---------------------------------------------------------------------------
 
+canon_event_struct!(
+    #[impl_shape]
+    BashInvoke {
+        #[input] request_id: String,
+        #[input] cmd: String,
+        #[serde(default)]
+        cwd: Option<String>,
+        #[output] queued: bool,
+    }
+);
+
+// ---------------------------------------------------------------------------
 // LLM capability
-canon_event_struct!(LlmCall {
-    request_id: String,
-    prompt: String,
-    #[serde(default)]
-    role: Option<String>,
-    #[serde(default)]
-    agent_id: Option<String>,
-});
-canon_event_struct!(RequestDispatch {
-    dispatch_id: String,
-    parent_request_id: String,
-    agent_id: String,
-    task_prompt: String,
-    task_kind: String,
-    #[serde(default)]
-    deps: Vec<String>,
-    #[serde(default)]
-    workspace_scope: Option<String>,
-});
-canon_event_struct!(SubTaskResult {
-    dispatch_id: String,
-    agent_id: String,
-    parent_request_id: String,
-    success: bool,
-    output: serde_json::Value,
-    actions_taken: Vec<String>,
-    #[serde(default)]
-    error: Option<String>,
-});
+// ---------------------------------------------------------------------------
 
+canon_event_struct!(
+    #[impl_shape]
+    LlmCall {
+        #[input] request_id: String,
+        #[input] prompt: String,
+        #[serde(default)]
+        role: Option<String>,
+        #[serde(default)]
+        agent_id: Option<String>,
+        #[output] dispatched: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    RequestDispatch {
+        dispatch_id: String,
+        #[input] parent_request_id: String,
+        agent_id: String,
+        #[input] task_prompt: String,
+        task_kind: String,
+        #[serde(default)]
+        #[delta] deps: Vec<String>,
+        #[serde(default)]
+        workspace_scope: Option<String>,
+        #[output] dispatched: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    SubTaskResult {
+        #[input] dispatch_id: String,
+        #[input] agent_id: String,
+        parent_request_id: String,
+        #[output] success: bool,
+        #[output] output: serde_json::Value,
+        #[delta] actions_taken: Vec<String>,
+        #[serde(default)]
+        error: Option<String>,
+    }
+);
+
+// ---------------------------------------------------------------------------
 // Analysis capability
-canon_event_struct!(AnalysisRun {
-    request_id: String,
-    crate_name: String,
-    #[serde(default)]
-    batch_id: Option<String>,
-});
-canon_event_struct!(AnalysisWorkspace { request_id: String });
+// ---------------------------------------------------------------------------
+
+canon_event_struct!(
+    #[impl_shape]
+    AnalysisRun {
+        #[input] request_id: String,
+        #[input] crate_name: String,
+        #[serde(default)]
+        batch_id: Option<String>,
+        #[output] queued: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    AnalysisWorkspace {
+        #[input] request_id: String,
+        #[output] queued: bool,
+    }
+);
 
 canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)] AnalysisEvent {
     Run(AnalysisRun),
     Workspace(AnalysisWorkspace),
 });
 
+// ---------------------------------------------------------------------------
+// Enum Default impls — explicit construction (Default no longer derived)
+// ---------------------------------------------------------------------------
+
 impl Default for EditEvent {
     fn default() -> Self {
-        Self::RenameSymbol(Default::default())
+        Self::RenameSymbol(RenameSymbol { project: String::new(), old: String::new(), new: String::new() })
     }
 }
 
 impl Default for CargoEvent {
     fn default() -> Self {
-        Self::Build(Default::default())
+        Self::Build(CargoBuild { request_id: String::new(), crate_name: String::new(), queued: false })
     }
 }
 
 impl Default for FileEvent {
     fn default() -> Self {
-        Self::Read(Default::default())
+        Self::Read(FileRead { request_id: String::new(), path: String::new(), queued: false })
     }
 }
 
 impl Default for AnalysisEvent {
     fn default() -> Self {
-        Self::Run(Default::default())
+        Self::Run(AnalysisRun { request_id: String::new(), crate_name: String::new(), batch_id: None, queued: false })
     }
 }
+
+// ---------------------------------------------------------------------------
+// RuntimeEvent master enum
+// ---------------------------------------------------------------------------
 
 canon_event_enum!(RuntimeEvent {
     Code(Code),
@@ -439,11 +832,49 @@ canon_event_enum!(RuntimeEvent {
     CapabilityResolved(CapabilityResolved),
 });
 
+// ---------------------------------------------------------------------------
+// Current dispatch ID — set by the event bus in the consumer thread just
+// before calling on_event, so consumers can read the canonical ID of the
+// triggering event and use it as a parent when emitting new events.
+// ---------------------------------------------------------------------------
+
+use std::cell::RefCell;
+
+thread_local! {
+    static CURRENT_DISPATCH_ID: RefCell<Option<crate::EventId>> = RefCell::new(None);
+}
+
+/// Returns the canonical ID of the event currently being dispatched to this
+/// consumer thread. Call this inside `on_event` to get the causal parent ID.
+pub fn current_dispatch_id() -> Option<crate::EventId> {
+    CURRENT_DISPATCH_ID.with(|id| id.borrow().clone())
+}
+
+/// Called by the event bus in the consumer thread before/after `on_event`.
+pub fn set_current_dispatch_id(id: Option<crate::EventId>) {
+    CURRENT_DISPATCH_ID.with(|cell| *cell.borrow_mut() = id);
+}
+
+// ---------------------------------------------------------------------------
+// EventEmitter trait
+// ---------------------------------------------------------------------------
+
 pub trait EventEmitter: Send + Sync {
     fn emit_located(&self, event: RuntimeEvent, file: &'static str, line: u32);
-    fn emit_with_parents(&self, event: RuntimeEvent, _parents: Vec<crate::EventId>, file: &'static str, line: u32) {
+
+    /// Emit an event with explicit causal parent IDs.
+    /// Implementations that want to propagate parents should override this method.
+    /// The default falls back to `emit_located` (no parent tracking).
+    fn emit_with_parents(
+        &self,
+        event: RuntimeEvent,
+        _parents: Vec<crate::EventId>,
+        file: &'static str,
+        line: u32,
+    ) {
         self.emit_located(event, file, line);
     }
+
     fn emit(&self, event: RuntimeEvent) {
         self.emit_located(event, "", 0);
     }
@@ -456,6 +887,7 @@ pub struct LocatedEvent {
     pub event: RuntimeEvent,
     pub file: &'static str,
     pub line: u32,
+    pub parent_ids: Vec<crate::EventId>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -467,18 +899,14 @@ pub enum EventFilter {
     CapabilityOnly,
 }
 
-/// The outcome every consumer must return from `on_event`.
-/// Returning unit `()` is a compile error; every path must declare intent.
+/// Every consumer must return an `EventOutcome` from `on_event`.
+/// Returning `()` is a compile error — every path must declare intent.
 #[derive(Debug)]
 pub enum EventOutcome {
-    /// Emit one event onto the bus.
     Emit(RuntimeEvent),
-    /// Emit multiple events onto the bus (ordered).
     EmitMany(Vec<RuntimeEvent>),
-    /// This consumer explicitly took no action this cycle.
-    /// The &'static str is a required reason string — no silent no-ops.
+    /// Explicit no-op — the `&'static str` is a required reason string.
     NoOp(&'static str),
-    /// Emit an error event; the consumer's internal state is unchanged.
     Error(RuntimeEvent),
 }
 
@@ -488,38 +916,9 @@ pub trait EventConsumer: Send + Sync {
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 }
 
-canon_event_struct!(CapabilityCompleted { request_id: String, capability: &'static str, result: CapabilityResult });
-
-canon_event_struct!(CapabilityFailed { request_id: String, capability: &'static str, error: String });
-
-canon_event_struct!(NodeReady {
-    node_id: String,
-    capability: String,
-    #[serde(default)]
-    request_id: String,
-});
-
-canon_event_struct!(NodeStarted {
-    node_id: String,
-    capability: String,
-    #[serde(default)]
-    request_id: String,
-});
-
-canon_event_struct!(NodeCompleted {
-    node_id: String,
-    capability: String,
-    #[serde(default)]
-    request_id: String,
-});
-
-canon_event_struct!(NodeFailed {
-    node_id: String,
-    capability: String,
-    error: Option<String>,
-    #[serde(default)]
-    request_id: String,
-});
+// ---------------------------------------------------------------------------
+// Capability result types
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProcessResult {
@@ -566,3 +965,69 @@ impl CapabilityResult {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Node lifecycle events
+// ---------------------------------------------------------------------------
+
+canon_event_struct!(
+    #[impl_shape]
+    CapabilityCompleted {
+        #[input] request_id: String,
+        #[input] capability: &'static str,
+        #[output] result: CapabilityResult,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    CapabilityFailed {
+        #[input] request_id: String,
+        #[input] capability: &'static str,
+        #[output] error: String,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    NodeReady {
+        #[input] node_id: String,
+        #[input] capability: String,
+        #[serde(default)]
+        request_id: String,
+        #[output] ready: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    NodeStarted {
+        #[input] node_id: String,
+        #[input] capability: String,
+        #[serde(default)]
+        request_id: String,
+        #[output] started: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    NodeCompleted {
+        #[input] node_id: String,
+        #[input] capability: String,
+        #[serde(default)]
+        request_id: String,
+        #[output] completed: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    NodeFailed {
+        #[input] node_id: String,
+        #[input] capability: String,
+        #[output] error: Option<String>,
+        #[serde(default)]
+        request_id: String,
+    }
+);
