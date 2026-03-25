@@ -1,12 +1,11 @@
 use anyhow::{anyhow, Result};
-use canon_event::{RuntimeEvent, FileEvent, FileRead};
+use canon_event::{EventId, RuntimeEvent, FileEvent, FileRead};
 use canon_exec::{ExecutableEvent, ExecutionContext, ExecutionResult};
 use std::path::PathBuf;
 
 struct NoopEmitter;
 impl canon_event::EventEmitter for NoopEmitter {
-    fn emit(&self, _event: RuntimeEvent) {}
-    fn emit_located(&self, _event: RuntimeEvent, _file: &'static str, _line: u32) {}
+    fn emit_with_parents(&self, _event: RuntimeEvent, _parents: Vec<canon_event::EventId>, _file: &'static str, _line: u32) {}
 }
 
 fn main() -> Result<()> {
@@ -16,7 +15,7 @@ fn main() -> Result<()> {
         queued: true,
     }));
     let exec = ExecutableEvent::try_from(event).expect("file read should be executable");
-    let ctx = ExecutionContext { workspace: PathBuf::from("/workspace/ai_sandbox/canon"), emitter: std::sync::Arc::new(NoopEmitter) };
+    let ctx = ExecutionContext { workspace: PathBuf::from("/workspace/ai_sandbox/canon"), emitter: std::sync::Arc::new(NoopEmitter), trigger_id: EventId::new("root") };
     let result = exec.execute(ctx)?;
     let completed = matches!(result, ExecutionResult::Emit(RuntimeEvent::CapabilityCompleted(_)) | ExecutionResult::EmitMany(_));
     if !completed {

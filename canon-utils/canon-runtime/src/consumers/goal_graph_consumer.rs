@@ -1,4 +1,4 @@
-use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, GoalGraphCheckpointed, RuntimeEvent};
+use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, GoalGraphCheckpointed, RuntimeEvent};
 use canon_proc_macros::must_emit;
 use std::collections::HashMap;
 
@@ -82,7 +82,7 @@ impl EventConsumer for GoalGraphConsumer {
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
     #[must_emit]
-    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
+    fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
         self.graph.apply(event);
         match event {
             RuntimeEvent::GoalNodeCreated(_) | RuntimeEvent::GoalNodeRetracted(_) | RuntimeEvent::GoalNodeRewritten(_) | RuntimeEvent::GoalEdgeDefined(_) => {

@@ -1,4 +1,4 @@
-use canon_event::{CapabilityCompleted, CapabilityFailed, RuntimeEvent, LoopVerified, RouteSelected};
+use canon_event::{CapabilityCompleted, CapabilityFailed, EventId, RuntimeEvent, LoopVerified, RouteSelected};
 
 use crate::{context::LoopContext, result::LoopStageResult};
 
@@ -22,39 +22,39 @@ pub enum LoopStageEvent {
 }
 
 impl LoopStageEvent {
-    pub fn execute(self, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+    pub fn execute(self, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
         match self {
             LoopStageEvent::Scan(_rs) => observe::execute(ctx),
-            LoopStageEvent::PlanTrigger(d) => plan::execute_trigger(d, ctx),
-            LoopStageEvent::ActDispatch(d) => act::execute_dispatch(d, ctx),
+            LoopStageEvent::PlanTrigger(d) => plan::execute_trigger(d, ctx, trigger_id),
+            LoopStageEvent::ActDispatch(d) => act::execute_dispatch(d, ctx, trigger_id.clone()),
             LoopStageEvent::VerifyTrigger(d) => verify::execute(d, ctx),
-            LoopStageEvent::Decompose(d) => decompose::execute(d, ctx),
+            LoopStageEvent::Decompose(d) => decompose::execute(d, ctx, trigger_id),
             LoopStageEvent::Conclude(d) => reward::execute_conclude(d, ctx),
-            LoopStageEvent::CapabilityDone(c) => dispatch_capability_done(c, ctx),
-            LoopStageEvent::CapabilityFail(f) => dispatch_capability_fail(f, ctx),
+            LoopStageEvent::CapabilityDone(c) => dispatch_capability_done(c, ctx, trigger_id),
+            LoopStageEvent::CapabilityFail(f) => dispatch_capability_fail(f, ctx, trigger_id),
             LoopStageEvent::Reward(v) => reward::execute(v, ctx),
         }
     }
 }
 
-fn dispatch_capability_done(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+fn dispatch_capability_done(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     let decompose_result = decompose::execute_complete(c.clone(), ctx)?;
     if !matches!(decompose_result, LoopStageResult::Noop) {
         return Ok(decompose_result);
     }
-    let plan_result = plan::execute_complete(c.clone(), ctx)?;
+    let plan_result = plan::execute_complete(c.clone(), ctx, trigger_id.clone())?;
     if !matches!(plan_result, LoopStageResult::Noop) {
         return Ok(plan_result);
     }
-    act::execute_complete(c, ctx)
+    act::execute_complete(c, ctx, trigger_id)
 }
 
-fn dispatch_capability_fail(f: CapabilityFailed, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
-    let plan_result = plan::execute_failed(f.clone(), ctx)?;
+fn dispatch_capability_fail(f: CapabilityFailed, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
+    let plan_result = plan::execute_failed(f.clone(), ctx, trigger_id.clone())?;
     if !matches!(plan_result, LoopStageResult::Noop) {
         return Ok(plan_result);
     }
-    act::execute_failed(f, ctx)
+    act::execute_failed(f, ctx, trigger_id)
 }
 
 impl TryFrom<RuntimeEvent> for LoopStageEvent {

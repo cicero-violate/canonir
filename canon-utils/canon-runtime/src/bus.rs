@@ -70,9 +70,7 @@ impl EventBus {
             let mut consumer = consumer;
             for msg in rx.iter() {
                 let parent_id = msg.event_id.clone();
-                canon_event::set_current_dispatch_id(Some(parent_id.clone()));
-                let outcome = consumer.on_event(&msg.event);
-                canon_event::set_current_dispatch_id(None);
+                let outcome = consumer.on_event(&msg.event, parent_id.clone());
                 hooks.run_post(&msg.event, &outcome);
                 match outcome {
                     EventOutcome::Emit(e) => {
@@ -93,16 +91,18 @@ impl EventBus {
         self.consumers.push(ConsumerEntry { filter, sender: tx });
     }
 
-    pub fn dispatch(&self, event: RuntimeEvent, event_id: EventId) {
+    /// Dispatch an event to all matching consumers. Returns the number of consumers that received it.
+    pub fn dispatch(&self, event: RuntimeEvent, event_id: EventId) -> usize {
         let base_event = match self.hooks.run_pre(&event) {
             HookDecision::Allow => event,
             HookDecision::Mutate { replacement } => replacement,
             HookDecision::Deny { reason } => {
                 self.hooks.run_post(&event, &EventOutcome::Error(hook_denied_event(&reason)));
-                return;
+                return 0;
             }
         };
         let reliable = is_control_event(&base_event);
+        let mut delivered = 0usize;
         for consumer in &self.consumers {
             match consumer.filter {
                 EventFilter::All => {}
@@ -131,12 +131,16 @@ impl EventBus {
                     }
                 }
             }
-            if reliable {
-                let _ = consumer.sender.send(EventMessage { event: base_event.clone(), event_id: event_id.clone() });
+            let sent = if reliable {
+                consumer.sender.send(EventMessage { event: base_event.clone(), event_id: event_id.clone() }).is_ok()
             } else {
-                let _ = consumer.sender.try_send(EventMessage { event: base_event.clone(), event_id: event_id.clone() });
+                consumer.sender.try_send(EventMessage { event: base_event.clone(), event_id: event_id.clone() }).is_ok()
+            };
+            if sent {
+                delivered += 1;
             }
         }
+        delivered
     }
 
     pub fn log_registry(&self) {}

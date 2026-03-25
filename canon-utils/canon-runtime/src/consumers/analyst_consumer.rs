@@ -1,4 +1,4 @@
-use canon_event::{CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, LlmCall, RuntimeEvent};
+use canon_event::{CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, LlmCall, RuntimeEvent};
 use canon_proc_macros::must_emit;
 use canon_skills::global_registry;
 use std::io::Write as _;
@@ -86,7 +86,7 @@ impl EventConsumer for AnalystConsumer {
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
     #[must_emit]
-    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
+    fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
         match event {
             RuntimeEvent::LoopRewarded(_) => {
                 if let State::Idle { ticks_since_reward, cooldown_ticks } = &mut self.state {

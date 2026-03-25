@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use canon_event::{
-    BashInvoke, CapabilityCompleted, CapabilityFailed, CapabilityResult, FileEvent, FilePatch, FileWrite, LoopActed, LoopPlanned, ProcessResult, RouteSelected, RuntimeEvent, ToolCall, ToolResult,
+    BashInvoke, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, FileEvent, FilePatch, FileWrite, LoopActed, LoopPlanned, ProcessResult, RouteSelected, RuntimeEvent, ToolCall, ToolResult,
 };
 use canon_goal::parse_agent_goal_markdown;
 use canon_tools_patch::apply_patch;
@@ -14,7 +14,7 @@ use crate::{
     result::LoopStageResult,
 };
 
-pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     if ctx.pending_act.is_some() {
         return Ok(LoopStageResult::Noop);
     }
@@ -30,7 +30,7 @@ pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Re
             break;
         };
         ctx.active_batch_llm_request_id = task.plan.llm_request_id.clone();
-        match dispatch_plan(ctx, &task.plan)? {
+        match dispatch_plan(ctx, &task.plan, &trigger_id)? {
             LoopStageResult::Emit(e) => events.push(e),
             LoopStageResult::EmitMany(evs) => events.extend(evs),
             LoopStageResult::Deferred | LoopStageResult::Noop => {}
@@ -43,7 +43,7 @@ pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Re
     }
 }
 
-pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     let Some(pending) = ctx.pending_act.take() else {
         return Ok(LoopStageResult::Noop);
     };
@@ -69,8 +69,8 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
         rationale: String::new(),
         gate_rules_fired: Vec::new(),
         gate_should_stop: false,
-        model_json: serde_json::json!({}),
-        confidence: 1.0,
+        model_json: String::new(),
+        confidence: Some(1.0),
         gate_changed: false,
         gate_note: String::new(),
     }));
@@ -82,7 +82,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
             let Some(next) = ctx.scheduler.pop_for_llm(llm_request_id.as_deref()).map(|t| t.plan) else {
                 break;
             };
-            match dispatch_plan(ctx, &next)? {
+            match dispatch_plan(ctx, &next, &trigger_id)? {
                 LoopStageResult::Emit(e) => events.push(e),
                 LoopStageResult::EmitMany(evs) => events.extend(evs),
                 _ => {}
@@ -92,7 +92,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
     Ok(LoopStageResult::EmitMany(events))
 }
 
-pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     let Some(pending) = ctx.pending_act.take() else {
         return Ok(LoopStageResult::Noop);
     };
@@ -121,7 +121,7 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext) -> anyhow::Res
             let Some(next) = ctx.scheduler.pop_for_llm(llm_request_id.as_deref()).map(|t| t.plan) else {
                 break;
             };
-            match dispatch_plan(ctx, &next)? {
+            match dispatch_plan(ctx, &next, &trigger_id)? {
                 LoopStageResult::Emit(e) => events.push(e),
                 LoopStageResult::EmitMany(evs) => events.extend(evs),
                 _ => {}
@@ -135,7 +135,7 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext) -> anyhow::Res
 // Dispatch helpers (ported from ActConsumer)
 // -------------------------------------------------------------------------------------
 
-fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result<LoopStageResult> {
+fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &EventId) -> anyhow::Result<LoopStageResult> {
     match planned.action_kind.as_str() {
         "no_op" | "done" => {
             ctx.mark_batch_inline_completion(planned, true);
@@ -181,11 +181,15 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned) -> anyhow::Result
                     DestructiveCmdPolicy::Warn => {
                         // emit warning
                         if let Some(emitter) = ctx.emitter.as_ref() {
-                            canon_meta::canon_emit_meta!(emitter; "act_consumer", "destructive_command_warning", serde_json::json!({
-                                "cmd": cmd,
-                                "policy": ctx.destructive_cmd_policy.as_str(),
-                                "action_id": planned.action_id,
-                            }));
+                            emitter.emit_with_parents(canon_event::RuntimeEvent::Debug(canon_event::DebugEvent {
+                                source: "act_consumer".to_string(),
+                                kind: "destructive_command_warning".to_string(),
+                                payload: serde_json::json!({
+                                    "cmd": cmd,
+                                    "policy": ctx.destructive_cmd_policy.as_str(),
+                                    "action_id": planned.action_id,
+                                }),
+                            }), vec![trigger_id.clone()], file!(), line!());
                         }
                     }
                     DestructiveCmdPolicy::Allow => {}
@@ -543,7 +547,7 @@ fn resolve_action_path(path_str: &str, ctx: &LoopContext) -> std::path::PathBuf 
 }
 
 fn emit_missing_args(planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
-    let acted = RuntimeEvent::LoopActed(LoopActed {
+    RuntimeEvent::LoopActed(LoopActed {
         tick: planned.tick,
         action_kind: planned.action_kind.clone(),
         capability_request_id: String::new(),
@@ -561,9 +565,7 @@ fn emit_missing_args(planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
         plan_id: planned.plan_id.clone(),
         plan_step_id: planned.plan_step_id.clone(),
         action_id: planned.action_id.clone(),
-    });
-
-    let route = RuntimeEvent::RouteSelected(RouteSelected { tick: pending.tick, approved_route: "verify".to_string() });
+    })
 }
 
 fn emit_conflict(planned: &LoopPlanned, agent: &str, action: &str, path: &str) -> RuntimeEvent {

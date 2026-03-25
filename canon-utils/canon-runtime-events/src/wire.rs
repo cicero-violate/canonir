@@ -241,6 +241,7 @@ pub struct CanonEvent {
 }
 
 impl CanonEvent {
+    #[track_caller]
     pub fn new(
         id: EventId,
         parent_ids: Vec<EventId>,
@@ -253,10 +254,41 @@ impl CanonEvent {
         if !root {
             assert!(
                 !parent_ids.is_empty(),
-                "CanonEvent requires at least one parent_id unless root=true"
+                "CanonEvent requires at least one parent_id unless root=true (kind={kind})"
             );
         }
         Self { id, parent_ids, actor: actor.into(), kind, ts, payload }
+    }
+
+    /// Construct a child event whose causal parent is `parent`.
+    /// The parent chain is enforced at the type level — impossible to omit.
+    pub fn from_parent(
+        parent: &CanonEvent,
+        id: EventId,
+        actor: impl Into<String>,
+        kind: EventKind,
+        ts: u64,
+        payload: CanonPayload,
+    ) -> Self {
+        Self {
+            id,
+            parent_ids: vec![parent.id.clone()],
+            actor: actor.into(),
+            kind,
+            ts,
+            payload,
+        }
+    }
+
+    /// Construct a root event (legitimately parentless: Tick, PromptLoaded, etc.).
+    pub fn new_root(
+        id: EventId,
+        actor: impl Into<String>,
+        kind: EventKind,
+        ts: u64,
+        payload: CanonPayload,
+    ) -> Self {
+        Self { id, parent_ids: Vec::new(), actor: actor.into(), kind, ts, payload }
     }
 }
 

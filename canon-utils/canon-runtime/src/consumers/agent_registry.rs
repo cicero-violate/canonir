@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use canon_event::{AgentRegistered, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, RequestDispatch, RuntimeEvent, SubTaskResult};
+use canon_event::{AgentRegistered, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, RequestDispatch, RuntimeEvent, SubTaskResult};
 use canon_proc_macros::must_emit;
 
 #[derive(Clone, Debug)]
@@ -97,7 +97,7 @@ impl EventConsumer for AgentRegistryConsumer {
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
     #[must_emit]
-    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
+    fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
         let Ok(mut reg) = self.registry.0.write() else {
             return EventOutcome::NoOp("agent_registry_poisoned");
         };

@@ -12,6 +12,14 @@ pub fn execute(ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
         ctx.goal_text = scan_tlog_for_goal(ctx.tlog_path.as_path());
     }
 
+    // If goal is still placeholder or absent after scan, nothing downstream can act.
+    // Return Noop unconditionally — do NOT emit LoopObserved with a placeholder goal
+    // regardless of whether state_changed, as that would trigger RouteExecutor →
+    // RouteSelected(plan) → observe again, creating a spam loop.
+    if ctx.goal_text.as_deref().map(is_placeholder_goal).unwrap_or(true) {
+        return Ok(LoopStageResult::Noop);
+    }
+
     let goal_hash = {
         let mut h = DefaultHasher::new();
         ctx.goal_text.hash(&mut h);
@@ -24,16 +32,26 @@ pub fn execute(ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
         h.finish()
     };
     let state_changed = (ctx.error_count as u64) != ctx.last_observed_error_count || goal_hash != ctx.last_observed_goal_hash || facts_hash != ctx.last_observed_facts_hash;
-    let stale = ctx.last_observed_tick.map(|t| ctx.current_tick.saturating_sub(t) >= 5).unwrap_or(true);
-    if !state_changed && !stale {
-        return Ok(LoopStageResult::Noop);
-    }
     if !state_changed {
-        // Emit a heartbeat observation to keep the loop alive even when state is stable.
+        let goal_pending = ctx.goal_text.as_deref().map(is_placeholder_goal).unwrap_or(true);
+        // Wait state: goal is pending and no errors — nothing downstream can act.
+        // Suppress even the stale heartbeat; only wake on genuine state change.
+        if goal_pending {
+            return Ok(LoopStageResult::Noop);
+        }
+        // Active state but nothing changed: only emit the stale heartbeat every 5 ticks.
+        let stale = ctx.last_observed_tick.map(|t| ctx.current_tick.saturating_sub(t) >= 5).unwrap_or(true);
+        if !stale {
+            return Ok(LoopStageResult::Noop);
+        }
     }
     ctx.last_observed_error_count = ctx.error_count as u64;
     ctx.last_observed_goal_hash = goal_hash;
     ctx.last_observed_facts_hash = facts_hash;
+    // Update last_observed_tick inline so that subsequent trigger_observe calls within the
+    // same event-processing window (before this LoopObserved loops back to the consumer)
+    // correctly see stale=false and return Noop, not another observation.
+    ctx.last_observed_tick = Some(ctx.current_tick);
     let payload = LoopObserved {
         tick: ctx.current_tick,
         error_count: ctx.error_count,

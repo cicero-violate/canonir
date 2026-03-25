@@ -48,6 +48,10 @@ pub struct EventRuntime {
     emitter: EventEmitterHandle,
     emitter_rx: crossbeam_channel::Receiver<canon_event::LocatedEvent>,
     observed_events: Vec<RuntimeEvent>,
+    /// IDs of events dispatched in-memory by the live path (emit_event / drain_emitted_events).
+    /// When P2 re-delivers the same tlog entry, process_events checks this set and skips
+    /// re-dispatch, preventing double-processing of every self-written event.
+    dispatched_ids: HashSet<canon_event::EventId>,
 }
 
 impl EventRuntime {
@@ -74,6 +78,7 @@ impl EventRuntime {
             emitter,
             emitter_rx,
             observed_events: Vec::new(),
+            dispatched_ids: HashSet::new(),
         }
     }
 
@@ -121,6 +126,7 @@ impl EventRuntime {
         self.runtime_tick = 0;
         self.runtime_state = serde_json::json!({});
         self.observed_events.clear();
+        self.dispatched_ids.clear();
     }
 
     pub fn take_observed_events(&mut self) -> Vec<RuntimeEvent> {
@@ -136,103 +142,117 @@ impl EventRuntime {
         let mut processed = 0usize;
         for event in events {
             if let AnyEvent::Canon(canon) = event {
+                // Skip events the runtime already dispatched in-memory (live path).
+                // The live path (emit_event / drain_emitted_events) writes the event to
+                // tlog AND inserts its ID into dispatched_ids. When P2 re-delivers the
+                // same tlog entry here, we remove the ID and skip dispatch to prevent
+                // every self-written event from being processed twice.
+                if self.dispatched_ids.remove(&canon.id) {
+                    processed += 1;
+                    continue;
+                }
+                // Preserve the original causal parent chain from the tlog entry.
+                // Without this, replayed events (e.g. capability_completed written by
+                // canon-analyst) arrive with empty parent_ids and trigger the assertion
+                // in CanonEvent::new — f(e_prev) → parent_ids must not be empty.
+                let parents = canon.parent_ids.clone();
                 if let Some(kernel) = extract_rustc_event(canon) {
                     self.handle_kernel_event(kernel)?;
                     self.drain_emitted_events()?;
                 } else if let Some(edit) = extract_edit_event(canon) {
-                    self.handle_runtime_event(RuntimeEvent::Edit(edit))?;
+                    self.handle_replayed_event(RuntimeEvent::Edit(edit), parents)?;
                     self.drain_emitted_events()?;
                 } else {
                     let data = canon.payload.data.clone();
                     let actor = canon.actor.as_str();
                     match canon.kind.as_str() {
                         "runtime_state.updated" => {
-                            self.handle_runtime_event(RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload: data.clone() }))?;
+                            self.handle_replayed_event(RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload: data.clone() }), parents)?;
                             self.drain_emitted_events()?;
                         }
                         "prompt_loaded" if actor != "event-runtime" => {
                             let payload = data.get("data").unwrap_or(&data).clone();
-                            self.handle_runtime_event(RuntimeEvent::PromptLoaded(PromptLoaded { payload }))?;
+                            self.handle_replayed_event(RuntimeEvent::PromptLoaded(PromptLoaded { payload }), parents)?;
                             self.drain_emitted_events()?;
                         }
-                        "capability_completed" if actor != "event-runtime" => {
+                        "capability_completed" => {
                             if let Ok(payload_owned) = serde_json::from_value::<CapabilityCompletedOwned>(data.clone()) {
                                 let payload =
                                     CapabilityCompleted { request_id: payload_owned.request_id, capability: Box::leak(payload_owned.capability.into_boxed_str()), result: payload_owned.result };
-                                self.handle_runtime_event(RuntimeEvent::CapabilityCompleted(payload))?;
+                                self.handle_replayed_event(RuntimeEvent::CapabilityCompleted(payload), parents)?;
                                 self.drain_emitted_events()?;
                             }
                         }
-                        "capability_failed" if actor != "event-runtime" => {
+                        "capability_failed" => {
                             if let Ok(payload_owned) = serde_json::from_value::<CapabilityFailedOwned>(data.clone()) {
                                 let payload = CapabilityFailed { request_id: payload_owned.request_id, capability: Box::leak(payload_owned.capability.into_boxed_str()), error: payload_owned.error };
-                                self.handle_runtime_event(RuntimeEvent::CapabilityFailed(payload))?;
+                                self.handle_replayed_event(RuntimeEvent::CapabilityFailed(payload), parents)?;
                                 self.drain_emitted_events()?;
                             }
                         }
-                        "error_occurred" if actor != "event-runtime" => {
+                        "error_occurred" => {
                             if let Ok(payload) = serde_json::from_value::<ErrorOccurred>(data.clone()) {
-                                self.handle_runtime_event(RuntimeEvent::ErrorOccurred(payload))?;
+                                self.handle_replayed_event(RuntimeEvent::ErrorOccurred(payload), parents)?;
                                 self.drain_emitted_events()?;
                             }
                         }
-                        "loop_observed" if actor != "observe" => {
+                        "loop_observed" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::LoopObserved>(data.clone()) {
-                                self.handle_runtime_event(RuntimeEvent::LoopObserved(decoded))?;
+                                self.handle_replayed_event(RuntimeEvent::LoopObserved(decoded), parents)?;
                                 self.drain_emitted_events()?;
                             }
                         }
-                        "loop_planned" if actor != "plan" => {
+                        "loop_planned" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::LoopPlanned>(data.clone()) {
-                                self.handle_runtime_event(RuntimeEvent::LoopPlanned(decoded))?;
+                                self.handle_replayed_event(RuntimeEvent::LoopPlanned(decoded), parents)?;
                                 self.drain_emitted_events()?;
                             }
                         }
-                        "loop_acted" if actor != "act" => {
+                        "loop_acted" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::LoopActed>(data.clone()) {
-                                self.handle_runtime_event(RuntimeEvent::LoopActed(decoded))?;
+                                self.handle_replayed_event(RuntimeEvent::LoopActed(decoded), parents)?;
                                 self.drain_emitted_events()?;
                             }
                         }
-                        "loop_verified" if actor != "verify" => {
+                        "loop_verified" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::LoopVerified>(data.clone()) {
-                                self.handle_runtime_event(RuntimeEvent::LoopVerified(decoded))?;
+                                self.handle_replayed_event(RuntimeEvent::LoopVerified(decoded), parents)?;
                                 self.drain_emitted_events()?;
                             }
                         }
-                        "loop_rewarded" if actor != "reward" => {
+                        "loop_rewarded" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::LoopRewarded>(data.clone()) {
-                                self.handle_runtime_event(RuntimeEvent::LoopRewarded(decoded))?;
+                                self.handle_replayed_event(RuntimeEvent::LoopRewarded(decoded), parents)?;
                                 self.drain_emitted_events()?;
                             }
                         }
                         "agent_registered" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::AgentRegistered>(data.clone()) {
-                                self.handle_runtime_event(RuntimeEvent::AgentRegistered(decoded))?;
+                                self.handle_replayed_event(RuntimeEvent::AgentRegistered(decoded), parents)?;
                                 self.drain_emitted_events()?;
                             }
                         }
                         "request_dispatch" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::RequestDispatch>(data.clone()) {
-                                self.handle_runtime_event(RuntimeEvent::RequestDispatch(decoded))?;
+                                self.handle_replayed_event(RuntimeEvent::RequestDispatch(decoded), parents)?;
                                 self.drain_emitted_events()?;
                             }
                         }
                         "sub_task_result" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::SubTaskResult>(data.clone()) {
-                                self.handle_runtime_event(RuntimeEvent::SubTaskResult(decoded))?;
+                                self.handle_replayed_event(RuntimeEvent::SubTaskResult(decoded), parents)?;
                                 self.drain_emitted_events()?;
                             }
                         }
-                        "route_tick" if actor != "supervisor" => {
+                        "route_tick" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::RouteTick>(data.clone()) {
-                                self.handle_runtime_event(RuntimeEvent::RouteTick(decoded))?;
+                                self.handle_replayed_event(RuntimeEvent::RouteTick(decoded), parents)?;
                                 self.drain_emitted_events()?;
                             }
                         }
-                        "route_selected" if actor != "supervisor" => {
+                        "route_selected" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::RouteSelected>(data.clone()) {
-                                self.handle_runtime_event(RuntimeEvent::RouteSelected(decoded))?;
+                                self.handle_replayed_event(RuntimeEvent::RouteSelected(decoded), parents)?;
                                 self.drain_emitted_events()?;
                             }
                         }
@@ -301,6 +321,45 @@ impl EventRuntime {
         self.handle_runtime_event_located_with_parents(event, "", 0, Vec::new())
     }
 
+    /// Dispatch a tlog-sourced event to bus consumers WITHOUT writing to tlog.
+    /// Events from external processes (rustc, prompt-watcher) are already in the tlog;
+    /// re-writing them would create duplicates. IDs are not tracked in dispatched_ids
+    /// because the event was not dispatched by the live in-memory path.
+    fn handle_replayed_event(&mut self, event: RuntimeEvent, parent_ids: Vec<canon_event::EventId>) -> Result<()> {
+        self.observed_events.push(event.clone());
+        let event_id = canon_event::EventId::new(canon_event::new_event_id());
+        // Dispatch only — do NOT write to tlog (event is already there).
+        let consumer_count = self.bus.dispatch(event.clone(), event_id.clone());
+        if consumer_count == 0 {
+            const SILENT_KINDS: &[&str] = &["debug", "runtime_state_updated", "code", "edit", "analysis", "cargo", "file", "bash", "llm"];
+            let kind_str = canon_event::event_kind_str(&event);
+            if !SILENT_KINDS.contains(&kind_str) {
+                eprintln!("[canon-runtime] WARN: event kind={kind_str} id={event_id} delivered to 0 consumers (replay)");
+            }
+        }
+        // Synthetic derived error events still need to be written and dispatched live.
+        let derived: Option<RuntimeEvent> = match &event {
+            RuntimeEvent::CapabilityFailed(payload) => Some(RuntimeEvent::ErrorOccurred(new_error_occurred(
+                "capability_failed",
+                "event-runtime",
+                payload.error.clone(),
+                "error",
+                serde_json::json!({ "request_id": payload.request_id, "capability": payload.capability }),
+                None,
+            ))),
+            RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload }) => {
+                self.runtime_state = payload.clone();
+                None
+            }
+            _ => None,
+        };
+        if let Some(err_event) = derived {
+            self.handle_runtime_event_located_with_parents(err_event, "", 0, vec![event_id])?;
+        }
+        let _ = parent_ids; // parents already encoded in tlog; not needed for bus dispatch
+        Ok(())
+    }
+
     fn handle_runtime_event_located(&mut self, event: RuntimeEvent, file: &'static str, line: u32) -> Result<()> {
         self.handle_runtime_event_located_with_parents(event, file, line, Vec::new())
     }
@@ -309,7 +368,18 @@ impl EventRuntime {
         self.observed_events.push(event.clone());
         // Pre-generate canonical ID so consumers and tlog share the same ID.
         let event_id = canon_event::EventId::new(canon_event::new_event_id());
-        self.bus.dispatch(event.clone(), event_id.clone());
+        // Track ID so process_events can skip re-dispatch when P2 re-delivers this
+        // same tlog entry (preventing double-processing of self-written events).
+        self.dispatched_ids.insert(event_id.clone());
+        let consumer_count = self.bus.dispatch(event.clone(), event_id.clone());
+        // Watchdog: warn if a non-informational event has no consumers.
+        if consumer_count == 0 {
+            const SILENT_KINDS: &[&str] = &["debug", "runtime_state_updated", "code", "edit", "analysis", "cargo", "file", "bash", "llm"];
+            let kind_str = canon_event::event_kind_str(&event);
+            if !SILENT_KINDS.contains(&kind_str) {
+                eprintln!("[canon-runtime] WARN: event kind={kind_str} id={event_id} delivered to 0 consumers");
+            }
+        }
         if !matches!(event, RuntimeEvent::RuntimeStateUpdated(_)) {
             self.append_runtime_event(&event, file, line, parent_ids, event_id.clone());
         }
@@ -367,7 +437,7 @@ impl EventRuntime {
         if let Some(err_event) = derived {
             let err_id = canon_event::EventId::new(canon_event::new_event_id());
             self.bus.dispatch(err_event.clone(), err_id.clone());
-            self.append_runtime_event(&err_event, "", 0, vec![event_id], err_id);
+            self.append_runtime_event(&err_event, file, line, vec![event_id], err_id);
         }
         Ok(())
     }
@@ -379,11 +449,11 @@ impl EventRuntime {
         Ok(())
     }
 
-    fn append_runtime_event(&mut self, event: &RuntimeEvent, _file: &'static str, _line: u32, parent_ids: Vec<canon_event::EventId>, event_id: canon_event::EventId) {
+    fn append_runtime_event(&mut self, event: &RuntimeEvent, file: &'static str, line: u32, parent_ids: Vec<canon_event::EventId>, event_id: canon_event::EventId) {
         let Some(path) = self.tlog_path.clone() else {
             return;
         };
-        let Some(wire) = runtime_event_to_wire(event, parent_ids, event_id) else {
+        let Some(wire) = runtime_event_to_wire(event, parent_ids, event_id, file, line) else {
             return;
         };
         if is_segment_dir_path(&path) {
@@ -423,7 +493,7 @@ fn payload_from_shape<T: canon_event::CanonPayloadShape>(val: &T) -> canon_event
     }
 }
 
-fn runtime_event_to_wire(event: &RuntimeEvent, parent_ids: Vec<canon_event::EventId>, event_id: canon_event::EventId) -> Option<canon_event::CanonEvent> {
+fn runtime_event_to_wire(event: &RuntimeEvent, parent_ids: Vec<canon_event::EventId>, event_id: canon_event::EventId, emit_file: &'static str, emit_line: u32) -> Option<canon_event::CanonEvent> {
     let (kind, payload) = match event {
         RuntimeEvent::LoopObserved(p) => (canon_event::EventKind::LoopObserved, payload_from_shape(p)),
         RuntimeEvent::LoopPlanned(p) => (canon_event::EventKind::LoopPlanned, payload_from_shape(p)),
@@ -471,7 +541,24 @@ fn runtime_event_to_wire(event: &RuntimeEvent, parent_ids: Vec<canon_event::Even
         RuntimeEvent::GoodnessSnapshot(_) => "event-runtime",
         _ => "event-runtime",
     };
-    let root = parent_ids.is_empty();
+    // Root events are legitimately parentless (external inputs to the system).
+    // All derived events MUST carry parent_ids — warn loudly if they don't.
+    const ROOT_KINDS: &[canon_event::EventKind] = &[
+        canon_event::EventKind::Tick,
+        canon_event::EventKind::PromptLoaded,
+        canon_event::EventKind::AgentRegistered,
+        canon_event::EventKind::SystemConfigLoaded,
+        canon_event::EventKind::RuntimeStarted,
+        canon_event::EventKind::Debug,
+        canon_event::EventKind::Code,
+    ];
+    let root = ROOT_KINDS.contains(&kind);
+    if parent_ids.is_empty() && !root {
+        eprintln!(
+            "[canon-runtime] WARN: non-root event kind={} id={} has no parent_ids — causal chain broken (emitted from {}:{})",
+            kind, event_id, emit_file, emit_line
+        );
+    }
     Some(canon_event::CanonEvent::new(
         event_id,
         parent_ids,
@@ -509,10 +596,6 @@ struct RuntimeEmitterImpl {
 }
 
 impl EventEmitter for RuntimeEmitterImpl {
-    fn emit_located(&self, event: RuntimeEvent, file: &'static str, line: u32) {
-        let _ = self.sender.send(canon_event::LocatedEvent { event, file, line, parent_ids: Vec::new() });
-    }
-
     fn emit_with_parents(&self, event: RuntimeEvent, parents: Vec<canon_event::EventId>, file: &'static str, line: u32) {
         let _ = self.sender.send(canon_event::LocatedEvent { event, file, line, parent_ids: parents });
     }

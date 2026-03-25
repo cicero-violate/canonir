@@ -502,8 +502,9 @@ pub fn canon_emit(input: TokenStream) -> TokenStream {
                 }}
             } else {
                 quote! {
-                    #emitter.emit_located(
+                    #emitter.emit_with_parents(
                         canon_event::RuntimeEvent::#variant(#inner),
+                        ::std::vec![],
                         ::std::file!(),
                         ::std::line!(),
                     )
@@ -521,12 +522,13 @@ pub fn canon_emit(input: TokenStream) -> TokenStream {
                     },
                     "data": #payload,
                 });
-                #emitter.emit_located(
+                #emitter.emit_with_parents(
                     canon_event::RuntimeEvent::Debug(canon_event::DebugEvent {
                         source: (#source).to_string(),
                         kind: (#kind).to_string(),
                         payload: __wrapped,
                     }),
+                    ::std::vec![],
                     ::std::file!(),
                     ::std::line!(),
                 )

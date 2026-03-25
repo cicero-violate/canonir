@@ -36,7 +36,7 @@ pub use events::{
     LocatedEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, MoveSymbol, NodeCompleted, NodeFailed, NodeReady, NodeStarted, PolicyBaselineUpdated, ProcessResult, PromptLoaded,
     RenameDir, RenameModule, RenameSymbol, RequestDispatch, RouteSelected, RouteTick, RuntimeEvent, RuntimeStateUpdated, RustcEventConsumer, SubTaskResult, SystemConfigLoaded, Tick, ToolBatchSettled,
     ToolCall, ToolResult, GoodnessSnapshot,
-    current_dispatch_id, set_current_dispatch_id,
+    event_kind_str,
     EVENT_SCHEMA_VERSION,
 };
 pub use wire::{CanonEvent, CanonPayload, CanonPayloadMeta, EventId, EventKind, CanonPayloadShape};

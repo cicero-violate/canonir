@@ -1,5 +1,5 @@
 use canon_decision::RouteKind;
-use canon_event::{CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, LlmCall, RouteSelected, RuntimeEvent, ToolBatchSettled};
+use canon_event::{CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, LlmCall, RouteSelected, RuntimeEvent, ToolBatchSettled};
 use canon_judgment::GuardConfig;
 use canon_proc_macros::must_emit;
 use canon_runtime_supervisor::judgment_loop::RouteController;
@@ -19,11 +19,12 @@ pub struct RouteExecutor {
     emitter: Option<EventEmitterHandle>,
     pending_request_id: Option<String>,
     pending_prompt: Option<String>,
+    current_trigger: Option<EventId>,
 }
 
 impl RouteExecutor {
     pub fn new(workspace: PathBuf) -> Self {
-        Self { ctx: RouteContext::new(), workspace, controller: RouteController::new(GuardConfig::default()), emitter: None, pending_request_id: None, pending_prompt: None }
+        Self { ctx: RouteContext::new(), workspace, controller: RouteController::new(GuardConfig::default()), emitter: None, pending_request_id: None, pending_prompt: None, current_trigger: None }
     }
 
     fn try_dispatch_route(&mut self) {
@@ -57,6 +58,7 @@ impl RouteExecutor {
         // conclusion regardless of what the LLM returns.
         if self.ctx.planned_pending == 0 && !self.ctx.acted_unverified && !self.ctx.workspace_dirty_tracker.any_dirty() && !self.ctx.finish_ready && self.ctx.context_ready {
             let json = heuristic_route_json(&self.ctx);
+            self.pending_request_id = Some("deterministic".to_string());
             self.emit_decision(&json, "deterministic:idle_plan".to_string());
             return;
         }
@@ -65,13 +67,14 @@ impl RouteExecutor {
         self.pending_request_id = Some(request_id.clone());
         self.pending_prompt = Some(prompt.clone());
         if let Some(emitter) = self.emitter.as_ref() {
-            canon_meta::canon_emit_meta!(emitter; Llm(LlmCall {
+            let tid = self.current_trigger.clone().expect("try_dispatch_route called without current_trigger");
+            emitter.emit_with_parents(canon_event::RuntimeEvent::Llm(LlmCall {
                 request_id,
                 prompt,
                 role: Some("router".to_string()),
                 agent_id: Some("router_chatgpt_group".to_string()),
                 dispatched: true,
-            }));
+            }), vec![tid], file!(), line!());
         }
     }
 }
@@ -86,13 +89,17 @@ impl EventConsumer for RouteExecutor {
     }
 
     #[must_emit]
-    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
+    fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
+        self.current_trigger = Some(trigger_id.clone());
         // Always accumulate state.
         self.ctx.update_from_event(event, &self.workspace);
 
-        // Safety valve: if we're idle but a stale pending_request_id is set (e.g., LLM timeout/lost),
-        // clear it so routing can resume.
-        if self.pending_request_id.is_some() && self.ctx.planned_pending == 0 && self.ctx.pending_tool_result_ids.is_empty() {
+        // Safety valve: if a REAL LLM routing request is in flight but the system is idle
+        // (e.g., LLM timed out / response lost), clear it so routing can resume.
+        // "deterministic" is a sentinel, not a real request — never clear it here or it
+        // re-fires idle_plan on every event before ToolCall{kind:llm.plan} propagates back.
+        let is_real_request = self.pending_request_id.as_deref().map(|id| id != "deterministic").unwrap_or(false);
+        if is_real_request && self.ctx.planned_pending == 0 && self.ctx.pending_tool_result_ids.is_empty() {
             self.pending_request_id = None;
             self.pending_prompt = None;
         }
@@ -100,11 +107,11 @@ impl EventConsumer for RouteExecutor {
         // Check if the batch just settled — emit the event and trigger routing.
         if let Some((result_count, any_failed)) = self.ctx.batch_settled.take() {
             if let Some(emitter) = self.emitter.as_ref() {
-                canon_meta::canon_emit_meta!(emitter; ToolBatchSettled(ToolBatchSettled {
+                emitter.emit_with_parents(canon_event::RuntimeEvent::ToolBatchSettled(ToolBatchSettled {
                     tick: self.ctx.scheduler_tick,
                     result_count,
                     any_failed,
-                }));
+                }), vec![trigger_id.clone()], file!(), line!());
             }
             self.try_dispatch_route();
             return EventOutcome::NoOp("route_executor_batch_settled");
@@ -133,8 +140,14 @@ impl EventConsumer for RouteExecutor {
         if should_try {
             let idle = self.ctx.planned_pending == 0 && self.ctx.pending_tool_result_ids.is_empty();
             if idle {
-                // Clear the deterministic sentinel so the next dispatch is not suppressed.
-                if self.pending_request_id.as_deref() == Some("deterministic") {
+                // Only clear the deterministic sentinel on real state transitions (acted/verified),
+                // not on bare observation. Clearing on every LoopObserved caused idle_plan to
+                // re-fire on every tick, producing thousands of RouteSelected(plan) events while
+                // the plan LLM response guard (last_handled_observed_hash) returned Noop — a
+                // closed loop with zero state transition.
+                if self.pending_request_id.as_deref() == Some("deterministic")
+                    && matches!(event, RuntimeEvent::LoopActed(_) | RuntimeEvent::LoopVerified(_))
+                {
                     self.pending_request_id = None;
                 }
                 self.try_dispatch_route();
@@ -146,6 +159,9 @@ impl EventConsumer for RouteExecutor {
         // batch_settled is suppressed for plan-only batches so we trigger here instead.
         if let RuntimeEvent::LoopPlanned(_) = event {
             if self.ctx.planned_pending > 0 && self.ctx.pending_tool_result_ids.is_empty() {
+                if self.pending_request_id.as_deref() == Some("deterministic") {
+                    self.pending_request_id = None;
+                }
                 self.try_dispatch_route();
                 return EventOutcome::NoOp("route_executor_plan_dispatch");
             }
@@ -244,7 +260,7 @@ impl RouteExecutor {
             should_stop: false,
             prompt,
         });
-        canon_meta::canon_emit_meta!(emitter; RouteSelected(RouteSelected {
+        let route_event = RuntimeEvent::RouteSelected(RouteSelected {
             tick: self.ctx.scheduler_tick,
             approved_route: decision.lane.as_str().to_string(),
             suggested_route: decision.suggested_route.as_str().to_string(),
@@ -256,6 +272,14 @@ impl RouteExecutor {
             gate_should_stop: decision.should_stop,
             prompt: decision.prompt.clone(),
             model_json: model_json.to_string(),
-        }));
+        });
+        let tid = self.current_trigger.clone().expect("emit_decision called without current_trigger set");
+        emitter.emit_with_parents(route_event, vec![tid], file!(), line!());
+        // Halt immediately when routing to conclude so that backlogged LoopObserved events
+        // in the bus queue don't each trigger another RouteSelected(conclude) before the
+        // LoopRewarded event propagates back to set ctx.halted.
+        if decision.lane.as_str() == "conclude" {
+            self.ctx.halted = true;
+        }
     }
 }

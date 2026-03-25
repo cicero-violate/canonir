@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use canon_event::{RuntimeEvent, CapabilityResult, EventEmitter, EventEmitterHandle, LlmCall};
+use canon_event::{EventId, RuntimeEvent, CapabilityResult, EventEmitter, EventEmitterHandle, LlmCall};
 use canon_exec::{ExecutableEvent, ExecutionContext, ExecutionResult};
 use canon_goal::GoalSpec;
 use crossbeam_channel as cc;
@@ -43,12 +43,6 @@ struct DirectEventEmitter {
 }
 
 impl EventEmitter for DirectEventEmitter {
-    fn emit(&self, event: RuntimeEvent) {
-        let _ = self.tx.send(event);
-    }
-    fn emit_located(&self, event: RuntimeEvent, _file: &'static str, _line: u32) {
-        let _ = self.tx.send(event);
-    }
     fn emit_with_parents(&self, event: RuntimeEvent, _parents: Vec<canon_event::EventId>, _file: &'static str, _line: u32) {
         let _ = self.tx.send(event);
     }
@@ -64,11 +58,12 @@ pub fn request_route_via_llm_call(
     let event = RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt: prompt.clone(), role: Some("router".to_string()), agent_id: None, dispatched: true });
     let (tx, rx) = cc::unbounded::<RuntimeEvent>();
     let emitter: EventEmitterHandle = std::sync::Arc::new(DirectEventEmitter { tx });
-    let ctx = ExecutionContext { workspace: workspace.to_path_buf(), emitter: emitter.clone() };
+    let trigger_id = EventId::new("root");
+    let ctx = ExecutionContext { workspace: workspace.to_path_buf(), emitter: emitter.clone(), trigger_id: trigger_id.clone() };
     let exec = ExecutableEvent::try_from(event.clone()).map_err(|_| anyhow!("llm.call not executable"))?;
     match exec.execute(ctx)? {
-        ExecutionResult::Emit(e) => emitter.emit(e),
-        ExecutionResult::EmitMany(evs) => evs.into_iter().for_each(|e| emitter.emit(e)),
+        ExecutionResult::Emit(e) => emitter.emit_with_parents(e, vec![trigger_id.clone()], file!(), line!()),
+        ExecutionResult::EmitMany(evs) => evs.into_iter().for_each(|e| emitter.emit_with_parents(e, vec![trigger_id.clone()], file!(), line!())),
         ExecutionResult::Deferred => {}
     }
 

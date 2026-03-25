@@ -1,4 +1,4 @@
-use canon_event::{new_error_occurred, EventConsumer, EventFilter, EventOutcome, RuntimeEvent};
+use canon_event::{new_error_occurred, EventConsumer, EventFilter, EventId, EventOutcome, RuntimeEvent};
 use canon_proc_macros::must_emit;
 use std::collections::HashMap;
 
@@ -25,7 +25,7 @@ impl EventConsumer for WatchdogConsumer {
     }
 
     #[must_emit]
-    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
+    fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
         match event {
             RuntimeEvent::Tick(t) => {
                 self.current_tick = t.tick;
@@ -34,7 +34,10 @@ impl EventConsumer for WatchdogConsumer {
                     .filter_map(|(stage, threshold)| {
                         let last = self.last_stage_tick.get(stage).copied().unwrap_or(0);
                         let idle = self.current_tick.saturating_sub(last);
-                        if idle >= *threshold {
+                        // Fire at the threshold, then once every threshold ticks after that.
+                        // Avoids emitting a warning every tick (which floods LoopObserved via
+                        // trigger_observe in LoopStageExecutor).
+                        if idle > 0 && idle % threshold == 0 {
                             Some(RuntimeEvent::ErrorOccurred(new_error_occurred(
                                 "watchdog_stall",
                                 "watchdog",

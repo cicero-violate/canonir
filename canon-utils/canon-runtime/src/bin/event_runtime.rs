@@ -112,7 +112,7 @@ fn clear_agent_goal() {
 // ---------------------------------------------------------------------------
 // Queue message type — P → Q_e / Q_c
 //
-// Producers push EventMsg into Q_e and ControlMsg into Q_c.
+// Producers push EventMsg into Q_e.
 // W=1 (the main loop) is the sole receiver of both; it defines commit order and is
 // the only writer to L (log/tlog).  Consumers (C ≥ 1) are driven from W
 // via bus dispatch and track their own offsets; they never mutate L.
@@ -128,10 +128,6 @@ enum EventMsg {
     Reset(Vec<AnyEvent>),
 }
 
-enum ControlMsg {
-    /// Periodic housekeeping tick from the timer producer (P3).
-    Tick,
-}
 
 fn is_kernel_canon_event(event: &AnyEvent) -> bool {
     if let AnyEvent::Canon(canon) = event {
@@ -171,26 +167,6 @@ fn handle_event_msg(
     Ok(())
 }
 
-fn handle_control_msg(
-    msg: ControlMsg, runtime: &mut EventRuntime, processed: &mut usize, cursor_path: &Path, tlog_path: &Path, start_seq: u64, session_id: &str, last_saved: &mut Instant,
-    last_saved_processed: &mut usize, scheduler_tick: &mut u64,
-) -> Result<bool> {
-    match msg {
-        ControlMsg::Tick => {
-            *scheduler_tick = scheduler_tick.saturating_add(1);
-            runtime.emit_tick()?;
-            runtime.flush_emitted_events()?;
-            if *processed != *last_saved_processed
-                && last_saved.elapsed() >= Duration::from_secs(1)
-                && save_cursor(cursor_path, tlog_path, *processed, start_seq, session_id, runtime.next_id()).is_ok()
-            {
-                *last_saved = Instant::now();
-                *last_saved_processed = *processed;
-            }
-        }
-    }
-    Ok(false)
-}
 
 // ---------------------------------------------------------------------------
 // main
@@ -257,42 +233,6 @@ fn main() -> Result<()> {
 
     let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
-    // Heartbeat thread: inject a Tick into the tlog every 5s so WatchdogConsumer
-    // can detect stalls even if the main loop stops ticking.
-    {
-        let heartbeat_tlog = tlog_path.clone();
-        std::thread::Builder::new()
-            .name("canon_heartbeat".to_string())
-            .spawn(move || {
-                use std::time::{Duration, SystemTime, UNIX_EPOCH};
-                let mut tick: u64 = u64::MAX / 2; // high base to avoid overlap with main ticks
-                loop {
-                    std::thread::sleep(Duration::from_secs(5));
-                    tick = tick.wrapping_add(1);
-                    let payload = canon_event::CanonPayload::from_data(
-                        serde_json::json!({}),
-                        serde_json::json!({}),
-                        serde_json::json!({}),
-                        canon_event::CanonPayloadMeta { file: "heartbeat".to_string(), line: 0 },
-                        serde_json::json!({ "tick": tick }),
-                    );
-                    let _ = canon_event::write_canon_event_auto(
-                        &heartbeat_tlog,
-                        &canon_event::CanonEvent::new(
-                            canon_event::EventId::new(canon_event::new_event_id()),
-                            Vec::new(),
-                            "heartbeat",
-                            canon_event::EventKind::Debug,
-                            SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
-                            payload,
-                            true,
-                        ),
-                    );
-                }
-            })
-            .expect("heartbeat thread");
-    }
-
     // Hot-reload skills on SIGHUP.
     {
         let mut signals = Signals::new([SIGHUP]).expect("signals");
@@ -349,6 +289,20 @@ fn main() -> Result<()> {
         runtime.emit_event(canon_event::RuntimeEvent::AgentRegistered(canon_event::AgentRegistered { payload })).ok();
     }
 
+    // Re-emit the current goal as PromptLoaded through the bus so GoalGenConsumer
+    // triggers. Bootstrap writes this directly to the tlog (skipped by start-at-tail),
+    // so consumers would never see it otherwise.
+    {
+        let goal_content = std::fs::read_to_string(AGENT_GOAL_PATH).unwrap_or_else(|_| "# goal-pending\n".to_string());
+        runtime.emit_event(canon_event::RuntimeEvent::PromptLoaded(canon_event::PromptLoaded {
+            payload: serde_json::json!({
+                "prompt_id": "AGENT_GOAL",
+                "path": AGENT_GOAL_PATH,
+                "content": goal_content,
+            }),
+        })).ok();
+    }
+
     // Read events that already exist in L at startup (in-memory after this point).
     let bootstrap_events: Vec<AnyEvent> = if tlog_path.exists() { read_any_events_from_path_with_start_seq(&tlog_path, start_seq).unwrap_or_default() } else { vec![] };
 
@@ -383,10 +337,7 @@ fn main() -> Result<()> {
     //
     // C ≥ 1  are the EventRuntime bus consumers.  They receive events dispatched
     //    by W, track their own state (offsets), and never write L (Rule 7).
-    // =========================================================================
-    // Q_c: control-plane queue (ticks/routing cadence).
     // Q_e: event-plane queue (tlog events/replay/reset).
-    let (q_control_tx, q_control_rx) = cc::unbounded::<ControlMsg>();
     let (q_event_tx, q_event_rx) = cc::unbounded::<EventMsg>();
     let (q_kernel_tx, q_kernel_rx) = cc::unbounded::<KernelMsg>();
     let event_budget_per_cycle = std::env::var("CANON_EVENT_RUNTIME_EVENT_BUDGET").ok().and_then(|v| v.parse::<usize>().ok()).filter(|v| *v > 0).unwrap_or(256);
@@ -488,19 +439,9 @@ fn main() -> Result<()> {
         })?;
     }
 
-    // --- P3: tick timer ---
-    // A lightweight background producer that sends a housekeeping Tick into Q
-    // every second.  W dispatches emit_tick(); consumers never see this as a
-    // log entry (Tick is not appended to L).
-    {
-        let tick_tx = q_control_tx.clone();
-        std::thread::Builder::new().name("canon-p3-tick".to_string()).spawn(move || loop {
-            std::thread::sleep(Duration::from_secs(1));
-            if tick_tx.send(ControlMsg::Tick).is_err() {
-                break;
-            }
-        })?;
-    }
+    // P3 tick timer removed — system is purely event-driven.
+    // Periodic ticks caused every consumer to re-observe on every heartbeat,
+    // generating O(N_agents * ticks_per_sec) spurious loop_observed events.
 
     // --- P4: prompt-directory watcher ---
     // Watches canon-agent-prompts/ for .md file changes. On change: re-reads
@@ -560,97 +501,54 @@ fn main() -> Result<()> {
     if env!("CANON_COMMIT_ID").starts_with("unknown") {
         eprintln!("[event_runtime] warning: CANON_COMMIT_ID is unknown; build metadata is incomplete");
     }
-    let mut scheduler_tick: u64 = 0;
-
     // =========================================================================
-    // W = 1 — single writer loop
+    // W = 1 — single writer loop (purely event-driven; no ticks)
     //
-    // Interleaved schedule with guarantees:
-    // 1) Process at most one control message each cycle (Q_c).
-    // 2) Then process at most N event messages (Q_e).
-    //
-    // This bounds control latency under bursty event load while preserving
-    // eventual event convergence.
+    // Each iteration:
+    // 1. Drain emitter_rx — consumer threads (CapabilityExecutor, etc.) emit
+    //    results (CapabilityCompleted, CapabilityFailed) here. Without this,
+    //    async results would never reach the tlog or other consumers.
+    // 2. Drain q_event_rx up to event_budget_per_cycle.
+    // 3. If nothing was available, block with a short timeout so we don't spin,
+    //    then loop back to drain emitter_rx again.
     // =========================================================================
     let mut last_saved = Instant::now();
     let mut last_saved_processed = processed;
 
     loop {
-        // Step 1: process one control message when available.
-        let mut processed_control = false;
-        match q_control_rx.try_recv() {
-            Ok(control_msg) => {
-                processed_control = true;
-                if handle_control_msg(control_msg, &mut runtime, &mut processed, &cursor_path, &tlog_path, start_seq, &session_id, &mut last_saved, &mut last_saved_processed, &mut scheduler_tick)? {
-                    return Ok(());
-                }
-            }
-            Err(cc::TryRecvError::Empty) => {
-                // If no control is immediately ready, block for one item from either
-                // queue so we don't spin when idle.
-                cc::select! {
-                    recv(q_control_rx) -> msg => {
-                        if let Ok(control_msg) = msg {
-                            processed_control = true;
-                            if handle_control_msg(
-                                control_msg,
-                                &mut runtime,
-                                &mut processed,
-                                &cursor_path,
-                                &tlog_path,
-                                start_seq,
-                                &session_id,
-                                &mut last_saved,
-                                &mut last_saved_processed,
-                                &mut scheduler_tick,
-                            )? {
-                                return Ok(());
-                            }
-                        }
-                    }
-                    recv(q_event_rx) -> msg => {
-                        if let Ok(event_msg) = msg {
-                            handle_event_msg(
-                                event_msg,
-                                &mut runtime,
-                                &mut processed,
-                                &cursor_path,
-                                &tlog_path,
-                                start_seq,
-                                &session_id,
-                                &mut last_saved,
-                                &mut last_saved_processed,
-                            )?;
-                        }
-                    }
-                }
-            }
-            Err(cc::TryRecvError::Disconnected) => {}
-        }
+        // Step 1: drain any events emitted by consumer threads (e.g. CapabilityCompleted).
+        // These sit in emitter_rx until W processes them; they do NOT arrive via P2/q_event_rx.
+        runtime.flush_emitted_events()?;
 
-        // Step 2: bounded event processing.
-        let mut handled_events = 0usize;
-        while handled_events < event_budget_per_cycle {
+        // Step 2: drain q_event_rx (tlog-sourced events from P2).
+        let mut handled = 0usize;
+        while handled < event_budget_per_cycle {
             match q_event_rx.try_recv() {
                 Ok(event_msg) => {
                     handle_event_msg(event_msg, &mut runtime, &mut processed, &cursor_path, &tlog_path, start_seq, &session_id, &mut last_saved, &mut last_saved_processed)?;
-                    handled_events = handled_events.saturating_add(1);
+                    handled = handled.saturating_add(1);
                 }
                 Err(cc::TryRecvError::Empty) => break,
                 Err(cc::TryRecvError::Disconnected) => break,
             }
         }
 
-        // If we did not process control and had no event work, block on control
-        // so routing cadence remains responsive.
-        if !processed_control && handled_events == 0 {
-            if let Ok(control_msg) = q_control_rx.recv() {
-                if handle_control_msg(control_msg, &mut runtime, &mut processed, &cursor_path, &tlog_path, start_seq, &session_id, &mut last_saved, &mut last_saved_processed, &mut scheduler_tick)? {
-                    return Ok(());
-                }
+        if handled > 0 {
+            // More tlog events may have arrived; loop immediately.
+            continue;
+        }
+
+        // Step 3: nothing in q_event_rx — wait briefly then loop back to drain emitter_rx.
+        // This is the only "polling" in the system; it is not tick-driven and emits no events.
+        match q_event_rx.recv_timeout(Duration::from_millis(20)) {
+            Ok(event_msg) => {
+                handle_event_msg(event_msg, &mut runtime, &mut processed, &cursor_path, &tlog_path, start_seq, &session_id, &mut last_saved, &mut last_saved_processed)?;
             }
+            Err(cc::RecvTimeoutError::Timeout) => {}
+            Err(cc::RecvTimeoutError::Disconnected) => break,
         }
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use canon_event::{CapabilityCompleted, CapabilityFailed, CapabilityResult, LlmCall, LoopActed, LoopObserved, LoopPlanned, RouteSelected, RuntimeEvent, ToolCall, ToolResult};
+use canon_event::{CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, LlmCall, LoopActed, LoopObserved, LoopPlanned, RouteSelected, RuntimeEvent, ToolCall, ToolResult};
 use canon_goal::parse_agent_goal_markdown;
 use canon_tools_search::search_files;
 use std::collections::hash_map::DefaultHasher;
@@ -15,13 +15,17 @@ use crate::{
 const LLM_TIMEOUT_TICKS: u64 = 60;
 const PLACEHOLDER_GOAL: &str = "goal-pending";
 
-pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     let tick = rs.tick;
-    check_llm_timeout(ctx, tick);
+    if let Some(timeout_plan) = check_llm_timeout(ctx, tick) {
+        if let Some(emitter) = ctx.emitter.as_ref() {
+            emitter.emit_with_parents(RuntimeEvent::LoopPlanned(timeout_plan), vec![trigger_id.clone()], file!(), line!());
+        }
+    }
     let Some(observed) = ctx.last_observed.clone() else {
         return Ok(LoopStageResult::Noop);
     };
-    handle_observed(ctx, &observed)
+    handle_observed(ctx, &observed, trigger_id)
 }
 
 fn is_placeholder_goal(goal: &str) -> bool {
@@ -29,7 +33,7 @@ fn is_placeholder_goal(goal: &str) -> bool {
     trimmed.is_empty() || trimmed.contains(PLACEHOLDER_GOAL)
 }
 
-pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     let Some(pending) = ctx.pending_plan.take() else {
         return Ok(LoopStageResult::Noop);
     };
@@ -38,7 +42,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
         return Ok(LoopStageResult::Noop);
     }
 
-    emit_tool_result(ctx, &pending.plan_tool_call_id, &pending.request_id, true)?;
+    emit_tool_result(ctx, &pending.plan_tool_call_id, &pending.request_id, true, &trigger_id)?;
 
     let (mut actions, signals) = match &c.result {
         CapabilityResult::Llm(llm) => parse_llm_actions(&llm.response),
@@ -210,7 +214,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
     Ok(LoopStageResult::EmitMany(out.into_iter().map(RuntimeEvent::LoopPlanned).collect()))
 }
 
-pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     let Some(pending) = ctx.pending_plan.take() else {
         return Ok(LoopStageResult::Noop);
     };
@@ -218,7 +222,7 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext) -> anyhow::Res
         ctx.pending_plan = Some(pending);
         return Ok(LoopStageResult::Noop);
     }
-    emit_tool_result(ctx, &pending.plan_tool_call_id, &pending.request_id, false)?;
+    emit_tool_result(ctx, &pending.plan_tool_call_id, &pending.request_id, false, &trigger_id)?;
     emit_plan(
         ctx,
         LoopPlanned {
@@ -240,7 +244,7 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext) -> anyhow::Res
     )
 }
 
-fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Result<LoopStageResult> {
+fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     if ctx.pending_plan.is_some() || ctx.last_planned_observed_tick == Some(observed.tick) {
         return Ok(LoopStageResult::Noop);
     }
@@ -249,25 +253,11 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
         return Ok(LoopStageResult::Noop);
     }
     if observed.goal_text.as_ref().map(|g| is_placeholder_goal(g)).unwrap_or(true) && observed.error_count == 0 {
-        return emit_plan(
-            ctx,
-            LoopPlanned {
-                tick: observed.tick,
-                action_kind: "no_op".to_string(),
-                action_payload: serde_json::json!({}),
-                reason: "no_goal".to_string(),
-                llm_request_id: None,
-                trace_id: None,
-                execution_id: None,
-                span_id: None,
-                parent_span_id: None,
-                plan_id: None,
-                plan_step_id: None,
-                action_id: None,
-                signals: None,
-                depends_on: Vec::new(),
-            },
-        );
+        // Wait state: goal not yet available. Emit nothing — silence is the correct response.
+        // Emitting LoopPlanned{no_op} here only generates log spam: every agent whose
+        // RouteExecutor fires idle_plan (triggered by another agent's LoopObserved) would
+        // produce a no_op plan, cascading through the bus with zero useful effect.
+        return Ok(LoopStageResult::Noop);
     }
     if observed.error_count == 0 && ctx.last_done_goal.is_some() && ctx.last_done_goal == observed.goal_text {
         if requirements_satisfied(ctx, observed) {
@@ -324,21 +314,21 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
     ctx.last_planned_observed_tick = Some(observed.tick);
 
     if let Some(emitter) = ctx.emitter.as_ref() {
-        canon_meta::canon_emit_meta!(emitter; ToolCall(ToolCall {
+        emitter.emit_with_parents(RuntimeEvent::ToolCall(ToolCall {
             node_id: "plan_consumer".to_string(),
             tool_call_id: plan_tool_call_id,
             request_id: request_id.clone(),
             kind: "llm.plan".to_string(),
             payload: serde_json::json!({"role": "planner"}),
             accepted: true,
-        }));
-        canon_meta::canon_emit_meta!(emitter; Llm(LlmCall {
+        }), vec![trigger_id.clone()], file!(), line!());
+        emitter.emit_with_parents(RuntimeEvent::Llm(LlmCall {
             request_id,
             prompt: llm_call.prompt,
             role: llm_call.role,
             agent_id: llm_call.agent_id,
             dispatched: true,
-        }));
+        }), vec![trigger_id.clone()], file!(), line!());
     }
 
     Ok(LoopStageResult::Deferred)
@@ -347,7 +337,9 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Re
 fn hash_observed(observed: &LoopObserved) -> u64 {
     let mut h = DefaultHasher::new();
     observed.error_count.hash(&mut h);
-    observed.warning_count.hash(&mut h);
+    // warning_count excluded: watchdog stall warnings fire every tick and would change
+    // the hash on every cycle, triggering a new plan LLM call after each completion even
+    // when goal, errors, and workspace state are identical.
     observed.goal_text.hash(&mut h);
     observed.workspace_facts.hash(&mut h);
     h.finish()
@@ -365,43 +357,40 @@ fn requirements_satisfied(ctx: &LoopContext, observed: &LoopObserved) -> bool {
     actual_loc >= required_loc
 }
 
-fn check_llm_timeout(ctx: &mut LoopContext, current_tick: u64) {
+fn check_llm_timeout(ctx: &mut LoopContext, current_tick: u64) -> Option<LoopPlanned> {
     let Some(pending) = &ctx.pending_plan else {
-        return;
+        return None;
     };
     if current_tick.saturating_sub(pending.dispatched_at_tick) < LLM_TIMEOUT_TICKS {
-        return;
+        return None;
     }
     let tick = pending.tick;
     ctx.pending_plan = None;
-    let _ = emit_plan(
-        ctx,
-        LoopPlanned {
-            tick,
-            action_kind: "no_op".to_string(),
-            action_payload: serde_json::json!({}),
-            reason: "llm_timeout".to_string(),
-            llm_request_id: None,
-            signals: None,
-            trace_id: None,
-            execution_id: None,
-            span_id: None,
-            parent_span_id: None,
-            plan_id: None,
-            plan_step_id: None,
-            action_id: None,
-            depends_on: Vec::new(),
-        },
-    );
+    Some(LoopPlanned {
+        tick,
+        action_kind: "no_op".to_string(),
+        action_payload: serde_json::json!({}),
+        reason: "llm_timeout".to_string(),
+        llm_request_id: None,
+        signals: None,
+        trace_id: None,
+        execution_id: None,
+        span_id: None,
+        parent_span_id: None,
+        plan_id: None,
+        plan_step_id: None,
+        action_id: None,
+        depends_on: Vec::new(),
+    })
 }
 
 fn emit_plan(_ctx: &LoopContext, payload: LoopPlanned) -> anyhow::Result<LoopStageResult> {
     Ok(LoopStageResult::Emit(RuntimeEvent::LoopPlanned(payload)))
 }
 
-fn emit_tool_result(ctx: &LoopContext, tool_call_id: &str, request_id: &str, success: bool) -> anyhow::Result<()> {
+fn emit_tool_result(ctx: &LoopContext, tool_call_id: &str, request_id: &str, success: bool, trigger_id: &EventId) -> anyhow::Result<()> {
     if let Some(emitter) = ctx.emitter.as_ref() {
-        canon_meta::canon_emit_meta!(emitter; ToolResult(ToolResult {
+        emitter.emit_with_parents(RuntimeEvent::ToolResult(ToolResult {
             node_id: "plan_consumer".to_string(),
             tool_call_id: tool_call_id.to_string(),
             tool_result_id: Uuid::new_v4().to_string(),
@@ -409,7 +398,7 @@ fn emit_tool_result(ctx: &LoopContext, tool_call_id: &str, request_id: &str, suc
             kind: "llm.plan".to_string(),
             output: serde_json::json!({}),
             success,
-        }));
+        }), vec![trigger_id.clone()], file!(), line!());
     }
     Ok(())
 }

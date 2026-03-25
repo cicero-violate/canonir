@@ -1,11 +1,11 @@
-use canon_event::{CapabilityCompleted, CapabilityResult, RuntimeEvent, RouteSelected, RequestDispatch, LlmCall, GoalNodeCreated, GoalEdgeDefined};
+use canon_event::{CapabilityCompleted, CapabilityResult, EventId, RuntimeEvent, RouteSelected, RequestDispatch, LlmCall, GoalNodeCreated, GoalEdgeDefined};
 use crate::{context::LoopContext, result::LoopStageResult};
 use uuid::Uuid;
 
 /// Called when RouteSelected { route: "decompose" } arrives.
 /// Emits an LlmCall asking the LLM to split the current goal into parallel sub-tasks.
 /// Returns Deferred — the RequestDispatch events are emitted in execute_complete().
-pub fn execute(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+pub fn execute(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     // Already waiting on a decompose LLM response.
     if ctx.pending_decompose_request_id.is_some() {
         return Ok(LoopStageResult::Noop);
@@ -23,13 +23,13 @@ pub fn execute(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopS
     let prompt = build_decompose_prompt(&goal_text);
     ctx.pending_decompose_request_id = Some(request_id.clone());
 
-    canon_meta::canon_emit_meta!(emitter; Llm(LlmCall {
+    emitter.emit_with_parents(RuntimeEvent::Llm(LlmCall {
         request_id,
         prompt,
         role: Some("decompose".to_string()),
         agent_id: ctx.agent_id.clone(),
         dispatched: true,
-    }));
+    }), vec![trigger_id], file!(), line!());
 
     let _ = rs; // tick used for tracing only
     Ok(LoopStageResult::Deferred)

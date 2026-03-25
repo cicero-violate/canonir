@@ -838,21 +838,53 @@ canon_event_enum!(RuntimeEvent {
 // triggering event and use it as a parent when emitting new events.
 // ---------------------------------------------------------------------------
 
-use std::cell::RefCell;
-
-thread_local! {
-    static CURRENT_DISPATCH_ID: RefCell<Option<crate::EventId>> = RefCell::new(None);
-}
-
-/// Returns the canonical ID of the event currently being dispatched to this
-/// consumer thread. Call this inside `on_event` to get the causal parent ID.
-pub fn current_dispatch_id() -> Option<crate::EventId> {
-    CURRENT_DISPATCH_ID.with(|id| id.borrow().clone())
-}
-
-/// Called by the event bus in the consumer thread before/after `on_event`.
-pub fn set_current_dispatch_id(id: Option<crate::EventId>) {
-    CURRENT_DISPATCH_ID.with(|cell| *cell.borrow_mut() = id);
+/// Returns a static string naming the variant of a `RuntimeEvent`.
+/// Used for diagnostics and logging.
+pub fn event_kind_str(event: &RuntimeEvent) -> &'static str {
+    match event {
+        RuntimeEvent::LoopObserved(_) => "loop_observed",
+        RuntimeEvent::LoopPlanned(_) => "loop_planned",
+        RuntimeEvent::LoopActed(_) => "loop_acted",
+        RuntimeEvent::LoopVerified(_) => "loop_verified",
+        RuntimeEvent::LoopRewarded(_) => "loop_rewarded",
+        RuntimeEvent::GoodnessSnapshot(_) => "goodness_snapshot",
+        RuntimeEvent::RouteTick(_) => "route_tick",
+        RuntimeEvent::RouteSelected(_) => "route_selected",
+        RuntimeEvent::CapabilityInvoked(_) => "capability_invoked",
+        RuntimeEvent::CapabilityResolved(_) => "capability_resolved",
+        RuntimeEvent::CapabilityCompleted(_) => "capability_completed",
+        RuntimeEvent::CapabilityFailed(_) => "capability_failed",
+        RuntimeEvent::ErrorOccurred(_) => "error_occurred",
+        RuntimeEvent::Debug(_) => "debug",
+        RuntimeEvent::PromptLoaded(_) => "prompt_loaded",
+        RuntimeEvent::RuntimeStateUpdated(_) => "runtime_state_updated",
+        RuntimeEvent::ToolCall(_) => "tool_call",
+        RuntimeEvent::ToolResult(_) => "tool_result",
+        RuntimeEvent::ToolBatchSettled(_) => "tool_batch_settled",
+        RuntimeEvent::GoalNodeCreated(_) => "goal_node_created",
+        RuntimeEvent::GoalNodeRetracted(_) => "goal_node_retracted",
+        RuntimeEvent::GoalNodeRewritten(_) => "goal_node_rewritten",
+        RuntimeEvent::GoalEdgeDefined(_) => "goal_edge_defined",
+        RuntimeEvent::GoalGraphCheckpointed(_) => "goal_graph_checkpointed",
+        RuntimeEvent::GoalSelected(_) => "goal_selected",
+        RuntimeEvent::AgentRegistered(_) => "agent_registered",
+        RuntimeEvent::RequestDispatch(_) => "request_dispatch",
+        RuntimeEvent::SubTaskResult(_) => "sub_task_result",
+        RuntimeEvent::Tick(_) => "tick",
+        RuntimeEvent::Code(_) => "code",
+        RuntimeEvent::Edit(_) => "edit",
+        RuntimeEvent::Llm(_) => "llm",
+        RuntimeEvent::Cargo(_) => "cargo",
+        RuntimeEvent::File(_) => "file",
+        RuntimeEvent::Bash(_) => "bash",
+        RuntimeEvent::Analysis(_) => "analysis",
+        RuntimeEvent::PolicyBaselineUpdated(_) => "policy_baseline_updated",
+        RuntimeEvent::SystemConfigLoaded(_) => "system_config_loaded",
+        RuntimeEvent::NodeReady(_) => "node_ready",
+        RuntimeEvent::NodeStarted(_) => "node_started",
+        RuntimeEvent::NodeCompleted(_) => "node_completed",
+        RuntimeEvent::NodeFailed(_) => "node_failed",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -860,23 +892,22 @@ pub fn set_current_dispatch_id(id: Option<crate::EventId>) {
 // ---------------------------------------------------------------------------
 
 pub trait EventEmitter: Send + Sync {
-    fn emit_located(&self, event: RuntimeEvent, file: &'static str, line: u32);
+    /// Forbidden: always panics. Use `emit_with_parents` instead.
+    fn emit_located(&self, _event: RuntimeEvent, _file: &'static str, _line: u32) {
+        panic!("emit_located forbidden — use emit_with_parents");
+    }
 
-    /// Emit an event with explicit causal parent IDs.
-    /// Implementations that want to propagate parents should override this method.
-    /// The default falls back to `emit_located` (no parent tracking).
+    /// The only allowed emission path. Pass an empty vec for genuine root events.
     fn emit_with_parents(
         &self,
         event: RuntimeEvent,
-        _parents: Vec<crate::EventId>,
+        parents: Vec<crate::EventId>,
         file: &'static str,
         line: u32,
-    ) {
-        self.emit_located(event, file, line);
-    }
+    );
 
-    fn emit(&self, event: RuntimeEvent) {
-        self.emit_located(event, "", 0);
+    fn emit_child(&self, event: RuntimeEvent, parents: Vec<crate::EventId>, file: &'static str, line: u32) {
+        self.emit_with_parents(event, parents, file, line)
     }
 }
 
@@ -912,7 +943,7 @@ pub enum EventOutcome {
 
 pub trait EventConsumer: Send + Sync {
     fn filter(&self) -> EventFilter;
-    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome;
+    fn on_event(&mut self, event: &RuntimeEvent, trigger_id: crate::EventId) -> EventOutcome;
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 }
 

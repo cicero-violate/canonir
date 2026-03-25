@@ -17,6 +17,7 @@ pub(crate) struct LlmWork {
     agent_id: Option<String>,
     raw: bool,
     emitter: EventEmitterHandle,
+    trigger_id: canon_event::EventId,
 }
 
 static LLM_WORKER_TX: std::sync::RwLock<Option<std::sync::mpsc::Sender<LlmWork>>> = std::sync::RwLock::new(None);
@@ -70,7 +71,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                 let _ = std::fs::create_dir_all(&llm_log_dir);
                 let mut llm_call_counter: u32 = next_llm_call_counter(&llm_log_dir);
                 for job in work_rx.iter() {
-                    let LlmWork { request_id, name, prompt, role, agent_id, raw, emitter } = job;
+                    let LlmWork { request_id, name, prompt, role, agent_id, raw, emitter, trigger_id } = job;
                     let _ = ws_emitter_thread.set(emitter.clone());
                     let start = Instant::now();
                     let is_planner_role = role.as_deref() == Some("planner");
@@ -95,7 +96,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                     };
                     let Some(endpoint) = selected else {
                         let error_msg = if requested_role.is_empty() { "no llm endpoints configured".to_string() } else { format!("no llm endpoint configured for role={}", requested_role) };
-                        canon_meta::canon_emit_meta!(emitter; ErrorOccurred(new_error_occurred(
+                        emitter.emit_child(canon_event::RuntimeEvent::ErrorOccurred(new_error_occurred(
                             "llm_config",
                             "llm_executor",
                             &error_msg,
@@ -106,8 +107,8 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                 "role": role,
                             }),
                             Some(request_id.clone()),
-                        )));
-                        canon_meta::canon_emit_meta!(emitter; CapabilityFailed(canon_event::CapabilityFailed { request_id, capability: name, error: error_msg }));
+                        )), vec![trigger_id.clone()], file!(), line!());
+                        emitter.emit_child(canon_event::RuntimeEvent::CapabilityFailed(canon_event::CapabilityFailed { request_id, capability: name, error: error_msg }), vec![trigger_id.clone()], file!(), line!());
                         continue;
                     };
                     let retries = config.llm_retry_count.max(1);
@@ -218,11 +219,11 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                 "finalized_ms": finalized_ms,
                             });
                             let _ = std::fs::write(&req_path, serde_json::to_string_pretty(&req_done).unwrap_or_default());
-                            canon_meta::canon_emit_meta!(emitter; CapabilityCompleted(canon_event::CapabilityCompleted {
+                            emitter.emit_child(canon_event::RuntimeEvent::CapabilityCompleted(canon_event::CapabilityCompleted {
                                 request_id: request_id.clone(),
                                 capability: name,
                                 result: CapabilityResult::Llm(LlmResult { success: true, duration_ms: elapsed_ms, response: payload.clone() }),
-                            }));
+                            }), vec![trigger_id.clone()], file!(), line!());
                         }
                         Err(err) => {
                             let finalized_ms = now_ms();
@@ -246,7 +247,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                 "finalized_ms": finalized_ms,
                             });
                             let _ = std::fs::write(&req_path, serde_json::to_string_pretty(&req_done).unwrap_or_default());
-                            canon_meta::canon_emit_meta!(emitter; ErrorOccurred(new_error_occurred(
+                            emitter.emit_child(canon_event::RuntimeEvent::ErrorOccurred(new_error_occurred(
                                 "llm_call",
                                 "llm_executor",
                                 err.to_string(),
@@ -256,8 +257,8 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                     "capability": name,
                                 }),
                                 Some(request_id.clone()),
-                            )));
-                            canon_meta::canon_emit_meta!(emitter; CapabilityFailed(canon_event::CapabilityFailed { request_id: request_id.clone(), capability: name, error: err.to_string() }));
+                            )), vec![trigger_id.clone()], file!(), line!());
+                            emitter.emit_child(canon_event::RuntimeEvent::CapabilityFailed(canon_event::CapabilityFailed { request_id: request_id.clone(), capability: name, error: err.to_string() }), vec![trigger_id.clone()], file!(), line!());
                         }
                     }
                 }
@@ -281,6 +282,7 @@ impl Executable for LlmCall {
             agent_id: self.agent_id,
             raw: false,
             emitter: ctx.emitter,
+            trigger_id: ctx.trigger_id,
         })
         .map_err(|e| anyhow::anyhow!("llm worker channel closed: {e}"))?;
         Ok(ExecutionResult::Deferred)

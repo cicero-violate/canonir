@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use crate::consumers::capability_executor::CapabilityExecutor;
 use crate::EventRuntime;
-use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, GoalNodeRetracted, LoopObserved, RequestDispatch, RuntimeEvent, SubTaskResult};
+use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, GoalNodeRetracted, LoopObserved, RequestDispatch, RuntimeEvent, SubTaskResult};
 use canon_loop::LoopStageExecutor;
 use canon_proc_macros::must_emit;
 use canon_route::RouteExecutor;
@@ -33,7 +33,7 @@ impl EventConsumer for HaltDetectorConsumer {
     }
     fn set_emitter(&mut self, _: EventEmitterHandle) {}
     #[must_emit]
-    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
+    fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
         if let RuntimeEvent::LoopRewarded(r) = event {
             if r.halt {
                 self.halted.store(true, Ordering::Relaxed);
@@ -60,16 +60,19 @@ impl EventConsumer for ForwardConsumer {
     }
     fn set_emitter(&mut self, _: EventEmitterHandle) {}
     #[must_emit]
-    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
+    fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
+        let forward = |parent: &EventEmitterHandle, e: RuntimeEvent| {
+            parent.emit_with_parents(e, vec![trigger_id.clone()], file!(), line!());
+        };
         match event {
-            RuntimeEvent::LoopObserved(_) => self.parent.emit(event.clone()),
+            RuntimeEvent::LoopObserved(_) => forward(&self.parent, event.clone()),
             RuntimeEvent::LoopPlanned(p) => {
                 if let Some(id) = &p.action_id {
                     if let Ok(mut v) = self.actions_taken.lock() {
                         v.push(id.clone());
                     }
                 }
-                self.parent.emit(event.clone());
+                forward(&self.parent, event.clone());
             }
             RuntimeEvent::LoopActed(a) => {
                 if let Some(id) = &a.action_id {
@@ -77,16 +80,16 @@ impl EventConsumer for ForwardConsumer {
                         v.push(id.clone());
                     }
                 }
-                self.parent.emit(event.clone());
+                forward(&self.parent, event.clone());
             }
             RuntimeEvent::LoopVerified(_) | RuntimeEvent::ToolCall(_) | RuntimeEvent::ToolResult(_) | RuntimeEvent::ToolBatchSettled(_) => {
-                self.parent.emit(event.clone());
+                forward(&self.parent, event.clone());
             }
             RuntimeEvent::LoopRewarded(r) => {
                 if r.halt {
                     self.halted.store(true, Ordering::Relaxed);
                 }
-                self.parent.emit(event.clone());
+                forward(&self.parent, event.clone());
             }
             RuntimeEvent::Code(_)
             | RuntimeEvent::Debug(_)
@@ -131,7 +134,7 @@ impl EventConsumer for ForwardConsumer {
 // Sub-agent loop — owns a full EventRuntime with isolated tlog
 // ---------------------------------------------------------------------------
 
-fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_workspace: PathBuf) {
+fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_workspace: PathBuf, trigger_id: EventId) {
     let workspace = base_workspace.join("sub_agents").join(&req.dispatch_id);
     std::fs::create_dir_all(&workspace).ok();
     let tlog = workspace.join("event.tlog.d");
@@ -157,7 +160,6 @@ fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_
 
     let deadline = Instant::now() + Duration::from_secs(SUB_AGENT_TIMEOUT_SECS);
     while !halted.load(Ordering::Relaxed) && Instant::now() < deadline {
-        runtime.emit_tick().ok();
         thread::sleep(Duration::from_millis(TICK_INTERVAL_MS));
     }
 
@@ -165,10 +167,10 @@ fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_
     let taken = actions_taken.lock().map(|v| v.clone()).unwrap_or_default();
 
     if !success {
-        parent_emitter.emit(RuntimeEvent::GoalNodeRetracted(GoalNodeRetracted { node_id: req.dispatch_id.clone(), retracted: true }));
+        parent_emitter.emit_with_parents(RuntimeEvent::GoalNodeRetracted(GoalNodeRetracted { node_id: req.dispatch_id.clone(), retracted: true }), vec![trigger_id.clone()], file!(), line!());
     }
 
-    parent_emitter.emit(RuntimeEvent::SubTaskResult(SubTaskResult {
+    parent_emitter.emit_with_parents(RuntimeEvent::SubTaskResult(SubTaskResult {
         dispatch_id: req.dispatch_id,
         agent_id: req.agent_id,
         parent_request_id: req.parent_request_id,
@@ -176,7 +178,7 @@ fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_
         output: serde_json::json!({}),
         actions_taken: taken,
         error: if success { None } else { Some("sub-agent timeout".to_string()) },
-    }));
+    }), vec![trigger_id], file!(), line!());
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +230,7 @@ impl EventConsumer for DispatchConsumer {
     }
 
     #[must_emit]
-    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
+    fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
         let RuntimeEvent::RequestDispatch(req) = event else {
             return EventOutcome::NoOp("dispatch_consumer_non_dispatch");
         };
@@ -243,7 +245,7 @@ impl EventConsumer for DispatchConsumer {
         thread::Builder::new()
             .name(format!("dispatch-worker-{}", req.dispatch_id))
             .spawn(move || {
-                run_sub_agent(req, emitter, base);
+                run_sub_agent(req, emitter, base, trigger_id);
             })
             .expect("dispatch worker thread");
         EventOutcome::NoOp("dispatch_consumer_spawned")

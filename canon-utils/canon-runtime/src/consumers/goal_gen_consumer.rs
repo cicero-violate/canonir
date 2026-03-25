@@ -1,4 +1,4 @@
-use canon_event::{new_error_occurred, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, LlmCall, PromptLoaded, RuntimeEvent};
+use canon_event::{new_error_occurred, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, LlmCall, PromptLoaded, RuntimeEvent};
 use canon_proc_macros::must_emit;
 use canon_skills::global_registry;
 use std::path::PathBuf;
@@ -9,12 +9,11 @@ const GOALGEN_PROJECTS_DIR: &str = "/workspace/ai_sandbox/canon/test_projects/go
 
 enum State {
     Waiting,
-    Pending { request_id: String, ticks_waiting: u64 },
+    Pending { request_id: String },
     Done,
 }
 
 const MAX_RETRIES: u32 = 5;
-const TIMEOUT_TICKS: u64 = 5;
 
 pub struct GoalGenConsumer {
     tlog_path: PathBuf,
@@ -49,11 +48,15 @@ impl EventConsumer for GoalGenConsumer {
     }
 
     #[must_emit]
-    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
+    fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
         match (&self.state, event) {
-            (State::Waiting, RuntimeEvent::Tick(_)) => {
+            (State::Waiting, RuntimeEvent::PromptLoaded(p)) => {
+                let content = p.payload.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                if !is_placeholder_goal(content) {
+                    return EventOutcome::NoOp("goal_gen_real_goal_already_loaded");
+                }
                 let request_id = Uuid::new_v4().to_string();
-                self.state = State::Pending { request_id: request_id.clone(), ticks_waiting: 0 };
+                self.state = State::Pending { request_id: request_id.clone() };
                 let prompt = match global_registry().load("goal_gen/generate_goal") {
                     Ok(skill) => skill.prompt.clone(),
                     Err(e) => {
@@ -63,23 +66,6 @@ impl EventConsumer for GoalGenConsumer {
                     }
                 };
                 EventOutcome::Emit(RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt, role: Some("goal_gen".to_string()), agent_id: Some("goal_gen_chatgpt".to_string()), dispatched: true }))
-            }
-            (State::Pending { request_id: expected_id, ticks_waiting }, RuntimeEvent::Tick(_)) => {
-                let new_ticks = ticks_waiting.saturating_add(1);
-                if new_ticks >= TIMEOUT_TICKS {
-                    // Fallback: if the LLM is unresponsive, synthesize a deterministic goal
-                    // to keep the system moving.
-                    let fallback = synthesize_fallback_goal();
-                    let _ = std::fs::write(AGENT_GOAL_PATH, &fallback);
-                    crate::bootstrap::write_prompt_loaded_to_tlog(&self.tlog_path, &fallback);
-                    emit_prompt_loaded(&self.emitter, &fallback);
-                    eprintln!("[goal_gen] fallback goal emitted after {TIMEOUT_TICKS} ticks without LLM completion");
-                    self.state = State::Done;
-                    EventOutcome::NoOp("goal_gen_timeout_fallback")
-                } else {
-                    self.state = State::Pending { request_id: expected_id.clone(), ticks_waiting: new_ticks };
-                    EventOutcome::NoOp("goal_gen_awaiting_llm")
-                }
             }
             (State::Pending { request_id: expected_id, .. }, RuntimeEvent::CapabilityCompleted(done)) => {
                 if done.request_id != *expected_id || done.capability != "llm.call" {
@@ -118,7 +104,7 @@ impl EventConsumer for GoalGenConsumer {
                 if validate_goal(&content) {
                     let _ = std::fs::write(AGENT_GOAL_PATH, &content);
                     crate::bootstrap::write_prompt_loaded_to_tlog(&self.tlog_path, &content);
-                    emit_prompt_loaded(&self.emitter, &content);
+                    emit_prompt_loaded(&self.emitter, &content, &trigger_id);
                     self.state = State::Done;
                     if warn_events.is_empty() {
                         EventOutcome::NoOp("goal_gen_done")
@@ -175,7 +161,8 @@ impl EventConsumer for GoalGenConsumer {
             }
             (State::Waiting, RuntimeEvent::CapabilityCompleted(_)) | (State::Waiting, RuntimeEvent::CapabilityFailed(_)) => EventOutcome::NoOp("goal_gen_waiting_unrelated"),
             (State::Done, _) => EventOutcome::NoOp("goal_gen_noop"),
-            (_, RuntimeEvent::Code(_))
+            (_, RuntimeEvent::Tick(_))
+            | (_, RuntimeEvent::Code(_))
             | (_, RuntimeEvent::Debug(_))
             | (_, RuntimeEvent::Edit(_))
             | (_, RuntimeEvent::ErrorOccurred(_))
@@ -218,6 +205,11 @@ impl EventConsumer for GoalGenConsumer {
     }
 }
 
+fn is_placeholder_goal(goal: &str) -> bool {
+    let trimmed = goal.trim();
+    trimmed.is_empty() || trimmed.contains("goal-pending")
+}
+
 fn extract_goal_text(raw: &str) -> String {
     let trimmed = raw.trim();
 
@@ -255,21 +247,16 @@ fn validate_goal(content: &str) -> bool {
     ok
 }
 
-fn synthesize_fallback_goal() -> String {
-    format!(
-        "# Fallback Rust CLI Toolbox\n\nA small but valid placeholder goal emitted locally when goal_gen LLM is unavailable. Builds a binary crate with a couple of modules and a CLI entrypoint so the planner can proceed.\n\n## Target\n- Project path: `{base}/fallback_toolbox`\n\n## Requirements\n1. Create a Rust binary crate with modules `cli`, `core`, and `utils`.\n2. Implement a CLI using `clap` with a `run` command that prints a greeting.\n3. Add a `core::add(a, b)` function with a unit test.\n4. Add a `utils::slugify` helper with a unit test.\n5. Wire `main` to call into `cli::run()`.\n6. Ensure `cargo check` passes.\n",
-        base = GOALGEN_PROJECTS_DIR
-    )
-}
 
-fn emit_prompt_loaded(emitter: &Option<EventEmitterHandle>, content: &str) {
+fn emit_prompt_loaded(emitter: &Option<EventEmitterHandle>, content: &str, trigger_id: &EventId) {
     if let Some(em) = emitter {
-        em.emit(RuntimeEvent::PromptLoaded(PromptLoaded {
+        let event = RuntimeEvent::PromptLoaded(PromptLoaded {
             payload: serde_json::json!({
                 "prompt_id": "AGENT_GOAL",
                 "path": AGENT_GOAL_PATH,
                 "content": content,
             }),
-        }));
+        });
+        em.emit_with_parents(event, vec![trigger_id.clone()], file!(), line!());
     }
 }

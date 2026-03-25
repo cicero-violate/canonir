@@ -7,6 +7,7 @@ struct BashWork {
     cmd: String,
     cwd: String,
     emitter: EventEmitterHandle,
+    trigger_id: canon_event::EventId,
 }
 
 static BASH_WORKER_TX: std::sync::RwLock<Option<std::sync::mpsc::Sender<BashWork>>> =
@@ -19,7 +20,7 @@ pub fn init_bash_worker() {
     std::thread::Builder::new()
         .name("bash_executor_worker".to_string())
         .spawn(move || {
-            for BashWork { request_id, cmd, cwd, emitter } in rx {
+            for BashWork { request_id, cmd, cwd, emitter, trigger_id } in rx {
                 std::fs::create_dir_all(&cwd).ok();
                 let result = Command::new("bash")
                     .arg("-lc")
@@ -28,7 +29,7 @@ pub fn init_bash_worker() {
                     .output();
                 match result {
                     Ok(output) => {
-                        emitter.emit(RuntimeEvent::CapabilityCompleted(CapabilityCompleted {
+                        emitter.emit_child(RuntimeEvent::CapabilityCompleted(CapabilityCompleted {
                             request_id,
                             capability: "bash",
                             result: CapabilityResult::Process(ProcessResult {
@@ -37,14 +38,14 @@ pub fn init_bash_worker() {
                                 stdout: String::from_utf8_lossy(&output.stdout).to_string(),
                                 stderr: String::from_utf8_lossy(&output.stderr).to_string(),
                             }),
-                        }));
+                        }), vec![trigger_id], file!(), line!());
                     }
                     Err(err) => {
-                        emitter.emit(RuntimeEvent::CapabilityFailed(CapabilityFailed {
+                        emitter.emit_child(RuntimeEvent::CapabilityFailed(CapabilityFailed {
                             request_id,
                             capability: "bash",
                             error: err.to_string(),
-                        }));
+                        }), vec![trigger_id], file!(), line!());
                     }
                 }
             }
@@ -65,6 +66,7 @@ impl Executable for BashInvoke {
                 cmd: self.cmd,
                 cwd,
                 emitter: ctx.emitter,
+                trigger_id: ctx.trigger_id,
             });
             Ok(ExecutionResult::Deferred)
         } else {

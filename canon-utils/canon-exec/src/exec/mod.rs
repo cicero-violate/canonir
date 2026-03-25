@@ -1,4 +1,4 @@
-use canon_event::{AnalysisEvent, BashInvoke, RuntimeEvent, CargoEvent, EditEvent, FileEvent, LlmCall};
+use canon_event::{AnalysisEvent, BashInvoke, RuntimeEvent, CargoEvent, EditEvent, EventId, FileEvent, LlmCall};
 use canon_event::EventEmitterHandle;
 use std::path::PathBuf;
 
@@ -13,6 +13,7 @@ pub mod llm;
 pub struct ExecutionContext {
     pub workspace: PathBuf,
     pub emitter: EventEmitterHandle,
+    pub trigger_id: EventId,
 }
 
 #[derive(Debug)]

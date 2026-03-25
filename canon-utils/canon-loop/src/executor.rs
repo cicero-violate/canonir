@@ -5,7 +5,7 @@ use crate::{
     scheduler::{infer_priority, ScheduledTask},
     stage::LoopStageEvent,
 };
-use canon_event::{AgentRegistered, EventConsumer, EventEmitterHandle, EventFilter, EventOutcome, GoalEdgeDefined, RuntimeEvent, Tick};
+use canon_event::{AgentRegistered, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, GoalEdgeDefined, RuntimeEvent, Tick};
 use canon_proc_macros::must_emit;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -35,24 +35,14 @@ impl EventConsumer for LoopStageExecutor {
     }
 
     #[must_emit]
-    fn on_event(&mut self, event: &RuntimeEvent) -> EventOutcome {
+    fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
         // State accumulation (mutations that do not emit).
         let mut trigger_observe = false;
         match event {
             RuntimeEvent::Tick(Tick { tick, .. }) => {
+                // Tick is kept for cursor-save bookkeeping but no longer drives observation
+                // or timeout checks — the system is purely event-driven.
                 self.ctx.current_tick = *tick;
-                // Always try to observe on every tick; observe::execute will dedup unchanged state.
-                trigger_observe = true;
-                for e in crate::stage::act::check_act_timeout(&mut self.ctx) {
-                    if let Some(emitter) = self.ctx.emitter.as_ref() {
-                        emitter.emit(e);
-                    }
-                }
-                for e in crate::stage::act::reconcile_stale_pending_artifacts(&mut self.ctx) {
-                    if let Some(emitter) = self.ctx.emitter.as_ref() {
-                        emitter.emit(e);
-                    }
-                }
             }
             RuntimeEvent::AgentRegistered(AgentRegistered { payload }) => {
                 if let Some(id) = payload.get("agent_id").and_then(|v| v.as_str()) {
@@ -71,6 +61,10 @@ impl EventConsumer for LoopStageExecutor {
                 self.ctx.last_action_success = a.success;
                 self.ctx.batch_acted.push(a.clone());
                 self.ctx.last_planned_observed_tick = None;
+                // Clear so the planner re-plans after each action cycle.
+                // batch_tool_results (accumulated since last plan) carry the new context.
+                // Without this, the hash guard blocks re-planning with the same base observation.
+                self.ctx.last_handled_observed_hash = None;
                 if let Some(action_id) = a.action_id.clone() {
                     if let Some(paths) = self.ctx.write_paths_by_action.remove(&action_id) {
                         for p in paths {
@@ -96,6 +90,10 @@ impl EventConsumer for LoopStageExecutor {
                     self.ctx.warning_count = 0;
                     self.ctx.dirty_tracker.mark_verified("orchestrator");
                 }
+                // Allow re-planning after a verify/reward cycle: the reward stage may
+                // route back to "plan" even if the base observation hash hasn't changed.
+                self.ctx.last_handled_observed_hash = None;
+                self.ctx.last_planned_observed_tick = None;
             }
             RuntimeEvent::SubTaskResult(r) => {
                 self.ctx.context_merger.absorb(r, &r.agent_id);
@@ -107,7 +105,7 @@ impl EventConsumer for LoopStageExecutor {
                     if let Some(emitter) = self.ctx.emitter.as_ref() {
                         if let Some(child) = p.action_id.as_ref() {
                             for dep in &p.depends_on {
-                                emitter.emit(RuntimeEvent::GoalEdgeDefined(GoalEdgeDefined { from_node_id: dep.clone(), to_node_id: child.clone(), created: true }));
+                                emitter.emit_child(RuntimeEvent::GoalEdgeDefined(GoalEdgeDefined { from_node_id: dep.clone(), to_node_id: child.clone(), created: true }), vec![trigger_id.clone()], file!(), line!());
                             }
                         }
                     }
@@ -192,7 +190,7 @@ impl EventConsumer for LoopStageExecutor {
         if trigger_observe && !self.ctx.halted {
             if let Ok(LoopStageResult::Emit(e)) = observe::execute(&mut self.ctx) {
                 if let Some(emitter) = self.ctx.emitter.as_ref() {
-                    emitter.emit_located(e, file!(), line!());
+                    emitter.emit_with_parents(e, vec![trigger_id.clone()], file!(), line!());
                 }
             }
         }
@@ -204,22 +202,28 @@ impl EventConsumer for LoopStageExecutor {
         let Ok(stage) = LoopStageEvent::try_from(event.clone()) else {
             return EventOutcome::NoOp("loop_stage_not_stage_event");
         };
-        let res = stage.execute(&mut self.ctx);
+        let res = stage.execute(&mut self.ctx, trigger_id.clone());
         let Some(emitter) = self.ctx.emitter.clone() else {
             return EventOutcome::NoOp("loop_stage_no_emitter");
         };
         match res {
-            Ok(LoopStageResult::Emit(e)) => emitter.emit_located(e, file!(), line!()),
-            Ok(LoopStageResult::EmitMany(evs)) => evs.into_iter().for_each(|e| emitter.emit_located(e, file!(), line!())),
+            Ok(LoopStageResult::Emit(e)) => {
+                emitter.emit_with_parents(e, vec![trigger_id.clone()], file!(), line!());
+            }
+            Ok(LoopStageResult::EmitMany(evs)) => {
+                evs.into_iter().for_each(|e| {
+                    emitter.emit_with_parents(e, vec![trigger_id.clone()], file!(), line!());
+                });
+            }
             Ok(LoopStageResult::Deferred) | Ok(LoopStageResult::Noop) => {}
-            Err(err) => emitter.emit(RuntimeEvent::ErrorOccurred(canon_event::new_error_occurred(
+            Err(err) => emitter.emit_child(RuntimeEvent::ErrorOccurred(canon_event::new_error_occurred(
                 "loop_stage_execution",
                 "loop_stage_executor",
                 err.to_string(),
                 "error",
                 serde_json::json!({ "event": format!("{:?}", event) }),
                 None,
-            ))),
+            )), vec![trigger_id.clone()], file!(), line!()),
         }
         EventOutcome::NoOp("loop_stage_async")
     }
