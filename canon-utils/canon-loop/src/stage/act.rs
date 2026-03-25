@@ -58,7 +58,22 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
     let mut events = Vec::new();
     events.push(emit_tool_result(ctx, &pending, tool_result_id.clone(), c.result.clone(), success));
     ctx.mark_batch_completion(llm_request_id.as_deref(), success);
-    events.push(emit_acted(pending, stdout, stderr, exit_code, duration_ms, success, Some(tool_result_id)));
+    let acted_event = emit_acted(pending, stdout, stderr, exit_code, duration_ms, success, Some(tool_result_id));
+    events.push(acted_event);
+
+    events.push(RuntimeEvent::RouteSelected(RouteSelected {
+        tick: ctx.current_tick,
+        approved_route: "verify".to_string(),
+        suggested_route: "verify".to_string(),
+        prompt: String::new(),
+        rationale: String::new(),
+        gate_rules_fired: Vec::new(),
+        gate_should_stop: false,
+        model_json: serde_json::json!({}),
+        confidence: 1.0,
+        gate_changed: false,
+        gate_note: String::new(),
+    }));
     if !success && action_kind == "run_command" {
         events.extend(abort_active_batch(ctx));
     } else {
@@ -528,7 +543,7 @@ fn resolve_action_path(path_str: &str, ctx: &LoopContext) -> std::path::PathBuf 
 }
 
 fn emit_missing_args(planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
-    RuntimeEvent::LoopActed(LoopActed {
+    let acted = RuntimeEvent::LoopActed(LoopActed {
         tick: planned.tick,
         action_kind: planned.action_kind.clone(),
         capability_request_id: String::new(),
@@ -546,7 +561,9 @@ fn emit_missing_args(planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
         plan_id: planned.plan_id.clone(),
         plan_step_id: planned.plan_step_id.clone(),
         action_id: planned.action_id.clone(),
-    })
+    });
+
+    let route = RuntimeEvent::RouteSelected(RouteSelected { tick: pending.tick, approved_route: "verify".to_string() });
 }
 
 fn emit_conflict(planned: &LoopPlanned, agent: &str, action: &str, path: &str) -> RuntimeEvent {
