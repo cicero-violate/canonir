@@ -5,12 +5,16 @@ edition = "2021"
 autotests = false
 autobins = false
 
-[[bin]]
-name = "canon-analyst"
-path = "src/main.rs"
-test = false
-bench = false
-doctest = false
+[lib]
+name = "canon_analyst"
+path = "src/lib.rs"
+
+# [[bin]]
+# name = "canon-analyst"
+# path = "src/main.rs"
+# test = false
+# bench = false
+# doctest = false
 
 [dependencies]
 anyhow = { workspace = true }
