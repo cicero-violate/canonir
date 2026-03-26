@@ -33,6 +33,7 @@ pub enum EventKind {
     LoopVerified,
     LoopRewarded,
     GoodnessSnapshot,
+    InvariantDiscovered,
     // Routing
     RouteTick,
     RouteSelected,
@@ -94,6 +95,7 @@ impl EventKind {
             EventKind::LoopVerified => "loop_verified",
             EventKind::LoopRewarded => "loop_rewarded",
             EventKind::GoodnessSnapshot => "goodness_snapshot",
+            EventKind::InvariantDiscovered => "invariant_discovered",
             EventKind::RouteTick => "route_tick",
             EventKind::RouteSelected => "route_selected",
             EventKind::CapabilityInvoked => "capability_invoked",

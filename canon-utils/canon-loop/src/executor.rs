@@ -193,7 +193,8 @@ impl EventConsumer for LoopStageExecutor {
             | RuntimeEvent::GoalEdgeDefined(_)
             | RuntimeEvent::GoalGraphCheckpointed(_)
             | RuntimeEvent::CapabilityInvoked(_)
-            | RuntimeEvent::CapabilityResolved(_) => {}
+            | RuntimeEvent::CapabilityResolved(_)
+            | RuntimeEvent::InvariantDiscovered(_) => {}
         }
 
         // Emit LoopObserved when state changes (event-driven, not tick-driven).

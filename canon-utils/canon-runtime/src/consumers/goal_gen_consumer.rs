@@ -200,7 +200,8 @@ impl EventConsumer for GoalGenConsumer {
             | (_, RuntimeEvent::GoalEdgeDefined(_))
             | (_, RuntimeEvent::GoalGraphCheckpointed(_))
             | (_, RuntimeEvent::CapabilityInvoked(_))
-            | (_, RuntimeEvent::CapabilityResolved(_)) => EventOutcome::NoOp("goal_gen_noop"),
+            | (_, RuntimeEvent::CapabilityResolved(_))
+            | (_, RuntimeEvent::InvariantDiscovered(_)) => EventOutcome::NoOp("goal_gen_noop"),
         }
     }
 }

@@ -251,6 +251,7 @@ impl EventConsumer for RouteExecutor {
             | RuntimeEvent::GoalGraphCheckpointed(_)
             | RuntimeEvent::CapabilityInvoked(_)
             | RuntimeEvent::CapabilityResolved(_)
+            | RuntimeEvent::InvariantDiscovered(_)
             | RuntimeEvent::LoopObserved(_)
             | RuntimeEvent::LoopPlanned(_)
             | RuntimeEvent::LoopActed(_)

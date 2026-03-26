@@ -112,7 +112,8 @@ impl EventConsumer for WatchdogConsumer {
             | RuntimeEvent::GoalEdgeDefined(_)
             | RuntimeEvent::GoalGraphCheckpointed(_)
             | RuntimeEvent::CapabilityInvoked(_)
-            | RuntimeEvent::CapabilityResolved(_) => EventOutcome::NoOp("watchdog_not_a_stage_event"),
+            | RuntimeEvent::CapabilityResolved(_)
+            | RuntimeEvent::InvariantDiscovered(_) => EventOutcome::NoOp("watchdog_not_a_stage_event"),
         }
     }
 }

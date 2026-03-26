@@ -1,21 +1,21 @@
-# Git-Like Version Control System with Object Store, Indexing, and Branching
+# Binary Patch and Diff Tool with Rolling Hash and Delta Encoding
 
-This project implements a simplified Git-like version control system in Rust that supports content-addressable storage, commits, branching, and diffs. It models core Git concepts such as blobs, trees, commits, and references while providing a CLI for interacting with repositories. The system is interesting because it combines hashing, immutable data structures, DAG modeling, and file system interactions into a powerful distributed version control mechanism.
+This project implements a binary diff and patch system in Rust that computes efficient differences between files and applies patches to reconstruct new versions. It uses rolling hash algorithms (e.g., Rabin-Karp) to detect matching blocks and generates compact delta instructions similar to rsync or bsdiff. The system supports large files, streaming processing, and verification of patch integrity. This project is interesting because it combines algorithms for diffing, hashing, compression, and streaming I/O into a highly practical tool for synchronization, updates, and storage optimization.
 
 ## Target
-- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/git_like_vcs`
+- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/binary_diff_tool`
 
 ## Requirements
 
-1. Implement a Rust binary crate structured into modules such as `object`, `blob`, `tree`, `commit`, `hash`, `store`, `index`, `diff`, `repo`, `reference`, `branch`, `log`, `cli`, and `errors`.
-2. Design a content-addressable object store where blobs, trees, and commits are stored using SHA-1 or SHA-256 hashes.
-3. Implement blob objects for file contents and tree objects for directory structures.
-4. Build commit objects that reference trees, parent commits, author metadata, and messages.
-5. Implement an index (staging area) that tracks changes before committing.
-6. Support basic commands such as `init`, `add`, `commit`, `status`, and `log`.
-7. Implement branching and references, allowing creation and switching of branches.
-8. Build a diff engine to compare file versions and display changes between commits or working directory.
-9. Support checkout functionality to restore working directory state from a given commit or branch.
-10. Implement simple merge functionality with conflict detection (no need for full conflict resolution UI).
-11. Provide persistence of all objects and metadata using filesystem storage and `serde` where appropriate.
-12. Integrate structured logging with `tracing` to trace object creation, hashing, commit history traversal, and repository operations, and ensure the implementation spans at least 800 lines of real Rust code across modules and compiles successfully with `cargo check` without requiring external services.
+1. Implement a Rust binary crate structured into modules such as `hash`, `rolling`, `chunk`, `index`, `matcher`, `delta`, `patch`, `encoder`, `decoder`, `stream`, `io`, `engine`, `cli`, and `errors`.
+2. Design a rolling hash implementation (e.g., Rabin-Karp) for efficient detection of matching byte sequences across files.
+3. Implement chunking logic that splits input files into variable or fixed-size blocks for comparison.
+4. Build an index of source file chunks to enable fast lookup during diff computation.
+5. Implement a diff algorithm that produces delta instructions (copy, insert) representing differences between source and target files.
+6. Design a compact binary format for encoding patch data using `serde` or custom encoding.
+7. Implement a patch application engine that reconstructs the target file from the source file and delta instructions.
+8. Support streaming processing for large files without loading entire contents into memory.
+9. Implement integrity verification using checksums (e.g., SHA-256) to ensure correctness of patches.
+10. Provide performance optimizations such as skipping unchanged regions and minimizing redundant comparisons.
+11. Provide a CLI using `clap` with commands like `diff <old> <new>`, `patch <old> <patch>`, and `verify`.
+12. Integrate structured logging with `tracing` to trace hashing, matching, delta generation, and patch application, and ensure the implementation spans at least 800 lines of real Rust code across modules and compiles successfully with `cargo check` without requiring external services.

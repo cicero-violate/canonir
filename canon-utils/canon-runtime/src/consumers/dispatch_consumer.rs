@@ -124,7 +124,8 @@ impl EventConsumer for ForwardConsumer {
             | RuntimeEvent::GoalEdgeDefined(_)
             | RuntimeEvent::GoalGraphCheckpointed(_)
             | RuntimeEvent::CapabilityInvoked(_)
-            | RuntimeEvent::CapabilityResolved(_) => {}
+            | RuntimeEvent::CapabilityResolved(_)
+            | RuntimeEvent::InvariantDiscovered(_) => {}
         }
         EventOutcome::NoOp("forward_consumer_forwarded")
     }

@@ -386,6 +386,15 @@ canon_event_struct!(
     }
 );
 
+canon_event_struct!(
+    #[impl_shape]
+    InvariantDiscovered {
+        #[input] feature: String,
+        #[output] confidence: f64,
+        #[output] support: u64,
+    }
+);
+
 // ---------------------------------------------------------------------------
 // Routing events
 // ---------------------------------------------------------------------------
@@ -823,6 +832,7 @@ canon_event_enum!(RuntimeEvent {
     LoopVerified(LoopVerified),
     LoopRewarded(LoopRewarded),
     GoodnessSnapshot(GoodnessSnapshot),
+    InvariantDiscovered(InvariantDiscovered),
     RouteTick(RouteTick),
     RouteSelected(RouteSelected),
     Cargo(CargoEvent),
@@ -872,6 +882,7 @@ pub fn event_kind_str(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::LoopVerified(_) => "loop_verified",
         RuntimeEvent::LoopRewarded(_) => "loop_rewarded",
         RuntimeEvent::GoodnessSnapshot(_) => "goodness_snapshot",
+        RuntimeEvent::InvariantDiscovered(_) => "invariant_discovered",
         RuntimeEvent::RouteTick(_) => "route_tick",
         RuntimeEvent::RouteSelected(_) => "route_selected",
         RuntimeEvent::CapabilityInvoked(_) => "capability_invoked",

@@ -126,7 +126,8 @@ impl EventConsumer for GoalGraphConsumer {
             | RuntimeEvent::ToolBatchSettled(_)
             | RuntimeEvent::GoalGraphCheckpointed(_)
             | RuntimeEvent::CapabilityInvoked(_)
-            | RuntimeEvent::CapabilityResolved(_) => {}
+            | RuntimeEvent::CapabilityResolved(_)
+            | RuntimeEvent::InvariantDiscovered(_) => {}
         }
         EventOutcome::NoOp("goal_graph_noop")
     }

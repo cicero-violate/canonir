@@ -156,7 +156,8 @@ impl EventConsumer for AgentRegistryConsumer {
             | RuntimeEvent::GoalEdgeDefined(_)
             | RuntimeEvent::GoalGraphCheckpointed(_)
             | RuntimeEvent::CapabilityInvoked(_)
-            | RuntimeEvent::CapabilityResolved(_) => EventOutcome::NoOp("agent_registry_ignored"),
+            | RuntimeEvent::CapabilityResolved(_)
+            | RuntimeEvent::InvariantDiscovered(_) => EventOutcome::NoOp("agent_registry_ignored"),
         }
     }
 }

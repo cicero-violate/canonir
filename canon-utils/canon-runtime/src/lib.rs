@@ -3,6 +3,7 @@ pub mod bootstrap;
 mod bus;
 pub mod consumers;
 pub mod hooks;
+mod invariants;
 
 use bus::EventBus;
 use canon_event::BinarySegmentWriter;
@@ -32,6 +33,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use invariants::InvariantEngine;
 
 pub struct EventRuntime {
     state: RustcState,
@@ -57,6 +59,7 @@ pub struct EventRuntime {
     last_kind_hash: HashMap<canon_event::EventKind, u64>,
     /// Per-kind id of the last written event; set as `prev_event_id` on the next write.
     last_event_id_per_kind: HashMap<canon_event::EventKind, canon_event::EventId>,
+    invariant_engine: InvariantEngine,
 }
 
 impl EventRuntime {
@@ -86,6 +89,7 @@ impl EventRuntime {
             dispatched_ids: HashSet::new(),
             last_kind_hash: HashMap::new(),
             last_event_id_per_kind: HashMap::new(),
+            invariant_engine: InvariantEngine::new(),
         }
     }
 
@@ -262,6 +266,12 @@ impl EventRuntime {
                         "route_selected" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::RouteSelected>(data.clone()) {
                                 self.handle_replayed_event(RuntimeEvent::RouteSelected(decoded), parents)?;
+                                self.drain_emitted_events()?;
+                            }
+                        }
+                        "invariant_discovered" => {
+                            if let Ok(decoded) = serde_json::from_value::<canon_event::InvariantDiscovered>(data.clone()) {
+                                self.handle_replayed_event(RuntimeEvent::InvariantDiscovered(decoded), parents)?;
                                 self.drain_emitted_events()?;
                             }
                         }
@@ -466,6 +476,12 @@ impl EventRuntime {
             return;
         };
 
+        // --- Invariant engine ---
+        if !self.invariant_engine.observe(&wire, &self.emitter) {
+            eprintln!("[canon-runtime] invariant violation — event rejected kind={} id={}", wire.kind, wire.id);
+            return;
+        }
+
         // --- DEDUP GATE ---
         // Drop consecutive identical events of the same kind (same data hash).
         // This prevents tlog bloat when consumers fire the same event repeatedly
@@ -549,6 +565,7 @@ fn runtime_event_to_wire(event: &RuntimeEvent, parent_ids: Vec<canon_event::Even
         RuntimeEvent::GoalEdgeDefined(p) => (canon_event::EventKind::GoalEdgeDefined, payload_from_shape(p)),
         RuntimeEvent::GoalGraphCheckpointed(p) => (canon_event::EventKind::GoalGraphCheckpointed, payload_from_shape(p)),
         RuntimeEvent::GoodnessSnapshot(p) => (canon_event::EventKind::GoodnessSnapshot, payload_from_shape(p)),
+        RuntimeEvent::InvariantDiscovered(p) => (canon_event::EventKind::InvariantDiscovered, payload_from_shape(p)),
         RuntimeEvent::Llm(p) => (canon_event::EventKind::Llm, payload_from_shape(p)),
         _ => return None,
     };
@@ -570,6 +587,7 @@ fn runtime_event_to_wire(event: &RuntimeEvent, parent_ids: Vec<canon_event::Even
             "goal_graph"
         }
         RuntimeEvent::GoodnessSnapshot(_) => "event-runtime",
+        RuntimeEvent::InvariantDiscovered(_) => "invariant-engine",
         _ => "event-runtime",
     };
     // Root events are legitimately parentless (external inputs to the system).

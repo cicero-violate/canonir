@@ -1,4 +1,4 @@
-use crate::CanonEvent;
+use crate::{invariants, CanonEvent};
 use anyhow::Result;
 use fs2::FileExt;
 use std::fs::{self, File, OpenOptions};
@@ -68,6 +68,34 @@ pub struct BinarySegmentWriter {
     last_ts: AtomicU64,
     fsync: bool,
     inner: Mutex<SegmentFiles>,
+    dedup: Mutex<DedupCache>,
+}
+
+#[derive(Default)]
+struct DedupCache {
+    seen: std::collections::HashSet<u64>,
+    order: std::collections::VecDeque<u64>,
+    cap: usize,
+}
+
+impl DedupCache {
+    fn new(cap: usize) -> Self {
+        Self { cap, ..Default::default() }
+    }
+
+    fn insert_if_new(&mut self, h: u64) -> bool {
+        if self.seen.contains(&h) {
+            return false;
+        }
+        self.seen.insert(h);
+        self.order.push_back(h);
+        if self.order.len() > self.cap {
+            if let Some(old) = self.order.pop_front() {
+                self.seen.remove(&old);
+            }
+        }
+        true
+    }
 }
 
 impl BinarySegmentWriter {
@@ -89,7 +117,15 @@ impl BinarySegmentWriter {
         if let Some(keep) = config.retain_segments {
             apply_retention(dir, keep)?;
         }
-        Ok(Self { dir: dir.to_path_buf(), config, seq: AtomicU64::new(next_seq), last_ts: AtomicU64::new(0), fsync: false, inner: Mutex::new(files) })
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            config,
+            seq: AtomicU64::new(next_seq),
+            last_ts: AtomicU64::new(0),
+            fsync: false,
+            inner: Mutex::new(files),
+            dedup: Mutex::new(DedupCache::new(1024)),
+        })
     }
 
     pub fn with_fsync(mut self, enabled: bool) -> Self {
@@ -98,6 +134,9 @@ impl BinarySegmentWriter {
     }
 
     pub fn write_canon_event(&self, event: &CanonEvent) -> Result<()> {
+        // --- Invariant gate ---
+        invariants::validate_event(event)?;
+
         let prev = self.last_ts.fetch_max(event.ts, Ordering::Relaxed);
         if event.ts < prev {
             return Err(anyhow::anyhow!("non-monotonic timestamp: {} < prev {}", event.ts, prev));
@@ -105,6 +144,23 @@ impl BinarySegmentWriter {
         if event.payload.input.is_null() || event.payload.output.is_null() || event.payload.delta.is_null() {
             return Err(anyhow::anyhow!("CanonPayload input/output/delta must not be null"));
         }
+
+        // --- Dedup gate (recent window) ---
+        let content_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            event.kind.hash(&mut h);
+            event.payload.data.hash(&mut h);
+            event.payload.delta.hash(&mut h);
+            h.finish()
+        };
+        let mut dedup = self.dedup.lock().expect("dedup cache poisoned");
+        if !dedup.insert_if_new(content_hash) {
+            // Duplicate of a recently written event; skip append but succeed.
+            return Ok(());
+        }
+        drop(dedup);
+
         let mut line = serde_json::to_vec(event)?;
         line.push(b'\n');
         let line_len = line.len() as u64;
