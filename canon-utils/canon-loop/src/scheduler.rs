@@ -71,6 +71,10 @@ impl Scheduler {
         self.heap.is_empty()
     }
 
+    pub fn len(&self) -> usize {
+        self.heap.len()
+    }
+
     pub fn push(&mut self, mut task: ScheduledTask) {
         task.seq = self.seq;
         self.seq = self.seq.saturating_add(1);

@@ -1,4 +1,5 @@
-use canon_event::{CanonEvent, EventKind, LoopObserved, RuntimeEvent, ToolCall, ToolResult};
+use canon_event::{new_error_occurred, CanonEvent, EventKind, LoopObserved, RuntimeEvent, ToolCall, ToolResult};
+use canon_invariant::decision_trace_payload;
 use canon_goal::parse_agent_goal_markdown;
 use canon_tools_search::search_files;
 use std::collections::hash_map::DefaultHasher;
@@ -127,7 +128,32 @@ fn build_workspace_facts(goal_text: &Option<String>) -> (Vec<String>, Vec<Runtim
     let exists = target_root.exists();
     facts.push(format!("target_path_exists={} path={}", exists, target_root.display()));
     if !exists {
-        return (facts, Vec::new());
+        return (
+            facts,
+            vec![
+                RuntimeEvent::Debug(canon_event::DebugEvent {
+                    source: "observe_stage".to_string(),
+                    kind: "target_workspace_missing".to_string(),
+                    payload: decision_trace_payload(
+                        "target workspace does not exist",
+                        serde_json::json!({
+                            "target_root": target_root.display().to_string(),
+                        }),
+                    ),
+                }),
+                RuntimeEvent::ErrorOccurred(new_error_occurred(
+                    "target_workspace_missing",
+                    "observe_stage",
+                    format!("target workspace does not exist: {}", target_root.display()),
+                    "warning",
+                    serde_json::json!({
+                        "target_root": target_root.display().to_string(),
+                        "recoverable": true,
+                    }),
+                    None,
+                )),
+            ],
+        );
     }
 
     let cargo_toml = target_root.join("Cargo.toml");

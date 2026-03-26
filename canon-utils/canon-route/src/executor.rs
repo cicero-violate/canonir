@@ -151,6 +151,19 @@ impl RouteExecutor {
             }
             return;
         }
+        if self.ctx.target_workspace_missing && self.ctx.planned_pending == 0 {
+            let json = serde_json::json!({
+                "route": "plan",
+                "rationale": format!(
+                    "target workspace is missing at {}; route directly to plan to create/bootstrap it",
+                    self.ctx.target_workspace_path.as_deref().unwrap_or("unknown")
+                ),
+                "confidence": 0.99,
+            })
+            .to_string();
+            self.emit_decision(&json, "deterministic:target_workspace_missing".to_string());
+            return;
+        }
         if self.ctx.context_ready
             && self.ctx.planned_pending == 0
             && self.ctx.consecutive_invalid_plan_batches > 0
@@ -520,10 +533,26 @@ impl EventConsumer for RouteExecutor {
             }
         }
 
-        // Planning completed — route either to act when work exists, or back to recovery
+        // Planning completed — route directly to act when work exists, or back to recovery
         // for recoverable empty outcomes such as invalid_plan / llm_failed / llm_timeout.
         // batch_settled is suppressed for plan-only batches so we trigger here instead.
         if let RuntimeEvent::PlanningCompleted(pc) = event {
+            if self.ctx.planned_pending > 0 && self.ctx.pending_tool_result_ids.is_empty() {
+                if self.pending_request_id.as_deref() == Some("deterministic") {
+                    self.pending_request_id = None;
+                }
+                let json = serde_json::json!({
+                    "route": "act",
+                    "rationale": format!(
+                        "planning completed with {} pending actions; advance directly to act",
+                        self.ctx.planned_pending
+                    ),
+                    "confidence": 0.99,
+                })
+                .to_string();
+                self.emit_decision(&json, "deterministic:planned_to_act".to_string());
+                return EventOutcome::NoOp("route_executor_planned_to_act");
+            }
             if pc.status == "missing_observed_context" && self.ctx.pending_tool_result_ids.is_empty() {
                 if self.pending_request_id.as_deref() == Some("deterministic") {
                     self.pending_request_id = None;
@@ -538,13 +567,8 @@ impl EventConsumer for RouteExecutor {
                 return EventOutcome::NoOp("route_executor_missing_observed_context");
             }
             let recoverable_empty_plan = self.ctx.planned_pending == 0
-                && matches!(
-                    pc.status.as_str(),
-                    "invalid_plan" | "llm_failed" | "llm_timeout"
-                );
-            if (self.ctx.planned_pending > 0 || recoverable_empty_plan)
-                && self.ctx.pending_tool_result_ids.is_empty()
-            {
+                && matches!(pc.status.as_str(), "invalid_plan" | "llm_failed" | "llm_timeout");
+            if recoverable_empty_plan && self.ctx.pending_tool_result_ids.is_empty() {
                 if self.pending_request_id.as_deref() == Some("deterministic") {
                     self.pending_request_id = None;
                 }

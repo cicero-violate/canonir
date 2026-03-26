@@ -59,6 +59,8 @@ pub struct RouteContext {
     pub last_invalid_plan_reason: Option<String>,
     pub last_invalid_plan_planned_count: Option<usize>,
     pub consecutive_invalid_plan_batches: u32,
+    pub target_workspace_missing: bool,
+    pub target_workspace_path: Option<String>,
     pub last_halt_reason: Option<String>,
     /// Maps action_id → (action_kind, llm_request_id) for enriching ToolResult metadata.
     action_meta: HashMap<String, (String, Option<String>)>,
@@ -92,7 +94,7 @@ impl RouteContext {
 
     pub fn snapshot_text(&self) -> String {
         format!(
-            "tick={tick}\ncontext_ready={context}\nworkspace_dirty={dirty}\nplanned_pending={pending}\nacted_unverified={unverified}\nfinish_ready={finish}\nlast_action_kind={action}\ngoodness={goodness}\ndelta_g={delta_g}\nconsecutive_invalid_plan_batches={invalid_count}\nlast_invalid_plan_planned_count={invalid_planned}\nlast_invalid_plan_reason={invalid_reason}\nhalted={halted}\nlast_halt_reason={halt_reason}",
+            "tick={tick}\ncontext_ready={context}\nworkspace_dirty={dirty}\nplanned_pending={pending}\nacted_unverified={unverified}\nfinish_ready={finish}\nlast_action_kind={action}\ngoodness={goodness}\ndelta_g={delta_g}\nconsecutive_invalid_plan_batches={invalid_count}\nlast_invalid_plan_planned_count={invalid_planned}\nlast_invalid_plan_reason={invalid_reason}\ntarget_workspace_missing={target_missing}\ntarget_workspace_path={target_path}\nhalted={halted}\nlast_halt_reason={halt_reason}",
             tick = self.scheduler_tick,
             context = self.context_ready,
             dirty = self.workspace_dirty_tracker.any_dirty(),
@@ -111,6 +113,8 @@ impl RouteContext {
                 .last_invalid_plan_reason
                 .as_deref()
                 .unwrap_or("NA"),
+            target_missing = self.target_workspace_missing,
+            target_path = self.target_workspace_path.as_deref().unwrap_or("NA"),
             halted = self.halted,
             halt_reason = self.last_halt_reason.as_deref().unwrap_or("NA"),
         )
@@ -126,12 +130,20 @@ impl RouteContext {
 
     pub fn update_from_event(&mut self, event: &RuntimeEvent, workspace: &Path) {
         match event {
-            RuntimeEvent::LoopObserved(LoopObserved { goal_text, error_count, .. }) => {
+            RuntimeEvent::LoopObserved(LoopObserved { goal_text, error_count, workspace_facts, .. }) => {
                 let goal_present = goal_text
                     .as_ref()
                     .map(|v| !Self::goal_is_placeholder(v))
                     .unwrap_or(false);
                 self.context_ready = goal_present || *error_count > 0;
+                self.target_workspace_missing = false;
+                self.target_workspace_path = None;
+                for fact in workspace_facts {
+                    if let Some(rest) = fact.strip_prefix("target_path_exists=false path=") {
+                        self.target_workspace_missing = true;
+                        self.target_workspace_path = Some(rest.to_string());
+                    }
+                }
                 if let Some(goal_text) = goal_text {
                     if !Self::goal_is_placeholder(goal_text) {
                         self.mission_raw = goal_text.clone();
@@ -246,6 +258,21 @@ impl RouteContext {
                 self.consecutive_invalid_plan_batches = 0;
                 self.last_invalid_plan_reason = None;
                 self.last_invalid_plan_planned_count = None;
+            }
+            RuntimeEvent::ErrorOccurred(err) if err.kind == "target_workspace_missing" => {
+                self.target_workspace_missing = true;
+                self.target_workspace_path = err
+                    .context
+                    .get("target_root")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.to_string());
+                self.push_journal(
+                    "observe",
+                    format!(
+                        "target_workspace_missing path={}",
+                        self.target_workspace_path.as_deref().unwrap_or("unknown")
+                    ),
+                );
             }
             RuntimeEvent::ToolCall(ToolCall { tool_call_id, kind, .. }) => {
                 // Opening a new call: if set was empty this starts a new batch.

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use canon_event::{new_error_occurred, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, LlmCall, LoopActed, LoopObserved, LoopPlanned, PlanningCompleted, RouteSelected, RuntimeEvent, ToolCall, ToolResult};
 use canon_goal::parse_agent_goal_markdown;
@@ -251,7 +251,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
         return Ok(LoopStageResult::Noop);
     }
     let discovery_only_retry = ctx.consecutive_invalid_plan_batches > 0;
-    if let Err(message) = validate_action_batch(&out, discovery_only_retry) {
+    if let Err(message) = validate_action_batch(&out, discovery_only_retry, pending.goal_text.as_deref()) {
         ctx.last_planned_observed_tick = None;
         return Ok(LoopStageResult::EmitMany(vec![
             RuntimeEvent::Debug(canon_event::DebugEvent {
@@ -311,7 +311,14 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     Ok(LoopStageResult::EmitMany(events))
 }
 
-fn validate_action_batch(actions: &[LoopPlanned], discovery_only_retry: bool) -> Result<(), String> {
+fn validate_action_batch(
+    actions: &[LoopPlanned],
+    discovery_only_retry: bool,
+    goal_text: Option<&str>,
+) -> Result<(), String> {
+    let target_root = goal_text
+        .and_then(|goal| parse_agent_goal_markdown(goal).target_path)
+        .unwrap_or_else(|| PathBuf::from("."));
     let has_discovery = actions.iter().any(|a| matches!(a.action_kind.as_str(), "list_dir" | "read_file"));
     let has_execution = actions.iter().any(|a| {
         matches!(
@@ -350,13 +357,31 @@ fn validate_action_batch(actions: &[LoopPlanned], discovery_only_retry: bool) ->
                     ));
                 }
             }
-            "read_file" | "list_dir" | "write_file" | "patch_file" | "done" => {}
+            "read_file" | "list_dir" | "write_file" | "patch_file" => {
+                let Some(path) = action.action_payload.get("path").and_then(|v| v.as_str()) else {
+                    return Err(format!("{} missing path payload", action.action_kind));
+                };
+                validate_workspace_relative_path(path, &target_root)
+                    .map_err(|e| format!("{} path is invalid: {e}", action.action_kind))?;
+            }
+            "done" => {}
             other => {
                 return Err(format!("unknown plan action_kind {other}"));
             }
         }
     }
 
+    Ok(())
+}
+
+fn validate_workspace_relative_path(path: &str, _target_root: &Path) -> Result<(), String> {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        return Err("absolute paths are not allowed for plan discovery/edit actions".to_string());
+    }
+    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(format!("path escapes target workspace via parent traversal: {path}"));
+    }
     Ok(())
 }
 
@@ -695,6 +720,10 @@ fn build_context_base(observed: &LoopObserved, workspace: &Path, sub_agent_secti
 
 Workspace facts:
 {workspace_facts}
+
+Bootstrap rule:
+- If workspace facts say `target_path_exists=false`, your first plan must create/init the target workspace.
+- In that case, do not emit `list_dir` or `read_file` inside the missing target directory before creating it.
 
 ━━━ CONTEXT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

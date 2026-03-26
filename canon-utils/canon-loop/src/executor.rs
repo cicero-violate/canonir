@@ -24,6 +24,30 @@ impl LoopStageExecutor {
         self.ctx.agent_id = Some(id);
         self
     }
+
+    fn record_control_state(&mut self, event: &RuntimeEvent, trigger_id: &EventId) {
+        let next = match event {
+            RuntimeEvent::RouteSelected(rs) => match rs.approved_route.as_str() {
+                "observe" => Some("loop_observed"),
+                "plan" => Some("planning_completed"),
+                "act" => Some("loop_acted"),
+                "verify" => Some("loop_verified"),
+                "conclude" => Some("loop_rewarded"),
+                _ => None,
+            },
+            RuntimeEvent::LoopObserved(_) => Some("route_selected"),
+            RuntimeEvent::PlanningCompleted(_) => Some("route_selected"),
+            RuntimeEvent::LoopActed(_) => Some("route_selected"),
+            RuntimeEvent::LoopVerified(_) => Some("loop_rewarded"),
+            RuntimeEvent::LoopRewarded(_) => Some("route_selected"),
+            _ => None,
+        };
+        if let Some(expected) = next {
+            self.ctx.last_control_event_id = Some(trigger_id.to_string());
+            self.ctx.last_control_kind = Some(canon_event::event_kind_str(event).to_string());
+            self.ctx.pending_required_successor = Some(expected.to_string());
+        }
+    }
 }
 
 impl EventConsumer for LoopStageExecutor {
@@ -48,6 +72,7 @@ impl EventConsumer for LoopStageExecutor {
         // State accumulation (mutations that do not emit).
         let mut trigger_observe = false;
         let mut force_observe_recovery = false;
+        self.record_control_state(event, &trigger_id);
         match event {
             RuntimeEvent::Debug(debug) if debug.kind == "recovery_event" => {
                 if debug
@@ -311,6 +336,12 @@ impl EventConsumer for LoopStageExecutor {
             matches!(event, RuntimeEvent::ErrorOccurred(err) if err.kind == "invariant_violation")
                 || matches!(event, RuntimeEvent::Code(code) if matches!(code.delta.event, canon_event::RustcEvent::InvariantViolation(_)));
 
+        let observe_blocked_by_successor = self
+            .ctx
+            .pending_required_successor
+            .as_deref()
+            .is_some_and(|expected| expected != "loop_observed");
+
         if force_observe_recovery && !self.ctx.halted {
             match observe::execute_forced(&mut self.ctx) {
                 Ok(LoopStageResult::Emit(e)) => {
@@ -345,6 +376,28 @@ impl EventConsumer for LoopStageExecutor {
                 }
             }
         } else if trigger_observe && !self.ctx.halted && !suppress_observe_on_invariant {
+            if observe_blocked_by_successor {
+                if let Some(emitter) = self.ctx.emitter.as_ref() {
+                    emitter.emit_child(
+                        RuntimeEvent::Debug(canon_event::DebugEvent {
+                            source: "loop_stage_executor".to_string(),
+                            kind: "observe_suppressed_due_to_pending_successor".to_string(),
+                            payload: decision_trace_payload(
+                                "observe suppressed because another control successor is required",
+                                serde_json::json!({
+                                    "pending_required_successor": self.ctx.pending_required_successor,
+                                    "last_control_kind": self.ctx.last_control_kind,
+                                    "last_control_event_id": self.ctx.last_control_event_id,
+                                    "trigger_kind": canon_event::event_kind_str(event),
+                                }),
+                            ),
+                        }),
+                        vec![trigger_id.clone()],
+                        file!(),
+                        line!(),
+                    );
+                }
+            } else {
             match observe::execute(&mut self.ctx) {
                 Ok(LoopStageResult::Emit(e)) => {
                     if let Some(emitter) = self.ctx.emitter.as_ref() {
@@ -380,6 +433,7 @@ impl EventConsumer for LoopStageExecutor {
                         )), vec![trigger_id.clone()], file!(), line!());
                     }
                 }
+            }
             }
         }
 

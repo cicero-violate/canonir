@@ -1,10 +1,11 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use canon_event::{
-    BashInvoke, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, FileEvent, FilePatch, FileWrite, LoopActed, LoopPlanned, ProcessResult, RouteSelected, RuntimeEvent, ToolCall, ToolResult,
+    new_error_occurred, BashInvoke, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, FileEvent, FilePatch, FileWrite, LoopActed, LoopPlanned, ProcessResult, RouteSelected, RuntimeEvent, ToolCall, ToolResult,
 };
 use canon_goal::parse_agent_goal_markdown;
 use canon_tools_patch::apply_patch;
+use canon_invariant::decision_trace_payload;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -16,16 +17,44 @@ use crate::{
 
 pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     if ctx.pending_act.is_some() {
+        emit_act_stall(
+            ctx,
+            &trigger_id,
+            "pending_act already present; cannot dispatch a new action",
+        );
         return Ok(LoopStageResult::Noop);
     }
     if ctx.scheduler.is_empty() {
         ctx.active_batch_llm_request_id = None;
+        emit_act_stall(
+            ctx,
+            &trigger_id,
+            "route_selected(act) but scheduler is empty",
+        );
         return Ok(LoopStageResult::Noop);
     }
     let mut events = Vec::new();
     while ctx.pending_act.is_none() {
-        let task = if let Some(batch_id) = ctx.active_batch_llm_request_id.as_deref() { ctx.scheduler.pop_for_llm(Some(batch_id)) } else { ctx.scheduler.pop_any() };
+        let filtered_batch_id = ctx.active_batch_llm_request_id.clone();
+        let scheduler_len_before = ctx.scheduler.len();
+        let task = if let Some(batch_id) = filtered_batch_id.as_deref() {
+            ctx.scheduler.pop_for_llm(Some(batch_id))
+        } else {
+            ctx.scheduler.pop_any()
+        };
         let Some(task) = task else {
+            if scheduler_len_before > 0 {
+                emit_act_stall_with_context(
+                    ctx,
+                    &trigger_id,
+                    "scheduler has queued work but no dispatchable task was returned",
+                    serde_json::json!({
+                        "scheduler_len": scheduler_len_before,
+                        "filtered_batch_id": filtered_batch_id,
+                        "dispatch_mode": if filtered_batch_id.is_some() { "pop_for_llm" } else { "pop_any" },
+                    }),
+                );
+            }
             ctx.active_batch_llm_request_id = None;
             break;
         };
@@ -43,6 +72,56 @@ pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext, trigger_id: E
     }
 }
 
+fn emit_act_stall(ctx: &LoopContext, trigger_id: &EventId, reason: &str) {
+    emit_act_stall_with_context(ctx, trigger_id, reason, serde_json::json!({}));
+}
+
+fn emit_act_stall_with_context(
+    ctx: &LoopContext,
+    trigger_id: &EventId,
+    reason: &str,
+    extra: serde_json::Value,
+) {
+    let Some(emitter) = ctx.emitter.as_ref() else {
+        return;
+    };
+    let mut payload = serde_json::json!({
+        "reason": reason,
+        "scheduler_len": ctx.scheduler.len(),
+        "pending_act_present": ctx.pending_act.is_some(),
+        "active_batch_llm_request_id": ctx.active_batch_llm_request_id,
+        "last_action_kind": ctx.last_action_kind,
+    });
+    if let (Some(dst), Some(src)) = (payload.as_object_mut(), extra.as_object()) {
+        for (k, v) in src {
+            dst.insert(k.clone(), v.clone());
+        }
+    }
+    emitter.emit_child(
+        RuntimeEvent::Debug(canon_event::DebugEvent {
+            source: "act_stage".to_string(),
+            kind: "act_suppressed".to_string(),
+            payload: decision_trace_payload("act dispatch returned noop", payload.clone()),
+        }),
+        vec![trigger_id.clone()],
+        file!(),
+        line!(),
+    );
+    emitter.emit_child(
+        RuntimeEvent::ErrorOccurred(new_error_occurred(
+            "act_stall",
+            "act_stage",
+            reason.to_string(),
+            "warning",
+            payload,
+            None,
+        )),
+        vec![trigger_id.clone()],
+        file!(),
+        line!(),
+    );
+}
+
 pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     let Some(pending) = ctx.pending_act.take() else {
         return Ok(LoopStageResult::Noop);
@@ -58,6 +137,37 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     let mut events = Vec::new();
     events.push(emit_tool_result(ctx, &pending, tool_result_id.clone(), c.result.clone(), success));
     ctx.mark_batch_completion(llm_request_id.as_deref(), success);
+    if ctx.pending_required_successor.as_deref() != Some("loop_acted") {
+        events.push(RuntimeEvent::Debug(canon_event::DebugEvent {
+            source: "act_stage".to_string(),
+            kind: "act_suppressed".to_string(),
+            payload: decision_trace_payload(
+                "act completion suppressed because control FSM expects a different successor",
+                serde_json::json!({
+                    "reason": "loop_acted would violate pending successor",
+                    "pending_required_successor": ctx.pending_required_successor,
+                    "last_control_kind": ctx.last_control_kind,
+                    "last_control_event_id": ctx.last_control_event_id,
+                    "action_kind": action_kind,
+                }),
+            ),
+        }));
+        events.push(RuntimeEvent::ErrorOccurred(new_error_occurred(
+            "act_stall",
+            "act_stage",
+            "act completion arrived after control moved past loop_acted".to_string(),
+            "warning",
+            serde_json::json!({
+                "pending_required_successor": ctx.pending_required_successor,
+                "last_control_kind": ctx.last_control_kind,
+                "last_control_event_id": ctx.last_control_event_id,
+                "recoverable": true,
+            }),
+            None,
+        )));
+        events.extend(abort_active_batch(ctx));
+        return Ok(LoopStageResult::EmitMany(events));
+    }
     let acted_event = emit_acted(pending, stdout, stderr, exit_code, duration_ms, success, Some(tool_result_id));
     events.push(acted_event);
 
@@ -113,6 +223,37 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext, trigger_id: Ev
         false,
     ));
     ctx.mark_batch_completion(llm_request_id.as_deref(), false);
+    if ctx.pending_required_successor.as_deref() != Some("loop_acted") {
+        events.push(RuntimeEvent::Debug(canon_event::DebugEvent {
+            source: "act_stage".to_string(),
+            kind: "act_suppressed".to_string(),
+            payload: decision_trace_payload(
+                "failed act completion suppressed because control FSM expects a different successor",
+                serde_json::json!({
+                    "reason": "loop_acted would violate pending successor",
+                    "pending_required_successor": ctx.pending_required_successor,
+                    "last_control_kind": ctx.last_control_kind,
+                    "last_control_event_id": ctx.last_control_event_id,
+                    "action_kind": action_kind,
+                }),
+            ),
+        }));
+        events.push(RuntimeEvent::ErrorOccurred(new_error_occurred(
+            "act_stall",
+            "act_stage",
+            "failed act completion arrived after control moved past loop_acted".to_string(),
+            "warning",
+            serde_json::json!({
+                "pending_required_successor": ctx.pending_required_successor,
+                "last_control_kind": ctx.last_control_kind,
+                "last_control_event_id": ctx.last_control_event_id,
+                "recoverable": true,
+            }),
+            None,
+        )));
+        events.extend(abort_active_batch(ctx));
+        return Ok(LoopStageResult::EmitMany(events));
+    }
     events.push(emit_acted(pending, String::new(), f.error.clone(), None, duration_ms, false, Some(tool_result_id)));
     if action_kind == "run_command" {
         events.extend(abort_active_batch(ctx));
