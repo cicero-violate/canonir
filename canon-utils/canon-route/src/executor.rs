@@ -74,6 +74,12 @@ impl RouteExecutor {
                 role: Some("router".to_string()),
                 agent_id: Some("router_chatgpt_group".to_string()),
                 dispatched: true,
+                system: None,
+                system_prompt_id: None,
+                context_base: None,
+                context_base_id: None,
+                prompt_base_id: None,
+                prev_prompt_id: None,
             }), vec![tid], file!(), line!());
         }
     }
@@ -98,8 +104,19 @@ impl EventConsumer for RouteExecutor {
         // (e.g., LLM timed out / response lost), clear it so routing can resume.
         // "deterministic" is a sentinel, not a real request — never clear it here or it
         // re-fires idle_plan on every event before ToolCall{kind:llm.plan} propagates back.
+        //
+        // IMPORTANT: do NOT clear pending_request_id when the current event IS the completion
+        // of that pending request — the match arm below still needs to find it to process the
+        // response. Clearing it here causes the response to be silently dropped as "unrelated".
         let is_real_request = self.pending_request_id.as_deref().map(|id| id != "deterministic").unwrap_or(false);
-        if is_real_request && self.ctx.planned_pending == 0 && self.ctx.pending_tool_result_ids.is_empty() {
+        let is_own_completion = if let RuntimeEvent::CapabilityCompleted(done) = event {
+            Some(&done.request_id) == self.pending_request_id.as_ref() && done.capability == "llm.call"
+        } else if let RuntimeEvent::CapabilityFailed(failed) = event {
+            Some(&failed.request_id) == self.pending_request_id.as_ref() && failed.capability == "llm.call"
+        } else {
+            false
+        };
+        if is_real_request && !is_own_completion && self.ctx.planned_pending == 0 && self.ctx.pending_tool_result_ids.is_empty() {
             self.pending_request_id = None;
             self.pending_prompt = None;
         }
@@ -275,6 +292,14 @@ impl RouteExecutor {
         });
         let tid = self.current_trigger.clone().expect("emit_decision called without current_trigger set");
         emitter.emit_with_parents(route_event, vec![tid], file!(), line!());
+        // "observe" produces LoopObserved as its follow-up event. LoopObserved is intentionally
+        // excluded from the sentinel-clear in on_event (to prevent plan-spam loops), so the
+        // deterministic sentinel would never be cleared for an observe route — causing a deadlock
+        // where try_dispatch_route returns early on every LoopObserved. Clear it here instead.
+        if decision.lane.as_str() == "observe" {
+            self.pending_request_id = None;
+            self.pending_prompt = None;
+        }
         // Halt immediately when routing to conclude so that backlogged LoopObserved events
         // in the bus queue don't each trigger another RouteSelected(conclude) before the
         // LoopRewarded event propagates back to set ctx.halted.

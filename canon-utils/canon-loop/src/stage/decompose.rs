@@ -29,6 +29,12 @@ pub fn execute(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: EventId) ->
         role: Some("decompose".to_string()),
         agent_id: ctx.agent_id.clone(),
         dispatched: true,
+        system: None,
+        system_prompt_id: None,
+        context_base: None,
+        context_base_id: None,
+        prompt_base_id: None,
+        prev_prompt_id: None,
     }), vec![trigger_id], file!(), line!());
 
     let _ = rs; // tick used for tracing only

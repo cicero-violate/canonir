@@ -52,6 +52,11 @@ pub struct EventRuntime {
     /// When P2 re-delivers the same tlog entry, process_events checks this set and skips
     /// re-dispatch, preventing double-processing of every self-written event.
     dispatched_ids: HashSet<canon_event::EventId>,
+    /// Per-kind hash of the last written event's `payload.data`.
+    /// Consecutive identical events (same kind + same data hash) are dropped at the writer.
+    last_kind_hash: HashMap<canon_event::EventKind, u64>,
+    /// Per-kind id of the last written event; set as `prev_event_id` on the next write.
+    last_event_id_per_kind: HashMap<canon_event::EventKind, canon_event::EventId>,
 }
 
 impl EventRuntime {
@@ -79,6 +84,8 @@ impl EventRuntime {
             emitter_rx,
             observed_events: Vec::new(),
             dispatched_ids: HashSet::new(),
+            last_kind_hash: HashMap::new(),
+            last_event_id_per_kind: HashMap::new(),
         }
     }
 
@@ -127,6 +134,8 @@ impl EventRuntime {
         self.runtime_state = serde_json::json!({});
         self.observed_events.clear();
         self.dispatched_ids.clear();
+        self.last_kind_hash.clear();
+        self.last_event_id_per_kind.clear();
     }
 
     pub fn take_observed_events(&mut self) -> Vec<RuntimeEvent> {
@@ -453,9 +462,31 @@ impl EventRuntime {
         let Some(path) = self.tlog_path.clone() else {
             return;
         };
-        let Some(wire) = runtime_event_to_wire(event, parent_ids, event_id, file, line) else {
+        let Some(mut wire) = runtime_event_to_wire(event, parent_ids, event_id, file, line) else {
             return;
         };
+
+        // --- DEDUP GATE ---
+        // Drop consecutive identical events of the same kind (same data hash).
+        // This prevents tlog bloat when consumers fire the same event repeatedly
+        // (e.g. route_tick, goodness_snapshot) without any state change.
+        let content_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            wire.kind.hash(&mut h);
+            wire.payload.data.to_string().hash(&mut h);
+            h.finish()
+        };
+        if self.last_kind_hash.get(&wire.kind) == Some(&content_hash) {
+            return; // identical consecutive event for this kind — skip write
+        }
+        self.last_kind_hash.insert(wire.kind, content_hash);
+
+        // --- PREV_EVENT_ID CHAIN ---
+        // Set the per-kind causal chain pointer before writing, then advance the cursor.
+        wire.prev_event_id = self.last_event_id_per_kind.get(&wire.kind).cloned();
+        self.last_event_id_per_kind.insert(wire.kind, wire.id.clone());
+
         if is_segment_dir_path(&path) {
             if let Some(writer_arc) = self.tlog_writer.as_ref() {
                 let needs_reopen = if let Ok(w) = writer_arc.lock() {

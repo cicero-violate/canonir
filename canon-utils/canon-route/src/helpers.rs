@@ -55,7 +55,7 @@ pub fn request_route_via_llm_call(
     _last_tool_result: Option<serde_json::Value>,
 ) -> Result<String> {
     let request_id = format!("route-{}", uuid::Uuid::new_v4());
-    let event = RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt: prompt.clone(), role: Some("router".to_string()), agent_id: None, dispatched: true });
+    let event = RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt: prompt.clone(), role: Some("router".to_string()), agent_id: None, dispatched: true, system: None, system_prompt_id: None, context_base: None, context_base_id: None, prompt_base_id: None, prev_prompt_id: None });
     let (tx, rx) = cc::unbounded::<RuntimeEvent>();
     let emitter: EventEmitterHandle = std::sync::Arc::new(DirectEventEmitter { tx });
     let trigger_id = EventId::new("root");

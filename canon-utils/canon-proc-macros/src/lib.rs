@@ -103,6 +103,8 @@ struct EventStruct {
     /// When true, generates `impl crate::CanonPayloadShape for Name { ... }`.
     /// Only set this for structs defined within the `canon_event` crate itself.
     impl_shape: bool,
+    /// When true, a compile error is emitted if no fields are tagged `#[delta]`.
+    must_delta: bool,
     name: Ident,
     fields: Punctuated<FieldSpec, Comma>,
 }
@@ -122,6 +124,7 @@ impl Parse for EventStruct {
         let struct_attrs = Attribute::parse_outer(input)?;
         let no_input = struct_attrs.iter().any(|a| a.path().is_ident("no_input"));
         let impl_shape = struct_attrs.iter().any(|a| a.path().is_ident("impl_shape"));
+        let must_delta = struct_attrs.iter().any(|a| a.path().is_ident("must_delta"));
         let name: Ident = input.parse()?;
         let content;
         syn::braced!(content in input);
@@ -133,7 +136,7 @@ impl Parse for EventStruct {
                 content.parse::<Comma>()?;
             }
         }
-        Ok(EventStruct { no_input, impl_shape, name, fields })
+        Ok(EventStruct { no_input, impl_shape, must_delta, name, fields })
     }
 }
 
@@ -178,7 +181,7 @@ fn build_json_object(pairs: &[(String, &Ident)]) -> TokenStream2 {
 
 #[proc_macro]
 pub fn canon_event_struct(input: TokenStream) -> TokenStream {
-    let EventStruct { no_input, impl_shape, name, fields } = parse_macro_input!(input as EventStruct);
+    let EventStruct { no_input, impl_shape, must_delta, name, fields } = parse_macro_input!(input as EventStruct);
 
     let field_idents: Vec<_> = fields.iter().map(|f| &f.ident).collect();
     let field_types: Vec<_> = fields.iter().map(|f| &f.ty).collect();
@@ -229,6 +232,20 @@ pub fn canon_event_struct(input: TokenStream) -> TokenStream {
         .into();
     }
 
+    // Enforce: at least one #[delta] field when #[must_delta] is declared.
+    if must_delta && delta_pairs.is_empty() {
+        return syn::Error::new(
+            name.span(),
+            format!(
+                "#[must_delta]: struct `{name}` has no #[delta] fields. \
+                 Add #[delta] to the field(s) that represent state change, \
+                 or remove #[must_delta] if this event carries no delta."
+            ),
+        )
+        .to_compile_error()
+        .into();
+    }
+
     let input_json = build_json_object(&input_pairs);
     let output_json = build_json_object(&output_pairs);
     let delta_json = build_json_object(&delta_pairs);
@@ -239,6 +256,36 @@ pub fn canon_event_struct(input: TokenStream) -> TokenStream {
             fn __assert_serialize<T: serde::Serialize>() {}
             __assert_serialize::<#name>();
         };
+    };
+
+    // content_hash() — always generated; hashes the #[delta] fields via JSON serialization.
+    // Returns 0 when no #[delta] fields are present.
+    let delta_idents: Vec<&&Ident> = delta_pairs.iter().map(|(_, i)| i).collect();
+    let content_hash_impl = if delta_idents.is_empty() {
+        quote! {
+            impl #name {
+                /// Returns a hash of the delta fields for O(1) dedup checks.
+                /// Always 0 for this struct (no #[delta] fields declared).
+                pub fn content_hash(&self) -> u64 { 0 }
+            }
+        }
+    } else {
+        quote! {
+            impl #name {
+                /// Returns a hash of the #[delta] fields for O(1) dedup checks.
+                /// Uses JSON serialization so no `Hash` bound is required on field types.
+                pub fn content_hash(&self) -> u64 {
+                    use std::hash::{Hash, Hasher};
+                    let mut __h = std::collections::hash_map::DefaultHasher::new();
+                    #(
+                        serde_json::to_string(&self.#delta_idents)
+                            .unwrap_or_default()
+                            .hash(&mut __h);
+                    )*
+                    __h.finish()
+                }
+            }
+        }
     };
 
     // CanonPayloadShape impl — only generated when #[impl_shape] is present.
@@ -274,6 +321,8 @@ pub fn canon_event_struct(input: TokenStream) -> TokenStream {
                 pub #field_idents: #field_types,
             )*
         }
+
+        #content_hash_impl
 
         #shape_impl
 

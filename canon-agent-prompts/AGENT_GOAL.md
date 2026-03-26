@@ -1,21 +1,21 @@
-# HTTP Reverse Proxy with Load Balancing, Middleware Pipeline, and Circuit Breaker
+# Git-Like Version Control System with Object Store, Indexing, and Branching
 
-This project implements a high-performance HTTP reverse proxy in Rust that routes incoming requests to backend services using configurable load balancing strategies, middleware processing, and resilience features such as circuit breakers and retries. It supports request/response transformation, logging, rate limiting, and health checks. The system models real-world API gateways and proxies like NGINX or Envoy in a simplified but modular form. This project is interesting because it combines networking, async I/O, middleware design, fault tolerance, and traffic management into a critical infrastructure component.
+This project implements a simplified Git-like version control system in Rust that supports content-addressable storage, commits, branching, and diffs. It models core Git concepts such as blobs, trees, commits, and references while providing a CLI for interacting with repositories. The system is interesting because it combines hashing, immutable data structures, DAG modeling, and file system interactions into a powerful distributed version control mechanism.
 
 ## Target
-- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/http_reverse_proxy`
+- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/git_like_vcs`
 
 ## Requirements
 
-1. Implement a Rust binary crate structured into modules such as `server`, `router`, `backend`, `load_balancer`, `strategy`, `middleware`, `pipeline`, `request`, `response`, `circuit_breaker`, `health`, `retry`, `rate_limit`, `config`, `cli`, and `errors`.
-2. Build an HTTP server using `hyper` or `axum` that accepts incoming requests and forwards them to configured backend services.
-3. Implement routing logic that maps incoming paths/hosts to backend clusters.
-4. Design multiple load balancing strategies such as round-robin, least-connections, and random selection.
-5. Implement a middleware pipeline that allows request/response processing (e.g., logging, header modification, authentication hooks).
-6. Implement a circuit breaker that tracks backend failures and temporarily disables unhealthy backends.
-7. Add retry logic with configurable policies (max retries, backoff strategies) for failed requests.
-8. Implement backend health checks (active and/or passive) to determine availability.
-9. Add rate limiting per client or route using token bucket or sliding window algorithms.
-10. Support configuration loading via JSON or YAML (`serde`) for defining routes, backends, and policies.
-11. Provide a CLI using `clap` with commands like `run`, `reload-config`, `status`, and `stats`.
-12. Integrate structured logging with `tracing` to trace request flow, load balancing decisions, middleware execution, failures, and recovery behavior, and ensure the implementation spans at least 800 lines of real Rust code across modules and compiles successfully with `cargo check` without requiring external services.
+1. Implement a Rust binary crate structured into modules such as `object`, `blob`, `tree`, `commit`, `hash`, `store`, `index`, `diff`, `repo`, `reference`, `branch`, `log`, `cli`, and `errors`.
+2. Design a content-addressable object store where blobs, trees, and commits are stored using SHA-1 or SHA-256 hashes.
+3. Implement blob objects for file contents and tree objects for directory structures.
+4. Build commit objects that reference trees, parent commits, author metadata, and messages.
+5. Implement an index (staging area) that tracks changes before committing.
+6. Support basic commands such as `init`, `add`, `commit`, `status`, and `log`.
+7. Implement branching and references, allowing creation and switching of branches.
+8. Build a diff engine to compare file versions and display changes between commits or working directory.
+9. Support checkout functionality to restore working directory state from a given commit or branch.
+10. Implement simple merge functionality with conflict detection (no need for full conflict resolution UI).
+11. Provide persistence of all objects and metadata using filesystem storage and `serde` where appropriate.
+12. Integrate structured logging with `tracing` to trace object creation, hashing, commit history traversal, and repository operations, and ensure the implementation spans at least 800 lines of real Rust code across modules and compiles successfully with `cargo check` without requiring external services.

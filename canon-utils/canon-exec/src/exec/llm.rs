@@ -5,6 +5,7 @@ use canon_llm::endpoint_worker;
 use canon_llm::llm;
 use canon_llm::ws_server;
 use serde_json::json;
+use std::collections::HashMap;
 use std::env;
 use std::sync::{Arc, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -12,7 +13,16 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 pub(crate) struct LlmWork {
     request_id: String,
     name: &'static str,
+    /// Fast-changing delta (LOC, errors, recent actions/results) — sent every call.
     prompt: String,
+    /// Static system instructions — Some on first send, None when already cached.
+    system: Option<String>,
+    /// Cache key for the static system instructions.
+    system_prompt_id: Option<String>,
+    /// Slow-changing context (GOAL, workspace tree, facts) — Some only when changed.
+    context_base: Option<String>,
+    /// Cache key for the slow-changing context base.
+    context_base_id: Option<String>,
     role: Option<String>,
     agent_id: Option<String>,
     raw: bool,
@@ -70,8 +80,26 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                 let llm_log_dir = env::var("CANON_LLM_LOG_DIR").unwrap_or_else(|_| "/workspace/ai_sandbox/canon/canon-utils/state/reports_out/llm".to_string());
                 let _ = std::fs::create_dir_all(&llm_log_dir);
                 let mut llm_call_counter: u32 = next_llm_call_counter(&llm_log_dir);
+                // System prompt cache: keyed by system_prompt_id (hash of static instructions).
+                // Populated on first call that includes `system`; subsequent calls omit it.
+                let mut system_cache: HashMap<String, String> = HashMap::new();
+                // Context-base cache: keyed by context_base_id (hash of slow-changing context).
+                // Populated when `context_base` is Some; subsequent calls with same id omit it.
+                let mut context_base_cache: HashMap<String, String> = HashMap::new();
                 for job in work_rx.iter() {
-                    let LlmWork { request_id, name, prompt, role, agent_id, raw, emitter, trigger_id } = job;
+                    let LlmWork { request_id, name, prompt, system, system_prompt_id, context_base, context_base_id, role, agent_id, raw, emitter, trigger_id } = job;
+
+                    // Cache new system prompt when provided (first call or reset).
+                    let system_was_sent = system.is_some();
+                    if let (Some(id), Some(sys)) = (system_prompt_id.as_ref(), system) {
+                        system_cache.insert(id.clone(), sys);
+                    }
+
+                    // Cache new context base when provided (changes when GOAL/workspace changes).
+                    if let (Some(id), Some(base)) = (context_base_id.as_ref(), context_base) {
+                        context_base_cache.insert(id.clone(), base);
+                    }
+
                     let _ = ws_emitter_thread.set(emitter.clone());
                     let start = Instant::now();
                     let is_planner_role = role.as_deref() == Some("planner");
@@ -111,10 +139,43 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                         emitter.emit_child(canon_event::RuntimeEvent::CapabilityFailed(canon_event::CapabilityFailed { request_id, capability: name, error: error_msg }), vec![trigger_id.clone()], file!(), line!());
                         continue;
                     };
+                    // Reconstruct the full prompt to send to the LLM API (three-tier hierarchy):
+                    //
+                    //   Tier 1 (system): static instructions — prepended once, cached.
+                    //   Tier 2 (context_base): GOAL + workspace — prepended when changed, cached.
+                    //   Tier 3 (prompt / delta): LOC, errors, actions — always present.
+                    //
+                    //   • First call (system_was_sent=true): reconstruct all three tiers.
+                    //   • Stateful endpoint, nothing changed: send only delta (LLM has tiers 1+2
+                    //     in session history already).
+                    //   • Stateless endpoint: always reconstruct from cache so LLM has full context.
+                    let sys = system_prompt_id.as_deref().and_then(|id| system_cache.get(id)).map(String::as_str).unwrap_or("");
+                    let base = context_base_id.as_deref().and_then(|id| context_base_cache.get(id)).map(String::as_str).unwrap_or("");
+                    let full_prompt = if system_was_sent {
+                        // First call: assemble all tiers; system and base were just cached.
+                        match (sys.is_empty(), base.is_empty()) {
+                            (false, false) => format!("{sys}\n\n{base}\n\n{prompt}"),
+                            (false, true)  => format!("{sys}\n\n{prompt}"),
+                            (true,  false) => format!("{base}\n\n{prompt}"),
+                            (true,  true)  => prompt.clone(),
+                        }
+                    } else if endpoint.stateful {
+                        // Stateful session: LLM already has system + base in history.
+                        // Send only the delta (prompt).
+                        prompt.clone()
+                    } else {
+                        // Stateless endpoint: reconstruct everything from cache on every call.
+                        match (sys.is_empty(), base.is_empty()) {
+                            (false, false) => format!("{sys}\n\n{base}\n\n{prompt}"),
+                            (false, true)  => format!("{sys}\n\n{prompt}"),
+                            (true,  false) => format!("{base}\n\n{prompt}"),
+                            (true,  true)  => prompt.clone(),
+                        }
+                    };
                     let retries = config.llm_retry_count.max(1);
                     let delay = config.llm_retry_delay_secs;
                     let role_content = default_role_content(role.as_deref().or(endpoint.role.as_deref()), &endpoint.id);
-                    let prompt_with_request_id = format!("{{\"request_id\":\"{}\"}}\n{}", request_id, prompt);
+                    let prompt_with_request_id = format!("{{\"request_id\":\"{}\"}}\n{}", request_id, full_prompt);
                     let dispatched_ms = now_ms();
                     let call_n = llm_call_counter;
 
@@ -278,6 +339,10 @@ impl Executable for LlmCall {
             request_id: self.request_id,
             name: "llm.call",
             prompt: self.prompt,
+            system: self.system,
+            system_prompt_id: self.system_prompt_id,
+            context_base: self.context_base,
+            context_base_id: self.context_base_id,
             role: self.role,
             agent_id: self.agent_id,
             raw: false,

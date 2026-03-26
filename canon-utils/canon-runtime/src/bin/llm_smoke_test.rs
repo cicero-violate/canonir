@@ -15,6 +15,12 @@ fn main() -> Result<()> {
         role: None,
         agent_id: None,
         dispatched: true,
+        system: None,
+        system_prompt_id: None,
+        context_base: None,
+        context_base_id: None,
+        prompt_base_id: None,
+        prev_prompt_id: None,
     });
     let exec = ExecutableEvent::try_from(event).expect("llm call should be executable");
     let ctx = ExecutionContext { workspace: PathBuf::from("/workspace/ai_sandbox/canon"), emitter: std::sync::Arc::new(NoopEmitter), trigger_id: EventId::new("root") };

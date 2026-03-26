@@ -65,6 +65,8 @@ impl EventConsumer for LoopStageExecutor {
                 // batch_tool_results (accumulated since last plan) carry the new context.
                 // Without this, the hash guard blocks re-planning with the same base observation.
                 self.ctx.last_handled_observed_hash = None;
+                self.ctx.last_emitted_plan_hash = None;
+                self.ctx.last_delta_hash = None;
                 if let Some(action_id) = a.action_id.clone() {
                     if let Some(paths) = self.ctx.write_paths_by_action.remove(&action_id) {
                         for p in paths {
@@ -76,10 +78,16 @@ impl EventConsumer for LoopStageExecutor {
                     if !READ_ONLY_ACTIONS.contains(&a.action_kind.as_str()) {
                         self.ctx.dirty_tracker.mark_dirty("orchestrator", Some(&action_id));
                     }
-                    // Release dependency waits
+                    // Release dependency waits — by UUID action_id first, then by
+                    // action_kind name so LLM-generated depends_on strings like
+                    // ["read_file", "apply_patch"] resolve correctly.
                     for task in self.ctx.dep_tracker.complete(&action_id) {
                         self.ctx.scheduler.push(task);
                     }
+                }
+                // Also signal by action_kind (LLM uses human-readable names in depends_on).
+                for task in self.ctx.dep_tracker.complete(&a.action_kind) {
+                    self.ctx.scheduler.push(task);
                 }
             }
             RuntimeEvent::LoopVerified(v) => {
@@ -94,6 +102,8 @@ impl EventConsumer for LoopStageExecutor {
                 // route back to "plan" even if the base observation hash hasn't changed.
                 self.ctx.last_handled_observed_hash = None;
                 self.ctx.last_planned_observed_tick = None;
+                self.ctx.last_emitted_plan_hash = None;
+                self.ctx.last_delta_hash = None;
             }
             RuntimeEvent::SubTaskResult(r) => {
                 self.ctx.context_merger.absorb(r, &r.agent_id);

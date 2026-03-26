@@ -114,5 +114,6 @@ fn upgrade_legacy_event(old: LegacyCanonEvent) -> CanonEvent {
             meta: CanonPayloadMeta { file: old.meta.file, line: old.meta.line },
             data: old.data.unwrap_or_else(|| serde_json::json!({})),
         },
+        prev_event_id: None,
     }
 }

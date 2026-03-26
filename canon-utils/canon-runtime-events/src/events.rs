@@ -688,12 +688,36 @@ canon_event_struct!(
     #[impl_shape]
     LlmCall {
         #[input] request_id: String,
+        /// Dynamic context only (goal, workspace state, errors, recent actions/results).
+        /// The static system instructions live in `system` and are cached by `system_prompt_id`.
         #[input] prompt: String,
         #[serde(default)]
         role: Option<String>,
         #[serde(default)]
         agent_id: Option<String>,
         #[output] dispatched: bool,
+        /// Static system instructions — tools, workflow, safety rules, output format.
+        /// Sent only on the first call or after a session reset; None on subsequent calls.
+        /// The executor worker caches this by `system_prompt_id` and prepends it for the LLM.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        system: Option<String>,
+        /// Hash of the static system prompt. Used as cache key in the executor worker.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        system_prompt_id: Option<String>,
+        /// Slow-changing context (GOAL, workspace tree, facts, search hints, sub-agents).
+        /// Sent only when changed from the previous call; worker caches by `context_base_id`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_base: Option<String>,
+        /// Hash of `context_base`. Always set when context caching is in use so the worker
+        /// can reconstruct the full prompt for stateless endpoints.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_base_id: Option<String>,
+        /// Hash of the base context used for this call (for causal chain tracing).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt_base_id: Option<String>,
+        /// Base id from the previous LLM call — causal chain.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prev_prompt_id: Option<String>,
     }
 );
 

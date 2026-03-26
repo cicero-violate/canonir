@@ -95,10 +95,16 @@ pub struct LoopContext {
     pub last_observed_tick: Option<u64>,
     pub last_handled_observed_hash: Option<u64>,
     pub last_planned_observed_tick: Option<u64>,
+    pub last_emitted_plan_hash: Option<u64>,
     pub last_done_goal: Option<String>,
     pub batch_acted: Vec<LoopActed>,
     pub batch_tool_results: Vec<ToolResult>,
     pub last_prompted_goal: Option<String>,
+    // System prompt caching — tracks which static system prompt the executor has cached.
+    pub last_system_prompt_id: Option<u64>,
+    // Context-base caching — tracks the slow-changing context section (GOAL + workspace tree).
+    pub last_context_base_id: Option<u64>,
+    pub last_delta_hash: Option<u64>,
 
     // Act
     pub scheduler: Scheduler,
@@ -160,10 +166,14 @@ impl LoopContext {
             last_observed_tick: None,
             last_handled_observed_hash: None,
             last_planned_observed_tick: None,
+            last_emitted_plan_hash: None,
             last_done_goal: None,
             batch_acted: Vec::new(),
             batch_tool_results: Vec::new(),
             last_prompted_goal: None,
+            last_system_prompt_id: None,
+            last_context_base_id: None,
+            last_delta_hash: None,
             scheduler: Scheduler::new(),
             dep_tracker: DependencyTracker::default(),
             pending_act: None,

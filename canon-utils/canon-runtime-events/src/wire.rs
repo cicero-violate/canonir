@@ -238,6 +238,11 @@ pub struct CanonEvent {
     pub kind: EventKind,
     pub ts: u64,
     pub payload: CanonPayload,
+    /// Previous event of the same kind in this session — forms a per-kind causal chain.
+    /// None for the first event of a given kind. Set by EventRuntime before writing to tlog.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub prev_event_id: Option<EventId>,
 }
 
 impl CanonEvent {
@@ -257,7 +262,7 @@ impl CanonEvent {
                 "CanonEvent requires at least one parent_id unless root=true (kind={kind})"
             );
         }
-        Self { id, parent_ids, actor: actor.into(), kind, ts, payload }
+        Self { id, parent_ids, actor: actor.into(), kind, ts, payload, prev_event_id: None }
     }
 
     /// Construct a child event whose causal parent is `parent`.
@@ -277,6 +282,7 @@ impl CanonEvent {
             kind,
             ts,
             payload,
+            prev_event_id: None,
         }
     }
 
@@ -288,7 +294,7 @@ impl CanonEvent {
         ts: u64,
         payload: CanonPayload,
     ) -> Self {
-        Self { id, parent_ids: Vec::new(), actor: actor.into(), kind, ts, payload }
+        Self { id, parent_ids: Vec::new(), actor: actor.into(), kind, ts, payload, prev_event_id: None }
     }
 }
 

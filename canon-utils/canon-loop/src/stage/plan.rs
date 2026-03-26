@@ -211,6 +211,21 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     if out.is_empty() {
         return Ok(LoopStageResult::Noop);
     }
+    // Action-batch dedup: if LLM returned identical actions to the previous plan, skip.
+    let action_batch_hash = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for p in &out {
+            p.action_kind.hash(&mut h);
+            p.action_payload.to_string().hash(&mut h);
+        }
+        h.finish()
+    };
+    if ctx.last_emitted_plan_hash == Some(action_batch_hash) {
+        ctx.last_planned_observed_tick = None;
+        return Ok(LoopStageResult::Noop);
+    }
+    ctx.last_emitted_plan_hash = Some(action_batch_hash);
     Ok(LoopStageResult::EmitMany(out.into_iter().map(RuntimeEvent::LoopPlanned).collect()))
 }
 
@@ -285,14 +300,43 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved, trigger_id: E
     }
     ctx.last_handled_observed_hash = Some(observed_hash);
 
+    // --- THREE-TIER PROMPT CACHING ---
+    // Tier 1 (system): static instructions — sent once, cached in executor worker.
+    // Tier 2 (context_base): GOAL + workspace tree + facts + search hints — sent only on change.
+    // Tier 3 (prompt / delta): LOC, errors, recent actions/results — sent every call.
+    let sub_agent_section = ctx.context_merger.prompt_section();
+    let workspace_clone = ctx.workspace.clone();
+    let context_base = build_context_base(observed, &workspace_clone, &sub_agent_section);
+    let context_base_hash = hash_str(&context_base);
+
+    let goal_text = observed.goal_text.clone().unwrap_or_else(|| "<no goal provided>".to_string());
+    let spec = parse_agent_goal_markdown(&goal_text);
+    let target_workspace = spec.target_path.map(|p| p.display().to_string()).unwrap_or_else(|| workspace_clone.display().to_string());
+    let context_delta = build_context_delta(observed, &ctx.batch_acted, &ctx.batch_tool_results, &target_workspace);
+
+    let system_id = *PLANNER_SYSTEM_PROMPT_ID;
+    let send_system = ctx.last_system_prompt_id != Some(system_id);
+    let send_base = ctx.last_context_base_id != Some(context_base_hash);
+
+    // Drop: nothing changed at any tier.
+    let delta_hash = hash_str(&context_delta);
+    if !send_system && !send_base && ctx.last_delta_hash == Some(delta_hash) {
+        return Ok(LoopStageResult::Noop);
+    }
+
+    // Update tracking state.
+    let prev_prompt_id = ctx.last_system_prompt_id.map(|id| id.to_string());
+    ctx.last_system_prompt_id = Some(system_id);
+    if send_base {
+        ctx.last_context_base_id = Some(context_base_hash);
+    }
+    ctx.last_delta_hash = Some(delta_hash);
+
     let request_id = Uuid::new_v4().to_string();
     let trace_id = Uuid::new_v4().to_string();
     let execution_id = Uuid::new_v4().to_string();
     let span_id = Uuid::new_v4().to_string();
     let plan_id = Uuid::new_v4().to_string();
-    let include_full_goal = observed.goal_text != ctx.last_prompted_goal;
-    let prompt = build_prompt(observed, &ctx.batch_acted, &ctx.batch_tool_results, include_full_goal, &ctx.workspace, &ctx.context_merger.prompt_section());
-    let llm_call = LlmCall { request_id: request_id.clone(), prompt: prompt.to_string(), role: Some("planner".to_string()), agent_id: ctx.agent_id.clone(), dispatched: true };
 
     let plan_tool_call_id = Uuid::new_v4().to_string();
     ctx.batch_acted.clear();
@@ -308,9 +352,7 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved, trigger_id: E
         plan_id,
         plan_tool_call_id: plan_tool_call_id.clone(),
     });
-    if include_full_goal {
-        ctx.last_prompted_goal = observed.goal_text.clone();
-    }
+    ctx.last_prompted_goal = observed.goal_text.clone();
     ctx.last_planned_observed_tick = Some(observed.tick);
 
     if let Some(emitter) = ctx.emitter.as_ref() {
@@ -324,10 +366,19 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved, trigger_id: E
         }), vec![trigger_id.clone()], file!(), line!());
         emitter.emit_with_parents(RuntimeEvent::Llm(LlmCall {
             request_id,
-            prompt: llm_call.prompt,
-            role: llm_call.role,
-            agent_id: llm_call.agent_id,
+            // Fast-changing delta only — GOAL and workspace live in context_base / executor cache.
+            prompt: context_delta,
+            role: Some("planner".to_string()),
+            agent_id: ctx.agent_id.clone(),
             dispatched: true,
+            // Tier 1: static system instructions — sent only on first call or session reset.
+            system: send_system.then(|| PLANNER_SYSTEM_INSTRUCTIONS.to_string()),
+            system_prompt_id: Some(system_id.to_string()),
+            // Tier 2: slow-changing context base — sent only when changed.
+            context_base: send_base.then_some(context_base),
+            context_base_id: Some(context_base_hash.to_string()),
+            prompt_base_id: Some(system_id.to_string()),
+            prev_prompt_id,
         }), vec![trigger_id.clone()], file!(), line!());
     }
 
@@ -420,14 +471,149 @@ struct ActionPlan {
     depends_on: Vec<String>,
 }
 
-fn build_prompt(observed: &LoopObserved, batch_acted: &[LoopActed], batch_tool_results: &[ToolResult], _include_full_goal: bool, workspace: &Path, sub_agent_section: &str) -> String {
+// ---------------------------------------------------------------------------
+// System prompt — static, immutable, sent once per executor session.
+// prompt_id = hash(PLANNER_SYSTEM_INSTRUCTIONS); computed once at startup.
+// ---------------------------------------------------------------------------
+
+const PLANNER_SYSTEM_INSTRUCTIONS: &str = r#"You are a code-editing agent. Produce a plan as a JSON array of actions.
+
+━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. list_dir — list what files/dirs exist (use BEFORE assuming project state)
+   {"action":"list_dir","path":"."}
+
+2. read_file — read a file's current contents (use BEFORE editing it)
+   {"action":"read_file","path":"src/main.rs"}
+   ⚠ Results appear in "Recent actions" on your NEXT call. Do not mix with edits.
+
+3. apply_patch — create, update, or delete files  ← ONLY tool for file edits
+   {"action":"apply_patch","patch":"*** Begin Patch\n...\n*** End Patch"}
+
+   Patch format (paths MUST be relative to TARGET WORKSPACE):
+
+   *** Begin Patch
+   *** Add File: path/to/new.rs        ← create new file
+   +fn hello() {}
+   +
+   *** Update File: path/to/existing.rs ← edit existing file
+   @@ fn main                           ← optional context (function/class name)
+    fn main() {                        ←  space = unchanged context line
+   -    println!("old");               ← - = remove this line
+   +    println!("new");               ← + = add this line
+    }
+   *** Delete File: path/to/remove.rs  ← delete file
+   *** End Patch
+
+   Rules:
+   - *** Add File for new files, *** Update File for existing files
+   - Include 3 lines of unchanged context around each change
+   - Multiple file ops can be in one patch
+   - NEVER use absolute paths inside the patch string
+   - NEVER prefix paths with the project directory name (use `src/main.rs`, NOT `myproject/src/main.rs`)
+
+4. run_command — run a shell command
+   {"action":"run_command","cmd":"cargo build","cwd":"<TARGET_WORKSPACE>"}
+   cwd must be absolute. Use TARGET WORKSPACE (provided in context) or a subdir.
+
+5. done — declare goal complete
+   {"action":"done","reason":"..."}
+
+━━━ WORKFLOW ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Step 1 — Discover (when unsure of project state):
+  Emit ONLY list_dir and/or read_file. Do NOT mix with edits.
+  → Results appear in "Recent actions" on your next call.
+
+Step 2 — Create/Edit (after seeing discovery results):
+  Use apply_patch (*** Add File for new, *** Update File for existing).
+  Use run_command for cargo/shell operations.
+  The "done" action must be the ONLY action in a batch, and only after verification has shown the goal is met.
+
+NEVER use "write" or "patch_file" — they are removed. Use apply_patch.
+NEVER assume a directory/project exists without checking with list_dir first.
+WORKSPACE RULE: If the target project directory already exists in the workspace tree, use `cargo init --name <name>` instead of `cargo new`. `cargo new` fails when the directory exists.
+SAFETY RULE: The following commands are BLOCKED and will always fail. Do NOT plan them: rm -rf, git reset --hard, git clean -f, dd if=, mkfs, shred, >/dev/sd.
+
+━━━ OUTPUT FORMAT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Return ONLY a JSON array of action objects. Do NOT wrap in an object. Do NOT include a "signals" key.
+Example:
+[
+  {"action":"list_dir","path":"."},
+  {"action":"run_command","cmd":"cargo build","cwd":"<TARGET_WORKSPACE>"}
+]
+
+Rules:
+- If you believe the goal is complete, the array must contain exactly one item: {"action":"done","reason":"..."}
+- Never include "done" alongside any other action.
+- Optional on any action: `"depends_on": ["<action_id>"]` to defer dispatch until those actions succeed.
+No prose outside the code block."#;
+
+/// Computed once at startup from the hash of the static system instructions.
+/// Used as the cache key sent in every `LlmCall.system_prompt_id`.
+static PLANNER_SYSTEM_PROMPT_ID: std::sync::LazyLock<u64> =
+    std::sync::LazyLock::new(|| hash_str(PLANNER_SYSTEM_INSTRUCTIONS));
+
+/// Tier-2 context: slow-changing section containing GOAL and workspace state.
+/// Sent only when its hash differs from `ctx.last_context_base_id`. For stateful
+/// endpoints the LLM already has this in session history; for stateless endpoints
+/// the executor worker reconstructs it from its cache before each API call.
+fn build_context_base(observed: &LoopObserved, workspace: &Path, sub_agent_section: &str) -> String {
+    let goal_text = observed.goal_text.clone().unwrap_or_else(|| "<no goal provided>".to_string());
+
+    let spec = parse_agent_goal_markdown(&goal_text);
+    let target_workspace = spec.target_path.map(|p| p.display().to_string()).unwrap_or_else(|| workspace.display().to_string());
+
+    let search_hints = build_search_hints(&goal_text, workspace);
+    let workspace_tree = build_workspace_tree(std::path::Path::new(&target_workspace), 3, 0);
+    let workspace_facts = if observed.workspace_facts.is_empty() {
+        " (none)".to_string()
+    } else {
+        observed.workspace_facts.iter().map(|f| format!("- {f}")).collect::<Vec<_>>().join("\n")
+    };
+
+    format!(
+        r#"GOAL:
+{goal_text}
+
+## Workspace State
+{workspace_tree}
+
+Workspace facts:
+{workspace_facts}
+
+━━━ CONTEXT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Relevant files:{search_hints}
+
+{sub_agent_section}"#,
+        goal_text = goal_text,
+        workspace_tree = workspace_tree,
+        workspace_facts = workspace_facts,
+        search_hints = search_hints,
+        sub_agent_section = sub_agent_section,
+    )
+}
+
+/// Tier-3 context: fast-changing delta sent on every planning call.
+/// Contains only the fields that change after each action: LOC, error counts,
+/// recent actions and tool results. Does NOT include GOAL or workspace tree.
+fn build_context_delta(
+    observed: &LoopObserved,
+    batch_acted: &[LoopActed],
+    batch_tool_results: &[ToolResult],
+    target_workspace: &str,
+) -> String {
+    // Count LOC only for the target project directory (Rust files only, excluding target/).
+    let workspace_loc = count_loc_in_workspace(std::path::Path::new(target_workspace));
+
     let recent_actions = batch_acted
         .iter()
         .rev()
         .take(24)
         .map(|a| {
-            let mut entry = format!("- action={} success={} exit_code={:?}", a.action_kind, a.success, a.exit_code,);
-            // Include actual content so the LLM can learn from failures and read results.
+            let mut entry = format!("- action={} success={} exit_code={:?}", a.action_kind, a.success, a.exit_code);
             let stdout = a.stdout.trim();
             let stderr = a.stderr.trim();
             if !stdout.is_empty() {
@@ -455,130 +641,38 @@ fn build_prompt(observed: &LoopObserved, batch_acted: &[LoopActed], batch_tool_r
         .collect::<Vec<_>>()
         .join("\n");
 
-    let goal_text = observed.goal_text.clone().unwrap_or_else(|| "<no goal provided>".to_string());
-    let workspace_loc = count_loc_in_workspace(workspace);
-
-    let spec = parse_agent_goal_markdown(&goal_text);
-    let target_workspace = spec.target_path.map(|p| p.display().to_string()).unwrap_or_else(|| workspace.display().to_string());
-
-    let search_hints = build_search_hints(&goal_text, workspace);
-    let workspace_tree = build_workspace_tree(std::path::Path::new(&target_workspace), 3, 0);
-    let workspace_facts = if observed.workspace_facts.is_empty() { " (none)".to_string() } else { observed.workspace_facts.iter().map(|f| format!("- {f}")).collect::<Vec<_>>().join("\n") };
     let destructive_warning = batch_acted.iter().any(|a| a.stderr.trim() == "rejected_destructive_command");
-    let destructive_note = if destructive_warning { "\nWARNING: A previous plan was blocked as destructive. Do NOT include destructive commands; they will fail.\n" } else { "\n" };
+    let destructive_note = if destructive_warning {
+        "WARNING: A previous plan was blocked as destructive. Do NOT include destructive commands; they will fail.\n"
+    } else {
+        ""
+    };
 
     format!(
-        r#"You are a code-editing agent. Produce a plan as a JSON array of actions.
-
-TARGET WORKSPACE: {target_workspace}
+        r#"TARGET WORKSPACE: {target_workspace}
 All relative paths resolve against TARGET WORKSPACE (not its parent).
 LOC: {loc}  |  Errors: {errors}  |  Warnings: {warnings}
 {destructive_note}
-GOAL:
-{goal}
-
-## Workspace State
-{workspace_tree}
-
-Workspace facts:
-{workspace_facts}
-
-━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1. list_dir — list what files/dirs exist (use BEFORE assuming project state)
-   {{"action":"list_dir","path":"."}}
-
-2. read_file — read a file's current contents (use BEFORE editing it)
-   {{"action":"read_file","path":"src/main.rs"}}
-   ⚠ Results appear in "Recent actions" on your NEXT call. Do not mix with edits.
-
-3. apply_patch — create, update, or delete files  ← ONLY tool for file edits
-   {{"action":"apply_patch","patch":"*** Begin Patch\n...\n*** End Patch"}}
-
-   Patch format (paths MUST be relative to TARGET WORKSPACE):
-
-   *** Begin Patch
-   *** Add File: path/to/new.rs        ← create new file
-   +fn hello() {{}}
-   +
-   *** Update File: path/to/existing.rs ← edit existing file
-   @@ fn main                           ← optional context (function/class name)
-    fn main() {{                        ←  space = unchanged context line
-   -    println!("old");               ← - = remove this line
-   +    println!("new");               ← + = add this line
-    }}
-   *** Delete File: path/to/remove.rs  ← delete file
-   *** End Patch
-
-   Rules:
-   - *** Add File for new files, *** Update File for existing files
-   - Include 3 lines of unchanged context around each change
-   - Multiple file ops can be in one patch
-   - NEVER use absolute paths inside the patch string
-   - NEVER prefix paths with the project directory name (use `src/main.rs`, NOT `myproject/src/main.rs`)
-
-4. run_command — run a shell command
-   {{"action":"run_command","cmd":"cargo build","cwd":"{target_workspace}"}}
-   cwd must be absolute. Use TARGET WORKSPACE or a subdir.
-
-5. done — declare goal complete
-   {{"action":"done","reason":"..."}}
-
-━━━ WORKFLOW ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Step 1 — Discover (when unsure of project state):
-  Emit ONLY list_dir and/or read_file. Do NOT mix with edits.
-  → Results appear in "Recent actions" on your next call.
-
-Step 2 — Create/Edit (after seeing discovery results):
-  Use apply_patch (*** Add File for new, *** Update File for existing).
-  Use run_command for cargo/shell operations.
-  The "done" action must be the ONLY action in a batch, and only after verification has shown the goal is met.
-
-NEVER use "write" or "patch_file" — they are removed. Use apply_patch.
-NEVER assume a directory/project exists without checking with list_dir first.
-WORKSPACE RULE: If the target project directory already exists in the workspace tree, use `cargo init --name <name>` instead of `cargo new`. `cargo new` fails when the directory exists.
-SAFETY RULE: The following commands are BLOCKED and will always fail. Do NOT plan them: rm -rf, git reset --hard, git clean -f, dd if=, mkfs, shred, >/dev/sd.
-
-━━━ CONTEXT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Relevant files:{search_hints}
-
 Recent actions (most recent first — read_file stdout contains file contents):
 {recent_actions}
 
 Recent tool results:
 {recent_results}
-
-{sub_agent_section}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Return ONLY a JSON array of action objects. Do NOT wrap in an object. Do NOT include a "signals" key.
-Example:
-[
-  {{"action":"list_dir","path":"."}},
-  {{"action":"run_command","cmd":"cargo build","cwd":"{target_workspace}"}}
-]
-
-Rules:
-- If you believe the goal is complete, the array must contain exactly one item: {{"action":"done","reason":"..."}}
-- Never include "done" alongside any other action.
-- Optional on any action: `"depends_on": ["<action_id>"]` to defer dispatch until those actions succeed.
-No prose outside the code block.
 "#,
         target_workspace = target_workspace,
-        goal = goal_text,
-        workspace_tree = workspace_tree,
         loc = workspace_loc,
         errors = observed.error_count,
         warnings = observed.warning_count,
         destructive_note = destructive_note,
-        search_hints = search_hints,
-        recent_actions = if recent_actions.is_empty() { "(none)".to_string() } else { recent_actions }.to_string(),
-        recent_results = if recent_results.is_empty() { "(none)".to_string() } else { recent_results }.to_string(),
-        workspace_facts = workspace_facts,
-        sub_agent_section = sub_agent_section,
+        recent_actions = if recent_actions.is_empty() { "(none)".to_string() } else { recent_actions },
+        recent_results = if recent_results.is_empty() { "(none)".to_string() } else { recent_results },
     )
+}
+
+fn hash_str(s: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
 }
 
 fn build_search_hints(goal_text: &str, workspace: &Path) -> String {
@@ -702,7 +796,13 @@ fn count_loc_in_workspace(dir: &Path) -> usize {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            total += count_loc_in_workspace(&path);
+            // Skip build artifact and hidden directories.
+            let skip = path.file_name().and_then(|n| n.to_str()).map(|n| {
+                matches!(n, "target" | ".git" | "node_modules" | ".cargo")
+            }).unwrap_or(false);
+            if !skip {
+                total += count_loc_in_workspace(&path);
+            }
         } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 total += content.lines().count();
