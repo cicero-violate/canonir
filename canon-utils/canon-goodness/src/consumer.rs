@@ -28,6 +28,10 @@ impl EventConsumer for GoodnessConsumer {
         EventFilter::All
     }
 
+    fn is_synchronous(&self) -> bool { true }
+
+    fn consumer_name(&self) -> &'static str { "goodness_consumer" }
+
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
         self.reducers.update_all(event);
@@ -43,12 +47,12 @@ impl EventConsumer for GoodnessConsumer {
                 store.append_goodness(v.tick, g_now, delta);
             }
 
-            return EventOutcome::Emit(RuntimeEvent::GoodnessSnapshot(canon_event::GoodnessSnapshot {
+            return EventOutcome::emit(RuntimeEvent::GoodnessSnapshot(canon_event::GoodnessSnapshot {
                 tick: v.tick,
                 g: g_now,
                 delta_g: delta,
                 metrics: serde_json::to_value(&metrics).unwrap_or_default(),
-            }));
+            }), file!(), line!());
         }
         EventOutcome::NoOp("goodness_noop")
     }

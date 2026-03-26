@@ -20,6 +20,10 @@ impl EventConsumer for CapabilityExecutor {
         EventFilter::All
     }
 
+    fn is_synchronous(&self) -> bool { true }
+
+    fn consumer_name(&self) -> &'static str { "capability_executor" }
+
     fn set_emitter(&mut self, emitter: EventEmitterHandle) {
         self.emitter = Some(emitter);
     }

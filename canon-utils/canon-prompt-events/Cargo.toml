@@ -1,0 +1,13 @@
+[package]
+name = "canon-prompt-events"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+name = "canon_prompt_events"
+
+[dependencies]
+canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
+serde_json.workspace = true
+sha2.workspace = true

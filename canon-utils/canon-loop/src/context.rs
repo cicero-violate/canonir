@@ -105,6 +105,10 @@ pub struct LoopContext {
     // Context-base caching — tracks the slow-changing context section (GOAL + workspace tree).
     pub last_context_base_id: Option<u64>,
     pub last_delta_hash: Option<u64>,
+    pub last_route_rationale: Option<String>,
+    pub last_route_confidence: Option<f64>,
+    pub last_route_rationale_non_empty: Option<String>,
+    pub last_route_confidence_non_empty: Option<f64>,
 
     // Act
     pub scheduler: Scheduler,
@@ -174,6 +178,10 @@ impl LoopContext {
             last_system_prompt_id: None,
             last_context_base_id: None,
             last_delta_hash: None,
+            last_route_rationale: None,
+            last_route_confidence: None,
+            last_route_rationale_non_empty: None,
+            last_route_confidence_non_empty: None,
             scheduler: Scheduler::new(),
             dep_tracker: DependencyTracker::default(),
             pending_act: None,

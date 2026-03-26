@@ -24,6 +24,10 @@ impl EventConsumer for WatchdogConsumer {
         EventFilter::All
     }
 
+    fn is_synchronous(&self) -> bool { true }
+
+    fn consumer_name(&self) -> &'static str { "watchdog_consumer" }
+
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
         match event {
@@ -54,14 +58,14 @@ impl EventConsumer for WatchdogConsumer {
                 if stalled.is_empty() {
                     EventOutcome::NoOp("watchdog_all_stages_healthy")
                 } else {
-                    EventOutcome::EmitMany(stalled)
+                    EventOutcome::emit_many(stalled, file!(), line!())
                 }
             }
             RuntimeEvent::LoopObserved(_) => {
                 self.last_stage_tick.insert("observed", self.current_tick);
                 EventOutcome::NoOp("watchdog_stage_reset")
             }
-            RuntimeEvent::LoopPlanned(_) => {
+            RuntimeEvent::PlanningCompleted(_) => {
                 self.last_stage_tick.insert("planned", self.current_tick);
                 EventOutcome::NoOp("watchdog_stage_reset")
             }
@@ -106,6 +110,7 @@ impl EventConsumer for WatchdogConsumer {
             | RuntimeEvent::ToolCall(_)
             | RuntimeEvent::ToolResult(_)
             | RuntimeEvent::ToolBatchSettled(_)
+            | RuntimeEvent::LoopPlanned(_)
             | RuntimeEvent::GoalNodeCreated(_)
             | RuntimeEvent::GoalNodeRetracted(_)
             | RuntimeEvent::GoalNodeRewritten(_)

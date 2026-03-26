@@ -6,10 +6,12 @@ use canon_event_store::{extract_rustc_event, read_any_events_from_path, read_any
 use canon_loop::LoopStageExecutor;
 use canon_route::RouteExecutor;
 use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry, prompts_dir, reload_prompt_file};
+use canon_prompt_events::runtime_goal_prompt_loaded;
 use canon_runtime::consumers::agent_registry::{AgentRegistryConsumer, AgentRegistryHandle};
 use canon_runtime::consumers::analyst_consumer::AnalystConsumer;
 use canon_runtime::consumers::capability_executor::CapabilityExecutor;
 use canon_runtime::consumers::check_consumer::CheckConsumer;
+use canon_runtime::consumers::diagnostics_consumer::DiagnosticsConsumer;
 use canon_runtime::consumers::dispatch_consumer::DispatchConsumer;
 use canon_runtime::consumers::error_logger::ErrorLogger;
 use canon_runtime::consumers::goal_gen_consumer::GoalGenConsumer;
@@ -32,6 +34,7 @@ use uuid::Uuid;
 // Goal-gen projects live under a dedicated subdir so cleaning does not wipe user test projects.
 const GOALGEN_PROJECTS_DIR: &str = "/workspace/ai_sandbox/canon/test_projects/goalgen";
 const AGENT_GOAL_PATH: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts/AGENT_GOAL.md";
+const CLEAN_GOALGEN_ON_START: bool = false;
 
 // ---------------------------------------------------------------------------
 // Lock guard — ensures only one instance runs against a given tlog path.
@@ -100,9 +103,11 @@ fn acquire_lock(path: &Path) -> Result<Option<LockGuard>> {
 }
 
 fn clean_test_projects() {
-    let p = Path::new(GOALGEN_PROJECTS_DIR);
-    let _ = fs::remove_dir_all(p);
-    let _ = fs::create_dir_all(p);
+    if CLEAN_GOALGEN_ON_START {
+        let p = Path::new(GOALGEN_PROJECTS_DIR);
+        let _ = fs::remove_dir_all(p);
+        let _ = fs::create_dir_all(p);
+    }
 }
 
 fn clear_agent_goal() {
@@ -255,6 +260,7 @@ fn main() -> Result<()> {
         Box::new(RouteExecutor::new(workspace.clone())),
         Box::new(ErrorLogger::new(None)),
         Box::new(CheckConsumer::new()),
+        Box::new(DiagnosticsConsumer::new()),
         Box::new(AgentRegistryConsumer::new(agent_registry.clone())),
         Box::new(DispatchConsumer::new()),
         Box::new(GoalGraphConsumer::new()),
@@ -289,18 +295,10 @@ fn main() -> Result<()> {
         runtime.emit_event(canon_event::RuntimeEvent::AgentRegistered(canon_event::AgentRegistered { payload })).ok();
     }
 
-    // Re-emit the current goal as PromptLoaded through the bus so GoalGenConsumer
-    // triggers. Bootstrap writes this directly to the tlog (skipped by start-at-tail),
-    // so consumers would never see it otherwise.
+    // Authoritative prompt loading happens through the runtime bus.
     {
         let goal_content = std::fs::read_to_string(AGENT_GOAL_PATH).unwrap_or_else(|_| "# goal-pending\n".to_string());
-        runtime.emit_event(canon_event::RuntimeEvent::PromptLoaded(canon_event::PromptLoaded {
-            payload: serde_json::json!({
-                "prompt_id": "AGENT_GOAL",
-                "path": AGENT_GOAL_PATH,
-                "content": goal_content,
-            }),
-        })).ok();
+        runtime.emit_event(runtime_goal_prompt_loaded(&goal_content)).ok();
     }
 
     // Read events that already exist in L at startup (in-memory after this point).
@@ -445,14 +443,12 @@ fn main() -> Result<()> {
 
     // --- P4: prompt-directory watcher ---
     // Watches canon-agent-prompts/ for .md file changes. On change: re-reads
-    // the file, updates the in-memory PromptRegistry (so LlmCapabilityHandler
-    // picks up the new content immediately), and writes a prompt_loaded event
-    // directly to the tlog. P2 then delivers it as EventMsg::Event to W, which
-    // dispatches RuntimeEvent::PromptLoaded to all consumers (including ObserveConsumer).
+    // the file, updates the in-memory PromptRegistry, and emits the
+    // authoritative PromptLoaded runtime event through the bus.
     {
         let prompts_path = PathBuf::from(prompts_dir());
-        let tlog_for_prompts = tlog_path.clone();
         let registry_for_prompts = prompt_registry.clone();
+        let prompt_emitter = runtime.emitter_handle();
 
         if prompts_path.exists() {
             let (prompt_fs_tx, prompt_fs_rx) = cc::unbounded::<notify::Result<notify::Event>>();
@@ -475,7 +471,9 @@ fn main() -> Result<()> {
                             continue;
                         }
                         last_reload.insert(path.clone(), now);
-                        reload_prompt_file(path, &tlog_for_prompts, &registry_for_prompts);
+                        if let Some(prompt) = reload_prompt_file(path, &registry_for_prompts) {
+                            prompt_emitter.emit_with_parents(canon_event::RuntimeEvent::PromptLoaded(prompt), vec![], file!(), line!());
+                        }
                     }
                 }
             })?;

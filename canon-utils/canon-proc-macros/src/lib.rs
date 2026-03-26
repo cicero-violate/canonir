@@ -2,12 +2,13 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
+    bracketed,
     parse::{Parse, ParseBuffer, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
     token::{Comma, Paren, Semi},
     visit::Visit,
-    Attribute, Expr, ExprMatch, Ident, ItemFn, Pat, Path, Token, Type,
+    Attribute, Expr, ExprMatch, Ident, ItemFn, LitStr, Pat, Path, Token, Type,
     spanned::Spanned,
 };
 
@@ -103,10 +104,16 @@ struct EventStruct {
     /// When true, generates `impl crate::CanonPayloadShape for Name { ... }`.
     /// Only set this for structs defined within the `canon_event` crate itself.
     impl_shape: bool,
-    /// When true, a compile error is emitted if no fields are tagged `#[delta]`.
-    must_delta: bool,
+    class: EventClassSpec,
+    next: Vec<Ident>,
     name: Ident,
     fields: Punctuated<FieldSpec, Comma>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EventClassSpec {
+    Control,
+    Effect,
 }
 
 struct FieldSpec {
@@ -124,7 +131,57 @@ impl Parse for EventStruct {
         let struct_attrs = Attribute::parse_outer(input)?;
         let no_input = struct_attrs.iter().any(|a| a.path().is_ident("no_input"));
         let impl_shape = struct_attrs.iter().any(|a| a.path().is_ident("impl_shape"));
-        let must_delta = struct_attrs.iter().any(|a| a.path().is_ident("must_delta"));
+        let mut class: Option<EventClassSpec> = None;
+        let mut next: Vec<Ident> = Vec::new();
+        for attr in &struct_attrs {
+            if !attr.path().is_ident("event") {
+                continue;
+            }
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("class") {
+                    let value = meta.value()?;
+                    let lit: LitStr = value.parse()?;
+                    class = Some(match lit.value().as_str() {
+                        "Control" => EventClassSpec::Control,
+                        "Effect" => EventClassSpec::Effect,
+                        other => {
+                            return Err(syn::Error::new(
+                                lit.span(),
+                                format!("invalid event class `{other}`; expected \"Control\" or \"Effect\""),
+                            ))
+                        }
+                    });
+                    return Ok(());
+                }
+                if meta.path.is_ident("next") {
+                    let value = meta.value()?;
+                    let content;
+                    bracketed!(content in value);
+                    let items = Punctuated::<Ident, Comma>::parse_terminated(&content)?;
+                    next.extend(items.into_iter());
+                    return Ok(());
+                }
+                Err(meta.error("unsupported #[event(...)] key; expected class or next"))
+            })?;
+        }
+        let class = class.ok_or_else(|| {
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "canon_event_struct!: missing #[event(class = \"Control\" | \"Effect\", ...)]",
+            )
+        })?;
+        if class == EventClassSpec::Control && next.is_empty() {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "canon_event_struct!: Control events must declare #[event(next = [..])]",
+            ));
+        }
+        if class == EventClassSpec::Effect && !next.is_empty() {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "canon_event_struct!: Effect events must not declare #[event(next = [..])]",
+            ));
+        }
         let name: Ident = input.parse()?;
         let content;
         syn::braced!(content in input);
@@ -136,7 +193,7 @@ impl Parse for EventStruct {
                 content.parse::<Comma>()?;
             }
         }
-        Ok(EventStruct { no_input, impl_shape, must_delta, name, fields })
+        Ok(EventStruct { no_input, impl_shape, class, next, name, fields })
     }
 }
 
@@ -181,7 +238,7 @@ fn build_json_object(pairs: &[(String, &Ident)]) -> TokenStream2 {
 
 #[proc_macro]
 pub fn canon_event_struct(input: TokenStream) -> TokenStream {
-    let EventStruct { no_input, impl_shape, must_delta, name, fields } = parse_macro_input!(input as EventStruct);
+    let EventStruct { no_input, impl_shape, class, next, name, fields } = parse_macro_input!(input as EventStruct);
 
     let field_idents: Vec<_> = fields.iter().map(|f| &f.ident).collect();
     let field_types: Vec<_> = fields.iter().map(|f| &f.ty).collect();
@@ -232,14 +289,15 @@ pub fn canon_event_struct(input: TokenStream) -> TokenStream {
         .into();
     }
 
-    // Enforce: at least one #[delta] field when #[must_delta] is declared.
-    if must_delta && delta_pairs.is_empty() {
+    // Enforce: at least one #[delta] field — the writer rejects empty deltas at runtime,
+    // so event definitions must declare a static delta contract up front.
+    if delta_pairs.is_empty() {
         return syn::Error::new(
             name.span(),
             format!(
-                "#[must_delta]: struct `{name}` has no #[delta] fields. \
-                 Add #[delta] to the field(s) that represent state change, \
-                 or remove #[must_delta] if this event carries no delta."
+                "canon_event_struct!: `{name}` has no #[delta] fields. \
+                 Writer invariants require every event to carry non-empty delta. \
+                 Add #[delta] to the field(s) that represent state change."
             ),
         )
         .to_compile_error()
@@ -249,6 +307,11 @@ pub fn canon_event_struct(input: TokenStream) -> TokenStream {
     let input_json = build_json_object(&input_pairs);
     let output_json = build_json_object(&output_pairs);
     let delta_json = build_json_object(&delta_pairs);
+    let class_str = match class {
+        EventClassSpec::Control => "Control",
+        EventClassSpec::Effect => "Effect",
+    };
+    let next_names: Vec<String> = next.iter().map(|i| i.to_string()).collect();
 
     // Serialization totality — compile-time assertion.
     let assert_serialize = quote! {
@@ -323,6 +386,11 @@ pub fn canon_event_struct(input: TokenStream) -> TokenStream {
         }
 
         #content_hash_impl
+
+        impl #name {
+            pub const EVENT_CLASS: &'static str = #class_str;
+            pub const EVENT_NEXT: &'static [&'static str] = &[#(#next_names),*];
+        }
 
         #shape_impl
 

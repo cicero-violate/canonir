@@ -1,0 +1,12 @@
+[package]
+name = "canon-invariant"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+name = "canon_invariant"
+
+[dependencies]
+canon_types = { path = "../canon-types" }
+serde_json.workspace = true

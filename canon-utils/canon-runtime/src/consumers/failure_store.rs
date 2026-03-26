@@ -39,6 +39,10 @@ impl EventConsumer for FailureStoreConsumer {
         EventFilter::ErrorOnly
     }
 
+    fn is_synchronous(&self) -> bool { true }
+
+    fn consumer_name(&self) -> &'static str { "failure_store" }
+
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
         self.store.record_event(event);

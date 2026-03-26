@@ -2,15 +2,16 @@ use canon_proc_macros::{canon_event_enum, canon_event_struct};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-canon_event_struct!(SessionStart {
+canon_event_struct!(#[event(class = "Effect")] SessionStart {
     #[input] project: String,
     #[serde(default)]
+    #[delta]
     #[output] schema: u64,
     #[serde(default)]
     byte_offset: u64,
 });
 
-canon_event_struct!(NodeDefined {
+canon_event_struct!(#[event(class = "Effect")] NodeDefined {
     #[input] symbol: String,
     #[input] kind: String,
     #[serde(default)]
@@ -22,10 +23,11 @@ canon_event_struct!(NodeDefined {
     #[serde(default)]
     lo: u32,
     #[serde(default)]
+    #[delta]
     #[output] hi: u32,
 });
 
-canon_event_struct!(NodeUpdated {
+canon_event_struct!(#[event(class = "Effect")] NodeUpdated {
     #[input] symbol: String,
     #[input] kind: String,
     #[serde(default)]
@@ -37,45 +39,52 @@ canon_event_struct!(NodeUpdated {
     #[serde(default)]
     lo: u32,
     #[serde(default)]
+    #[delta]
     #[output] hi: u32,
 });
 
-canon_event_struct!(NodeRemoved {
+canon_event_struct!(#[event(class = "Effect")] NodeRemoved {
     #[input] symbol: String,
+    #[delta]
     #[output] removed: bool,
 });
 
-canon_event_struct!(EdgeDefined {
+canon_event_struct!(#[event(class = "Effect")] EdgeDefined {
     #[input] src: String,
     #[input] dst: String,
     #[input] kind: String,
+    #[delta]
     #[output] defined: bool,
 });
 
-canon_event_struct!(EdgeRemoved {
+canon_event_struct!(#[event(class = "Effect")] EdgeRemoved {
     #[input] src: String,
     #[input] dst: String,
     #[input] kind: String,
+    #[delta]
     #[output] removed: bool,
 });
 
-canon_event_struct!(FileSeen {
+canon_event_struct!(#[event(class = "Effect")] FileSeen {
     #[input] path: String,
+    #[delta]
     #[output] seen: bool,
 });
 
-canon_event_struct!(CallsiteObserved {
+canon_event_struct!(#[event(class = "Effect")] CallsiteObserved {
     #[input] kind: String,
+    #[delta]
     #[output] resolved: bool,
 });
 
-canon_event_struct!(SymbolDefined {
+canon_event_struct!(#[event(class = "Effect")] SymbolDefined {
     #[input] symbol: String,
     #[input] kind: String,
+    #[delta]
     #[output] defined: bool,
 });
 
-canon_event_struct!(SpanDefined {
+canon_event_struct!(#[event(class = "Effect")] SpanDefined {
     #[input] symbol: String,
     #[serde(default)]
     file: String,
@@ -86,10 +95,11 @@ canon_event_struct!(SpanDefined {
     #[serde(default)]
     lo: u32,
     #[serde(default)]
+    #[delta]
     #[output] hi: u32,
 });
 
-canon_event_struct!(PanicCaptured {
+canon_event_struct!(#[event(class = "Effect")] PanicCaptured {
     #[input] def_id: String,
     #[input] message: String,
     #[serde(default)]
@@ -101,21 +111,25 @@ canon_event_struct!(PanicCaptured {
     #[serde(default)]
     span: Option<String>,
     #[serde(default)]
+    #[delta]
     #[output] frames: Vec<PanicFrame>,
 });
 
-canon_event_struct!(WarningCaptured {
+canon_event_struct!(#[event(class = "Effect")] WarningCaptured {
     #[input] message: String,
+    #[delta]
     #[output] captured: bool,
 });
 
-canon_event_struct!(CompilationUnitFinished {
+canon_event_struct!(#[event(class = "Effect")] CompilationUnitFinished {
     #[input] crate_name: String,
+    #[delta]
     #[output] finished: bool,
 });
 
-canon_event_struct!(InvariantViolation {
+canon_event_struct!(#[event(class = "Effect")] InvariantViolation {
     #[input] message: String,
+    #[delta]
     #[output] recorded: bool,
 });
 
@@ -195,14 +209,16 @@ impl Default for RustcState {
     }
 }
 
-canon_event_struct!(PanicFrame {
+canon_event_struct!(#[event(class = "Effect")] PanicFrame {
     #[input] frame_index: usize,
+    #[delta]
     #[output] symbols: Vec<PanicSymbol>,
 });
 
-canon_event_struct!(PanicSymbol {
+canon_event_struct!(#[event(class = "Effect")] PanicSymbol {
     #[input] symbol: String,
     #[serde(default)]
+    #[delta]
     #[output] file: Option<String>,
     #[serde(default)]
     line: Option<u32>,

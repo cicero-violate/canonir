@@ -1,13 +1,24 @@
-use canon_event::{CanonEvent, EventKind, LoopObserved, RuntimeEvent};
+use canon_event::{CanonEvent, EventKind, LoopObserved, RuntimeEvent, ToolCall, ToolResult};
+use canon_goal::parse_agent_goal_markdown;
+use canon_tools_search::search_files;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 use crate::{context::LoopContext, result::LoopStageResult};
 
 /// Emit a LoopObserved if state has changed since the last observation.
 /// Called directly from the executor on state-changing events, not on every tick.
 pub fn execute(ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+    execute_inner(ctx, false)
+}
+
+pub fn execute_forced(ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+    execute_inner(ctx, true)
+}
+
+fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStageResult> {
     if ctx.goal_text.is_none() || ctx.goal_text.as_deref().map(is_placeholder_goal).unwrap_or(false) {
         ctx.goal_text = scan_tlog_for_goal(ctx.tlog_path.as_path());
     }
@@ -16,7 +27,7 @@ pub fn execute(ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
     // Return Noop unconditionally — do NOT emit LoopObserved with a placeholder goal
     // regardless of whether state_changed, as that would trigger RouteExecutor →
     // RouteSelected(plan) → observe again, creating a spam loop.
-    if ctx.goal_text.as_deref().map(is_placeholder_goal).unwrap_or(true) {
+    if !force && ctx.goal_text.as_deref().map(is_placeholder_goal).unwrap_or(true) {
         return Ok(LoopStageResult::Noop);
     }
 
@@ -25,14 +36,14 @@ pub fn execute(ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
         ctx.goal_text.hash(&mut h);
         h.finish()
     };
-    let workspace_facts = build_workspace_facts(&ctx.goal_text);
+    let (workspace_facts, observe_events) = build_workspace_facts(&ctx.goal_text);
     let facts_hash = {
         let mut h = DefaultHasher::new();
         workspace_facts.hash(&mut h);
         h.finish()
     };
     let state_changed = (ctx.error_count as u64) != ctx.last_observed_error_count || goal_hash != ctx.last_observed_goal_hash || facts_hash != ctx.last_observed_facts_hash;
-    if !state_changed {
+    if !force && !state_changed {
         let goal_pending = ctx.goal_text.as_deref().map(is_placeholder_goal).unwrap_or(true);
         // Wait state: goal is pending and no errors — nothing downstream can act.
         // Suppress even the stale heartbeat; only wake on genuine state change.
@@ -60,7 +71,9 @@ pub fn execute(ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
         goal_text: ctx.goal_text.clone(),
         workspace_facts,
     };
-    Ok(LoopStageResult::Emit(RuntimeEvent::LoopObserved(payload)))
+    let mut out = observe_events;
+    out.push(RuntimeEvent::LoopObserved(payload));
+    Ok(LoopStageResult::EmitMany(out))
 }
 
 fn is_placeholder_goal(goal: &str) -> bool {
@@ -100,17 +113,83 @@ fn scan_tlog_for_goal(tlog_path: &Path) -> Option<String> {
     found
 }
 
-fn build_workspace_facts(goal_text: &Option<String>) -> Vec<String> {
+fn build_workspace_facts(goal_text: &Option<String>) -> (Vec<String>, Vec<RuntimeEvent>) {
     let Some(goal) = goal_text else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
-    let target_path = extract_target_path(goal);
-    match target_path {
-        Some(p) => {
-            let exists = Path::new(&p).exists();
-            vec![format!("target_path_exists={} path={}", exists, p)]
+    let mut facts = Vec::new();
+    let mut search_hits = Vec::new();
+    let Some(target_root) = resolve_target_root(goal) else {
+        return (facts, Vec::new());
+    };
+
+    let exists = target_root.exists();
+    facts.push(format!("target_path_exists={} path={}", exists, target_root.display()));
+    if !exists {
+        return (facts, Vec::new());
+    }
+
+    let cargo_toml = target_root.join("Cargo.toml");
+    facts.push(format!("cargo_toml_exists={} path={}", cargo_toml.exists(), cargo_toml.display()));
+
+    let spec = parse_agent_goal_markdown(goal);
+    let keywords = extract_goal_keywords(&spec);
+    for kw in keywords.into_iter().take(3) {
+        if let Ok(results) = search_files(&kw, &target_root, 3) {
+            for r in results {
+                facts.push(format!("search_match kw={} path={}", kw, r.path.display()));
+                search_hits.push(serde_json::json!({
+                    "keyword": kw,
+                    "path": r.path.display().to_string(),
+                    "score": r.score,
+                }));
+            }
         }
-        None => Vec::new(),
+    }
+
+    let request_id = format!("observe-{}", Uuid::new_v4());
+    let tool_call_id = Uuid::new_v4().to_string();
+    let tool_result_id = Uuid::new_v4().to_string();
+    let node_id = "observe_consumer".to_string();
+    let payload = serde_json::json!({
+        "op": "workspace_scan",
+        "target_root": target_root.display().to_string(),
+        "cargo_toml_exists": cargo_toml.exists(),
+        "search_hits": search_hits,
+    });
+    let events = vec![
+        RuntimeEvent::ToolCall(ToolCall {
+            node_id: node_id.clone(),
+            tool_call_id: tool_call_id.clone(),
+            request_id: request_id.clone(),
+            kind: "observe.search".to_string(),
+            payload: serde_json::json!({
+                "target_root": target_root.display().to_string(),
+                "keywords": extract_goal_keywords(&spec).into_iter().take(3).collect::<Vec<_>>(),
+            }),
+            accepted: true,
+        }),
+        RuntimeEvent::ToolResult(ToolResult {
+            node_id,
+            tool_call_id,
+            tool_result_id,
+            request_id,
+            kind: "observe.search".to_string(),
+            output: payload,
+            success: true,
+        }),
+    ];
+
+    (facts, events)
+}
+
+fn resolve_target_root(goal: &str) -> Option<PathBuf> {
+    let raw = extract_target_path(goal)?;
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        std::env::current_dir().ok().map(|cwd| cwd.join(path))
     }
 }
 
@@ -139,4 +218,18 @@ fn extract_target_path(goal: &str) -> Option<String> {
             None
         })
         .filter(|s| !s.is_empty())
+}
+
+fn extract_goal_keywords(spec: &canon_goal::GoalSpec) -> Vec<String> {
+    let mut out = Vec::new();
+    for req in &spec.requirements {
+        for token in req.split(|c: char| !c.is_alphanumeric() && c != '.' && c != '_' && c != '/') {
+            if token.len() >= 4 || token.contains('.') || token.contains('/') {
+                out.push(token.to_string());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }

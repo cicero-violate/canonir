@@ -31,6 +31,8 @@ impl EventConsumer for HaltDetectorConsumer {
     fn filter(&self) -> EventFilter {
         EventFilter::All
     }
+    fn is_synchronous(&self) -> bool { true }
+    fn consumer_name(&self) -> &'static str { "halt_detector" }
     fn set_emitter(&mut self, _: EventEmitterHandle) {}
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
@@ -58,6 +60,8 @@ impl EventConsumer for ForwardConsumer {
     fn filter(&self) -> EventFilter {
         EventFilter::All
     }
+    fn is_synchronous(&self) -> bool { true }
+    fn consumer_name(&self) -> &'static str { "forward_consumer" }
     fn set_emitter(&mut self, _: EventEmitterHandle) {}
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
@@ -65,7 +69,7 @@ impl EventConsumer for ForwardConsumer {
             parent.emit_with_parents(e, vec![trigger_id.clone()], file!(), line!());
         };
         match event {
-            RuntimeEvent::LoopObserved(_) => forward(&self.parent, event.clone()),
+            RuntimeEvent::LoopObserved(_) => {}
             RuntimeEvent::LoopPlanned(p) => {
                 if let Some(id) = &p.action_id {
                     if let Ok(mut v) = self.actions_taken.lock() {
@@ -82,7 +86,11 @@ impl EventConsumer for ForwardConsumer {
                 }
                 forward(&self.parent, event.clone());
             }
-            RuntimeEvent::LoopVerified(_) | RuntimeEvent::ToolCall(_) | RuntimeEvent::ToolResult(_) | RuntimeEvent::ToolBatchSettled(_) => {
+            RuntimeEvent::PlanningCompleted(_)
+            | RuntimeEvent::LoopVerified(_)
+            | RuntimeEvent::ToolCall(_)
+            | RuntimeEvent::ToolResult(_)
+            | RuntimeEvent::ToolBatchSettled(_) => {
                 forward(&self.parent, event.clone());
             }
             RuntimeEvent::LoopRewarded(r) => {
@@ -154,10 +162,15 @@ fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_
     let mut runtime = EventRuntime::new(consumers);
     runtime.set_tlog_path(tlog);
 
-    // Prime the sub-agent with its goal.
-    runtime
-        .emit_event(RuntimeEvent::LoopObserved(LoopObserved { tick: 0, goal_text: Some(req.task_prompt.clone()), error_count: 0, warning_count: 0, compiler_errors: vec![], workspace_facts: vec![] }))
-        .ok();
+    // Prime the sub-agent with its goal inside the sub-agent runtime, not the parent bus.
+    let _ = runtime.emit_event(RuntimeEvent::LoopObserved(LoopObserved {
+            tick: 0,
+            goal_text: Some(req.task_prompt.clone()),
+            error_count: 0,
+            warning_count: 0,
+            compiler_errors: vec![],
+            workspace_facts: vec![],
+        }));
 
     let deadline = Instant::now() + Duration::from_secs(SUB_AGENT_TIMEOUT_SECS);
     while !halted.load(Ordering::Relaxed) && Instant::now() < deadline {
@@ -225,6 +238,10 @@ impl EventConsumer for DispatchConsumer {
     fn filter(&self) -> EventFilter {
         EventFilter::All
     }
+
+    fn is_synchronous(&self) -> bool { true }
+
+    fn consumer_name(&self) -> &'static str { "dispatch_consumer" }
 
     fn set_emitter(&mut self, emitter: EventEmitterHandle) {
         self.emitter = Some(emitter);

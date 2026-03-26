@@ -1,7 +1,9 @@
 use crate::hooks::{hook_denied_event, HookChain, HookDecision};
-use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventId, EventMask, EventOutcome, RuntimeEvent, RustcEvent};
+use canon_invariant::{decision_trace_payload, invariant_violation_delta, invariant_violation_state};
+use canon_event::{Code, DebugEvent, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventMask, EventOutcome, RuntimeEvent, RustcEvent};
 use crossbeam_channel::{bounded, Sender};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 
 #[derive(Clone)]
@@ -15,8 +17,16 @@ pub struct ConsumerEntry {
     pub sender: Sender<EventMessage>,
 }
 
+pub struct SyncConsumerEntry {
+    pub name: String,
+    pub filter: EventFilter,
+    pub consumer: Mutex<Box<dyn EventConsumer>>,
+    pub emitter: EventEmitterHandle,
+}
+
 pub struct EventBus {
     consumers: Vec<ConsumerEntry>,
+    sync_consumers: Vec<SyncConsumerEntry>,
     queue_size: usize,
     hooks: Arc<HookChain>,
 }
@@ -37,22 +47,44 @@ fn is_error_event(event: &RuntimeEvent) -> bool {
 fn is_control_event(event: &RuntimeEvent) -> bool {
     matches!(
         event,
-        RuntimeEvent::Tick(_)
-            | RuntimeEvent::PromptLoaded(_)
-            | RuntimeEvent::CapabilityCompleted(_)
-            | RuntimeEvent::CapabilityFailed(_)
+        RuntimeEvent::RouteSelected(_)
             | RuntimeEvent::LoopObserved(_)
-            | RuntimeEvent::LoopPlanned(_)
+            | RuntimeEvent::PlanningCompleted(_)
             | RuntimeEvent::LoopActed(_)
             | RuntimeEvent::LoopVerified(_)
             | RuntimeEvent::LoopRewarded(_)
-            | RuntimeEvent::Debug(_)
     )
+}
+
+fn should_count_as_noop_violation(consumer: &str, reason: &str) -> bool {
+    match consumer {
+        // Only the control-owning executors should contribute to noop-based invariant failures.
+        "route_executor" => !matches!(
+            reason,
+            "route_executor_idle_dispatch"
+                | "route_executor_plan_dispatch"
+                | "route_executor_batch_settled"
+                | "route_executor_done_verify"
+                | "route_executor_completion"
+                | "route_executor_failure_reroute"
+                | "route_executor_unrelated_completion"
+                | "route_executor_unrelated_failure"
+                | "route_executor_noop"
+        ),
+        "loop_stage_executor" => !matches!(
+            reason,
+            "loop_stage_not_stage_event"
+                | "loop_stage_async"
+                | "loop_stage_halted"
+                | "loop_stage_no_emitter"
+        ),
+        _ => false,
+    }
 }
 
 impl EventBus {
     pub fn new(queue_size: usize, hooks: Arc<HookChain>) -> Self {
-        Self { consumers: Vec::new(), queue_size: queue_size.max(1), hooks }
+        Self { consumers: Vec::new(), sync_consumers: Vec::new(), queue_size: queue_size.max(1), hooks }
     }
 
     pub fn set_hooks(&mut self, hooks: Arc<HookChain>) {
@@ -60,6 +92,14 @@ impl EventBus {
     }
 
     pub fn register(&mut self, name: String, mut consumer: Box<dyn EventConsumer>, emitter: EventEmitterHandle) {
+        if consumer.is_synchronous() {
+            let consumer_name = consumer.consumer_name().to_string();
+            consumer.set_emitter(emitter.clone());
+            let filter = consumer.filter();
+            self.sync_consumers.push(SyncConsumerEntry { name: consumer_name, filter, consumer: Mutex::new(consumer), emitter });
+            return;
+        }
+        let consumer_name = consumer.consumer_name().to_string();
         let emitter_for_loop = emitter.clone();
         consumer.set_emitter(emitter);
         let hooks = self.hooks.clone();
@@ -73,17 +113,36 @@ impl EventBus {
                 let outcome = consumer.on_event(&msg.event, parent_id.clone());
                 hooks.run_post(&msg.event, &outcome);
                 match outcome {
-                    EventOutcome::Emit(e) => {
-                        emitter_for_loop.emit_with_parents(e, vec![parent_id], "", 0);
+                    EventOutcome::Emit { event, file, line } => {
+                        emitter_for_loop.emit_with_parents(event, vec![parent_id], file, line);
                     }
-                    EventOutcome::EmitMany(list) => {
-                        for e in list {
-                            emitter_for_loop.emit_with_parents(e, vec![parent_id.clone()], "", 0);
+                    EventOutcome::EmitMany { events, file, line } => {
+                        for event in events {
+                            emitter_for_loop.emit_with_parents(event, vec![parent_id.clone()], file, line);
                         }
                     }
-                    EventOutcome::NoOp(_) => {}
-                    EventOutcome::Error(e) => {
-                        emitter_for_loop.emit_with_parents(e, vec![parent_id], "", 0);
+                    EventOutcome::NoOp(reason) => {
+                        if is_control_event(&msg.event) {
+                            emitter_for_loop.emit_with_parents(
+                                RuntimeEvent::Debug(DebugEvent {
+                                    source: consumer_name.clone(),
+                                    kind: "control_noop".to_string(),
+                                    payload: decision_trace_payload(
+                                        reason,
+                                        serde_json::json!({
+                                            "event_kind": canon_event::event_kind_str(&msg.event),
+                                            "event_id": parent_id.to_string(),
+                                        }),
+                                    ),
+                                }),
+                                vec![parent_id],
+                                file!(),
+                                line!(),
+                            );
+                        }
+                    }
+                    EventOutcome::Error { event, file, line } => {
+                        emitter_for_loop.emit_with_parents(event, vec![parent_id], file, line);
                     }
                 }
             }
@@ -97,12 +156,84 @@ impl EventBus {
             HookDecision::Allow => event,
             HookDecision::Mutate { replacement } => replacement,
             HookDecision::Deny { reason } => {
-                self.hooks.run_post(&event, &EventOutcome::Error(hook_denied_event(&reason)));
+                self.hooks.run_post(&event, &EventOutcome::error(hook_denied_event(&reason), file!(), line!()));
                 return 0;
             }
         };
         let reliable = is_control_event(&base_event);
         let mut delivered = 0usize;
+        let mut noop_reasons: Vec<String> = Vec::new();
+        for consumer in &self.sync_consumers {
+            match consumer.filter {
+                EventFilter::All => {}
+                EventFilter::ErrorOnly => {
+                    if !is_error_event(&base_event) {
+                        continue;
+                    }
+                }
+                EventFilter::EditOnly => {
+                    if !matches!(base_event, RuntimeEvent::Edit(_)) {
+                        continue;
+                    }
+                }
+                EventFilter::CapabilityOnly => {
+                    if !matches!(base_event, RuntimeEvent::CapabilityCompleted(_) | RuntimeEvent::CapabilityFailed(_)) {
+                        continue;
+                    }
+                }
+                EventFilter::Code(mask) => {
+                    let RuntimeEvent::Code(canon_event::Code { delta, .. }) = &base_event else {
+                        continue;
+                    };
+                    let event_mask = EventMask::for_event(&delta.event);
+                    if !mask.contains(event_mask) {
+                        continue;
+                    }
+                }
+            }
+            if let Ok(mut locked) = consumer.consumer.lock() {
+                let outcome = locked.on_event(&base_event, event_id.clone());
+                self.hooks.run_post(&base_event, &outcome);
+                match outcome {
+                    EventOutcome::Emit { event, file, line } => {
+                        consumer.emitter.emit_with_parents(event, vec![event_id.clone()], file, line);
+                    }
+                    EventOutcome::EmitMany { events, file, line } => {
+                        for event in events {
+                            consumer.emitter.emit_with_parents(event, vec![event_id.clone()], file, line);
+                        }
+                    }
+                    EventOutcome::NoOp(reason) => {
+                        if is_control_event(&base_event) && should_count_as_noop_violation(&consumer.name, reason) {
+                            noop_reasons.push(format!("{}:{}", consumer.name, reason));
+                        }
+                    }
+                    EventOutcome::Error { event, file, line } => {
+                        consumer.emitter.emit_with_parents(event, vec![event_id.clone()], file, line);
+                    }
+                }
+                delivered += 1;
+            }
+        }
+        if !noop_reasons.is_empty() && is_control_event(&base_event) {
+            if let Some(first) = self.sync_consumers.first() {
+                first.emitter.emit_with_parents(
+                    RuntimeEvent::Code(Code {
+                        delta: invariant_violation_delta(format!(
+                            "noop_spam; parent={}; kind={}; reasons={}; count={}",
+                            event_id,
+                            canon_event::event_kind_str(&base_event),
+                            noop_reasons.join(","),
+                            noop_reasons.len()
+                        )),
+                        state: invariant_violation_state(),
+                    }),
+                    vec![event_id.clone()],
+                    file!(),
+                    line!(),
+                );
+            }
+        }
         for consumer in &self.consumers {
             match consumer.filter {
                 EventFilter::All => {}
@@ -138,6 +269,23 @@ impl EventBus {
             };
             if sent {
                 delivered += 1;
+            }
+        }
+        if delivered == 0 && is_control_event(&base_event) {
+            if let Some(first) = self.sync_consumers.first() {
+                first.emitter.emit_with_parents(
+                    RuntimeEvent::Code(Code {
+                        delta: invariant_violation_delta(format!(
+                            "control event delivered to 0 consumers; kind={}; event_id={}",
+                            canon_event::event_kind_str(&base_event),
+                            event_id
+                        )),
+                        state: invariant_violation_state(),
+                    }),
+                    vec![event_id],
+                    file!(),
+                    line!(),
+                );
             }
         }
         delivered

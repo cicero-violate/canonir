@@ -79,6 +79,10 @@ impl EventConsumer for GoalGraphConsumer {
         EventFilter::All
     }
 
+    fn is_synchronous(&self) -> bool { true }
+
+    fn consumer_name(&self) -> &'static str { "goal_graph_consumer" }
+
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
     #[must_emit]
@@ -87,7 +91,7 @@ impl EventConsumer for GoalGraphConsumer {
         match event {
             RuntimeEvent::GoalNodeCreated(_) | RuntimeEvent::GoalNodeRetracted(_) | RuntimeEvent::GoalNodeRewritten(_) | RuntimeEvent::GoalEdgeDefined(_) => {
                 self.last_checkpoint_seq += 1;
-                return EventOutcome::Emit(RuntimeEvent::GoalGraphCheckpointed(GoalGraphCheckpointed { tlog_seq: self.last_checkpoint_seq, checkpointed: true }));
+                return EventOutcome::emit(RuntimeEvent::GoalGraphCheckpointed(GoalGraphCheckpointed { tlog_seq: self.last_checkpoint_seq, checkpointed: true }), file!(), line!());
             }
             RuntimeEvent::Code(_)
             | RuntimeEvent::Debug(_)
@@ -96,6 +100,7 @@ impl EventConsumer for GoalGraphConsumer {
             | RuntimeEvent::Tick(_)
             | RuntimeEvent::LoopObserved(_)
             | RuntimeEvent::LoopPlanned(_)
+            | RuntimeEvent::PlanningCompleted(_)
             | RuntimeEvent::LoopActed(_)
             | RuntimeEvent::LoopVerified(_)
             | RuntimeEvent::LoopRewarded(_)

@@ -94,6 +94,10 @@ impl EventConsumer for AgentRegistryConsumer {
         EventFilter::All
     }
 
+    fn is_synchronous(&self) -> bool { true }
+
+    fn consumer_name(&self) -> &'static str { "agent_registry" }
+
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
     #[must_emit]
@@ -125,6 +129,7 @@ impl EventConsumer for AgentRegistryConsumer {
             | RuntimeEvent::Tick(_)
             | RuntimeEvent::LoopObserved(_)
             | RuntimeEvent::LoopPlanned(_)
+            | RuntimeEvent::PlanningCompleted(_)
             | RuntimeEvent::LoopActed(_)
             | RuntimeEvent::LoopVerified(_)
             | RuntimeEvent::LoopRewarded(_)

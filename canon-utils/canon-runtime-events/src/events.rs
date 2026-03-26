@@ -11,63 +11,77 @@ pub const EVENT_SCHEMA_VERSION: &str = "1";
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     RenameSymbol {
         project: String,
         #[input] old: String,
+        #[delta]
         #[output] new: String,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     MoveSymbol {
         project: String,
         #[input] symbol: String,
+        #[delta]
         #[output] module: String,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     DeleteSymbol {
         project: String,
         #[input] symbol: String,
+        #[delta]
         #[output] success: bool,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     RenameModule {
         project: String,
         #[input] old: String,
+        #[delta]
         #[output] new: String,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     RenameDir {
         project: String,
         #[input] old: std::path::PathBuf,
+        #[delta]
         #[output] new: std::path::PathBuf,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     InlineModule {
         project: String,
         #[input] module: String,
+        #[delta]
         #[output] success: bool,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     ExtractModule {
         project: String,
         #[input] symbol: String,
+        #[delta]
         #[output] module: String,
     }
 );
@@ -205,15 +219,18 @@ impl crate::CanonPayloadShape for Code {
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     DebugEvent {
         #[input] source: String,
         #[input] kind: String,
+        #[delta]
         #[output] payload: serde_json::Value,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     ErrorOccurred {
         #[input] kind: String,
         #[input] source: String,
@@ -226,6 +243,7 @@ canon_event_struct!(
         trace_id: Option<String>,
         #[serde(default)]
         error_id: Option<String>,
+        #[delta]
         #[output] captured: bool,
     }
 );
@@ -252,14 +270,17 @@ pub fn new_error_occurred(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     Tick {
         #[input] tick: u64,
+        #[delta]
         #[output] emitted: bool,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Control", next = [RouteSelected])]
     LoopObserved {
         #[input] tick: u64,
         #[output] error_count: usize,
@@ -273,6 +294,7 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     LoopPlanned {
         #[input] tick: u64,
         #[input] action_kind: String,
@@ -302,6 +324,19 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Control", next = [RouteSelected])]
+    PlanningCompleted {
+        #[input] tick: u64,
+        #[input] llm_request_id: Option<String>,
+        #[delta]
+        #[output] planned_count: usize,
+        #[output] status: String,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    #[event(class = "Control", next = [RouteSelected, LoopVerified])]
     LoopActed {
         #[input] tick: u64,
         #[input] action_kind: String,
@@ -334,6 +369,7 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Control", next = [LoopRewarded])]
     LoopVerified {
         #[input] tick: u64,
         #[output] passed: bool,
@@ -354,6 +390,7 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Control", next = [RouteSelected, LoopObserved])]
     LoopRewarded {
         #[input] tick: u64,
         #[input] errors_before: usize,
@@ -378,6 +415,7 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     GoodnessSnapshot {
         #[input] tick: u64,
         #[output] g: f32,
@@ -388,8 +426,10 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     InvariantDiscovered {
         #[input] feature: String,
+        #[delta]
         #[output] confidence: f64,
         #[output] support: u64,
     }
@@ -401,14 +441,17 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     RouteTick {
         #[input] tick: u64,
+        #[delta]
         #[output] emitted: bool,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Control", next = [LoopObserved, PlanningCompleted, LoopActed, LoopVerified, LoopRewarded])]
     RouteSelected {
         #[input] tick: u64,
         #[input] suggested_route: String,
@@ -433,7 +476,9 @@ canon_event_struct!(
 canon_event_struct!(
     #[no_input]
     #[impl_shape]
+    #[event(class = "Effect")]
     RuntimeStateUpdated {
+        #[delta]
         #[output] payload: serde_json::Value,
     }
 );
@@ -441,7 +486,9 @@ canon_event_struct!(
 canon_event_struct!(
     #[no_input]
     #[impl_shape]
+    #[event(class = "Effect")]
     PolicyBaselineUpdated {
+        #[delta]
         #[output] payload: serde_json::Value,
     }
 );
@@ -449,7 +496,9 @@ canon_event_struct!(
 canon_event_struct!(
     #[no_input]
     #[impl_shape]
+    #[event(class = "Effect")]
     GoalSelected {
+        #[delta]
         #[output] payload: serde_json::Value,
     }
 );
@@ -457,7 +506,9 @@ canon_event_struct!(
 canon_event_struct!(
     #[no_input]
     #[impl_shape]
+    #[event(class = "Effect")]
     SystemConfigLoaded {
+        #[delta]
         #[output] payload: serde_json::Value,
     }
 );
@@ -465,7 +516,9 @@ canon_event_struct!(
 canon_event_struct!(
     #[no_input]
     #[impl_shape]
+    #[event(class = "Effect")]
     AgentRegistered {
+        #[delta]
         #[output] payload: serde_json::Value,
     }
 );
@@ -473,7 +526,9 @@ canon_event_struct!(
 canon_event_struct!(
     #[no_input]
     #[impl_shape]
+    #[event(class = "Effect")]
     PromptLoaded {
+        #[delta]
         #[output] payload: serde_json::Value,
     }
 );
@@ -484,24 +539,28 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     ToolCall {
         node_id: String,
         #[input] tool_call_id: String,
         request_id: String,
         #[input] kind: String,
         #[input] payload: serde_json::Value,
+        #[delta]
         #[output] accepted: bool,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     ToolResult {
         node_id: String,
         #[input] tool_call_id: String,
         tool_result_id: String,
         request_id: String,
         #[input] kind: String,
+        #[delta]
         #[output] output: serde_json::Value,
         #[output] success: bool,
     }
@@ -510,9 +569,11 @@ canon_event_struct!(
 // Emitted once when all pending tool results for a batch have landed.
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     ToolBatchSettled {
         #[input] tick: u64,
         #[input] result_count: u32,
+        #[delta]
         #[output] any_failed: bool,
     }
 );
@@ -523,6 +584,7 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     GoalNodeCreated {
         #[input] node_id: String,
         #[input] description: String,
@@ -538,14 +600,17 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     GoalNodeRetracted {
         #[input] node_id: String,
+        #[delta]
         #[output] retracted: bool,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     GoalNodeRewritten {
         #[input] node_id: String,
         #[output] new_description: String,
@@ -555,17 +620,21 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     GoalEdgeDefined {
         #[input] from_node_id: String,
         #[input] to_node_id: String,
+        #[delta]
         #[output] created: bool,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     GoalGraphCheckpointed {
         #[input] tlog_seq: u64,
+        #[delta]
         #[output] checkpointed: bool,
     }
 );
@@ -576,18 +645,22 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     CapabilityInvoked {
         #[input] capability_id: String,
         #[input] capability: &'static str,
         #[input] node_id: String,
+        #[delta]
         #[output] invoked: bool,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     CapabilityResolved {
         #[input] capability_id: String,
+        #[delta]
         #[output] success: bool,
         duration_ms: u64,
     }
@@ -599,15 +672,18 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     CargoBuild {
         #[input] request_id: String,
         #[input] crate_name: String,
+        #[delta]
         #[output] queued: bool,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     CargoRun {
         #[input] request_id: String,
         #[input] crate_name: String,
@@ -615,15 +691,18 @@ canon_event_struct!(
         bin: Option<String>,
         #[serde(default)]
         args: Vec<String>,
+        #[delta]
         #[output] queued: bool,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     CargoCheck {
         #[input] request_id: String,
         #[input] crate_name: String,
+        #[delta]
         #[output] queued: bool,
     }
 );
@@ -640,29 +719,35 @@ canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)] CargoEvent {
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     FileRead {
         #[input] request_id: String,
         #[input] path: String,
+        #[delta]
         #[output] queued: bool,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     FileWrite {
         #[input] request_id: String,
         #[input] path: String,
         #[input] content: String,
+        #[delta]
         #[output] queued: bool,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     FilePatch {
         #[input] request_id: String,
         #[input] path: String,
         #[input] old: String,
+        #[delta]
         #[output] new: String,
         #[output] queued: bool,
     }
@@ -680,11 +765,13 @@ canon_event_enum!(#[derive(serde::Serialize, serde::Deserialize)] FileEvent {
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     BashInvoke {
         #[input] request_id: String,
         #[input] cmd: String,
         #[serde(default)]
         cwd: Option<String>,
+        #[delta]
         #[output] queued: bool,
     }
 );
@@ -695,6 +782,7 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     LlmCall {
         #[input] request_id: String,
         /// Dynamic context only (goal, workspace state, errors, recent actions/results).
@@ -704,6 +792,7 @@ canon_event_struct!(
         role: Option<String>,
         #[serde(default)]
         agent_id: Option<String>,
+        #[delta]
         #[output] dispatched: bool,
         /// Static system instructions — tools, workflow, safety rules, output format.
         /// Sent only on the first call or after a session reset; None on subsequent calls.
@@ -732,6 +821,7 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     RequestDispatch {
         dispatch_id: String,
         #[input] parent_request_id: String,
@@ -748,6 +838,7 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     SubTaskResult {
         #[input] dispatch_id: String,
         #[input] agent_id: String,
@@ -766,19 +857,23 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     AnalysisRun {
         #[input] request_id: String,
         #[input] crate_name: String,
         #[serde(default)]
         batch_id: Option<String>,
+        #[delta]
         #[output] queued: bool,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     AnalysisWorkspace {
         #[input] request_id: String,
+        #[delta]
         #[output] queued: bool,
     }
 );
@@ -828,6 +923,7 @@ canon_event_enum!(RuntimeEvent {
     Tick(Tick),
     LoopObserved(LoopObserved),
     LoopPlanned(LoopPlanned),
+    PlanningCompleted(PlanningCompleted),
     LoopActed(LoopActed),
     LoopVerified(LoopVerified),
     LoopRewarded(LoopRewarded),
@@ -878,6 +974,7 @@ pub fn event_kind_str(event: &RuntimeEvent) -> &'static str {
     match event {
         RuntimeEvent::LoopObserved(_) => "loop_observed",
         RuntimeEvent::LoopPlanned(_) => "loop_planned",
+        RuntimeEvent::PlanningCompleted(_) => "planning_completed",
         RuntimeEvent::LoopActed(_) => "loop_acted",
         RuntimeEvent::LoopVerified(_) => "loop_verified",
         RuntimeEvent::LoopRewarded(_) => "loop_rewarded",
@@ -969,17 +1066,33 @@ pub enum EventFilter {
 /// Returning `()` is a compile error — every path must declare intent.
 #[derive(Debug)]
 pub enum EventOutcome {
-    Emit(RuntimeEvent),
-    EmitMany(Vec<RuntimeEvent>),
+    Emit { event: RuntimeEvent, file: &'static str, line: u32 },
+    EmitMany { events: Vec<RuntimeEvent>, file: &'static str, line: u32 },
     /// Explicit no-op — the `&'static str` is a required reason string.
     NoOp(&'static str),
-    Error(RuntimeEvent),
+    Error { event: RuntimeEvent, file: &'static str, line: u32 },
+}
+
+impl EventOutcome {
+    pub fn emit(event: RuntimeEvent, file: &'static str, line: u32) -> Self {
+        Self::Emit { event, file, line }
+    }
+
+    pub fn emit_many(events: Vec<RuntimeEvent>, file: &'static str, line: u32) -> Self {
+        Self::EmitMany { events, file, line }
+    }
+
+    pub fn error(event: RuntimeEvent, file: &'static str, line: u32) -> Self {
+        Self::Error { event, file, line }
+    }
 }
 
 pub trait EventConsumer: Send + Sync {
     fn filter(&self) -> EventFilter;
     fn on_event(&mut self, event: &RuntimeEvent, trigger_id: crate::EventId) -> EventOutcome;
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
+    fn is_synchronous(&self) -> bool { false }
+    fn consumer_name(&self) -> &'static str { "anonymous_consumer" }
 }
 
 // ---------------------------------------------------------------------------
@@ -1038,60 +1151,72 @@ impl CapabilityResult {
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     CapabilityCompleted {
         #[input] request_id: String,
         #[input] capability: &'static str,
+        #[delta]
         #[output] result: CapabilityResult,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     CapabilityFailed {
         #[input] request_id: String,
         #[input] capability: &'static str,
+        #[delta]
         #[output] error: String,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     NodeReady {
         #[input] node_id: String,
         #[input] capability: String,
         #[serde(default)]
         request_id: String,
+        #[delta]
         #[output] ready: bool,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     NodeStarted {
         #[input] node_id: String,
         #[input] capability: String,
         #[serde(default)]
         request_id: String,
+        #[delta]
         #[output] started: bool,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     NodeCompleted {
         #[input] node_id: String,
         #[input] capability: String,
         #[serde(default)]
         request_id: String,
+        #[delta]
         #[output] completed: bool,
     }
 );
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Effect")]
     NodeFailed {
         #[input] node_id: String,
         #[input] capability: String,
+        #[delta]
         #[output] error: Option<String>,
         #[serde(default)]
         request_id: String,

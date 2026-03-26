@@ -45,7 +45,7 @@ impl AnalystConsumer {
         };
         let request_id = Uuid::new_v4().to_string();
         self.state = State::PendingLlm { request_id: request_id.clone(), turn: 1 };
-        EventOutcome::Emit(RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt: first_prompt, role: Some(ANALYST_ROLE.to_string()), agent_id: Some(ANALYST_AGENT_ID.to_string()), dispatched: true, system: None, system_prompt_id: None, context_base: None, context_base_id: None, prompt_base_id: None, prev_prompt_id: None }))
+        EventOutcome::emit(RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt: first_prompt, role: Some(ANALYST_ROLE.to_string()), agent_id: Some(ANALYST_AGENT_ID.to_string()), dispatched: true, system: None, system_prompt_id: None, context_base: None, context_base_id: None, prompt_base_id: None, prev_prompt_id: None }), file!(), line!())
     }
 
     fn continue_session(&mut self, code: String, turn: usize) -> EventOutcome {
@@ -58,7 +58,7 @@ impl AnalystConsumer {
         let prompt = format!("## Python result\n```\n{result_block}\n```");
         let request_id = Uuid::new_v4().to_string();
         self.state = State::PendingLlm { request_id: request_id.clone(), turn: turn + 1 };
-        EventOutcome::Emit(RuntimeEvent::Llm(LlmCall { request_id, prompt, role: Some(ANALYST_ROLE.to_string()), agent_id: Some(ANALYST_AGENT_ID.to_string()), dispatched: true, system: None, system_prompt_id: None, context_base: None, context_base_id: None, prompt_base_id: None, prev_prompt_id: None }))
+        EventOutcome::emit(RuntimeEvent::Llm(LlmCall { request_id, prompt, role: Some(ANALYST_ROLE.to_string()), agent_id: Some(ANALYST_AGENT_ID.to_string()), dispatched: true, system: None, system_prompt_id: None, context_base: None, context_base_id: None, prompt_base_id: None, prev_prompt_id: None }), file!(), line!())
     }
 
     fn continue_session_no_python(&mut self, turn: usize) -> EventOutcome {
@@ -66,7 +66,7 @@ impl AnalystConsumer {
         let prompt = nudge.to_string();
         let request_id = Uuid::new_v4().to_string();
         self.state = State::PendingLlm { request_id: request_id.clone(), turn: turn + 1 };
-        EventOutcome::Emit(RuntimeEvent::Llm(LlmCall { request_id, prompt, role: Some(ANALYST_ROLE.to_string()), agent_id: Some(ANALYST_AGENT_ID.to_string()), dispatched: true, system: None, system_prompt_id: None, context_base: None, context_base_id: None, prompt_base_id: None, prev_prompt_id: None }))
+        EventOutcome::emit(RuntimeEvent::Llm(LlmCall { request_id, prompt, role: Some(ANALYST_ROLE.to_string()), agent_id: Some(ANALYST_AGENT_ID.to_string()), dispatched: true, system: None, system_prompt_id: None, context_base: None, context_base_id: None, prompt_base_id: None, prev_prompt_id: None }), file!(), line!())
     }
 
     fn finish_session(&mut self, report: String) -> EventOutcome {
@@ -82,6 +82,10 @@ impl EventConsumer for AnalystConsumer {
     fn filter(&self) -> EventFilter {
         EventFilter::All
     }
+
+    fn is_synchronous(&self) -> bool { true }
+
+    fn consumer_name(&self) -> &'static str { "analyst_consumer" }
 
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
@@ -188,6 +192,7 @@ impl EventConsumer for AnalystConsumer {
             | RuntimeEvent::InvariantDiscovered(_)
             | RuntimeEvent::LoopObserved(_)
             | RuntimeEvent::LoopPlanned(_)
+            | RuntimeEvent::PlanningCompleted(_)
             | RuntimeEvent::LoopActed(_)
             | RuntimeEvent::LoopVerified(_) => EventOutcome::NoOp("analyst_ignored_event"),
         }

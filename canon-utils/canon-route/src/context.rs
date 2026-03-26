@@ -254,6 +254,15 @@ impl RouteContext {
                 self.push_journal("tool", format!("tool_result kind={kind} success={success} tool_call_id={tool_call_id} tool_result_id={tool_result_id} output={output_text}"));
             }
             RuntimeEvent::RuntimeStateUpdated(updated) => {
+                if updated.payload.get("fatal_invariant").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    self.halted = true;
+                    if let Some(reason) = updated.payload.get("fatal_invariant_reason").and_then(|v| v.as_str()) {
+                        self.push_journal("runtime", format!("fatal_invariant_halt reason={reason}"));
+                    }
+                } else if updated.payload.get("runtime_mode").and_then(|v| v.as_str()) == Some("running") {
+                    self.halted = false;
+                    self.push_journal("runtime", "mode=running");
+                }
                 let dirty = updated.payload.get("workspace_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
                 if dirty {
                     self.workspace_dirty_tracker.mark_dirty("orchestrator", None);

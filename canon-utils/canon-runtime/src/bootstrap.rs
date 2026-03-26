@@ -1,11 +1,8 @@
 use serde::Deserialize;
+use canon_prompt_events::{prompt_file_id, prompt_loaded_payload, GOAL_PROMPT_FILE, GOAL_PROMPT_ID, PROMPTS_DIR};
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-//
-const PROMPTS_DIR: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts";
-const GOAL_PROMPT_FILE: &str = "AGENT_GOAL.md";
 const AGENT_CONFIG_TOML: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts/capability_config.toml";
 
 // ---------------------------------------------------------------------------
@@ -63,24 +60,18 @@ struct AgentCardRaw {
 // Bootstrap entry point
 // ---------------------------------------------------------------------------
 
-/// Read config files and prompt assets, populate the registry, and write audit
-/// events to the tlog. Safe to call on every startup — idempotent per content hash.
+/// Read config files and prompt assets and populate the registry.
+/// PromptLoaded emission is authoritative through the runtime bus only.
 pub fn bootstrap_config(tlog_path: &Path, registry: &PromptRegistryHandle) {
-    bootstrap_prompts(tlog_path, registry);
-    bootstrap_agents(tlog_path);
+    bootstrap_prompts(registry);
+    let _ = tlog_path;
 }
 
 // ---------------------------------------------------------------------------
 // Prompt loading
 // ---------------------------------------------------------------------------
 
-fn content_hash(s: &str) -> String {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
-}
-
-fn bootstrap_prompts(tlog_path: &Path, registry: &PromptRegistryHandle) {
+fn bootstrap_prompts(registry: &PromptRegistryHandle) {
     let goal_path = Path::new(PROMPTS_DIR).join(GOAL_PROMPT_FILE);
     if !goal_path.exists() {
         return;
@@ -93,26 +84,7 @@ fn bootstrap_prompts(tlog_path: &Path, registry: &PromptRegistryHandle) {
         Ok(c) => c,
         Err(_) => return,
     };
-    let stem = "AGENT_GOAL".to_string();
-    let hash = content_hash(&content);
-    reg.prompts.insert(stem.clone(), content.clone());
-    let payload = serde_json::json!({
-        "prompt_id": stem,
-        "path": GOAL_PROMPT_FILE,
-        "hash": hash,
-        "content": content,
-    });
-    write_boot_event(tlog_path, "prompt_loaded", payload);
-}
-
-// ---------------------------------------------------------------------------
-// Agent registration
-// ---------------------------------------------------------------------------
-
-fn bootstrap_agents(tlog_path: &Path) {
-    for payload in load_agent_cards() {
-        write_boot_event(tlog_path, "agent_registered", payload);
-    }
+    reg.prompts.insert(GOAL_PROMPT_ID.to_string(), content);
 }
 
 /// Returns the agent cards from capability_config.toml as JSON values.
@@ -144,60 +116,27 @@ pub fn load_agent_cards() -> Vec<serde_json::Value> {
 }
 
 // ---------------------------------------------------------------------------
-// Tlog writer helper — handles both binary dir and JSON file formats
-// ---------------------------------------------------------------------------
-
-fn write_boot_event(tlog_path: &Path, kind: &str, payload: serde_json::Value) {
-    let _ = canon_meta::canon_emit_meta!("bootstrap", kind, payload, tlog_path);
-}
-
-/// Helper for emitting a PromptLoaded event to the tlog. Used by bootstrap
-/// and GoalGenConsumer to avoid duplicating the payload shape.
-pub fn write_prompt_loaded_to_tlog(tlog_path: &Path, content: &str) {
-    let hash = content_hash(content);
-    let payload = serde_json::json!({
-        "prompt_id": "AGENT_GOAL",
-        "path": GOAL_PROMPT_FILE,
-        "hash": hash,
-        "content": content,
-    });
-    write_boot_event(tlog_path, "prompt_loaded", payload);
-}
-
-// ---------------------------------------------------------------------------
-// Hot-reload: re-read one prompt file, update registry, write tlog event.
-// Called by the prompt-directory watcher (P4) at runtime.
+// Hot-reload: re-read one prompt file and update the registry. The caller is
+// responsible for emitting the authoritative PromptLoaded runtime event.
 // ---------------------------------------------------------------------------
 
 pub fn prompts_dir() -> &'static str {
     PROMPTS_DIR
 }
 
-pub fn reload_prompt_file(path: &Path, tlog_path: &Path, registry: &PromptRegistryHandle) {
+pub fn reload_prompt_file(path: &Path, registry: &PromptRegistryHandle) -> Option<canon_event::PromptLoaded> {
     if path.file_name().and_then(|s| s.to_str()) != Some(GOAL_PROMPT_FILE) {
-        return;
+        return None;
     }
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
-        Err(_) => return,
+        Err(_) => return None,
     };
-    let stem = match path.file_stem().and_then(|s| s.to_str()) {
-        Some(s) => s.to_string(),
-        None => return,
-    };
-    let filename = match path.file_name().and_then(|s| s.to_str()) {
-        Some(s) => s.to_string(),
-        None => return,
-    };
-    let hash = content_hash(&content);
+    let prompt_id = prompt_file_id(path)?;
     if let Ok(mut reg) = registry.write() {
-        reg.prompts.insert(stem.clone(), content.clone());
+        reg.prompts.insert(prompt_id.clone(), content.clone());
     }
-    let payload = serde_json::json!({
-        "prompt_id": stem,
-        "path": filename,
-        "hash": hash,
-        "content": content,
-    });
-    let _ = canon_meta::canon_emit_meta!("prompt-watcher", "prompt_loaded", payload, tlog_path);
+    Some(canon_event::PromptLoaded {
+        payload: prompt_loaded_payload(&prompt_id, &path.display().to_string(), &content),
+    })
 }

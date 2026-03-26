@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use canon_event::{CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, LlmCall, LoopActed, LoopObserved, LoopPlanned, RouteSelected, RuntimeEvent, ToolCall, ToolResult};
+use canon_event::{CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, LlmCall, LoopActed, LoopObserved, LoopPlanned, PlanningCompleted, RouteSelected, RuntimeEvent, ToolCall, ToolResult};
 use canon_goal::parse_agent_goal_markdown;
 use canon_tools_search::search_files;
 use std::collections::hash_map::DefaultHasher;
@@ -19,13 +19,13 @@ pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: Eve
     let tick = rs.tick;
     if let Some(timeout_plan) = check_llm_timeout(ctx, tick) {
         if let Some(emitter) = ctx.emitter.as_ref() {
-            emitter.emit_with_parents(RuntimeEvent::LoopPlanned(timeout_plan), vec![trigger_id.clone()], file!(), line!());
+            emitter.emit_with_parents(RuntimeEvent::PlanningCompleted(timeout_plan), vec![trigger_id.clone()], file!(), line!());
         }
     }
     let Some(observed) = ctx.last_observed.clone() else {
         return Ok(LoopStageResult::Noop);
     };
-    handle_observed(ctx, &observed, trigger_id)
+    handle_observed(ctx, &observed, trigger_id, Some(rs.rationale.clone()), rs.confidence)
 }
 
 fn is_placeholder_goal(goal: &str) -> bool {
@@ -54,7 +54,12 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     let goal_placeholder = pending.goal_text.as_ref().map(|g| is_placeholder_goal(g)).unwrap_or(true);
     if goal_placeholder {
         ctx.last_planned_observed_tick = None;
-        return Ok(LoopStageResult::Noop);
+        return Ok(LoopStageResult::Emit(RuntimeEvent::PlanningCompleted(PlanningCompleted {
+            tick: pending.tick,
+            llm_request_id: Some(pending.request_id.clone()),
+            planned_count: 0,
+            status: "goal_placeholder".to_string(),
+        })));
     }
     ctx.last_llm_signals = signals.clone();
     if actions.len() > 1 && actions.iter().any(|a| matches!(a.action, LlmAction::Done { .. })) {
@@ -226,7 +231,14 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
         return Ok(LoopStageResult::Noop);
     }
     ctx.last_emitted_plan_hash = Some(action_batch_hash);
-    Ok(LoopStageResult::EmitMany(out.into_iter().map(RuntimeEvent::LoopPlanned).collect()))
+    let mut events: Vec<RuntimeEvent> = out.into_iter().map(RuntimeEvent::LoopPlanned).collect();
+    events.push(RuntimeEvent::PlanningCompleted(PlanningCompleted {
+        tick: pending.tick,
+        llm_request_id: Some(req_id),
+        planned_count: events.len(),
+        status: "planned".to_string(),
+    }));
+    Ok(LoopStageResult::EmitMany(events))
 }
 
 pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
@@ -238,28 +250,21 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext, trigger_id: Ev
         return Ok(LoopStageResult::Noop);
     }
     emit_tool_result(ctx, &pending.plan_tool_call_id, &pending.request_id, false, &trigger_id)?;
-    emit_plan(
-        ctx,
-        LoopPlanned {
-            tick: pending.tick,
-            action_kind: "no_op".to_string(),
-            action_payload: serde_json::json!({}),
-            reason: "llm_failed".to_string(),
-            llm_request_id: Some(pending.request_id),
-            trace_id: Some(pending.trace_id),
-            execution_id: Some(pending.execution_id),
-            span_id: None,
-            parent_span_id: Some(pending.span_id),
-            plan_id: Some(pending.plan_id),
-            plan_step_id: None,
-            action_id: None,
-            signals: None,
-            depends_on: Vec::new(),
-        },
-    )
+    Ok(LoopStageResult::Emit(RuntimeEvent::PlanningCompleted(PlanningCompleted {
+        tick: pending.tick,
+        llm_request_id: Some(pending.request_id),
+        planned_count: 0,
+        status: "llm_failed".to_string(),
+    })))
 }
 
-fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
+fn handle_observed(
+    ctx: &mut LoopContext,
+    observed: &LoopObserved,
+    trigger_id: EventId,
+    route_rationale: Option<String>,
+    route_confidence: Option<f32>,
+) -> anyhow::Result<LoopStageResult> {
     if ctx.pending_plan.is_some() || ctx.last_planned_observed_tick == Some(observed.tick) {
         return Ok(LoopStageResult::Noop);
     }
@@ -276,25 +281,12 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved, trigger_id: E
     }
     if observed.error_count == 0 && ctx.last_done_goal.is_some() && ctx.last_done_goal == observed.goal_text {
         if requirements_satisfied(ctx, observed) {
-            return emit_plan(
-                ctx,
-                LoopPlanned {
-                    tick: observed.tick,
-                    action_kind: "no_op".to_string(),
-                    action_payload: serde_json::json!({}),
-                    reason: "goal_complete".to_string(),
-                    llm_request_id: None,
-                    signals: None,
-                    trace_id: None,
-                    execution_id: None,
-                    span_id: None,
-                    parent_span_id: None,
-                    plan_id: None,
-                    plan_step_id: None,
-                    action_id: None,
-                    depends_on: Vec::new(),
-                },
-            );
+            return Ok(LoopStageResult::Emit(RuntimeEvent::PlanningCompleted(PlanningCompleted {
+                tick: observed.tick,
+                llm_request_id: None,
+                planned_count: 0,
+                status: "goal_complete".to_string(),
+            })));
         }
         ctx.last_done_goal = None;
     }
@@ -312,7 +304,20 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved, trigger_id: E
     let goal_text = observed.goal_text.clone().unwrap_or_else(|| "<no goal provided>".to_string());
     let spec = parse_agent_goal_markdown(&goal_text);
     let target_workspace = spec.target_path.map(|p| p.display().to_string()).unwrap_or_else(|| workspace_clone.display().to_string());
-    let context_delta = build_context_delta(observed, &ctx.batch_acted, &ctx.batch_tool_results, &target_workspace);
+    const HEURISTIC_RATIONALE: &str = "heuristic proposal from runtime state";
+    let (rationale_for_prompt, confidence_for_prompt) = match (route_rationale.as_deref(), route_confidence) {
+        (Some(r), c) if !r.is_empty() && r != HEURISTIC_RATIONALE => (Some(r), c.map(|v| v as f64)),
+        _ => (ctx.last_route_rationale_non_empty.as_deref(), ctx.last_route_confidence_non_empty),
+    };
+
+    let context_delta = build_context_delta(
+        observed,
+        &ctx.batch_acted,
+        &ctx.batch_tool_results,
+        &target_workspace,
+        rationale_for_prompt,
+        confidence_for_prompt,
+    );
 
     let system_id = *PLANNER_SYSTEM_PROMPT_ID;
     let send_system = ctx.last_system_prompt_id != Some(system_id);
@@ -408,7 +413,7 @@ fn requirements_satisfied(ctx: &LoopContext, observed: &LoopObserved) -> bool {
     actual_loc >= required_loc
 }
 
-fn check_llm_timeout(ctx: &mut LoopContext, current_tick: u64) -> Option<LoopPlanned> {
+fn check_llm_timeout(ctx: &mut LoopContext, current_tick: u64) -> Option<PlanningCompleted> {
     let Some(pending) = &ctx.pending_plan else {
         return None;
     };
@@ -417,26 +422,12 @@ fn check_llm_timeout(ctx: &mut LoopContext, current_tick: u64) -> Option<LoopPla
     }
     let tick = pending.tick;
     ctx.pending_plan = None;
-    Some(LoopPlanned {
+    Some(PlanningCompleted {
         tick,
-        action_kind: "no_op".to_string(),
-        action_payload: serde_json::json!({}),
-        reason: "llm_timeout".to_string(),
         llm_request_id: None,
-        signals: None,
-        trace_id: None,
-        execution_id: None,
-        span_id: None,
-        parent_span_id: None,
-        plan_id: None,
-        plan_step_id: None,
-        action_id: None,
-        depends_on: Vec::new(),
+        planned_count: 0,
+        status: "llm_timeout".to_string(),
     })
-}
-
-fn emit_plan(_ctx: &LoopContext, payload: LoopPlanned) -> anyhow::Result<LoopStageResult> {
-    Ok(LoopStageResult::Emit(RuntimeEvent::LoopPlanned(payload)))
 }
 
 fn emit_tool_result(ctx: &LoopContext, tool_call_id: &str, request_id: &str, success: bool, trigger_id: &EventId) -> anyhow::Result<()> {
@@ -604,6 +595,8 @@ fn build_context_delta(
     batch_acted: &[LoopActed],
     batch_tool_results: &[ToolResult],
     target_workspace: &str,
+    route_rationale: Option<&str>,
+    route_confidence: Option<f64>,
 ) -> String {
     // Count LOC only for the target project directory (Rust files only, excluding target/).
     let workspace_loc = count_loc_in_workspace(std::path::Path::new(target_workspace));
@@ -648,10 +641,19 @@ fn build_context_delta(
         ""
     };
 
+    let route_section = match route_rationale {
+        Some(r) if !r.is_empty() => {
+            let conf = route_confidence.map(|c| format!("{:.2}", c)).unwrap_or_else(|| "n/a".to_string());
+            format!("Route rationale: {r}\nRoute confidence: {conf}\n")
+        }
+        _ => "Route rationale: (not provided)\n".to_string(),
+    };
+
     format!(
         r#"TARGET WORKSPACE: {target_workspace}
 All relative paths resolve against TARGET WORKSPACE (not its parent).
 LOC: {loc}  |  Errors: {errors}  |  Warnings: {warnings}
+{route_section}
 {destructive_note}
 Recent actions (most recent first — read_file stdout contains file contents):
 {recent_actions}

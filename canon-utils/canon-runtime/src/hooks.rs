@@ -179,10 +179,10 @@ impl PostHook for AuditLogHook {
     fn on_post(&self, event: &RuntimeEvent, outcome: &EventOutcome) {
         let kind = format!("{event:?}");
         let outcome_kind = match outcome {
-            EventOutcome::Emit(_) => "emit",
-            EventOutcome::EmitMany(_) => "emit_many",
+            EventOutcome::Emit { .. } => "emit",
+            EventOutcome::EmitMany { .. } => "emit_many",
             EventOutcome::NoOp(_) => "noop",
-            EventOutcome::Error(_) => "error",
+            EventOutcome::Error { .. } => "error",
         };
         let _ = self.tx.send((kind, outcome_kind.to_string()));
     }

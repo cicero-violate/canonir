@@ -6,6 +6,7 @@ use crate::{
     stage::LoopStageEvent,
 };
 use canon_event::{AgentRegistered, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, GoalEdgeDefined, RuntimeEvent, Tick};
+use canon_invariant::decision_trace_payload;
 use canon_proc_macros::must_emit;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -30,6 +31,14 @@ impl EventConsumer for LoopStageExecutor {
         EventFilter::All
     }
 
+    fn consumer_name(&self) -> &'static str {
+        "loop_stage_executor"
+    }
+
+    fn is_synchronous(&self) -> bool {
+        true
+    }
+
     fn set_emitter(&mut self, emitter: EventEmitterHandle) {
         self.ctx.emitter = Some(emitter);
     }
@@ -38,7 +47,27 @@ impl EventConsumer for LoopStageExecutor {
     fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
         // State accumulation (mutations that do not emit).
         let mut trigger_observe = false;
+        let mut force_observe_recovery = false;
         match event {
+            RuntimeEvent::Debug(debug) if debug.kind == "recovery_event" => {
+                if debug
+                    .payload
+                    .get("context")
+                    .and_then(|v| v.get("expected_successor"))
+                    .and_then(|v| v.as_str())
+                    == Some("loop_observed")
+                {
+                    force_observe_recovery = true;
+                }
+            }
+            RuntimeEvent::RouteSelected(rs) => {
+                self.ctx.last_route_rationale = Some(rs.rationale.clone());
+                self.ctx.last_route_confidence = rs.confidence.map(|c| c as f64);
+                if !rs.rationale.is_empty() {
+                    self.ctx.last_route_rationale_non_empty = Some(rs.rationale.clone());
+                    self.ctx.last_route_confidence_non_empty = rs.confidence.map(|c| c as f64);
+                }
+            }
             RuntimeEvent::Tick(Tick { tick, .. }) => {
                 // Tick is kept for cursor-save bookkeeping but no longer drives observation
                 // or timeout checks — the system is purely event-driven.
@@ -129,9 +158,17 @@ impl EventConsumer for LoopStageExecutor {
                     self.ctx.halted = true;
                 }
             }
+            RuntimeEvent::PlanningCompleted(_) => {}
             RuntimeEvent::GoodnessSnapshot(g) => {
                 self.ctx.goodness = Some(g.g);
                 self.ctx.delta_g = Some(g.delta_g);
+            }
+            RuntimeEvent::RuntimeStateUpdated(updated) => {
+                if updated.payload.get("fatal_invariant").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    self.ctx.halted = true;
+                } else if updated.payload.get("runtime_mode").and_then(|v| v.as_str()) == Some("running") {
+                    self.ctx.halted = false;
+                }
             }
             RuntimeEvent::PromptLoaded(prompt) => {
                 let data = prompt.payload.get("data").unwrap_or(&prompt.payload);
@@ -158,7 +195,15 @@ impl EventConsumer for LoopStageExecutor {
                     let drop_n = self.ctx.recent_compiler_errors.len() - 16;
                     self.ctx.recent_compiler_errors.drain(0..drop_n);
                 }
-                trigger_observe = true;
+                let fatal_invariant_diag = err.kind == "diagnostics_triggered"
+                    && err
+                        .context
+                        .get("fatal_invariant")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                if err.kind != "invariant_violation" && !fatal_invariant_diag {
+                    trigger_observe = true;
+                }
             }
             RuntimeEvent::ToolResult(r) if r.kind != "llm.plan" => {
                 self.ctx.batch_tool_results.push(r.clone());
@@ -167,14 +212,12 @@ impl EventConsumer for LoopStageExecutor {
             | RuntimeEvent::Debug(_)
             | RuntimeEvent::Edit(_)
             | RuntimeEvent::RouteTick(_)
-            | RuntimeEvent::RouteSelected(_)
             | RuntimeEvent::Cargo(_)
             | RuntimeEvent::File(_)
             | RuntimeEvent::Bash(_)
             | RuntimeEvent::Llm(_)
             | RuntimeEvent::RequestDispatch(_)
             | RuntimeEvent::Analysis(_)
-            | RuntimeEvent::RuntimeStateUpdated(_)
             | RuntimeEvent::NodeReady(_)
             | RuntimeEvent::NodeStarted(_)
             | RuntimeEvent::NodeCompleted(_)
@@ -198,10 +241,78 @@ impl EventConsumer for LoopStageExecutor {
         }
 
         // Emit LoopObserved when state changes (event-driven, not tick-driven).
-        if trigger_observe && !self.ctx.halted {
-            if let Ok(LoopStageResult::Emit(e)) = observe::execute(&mut self.ctx) {
-                if let Some(emitter) = self.ctx.emitter.as_ref() {
-                    emitter.emit_with_parents(e, vec![trigger_id.clone()], file!(), line!());
+        let suppress_observe_on_invariant =
+            matches!(event, RuntimeEvent::ErrorOccurred(err) if err.kind == "invariant_violation")
+                || matches!(event, RuntimeEvent::Code(code) if matches!(code.delta.event, canon_event::RustcEvent::InvariantViolation(_)));
+
+        if force_observe_recovery && !self.ctx.halted {
+            match observe::execute_forced(&mut self.ctx) {
+                Ok(LoopStageResult::Emit(e)) => {
+                    if let Some(emitter) = self.ctx.emitter.as_ref() {
+                        emitter.emit_with_parents(e, vec![trigger_id.clone()], file!(), line!());
+                    }
+                }
+                Ok(LoopStageResult::EmitMany(evs)) => {
+                    if let Some(emitter) = self.ctx.emitter.as_ref() {
+                        for event in evs {
+                            emitter.emit_with_parents(event, vec![trigger_id.clone()], file!(), line!());
+                        }
+                    }
+                }
+                Ok(LoopStageResult::Deferred) | Ok(LoopStageResult::Noop) => {}
+                Err(err) => {
+                    if let Some(emitter) = self.ctx.emitter.as_ref() {
+                        emitter.emit_child(
+                            RuntimeEvent::ErrorOccurred(canon_event::new_error_occurred(
+                                "observe_recovery_execution",
+                                "loop_stage_executor",
+                                err.to_string(),
+                                "error",
+                                serde_json::json!({ "event": canon_event::event_kind_str(event) }),
+                                None,
+                            )),
+                            vec![trigger_id.clone()],
+                            file!(),
+                            line!(),
+                        );
+                    }
+                }
+            }
+        } else if trigger_observe && !self.ctx.halted && !suppress_observe_on_invariant {
+            match observe::execute(&mut self.ctx) {
+                Ok(LoopStageResult::Emit(e)) => {
+                    if let Some(emitter) = self.ctx.emitter.as_ref() {
+                        emitter.emit_with_parents(e, vec![trigger_id.clone()], file!(), line!());
+                    }
+                }
+                Ok(LoopStageResult::EmitMany(evs)) => {
+                    if let Some(emitter) = self.ctx.emitter.as_ref() {
+                        for event in evs {
+                            emitter.emit_with_parents(event, vec![trigger_id.clone()], file!(), line!());
+                        }
+                    }
+                }
+                Ok(LoopStageResult::Deferred) => {
+                    if let Some(emitter) = self.ctx.emitter.as_ref() {
+                        emitter.emit_child(RuntimeEvent::Debug(canon_event::DebugEvent { source: "loop_stage_executor".to_string(), kind: "observe_deferred".to_string(), payload: decision_trace_payload("observe returned deferred", serde_json::json!({ "trigger_kind": canon_event::event_kind_str(event) })) }), vec![trigger_id.clone()], file!(), line!());
+                    }
+                }
+                Ok(LoopStageResult::Noop) => {
+                    if let Some(emitter) = self.ctx.emitter.as_ref() {
+                        emitter.emit_child(RuntimeEvent::Debug(canon_event::DebugEvent { source: "loop_stage_executor".to_string(), kind: "observe_noop".to_string(), payload: decision_trace_payload("observe returned noop", serde_json::json!({ "trigger_kind": canon_event::event_kind_str(event) })) }), vec![trigger_id.clone()], file!(), line!());
+                    }
+                }
+                Err(err) => {
+                    if let Some(emitter) = self.ctx.emitter.as_ref() {
+                        emitter.emit_child(RuntimeEvent::ErrorOccurred(canon_event::new_error_occurred(
+                            "observe_stage_execution",
+                            "loop_stage_executor",
+                            err.to_string(),
+                            "error",
+                            serde_json::json!({ "event": format!("{:?}", event) }),
+                            None,
+                        )), vec![trigger_id.clone()], file!(), line!());
+                    }
                 }
             }
         }

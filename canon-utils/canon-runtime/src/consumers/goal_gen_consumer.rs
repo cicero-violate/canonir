@@ -1,7 +1,7 @@
-use canon_event::{new_error_occurred, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, LlmCall, PromptLoaded, RuntimeEvent};
+use canon_event::{new_error_occurred, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, LlmCall, RuntimeEvent};
+use canon_prompt_events::goal_prompt_loaded_event;
 use canon_proc_macros::must_emit;
 use canon_skills::global_registry;
-use std::path::PathBuf;
 use uuid::Uuid;
 
 const AGENT_GOAL_PATH: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts/AGENT_GOAL.md";
@@ -16,14 +16,13 @@ enum State {
 const MAX_RETRIES: u32 = 5;
 
 pub struct GoalGenConsumer {
-    tlog_path: PathBuf,
     state: State,
     retries: u32,
     emitter: Option<EventEmitterHandle>,
 }
 
 impl GoalGenConsumer {
-    pub fn new(tlog_path: PathBuf) -> Self {
+    pub fn new(_tlog_path: std::path::PathBuf) -> Self {
         let initial_state = if let Ok(existing) = std::fs::read_to_string(AGENT_GOAL_PATH) {
             if validate_goal(&existing) {
                 eprintln!("[goal_gen] valid goal already on disk, skipping generation");
@@ -34,7 +33,7 @@ impl GoalGenConsumer {
         } else {
             State::Waiting
         };
-        Self { tlog_path, state: initial_state, retries: 0, emitter: None }
+        Self { state: initial_state, retries: 0, emitter: None }
     }
 }
 
@@ -42,6 +41,10 @@ impl EventConsumer for GoalGenConsumer {
     fn filter(&self) -> EventFilter {
         EventFilter::All
     }
+
+    fn is_synchronous(&self) -> bool { true }
+
+    fn consumer_name(&self) -> &'static str { "goal_gen_consumer" }
 
     fn set_emitter(&mut self, emitter: EventEmitterHandle) {
         self.emitter = Some(emitter);
@@ -65,7 +68,7 @@ impl EventConsumer for GoalGenConsumer {
                         return EventOutcome::NoOp("goal_gen_skill_load_failed");
                     }
                 };
-                EventOutcome::Emit(RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt, role: Some("goal_gen".to_string()), agent_id: Some("goal_gen_chatgpt".to_string()), dispatched: true, system: None, system_prompt_id: None, context_base: None, context_base_id: None, prompt_base_id: None, prev_prompt_id: None }))
+                EventOutcome::emit(RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt, role: Some("goal_gen".to_string()), agent_id: Some("goal_gen_chatgpt".to_string()), dispatched: true, system: None, system_prompt_id: None, context_base: None, context_base_id: None, prompt_base_id: None, prev_prompt_id: None }), file!(), line!())
             }
             (State::Pending { request_id: expected_id, .. }, RuntimeEvent::CapabilityCompleted(done)) => {
                 if done.request_id != *expected_id || done.capability != "llm.call" {
@@ -103,13 +106,12 @@ impl EventConsumer for GoalGenConsumer {
                 };
                 if validate_goal(&content) {
                     let _ = std::fs::write(AGENT_GOAL_PATH, &content);
-                    crate::bootstrap::write_prompt_loaded_to_tlog(&self.tlog_path, &content);
                     emit_prompt_loaded(&self.emitter, &content, &trigger_id);
                     self.state = State::Done;
                     if warn_events.is_empty() {
                         EventOutcome::NoOp("goal_gen_done")
                     } else {
-                        EventOutcome::EmitMany(warn_events)
+                        EventOutcome::emit_many(warn_events, file!(), line!())
                     }
                 } else {
                     self.retries += 1;
@@ -117,14 +119,14 @@ impl EventConsumer for GoalGenConsumer {
                         let msg = format!("goal_gen gave up after {MAX_RETRIES} retries — last content was {} bytes: {}", content.len(), &content[..content.len().min(200)]);
                         eprintln!("[goal_gen] {msg}");
                         self.state = State::Done;
-                        return EventOutcome::Error(RuntimeEvent::ErrorOccurred(new_error_occurred(
+                        return EventOutcome::error(RuntimeEvent::ErrorOccurred(new_error_occurred(
                             "goal_gen_exhausted",
                             "goal_gen_consumer",
                             &msg,
                             "error",
                             serde_json::json!({ "retries": MAX_RETRIES, "content_bytes": content.len() }),
                             None,
-                        )));
+                        )), file!(), line!());
                     } else {
                         eprintln!("[goal_gen] retry {}/{}", self.retries, MAX_RETRIES);
                         self.state = State::Waiting;
@@ -132,7 +134,7 @@ impl EventConsumer for GoalGenConsumer {
                     if warn_events.is_empty() {
                         EventOutcome::NoOp("goal_gen_retrying")
                     } else {
-                        EventOutcome::EmitMany(warn_events)
+                        EventOutcome::emit_many(warn_events, file!(), line!())
                     }
                 }
             }
@@ -146,14 +148,14 @@ impl EventConsumer for GoalGenConsumer {
                 if self.retries >= MAX_RETRIES {
                     eprintln!("[goal_gen] gave up after {MAX_RETRIES} retries due to capability failures");
                     self.state = State::Done;
-                    return EventOutcome::Error(RuntimeEvent::ErrorOccurred(new_error_occurred(
+                    return EventOutcome::error(RuntimeEvent::ErrorOccurred(new_error_occurred(
                         "goal_gen_exhausted",
                         "goal_gen_consumer",
                         &msg,
                         "error",
                         serde_json::json!({ "retries": MAX_RETRIES, "last_error": fail.error }),
                         None,
-                    )));
+                    )), file!(), line!());
                 } else {
                     self.state = State::Waiting;
                 }
@@ -168,6 +170,7 @@ impl EventConsumer for GoalGenConsumer {
             | (_, RuntimeEvent::ErrorOccurred(_))
             | (_, RuntimeEvent::LoopObserved(_))
             | (_, RuntimeEvent::LoopPlanned(_))
+            | (_, RuntimeEvent::PlanningCompleted(_))
             | (_, RuntimeEvent::LoopActed(_))
             | (_, RuntimeEvent::LoopVerified(_))
             | (_, RuntimeEvent::LoopRewarded(_))
@@ -236,6 +239,9 @@ fn extract_goal_text(raw: &str) -> String {
 }
 
 fn validate_goal(content: &str) -> bool {
+    if content.contains("goal-pending") {
+        return false;
+    }
     let has_path = content.contains(GOALGEN_PROJECTS_DIR);
     let lower = content.to_lowercase();
     let has_requirements = lower.contains("## requirements");
@@ -251,13 +257,7 @@ fn validate_goal(content: &str) -> bool {
 
 fn emit_prompt_loaded(emitter: &Option<EventEmitterHandle>, content: &str, trigger_id: &EventId) {
     if let Some(em) = emitter {
-        let event = RuntimeEvent::PromptLoaded(PromptLoaded {
-            payload: serde_json::json!({
-                "prompt_id": "AGENT_GOAL",
-                "path": AGENT_GOAL_PATH,
-                "content": content,
-            }),
-        });
+        let event = RuntimeEvent::PromptLoaded(goal_prompt_loaded_event(content));
         em.emit_with_parents(event, vec![trigger_id.clone()], file!(), line!());
     }
 }

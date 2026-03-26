@@ -29,6 +29,7 @@ pub enum EventKind {
     // Loop lifecycle
     LoopObserved,
     LoopPlanned,
+    PlanningCompleted,
     LoopActed,
     LoopVerified,
     LoopRewarded,
@@ -86,11 +87,18 @@ pub enum EventKind {
     SupervisorEvent,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum EventClass {
+    Control,
+    Effect,
+}
+
 impl EventKind {
     pub fn as_str(self) -> &'static str {
         match self {
             EventKind::LoopObserved => "loop_observed",
             EventKind::LoopPlanned => "loop_planned",
+            EventKind::PlanningCompleted => "planning_completed",
             EventKind::LoopActed => "loop_acted",
             EventKind::LoopVerified => "loop_verified",
             EventKind::LoopRewarded => "loop_rewarded",
@@ -137,6 +145,31 @@ impl EventKind {
             EventKind::SupervisorEvent => "supervisor_event",
         }
     }
+
+    pub fn class(self) -> EventClass {
+        match self {
+            EventKind::RouteSelected
+            | EventKind::LoopObserved
+            | EventKind::PlanningCompleted
+            | EventKind::LoopActed
+            | EventKind::LoopVerified
+            | EventKind::LoopRewarded => EventClass::Control,
+            _ => EventClass::Effect,
+        }
+    }
+
+    pub fn allowed_next(self) -> &'static [EventKind] {
+        use EventKind::*;
+        match self {
+            RouteSelected => &[LoopObserved, PlanningCompleted, LoopActed, LoopVerified, LoopRewarded],
+            LoopObserved => &[RouteSelected],
+            PlanningCompleted => &[RouteSelected],
+            LoopActed => &[RouteSelected, LoopVerified],
+            LoopVerified => &[LoopRewarded],
+            LoopRewarded => &[RouteSelected, LoopObserved],
+            _ => &[],
+        }
+    }
 }
 
 impl std::fmt::Display for EventKind {
@@ -152,6 +185,7 @@ impl std::str::FromStr for EventKind {
         match s {
             "loop_observed" => Ok(EventKind::LoopObserved),
             "loop_planned" => Ok(EventKind::LoopPlanned),
+            "planning_completed" => Ok(EventKind::PlanningCompleted),
             "loop_acted" => Ok(EventKind::LoopActed),
             "loop_verified" => Ok(EventKind::LoopVerified),
             "loop_rewarded" => Ok(EventKind::LoopRewarded),

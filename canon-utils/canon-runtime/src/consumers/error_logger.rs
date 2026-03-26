@@ -40,6 +40,10 @@ impl EventConsumer for ErrorLogger {
         EventFilter::ErrorOnly
     }
 
+    fn is_synchronous(&self) -> bool { true }
+
+    fn consumer_name(&self) -> &'static str { "error_logger" }
+
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
         if let RuntimeEvent::ErrorOccurred(payload) = event {

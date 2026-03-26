@@ -34,13 +34,13 @@ pub use events::{
     new_error_occurred, AgentRegistered, AnalysisEvent, AnalysisRun, AnalysisWorkspace, BashInvoke, CapabilityCompleted, CapabilityFailed, CapabilityInvoked, CapabilityResolved, CapabilityResult,
     CargoBuild, CargoCheck, CargoEvent, CargoRun, Code, DebugEvent, DeleteSymbol, EditEvent, ErrorOccurred, EventConsumer, EventEmitter, EventEmitterHandle, EventFilter, EventMask, EventOutcome, ExtractModule,
     FileEvent, FilePatch, FileRead, FileWrite, GoalEdgeDefined, GoalGraphCheckpointed, GoalNodeCreated, GoalNodeRetracted, GoalNodeRewritten, GoalSelected, InlineModule, InvariantDiscovered, LlmCall, LlmResult,
-    LocatedEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, MoveSymbol, NodeCompleted, NodeFailed, NodeReady, NodeStarted, PolicyBaselineUpdated, ProcessResult, PromptLoaded,
+    LocatedEvent, LoopActed, LoopObserved, LoopPlanned, PlanningCompleted, LoopRewarded, LoopVerified, MoveSymbol, NodeCompleted, NodeFailed, NodeReady, NodeStarted, PolicyBaselineUpdated, ProcessResult, PromptLoaded,
     RenameDir, RenameModule, RenameSymbol, RequestDispatch, RouteSelected, RouteTick, RuntimeEvent, RuntimeStateUpdated, RustcEventConsumer, SubTaskResult, SystemConfigLoaded, Tick, ToolBatchSettled,
     ToolCall, ToolResult, GoodnessSnapshot,
     event_kind_str,
     EVENT_SCHEMA_VERSION,
 };
-pub use wire::{CanonEvent, CanonPayload, CanonPayloadMeta, EventId, EventKind, CanonPayloadShape};
+pub use wire::{CanonEvent, CanonPayload, CanonPayloadMeta, EventClass, EventId, EventKind, CanonPayloadShape};
 pub use macros::emit::canon_emit;
 pub use schema::*;
 pub use tlog::{is_binary_tlog, maybe_rotate, BinarySegmentWriter, RotateConfig, SegmentConfig};

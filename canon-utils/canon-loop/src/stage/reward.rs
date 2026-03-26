@@ -24,7 +24,9 @@ pub fn execute(v: LoopVerified, ctx: &mut LoopContext) -> anyhow::Result<LoopSta
     ctx.last_reward_trace_id = v.trace_id.clone();
     ctx.last_reward_execution_id = v.execution_id.clone();
     let reward = compute_reward(ctx, &v);
-    let halt = ctx.stagnant_ticks > 10;
+    // Verify/reward is evaluative, not terminal: ordinary compiler failures should replan,
+    // not halt the loop. Terminal halts only come from explicit conclude routing.
+    let halt = false;
     let rewarded = LoopRewarded {
         tick: v.tick,
         errors_before: ctx.errors_before,
