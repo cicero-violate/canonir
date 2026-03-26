@@ -140,3 +140,4 @@ state/event_runtime.lock
 **.idx
 
 .claude/*
+test_projects/*
