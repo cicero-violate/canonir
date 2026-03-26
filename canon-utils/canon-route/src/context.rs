@@ -56,6 +56,10 @@ pub struct RouteContext {
     batch_any_failed: bool,
     /// True when the current batch contains only llm.plan calls — routing deferred to LoopPlanned.
     pub batch_is_plan_only: bool,
+    pub last_invalid_plan_reason: Option<String>,
+    pub last_invalid_plan_planned_count: Option<usize>,
+    pub consecutive_invalid_plan_batches: u32,
+    pub last_halt_reason: Option<String>,
     /// Maps action_id → (action_kind, llm_request_id) for enriching ToolResult metadata.
     action_meta: HashMap<String, (String, Option<String>)>,
     pub causal_graph: crate::causal::CausalGraph,
@@ -88,7 +92,7 @@ impl RouteContext {
 
     pub fn snapshot_text(&self) -> String {
         format!(
-            "tick={tick}\ncontext_ready={context}\nworkspace_dirty={dirty}\nplanned_pending={pending}\nacted_unverified={unverified}\nfinish_ready={finish}\nlast_action_kind={action}\ngoodness={goodness}\ndelta_g={delta_g}",
+            "tick={tick}\ncontext_ready={context}\nworkspace_dirty={dirty}\nplanned_pending={pending}\nacted_unverified={unverified}\nfinish_ready={finish}\nlast_action_kind={action}\ngoodness={goodness}\ndelta_g={delta_g}\nconsecutive_invalid_plan_batches={invalid_count}\nlast_invalid_plan_planned_count={invalid_planned}\nlast_invalid_plan_reason={invalid_reason}\nhalted={halted}\nlast_halt_reason={halt_reason}",
             tick = self.scheduler_tick,
             context = self.context_ready,
             dirty = self.workspace_dirty_tracker.any_dirty(),
@@ -98,6 +102,17 @@ impl RouteContext {
             action = self.last_action_kind,
             goodness = self.goodness.map(|v| v.to_string()).unwrap_or_else(|| "NA".into()),
             delta_g = self.delta_g.map(|v| v.to_string()).unwrap_or_else(|| "NA".into()),
+            invalid_count = self.consecutive_invalid_plan_batches,
+            invalid_planned = self
+                .last_invalid_plan_planned_count
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "NA".into()),
+            invalid_reason = self
+                .last_invalid_plan_reason
+                .as_deref()
+                .unwrap_or("NA"),
+            halted = self.halted,
+            halt_reason = self.last_halt_reason.as_deref().unwrap_or("NA"),
         )
     }
 
@@ -152,6 +167,9 @@ impl RouteContext {
             }
             RuntimeEvent::LoopActed(LoopActed { action_kind, capability_request_id, tool_call_id, tool_result_id, success, stderr, action_id, .. }) => {
                 self.planned_pending = self.planned_pending.saturating_sub(1);
+                self.consecutive_invalid_plan_batches = 0;
+                self.last_invalid_plan_reason = None;
+                self.last_invalid_plan_planned_count = None;
                 update_causal_graph(&mut self.causal_graph, event);
                 // Only mark dirty/acted_unverified for mutating actions.
                 const READ_ONLY_ACTIONS: &[&str] = &["list_dir", "read_file", "search_files", "done"];
@@ -189,6 +207,7 @@ impl RouteContext {
             RuntimeEvent::LoopRewarded(LoopRewarded { halt, .. }) => {
                 if *halt {
                     self.halted = true;
+                    self.last_halt_reason = Some("loop_rewarded requested halt".to_string());
                 }
                 self.push_journal("reward", format!("halt={halt}"));
             }
@@ -202,6 +221,31 @@ impl RouteContext {
             }
             RuntimeEvent::RequestDispatch(_) => {
                 update_causal_graph(&mut self.causal_graph, event);
+            }
+            RuntimeEvent::ErrorOccurred(err) if err.kind == "invalid_plan_batch" => {
+                self.consecutive_invalid_plan_batches = self.consecutive_invalid_plan_batches.saturating_add(1);
+                self.last_invalid_plan_reason = Some(err.message.clone());
+                self.last_invalid_plan_planned_count = err
+                    .context
+                    .get("planned_count")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+                self.push_journal(
+                    "plan",
+                    format!(
+                        "invalid_plan_batch count={} planned_count={} reason={}",
+                        self.consecutive_invalid_plan_batches,
+                        self.last_invalid_plan_planned_count
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "NA".to_string()),
+                        err.message
+                    ),
+                );
+            }
+            RuntimeEvent::PlanningCompleted(pc) if pc.status != "invalid_plan" => {
+                self.consecutive_invalid_plan_batches = 0;
+                self.last_invalid_plan_reason = None;
+                self.last_invalid_plan_planned_count = None;
             }
             RuntimeEvent::ToolCall(ToolCall { tool_call_id, kind, .. }) => {
                 // Opening a new call: if set was empty this starts a new batch.
@@ -256,11 +300,17 @@ impl RouteContext {
             RuntimeEvent::RuntimeStateUpdated(updated) => {
                 if updated.payload.get("fatal_invariant").and_then(|v| v.as_bool()).unwrap_or(false) {
                     self.halted = true;
+                    self.last_halt_reason = updated
+                        .payload
+                        .get("fatal_invariant_reason")
+                        .and_then(|v| v.as_str())
+                        .map(|v| v.to_string());
                     if let Some(reason) = updated.payload.get("fatal_invariant_reason").and_then(|v| v.as_str()) {
                         self.push_journal("runtime", format!("fatal_invariant_halt reason={reason}"));
                     }
                 } else if updated.payload.get("runtime_mode").and_then(|v| v.as_str()) == Some("running") {
                     self.halted = false;
+                    self.last_halt_reason = None;
                     self.push_journal("runtime", "mode=running");
                 }
                 let dirty = updated.payload.get("workspace_dirty").and_then(|v| v.as_bool()).unwrap_or(false);

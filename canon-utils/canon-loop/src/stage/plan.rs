@@ -1,8 +1,10 @@
 use std::path::Path;
 
-use canon_event::{CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, LlmCall, LoopActed, LoopObserved, LoopPlanned, PlanningCompleted, RouteSelected, RuntimeEvent, ToolCall, ToolResult};
+use canon_event::{new_error_occurred, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, LlmCall, LoopActed, LoopObserved, LoopPlanned, PlanningCompleted, RouteSelected, RuntimeEvent, ToolCall, ToolResult};
 use canon_goal::parse_agent_goal_markdown;
+use canon_invariant::decision_trace_payload;
 use canon_tools_search::search_files;
+use canon_tools_patch::parse_patch;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use uuid::Uuid;
@@ -23,7 +25,39 @@ pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: Eve
         }
     }
     let Some(observed) = ctx.last_observed.clone() else {
-        return Ok(LoopStageResult::Noop);
+        return Ok(LoopStageResult::EmitMany(vec![
+            RuntimeEvent::Debug(canon_event::DebugEvent {
+                source: "plan_stage".to_string(),
+                kind: "plan_suppressed".to_string(),
+                payload: decision_trace_payload(
+                    "planning skipped because no observation context is available",
+                    serde_json::json!({
+                        "reason": "missing_last_observed",
+                        "tick": tick,
+                        "goal_present": ctx.goal_text.is_some(),
+                        "consecutive_invalid_plan_batches": ctx.consecutive_invalid_plan_batches,
+                    }),
+                ),
+            }),
+            RuntimeEvent::ErrorOccurred(new_error_occurred(
+                "plan_stall",
+                "plan_stage",
+                "planning requested without last_observed context".to_string(),
+                "warning",
+                serde_json::json!({
+                    "reason": "missing_last_observed",
+                    "recoverable": true,
+                    "tick": tick,
+                }),
+                None,
+            )),
+            RuntimeEvent::PlanningCompleted(PlanningCompleted {
+                tick,
+                llm_request_id: None,
+                planned_count: 0,
+                status: "missing_observed_context".to_string(),
+            }),
+        ]));
     };
     handle_observed(ctx, &observed, trigger_id, Some(rs.rationale.clone()), rs.confidence)
 }
@@ -216,6 +250,42 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     if out.is_empty() {
         return Ok(LoopStageResult::Noop);
     }
+    let discovery_only_retry = ctx.consecutive_invalid_plan_batches > 0;
+    if let Err(message) = validate_action_batch(&out, discovery_only_retry) {
+        ctx.last_planned_observed_tick = None;
+        return Ok(LoopStageResult::EmitMany(vec![
+            RuntimeEvent::Debug(canon_event::DebugEvent {
+                source: "plan_stage".to_string(),
+                kind: "invalid_plan_batch".to_string(),
+                payload: decision_trace_payload(
+                    "plan rejected before execution",
+                    serde_json::json!({
+                        "reason": message,
+                        "planned_count": out.len(),
+                        "discovery_only_retry": discovery_only_retry,
+                    }),
+                ),
+            }),
+            RuntimeEvent::ErrorOccurred(new_error_occurred(
+                "invalid_plan_batch",
+                "plan_stage",
+                format!("invalid plan batch before execution: {message}"),
+                "warning",
+                serde_json::json!({
+                    "planned_count": out.len(),
+                    "recoverable": true,
+                    "discovery_only_retry": discovery_only_retry,
+                }),
+                None,
+            )),
+            RuntimeEvent::PlanningCompleted(PlanningCompleted {
+                tick: pending.tick,
+                llm_request_id: Some(req_id),
+                planned_count: 0,
+                status: "invalid_plan".to_string(),
+            }),
+        ]));
+    }
     // Action-batch dedup: if LLM returned identical actions to the previous plan, skip.
     let action_batch_hash = {
         use std::hash::{Hash, Hasher};
@@ -239,6 +309,55 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
         status: "planned".to_string(),
     }));
     Ok(LoopStageResult::EmitMany(events))
+}
+
+fn validate_action_batch(actions: &[LoopPlanned], discovery_only_retry: bool) -> Result<(), String> {
+    let has_discovery = actions.iter().any(|a| matches!(a.action_kind.as_str(), "list_dir" | "read_file"));
+    let has_execution = actions.iter().any(|a| {
+        matches!(
+            a.action_kind.as_str(),
+            "patch_file" | "apply_patch" | "write_file" | "run_command" | "done"
+        )
+    });
+    if discovery_only_retry && has_execution {
+        return Err(
+            "discovery-only retry required after invalid plan batch; execution/edit actions are not allowed yet"
+                .to_string(),
+        );
+    }
+    if has_discovery && has_execution {
+        return Err(
+            "mixed discovery actions with execution/edit actions in one plan batch".to_string(),
+        );
+    }
+
+    for action in actions {
+        match action.action_kind.as_str() {
+            "apply_patch" => {
+                let Some(patch) = action.action_payload.get("patch").and_then(|v| v.as_str()) else {
+                    return Err("apply_patch missing string patch payload".to_string());
+                };
+                if let Err(err) = parse_patch(patch) {
+                    return Err(format!("apply_patch payload is invalid: {err}"));
+                }
+            }
+            "run_command" => {
+                let cwd = action.action_payload.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
+                if cwd.is_empty() || !Path::new(cwd).is_absolute() {
+                    return Err(format!(
+                        "run_command requires an absolute cwd; got {:?}",
+                        if cwd.is_empty() { "<empty>" } else { cwd }
+                    ));
+                }
+            }
+            "read_file" | "list_dir" | "write_file" | "patch_file" | "done" => {}
+            other => {
+                return Err(format!("unknown plan action_kind {other}"));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
@@ -317,6 +436,9 @@ fn handle_observed(
         &target_workspace,
         rationale_for_prompt,
         confidence_for_prompt,
+        ctx.last_invalid_plan_reason.as_deref(),
+        ctx.last_invalid_plan_planned_count,
+        ctx.consecutive_invalid_plan_batches,
     );
 
     let system_id = *PLANNER_SYSTEM_PROMPT_ID;
@@ -597,6 +719,9 @@ fn build_context_delta(
     target_workspace: &str,
     route_rationale: Option<&str>,
     route_confidence: Option<f64>,
+    last_invalid_plan_reason: Option<&str>,
+    last_invalid_plan_planned_count: Option<usize>,
+    consecutive_invalid_plan_batches: u32,
 ) -> String {
     // Count LOC only for the target project directory (Rust files only, excluding target/).
     let workspace_loc = count_loc_in_workspace(std::path::Path::new(target_workspace));
@@ -649,11 +774,23 @@ fn build_context_delta(
         _ => "Route rationale: (not provided)\n".to_string(),
     };
 
+    let invalid_plan_section = match last_invalid_plan_reason {
+        Some(reason) => format!(
+            "Invalid plan memory: consecutive_invalid_plan_batches={count}; last_invalid_plan_planned_count={planned}; last_invalid_plan_reason={reason}\nIf the previous batch mixed discovery with edits/execution, your next batch must be discovery-only (list_dir/read_file) and must not include apply_patch, write_file, run_command, patch_file, or done.\n",
+            count = consecutive_invalid_plan_batches,
+            planned = last_invalid_plan_planned_count
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "NA".to_string()),
+        ),
+        None => "Invalid plan memory: none\n".to_string(),
+    };
+
     format!(
         r#"TARGET WORKSPACE: {target_workspace}
 All relative paths resolve against TARGET WORKSPACE (not its parent).
 LOC: {loc}  |  Errors: {errors}  |  Warnings: {warnings}
 {route_section}
+{invalid_plan_section}
 {destructive_note}
 Recent actions (most recent first — read_file stdout contains file contents):
 {recent_actions}
@@ -666,6 +803,7 @@ Recent tool results:
         errors = observed.error_count,
         warnings = observed.warning_count,
         destructive_note = destructive_note,
+        invalid_plan_section = invalid_plan_section,
         recent_actions = if recent_actions.is_empty() { "(none)".to_string() } else { recent_actions },
         recent_results = if recent_results.is_empty() { "(none)".to_string() } else { recent_results },
     )

@@ -1,5 +1,5 @@
 use canon_decision::RouteKind;
-use canon_event::{CapabilityResult, Code, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, LlmCall, RouteSelected, RuntimeEvent, ToolBatchSettled};
+use canon_event::{new_error_occurred, CapabilityResult, Code, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, LlmCall, RouteSelected, RuntimeEvent, ToolBatchSettled};
 use canon_invariant::{decision_trace_payload, invariant_violation_delta, invariant_violation_state};
 use canon_judgment::GuardConfig;
 use canon_proc_macros::must_emit;
@@ -30,6 +30,7 @@ pub struct RouteExecutor {
     last_route_prompt_hash: Option<u64>,
     last_route_selected: Option<RouteSelected>,
     force_fresh_route_once: bool,
+    awaiting_control_successor: Option<String>,
     current_trigger: Option<EventId>,
 }
 
@@ -50,6 +51,7 @@ impl RouteExecutor {
             last_route_prompt_hash: None,
             last_route_selected: None,
             force_fresh_route_once: false,
+            awaiting_control_successor: None,
             current_trigger: None,
         }
     }
@@ -105,10 +107,31 @@ impl RouteExecutor {
             }
             return;
         }
+        if let Some(expected) = self.awaiting_control_successor.as_deref() {
+            if let Some(emitter) = self.emitter.as_ref() {
+                emitter.emit_child(
+                    RuntimeEvent::Debug(canon_event::DebugEvent {
+                        source: "route_executor".to_string(),
+                        kind: "route_suppressed".to_string(),
+                        payload: self.suppression_payload(
+                            "awaiting control successor before rerouting",
+                            "recoverable",
+                            "await_successor",
+                            serde_json::json!({ "awaiting_control_successor": expected }),
+                        ),
+                    }),
+                    self.current_trigger.iter().cloned().collect(),
+                    file!(),
+                    line!(),
+                );
+            }
+            return;
+        }
         if self.pending_required_successor.as_deref() == Some("route_selected")
             && self.last_route_emitted_for_control_id.as_deref() == self.last_control_event_id.as_deref()
         {
             if let Some(emitter) = self.emitter.as_ref() {
+                let tid = self.current_trigger.clone().expect("route stall emit without current_trigger");
                 emitter.emit_child(
                     RuntimeEvent::Debug(canon_event::DebugEvent {
                         source: "route_executor".to_string(),
@@ -120,11 +143,28 @@ impl RouteExecutor {
                             serde_json::json!({}),
                         ),
                     }),
-                    self.current_trigger.iter().cloned().collect(),
+                    vec![tid.clone()],
                     file!(),
                     line!(),
                 );
+                self.emit_route_stall(emitter, tid, "route already emitted for current control event");
             }
+            return;
+        }
+        if self.ctx.context_ready
+            && self.ctx.planned_pending == 0
+            && self.ctx.consecutive_invalid_plan_batches > 0
+        {
+            let json = serde_json::json!({
+                "route": "plan",
+                "rationale": format!(
+                    "previous plan batches were invalid (count={}); route directly to plan for constrained replanning",
+                    self.ctx.consecutive_invalid_plan_batches
+                ),
+                "confidence": 0.99,
+            })
+            .to_string();
+            self.emit_decision(&json, "deterministic:invalid_plan_replan".to_string());
             return;
         }
         // Deterministic fast-path disabled: always fall through to router LLM.
@@ -206,6 +246,7 @@ impl RouteExecutor {
                     );
                 }
                 if !should_force_fresh_now {
+                    let tid = self.current_trigger.clone().expect("route stall emit without current_trigger");
                     emitter.emit_child(
                         RuntimeEvent::Debug(canon_event::DebugEvent {
                             source: "route_executor".to_string(),
@@ -227,10 +268,13 @@ impl RouteExecutor {
                                 }),
                             ),
                         }),
-                        self.current_trigger.iter().cloned().collect(),
+                        vec![tid.clone()],
                         file!(),
                         line!(),
                     );
+                    if self.pending_required_successor.as_deref() != Some("route_selected") {
+                        self.emit_route_stall(emitter, tid, "duplicate route prompt for unchanged state");
+                    }
                 }
             }
             if !should_force_fresh_now {
@@ -261,6 +305,11 @@ impl RouteExecutor {
     }
 
     fn can_emit_route_selected(&self) -> Result<(), String> {
+        if let Some(expected) = self.awaiting_control_successor.as_deref() {
+            return Err(format!(
+                "illegal_control_emit; attempted=route_selected; awaiting_control_successor={expected}"
+            ));
+        }
         if self.last_control_kind.as_deref() == Some("route_selected") {
             return Err(format!(
                 "illegal_control_reentry; attempted=route_selected; last_control_kind=route_selected; expected_successor={}",
@@ -302,6 +351,31 @@ impl RouteExecutor {
             line!(),
         );
     }
+
+    fn emit_route_stall(&self, emitter: &EventEmitterHandle, trigger_id: EventId, reason: &str) {
+        if self.pending_request_id.is_some() || self.awaiting_control_successor.is_some() {
+            return;
+        }
+        emitter.emit_child(
+            RuntimeEvent::ErrorOccurred(new_error_occurred(
+                "route_stall",
+                "route_executor",
+                format!("route suppressed with no active successor generator: {reason}"),
+                "warning",
+                serde_json::json!({
+                    "reason": reason,
+                    "pending_required_successor": self.pending_required_successor,
+                    "last_control_event_id": self.last_control_event_id,
+                    "last_control_kind": self.last_control_kind,
+                    "snapshot": self.ctx.snapshot_text(),
+                }),
+                None,
+            )),
+            vec![trigger_id],
+            file!(),
+            line!(),
+        );
+    }
 }
 
 fn hash_str(value: &str) -> u64 {
@@ -330,6 +404,67 @@ impl EventConsumer for RouteExecutor {
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
         self.current_trigger = Some(trigger_id.clone());
+        match event {
+            RuntimeEvent::LoopObserved(_) if self.awaiting_control_successor.as_deref() == Some("loop_observed") => {
+                self.awaiting_control_successor = None;
+            }
+            RuntimeEvent::PlanningCompleted(_) if self.awaiting_control_successor.as_deref() == Some("planning_completed") => {
+                self.awaiting_control_successor = None;
+            }
+            RuntimeEvent::LoopActed(_) if self.awaiting_control_successor.as_deref() == Some("loop_acted") => {
+                self.awaiting_control_successor = None;
+            }
+            RuntimeEvent::LoopVerified(_) if self.awaiting_control_successor.as_deref() == Some("loop_verified") => {
+                self.awaiting_control_successor = None;
+            }
+            RuntimeEvent::LoopRewarded(_) if self.awaiting_control_successor.as_deref() == Some("loop_rewarded") => {
+                self.awaiting_control_successor = None;
+            }
+            RuntimeEvent::Code(_)
+            | RuntimeEvent::Debug(_)
+            | RuntimeEvent::Edit(_)
+            | RuntimeEvent::ErrorOccurred(_)
+            | RuntimeEvent::Tick(_)
+            | RuntimeEvent::GoodnessSnapshot(_)
+            | RuntimeEvent::RouteTick(_)
+            | RuntimeEvent::RouteSelected(_)
+            | RuntimeEvent::Cargo(_)
+            | RuntimeEvent::File(_)
+            | RuntimeEvent::Bash(_)
+            | RuntimeEvent::Llm(_)
+            | RuntimeEvent::RequestDispatch(_)
+            | RuntimeEvent::SubTaskResult(_)
+            | RuntimeEvent::Analysis(_)
+            | RuntimeEvent::RuntimeStateUpdated(_)
+            | RuntimeEvent::NodeReady(_)
+            | RuntimeEvent::NodeStarted(_)
+            | RuntimeEvent::NodeCompleted(_)
+            | RuntimeEvent::NodeFailed(_)
+            | RuntimeEvent::CapabilityCompleted(_)
+            | RuntimeEvent::CapabilityFailed(_)
+            | RuntimeEvent::PolicyBaselineUpdated(_)
+            | RuntimeEvent::GoalSelected(_)
+            | RuntimeEvent::SystemConfigLoaded(_)
+            | RuntimeEvent::AgentRegistered(_)
+            | RuntimeEvent::PromptLoaded(_)
+            | RuntimeEvent::ToolCall(_)
+            | RuntimeEvent::ToolResult(_)
+            | RuntimeEvent::ToolBatchSettled(_)
+            | RuntimeEvent::GoalNodeCreated(_)
+            | RuntimeEvent::GoalNodeRetracted(_)
+            | RuntimeEvent::GoalNodeRewritten(_)
+            | RuntimeEvent::GoalEdgeDefined(_)
+            | RuntimeEvent::GoalGraphCheckpointed(_)
+            | RuntimeEvent::CapabilityInvoked(_)
+            | RuntimeEvent::CapabilityResolved(_)
+            | RuntimeEvent::InvariantDiscovered(_)
+            | RuntimeEvent::LoopObserved(_)
+            | RuntimeEvent::PlanningCompleted(_)
+            | RuntimeEvent::LoopActed(_)
+            | RuntimeEvent::LoopVerified(_)
+            | RuntimeEvent::LoopRewarded(_)
+            | RuntimeEvent::LoopPlanned(_) => {}
+        }
         // Always accumulate state.
         self.ctx.update_from_event(event, &self.workspace);
         self.record_control_state(event, &trigger_id);
@@ -385,10 +520,31 @@ impl EventConsumer for RouteExecutor {
             }
         }
 
-        // Planning completed — planned_pending > 0 and all tools resolved.
+        // Planning completed — route either to act when work exists, or back to recovery
+        // for recoverable empty outcomes such as invalid_plan / llm_failed / llm_timeout.
         // batch_settled is suppressed for plan-only batches so we trigger here instead.
-        if let RuntimeEvent::PlanningCompleted(_) = event {
-            if self.ctx.planned_pending > 0 && self.ctx.pending_tool_result_ids.is_empty() {
+        if let RuntimeEvent::PlanningCompleted(pc) = event {
+            if pc.status == "missing_observed_context" && self.ctx.pending_tool_result_ids.is_empty() {
+                if self.pending_request_id.as_deref() == Some("deterministic") {
+                    self.pending_request_id = None;
+                }
+                let json = serde_json::json!({
+                    "route": "observe",
+                    "rationale": "planning had no observation context; refresh observation before planning again",
+                    "confidence": 0.99,
+                })
+                .to_string();
+                self.emit_decision(&json, "deterministic:missing_observed_context".to_string());
+                return EventOutcome::NoOp("route_executor_missing_observed_context");
+            }
+            let recoverable_empty_plan = self.ctx.planned_pending == 0
+                && matches!(
+                    pc.status.as_str(),
+                    "invalid_plan" | "llm_failed" | "llm_timeout"
+                );
+            if (self.ctx.planned_pending > 0 || recoverable_empty_plan)
+                && self.ctx.pending_tool_result_ids.is_empty()
+            {
                 if self.pending_request_id.as_deref() == Some("deterministic") {
                     self.pending_request_id = None;
                 }
@@ -539,6 +695,11 @@ impl RouteExecutor {
             return;
         };
         if let Err(reason) = self.can_emit_route_selected() {
+            let kind = if reason.contains("awaiting_control_successor=") || reason.contains("last_control_kind=route_selected") {
+                "duplicate_route_emit_before_successor"
+            } else {
+                "illegal_control_reentry"
+            };
             let payload = self.suppression_payload(
                 &reason,
                 "recoverable",
@@ -551,7 +712,7 @@ impl RouteExecutor {
             emitter.emit_child(
                 RuntimeEvent::Debug(canon_event::DebugEvent {
                     source: "route_executor".to_string(),
-                    kind: "illegal_control_reentry".to_string(),
+                    kind: kind.to_string(),
                     payload,
                 }),
                 vec![tid.clone()],
@@ -561,7 +722,7 @@ impl RouteExecutor {
             self.emit_recovery_for_expected_successor(emitter, tid);
             return;
         }
-        let decision = decide_from_json(&self.ctx, model_json, prompt.clone(), &mut self.controller).unwrap_or_else(|e| RouteDecision {
+        let mut decision = decide_from_json(&self.ctx, model_json, prompt.clone(), &mut self.controller).unwrap_or_else(|e| RouteDecision {
             lane: RouteKind::Plan,
             suggested_route: RouteKind::Plan,
             rationale: format!("gatekeeper error: {e}"),
@@ -572,6 +733,20 @@ impl RouteExecutor {
             should_stop: false,
             prompt,
         });
+        if decision.lane.as_str() == "observe"
+            && self.pending_required_successor.as_deref() == Some("route_selected")
+            && self.last_control_kind.as_deref() == Some("loop_observed")
+        {
+            decision.lane = RouteKind::Plan;
+            decision.changed = true;
+            decision.note = "repeated observe on unchanged state requires plan".to_string();
+            decision.gate_rules_fired.push("repeated observe on unchanged state requires plan".to_string());
+            decision.rationale = format!(
+                "{} [{}]",
+                decision.rationale,
+                "observe would not advance state; forcing plan"
+            );
+        }
         let route_event = RuntimeEvent::RouteSelected(RouteSelected {
             tick: self.ctx.scheduler_tick,
             approved_route: decision.lane.as_str().to_string(),
@@ -591,6 +766,14 @@ impl RouteExecutor {
         self.last_route_prompt_hash = Some(hash_str(&decision.prompt));
         self.last_route_selected = Some(route_payload.clone());
         let tid = self.current_trigger.clone().expect("emit_decision called without current_trigger set");
+        self.awaiting_control_successor = match decision.lane.as_str() {
+            "observe" => Some("loop_observed".to_string()),
+            "plan" => Some("planning_completed".to_string()),
+            "act" => Some("loop_acted".to_string()),
+            "verify" => Some("loop_verified".to_string()),
+            "conclude" => Some("loop_rewarded".to_string()),
+            _ => None,
+        };
         emitter.emit_with_parents(route_event, vec![tid], file!(), line!());
         if self.pending_required_successor.as_deref() == Some("route_selected") {
             self.last_route_emitted_for_control_id = self.last_control_event_id.clone();

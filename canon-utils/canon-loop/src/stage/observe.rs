@@ -3,6 +3,7 @@ use canon_goal::parse_agent_goal_markdown;
 use canon_tools_search::search_files;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -130,7 +131,18 @@ fn build_workspace_facts(goal_text: &Option<String>) -> (Vec<String>, Vec<Runtim
     }
 
     let cargo_toml = target_root.join("Cargo.toml");
+    let entrypoint = preferred_entrypoint(&target_root);
     facts.push(format!("cargo_toml_exists={} path={}", cargo_toml.exists(), cargo_toml.display()));
+    if let Some(entry) = &entrypoint {
+        facts.push(format!("entrypoint_exists=true path={}", entry.display()));
+    } else {
+        facts.push("entrypoint_exists=false path=NA".to_string());
+    }
+
+    let listing = list_dir_entries(&target_root, 32);
+    if !listing.is_empty() {
+        facts.push(format!("dir_entries={}", listing.join(",")));
+    }
 
     let spec = parse_agent_goal_markdown(goal);
     let keywords = extract_goal_keywords(&spec);
@@ -147,40 +159,134 @@ fn build_workspace_facts(goal_text: &Option<String>) -> (Vec<String>, Vec<Runtim
         }
     }
 
+    let node_id = "observe_consumer".to_string();
+    let mut events = Vec::new();
+    events.extend(synthetic_observe_event(
+        &node_id,
+        "observe.list_dir",
+        serde_json::json!({
+            "path": target_root.display().to_string(),
+        }),
+        serde_json::json!({
+            "path": target_root.display().to_string(),
+            "entries": listing,
+        }),
+    ));
+    if cargo_toml.exists() {
+        let cargo_contents = read_file_preview(&cargo_toml, 4000);
+        events.extend(synthetic_observe_event(
+            &node_id,
+            "observe.read_file",
+            serde_json::json!({
+                "path": cargo_toml.display().to_string(),
+            }),
+            serde_json::json!({
+                "path": cargo_toml.display().to_string(),
+                "stdout": cargo_contents,
+            }),
+        ));
+    }
+    if let Some(entry) = &entrypoint {
+        let entry_contents = read_file_preview(entry, 4000);
+        events.extend(synthetic_observe_event(
+            &node_id,
+            "observe.read_file",
+            serde_json::json!({
+                "path": entry.display().to_string(),
+            }),
+            serde_json::json!({
+                "path": entry.display().to_string(),
+                "stdout": entry_contents,
+            }),
+        ));
+    }
+    events.extend(synthetic_observe_event(
+        &node_id,
+        "observe.search",
+        serde_json::json!({
+            "target_root": target_root.display().to_string(),
+            "keywords": extract_goal_keywords(&spec).into_iter().take(3).collect::<Vec<_>>(),
+        }),
+        serde_json::json!({
+            "op": "workspace_scan",
+            "target_root": target_root.display().to_string(),
+            "cargo_toml_exists": cargo_toml.exists(),
+            "entrypoint": entrypoint.as_ref().map(|p| p.display().to_string()),
+            "search_hits": search_hits,
+        }),
+    ));
+
+    (facts, events)
+}
+
+fn synthetic_observe_event(
+    node_id: &str,
+    kind: &str,
+    payload: serde_json::Value,
+    output: serde_json::Value,
+) -> Vec<RuntimeEvent> {
     let request_id = format!("observe-{}", Uuid::new_v4());
     let tool_call_id = Uuid::new_v4().to_string();
     let tool_result_id = Uuid::new_v4().to_string();
-    let node_id = "observe_consumer".to_string();
-    let payload = serde_json::json!({
-        "op": "workspace_scan",
-        "target_root": target_root.display().to_string(),
-        "cargo_toml_exists": cargo_toml.exists(),
-        "search_hits": search_hits,
-    });
-    let events = vec![
+    vec![
         RuntimeEvent::ToolCall(ToolCall {
-            node_id: node_id.clone(),
+            node_id: node_id.to_string(),
             tool_call_id: tool_call_id.clone(),
             request_id: request_id.clone(),
-            kind: "observe.search".to_string(),
-            payload: serde_json::json!({
-                "target_root": target_root.display().to_string(),
-                "keywords": extract_goal_keywords(&spec).into_iter().take(3).collect::<Vec<_>>(),
-            }),
+            kind: kind.to_string(),
+            payload,
             accepted: true,
         }),
         RuntimeEvent::ToolResult(ToolResult {
-            node_id,
+            node_id: node_id.to_string(),
             tool_call_id,
             tool_result_id,
             request_id,
-            kind: "observe.search".to_string(),
-            output: payload,
+            kind: kind.to_string(),
+            output,
             success: true,
         }),
-    ];
+    ]
+}
 
-    (facts, events)
+fn preferred_entrypoint(target_root: &Path) -> Option<PathBuf> {
+    for candidate in ["src/main.rs", "src/lib.rs"] {
+        let path = target_root.join(candidate);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn list_dir_entries(dir: &Path, limit: usize) -> Vec<String> {
+    let Ok(read_dir) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut entries = read_dir
+        .filter_map(|entry| entry.ok())
+        .map(|entry| {
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            let suffix = if entry.path().is_dir() { "/" } else { "" };
+            format!("{file_name}{suffix}")
+        })
+        .collect::<Vec<_>>();
+    entries.sort();
+    entries.truncate(limit);
+    entries
+}
+
+fn read_file_preview(path: &Path, max_len: usize) -> String {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return String::new();
+    };
+    if contents.len() > max_len {
+        let mut truncated = contents[..max_len].to_string();
+        truncated.push_str("...<truncated>");
+        truncated
+    } else {
+        contents
+    }
 }
 
 fn resolve_target_root(goal: &str) -> Option<PathBuf> {

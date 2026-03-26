@@ -96,6 +96,9 @@ impl EventConsumer for LoopStageExecutor {
                 self.ctx.last_handled_observed_hash = None;
                 self.ctx.last_emitted_plan_hash = None;
                 self.ctx.last_delta_hash = None;
+                self.ctx.consecutive_invalid_plan_batches = 0;
+                self.ctx.last_invalid_plan_reason = None;
+                self.ctx.last_invalid_plan_planned_count = None;
                 if let Some(action_id) = a.action_id.clone() {
                     if let Some(paths) = self.ctx.write_paths_by_action.remove(&action_id) {
                         for p in paths {
@@ -156,9 +159,53 @@ impl EventConsumer for LoopStageExecutor {
             RuntimeEvent::LoopRewarded(r) => {
                 if r.halt {
                     self.ctx.halted = true;
+                    let reason = if self.ctx.last_action_kind == "conclude" {
+                        "explicit conclude route".to_string()
+                    } else {
+                        format!(
+                            "loop_rewarded requested halt; reward={} stagnant_ticks={} errors_before={} errors_after={}",
+                            r.reward, r.stagnant_ticks, r.errors_before, r.errors_after
+                        )
+                    };
+                    self.ctx.last_halt_reason = Some(reason.clone());
+                    if let Some(emitter) = self.ctx.emitter.as_ref() {
+                        emitter.emit_child(
+                            RuntimeEvent::Debug(canon_event::DebugEvent {
+                                source: "loop_stage_executor".to_string(),
+                                kind: "loop_halt_reason".to_string(),
+                                payload: decision_trace_payload(
+                                    "loop entered halted state",
+                                    serde_json::json!({
+                                        "reason": reason,
+                                        "tick": r.tick,
+                                        "reward": r.reward,
+                                        "stagnant_ticks": r.stagnant_ticks,
+                                        "errors_before": r.errors_before,
+                                        "errors_after": r.errors_after,
+                                    }),
+                                ),
+                            }),
+                            vec![trigger_id.clone()],
+                            file!(),
+                            line!(),
+                        );
+                    }
                 }
             }
-            RuntimeEvent::PlanningCompleted(_) => {}
+            RuntimeEvent::PlanningCompleted(pc) => {
+                if pc.status == "invalid_plan" {
+                    // Invalid plan is recoverable: clear planner suppression cursors so the
+                    // same observed state/tick can immediately re-enter planning.
+                    self.ctx.last_planned_observed_tick = None;
+                    self.ctx.last_handled_observed_hash = None;
+                    self.ctx.last_emitted_plan_hash = None;
+                    self.ctx.last_delta_hash = None;
+                } else {
+                    self.ctx.consecutive_invalid_plan_batches = 0;
+                    self.ctx.last_invalid_plan_reason = None;
+                    self.ctx.last_invalid_plan_planned_count = None;
+                }
+            }
             RuntimeEvent::GoodnessSnapshot(g) => {
                 self.ctx.goodness = Some(g.g);
                 self.ctx.delta_g = Some(g.delta_g);
@@ -166,8 +213,14 @@ impl EventConsumer for LoopStageExecutor {
             RuntimeEvent::RuntimeStateUpdated(updated) => {
                 if updated.payload.get("fatal_invariant").and_then(|v| v.as_bool()).unwrap_or(false) {
                     self.ctx.halted = true;
+                    self.ctx.last_halt_reason = updated
+                        .payload
+                        .get("fatal_invariant_reason")
+                        .and_then(|v| v.as_str())
+                        .map(|v| v.to_string());
                 } else if updated.payload.get("runtime_mode").and_then(|v| v.as_str()) == Some("running") {
                     self.ctx.halted = false;
+                    self.ctx.last_halt_reason = None;
                 }
             }
             RuntimeEvent::PromptLoaded(prompt) => {
@@ -195,13 +248,26 @@ impl EventConsumer for LoopStageExecutor {
                     let drop_n = self.ctx.recent_compiler_errors.len() - 16;
                     self.ctx.recent_compiler_errors.drain(0..drop_n);
                 }
+                if err.kind == "invalid_plan_batch" {
+                    self.ctx.consecutive_invalid_plan_batches =
+                        self.ctx.consecutive_invalid_plan_batches.saturating_add(1);
+                    self.ctx.last_invalid_plan_reason = Some(err.message.clone());
+                    self.ctx.last_invalid_plan_planned_count = err
+                        .context
+                        .get("planned_count")
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as usize);
+                }
                 let fatal_invariant_diag = err.kind == "diagnostics_triggered"
                     && err
                         .context
                         .get("fatal_invariant")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
-                if err.kind != "invariant_violation" && !fatal_invariant_diag {
+                if err.kind != "invariant_violation"
+                    && err.kind != "invalid_plan_batch"
+                    && !fatal_invariant_diag
+                {
                     trigger_observe = true;
                 }
             }
@@ -318,6 +384,43 @@ impl EventConsumer for LoopStageExecutor {
         }
 
         if self.ctx.halted {
+            if matches!(event, RuntimeEvent::RouteSelected(_)) {
+                if let Some(emitter) = self.ctx.emitter.as_ref() {
+                    emitter.emit_child(
+                        RuntimeEvent::Debug(canon_event::DebugEvent {
+                            source: "loop_stage_executor".to_string(),
+                            kind: "loop_stage_blocked".to_string(),
+                            payload: decision_trace_payload(
+                                "loop stage execution blocked because context is halted",
+                                serde_json::json!({
+                                    "event_kind": canon_event::event_kind_str(event),
+                                    "last_halt_reason": self.ctx.last_halt_reason,
+                                }),
+                            ),
+                        }),
+                        vec![trigger_id.clone()],
+                        file!(),
+                        line!(),
+                    );
+                    emitter.emit_child(
+                        RuntimeEvent::ErrorOccurred(canon_event::new_error_occurred(
+                            "loop_stage_halted",
+                            "loop_stage_executor",
+                            "route_selected received while loop context is halted".to_string(),
+                            "warning",
+                            serde_json::json!({
+                                "event_kind": canon_event::event_kind_str(event),
+                                "last_halt_reason": self.ctx.last_halt_reason,
+                                "recoverable": true,
+                            }),
+                            None,
+                        )),
+                        vec![trigger_id.clone()],
+                        file!(),
+                        line!(),
+                    );
+                }
+            }
             return EventOutcome::NoOp("loop_stage_halted");
         }
 
