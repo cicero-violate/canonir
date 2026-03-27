@@ -2518,6 +2518,7 @@ fn assert_planner_recovery_row(row: &PlannerRecoveryRow) {
             row.reason,
             row.consecutive_invalid_plan_batches,
             &row.recent_execution_results,
+            &canon_semantic_state::ObjectiveTrendState::default(),
         ),
         row.expected_retry,
         "planner recovery row {} mismatch",

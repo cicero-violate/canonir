@@ -1,7 +1,9 @@
 use canon_event::{new_error_occurred, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, LlmCall, RuntimeEvent};
 use canon_prompt_events::goal_prompt_loaded_event;
 use canon_proc_macros::must_emit;
-use canon_semantic_state::{derive_self_development_objective_state, LlmSemanticContext, SemanticStateSummary};
+use canon_semantic_state::{
+    derive_self_development_objective_state, LlmSemanticContext, ObjectiveTrendState, SemanticStateSummary,
+};
 use canon_skills::global_registry;
 use uuid::Uuid;
 
@@ -21,6 +23,7 @@ pub struct GoalGenConsumer {
     retries: u32,
     emitter: Option<EventEmitterHandle>,
     semantic_summary: SemanticStateSummary,
+    objective_trend_state: ObjectiveTrendState,
 }
 
 impl GoalGenConsumer {
@@ -35,7 +38,13 @@ impl GoalGenConsumer {
         } else {
             State::Waiting
         };
-        Self { state: initial_state, retries: 0, emitter: None, semantic_summary: SemanticStateSummary::default() }
+        Self {
+            state: initial_state,
+            retries: 0,
+            emitter: None,
+            semantic_summary: SemanticStateSummary::default(),
+            objective_trend_state: ObjectiveTrendState::default(),
+        }
     }
 }
 
@@ -78,6 +87,7 @@ impl EventConsumer for GoalGenConsumer {
                         0,
                         &[],
                     ),
+                    objective_trend_state: self.objective_trend_state.clone(),
                     target_workspace: Some(GOALGEN_PROJECTS_DIR.to_string()),
                     workspace_loc: None,
                     error_count: None,
@@ -201,19 +211,29 @@ impl EventConsumer for GoalGenConsumer {
                 self.semantic_summary = observed.semantic_summary.clone();
                 EventOutcome::NoOp("goal_gen_observed_update")
             }
+            (_, RuntimeEvent::PlanningCompleted(pc)) => {
+                self.objective_trend_state.record_planning_completion(&pc.status);
+                EventOutcome::NoOp("goal_gen_planning_update")
+            }
+            (_, RuntimeEvent::GoodnessSnapshot(g)) => {
+                self.objective_trend_state.record_goodness(g.g, g.delta_g);
+                EventOutcome::NoOp("goal_gen_goodness_update")
+            }
+            (_, RuntimeEvent::ErrorOccurred(err)) if err.kind == "invalid_plan_batch" => {
+                self.objective_trend_state.record_invalid_plan_event();
+                EventOutcome::NoOp("goal_gen_invalid_plan_update")
+            }
+            (_, RuntimeEvent::ErrorOccurred(_)) => EventOutcome::NoOp("goal_gen_error_ignored"),
             (State::Waiting, RuntimeEvent::CapabilityCompleted(_)) | (State::Waiting, RuntimeEvent::CapabilityFailed(_)) => EventOutcome::NoOp("goal_gen_waiting_unrelated"),
             (State::Done, _) => EventOutcome::NoOp("goal_gen_noop"),
             (_, RuntimeEvent::Tick(_))
             | (_, RuntimeEvent::Code(_))
             | (_, RuntimeEvent::Debug(_))
             | (_, RuntimeEvent::Edit(_))
-            | (_, RuntimeEvent::ErrorOccurred(_))
             | (_, RuntimeEvent::LoopPlanned(_))
-            | (_, RuntimeEvent::PlanningCompleted(_))
             | (_, RuntimeEvent::LoopActed(_))
             | (_, RuntimeEvent::LoopVerified(_))
             | (_, RuntimeEvent::LoopRewarded(_))
-            | (_, RuntimeEvent::GoodnessSnapshot(_))
             | (_, RuntimeEvent::RouteTick(_))
             | (_, RuntimeEvent::RouteSelected(_))
             | (_, RuntimeEvent::Cargo(_))

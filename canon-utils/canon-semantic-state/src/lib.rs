@@ -296,6 +296,7 @@ pub struct LlmSemanticContext {
     pub mission_summary: Option<String>,
     pub semantic_summary: SemanticStateSummary,
     pub objective_state: SelfDevelopmentObjectiveState,
+    pub objective_trend_state: ObjectiveTrendState,
     pub target_workspace: Option<String>,
     pub workspace_loc: Option<usize>,
     pub error_count: Option<usize>,
@@ -358,6 +359,96 @@ impl SelfDevelopmentObjectiveState {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ObjectiveTrendState {
+    pub planning_attempts: u32,
+    pub invalid_plan_events: u32,
+    pub total_execution_results: u32,
+    pub semantic_progress_events: u32,
+    pub no_semantic_progress_events: u32,
+    pub current_no_progress_streak: u32,
+    pub repeated_stall_count: u32,
+    pub last_goodness: Option<f32>,
+    pub last_delta_g: Option<f32>,
+}
+
+impl ObjectiveTrendState {
+    pub fn record_execution_results(&mut self, results: &[SemanticExecutionResultRecord]) {
+        for result in results {
+            self.total_execution_results = self.total_execution_results.saturating_add(1);
+            if result.semantic_progress {
+                self.semantic_progress_events = self.semantic_progress_events.saturating_add(1);
+                self.current_no_progress_streak = 0;
+            } else {
+                self.no_semantic_progress_events = self.no_semantic_progress_events.saturating_add(1);
+                self.current_no_progress_streak = self.current_no_progress_streak.saturating_add(1);
+                if self.current_no_progress_streak == 2 {
+                    self.repeated_stall_count = self.repeated_stall_count.saturating_add(1);
+                }
+            }
+        }
+    }
+
+    pub fn record_planning_completion(&mut self, status: &str) {
+        self.planning_attempts = self.planning_attempts.saturating_add(1);
+        if status == "invalid_plan" {
+            self.invalid_plan_events = self.invalid_plan_events.saturating_add(1);
+        }
+    }
+
+    pub fn record_invalid_plan_event(&mut self) {
+        self.invalid_plan_events = self.invalid_plan_events.saturating_add(1);
+    }
+
+    pub fn record_goodness(&mut self, g: f32, delta_g: f32) {
+        self.last_goodness = Some(g);
+        self.last_delta_g = Some(delta_g);
+    }
+
+    pub fn repair_resolution_rate(&self) -> f32 {
+        if self.total_execution_results == 0 {
+            0.0
+        } else {
+            self.semantic_progress_events as f32 / self.total_execution_results as f32
+        }
+    }
+
+    pub fn invalid_plan_rate(&self) -> f32 {
+        if self.planning_attempts == 0 {
+            0.0
+        } else {
+            self.invalid_plan_events as f32 / self.planning_attempts as f32
+        }
+    }
+
+    pub fn semantic_progress_trend(&self) -> f32 {
+        self.repair_resolution_rate() - (self.invalid_plan_rate() * 0.5)
+    }
+
+    pub fn render_lines(&self) -> Vec<String> {
+        vec![
+            format!("repair_resolution_rate={:.2}", self.repair_resolution_rate()),
+            format!("invalid_plan_rate={:.2}", self.invalid_plan_rate()),
+            format!("semantic_progress_trend={:.2}", self.semantic_progress_trend()),
+            format!("repeated_stall_count={}", self.repeated_stall_count),
+            format!("total_execution_results={}", self.total_execution_results),
+            format!("planning_attempts={}", self.planning_attempts),
+            format!(
+                "last_goodness={}",
+                self.last_goodness
+                    .map(|v| format!("{v:.3}"))
+                    .unwrap_or_else(|| "NA".into())
+            ),
+            format!(
+                "last_delta_g={}",
+                self.last_delta_g
+                    .map(|v| format!("{v:.3}"))
+                    .unwrap_or_else(|| "NA".into())
+            ),
+        ]
+    }
+}
+
 impl LlmSemanticContext {
     pub fn render_goal_gen_block(&self) -> String {
         let mut lines = Vec::new();
@@ -377,6 +468,7 @@ impl LlmSemanticContext {
             ));
         }
         lines.extend(self.objective_state.render_lines());
+        lines.extend(self.objective_trend_state.render_lines());
         format!("LLM semantic context:
 {}", render_bullets(&lines))
     }
@@ -405,6 +497,7 @@ impl LlmSemanticContext {
             ));
         }
         lines.extend(self.objective_state.render_lines());
+        lines.extend(self.objective_trend_state.render_lines());
         format!("LLM semantic context:
 {}", render_bullets(&lines))
     }
@@ -435,6 +528,10 @@ impl LlmSemanticContext {
                 render_bullets(&self.objective_state.render_lines()),
             ));
         }
+        sections.push(format!(
+            "Execution trends:\n{}",
+            render_bullets(&self.objective_trend_state.render_lines()),
+        ));
         sections.join("
 
 ")
@@ -517,6 +614,10 @@ LOC: {}  |  Errors: {}  |  Warnings: {}",
             "Self-development objective state:\n{}",
             render_bullets(&self.objective_state.render_lines())
         ));
+        sections.push(format!(
+            "Self-development objective trends:\n{}",
+            render_bullets(&self.objective_trend_state.render_lines())
+        ));
         sections.join("
 
 ")
@@ -535,6 +636,24 @@ pub fn derive_self_development_objective_state(
         validation_blocked_by_preconditions: semantic_summary.validation_blocked_by_preconditions,
         compiler_repair_required: semantic_summary.compiler_repair_required,
     }
+}
+
+pub fn derive_objective_trend_state(
+    planning_attempts: u32,
+    invalid_plan_events: u32,
+    last_goodness: Option<f32>,
+    last_delta_g: Option<f32>,
+    recent_execution_results: &[SemanticExecutionResultRecord],
+) -> ObjectiveTrendState {
+    let mut trend = ObjectiveTrendState {
+        planning_attempts,
+        invalid_plan_events,
+        last_goodness,
+        last_delta_g,
+        ..ObjectiveTrendState::default()
+    };
+    trend.record_execution_results(recent_execution_results);
+    trend
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -3,7 +3,7 @@ use std::path::Path;
 use canon_event::{new_error_occurred, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, LlmCall, LoopActed, LoopObserved, LoopPlanned, PlanningCompleted, RouteSelected, RuntimeEvent, ToolCall, ToolResult};
 use canon_goal::parse_agent_goal_markdown;
 use canon_invariant::decision_trace_payload;
-use canon_semantic_state::{derive_self_development_objective_state, LlmSemanticContext, SemanticStateSummary};
+use canon_semantic_state::{derive_self_development_objective_state, LlmSemanticContext, ObjectiveTrendState, SemanticStateSummary};
 use canon_tools_search::search_files;
 use canon_tools_patch::parse_patch;
 use std::collections::hash_map::DefaultHasher;
@@ -257,6 +257,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
         ctx.last_invalid_plan_reason.as_deref(),
         ctx.consecutive_invalid_plan_batches,
         &ctx.recent_execution_results,
+        &ctx.objective_trend_state,
     );
     let semantic_summary = match planning_semantic_summary(ctx.last_observed.as_ref()) {
         Ok(summary) => summary,
@@ -583,6 +584,7 @@ fn handle_observed(
         ctx.last_invalid_plan_reason.as_deref(),
         ctx.last_invalid_plan_planned_count,
         ctx.consecutive_invalid_plan_batches,
+        &ctx.objective_trend_state,
     );
     let context_base = build_context_base(observed, &workspace_clone, &sub_agent_section, &llm_semantic_context);
     let context_base_hash = hash_str(&context_base);
@@ -886,6 +888,7 @@ fn build_context_delta(
                 Some(reason),
                 consecutive_invalid_plan_batches,
                 &llm_semantic_context.recent_execution_results,
+                &llm_semantic_context.objective_trend_state,
             );
             let policy_text = match policy {
                 RetryPolicy::DiscoveryOnly =>
@@ -903,6 +906,7 @@ fn build_context_delta(
                 None,
                 consecutive_invalid_plan_batches,
                 &llm_semantic_context.recent_execution_results,
+                &llm_semantic_context.objective_trend_state,
             );
             if policy == RetryPolicy::CorrectiveRetry {
                 format!(
@@ -920,6 +924,7 @@ fn build_context_delta(
         last_invalid_plan_reason,
         consecutive_invalid_plan_batches,
         &llm_semantic_context.recent_execution_results,
+        &llm_semantic_context.objective_trend_state,
     );
 
     format!(
@@ -947,6 +952,7 @@ fn build_llm_semantic_context(
     last_invalid_plan_reason: Option<&str>,
     last_invalid_plan_planned_count: Option<usize>,
     consecutive_invalid_plan_batches: u32,
+    objective_trend_state: &ObjectiveTrendState,
 ) -> LlmSemanticContext {
     let recent_actions = batch_acted
         .iter()
@@ -991,6 +997,7 @@ fn build_llm_semantic_context(
             consecutive_invalid_plan_batches,
             recent_execution_results,
         ),
+        objective_trend_state: objective_trend_state.clone(),
         target_workspace: Some(target_workspace.to_string()),
         workspace_loc: Some(count_loc_in_workspace(std::path::Path::new(target_workspace))),
         error_count: Some(observed.error_count),
@@ -1012,6 +1019,7 @@ fn build_planner_hint(
     last_invalid_plan_reason: Option<&str>,
     consecutive_invalid_plan_batches: u32,
     recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
+    objective_trend_state: &ObjectiveTrendState,
 ) -> String {
     let last_failure = if recent_execution_results.is_empty() {
         batch_acted
@@ -1035,6 +1043,7 @@ fn build_planner_hint(
         last_invalid_plan_reason,
         consecutive_invalid_plan_batches,
         recent_execution_results,
+        objective_trend_state,
         last_failure.as_ref().map(|(kind, _)| kind.as_str()),
         last_failure
             .as_ref()

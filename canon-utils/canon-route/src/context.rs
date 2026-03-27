@@ -2,10 +2,9 @@ use canon_decision::JournalLine;
 use canon_event::{RuntimeEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult, SubTaskResult};
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
 use canon_semantic_state::{
-    classify_planned_action_intents, derive_self_development_objective_state, execution_results_for_action,
-    LlmSemanticContext,
-    SemanticActionIntent, SemanticExecutionResultRecord, SemanticStateSummary, semantic_no_progress_streak,
-    semantic_progress_rate,
+    classify_planned_action_intents, derive_objective_trend_state, derive_self_development_objective_state,
+    execution_results_for_action, LlmSemanticContext, ObjectiveTrendState, SemanticActionIntent,
+    SemanticExecutionResultRecord, SemanticStateSummary, semantic_no_progress_streak, semantic_progress_rate,
 };
 use crate::causal::update_causal_graph;
 use canon_judgment::{LlmSignals, RuntimeSignals};
@@ -60,6 +59,7 @@ pub struct RouteContext {
     pub halted: bool,
     pub goodness: Option<f32>,
     pub delta_g: Option<f32>,
+    pub objective_trend_state: ObjectiveTrendState,
     /// Set to Some(...) when the last pending tool result lands; cleared after the executor emits ToolBatchSettled.
     pub batch_settled: Option<(u32, bool)>, // (result_count, any_failed)
     batch_result_count: u32,
@@ -177,6 +177,7 @@ impl RouteContext {
             },
             semantic_summary: self.semantic_summary.clone(),
             objective_state,
+            objective_trend_state: self.objective_trend_state.clone(),
             target_workspace: self.semantic_summary.target_root.clone(),
             workspace_loc: None,
             error_count: None,
@@ -199,6 +200,16 @@ impl RouteContext {
             self.consecutive_invalid_plan_batches,
             &self.recent_execution_results,
         )
+    }
+
+    pub fn refresh_objective_trend_state(&mut self) {
+        self.objective_trend_state = derive_objective_trend_state(
+            self.objective_trend_state.planning_attempts,
+            self.objective_trend_state.invalid_plan_events,
+            self.goodness,
+            self.delta_g,
+            &self.recent_execution_results,
+        );
     }
 
     pub fn push_journal(&mut self, lane: impl Into<String>, summary: impl Into<String>) {
@@ -285,6 +296,7 @@ impl RouteContext {
                 if let Some(action_id) = action_id {
                     if let Some(intents) = self.action_semantic_intents.remove(action_id) {
                         let results = execution_results_for_action(&intents, *success, stderr);
+                        self.objective_trend_state.record_execution_results(&results);
                         self.recent_execution_results.extend(results);
                         if self.recent_execution_results.len() > 16 {
                             let drop_n = self.recent_execution_results.len() - 16;
@@ -349,6 +361,7 @@ impl RouteContext {
             }
             RuntimeEvent::ErrorOccurred(err) if err.kind == "invalid_plan_batch" => {
                 self.consecutive_invalid_plan_batches = self.consecutive_invalid_plan_batches.saturating_add(1);
+                self.objective_trend_state.record_invalid_plan_event();
                 self.last_invalid_plan_reason = Some(err.message.clone());
                 self.last_invalid_plan_planned_count = err
                     .context
@@ -368,9 +381,13 @@ impl RouteContext {
                 );
             }
             RuntimeEvent::PlanningCompleted(pc) if pc.status != "invalid_plan" => {
+                self.objective_trend_state.record_planning_completion(&pc.status);
                 self.consecutive_invalid_plan_batches = 0;
                 self.last_invalid_plan_reason = None;
                 self.last_invalid_plan_planned_count = None;
+            }
+            RuntimeEvent::PlanningCompleted(pc) => {
+                self.objective_trend_state.record_planning_completion(&pc.status);
             }
             RuntimeEvent::Debug(debug) if debug.kind == "bootstrap_refresh_required" => {
                 self.bootstrap_refresh_required = true;
@@ -454,6 +471,7 @@ impl RouteContext {
             RuntimeEvent::GoodnessSnapshot(g) => {
                 self.goodness = Some(g.g);
                 self.delta_g = Some(g.delta_g);
+                self.objective_trend_state.record_goodness(g.g, g.delta_g);
                 self.push_journal("goodness", format!("g={} delta={}", g.g, g.delta_g));
             }
             _ => {}

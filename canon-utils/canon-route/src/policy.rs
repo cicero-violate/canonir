@@ -698,6 +698,9 @@ pub fn has_actionable_failure(ctx: &RouteContext) -> bool {
     if ctx.objective_state().is_stalled() {
         return true;
     }
+    if ctx.objective_trend_state.repeated_stall_count > 0 && ctx.objective_trend_state.current_no_progress_streak > 0 {
+        return true;
+    }
     if semantic_repair_state_is_actionable(&ctx.semantic_summary)
         || ctx.validation_blocked_state()
         || ctx.compiler_repair_required_state()

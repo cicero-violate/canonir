@@ -439,10 +439,14 @@ pub fn retry_policy_for_planning_context(
     reason: Option<&str>,
     consecutive_invalid_plan_batches: u32,
     recent_execution_results: &[SemanticExecutionResultRecord],
+    objective_trend_state: &ObjectiveTrendState,
 ) -> RetryPolicy {
     let base = retry_policy_for_invalid_plan(reason, consecutive_invalid_plan_batches);
     if base != RetryPolicy::None {
         return base;
+    }
+    if objective_trend_state.repeated_stall_count > 0 && objective_trend_state.current_no_progress_streak > 0 {
+        return RetryPolicy::CorrectiveRetry;
     }
     if semantic_no_progress_streak(recent_execution_results) >= 2 {
         RetryPolicy::CorrectiveRetry
@@ -457,6 +461,7 @@ pub fn planner_hint_lines(
     reason: Option<&str>,
     consecutive_invalid_plan_batches: u32,
     recent_execution_results: &[SemanticExecutionResultRecord],
+    objective_trend_state: &ObjectiveTrendState,
     last_failed_action_kind: Option<&str>,
     last_failed_text: Option<&str>,
 ) -> Vec<String> {
@@ -464,7 +469,12 @@ pub fn planner_hint_lines(
     if let Some(reason) = reason {
         out.push(format!("Previous invalid-plan reason: {reason}"));
     }
-    match retry_policy_for_planning_context(reason, consecutive_invalid_plan_batches, recent_execution_results) {
+    match retry_policy_for_planning_context(
+        reason,
+        consecutive_invalid_plan_batches,
+        recent_execution_results,
+        objective_trend_state,
+    ) {
         RetryPolicy::None => {}
         RetryPolicy::DiscoveryOnly => out.push(
             "Programmatic tip: next batch must be discovery-only; emit only list_dir/read_file.".to_string(),
@@ -485,6 +495,12 @@ pub fn planner_hint_lines(
     if semantic_no_progress_streak(recent_execution_results) >= 2 {
         out.push(
             "Programmatic tip: repeated no-progress batches indicate a stalled repair loop; change approach or refresh context before retrying."
+                .to_string(),
+        );
+    }
+    if objective_trend_state.invalid_plan_rate() > 0.5 && objective_trend_state.planning_attempts >= 3 {
+        out.push(
+            "Programmatic tip: invalid-plan rate is high; simplify the next batch and avoid mixing multiple repair strategies."
                 .to_string(),
         );
     }
@@ -567,6 +583,7 @@ mod tests {
             Some("invalid hunk at line 12"),
             2,
             &[],
+            &ObjectiveTrendState::default(),
             Some("apply_patch"),
             Some("invalid hunk at line 12, unexpected line in update chunk"),
         );
@@ -584,10 +601,11 @@ mod tests {
             false,
         )];
         assert_eq!(
-            retry_policy_for_planning_context(None, 0, &results),
+            retry_policy_for_planning_context(None, 0, &results, &ObjectiveTrendState::default()),
             RetryPolicy::CorrectiveRetry
         );
-        let hints = planner_hint_lines(None, 0, &results, None, None).join("\n");
+        let hints =
+            planner_hint_lines(None, 0, &results, &ObjectiveTrendState::default(), None, None).join("\n");
         assert!(hints.contains("no semantic progress"));
         assert!(hints.contains("Recent execution semantics:"));
     }
@@ -660,4 +678,7 @@ mod tests {
         }
     }
 }
-use canon_semantic_state::{latest_no_semantic_progress, semantic_no_progress_streak, SemanticExecutionResultRecord};
+use canon_semantic_state::{
+    latest_no_semantic_progress, semantic_no_progress_streak, ObjectiveTrendState,
+    SemanticExecutionResultRecord,
+};

@@ -1,7 +1,7 @@
 use crate::merge::{ContextMerger, FileWriteTracker, WorkspaceDirtyTracker};
 use crate::scheduler::{DependencyTracker, Scheduler};
 use canon_event::{EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, LoopVerified, ToolResult};
-use canon_semantic_state::{SemanticActionIntent, SemanticExecutionResultRecord};
+use canon_semantic_state::{ObjectiveTrendState, SemanticActionIntent, SemanticExecutionResultRecord};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -101,6 +101,7 @@ pub struct LoopContext {
     pub batch_acted: Vec<LoopActed>,
     pub batch_tool_results: Vec<ToolResult>,
     pub recent_execution_results: Vec<SemanticExecutionResultRecord>,
+    pub objective_trend_state: ObjectiveTrendState,
     pub last_prompted_goal: Option<String>,
     // System prompt caching — tracks which static system prompt the executor has cached.
     pub last_system_prompt_id: Option<u64>,
@@ -186,6 +187,7 @@ impl LoopContext {
             batch_acted: Vec::new(),
             batch_tool_results: Vec::new(),
             recent_execution_results: Vec::new(),
+            objective_trend_state: ObjectiveTrendState::default(),
             last_prompted_goal: None,
             last_system_prompt_id: None,
             last_context_base_id: None,

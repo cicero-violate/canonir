@@ -340,6 +340,7 @@ impl EventConsumer for LoopStageExecutor {
                 if let Some(action_id) = a.action_id.clone() {
                     if let Some(intents) = self.ctx.action_semantic_intents.remove(&action_id) {
                         let results = execution_results_for_action(&intents, a.success, &a.stderr);
+                        self.ctx.objective_trend_state.record_execution_results(&results);
                         self.ctx.recent_execution_results.extend(results);
                         if self.ctx.recent_execution_results.len() > 16 {
                             let drop_n = self.ctx.recent_execution_results.len() - 16;
@@ -474,6 +475,7 @@ impl EventConsumer for LoopStageExecutor {
                 }
             }
             RuntimeEvent::PlanningCompleted(pc) => {
+                self.ctx.objective_trend_state.record_planning_completion(&pc.status);
                 let transition =
                     evaluate_loop_transition(self.ctx.pending_required_successor.as_deref(), Some(&pc.status), None, None);
                 if transition
@@ -493,6 +495,7 @@ impl EventConsumer for LoopStageExecutor {
             RuntimeEvent::GoodnessSnapshot(g) => {
                 self.ctx.goodness = Some(g.g);
                 self.ctx.delta_g = Some(g.delta_g);
+                self.ctx.objective_trend_state.record_goodness(g.g, g.delta_g);
             }
             RuntimeEvent::RuntimeStateUpdated(updated) => {
                 if updated.payload.get("fatal_invariant").and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -535,6 +538,7 @@ impl EventConsumer for LoopStageExecutor {
                 if err.kind == "invalid_plan_batch" {
                     self.ctx.consecutive_invalid_plan_batches =
                         self.ctx.consecutive_invalid_plan_batches.saturating_add(1);
+                    self.ctx.objective_trend_state.record_invalid_plan_event();
                     self.ctx.last_invalid_plan_reason = Some(err.message.clone());
                     self.ctx.last_invalid_plan_planned_count = err
                         .context
