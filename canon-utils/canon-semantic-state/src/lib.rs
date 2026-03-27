@@ -328,6 +328,16 @@ impl LlmSemanticContext {
                 self.semantic_summary.compiler_hint_kinds().join("|")
             ));
         }
+        if !self.recent_execution_results.is_empty() {
+            lines.push(format!(
+                "semantic_progress_rate={:.2}",
+                semantic_progress_rate(&self.recent_execution_results)
+            ));
+            lines.push(format!(
+                "semantic_no_progress_streak={}",
+                semantic_no_progress_streak(&self.recent_execution_results)
+            ));
+        }
         format!("LLM semantic context:
 {}", render_bullets(&lines))
     }
@@ -354,6 +364,14 @@ impl LlmSemanticContext {
                     .collect::<Vec<_>>()
                     .join("|")
             ));
+            lines.push(format!(
+                "semantic_progress_rate={:.2}",
+                semantic_progress_rate(&self.recent_execution_results)
+            ));
+            lines.push(format!(
+                "semantic_no_progress_streak={}",
+                semantic_no_progress_streak(&self.recent_execution_results)
+            ));
         }
         format!("LLM semantic context:
 {}", render_bullets(&lines))
@@ -379,6 +397,11 @@ impl LlmSemanticContext {
                         .map(SemanticExecutionResultRecord::render_line)
                         .collect::<Vec<_>>()
                 )
+            ));
+            sections.push(format!(
+                "Execution metrics:\n- semantic_progress_rate={:.2}\n- semantic_no_progress_streak={}",
+                semantic_progress_rate(&self.recent_execution_results),
+                semantic_no_progress_streak(&self.recent_execution_results),
             ));
         }
         sections.join("
@@ -692,6 +715,25 @@ pub fn latest_no_semantic_progress(results: &[SemanticExecutionResultRecord]) ->
         .rev()
         .next()
         .is_some_and(|result| !result.semantic_progress)
+}
+
+pub fn semantic_progress_count(results: &[SemanticExecutionResultRecord]) -> usize {
+    results.iter().filter(|result| result.semantic_progress).count()
+}
+
+pub fn semantic_no_progress_streak(results: &[SemanticExecutionResultRecord]) -> usize {
+    results
+        .iter()
+        .rev()
+        .take_while(|result| !result.semantic_progress)
+        .count()
+}
+
+pub fn semantic_progress_rate(results: &[SemanticExecutionResultRecord]) -> f32 {
+    if results.is_empty() {
+        return 0.0;
+    }
+    semantic_progress_count(results) as f32 / results.len() as f32
 }
 
 fn render_bullets(lines: &[String]) -> String {

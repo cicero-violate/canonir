@@ -719,14 +719,7 @@ pub fn has_actionable_failure(ctx: &RouteContext) -> bool {
                 | ApplyPatchOutcomeClass::OtherFailure
         );
     }
-    if !ctx.recent_execution_results.is_empty() {
-        return false;
-    }
-    ctx.last_action_failed
-        || ctx.recent_tool_results.iter().rev().any(|r| {
-            r.get("action").and_then(|v| v.as_str()) != Some("run_command")
-                && r.get("success").and_then(|v| v.as_bool()) == Some(false)
-        })
+    false
 }
 
 pub fn semantic_repair_state_is_actionable(summary: &SemanticStateSummary) -> bool {
@@ -889,7 +882,12 @@ mod tests {
     #[test]
     fn cycle_cap_with_actionable_failure_falls_back_to_plan() {
         let mut ctx = RouteContext::default();
-        ctx.last_action_failed = true;
+        ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
+            "no_semantic_progress",
+            "action failed",
+            Vec::new(),
+            false,
+        ));
         let d = decision(RouteKind::Conclude, RouteKind::Plan, "cycle cap reached; forcing conclude");
         assert_eq!(cycle_cap_fallback_lane(&ctx, &d), Some(RouteKind::Plan));
     }
@@ -1329,7 +1327,12 @@ mod tests {
     #[test]
     fn apply_route_policy_cycle_cap_rewrites_conclude() {
         let mut ctx = RouteContext::default();
-        ctx.last_action_failed = true;
+        ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
+            "no_semantic_progress",
+            "action failed",
+            Vec::new(),
+            false,
+        ));
         let mut d = decision(RouteKind::Conclude, RouteKind::Plan, "cycle cap reached; forcing conclude");
         let rules = apply_route_policy(
             &ctx,
