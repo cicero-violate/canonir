@@ -34,6 +34,7 @@ pub enum PlannedActionClass {
     Unknown,
 }
 
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConstraintRoute {
     Observe,
@@ -183,6 +184,7 @@ impl PlannedActionClass {
             Self::Unknown => "unknown",
         }
     }
+
 }
 
 pub fn meta_invariant_classify_planned_action_class(
@@ -212,6 +214,7 @@ pub fn meta_invariant_classify_planned_action_class(
         | "edit.create_module_file" => PlannedActionClass::Mutation,
         _ => PlannedActionClass::Unknown,
     }
+
 }
 
 pub fn classify_planned_action_class(
@@ -219,6 +222,7 @@ pub fn classify_planned_action_class(
     action_payload: &Value,
 ) -> PlannedActionClass {
     meta_invariant_classify_planned_action_class(action_kind, action_payload)
+
 }
 
 pub fn meta_invariant_is_localized_repair_action(action_kind: &str) -> bool {
@@ -229,10 +233,12 @@ pub fn meta_invariant_is_localized_repair_action(action_kind: &str) -> bool {
             | "edit.rename_symbol"
             | "apply_patch"
     )
+
 }
 
 pub fn is_localized_repair_action(action_kind: &str) -> bool {
     meta_invariant_is_localized_repair_action(action_kind)
+
 }
 
 pub fn meta_invariant_all_failures_typed(
@@ -241,6 +247,7 @@ pub fn meta_invariant_all_failures_typed(
 ) -> bool {
     matches!(failure_class, Some(value) if !value.trim().is_empty())
         && matches!(failure_scope, Some("localized" | "workspace" | "tooling" | "none"))
+
 }
 
 pub fn meta_invariant_any_action_cites_failure(
@@ -255,6 +262,7 @@ pub fn meta_invariant_any_action_cites_failure(
             .unwrap_or(false),
         _ => true,
     }
+
 }
 
 pub fn meta_invariant_is_mutating_action(
@@ -265,6 +273,7 @@ pub fn meta_invariant_is_mutating_action(
         meta_invariant_classify_planned_action_class(action_kind, action_payload),
         PlannedActionClass::Mutation
     )
+
 }
 
 pub fn meta_invariant_expected_verifier(
@@ -283,6 +292,7 @@ pub fn meta_invariant_expected_verifier(
         "apply_patch" | "patch_file" | "write_file" | "run_command" => Some("cargo_check"),
         _ => Some("cargo_check"),
     }
+
 }
 
 pub fn meta_invariant_action_must_declare_verifier(
@@ -297,6 +307,7 @@ pub fn meta_invariant_action_must_declare_verifier(
         .and_then(|v| v.as_str())
         .map(|value| !value.trim().is_empty() && value == expected)
         .unwrap_or(false)
+
 }
 
 pub fn meta_invariant_classify_bootstrap_tool(cmd: &str) -> Option<MetaInvariantBootstrapToolChoice> {
@@ -307,6 +318,7 @@ pub fn meta_invariant_classify_bootstrap_tool(cmd: &str) -> Option<MetaInvariant
     } else {
         None
     }
+
 }
 
 pub fn meta_invariant_tool_selection_correctness(
@@ -323,6 +335,7 @@ pub fn meta_invariant_tool_selection_correctness(
     meta_invariant_classify_bootstrap_tool(cmd)
         .map(|tool| tool.as_str() == expected_tool_choice)
         .unwrap_or(false)
+
 }
 
 pub fn evaluate_constraint_context(ctx: &ConstraintContext) -> ConstraintDecision {
@@ -348,8 +361,8 @@ pub fn evaluate_constraint_context(ctx: &ConstraintContext) -> ConstraintDecisio
             );
         }
         if route == ConstraintRoute::Plan
-            && ctx.state.recent_no_semantic_progress
-            && (!ctx.state.actionable_failure || ctx.state.failure_class_no_actionable)
+            && (ctx.state.failure_class_no_actionable
+                || (ctx.state.recent_no_semantic_progress && !ctx.state.actionable_failure))
             && !ctx.state.validation_blocked
             && !ctx.state.entrypoint_missing
             && !ctx.state.module_gaps_present
@@ -440,6 +453,7 @@ pub fn evaluate_constraint_context(ctx: &ConstraintContext) -> ConstraintDecisio
     }
 
     ConstraintDecision::Allow
+
 }
 
 pub fn meta_invariant_has_actionable_failure(
@@ -454,6 +468,7 @@ pub fn meta_invariant_has_actionable_failure(
         || planning_preconditions_len > 0
         || compiler_hints_len > 0
         || module_gaps_len > 0
+
 }
 
 pub fn semantic_summary_has_actionable_failure(
@@ -470,6 +485,7 @@ pub fn semantic_summary_has_actionable_failure(
         compiler_hints_len,
         module_gaps_len,
     )
+
 }
 
 pub fn meta_invariant_failure_scope_is_sufficient(
@@ -481,6 +497,7 @@ pub fn meta_invariant_failure_scope_is_sufficient(
         return true;
     }
     matches!(failure_scope, Some("localized") | Some("workspace") | Some("tooling"))
+
 }
 
 pub fn failure_scope_is_sufficient(
@@ -493,6 +510,7 @@ pub fn failure_scope_is_sufficient(
         compiler_hints_len,
         failure_scope,
     )
+
 }
 
 pub fn meta_invariant_high_invalid_plan_requires_simple_batch(
@@ -500,6 +518,7 @@ pub fn meta_invariant_high_invalid_plan_requires_simple_batch(
     planning_attempts: u32,
 ) -> bool {
     invalid_plan_rate > 0.5 && planning_attempts >= 3
+
 }
 
 pub fn high_invalid_plan_pressure_requires_single_action(
@@ -507,6 +526,7 @@ pub fn high_invalid_plan_pressure_requires_single_action(
     planning_attempts: u32,
 ) -> bool {
     meta_invariant_high_invalid_plan_requires_simple_batch(invalid_plan_rate, planning_attempts)
+
 }
 
 pub fn meta_invariant_no_progress_forces_change(
@@ -515,6 +535,7 @@ pub fn meta_invariant_no_progress_forces_change(
 ) -> bool {
     no_progress_streak >= 2
         && matches!(action_class, PlannedActionClass::PassiveDiscovery | PlannedActionClass::Verification)
+
 }
 
 pub fn stalled_loop_forbids_action_class(
@@ -522,6 +543,7 @@ pub fn stalled_loop_forbids_action_class(
     action_class: PlannedActionClass,
 ) -> bool {
     meta_invariant_no_progress_forces_change(no_progress_streak, action_class)
+
 }
 
 fn looks_like_compiler_failure(text: &str) -> bool {
@@ -530,6 +552,7 @@ fn looks_like_compiler_failure(text: &str) -> bool {
         || text.contains("allow(dead_code) incompatible with previous forbid")
         || text.contains("file not found for module `")
         || text.contains("cargo_check_failed")
+
 }
 
 pub fn meta_invariant_classify_verifier_outcome(
@@ -544,6 +567,7 @@ pub fn meta_invariant_classify_verifier_outcome(
     } else {
         MetaInvariantVerifierOutcome::FailedNoCompilerSignal
     }
+
 }
 
 pub fn meta_invariant_all_results_update_policy(
@@ -568,6 +592,7 @@ pub fn meta_invariant_all_results_update_policy(
             actionable_failure: true,
         },
     }
+
 }
 
 pub fn meta_invariant_verifier_sequence_contract(
@@ -607,6 +632,7 @@ pub fn meta_invariant_verifier_sequence_contract(
             }
         }
     }
+
 }
 
 #[cfg(test)]
@@ -1181,4 +1207,276 @@ mod tests {
             }
         }
     }
+
+
+
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    struct SyntheticLoopState {
+        real_path_exists: bool,
+        real_cargo_project: bool,
+        validation_blocked: bool,
+        entrypoint_missing: bool,
+        module_gaps_present: bool,
+        failure_class_no_actionable: bool,
+        failure_scope_localized: bool,
+        failure_scope_workspace: bool,
+        failure_scope_tooling: bool,
+    }
+
+    impl SyntheticLoopState {
+        fn as_constraint_state(self) -> ConstraintState {
+            ConstraintState {
+                semantic_path_exists: self.real_path_exists,
+                semantic_cargo_project: self.real_cargo_project,
+                real_path_exists: self.real_path_exists,
+                real_cargo_project: self.real_cargo_project,
+                actionable_failure: self.validation_blocked
+                    || self.entrypoint_missing
+                    || self.module_gaps_present
+                    || self.failure_scope_localized
+                    || self.failure_scope_workspace
+                    || self.failure_scope_tooling,
+                validation_blocked: self.validation_blocked,
+                entrypoint_missing: self.entrypoint_missing,
+                module_gaps_present: self.module_gaps_present,
+                recent_no_semantic_progress: self.failure_class_no_actionable,
+                failure_class_no_actionable: self.failure_class_no_actionable,
+                failure_scope_localized: self.failure_scope_localized,
+                failure_scope_workspace: self.failure_scope_workspace,
+                failure_scope_tooling: self.failure_scope_tooling,
+            }
+        }
+
+        fn is_terminal(self) -> bool {
+            self.real_path_exists
+                && self.real_cargo_project
+                && !self.validation_blocked
+                && !self.entrypoint_missing
+                && !self.module_gaps_present
+                && !self.failure_class_no_actionable
+                && !self.failure_scope_localized
+                && !self.failure_scope_workspace
+                && !self.failure_scope_tooling
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct SyntheticTransition {
+        next: SyntheticLoopState,
+        route_rewrite: bool,
+        action_rewrite: bool,
+    }
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    struct SyntheticLoopMetrics {
+        total_steps: usize,
+        oscillation_count: usize,
+        repeated_rewrite_count: usize,
+        fake_progress_count: usize,
+    }
+
+    fn unresolved_score(state: SyntheticLoopState) -> usize {
+        usize::from(!state.real_path_exists)
+            + usize::from(!state.real_cargo_project)
+            + usize::from(state.validation_blocked)
+            + usize::from(state.entrypoint_missing)
+            + usize::from(state.module_gaps_present)
+            + usize::from(state.failure_class_no_actionable)
+            + usize::from(state.failure_scope_localized)
+            + usize::from(state.failure_scope_workspace)
+            + usize::from(state.failure_scope_tooling)
+    }
+
+    fn synthetic_step(state: SyntheticLoopState) -> SyntheticTransition {
+        let constraint_state = state.as_constraint_state();
+        let route_decision = evaluate_constraint_context(&ConstraintContext {
+            state: constraint_state,
+            route: Some(ConstraintRoute::Plan),
+            action: None,
+            deterministic_route: None,
+        });
+        let route = match route_decision {
+            ConstraintDecision::RewriteRoute(route, _) => route,
+            _ => ConstraintRoute::Plan,
+        };
+        let action = match route {
+            ConstraintRoute::Observe => {
+                return SyntheticTransition {
+                    next: SyntheticLoopState {
+                        failure_class_no_actionable: false,
+                        ..state
+                    },
+                    route_rewrite: matches!(route_decision, ConstraintDecision::RewriteRoute(_, _)),
+                    action_rewrite: false,
+                };
+            }
+            ConstraintRoute::Plan => {
+                if !state.real_path_exists {
+                    ConstraintAction::CargoInit
+                } else if !state.real_cargo_project {
+                    ConstraintAction::CargoNew
+                } else if state.entrypoint_missing || state.module_gaps_present || state.failure_scope_localized {
+                    ConstraintAction::RepairLocalized
+                } else if state.validation_blocked || state.failure_scope_workspace || state.failure_scope_tooling {
+                    ConstraintAction::RepairWorkspace
+                } else {
+                    ConstraintAction::Validation
+                }
+            }
+            _ => ConstraintAction::Validation,
+        };
+        let action_decision = evaluate_constraint_context(&ConstraintContext {
+            state: constraint_state,
+            route: None,
+            action: Some(action),
+            deterministic_route: None,
+        });
+        let resolved_action = match action_decision {
+            ConstraintDecision::RewriteAction(action, _) => action,
+            ConstraintDecision::Forbid(_) => ConstraintAction::Other,
+            _ => action,
+        };
+        let next = match resolved_action {
+            ConstraintAction::CargoNew | ConstraintAction::CargoInit => SyntheticLoopState {
+                real_path_exists: true,
+                real_cargo_project: true,
+                validation_blocked: false,
+                ..state
+            },
+            ConstraintAction::RepairLocalized => SyntheticLoopState {
+                entrypoint_missing: false,
+                module_gaps_present: false,
+                failure_scope_localized: false,
+                validation_blocked: false,
+                ..state
+            },
+            ConstraintAction::RepairWorkspace => SyntheticLoopState {
+                real_path_exists: true,
+                real_cargo_project: true,
+                validation_blocked: false,
+                failure_scope_workspace: false,
+                failure_scope_tooling: false,
+                ..state
+            },
+            ConstraintAction::Validation => SyntheticLoopState {
+                failure_class_no_actionable: false,
+                ..state
+            },
+            ConstraintAction::Other => state,
+        };
+        SyntheticTransition {
+            next,
+            route_rewrite: matches!(route_decision, ConstraintDecision::RewriteRoute(_, _)),
+            action_rewrite: matches!(action_decision, ConstraintDecision::RewriteAction(_, _)),
+        }
+    }
+
+    fn synthetic_seed_space() -> Vec<SyntheticLoopState> {
+        let mut seeds = Vec::new();
+        for real_path_exists in [false, true] {
+            for real_cargo_project in [false, true] {
+                if !real_path_exists && real_cargo_project {
+                    continue;
+                }
+                for validation_blocked in [false, true] {
+                    for entrypoint_missing in [false, true] {
+                        if entrypoint_missing && !real_cargo_project {
+                            continue;
+                        }
+                        for module_gaps_present in [false, true] {
+                            if module_gaps_present && !real_cargo_project {
+                                continue;
+                            }
+                            for failure_class_no_actionable in [false, true] {
+                                for (failure_scope_localized, failure_scope_workspace, failure_scope_tooling) in [
+                                    (false, false, false),
+                                    (true, false, false),
+                                    (false, true, false),
+                                    (false, false, true),
+                                ] {
+                                    if failure_class_no_actionable
+                                        && (validation_blocked
+                                            || entrypoint_missing
+                                            || module_gaps_present
+                                            || failure_scope_localized
+                                            || failure_scope_workspace
+                                            || failure_scope_tooling)
+                                    {
+                                        continue;
+                                    }
+                                    seeds.push(SyntheticLoopState {
+                                        real_path_exists,
+                                        real_cargo_project,
+                                        validation_blocked,
+                                        entrypoint_missing,
+                                        module_gaps_present,
+                                        failure_class_no_actionable,
+                                        failure_scope_localized,
+                                        failure_scope_workspace,
+                                        failure_scope_tooling,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        seeds
+    }
+
+    #[test]
+    fn constraint_engine_long_loop_harness_converges_without_dead_end() {
+        let seeds = synthetic_seed_space();
+        let mut metrics = SyntheticLoopMetrics::default();
+        for seed in seeds {
+            let mut state = seed;
+            let mut stagnant = 0usize;
+            let mut prev = None;
+            let mut prev_prev = None;
+            let mut previous_rewrite = false;
+            for _ in 0..128 {
+                metrics.total_steps += 1;
+                if state.is_terminal() {
+                    break;
+                }
+                let transition = synthetic_step(state);
+                let next = transition.next;
+                let had_rewrite = transition.route_rewrite || transition.action_rewrite;
+                if had_rewrite && previous_rewrite {
+                    metrics.repeated_rewrite_count += 1;
+                }
+                previous_rewrite = had_rewrite;
+                if let Some(two_back) = prev_prev {
+                    if next == two_back && next != state {
+                        metrics.oscillation_count += 1;
+                    }
+                }
+                if next == state {
+                    stagnant += 1;
+                } else {
+                    stagnant = 0;
+                }
+                if next != state && unresolved_score(next) >= unresolved_score(state) {
+                    metrics.fake_progress_count += 1;
+                }
+                assert!(stagnant < 4, "synthetic loop stagnated at state {:?}", state);
+                prev_prev = prev;
+                prev = Some(state);
+                state = next;
+            }
+            assert!(state.is_terminal(), "synthetic loop did not converge from seed {:?}", seed);
+        }
+        assert!(
+            metrics.total_steps >= 200,
+            "long-loop harness should exercise 200+ synthetic steps across synthetic families"
+        );
+        assert_eq!(metrics.oscillation_count, 0, "synthetic loop should not oscillate");
+        assert_eq!(
+            metrics.fake_progress_count, 0,
+            "synthetic loop should not report fake progress"
+        );
+    }
+
 }

@@ -133,14 +133,13 @@ fn build_observation_payload(
     };
     let planning_preconditions =
         planning_preconditions::derive_preconditions(Some(&model), compiler_errors);
-    let repair_intents = planning_preconditions::derive_repair_intents(&planning_preconditions, failure_scope.as_deref());
     let compiler_hints = crate::compiler_hints::planner_lines(compiler_errors);
     let planning_precondition_lines = planning_preconditions::planner_lines(&planning_preconditions);
     let failure_class = compiler_hints
         .iter()
         .find_map(|hint| hint.kind_enum().map(|kind| kind.as_str().to_string()))
         .or_else(|| {
-            if planning_preconditions.is_empty() && repair_intents.is_empty() {
+            if planning_preconditions.is_empty() {
                 Some(canon_semantic_state::FailureClassKind::NoActionableFailure.as_str().to_string())
             } else {
                 None
@@ -152,12 +151,13 @@ fn build_observation_payload(
         .find(|scope| *scope != canon_semantic_state::FailureScopeKind::None)
         .map(|scope| scope.as_str().to_string())
         .or_else(|| {
-            if planning_preconditions.is_empty() && repair_intents.is_empty() {
+            if planning_preconditions.is_empty() {
                 Some(canon_semantic_state::FailureScopeKind::None.as_str().to_string())
             } else {
                 None
             }
         });
+    let repair_intents = planning_preconditions::derive_repair_intents(&planning_preconditions, failure_scope.as_deref());
     let target_root = model.target_root.clone();
     let summary = SemanticStateSummary {
         version: SemanticStateSummary::VERSION,

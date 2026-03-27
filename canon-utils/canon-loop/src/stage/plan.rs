@@ -1410,7 +1410,7 @@ fn build_context_delta(
         consecutive_invalid_plan_batches,
         &llm_semantic_context.recent_execution_results,
         &llm_semantic_context.objective_trend_state,
-        semantic_summary,
+        &llm_semantic_context.semantic_summary,
     );
 
     format!(

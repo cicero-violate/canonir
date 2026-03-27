@@ -147,9 +147,11 @@ pub enum DeterministicRouteRule {
     PlannedToAct,
     MissingObservedContextObserve,
     MissingTargetPlan,
+    BlockedValidationPlan,
     InvalidPlanReplan,
 }
 
+#[derive(Clone)]
 pub struct DeterministicRouteDecision {
     pub route: RouteKind,
     pub rationale: String,
@@ -279,23 +281,6 @@ fn route_constraint_state(ctx: &RouteContext) -> ConstraintState {
     }
 }
 
-fn derive_route_from_constraints(
-    ctx: &RouteContext,
-    proposed_route: RouteKind,
-    deterministic_route: Option<RouteKind>,
-) -> RouteKind {
-    match evaluate_constraint_context(&ConstraintContext {
-        state: route_constraint_state(ctx),
-        route: Some(route_to_constraint(proposed_route)),
-        action: None,
-        deterministic_route: deterministic_route.map(route_to_constraint),
-    }) {
-        ConstraintDecision::RewriteRoute(ConstraintRoute::Observe, _) => RouteKind::Observe,
-        ConstraintDecision::RewriteRoute(ConstraintRoute::Plan, _) => RouteKind::Plan,
-        _ => proposed_route,
-    }
-}
-
 pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decision: &mut RouteDecision) -> Vec<RoutePolicyRule> {
     let mut rules = evaluate_route_transition(ctx, state, None, Some(decision)).rules;
     match evaluate_constraint_context(&ConstraintContext {
@@ -377,6 +362,138 @@ fn route_choice_contradicts_objective(ctx: &RouteContext, lane: RouteKind) -> bo
                 && ctx.objective_trend_state.current_no_progress_streak > 0))
 }
 
+enum RouteProposal {
+    StateDriftObserve,
+    MissingTargetPlan,
+    BlockedValidationPlan,
+    NoSemanticProgressPlan,
+    InvalidPlanReplan,
+    BootstrapRefreshObserve,
+    DoneVerify,
+    SemanticProgressVerify,
+    ContinueAct,
+    PlannedToAct,
+    MissingObservedContextObserve,
+}
+
+impl RouteProposal {
+    fn base_decision(&self, ctx: &RouteContext) -> DeterministicRouteDecision {
+        match self {
+            Self::StateDriftObserve => DeterministicRouteDecision {
+                route: RouteKind::Observe,
+                rationale: "semantic workspace facts disagree with the filesystem; refresh observation before planning or verification".to_string(),
+                confidence: 0.99,
+                prompt_tag: "deterministic:state_drift_observe",
+                noop_reason: "route_executor_state_drift_observe",
+                rule: DeterministicRouteRule::StateDriftObserve,
+            },
+            Self::MissingTargetPlan => DeterministicRouteDecision {
+                route: RouteKind::Plan,
+                rationale: format!(
+                    "target workspace is missing at {}; route directly to plan to create/bootstrap it",
+                    ctx.target_workspace_path_state().unwrap_or("unknown")
+                ),
+                confidence: 0.99,
+                prompt_tag: "deterministic:target_workspace_missing",
+                noop_reason: "route_executor_missing_target_plan",
+                rule: DeterministicRouteRule::MissingTargetPlan,
+            },
+            Self::BlockedValidationPlan => DeterministicRouteDecision {
+                route: RouteKind::Plan,
+                rationale: "validation remains blocked; route to plan before verification or further execution".to_string(),
+                confidence: 0.99,
+                prompt_tag: "deterministic:blocked_validation_plan",
+                noop_reason: "route_executor_blocked_validation_plan",
+                rule: DeterministicRouteRule::BlockedValidationPlan,
+            },
+            Self::NoSemanticProgressPlan => DeterministicRouteDecision {
+                route: RouteKind::Plan,
+                rationale: "recent action produced no semantic progress; replan before retrying execution".to_string(),
+                confidence: 0.95,
+                prompt_tag: "deterministic:no_semantic_progress_plan",
+                noop_reason: "route_executor_no_semantic_progress_plan",
+                rule: DeterministicRouteRule::NoSemanticProgressPlan,
+            },
+            Self::InvalidPlanReplan => DeterministicRouteDecision {
+                route: RouteKind::Plan,
+                rationale: format!(
+                    "previous plan batches were invalid (count={}); route directly to plan for constrained replanning",
+                    ctx.consecutive_invalid_plan_batches
+                ),
+                confidence: 0.99,
+                prompt_tag: "deterministic:invalid_plan_replan",
+                noop_reason: "route_executor_invalid_plan_replan",
+                rule: DeterministicRouteRule::InvalidPlanReplan,
+            },
+            Self::BootstrapRefreshObserve => DeterministicRouteDecision {
+                route: RouteKind::Observe,
+                rationale: "bootstrap command succeeded; refresh workspace facts before further planning or execution".to_string(),
+                confidence: 0.99,
+                prompt_tag: "deterministic:bootstrap_refresh_observe",
+                noop_reason: "route_executor_bootstrap_refresh",
+                rule: DeterministicRouteRule::BootstrapRefreshObserve,
+            },
+            Self::DoneVerify => DeterministicRouteDecision {
+                route: RouteKind::Verify,
+                rationale: "done action executed; verify to confirm goal completion".to_string(),
+                confidence: 0.99,
+                prompt_tag: "deterministic:done_verify",
+                noop_reason: "route_executor_done_verify",
+                rule: DeterministicRouteRule::DoneVerify,
+            },
+            Self::SemanticProgressVerify => DeterministicRouteDecision {
+                route: RouteKind::Verify,
+                rationale: "recent action produced semantic progress; verify whether the repair resolved the active failure".to_string(),
+                confidence: 0.95,
+                prompt_tag: "deterministic:semantic_progress_verify",
+                noop_reason: "route_executor_semantic_progress_verify",
+                rule: DeterministicRouteRule::SemanticProgressVerify,
+            },
+            Self::ContinueAct => DeterministicRouteDecision {
+                route: RouteKind::Act,
+                rationale: format!(
+                    "previous act completed and {} planned actions remain; continue acting",
+                    ctx.planned_pending
+                ),
+                confidence: 0.99,
+                prompt_tag: "deterministic:continue_act",
+                noop_reason: "route_executor_continue_act",
+                rule: DeterministicRouteRule::ContinueAct,
+            },
+            Self::PlannedToAct => DeterministicRouteDecision {
+                route: RouteKind::Act,
+                rationale: format!(
+                    "planning completed with {} pending actions; advance directly to act",
+                    ctx.planned_pending
+                ),
+                confidence: 0.99,
+                prompt_tag: "deterministic:planned_to_act",
+                noop_reason: "route_executor_planned_to_act",
+                rule: DeterministicRouteRule::PlannedToAct,
+            },
+            Self::MissingObservedContextObserve => DeterministicRouteDecision {
+                route: RouteKind::Observe,
+                rationale: "planning had no observation context; refresh observation before planning again".to_string(),
+                confidence: 0.99,
+                prompt_tag: "deterministic:missing_observed_context",
+                noop_reason: "route_executor_missing_observed_context",
+                rule: DeterministicRouteRule::MissingObservedContextObserve,
+            },
+        }
+    }
+}
+
+fn derive_deterministic_route_from_constraints(
+    ctx: &RouteContext,
+    proposal: RouteProposal,
+) -> DeterministicRouteDecision {
+    let base = proposal.base_decision(ctx);
+    match apply_shared_route_constraint(ctx, base.clone()) {
+        Some(normalized) => normalized,
+        None => base,
+    }
+}
+
 pub fn evaluate_route_dispatch(
     ctx: &RouteContext,
     policy_state: RoutePolicyState<'_>,
@@ -452,47 +569,49 @@ pub fn evaluate_route_dispatch(
     if ctx.planned_pending == 0 && workspace_state_drift_detected(&ctx.semantic_summary) {
         return RouteDispatchEvaluation {
             suppression: None,
-            deterministic: Some(DeterministicRouteDecision {
-                route: RouteKind::Observe,
-                rationale: "semantic workspace facts disagree with the filesystem; refresh observation before planning or verification".to_string(),
-                confidence: 0.99,
-                prompt_tag: "deterministic:state_drift_observe",
-                noop_reason: "route_executor_state_drift_observe",
-                rule: DeterministicRouteRule::StateDriftObserve,
-            }),
+            deterministic: Some(derive_deterministic_route_from_constraints(
+                ctx,
+                RouteProposal::StateDriftObserve,
+            )),
         };
     }
     if ctx.target_workspace_missing_state() && ctx.planned_pending == 0 {
-        let route = derive_route_from_constraints(ctx, RouteKind::Observe, Some(RouteKind::Observe));
         return RouteDispatchEvaluation {
             suppression: None,
-            deterministic: Some(DeterministicRouteDecision {
-                route,
-                rationale: format!(
-                    "target workspace is missing at {}; route directly to plan to create/bootstrap it",
-                    ctx.target_workspace_path_state().unwrap_or("unknown")
-                ),
-                confidence: 0.99,
-                prompt_tag: "deterministic:target_workspace_missing",
-                noop_reason: "route_executor_missing_target_plan",
-                rule: DeterministicRouteRule::MissingTargetPlan,
-            }),
+            deterministic: Some(derive_deterministic_route_from_constraints(
+                ctx,
+                RouteProposal::MissingTargetPlan,
+            )),
+        };
+    }
+    if ctx.planned_pending == 0 && ctx.validation_blocked_state() {
+        return RouteDispatchEvaluation {
+            suppression: None,
+            deterministic: Some(derive_deterministic_route_from_constraints(
+                ctx,
+                RouteProposal::BlockedValidationPlan,
+            )),
+        };
+    }
+    if ctx.planned_pending == 0
+        && ctx.semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure")
+        && !ctx.finish_ready
+    {
+        return RouteDispatchEvaluation {
+            suppression: None,
+            deterministic: Some(derive_deterministic_route_from_constraints(
+                ctx,
+                RouteProposal::NoSemanticProgressPlan,
+            )),
         };
     }
     if ctx.context_ready && ctx.planned_pending == 0 && ctx.consecutive_invalid_plan_batches > 0 {
         return RouteDispatchEvaluation {
             suppression: None,
-            deterministic: Some(DeterministicRouteDecision {
-                route: RouteKind::Plan,
-                rationale: format!(
-                    "previous plan batches were invalid (count={}); route directly to plan for constrained replanning",
-                    ctx.consecutive_invalid_plan_batches
-                ),
-                confidence: 0.99,
-                prompt_tag: "deterministic:invalid_plan_replan",
-                noop_reason: "route_executor_invalid_plan_replan",
-                rule: DeterministicRouteRule::InvalidPlanReplan,
-            }),
+            deterministic: Some(derive_deterministic_route_from_constraints(
+                ctx,
+                RouteProposal::InvalidPlanReplan,
+            )),
         };
     }
     RouteDispatchEvaluation {
@@ -717,51 +836,33 @@ pub fn evaluate_route_transition(
 }
 
 pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -> Option<DeterministicRouteDecision> {
-    let decision = match event {
-        RuntimeEvent::LoopActed(a) if ctx.bootstrap_refresh_required => Some(DeterministicRouteDecision {
-            route: RouteKind::Observe,
-            rationale: "bootstrap command succeeded; refresh workspace facts before further planning or execution".to_string(),
-            confidence: 0.99,
-            prompt_tag: "deterministic:bootstrap_refresh_observe",
-            noop_reason: "route_executor_bootstrap_refresh",
-            rule: DeterministicRouteRule::BootstrapRefreshObserve,
-        }),
+    match event {
+        RuntimeEvent::LoopActed(_a) if ctx.bootstrap_refresh_required => Some(
+            derive_deterministic_route_from_constraints(ctx, RouteProposal::BootstrapRefreshObserve),
+        ),
         RuntimeEvent::LoopActed(_)
             if ctx.planned_pending == 0
                 && ctx.pending_tool_result_ids.is_empty()
                 && workspace_state_drift_detected(&ctx.semantic_summary) =>
         {
-            Some(DeterministicRouteDecision {
-                route: RouteKind::Observe,
-                rationale: "semantic workspace facts disagree with the filesystem; refresh observation before planning or verification".to_string(),
-                confidence: 0.99,
-                prompt_tag: "deterministic:state_drift_observe",
-                noop_reason: "route_executor_state_drift_observe",
-                rule: DeterministicRouteRule::StateDriftObserve,
-            })
+            Some(derive_deterministic_route_from_constraints(
+                ctx,
+                RouteProposal::StateDriftObserve,
+            ))
         }
-        RuntimeEvent::LoopActed(a) if a.action_kind == "done" && ctx.planned_pending == 0 => Some(DeterministicRouteDecision {
-            route: RouteKind::Verify,
-            rationale: "done action executed; verify to confirm goal completion".to_string(),
-            confidence: 0.99,
-            prompt_tag: "deterministic:done_verify",
-            noop_reason: "route_executor_done_verify",
-            rule: DeterministicRouteRule::DoneVerify,
-        }),
+        RuntimeEvent::LoopActed(a) if a.action_kind == "done" && ctx.planned_pending == 0 => Some(
+            derive_deterministic_route_from_constraints(ctx, RouteProposal::DoneVerify),
+        ),
         RuntimeEvent::LoopActed(_)
             if ctx.planned_pending == 0
                 && ctx.pending_tool_result_ids.is_empty()
                 && latest_semantic_progress(&ctx.recent_execution_results)
                 && !ctx.validation_blocked_state() =>
         {
-            Some(DeterministicRouteDecision {
-                route: RouteKind::Verify,
-                rationale: "recent action produced semantic progress; verify whether the repair resolved the active failure".to_string(),
-                confidence: 0.95,
-                prompt_tag: "deterministic:semantic_progress_verify",
-                noop_reason: "route_executor_semantic_progress_verify",
-                rule: DeterministicRouteRule::SemanticProgressVerify,
-            })
+            Some(derive_deterministic_route_from_constraints(
+                ctx,
+                RouteProposal::SemanticProgressVerify,
+            ))
         }
         RuntimeEvent::LoopActed(_)
             if ctx.planned_pending == 0
@@ -769,63 +870,27 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
                 && latest_no_semantic_progress(&ctx.recent_execution_results)
                 && !ctx.finish_ready =>
         {
-            Some(no_progress_route_via_constraints(ctx))
+            Some(derive_deterministic_route_from_constraints(
+                ctx,
+                RouteProposal::NoSemanticProgressPlan,
+            ))
         }
-        RuntimeEvent::LoopActed(_) if ctx.planned_pending > 0 && ctx.pending_tool_result_ids.is_empty() => Some(DeterministicRouteDecision {
-            route: RouteKind::Act,
-            rationale: format!(
-                "previous act completed and {} planned actions remain; continue acting",
-                ctx.planned_pending
-            ),
-            confidence: 0.99,
-            prompt_tag: "deterministic:continue_act",
-            noop_reason: "route_executor_continue_act",
-            rule: DeterministicRouteRule::ContinueAct,
-        }),
-        RuntimeEvent::PlanningCompleted(_) if ctx.planned_pending > 0 && ctx.pending_tool_result_ids.is_empty() => Some(DeterministicRouteDecision {
-            route: RouteKind::Act,
-            rationale: format!(
-                "planning completed with {} pending actions; advance directly to act",
-                ctx.planned_pending
-            ),
-            confidence: 0.99,
-            prompt_tag: "deterministic:planned_to_act",
-            noop_reason: "route_executor_planned_to_act",
-            rule: DeterministicRouteRule::PlannedToAct,
-        }),
+        RuntimeEvent::LoopActed(_) if ctx.planned_pending > 0 && ctx.pending_tool_result_ids.is_empty() => Some(
+            derive_deterministic_route_from_constraints(ctx, RouteProposal::ContinueAct),
+        ),
+        RuntimeEvent::PlanningCompleted(_) if ctx.planned_pending > 0 && ctx.pending_tool_result_ids.is_empty() => Some(
+            derive_deterministic_route_from_constraints(ctx, RouteProposal::PlannedToAct),
+        ),
         RuntimeEvent::PlanningCompleted(pc)
             if pc.status == "missing_observed_context" && ctx.pending_tool_result_ids.is_empty() =>
         {
-            Some(DeterministicRouteDecision {
-                route: RouteKind::Observe,
-                rationale: "planning had no observation context; refresh observation before planning again".to_string(),
-                confidence: 0.99,
-                prompt_tag: "deterministic:missing_observed_context",
-                noop_reason: "route_executor_missing_observed_context",
-                rule: DeterministicRouteRule::MissingObservedContextObserve,
-            })
+            Some(derive_deterministic_route_from_constraints(
+                ctx,
+                RouteProposal::MissingObservedContextObserve,
+            ))
         }
         _ => None,
-    }?;
-
-    apply_shared_route_constraint(ctx, decision)
-}
-
-fn no_progress_route_via_constraints(ctx: &RouteContext) -> DeterministicRouteDecision {
-    let actionable_failure = has_actionable_failure(ctx);
-    let proposed = DeterministicRouteDecision {
-        route: RouteKind::Plan,
-        rationale: "recent action produced no semantic progress; replan before retrying execution".to_string(),
-        confidence: 0.95,
-        prompt_tag: "deterministic:no_semantic_progress_plan",
-        noop_reason: "route_executor_no_semantic_progress_plan",
-        rule: DeterministicRouteRule::NoSemanticProgressPlan,
-    };
-    let normalized = apply_shared_route_constraint(ctx, proposed).unwrap_or(proposed);
-    if normalized.route == RouteKind::Observe && !actionable_failure {
-        return normalized;
     }
-    normalized
 }
 
 fn apply_shared_route_constraint(
