@@ -1525,7 +1525,7 @@ pub fn planner_objective_alignment_rows() -> Vec<PlannerObjectiveAlignmentRow> {
         PlannerObjectiveAlignmentRow {
             name: "planner_trend_intent_mismatch_repeats_stalled_import_fix",
             family: JudgmentScenarioFamily::PlannerTrendIntentMismatch,
-            actions: vec![planned_update_file("src/lib.rs", "+use crate::foo;\n")],
+            actions: vec![planned_add_import("src/lib.rs", "crate::foo")],
             summary: SemanticStateSummary {
                 complete: true,
                 path_exists: true,
@@ -1719,10 +1719,10 @@ fn planner_actions_for_state(state: PlannerJudgmentState) -> Vec<canon_event::Lo
             vec![planned_update_file("src/lib.rs", "-#![allow(dead_code)]\n+#![allow(dead_code)]\n")]
         }
         PlannerActionCase::FixUnresolvedImport => {
-            vec![planned_update_file("src/lib.rs", "+use crate::foo;\n")]
+            vec![planned_add_import("src/lib.rs", "crate::foo")]
         }
         PlannerActionCase::DefineMissingSymbol => {
-            vec![planned_update_file("src/main.rs", "+fn run() {}\n")]
+            vec![planned_define_symbol_stub("src/main.rs", "run", "fn")]
         }
         PlannerActionCase::ResolveDuplicateDefinition => vec![planned_update_file(
             "src/lib.rs",
@@ -2978,6 +2978,51 @@ fn planned_update_file(path: &str, added_line: &str) -> canon_event::LoopPlanned
         action_kind: "apply_patch".to_string(),
         action_payload: serde_json::json!({
             "patch": format!("*** Begin Patch\n*** Update File: {path}\n@@\n{added_line}*** End Patch\n")
+        }),
+        reason: String::new(),
+        llm_request_id: None,
+        trace_id: None,
+        execution_id: None,
+        span_id: None,
+        parent_span_id: None,
+        plan_id: None,
+        plan_step_id: None,
+        action_id: None,
+        signals: None,
+        depends_on: Vec::new(),
+    }
+}
+
+fn planned_add_import(path: &str, import: &str) -> canon_event::LoopPlanned {
+    canon_event::LoopPlanned {
+        tick: 0,
+        action_kind: "edit.add_import".to_string(),
+        action_payload: serde_json::json!({
+            "path": path,
+            "import": import,
+        }),
+        reason: String::new(),
+        llm_request_id: None,
+        trace_id: None,
+        execution_id: None,
+        span_id: None,
+        parent_span_id: None,
+        plan_id: None,
+        plan_step_id: None,
+        action_id: None,
+        signals: None,
+        depends_on: Vec::new(),
+    }
+}
+
+fn planned_define_symbol_stub(path: &str, symbol: &str, kind: &str) -> canon_event::LoopPlanned {
+    canon_event::LoopPlanned {
+        tick: 0,
+        action_kind: "edit.define_symbol_stub".to_string(),
+        action_payload: serde_json::json!({
+            "path": path,
+            "symbol": symbol,
+            "kind": kind,
         }),
         reason: String::new(),
         llm_request_id: None,
