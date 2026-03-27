@@ -1487,7 +1487,7 @@ pub fn planner_objective_alignment_rows() -> Vec<PlannerObjectiveAlignmentRow> {
         PlannerObjectiveAlignmentRow {
             name: "planner_objective_aligned_repair_edit",
             family: JudgmentScenarioFamily::PlannerObjectiveAligned,
-            actions: vec![planned_update_file("src/lib.rs", "+use crate::foo;\n")],
+            actions: vec![planned_add_import("src/lib.rs", "crate::foo")],
             summary: SemanticStateSummary {
                 complete: true,
                 path_exists: true,
@@ -1692,7 +1692,7 @@ fn planner_summary_for_state(state: PlannerJudgmentState) -> SemanticStateSummar
         PlannerHintState::DuplicateDefinition => vec![CompilerHintRecord::new(
             CompilerHintKind::DuplicateDefinition,
             "duplicate definition",
-            "remove duplicate",
+            "use semantic rename to resolve duplicate",
             vec!["src/lib.rs".into()],
         )],
         PlannerHintState::TraitBound => vec![CompilerHintRecord::new(

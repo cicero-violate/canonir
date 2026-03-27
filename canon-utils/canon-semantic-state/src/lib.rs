@@ -1706,7 +1706,7 @@ mod tests {
             compiler_hints: vec![CompilerHintRecord::new(
                 CompilerHintKind::MissingSymbol,
                 "compiler cannot find `run` in scope",
-                "define the missing symbol or import it before cargo check",
+                "use semantic symbol definition or import repair before cargo check",
                 vec!["src/main.rs".into()],
             )],
             ..SemanticStateSummary::default()
@@ -1723,7 +1723,7 @@ mod tests {
             compiler_hints: vec![CompilerHintRecord::new(
                 CompilerHintKind::DuplicateDefinition,
                 "compiler reports duplicate definition",
-                "remove duplicate",
+                "use semantic rename to resolve duplicate",
                 vec!["src/lib.rs".into()],
             )],
             ..SemanticStateSummary::default()

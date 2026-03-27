@@ -8,7 +8,7 @@ pub fn extract_compiler_hints(errors: &[serde_json::Value]) -> Vec<CompilerHintR
             hints.push(CompilerHintRecord::new(
                 CompilerHintKind::MissingModule,
                 format!("compiler reports missing module `{module_name}`"),
-                format!("create the missing module file for `{module_name}` and wire it before cargo check"),
+                format!("use semantic module creation to add `{module_name}` before cargo check"),
                 target_files,
             ));
             continue;
@@ -35,7 +35,7 @@ pub fn extract_compiler_hints(errors: &[serde_json::Value]) -> Vec<CompilerHintR
             hints.push(CompilerHintRecord::new(
                 CompilerHintKind::UnresolvedImport,
                 format!("compiler reports unresolved import `{symbol}`"),
-                "add the missing import target or correct the import path before cargo check",
+                "use semantic import repair to add or correct the import before cargo check",
                 target_files,
             ));
             continue;
@@ -44,7 +44,7 @@ pub fn extract_compiler_hints(errors: &[serde_json::Value]) -> Vec<CompilerHintR
             hints.push(CompilerHintRecord::new(
                 CompilerHintKind::MissingSymbol,
                 format!("compiler cannot find `{symbol}` in scope"),
-                "define the missing symbol or import it before cargo check",
+                "use semantic symbol definition or import repair before cargo check",
                 target_files,
             ));
             continue;
