@@ -244,7 +244,17 @@ impl RoutePolicyRule {
 
 pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decision: &mut RouteDecision) -> Vec<RoutePolicyRule> {
     let mut rules = evaluate_route_transition(ctx, state, None, Some(decision)).rules;
-    if route_choice_contradicts_objective(ctx, decision.lane) {
+    let already_forced_plan = rules.iter().any(|rule| {
+        matches!(
+            rule,
+            RoutePolicyRule::ForcePlanOnRepeatedObserve
+                | RoutePolicyRule::ForcePlanOnMissingTarget
+                | RoutePolicyRule::ForcePlanOnBlockedValidation
+                | RoutePolicyRule::CycleCapToPlan
+                | RoutePolicyRule::ForcePlanOnObjectiveContradiction
+        )
+    });
+    if !already_forced_plan && route_choice_contradicts_objective(ctx, decision.lane) {
         rules.push(RoutePolicyRule::ForcePlanOnObjectiveContradiction);
     }
     for rule in &rules {
