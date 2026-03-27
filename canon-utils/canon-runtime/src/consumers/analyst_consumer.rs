@@ -194,7 +194,11 @@ impl EventConsumer for AnalystConsumer {
             | RuntimeEvent::LoopPlanned(_)
             | RuntimeEvent::PlanningCompleted(_)
             | RuntimeEvent::LoopActed(_)
-            | RuntimeEvent::LoopVerified(_) => EventOutcome::NoOp("analyst_ignored_event"),
+            | RuntimeEvent::LoopVerified(_)
+            | RuntimeEvent::RustcCaptureStarted(_)
+            | RuntimeEvent::RustcGraphArtifactWritten(_)
+            | RuntimeEvent::RustcCaptureCompleted(_)
+            | RuntimeEvent::RustcCaptureFailed(_) => EventOutcome::NoOp("analyst_ignored_event"),
         }
     }
 }

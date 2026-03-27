@@ -162,7 +162,11 @@ impl EventConsumer for AgentRegistryConsumer {
             | RuntimeEvent::GoalGraphCheckpointed(_)
             | RuntimeEvent::CapabilityInvoked(_)
             | RuntimeEvent::CapabilityResolved(_)
-            | RuntimeEvent::InvariantDiscovered(_) => EventOutcome::NoOp("agent_registry_ignored"),
+            | RuntimeEvent::InvariantDiscovered(_)
+            | RuntimeEvent::RustcCaptureStarted(_)
+            | RuntimeEvent::RustcGraphArtifactWritten(_)
+            | RuntimeEvent::RustcCaptureCompleted(_)
+            | RuntimeEvent::RustcCaptureFailed(_) => EventOutcome::NoOp("agent_registry_ignored"),
         }
     }
 }

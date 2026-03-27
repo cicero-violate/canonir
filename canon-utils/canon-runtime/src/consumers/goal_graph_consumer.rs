@@ -132,7 +132,11 @@ impl EventConsumer for GoalGraphConsumer {
             | RuntimeEvent::GoalGraphCheckpointed(_)
             | RuntimeEvent::CapabilityInvoked(_)
             | RuntimeEvent::CapabilityResolved(_)
-            | RuntimeEvent::InvariantDiscovered(_) => {}
+            | RuntimeEvent::InvariantDiscovered(_)
+            | RuntimeEvent::RustcCaptureStarted(_)
+            | RuntimeEvent::RustcGraphArtifactWritten(_)
+            | RuntimeEvent::RustcCaptureCompleted(_)
+            | RuntimeEvent::RustcCaptureFailed(_) => {}
         }
         EventOutcome::NoOp("goal_graph_noop")
     }

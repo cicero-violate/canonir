@@ -133,7 +133,11 @@ impl EventConsumer for ForwardConsumer {
             | RuntimeEvent::GoalGraphCheckpointed(_)
             | RuntimeEvent::CapabilityInvoked(_)
             | RuntimeEvent::CapabilityResolved(_)
-            | RuntimeEvent::InvariantDiscovered(_) => {}
+            | RuntimeEvent::InvariantDiscovered(_)
+            | RuntimeEvent::RustcCaptureStarted(_)
+            | RuntimeEvent::RustcGraphArtifactWritten(_)
+            | RuntimeEvent::RustcCaptureCompleted(_)
+            | RuntimeEvent::RustcCaptureFailed(_) => {}
         }
         EventOutcome::NoOp("forward_consumer_forwarded")
     }

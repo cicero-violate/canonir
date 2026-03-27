@@ -118,7 +118,11 @@ impl EventConsumer for WatchdogConsumer {
             | RuntimeEvent::GoalGraphCheckpointed(_)
             | RuntimeEvent::CapabilityInvoked(_)
             | RuntimeEvent::CapabilityResolved(_)
-            | RuntimeEvent::InvariantDiscovered(_) => EventOutcome::NoOp("watchdog_not_a_stage_event"),
+            | RuntimeEvent::InvariantDiscovered(_)
+            | RuntimeEvent::RustcCaptureStarted(_)
+            | RuntimeEvent::RustcGraphArtifactWritten(_)
+            | RuntimeEvent::RustcCaptureCompleted(_)
+            | RuntimeEvent::RustcCaptureFailed(_) => EventOutcome::NoOp("watchdog_not_a_stage_event"),
         }
     }
 }
