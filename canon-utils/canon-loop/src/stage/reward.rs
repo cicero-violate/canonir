@@ -97,13 +97,13 @@ mod tests {
             tick: 0,
             passed: false,
             compiler_clean: false,
+            tlog_clean: true,
+            error_count: 1,
             diagnostics: vec!["error".into()],
             trace_id: None,
             execution_id: None,
             span_id: None,
             parent_span_id: None,
-            done_action: false,
-            system_satisfied: false,
         }
     }
 
