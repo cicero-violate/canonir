@@ -24,6 +24,7 @@ pub struct GoalGenConsumer {
     emitter: Option<EventEmitterHandle>,
     semantic_summary: SemanticStateSummary,
     objective_trend_state: ObjectiveTrendState,
+    last_route_objective: Option<String>,
 }
 
 impl GoalGenConsumer {
@@ -44,6 +45,7 @@ impl GoalGenConsumer {
             emitter: None,
             semantic_summary: SemanticStateSummary::default(),
             objective_trend_state: ObjectiveTrendState::default(),
+            last_route_objective: None,
         }
     }
 }
@@ -102,9 +104,24 @@ impl EventConsumer for GoalGenConsumer {
                     recent_tool_results: Vec::new(),
                     recent_execution_results: Vec::new(),
                 };
+                let current_goal_objective = infer_goal_objective(content);
+                let objective_override = self
+                    .last_route_objective
+                    .as_deref()
+                    .filter(|route_objective| goal_objective_drift(current_goal_objective, route_objective))
+                    .map(|route_objective| {
+                        format!(
+                            "\n\nGoal objective override:\n- The current runtime objective has drifted.\n- Rewrite the goal so it prioritizes: {route_objective}"
+                        )
+                    })
+                    .unwrap_or_default();
                 EventOutcome::emit(RuntimeEvent::Llm(LlmCall {
                     request_id: request_id.clone(),
-                    prompt: format!("{prompt}\n\n{}", semantic_context.render_goal_gen_block()),
+                    prompt: format!(
+                        "{prompt}\n\n{}{}",
+                        semantic_context.render_goal_gen_block(),
+                        objective_override
+                    ),
                     role: Some("goal_gen".to_string()),
                     agent_id: Some("goal_gen_chatgpt".to_string()),
                     dispatched: true,
@@ -211,6 +228,13 @@ impl EventConsumer for GoalGenConsumer {
                 self.semantic_summary = observed.semantic_summary.clone();
                 EventOutcome::NoOp("goal_gen_observed_update")
             }
+            (_, RuntimeEvent::RouteSelected(_)) => {
+                self.last_route_objective = Some(current_primary_objective(
+                    &self.semantic_summary,
+                    &self.objective_trend_state,
+                ));
+                EventOutcome::NoOp("goal_gen_route_objective_update")
+            }
             (_, RuntimeEvent::PlanningCompleted(pc)) => {
                 self.objective_trend_state.record_planning_completion(&pc.status);
                 EventOutcome::NoOp("goal_gen_planning_update")
@@ -235,7 +259,6 @@ impl EventConsumer for GoalGenConsumer {
             | (_, RuntimeEvent::LoopVerified(_))
             | (_, RuntimeEvent::LoopRewarded(_))
             | (_, RuntimeEvent::RouteTick(_))
-            | (_, RuntimeEvent::RouteSelected(_))
             | (_, RuntimeEvent::Cargo(_))
             | (_, RuntimeEvent::File(_))
             | (_, RuntimeEvent::Bash(_))
@@ -266,6 +289,37 @@ impl EventConsumer for GoalGenConsumer {
             | (_, RuntimeEvent::InvariantDiscovered(_)) => EventOutcome::NoOp("goal_gen_noop"),
         }
     }
+}
+
+fn current_primary_objective(
+    semantic_summary: &SemanticStateSummary,
+    objective_trend_state: &ObjectiveTrendState,
+) -> String {
+    let objective_state = derive_self_development_objective_state(semantic_summary, 0, &[]);
+    objective_trend_state.primary_objective(&objective_state).to_string()
+}
+
+fn infer_goal_objective(goal_text: &str) -> &str {
+    let lower = goal_text.to_ascii_lowercase();
+    if lower.contains("fix")
+        || lower.contains("repair")
+        || lower.contains("resolve")
+        || lower.contains("compile")
+        || lower.contains("error")
+    {
+        "repair"
+    } else {
+        "sustain"
+    }
+}
+
+fn goal_objective_drift(goal_objective: &str, route_objective: &str) -> bool {
+    let route_focus = if route_objective.contains("sustain semantic progress") {
+        "sustain"
+    } else {
+        "repair"
+    };
+    goal_objective != route_focus
 }
 
 fn is_placeholder_goal(goal: &str) -> bool {

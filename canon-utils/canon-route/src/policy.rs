@@ -36,6 +36,7 @@ pub enum RoutePolicyRule {
     ForcePlanOnRepeatedObserve,
     ForcePlanOnMissingTarget,
     ForcePlanOnBlockedValidation,
+    ForcePlanOnObjectiveContradiction,
     CycleCapToPlan,
     CycleCapToObserve,
 }
@@ -212,6 +213,7 @@ impl RoutePolicyRule {
             Self::ForcePlanOnRepeatedObserve => "repeated observe on unchanged state requires plan",
             Self::ForcePlanOnMissingTarget => "target workspace missing requires bootstrap plan",
             Self::ForcePlanOnBlockedValidation => "validation is blocked by planning preconditions; forcing plan",
+            Self::ForcePlanOnObjectiveContradiction => "route contradicts active repair objective; forcing plan",
             Self::CycleCapToPlan => "cycle cap reached but actionable failure remains; forcing plan",
             Self::CycleCapToObserve => "cycle cap reached without terminal success; forcing observe",
         }
@@ -222,6 +224,7 @@ impl RoutePolicyRule {
             Self::ForcePlanOnRepeatedObserve => "repeated observe on unchanged state requires plan",
             Self::ForcePlanOnMissingTarget => "target workspace missing requires bootstrap plan",
             Self::ForcePlanOnBlockedValidation => "validation blocked by preconditions requires plan",
+            Self::ForcePlanOnObjectiveContradiction => "objective contradiction requires plan",
             Self::CycleCapToPlan => "cycle cap conclude blocked by actionable failure",
             Self::CycleCapToObserve => "cycle cap conclude downgraded to observe",
         }
@@ -232,6 +235,7 @@ impl RoutePolicyRule {
             Self::ForcePlanOnRepeatedObserve => "observe would not advance state; forcing plan",
             Self::ForcePlanOnMissingTarget => "target workspace missing; verify/observe would not bootstrap the project",
             Self::ForcePlanOnBlockedValidation => "validation would fail before required repair work; forcing plan",
+            Self::ForcePlanOnObjectiveContradiction => "selected route conflicts with active repair objective; forcing plan",
             Self::CycleCapToPlan => "recent failure evidence requires replanning instead of terminal conclude",
             Self::CycleCapToObserve => "no terminal success signal exists; refresh context instead of terminal conclude",
         }
@@ -239,11 +243,24 @@ impl RoutePolicyRule {
 }
 
 pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decision: &mut RouteDecision) -> Vec<RoutePolicyRule> {
-    let rules = evaluate_route_transition(ctx, state, None, Some(decision)).rules;
+    let mut rules = evaluate_route_transition(ctx, state, None, Some(decision)).rules;
+    if route_choice_contradicts_objective(ctx, decision.lane) {
+        rules.push(RoutePolicyRule::ForcePlanOnObjectiveContradiction);
+    }
     for rule in &rules {
         apply_rule(decision, *rule);
     }
     rules
+}
+
+fn route_choice_contradicts_objective(ctx: &RouteContext, lane: RouteKind) -> bool {
+    matches!(lane, RouteKind::Verify | RouteKind::Conclude)
+        && (ctx.validation_blocked_state()
+            || ctx.compiler_repair_required_state()
+            || !ctx.planning_preconditions_state().is_empty()
+            || ctx.objective_state().repair_pressure_score() > 0
+            || (ctx.objective_trend_state.repeated_stall_count > 0
+                && ctx.objective_trend_state.current_no_progress_streak > 0))
 }
 
 pub fn evaluate_route_dispatch(
@@ -654,6 +671,7 @@ fn apply_rule(decision: &mut RouteDecision, rule: RoutePolicyRule) {
         RoutePolicyRule::ForcePlanOnRepeatedObserve
         | RoutePolicyRule::ForcePlanOnMissingTarget
         | RoutePolicyRule::ForcePlanOnBlockedValidation
+        | RoutePolicyRule::ForcePlanOnObjectiveContradiction
         | RoutePolicyRule::CycleCapToPlan => {
             decision.lane = RouteKind::Plan;
         }
@@ -1325,6 +1343,25 @@ mod tests {
             &mut d,
         );
         assert_eq!(rules, vec![RoutePolicyRule::ForcePlanOnBlockedValidation]);
+        assert_eq!(d.lane, RouteKind::Plan);
+    }
+
+    #[test]
+    fn apply_route_policy_forces_plan_on_objective_contradiction() {
+        let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.path_exists = true;
+        ctx.semantic_summary.compiler_repair_required = true;
+        let mut d = decision(RouteKind::Verify, RouteKind::Verify, "accepted");
+        let rules = apply_route_policy(
+            &ctx,
+            RoutePolicyState {
+                last_control_kind: None,
+                pending_required_successor: None,
+            },
+            &mut d,
+        );
+        assert_eq!(rules, vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction]);
         assert_eq!(d.lane, RouteKind::Plan);
     }
 
