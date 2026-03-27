@@ -94,7 +94,7 @@ impl RouteContext {
             has_queued_plan: self.planned_pending > 0,
             workspace_dirty: self.workspace_dirty_tracker.any_dirty(),
             performed_recently: self.acted_unverified,
-            last_action_failed: semantic_no_progress_streak(&self.recent_execution_results) > 0,
+            repair_stalled: semantic_no_progress_streak(&self.recent_execution_results) > 0,
             finish_ready: self.finish_ready && self.workspace_dirty_tracker.all_clean(),
             last_action_kind: self.last_action_kind.clone(),
             llm_signals: self.last_llm_signals.as_ref().map(LlmSignals::from_value),

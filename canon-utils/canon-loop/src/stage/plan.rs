@@ -300,6 +300,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
         retry_policy,
         &semantic_summary,
         &ctx.objective_trend_state,
+        &ctx.recent_execution_results,
     ) {
         ctx.last_planned_observed_tick = None;
         return Ok(LoopStageResult::EmitMany(vec![
@@ -365,6 +366,7 @@ fn validate_action_batch(
     retry_policy: RetryPolicy,
     semantic_summary: &SemanticStateSummary,
     objective_trend_state: &ObjectiveTrendState,
+    recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
 ) -> Result<(), String> {
     if !semantic_summary.complete {
         return Err("semantic summary is incomplete".to_string());
@@ -456,6 +458,12 @@ fn validate_action_batch(
             ),
         ),
         semantic_summary,
+    )?;
+    planning_preconditions::validate_trend_intent_alignment(
+        actions,
+        &target_root,
+        recent_execution_results,
+        objective_trend_state,
     )?;
 
     Ok(())

@@ -1,7 +1,9 @@
 use canon_decision::RouteKind;
 use canon_event::{LoopActed, PlanningCompleted, RuntimeEvent};
 use canon_loop::planning_preconditions::{
-    validate_objective_route_plan_alignment, validate_preconditions, PlanningPrecondition,
+    goal_route_objective_drift, route_choice_contradicts_primary_objective,
+    validate_objective_route_plan_alignment, validate_preconditions, validate_trend_intent_alignment,
+    PlanningPrecondition,
 };
 use canon_loop::policy::{
     classify_invalid_plan_reason, evaluate_loop_runtime, evaluate_loop_transition, evaluate_recovery_event,
@@ -51,6 +53,8 @@ pub enum TransitionRow {
     SuccessorConsumption(SuccessorConsumptionRow),
     PlannerJudgment(PlannerJudgmentRow),
     PlannerObjectiveAlignment(PlannerObjectiveAlignmentRow),
+    RouteObjectiveAlignment(RouteObjectiveAlignmentRow),
+    GoalRouteObjectiveDrift(GoalRouteObjectiveDriftRow),
     RouteSemanticActionability(RouteSemanticActionabilityRow),
 }
 
@@ -253,6 +257,7 @@ pub enum JudgmentScenarioFamily {
     PlannerFixTraitBoundFailure,
     PlannerObjectiveAligned,
     PlannerObjectiveContradiction,
+    PlannerTrendIntentMismatch,
     PlannerRetryNoSemanticProgress,
     PlannerRetryTrendStalled,
     RouteSemanticPreconditionActionable,
@@ -262,10 +267,12 @@ pub enum JudgmentScenarioFamily {
     RouteSemanticDuplicateDefinitionActionable,
     RouteSemanticTraitBoundActionable,
     RouteTrendStallActionable,
+    RouteObjectiveContradiction,
+    GoalRouteObjectiveDrift,
 }
 
 impl JudgmentScenarioFamily {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 23] = [
         Self::PlannerBootstrapWorkspace,
         Self::PlannerInitCargoProject,
         Self::PlannerCreateEntrypoint,
@@ -277,6 +284,7 @@ impl JudgmentScenarioFamily {
         Self::PlannerFixTraitBoundFailure,
         Self::PlannerObjectiveAligned,
         Self::PlannerObjectiveContradiction,
+        Self::PlannerTrendIntentMismatch,
         Self::PlannerRetryNoSemanticProgress,
         Self::PlannerRetryTrendStalled,
         Self::RouteSemanticPreconditionActionable,
@@ -286,6 +294,8 @@ impl JudgmentScenarioFamily {
         Self::RouteSemanticDuplicateDefinitionActionable,
         Self::RouteSemanticTraitBoundActionable,
         Self::RouteTrendStallActionable,
+        Self::RouteObjectiveContradiction,
+        Self::GoalRouteObjectiveDrift,
     ];
 }
 
@@ -304,6 +314,27 @@ pub struct PlannerObjectiveAlignmentRow {
     pub name: &'static str,
     pub family: JudgmentScenarioFamily,
     pub actions: Vec<canon_event::LoopPlanned>,
+    pub summary: SemanticStateSummary,
+    pub primary_objective: &'static str,
+    pub route_choice: &'static str,
+    pub recent_execution_results: Vec<SemanticExecutionResultRecord>,
+    pub objective_trend_state: canon_semantic_state::ObjectiveTrendState,
+    pub expected_ok: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct GoalRouteObjectiveDriftRow {
+    pub name: &'static str,
+    pub family: JudgmentScenarioFamily,
+    pub goal_objective: &'static str,
+    pub route_objective: &'static str,
+    pub expected_drift: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct RouteObjectiveAlignmentRow {
+    pub name: &'static str,
+    pub family: JudgmentScenarioFamily,
     pub summary: SemanticStateSummary,
     pub primary_objective: &'static str,
     pub route_choice: &'static str,
@@ -791,6 +822,8 @@ pub fn assert_transition_rows(rows: &[TransitionRow]) {
             TransitionRow::SuccessorConsumption(row) => assert_successor_consumption_row(row),
             TransitionRow::PlannerJudgment(row) => assert_planner_judgment_row(row),
             TransitionRow::PlannerObjectiveAlignment(row) => assert_planner_objective_alignment_row(row),
+            TransitionRow::RouteObjectiveAlignment(row) => assert_route_objective_alignment_row(row),
+            TransitionRow::GoalRouteObjectiveDrift(row) => assert_goal_route_objective_drift_row(row),
             TransitionRow::RouteSemanticActionability(row) => {
                 assert_route_semantic_actionability_row(row)
             }
@@ -824,6 +857,12 @@ pub fn coverage_report(rows: &[TransitionRow]) -> CoverageReport {
             TransitionRow::SuccessorConsumption(row) => push_unique(&mut report.route_covered, row.family),
             TransitionRow::PlannerJudgment(row) => push_unique(&mut report.judgment_covered, row.family),
             TransitionRow::PlannerObjectiveAlignment(row) => {
+                push_unique(&mut report.judgment_covered, row.family)
+            }
+            TransitionRow::RouteObjectiveAlignment(row) => {
+                push_unique(&mut report.judgment_covered, row.family)
+            }
+            TransitionRow::GoalRouteObjectiveDrift(row) => {
                 push_unique(&mut report.judgment_covered, row.family)
             }
             TransitionRow::RouteSemanticActionability(row) => {
@@ -874,6 +913,16 @@ pub fn baseline_transition_rows() -> Vec<TransitionRow> {
         planner_objective_alignment_rows()
             .into_iter()
             .map(TransitionRow::PlannerObjectiveAlignment),
+    );
+    rows.extend(
+        route_objective_alignment_rows()
+            .into_iter()
+            .map(TransitionRow::RouteObjectiveAlignment),
+    );
+    rows.extend(
+        goal_route_objective_drift_rows()
+            .into_iter()
+            .map(TransitionRow::GoalRouteObjectiveDrift),
     );
     rows.extend(
         route_semantic_actionability_rows()
@@ -1403,6 +1452,8 @@ pub fn planner_objective_alignment_rows() -> Vec<PlannerObjectiveAlignmentRow> {
             },
             primary_objective: "reduce compiler repair pressure",
             route_choice: "plan",
+            recent_execution_results: Vec::new(),
+            objective_trend_state: canon_semantic_state::ObjectiveTrendState::default(),
             expected_ok: true,
         },
         PlannerObjectiveAlignmentRow {
@@ -1420,9 +1471,69 @@ pub fn planner_objective_alignment_rows() -> Vec<PlannerObjectiveAlignmentRow> {
             },
             primary_objective: "reduce compiler repair pressure",
             route_choice: "plan",
+            recent_execution_results: Vec::new(),
+            objective_trend_state: canon_semantic_state::ObjectiveTrendState::default(),
+            expected_ok: false,
+        },
+        PlannerObjectiveAlignmentRow {
+            name: "planner_trend_intent_mismatch_repeats_stalled_import_fix",
+            family: JudgmentScenarioFamily::PlannerTrendIntentMismatch,
+            actions: vec![planned_update_file("src/lib.rs", "+use crate::foo;\n")],
+            summary: SemanticStateSummary {
+                complete: true,
+                path_exists: true,
+                cargo_project: true,
+                target_root: Some("/tmp/example".into()),
+                compiler_repair_required: true,
+                ..SemanticStateSummary::default()
+            },
+            primary_objective: "break the stalled repair loop with a different strategy",
+            route_choice: "plan",
+            recent_execution_results: vec![
+                SemanticExecutionResultRecord::new(
+                    "no_semantic_progress",
+                    "fix_unresolved_import failed: unresolved import persists",
+                    vec!["src/lib.rs".into()],
+                    false,
+                )
+                .with_attempted_kind("fix_unresolved_import"),
+            ],
+            objective_trend_state: canon_semantic_state::ObjectiveTrendState {
+                repeated_stall_count: 1,
+                current_no_progress_streak: 1,
+                ..canon_semantic_state::ObjectiveTrendState::default()
+            },
             expected_ok: false,
         },
     ]
+}
+
+pub fn goal_route_objective_drift_rows() -> Vec<GoalRouteObjectiveDriftRow> {
+    vec![GoalRouteObjectiveDriftRow {
+        name: "goal_route_objective_drift_repair_vs_sustain",
+        family: JudgmentScenarioFamily::GoalRouteObjectiveDrift,
+        goal_objective: "reduce compiler repair pressure",
+        route_objective: "sustain semantic progress while reducing repair pressure",
+        expected_drift: true,
+    }]
+}
+
+pub fn route_objective_alignment_rows() -> Vec<RouteObjectiveAlignmentRow> {
+    vec![RouteObjectiveAlignmentRow {
+        name: "route_objective_contradiction_verify_under_repair_pressure",
+        family: JudgmentScenarioFamily::RouteObjectiveContradiction,
+        summary: SemanticStateSummary {
+            complete: true,
+            path_exists: true,
+            cargo_project: true,
+            compiler_repair_required: true,
+            planning_preconditions: vec!["must_fix_unresolved_import=true".into()],
+            ..SemanticStateSummary::default()
+        },
+        primary_objective: "reduce compiler repair pressure",
+        route_choice: "verify",
+        expected_ok: false,
+    }]
 }
 
 fn valid_planner_judgment_state(state: PlannerJudgmentState) -> bool {
@@ -2433,19 +2544,45 @@ fn assert_planner_judgment_row(row: &PlannerJudgmentRow) {
 }
 
 fn assert_planner_objective_alignment_row(row: &PlannerObjectiveAlignmentRow) {
-    let result = validate_objective_route_plan_alignment(
+    let route_result = validate_objective_route_plan_alignment(
         &row.actions,
         std::path::Path::new("/tmp/example"),
         row.route_choice,
         row.primary_objective,
         &row.summary,
     );
+    let trend_result = validate_trend_intent_alignment(
+        &row.actions,
+        std::path::Path::new("/tmp/example"),
+        &row.recent_execution_results,
+        &row.objective_trend_state,
+    );
+    let ok = route_result.is_ok() && trend_result.is_ok();
     assert_eq!(
-        result.is_ok(),
+        ok,
         row.expected_ok,
-        "planner objective alignment row {} mismatch: {:?}",
+        "planner objective alignment row {} mismatch: route={:?} trend={:?}",
         row.name,
-        result
+        route_result,
+        trend_result
+    );
+}
+
+fn assert_route_objective_alignment_row(row: &RouteObjectiveAlignmentRow) {
+    assert_eq!(
+        !route_choice_contradicts_primary_objective(row.route_choice, row.primary_objective, &row.summary),
+        row.expected_ok,
+        "route objective alignment row {} mismatch",
+        row.name
+    );
+}
+
+fn assert_goal_route_objective_drift_row(row: &GoalRouteObjectiveDriftRow) {
+    assert_eq!(
+        goal_route_objective_drift(row.goal_objective, row.route_objective),
+        row.expected_drift,
+        "goal/route objective drift row {} mismatch",
+        row.name
     );
 }
 

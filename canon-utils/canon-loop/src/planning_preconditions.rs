@@ -365,6 +365,85 @@ fn validate_highest_priority_intent(
     }
 }
 
+fn action_intent_key(intent: &ActionIntent) -> &'static str {
+    match intent {
+        ActionIntent::BootstrapWorkspace => "bootstrap_workspace",
+        ActionIntent::InitCargoProject => "init_cargo_project",
+        ActionIntent::ValidateCargoCheck => "validate_cargo_check",
+        ActionIntent::CreateEntrypoint(_) => "create_entrypoint",
+        ActionIntent::CreateModuleFile(_) => "create_module_file",
+        ActionIntent::FixDeadCodeConflict(_) => "fix_dead_code_conflict",
+        ActionIntent::FixUnresolvedImport(_) => "fix_unresolved_import",
+        ActionIntent::DefineMissingSymbol(_) => "define_missing_symbol",
+        ActionIntent::ResolveDuplicateDefinition(_) => "resolve_duplicate_definition",
+        ActionIntent::FixTraitBoundFailure(_) => "fix_trait_bound_failure",
+    }
+}
+
+pub fn validate_trend_intent_alignment(
+    actions: &[canon_event::LoopPlanned],
+    target_root: &Path,
+    recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
+    objective_trend_state: &canon_semantic_state::ObjectiveTrendState,
+) -> Result<(), String> {
+    if objective_trend_state.current_no_progress_streak == 0
+        || objective_trend_state.repeated_stall_count == 0
+    {
+        return Ok(());
+    }
+    let Some(last_attempted_kind) = recent_execution_results
+        .iter()
+        .rev()
+        .find_map(|result| result.attempted_kind.as_deref())
+    else {
+        return Ok(());
+    };
+    let action_intents = collect_action_intents(actions, target_root);
+    let repeats_stalled_intent = action_intents
+        .iter()
+        .any(|intent| action_intent_key(intent) == last_attempted_kind);
+    if repeats_stalled_intent {
+        return Err(
+            "first planned batch repeats the same stalled repair intent; choose a different repair strategy"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+pub fn route_choice_contradicts_primary_objective(
+    route_choice: &str,
+    primary_objective: &str,
+    semantic_summary: &SemanticStateSummary,
+) -> bool {
+    let objective_requires_repair = semantic_summary.validation_blocked_by_preconditions
+        || semantic_summary.compiler_repair_required
+        || !semantic_summary.planning_preconditions.is_empty()
+        || primary_objective.contains("remove validation blockers")
+        || primary_objective.contains("reduce compiler repair pressure")
+        || primary_objective.contains("break the stalled repair loop")
+        || primary_objective.contains("lower invalid-plan rate")
+        || primary_objective.contains("increase repair resolution rate");
+    objective_requires_repair && matches!(route_choice, "verify" | "conclude")
+}
+
+fn objective_focus_label(objective: &str) -> &'static str {
+    if objective.contains("remove validation blockers")
+        || objective.contains("reduce compiler repair pressure")
+        || objective.contains("break the stalled repair loop")
+        || objective.contains("lower invalid-plan rate")
+        || objective.contains("increase repair resolution rate")
+    {
+        "repair"
+    } else {
+        "sustain"
+    }
+}
+
+pub fn goal_route_objective_drift(goal_objective: &str, route_objective: &str) -> bool {
+    objective_focus_label(goal_objective) != objective_focus_label(route_objective)
+}
+
 fn contains_expected_entrypoint_target(
     action_intents: &[ActionIntent],
     semantic_summary: &SemanticStateSummary,

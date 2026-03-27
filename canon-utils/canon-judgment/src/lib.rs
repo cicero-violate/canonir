@@ -85,7 +85,7 @@ pub struct RuntimeSignals {
     pub has_queued_plan: bool,
     pub workspace_dirty: bool,
     pub performed_recently: bool,
-    pub last_action_failed: bool,
+    pub repair_stalled: bool,
     pub finish_ready: bool,
     #[serde(default)]
     pub last_action_kind: String,
@@ -350,10 +350,10 @@ impl Gatekeeper {
             notes.push("acted_unverified=true requires verify");
         }
 
-        if signals.last_action_failed && !signals.has_queued_plan && !signals.performed_recently && lane != RouteKind::Plan {
+        if signals.repair_stalled && !signals.has_queued_plan && !signals.performed_recently && lane != RouteKind::Plan {
             lane = RouteKind::Plan;
             changed = true;
-            notes.push("batch_failed requires plan for replan");
+            notes.push("repair loop stalled requires plan for replan");
         }
 
         if signals.has_queued_plan && lane != RouteKind::Act {

@@ -710,6 +710,7 @@ pub struct SemanticExecutionResultRecord {
     pub summary: String,
     pub target_files: Vec<String>,
     pub semantic_progress: bool,
+    pub attempted_kind: Option<String>,
 }
 
 impl SemanticExecutionResultRecord {
@@ -724,7 +725,13 @@ impl SemanticExecutionResultRecord {
             summary: summary.into(),
             target_files,
             semantic_progress,
+            attempted_kind: None,
         }
+    }
+
+    pub fn with_attempted_kind(mut self, attempted_kind: impl Into<String>) -> Self {
+        self.attempted_kind = Some(attempted_kind.into());
+        self
     }
 
     pub fn render_line(&self) -> String {
@@ -733,9 +740,10 @@ impl SemanticExecutionResultRecord {
         } else {
             self.target_files.join("|")
         };
+        let attempted = self.attempted_kind.as_deref().unwrap_or("none");
         format!(
-            "kind={} progress={} targets={} summary={}",
-            self.kind, self.semantic_progress, targets, self.summary
+            "kind={} attempted_kind={} progress={} targets={} summary={}",
+            self.kind, attempted, self.semantic_progress, targets, self.summary
         )
     }
 }
@@ -825,6 +833,7 @@ pub fn execution_results_for_action(
                     targets,
                     false,
                 )
+                .with_attempted_kind(kind)
             })
             .collect();
     }
@@ -844,61 +853,71 @@ pub fn execution_results_for_action(
                 "workspace bootstrap command succeeded",
                 Vec::new(),
                 true,
-            ),
+            )
+            .with_attempted_kind("bootstrap_workspace"),
             SemanticActionIntent::InitCargoProject => SemanticExecutionResultRecord::new(
                 "cargo_project_initialized",
                 "cargo project initialization succeeded",
                 Vec::new(),
                 true,
-            ),
+            )
+            .with_attempted_kind("init_cargo_project"),
             SemanticActionIntent::ValidateCargoCheck => SemanticExecutionResultRecord::new(
                 "validation_attempted",
                 "cargo check executed",
                 Vec::new(),
                 false,
-            ),
+            )
+            .with_attempted_kind("validate_cargo_check"),
             SemanticActionIntent::CreateEntrypoint(path) => SemanticExecutionResultRecord::new(
                 "entrypoint_created",
                 "entrypoint file created",
                 vec![path.to_string_lossy().to_string()],
                 true,
-            ),
+            )
+            .with_attempted_kind("create_entrypoint"),
             SemanticActionIntent::CreateModuleFile(path) => SemanticExecutionResultRecord::new(
                 "module_created",
                 "module file created",
                 vec![path.to_string_lossy().to_string()],
                 true,
-            ),
+            )
+            .with_attempted_kind("create_module_file"),
             SemanticActionIntent::FixDeadCodeConflict(path) => SemanticExecutionResultRecord::new(
                 "dead_code_conflict_addressed",
                 "dead_code conflict edit applied",
                 vec![path.to_string_lossy().to_string()],
                 true,
-            ),
+            )
+            .with_attempted_kind("fix_dead_code_conflict"),
             SemanticActionIntent::FixUnresolvedImport(path) => SemanticExecutionResultRecord::new(
                 "import_resolved",
                 "import repair edit applied",
                 vec![path.to_string_lossy().to_string()],
                 true,
-            ),
+            )
+            .with_attempted_kind("fix_unresolved_import"),
             SemanticActionIntent::DefineMissingSymbol(path) => SemanticExecutionResultRecord::new(
                 "symbol_defined",
                 "missing symbol definition edit applied",
                 vec![path.to_string_lossy().to_string()],
                 true,
-            ),
+            )
+            .with_attempted_kind("define_missing_symbol"),
             SemanticActionIntent::ResolveDuplicateDefinition(path) => SemanticExecutionResultRecord::new(
                 "duplicate_resolved",
                 "duplicate definition repair applied",
                 vec![path.to_string_lossy().to_string()],
                 true,
-            ),
+            )
+            .with_attempted_kind("resolve_duplicate_definition"),
             SemanticActionIntent::FixTraitBoundFailure(path) => SemanticExecutionResultRecord::new(
                 "trait_bound_fixed",
                 "trait bound repair edit applied",
                 vec![path.to_string_lossy().to_string()],
                 true,
-            ),
+            )
+            .with_attempted_kind("fix_trait_bound_failure"),
         })
         .collect()
 }
