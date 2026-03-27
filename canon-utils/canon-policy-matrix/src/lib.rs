@@ -249,16 +249,18 @@ pub enum JudgmentScenarioFamily {
     PlannerResolveDuplicateDefinition,
     PlannerFixTraitBoundFailure,
     PlannerRetryNoSemanticProgress,
+    PlannerRetryTrendStalled,
     RouteSemanticPreconditionActionable,
     RouteSemanticRepairIntentActionable,
     RouteSemanticValidationBlockedActionable,
     RouteSemanticUnresolvedImportActionable,
     RouteSemanticDuplicateDefinitionActionable,
     RouteSemanticTraitBoundActionable,
+    RouteTrendStallActionable,
 }
 
 impl JudgmentScenarioFamily {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 18] = [
         Self::PlannerBootstrapWorkspace,
         Self::PlannerInitCargoProject,
         Self::PlannerCreateEntrypoint,
@@ -269,12 +271,14 @@ impl JudgmentScenarioFamily {
         Self::PlannerResolveDuplicateDefinition,
         Self::PlannerFixTraitBoundFailure,
         Self::PlannerRetryNoSemanticProgress,
+        Self::PlannerRetryTrendStalled,
         Self::RouteSemanticPreconditionActionable,
         Self::RouteSemanticRepairIntentActionable,
         Self::RouteSemanticValidationBlockedActionable,
         Self::RouteSemanticUnresolvedImportActionable,
         Self::RouteSemanticDuplicateDefinitionActionable,
         Self::RouteSemanticTraitBoundActionable,
+        Self::RouteTrendStallActionable,
     ];
 }
 
@@ -293,6 +297,7 @@ pub struct RouteSemanticActionabilityRow {
     pub name: &'static str,
     pub family: JudgmentScenarioFamily,
     pub summary: SemanticStateSummary,
+    pub objective_trend_state: canon_semantic_state::ObjectiveTrendState,
     pub expected_actionable: bool,
 }
 
@@ -640,6 +645,7 @@ pub struct PlannerRecoveryRow {
     pub reason: Option<&'static str>,
     pub consecutive_invalid_plan_batches: u32,
     pub recent_execution_results: Vec<SemanticExecutionResultRecord>,
+    pub objective_trend_state: canon_semantic_state::ObjectiveTrendState,
     pub expected_retry: RetryPolicy,
 }
 
@@ -846,6 +852,11 @@ pub fn baseline_transition_rows() -> Vec<TransitionRow> {
     rows.extend(planner_judgment_rows().into_iter().map(TransitionRow::PlannerJudgment));
     rows.extend(
         route_semantic_actionability_rows()
+            .into_iter()
+            .map(TransitionRow::RouteSemanticActionability),
+    );
+    rows.extend(
+        route_trend_actionability_rows()
             .into_iter()
             .map(TransitionRow::RouteSemanticActionability),
     );
@@ -1320,6 +1331,7 @@ pub fn route_semantic_actionability_rows() -> Vec<RouteSemanticActionabilityRow>
                             ),
                             family,
                             summary: route_summary_for_state(state),
+                            objective_trend_state: canon_semantic_state::ObjectiveTrendState::default(),
                             expected_actionable: route_state_is_actionable(state),
                         });
                     }
@@ -1328,6 +1340,25 @@ pub fn route_semantic_actionability_rows() -> Vec<RouteSemanticActionabilityRow>
         }
     }
     rows
+}
+
+pub fn route_trend_actionability_rows() -> Vec<RouteSemanticActionabilityRow> {
+    vec![RouteSemanticActionabilityRow {
+        name: "route_trend_stall_actionability",
+        family: JudgmentScenarioFamily::RouteTrendStallActionable,
+        summary: SemanticStateSummary {
+            complete: true,
+            path_exists: true,
+            cargo_project: true,
+            ..SemanticStateSummary::default()
+        },
+        objective_trend_state: canon_semantic_state::ObjectiveTrendState {
+            repeated_stall_count: 1,
+            current_no_progress_streak: 1,
+            ..canon_semantic_state::ObjectiveTrendState::default()
+        },
+        expected_actionable: true,
+    }]
 }
 
 fn valid_planner_judgment_state(state: PlannerJudgmentState) -> bool {
@@ -1950,19 +1981,35 @@ pub fn bootstrap_effect_rows() -> Vec<BootstrapEffectRow> {
 }
 
 pub fn planner_recovery_rows() -> Vec<PlannerRecoveryRow> {
-    vec![PlannerRecoveryRow {
-        name: "planner_retry_no_semantic_progress",
-        family: JudgmentScenarioFamily::PlannerRetryNoSemanticProgress,
-        reason: None,
-        consecutive_invalid_plan_batches: 0,
-        recent_execution_results: vec![SemanticExecutionResultRecord::new(
-            "no_semantic_progress",
-            "action failed",
-            Vec::new(),
-            false,
-        )],
-        expected_retry: RetryPolicy::CorrectiveRetry,
-    }]
+    vec![
+        PlannerRecoveryRow {
+            name: "planner_retry_no_semantic_progress",
+            family: JudgmentScenarioFamily::PlannerRetryNoSemanticProgress,
+            reason: None,
+            consecutive_invalid_plan_batches: 0,
+            recent_execution_results: vec![SemanticExecutionResultRecord::new(
+                "no_semantic_progress",
+                "action failed",
+                Vec::new(),
+                false,
+            )],
+            objective_trend_state: canon_semantic_state::ObjectiveTrendState::default(),
+            expected_retry: RetryPolicy::CorrectiveRetry,
+        },
+        PlannerRecoveryRow {
+            name: "planner_retry_trend_stalled",
+            family: JudgmentScenarioFamily::PlannerRetryTrendStalled,
+            reason: None,
+            consecutive_invalid_plan_batches: 0,
+            recent_execution_results: Vec::new(),
+            objective_trend_state: canon_semantic_state::ObjectiveTrendState {
+                repeated_stall_count: 1,
+                current_no_progress_streak: 1,
+                ..canon_semantic_state::ObjectiveTrendState::default()
+            },
+            expected_retry: RetryPolicy::CorrectiveRetry,
+        },
+    ]
 }
 
 pub fn reward_semantics_rows() -> Vec<RewardSemanticsRow> {
@@ -2327,6 +2374,7 @@ fn assert_planner_judgment_row(row: &PlannerJudgmentRow) {
 fn assert_route_semantic_actionability_row(row: &RouteSemanticActionabilityRow) {
     let mut ctx = RouteContext::default();
     ctx.semantic_summary = row.summary.clone();
+    ctx.objective_trend_state = row.objective_trend_state.clone();
     assert_eq!(
         canon_route::policy::has_actionable_failure(&ctx),
         row.expected_actionable,
@@ -2518,7 +2566,7 @@ fn assert_planner_recovery_row(row: &PlannerRecoveryRow) {
             row.reason,
             row.consecutive_invalid_plan_batches,
             &row.recent_execution_results,
-            &canon_semantic_state::ObjectiveTrendState::default(),
+            &row.objective_trend_state,
         ),
         row.expected_retry,
         "planner recovery row {} mismatch",

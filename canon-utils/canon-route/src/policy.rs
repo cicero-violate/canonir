@@ -585,7 +585,6 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
             if ctx.planned_pending == 0
                 && ctx.pending_tool_result_ids.is_empty()
                 && latest_semantic_progress(&ctx.recent_execution_results)
-                && !ctx.last_action_failed
                 && !ctx.validation_blocked_state() =>
         {
             Some(DeterministicRouteDecision {

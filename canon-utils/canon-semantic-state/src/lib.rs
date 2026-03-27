@@ -447,6 +447,22 @@ impl ObjectiveTrendState {
             ),
         ]
     }
+
+    pub fn primary_objective(&self, objective_state: &SelfDevelopmentObjectiveState) -> &'static str {
+        if objective_state.validation_blocked_by_preconditions {
+            "remove validation blockers before attempting verification"
+        } else if objective_state.compiler_repair_required {
+            "reduce compiler repair pressure"
+        } else if self.current_no_progress_streak >= 2 || self.repeated_stall_count > 0 {
+            "break the stalled repair loop with a different strategy"
+        } else if self.invalid_plan_rate() > 0.5 && self.planning_attempts >= 3 {
+            "lower invalid-plan rate by simplifying planned batches"
+        } else if self.repair_resolution_rate() < 0.5 && self.total_execution_results >= 3 {
+            "increase repair resolution rate"
+        } else {
+            "sustain semantic progress while reducing repair pressure"
+        }
+    }
 }
 
 impl LlmSemanticContext {
@@ -467,6 +483,10 @@ impl LlmSemanticContext {
                 self.semantic_summary.compiler_hint_kinds().join("|")
             ));
         }
+        lines.push(format!(
+            "primary_objective={}",
+            self.objective_trend_state.primary_objective(&self.objective_state)
+        ));
         lines.extend(self.objective_state.render_lines());
         lines.extend(self.objective_trend_state.render_lines());
         format!("LLM semantic context:
@@ -486,6 +506,10 @@ impl LlmSemanticContext {
             lines.push(format!("route_confidence={confidence:.2}"));
         }
         lines.push(self.semantic_summary.compact_block());
+        lines.push(format!(
+            "primary_objective={}",
+            self.objective_trend_state.primary_objective(&self.objective_state)
+        ));
         if !self.recent_execution_results.is_empty() {
             lines.push(format!(
                 "execution_results={}",
@@ -503,7 +527,13 @@ impl LlmSemanticContext {
     }
 
     pub fn render_planner_base_block(&self) -> String {
-        let mut sections = vec![self.semantic_summary.render_planner_block()];
+        let mut sections = vec![
+            self.semantic_summary.render_planner_block(),
+            format!(
+                "Primary objective:\n- {}",
+                self.objective_trend_state.primary_objective(&self.objective_state)
+            ),
+        ];
         if !self.low_level_diagnostics.is_empty() {
             sections.push(format!(
                 "Low-level diagnostics:
@@ -588,6 +618,10 @@ LOC: {}  |  Errors: {}  |  Warnings: {}",
 {}", render_bullets(&compiler_hints)),
             format!("Semantic summary:
 {}", self.semantic_summary.compact_block()),
+            format!(
+                "Primary objective:\n- {}",
+                self.objective_trend_state.primary_objective(&self.objective_state)
+            ),
         ];
         if !self.recent_actions.is_empty() {
             sections.push(format!("Recent actions:

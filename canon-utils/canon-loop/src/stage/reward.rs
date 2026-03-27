@@ -60,9 +60,6 @@ pub fn execute(v: LoopVerified, ctx: &mut LoopContext) -> anyhow::Result<LoopSta
 
 pub fn evaluate_reward_semantics(ctx: &LoopContext, v: &LoopVerified) -> RewardSemantics {
     let mut reward = if v.compiler_clean { 1.0_f32 } else { -1.0_f32 };
-    if !ctx.last_action_success {
-        reward -= 0.2;
-    }
     if ctx.last_action_kind == "done" {
         reward += 0.5;
     }
@@ -70,6 +67,14 @@ pub fn evaluate_reward_semantics(ctx: &LoopContext, v: &LoopVerified) -> RewardS
         reward += 0.4;
     } else if latest_no_semantic_progress(&ctx.recent_execution_results) {
         reward -= 0.4;
+    }
+    if ctx.objective_trend_state.repair_resolution_rate() > 0.5 {
+        reward += 0.2;
+    }
+    if ctx.objective_trend_state.repeated_stall_count > 0
+        && ctx.objective_trend_state.current_no_progress_streak > 0
+    {
+        reward -= 0.3;
     }
     RewardSemantics {
         reward,
