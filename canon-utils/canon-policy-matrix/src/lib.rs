@@ -678,6 +678,10 @@ pub struct CoverageReport {
     pub invalid_plan_retry_missing: Vec<InvalidPlanRetryFamily>,
     pub judgment_covered: Vec<JudgmentScenarioFamily>,
     pub judgment_missing: Vec<JudgmentScenarioFamily>,
+    pub planner_generated_total: usize,
+    pub planner_generated_valid: usize,
+    pub route_generated_total: usize,
+    pub route_generated_valid: usize,
 }
 
 pub fn assert_transition_rows(rows: &[TransitionRow]) {
@@ -745,6 +749,10 @@ pub fn coverage_report(rows: &[TransitionRow]) -> CoverageReport {
     report.invalid_plan_retry_missing =
         missing_families(&InvalidPlanRetryFamily::ALL, &report.invalid_plan_retry_covered);
     report.judgment_missing = missing_families(&JudgmentScenarioFamily::ALL, &report.judgment_covered);
+    report.planner_generated_total = planner_judgment_state_count(false);
+    report.planner_generated_valid = planner_judgment_state_count(true);
+    report.route_generated_total = route_semantic_state_count(false);
+    report.route_generated_valid = route_semantic_state_count(true);
 
     report
 }
@@ -1466,6 +1474,61 @@ fn route_state_is_actionable(state: RouteSemanticState) -> bool {
             || state.hint != RouteHintState::None)
 }
 
+fn planner_judgment_state_count(valid_only: bool) -> usize {
+    let mut count = 0usize;
+    for path in PlannerPathState::ALL {
+        for cargo in PlannerCargoState::ALL {
+            for entrypoint in PlannerEntrypointState::ALL {
+                for module_gap in PlannerModuleGapState::ALL {
+                    for hint in PlannerHintState::ALL {
+                        for action in PlannerActionCase::ALL {
+                            let state = PlannerJudgmentState {
+                                path,
+                                cargo,
+                                entrypoint,
+                                module_gap,
+                                hint,
+                                action,
+                            };
+                            if valid_only && !valid_planner_judgment_state(state) {
+                                continue;
+                            }
+                            count += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    count
+}
+
+fn route_semantic_state_count(valid_only: bool) -> usize {
+    let mut count = 0usize;
+    for completeness in RouteSummaryCompleteness::ALL {
+        for preconditions in RoutePreconditionState::ALL {
+            for repair_intents in RouteRepairIntentState::ALL {
+                for hint in RouteHintState::ALL {
+                    for validation_blocked in RouteValidationBlockedState::ALL {
+                        let state = RouteSemanticState {
+                            completeness,
+                            preconditions,
+                            repair_intents,
+                            hint,
+                            validation_blocked,
+                        };
+                        if valid_only && !valid_route_semantic_state(state) {
+                            continue;
+                        }
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+    count
+}
+
 pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
     vec![
         LoopTransitionRow {
@@ -1886,6 +1949,15 @@ pub fn coverage_report_markdown(rows: &[TransitionRow]) -> String {
     let report = coverage_report(rows);
     let mut out = String::new();
     out.push_str("# Policy Matrix Coverage\n\n");
+    out.push_str("## Judgment generation\n");
+    out.push_str(&format!(
+        "- planner states: valid={} total={}\n",
+        report.planner_generated_valid, report.planner_generated_total
+    ));
+    out.push_str(&format!(
+        "- route states: valid={} total={}\n\n",
+        report.route_generated_valid, report.route_generated_total
+    ));
     out.push_str(&coverage_section("Route transitions", &report.route_covered, &report.route_missing, |v| format!("{:?}", v)));
     out.push_str(&coverage_section("Loop transitions", &report.loop_covered, &report.loop_missing, |v| format!("{:?}", v)));
     out.push_str(&coverage_section("Run command outcomes", &report.run_command_covered, &report.run_command_missing, |v| format!("{:?}", v)));
@@ -2254,6 +2326,28 @@ fn planned_add_file(path: &str, body: &str) -> canon_event::LoopPlanned {
         action_kind: "apply_patch".to_string(),
         action_payload: serde_json::json!({
             "patch": format!("*** Begin Patch\n*** Add File: {path}\n{body}*** End Patch\n")
+        }),
+        reason: String::new(),
+        llm_request_id: None,
+        trace_id: None,
+        execution_id: None,
+        span_id: None,
+        parent_span_id: None,
+        plan_id: None,
+        plan_step_id: None,
+        action_id: None,
+        signals: None,
+        depends_on: Vec::new(),
+    }
+}
+
+fn planned_run_command(cmd: &str, cwd: &str) -> canon_event::LoopPlanned {
+    canon_event::LoopPlanned {
+        tick: 0,
+        action_kind: "run_command".to_string(),
+        action_payload: serde_json::json!({
+            "cmd": cmd,
+            "cwd": cwd,
         }),
         reason: String::new(),
         llm_request_id: None,
