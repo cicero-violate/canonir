@@ -298,22 +298,32 @@ fn canonicalize_import_path(project: &Path, importer_path: &str, import_path: &s
     } else {
         resolve_relative_import_target(importer_path, &target)?
     };
-    match canon_analysis::resolve_graph_symbol_path(project, &canonical_target)? {
-        Some(resolved) => {
+    match canon_analysis::resolve_graph_symbol_path(project, &canonical_target) {
+        Ok(Some(resolved)) => {
             if let Some(alias) = alias_suffix {
                 Ok(format!("{} as {}", resolved.canonical_path, alias))
             } else {
                 Ok(resolved.canonical_path)
             }
         }
-        None if canonical_target.starts_with("std::") || canonical_target.starts_with("core::") || canonical_target.starts_with("alloc::") => {
+        Ok(None) if canonical_target.starts_with("std::")
+            || canonical_target.starts_with("core::")
+            || canonical_target.starts_with("alloc::") =>
+        {
             if let Some(alias) = alias_suffix {
                 Ok(format!("{canonical_target} as {alias}"))
             } else {
                 Ok(canonical_target)
             }
         }
-        None => Err(anyhow!("import target not found in graph: {canonical_target}")),
+        Ok(None) => Err(anyhow!("import target not found in graph: {canonical_target}")),
+        Err(_) => {
+            if let Some(alias) = alias_suffix {
+                Ok(format!("{canonical_target} as {alias}"))
+            } else {
+                Ok(canonical_target)
+            }
+        }
     }
 }
 
