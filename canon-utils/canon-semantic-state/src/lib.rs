@@ -364,6 +364,49 @@ pub struct DevelopmentObjective {
     pub progress_summary: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DevelopmentStrategyKind {
+    FixConfigLintPolicy,
+    ApplyTargetedCompilerRepair,
+    DiscoverTestSurface,
+    AddRegressionTest,
+    SimplifyPlanBatch,
+    RealignObjectiveFlow,
+    RefreshContextBeforeRetry,
+    CreateMissingModules,
+    RestructureModules,
+}
+
+impl DevelopmentStrategyKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FixConfigLintPolicy => "fix_config_lint_policy",
+            Self::ApplyTargetedCompilerRepair => "apply_targeted_compiler_repair",
+            Self::DiscoverTestSurface => "discover_test_surface",
+            Self::AddRegressionTest => "add_regression_test",
+            Self::SimplifyPlanBatch => "simplify_plan_batch",
+            Self::RealignObjectiveFlow => "realign_objective_flow",
+            Self::RefreshContextBeforeRetry => "refresh_context_before_retry",
+            Self::CreateMissingModules => "create_missing_modules",
+            Self::RestructureModules => "restructure_modules",
+        }
+    }
+
+    pub fn focus_text(self) -> &'static str {
+        match self {
+            Self::FixConfigLintPolicy => "edit workspace/toolchain config before changing source",
+            Self::ApplyTargetedCompilerRepair => "make the smallest source repair that directly addresses the compiler blocker",
+            Self::DiscoverTestSurface => "inspect the current test surface before adding tests",
+            Self::AddRegressionTest => "add a targeted regression test for the active behavior gap",
+            Self::SimplifyPlanBatch => "reduce batch complexity and constrain the next plan",
+            Self::RealignObjectiveFlow => "realign goal, route, and planner around the same objective",
+            Self::RefreshContextBeforeRetry => "refresh semantic context before repeating a stalled repair",
+            Self::CreateMissingModules => "create or wire missing module files before validation",
+            Self::RestructureModules => "improve module boundaries and cohesion before more feature work",
+        }
+    }
+}
+
 impl SelfDevelopmentObjectiveState {
     pub fn is_stalled(&self) -> bool {
         self.semantic_no_progress_streak >= 2 || self.consecutive_invalid_plan_batches >= 2
@@ -579,6 +622,66 @@ pub fn primary_development_objective_kind(
         .unwrap_or(DevelopmentObjectiveKind::ReduceCompilerFailures)
 }
 
+pub fn primary_development_strategy_kind(
+    objective_state: &SelfDevelopmentObjectiveState,
+    objective_trend_state: &ObjectiveTrendState,
+    semantic_summary: &SemanticStateSummary,
+) -> DevelopmentStrategyKind {
+    let primary_objective =
+        primary_development_objective_kind(objective_state, objective_trend_state, semantic_summary);
+
+    if objective_state.misalignment_pressure_score > 0 {
+        return DevelopmentStrategyKind::RealignObjectiveFlow;
+    }
+    if semantic_summary
+        .compiler_hints
+        .iter()
+        .any(|hint| hint.kind_enum() == Some(CompilerHintKind::DeadCodeForbidConflict))
+    {
+        return DevelopmentStrategyKind::FixConfigLintPolicy;
+    }
+    if objective_trend_state.repeated_stall_count > 0
+        && objective_state.semantic_no_progress_streak >= 2
+    {
+        return DevelopmentStrategyKind::RefreshContextBeforeRetry;
+    }
+
+    match primary_objective {
+        DevelopmentObjectiveKind::ReduceCompilerFailures => {
+            if !semantic_summary.module_gaps.is_empty() {
+                DevelopmentStrategyKind::CreateMissingModules
+            } else {
+                DevelopmentStrategyKind::ApplyTargetedCompilerRepair
+            }
+        }
+        DevelopmentObjectiveKind::ReduceContradictionRate => DevelopmentStrategyKind::RealignObjectiveFlow,
+        DevelopmentObjectiveKind::IncreaseTestCoverage => {
+            let has_test_files = semantic_summary.source_files.iter().any(|path| {
+                path.contains("/tests/")
+                    || path.starts_with("tests/")
+                    || path.ends_with("_test.rs")
+                    || path.ends_with("_tests.rs")
+            });
+            if has_test_files {
+                DevelopmentStrategyKind::AddRegressionTest
+            } else {
+                DevelopmentStrategyKind::DiscoverTestSurface
+            }
+        }
+        DevelopmentObjectiveKind::DecreaseInvalidPlanRate => DevelopmentStrategyKind::SimplifyPlanBatch,
+        DevelopmentObjectiveKind::ReduceStalledLoopFrequency => {
+            DevelopmentStrategyKind::RefreshContextBeforeRetry
+        }
+        DevelopmentObjectiveKind::ImproveModuleCohesion => {
+            if !semantic_summary.module_gaps.is_empty() {
+                DevelopmentStrategyKind::CreateMissingModules
+            } else {
+                DevelopmentStrategyKind::RestructureModules
+            }
+        }
+    }
+}
+
 pub fn derive_development_objectives(
     semantic_summary: &SemanticStateSummary,
     objective_state: &SelfDevelopmentObjectiveState,
@@ -702,6 +805,11 @@ impl LlmSemanticContext {
             &self.objective_trend_state,
             &self.semantic_summary,
         );
+        let primary_strategy = primary_development_strategy_kind(
+            &self.objective_state,
+            &self.objective_trend_state,
+            &self.semantic_summary,
+        );
         if let Some(mission) = &self.mission_summary {
             lines.push(format!("mission_summary={mission}"));
         }
@@ -722,6 +830,8 @@ impl LlmSemanticContext {
             primary_objective.as_str()
         ));
         lines.push(format!("primary_objective_focus={}", primary_objective.focus_text()));
+        lines.push(format!("primary_strategy={}", primary_strategy.as_str()));
+        lines.push(format!("primary_strategy_focus={}", primary_strategy.focus_text()));
         lines.extend(development_objective_lines(
             &self.semantic_summary,
             &self.objective_state,
@@ -735,6 +845,11 @@ impl LlmSemanticContext {
 
     pub fn render_router_block(&self) -> String {
         let primary_objective = primary_development_objective_kind(
+            &self.objective_state,
+            &self.objective_trend_state,
+            &self.semantic_summary,
+        );
+        let primary_strategy = primary_development_strategy_kind(
             &self.objective_state,
             &self.objective_trend_state,
             &self.semantic_summary,
@@ -756,6 +871,8 @@ impl LlmSemanticContext {
             primary_objective.as_str()
         ));
         lines.push(format!("primary_objective_focus={}", primary_objective.focus_text()));
+        lines.push(format!("primary_strategy={}", primary_strategy.as_str()));
+        lines.push(format!("primary_strategy_focus={}", primary_strategy.focus_text()));
         if !self.recent_execution_results.is_empty() {
             lines.push(format!(
                 "execution_results={}",
@@ -783,12 +900,22 @@ impl LlmSemanticContext {
             &self.objective_trend_state,
             &self.semantic_summary,
         );
+        let primary_strategy = primary_development_strategy_kind(
+            &self.objective_state,
+            &self.objective_trend_state,
+            &self.semantic_summary,
+        );
         let mut sections = vec![
             self.semantic_summary.render_planner_block(),
             format!(
                 "Primary objective:\n- {} ({})",
                 primary_objective.as_str(),
                 primary_objective.focus_text()
+            ),
+            format!(
+                "Primary strategy:\n- {} ({})",
+                primary_strategy.as_str(),
+                primary_strategy.focus_text()
             ),
             format!(
                 "Development objectives:\n{}",
@@ -834,6 +961,11 @@ impl LlmSemanticContext {
 
     pub fn render_planner_delta_block(&self) -> String {
         let primary_objective = primary_development_objective_kind(
+            &self.objective_state,
+            &self.objective_trend_state,
+            &self.semantic_summary,
+        );
+        let primary_strategy = primary_development_strategy_kind(
             &self.objective_state,
             &self.objective_trend_state,
             &self.semantic_summary,
@@ -892,6 +1024,11 @@ LOC: {}  |  Errors: {}  |  Warnings: {}",
                 "Primary objective:\n- {} ({})",
                 primary_objective.as_str(),
                 primary_objective.focus_text()
+            ),
+            format!(
+                "Primary strategy:\n- {} ({})",
+                primary_strategy.as_str(),
+                primary_strategy.focus_text()
             ),
             format!(
                 "Development objectives:\n{}",
@@ -1382,8 +1519,10 @@ fn next_field_delimiter(marker: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        derive_development_objectives, derive_self_development_objective_state, CompilerHintKind,
-        CompilerHintRecord, DevelopmentObjectiveKind, ObjectiveTrendState, SemanticStateSummary,
+        derive_development_objectives, derive_self_development_objective_state,
+        primary_development_strategy_kind, CompilerHintKind, CompilerHintRecord,
+        DevelopmentObjectiveKind, DevelopmentStrategyKind, ObjectiveTrendState,
+        SemanticStateSummary,
     };
 
     #[test]
@@ -1469,5 +1608,27 @@ mod tests {
         let objectives = derive_development_objectives(&summary, &objective_state, &trend);
         assert_eq!(objectives[0].kind, DevelopmentObjectiveKind::ReduceContradictionRate);
         assert!(objectives[0].priority_score > 0);
+    }
+
+    #[test]
+    fn development_strategy_prefers_config_fix_for_dead_code_conflict() {
+        let summary = SemanticStateSummary {
+            complete: true,
+            path_exists: true,
+            cargo_project: true,
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::DeadCodeForbidConflict,
+                "compiler forbids dead_code while source adds allow(dead_code)",
+                "edit config or lint policy before more source edits",
+                vec![".cargo/config.toml".into()],
+            )],
+            ..SemanticStateSummary::default()
+        };
+        let trend = ObjectiveTrendState::default();
+        let objective_state = derive_self_development_objective_state(&summary, 0, &[], &trend);
+        assert_eq!(
+            primary_development_strategy_kind(&objective_state, &trend, &summary),
+            DevelopmentStrategyKind::FixConfigLintPolicy
+        );
     }
 }

@@ -2,7 +2,8 @@ use canon_event::{new_error_occurred, CapabilityResult, EventConsumer, EventEmit
 use canon_prompt_events::goal_prompt_loaded_event;
 use canon_proc_macros::must_emit;
 use canon_semantic_state::{
-    derive_self_development_objective_state, primary_development_objective_kind, DevelopmentObjectiveKind,
+    derive_self_development_objective_state, primary_development_objective_kind,
+    primary_development_strategy_kind, DevelopmentObjectiveKind, DevelopmentStrategyKind,
     LlmSemanticContext, ObjectiveTrendState, SemanticStateSummary,
 };
 use canon_skills::global_registry;
@@ -122,6 +123,10 @@ impl EventConsumer for GoalGenConsumer {
                     &self.semantic_summary,
                     &self.objective_trend_state,
                 );
+                let selected_goal_strategy = current_primary_strategy(
+                    &self.semantic_summary,
+                    &self.objective_trend_state,
+                );
                 if !objective_override.is_empty() {
                     if let Some(emitter) = &self.emitter {
                         emitter.emit_with_parents(
@@ -142,10 +147,12 @@ impl EventConsumer for GoalGenConsumer {
                 EventOutcome::emit(RuntimeEvent::Llm(LlmCall {
                     request_id: request_id.clone(),
                     prompt: format!(
-                        "{prompt}\n\n{}\n\nGoal generation target objective:\n- {}\n- {}\n{}",
+                        "{prompt}\n\n{}\n\nGoal generation target objective:\n- {}\n- {}\nGoal generation target strategy:\n- {}\n- {}\n{}",
                         semantic_context.render_goal_gen_block(),
                         selected_goal_objective.as_str(),
                         selected_goal_objective.focus_text(),
+                        selected_goal_strategy.as_str(),
+                        selected_goal_strategy.focus_text(),
                         objective_override
                     ),
                     role: Some("goal_gen".to_string()),
@@ -333,6 +340,14 @@ fn current_primary_objective(
 ) -> DevelopmentObjectiveKind {
     let objective_state = derive_self_development_objective_state(semantic_summary, 0, &[], objective_trend_state);
     primary_development_objective_kind(&objective_state, objective_trend_state, semantic_summary)
+}
+
+fn current_primary_strategy(
+    semantic_summary: &SemanticStateSummary,
+    objective_trend_state: &ObjectiveTrendState,
+) -> DevelopmentStrategyKind {
+    let objective_state = derive_self_development_objective_state(semantic_summary, 0, &[], objective_trend_state);
+    primary_development_strategy_kind(&objective_state, objective_trend_state, semantic_summary)
 }
 
 fn infer_goal_objective(goal_text: &str) -> Option<DevelopmentObjectiveKind> {

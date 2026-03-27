@@ -466,6 +466,18 @@ fn validate_action_batch(
         recent_execution_results,
         objective_trend_state,
     )?;
+    planning_preconditions::validate_development_strategy_alignment(
+        actions,
+        &target_root,
+        semantic_summary,
+        &canon_semantic_state::derive_self_development_objective_state(
+            semantic_summary,
+            0,
+            recent_execution_results,
+            objective_trend_state,
+        ),
+        objective_trend_state,
+    )?;
 
     Ok(())
 }

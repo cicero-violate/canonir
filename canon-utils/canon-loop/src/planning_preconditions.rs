@@ -1,6 +1,9 @@
 use crate::compiler_hints::extract_compiler_hints;
 use crate::env_model::{EntrypointKind, WorkspaceModel};
-use canon_semantic_state::{CompilerHintKind, SemanticStateSummary};
+use canon_semantic_state::{
+    primary_development_strategy_kind, CompilerHintKind, DevelopmentStrategyKind, ObjectiveTrendState,
+    SelfDevelopmentObjectiveState, SemanticStateSummary,
+};
 use canon_tools_patch::parse_patch;
 use std::path::{Path, PathBuf};
 
@@ -324,6 +327,95 @@ pub fn validate_objective_route_plan_alignment(
     Ok(())
 }
 
+pub fn validate_development_strategy_alignment(
+    actions: &[canon_event::LoopPlanned],
+    target_root: &Path,
+    semantic_summary: &SemanticStateSummary,
+    objective_state: &SelfDevelopmentObjectiveState,
+    objective_trend_state: &ObjectiveTrendState,
+) -> Result<(), String> {
+    let action_intents = collect_action_intents(actions, target_root);
+    let strategy =
+        primary_development_strategy_kind(objective_state, objective_trend_state, semantic_summary);
+    match strategy {
+        DevelopmentStrategyKind::FixConfigLintPolicy => {
+            let targets_config = actions.iter().any(|action| {
+                touches_any_path(
+                    action,
+                    target_root,
+                    &[
+                        target_root.join(".cargo/config.toml").as_path(),
+                        target_root.join("Cargo.toml").as_path(),
+                    ],
+                )
+            });
+            if !targets_config {
+                return Err(
+                    "active development strategy requires a config-level lint/toolchain fix before more source edits"
+                        .to_string(),
+                );
+            }
+        }
+        DevelopmentStrategyKind::DiscoverTestSurface => {
+            let discovery_only = actions.iter().all(|action| {
+                matches!(
+                    action.action_kind.as_str(),
+                    "list_dir" | "read_file" | "search_files"
+                )
+            });
+            if !discovery_only {
+                return Err(
+                    "active development strategy requires discovery-only work to map the existing test surface"
+                        .to_string(),
+                );
+            }
+        }
+        DevelopmentStrategyKind::AddRegressionTest => {
+            let touches_tests = actions.iter().any(|action| touches_test_surface(action, target_root));
+            if !touches_tests {
+                return Err(
+                    "active development strategy requires the first batch to touch the test surface"
+                        .to_string(),
+                );
+            }
+        }
+        DevelopmentStrategyKind::SimplifyPlanBatch => {
+            if actions.len() > 1 {
+                return Err(
+                    "active development strategy requires a simpler first batch; emit one action only"
+                        .to_string(),
+                );
+            }
+        }
+        DevelopmentStrategyKind::CreateMissingModules => {
+            if !contains_expected_module_target(&action_intents, semantic_summary, target_root) {
+                return Err(
+                    "active development strategy requires creating or wiring the missing module files first"
+                        .to_string(),
+                );
+            }
+        }
+        DevelopmentStrategyKind::RefreshContextBeforeRetry => {
+            let has_discovery = actions.iter().any(|action| {
+                matches!(
+                    action.action_kind.as_str(),
+                    "list_dir" | "read_file" | "search_files"
+                )
+            });
+            if !has_discovery {
+                return Err(
+                    "active development strategy requires refreshing context before retrying another repair"
+                        .to_string(),
+                );
+            }
+        }
+        DevelopmentStrategyKind::ApplyTargetedCompilerRepair
+        | DevelopmentStrategyKind::RealignObjectiveFlow
+        | DevelopmentStrategyKind::RestructureModules => {}
+    }
+    Ok(())
+}
+
 fn validate_highest_priority_intent(
     actions: &[canon_event::LoopPlanned],
     target_root: &Path,
@@ -634,6 +726,23 @@ fn contains_dead_code_conflict_fix(actions: &[canon_event::LoopPlanned], target_
                 .is_some_and(|patch| patch.contains("allow(dead_code)"));
         }
         true
+    })
+}
+
+fn touches_test_surface(action: &canon_event::LoopPlanned, target_root: &Path) -> bool {
+    touches_any_path(
+        action,
+        target_root,
+        &[
+            target_root.join("tests").as_path(),
+            target_root.join("src").as_path(),
+        ],
+    ) && touched_paths(action).into_iter().any(|path| {
+        let text = path.to_string_lossy();
+        text.contains("/tests/")
+            || text.starts_with("tests/")
+            || text.ends_with("_test.rs")
+            || text.ends_with("_tests.rs")
     })
 }
 
