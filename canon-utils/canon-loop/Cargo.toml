@@ -14,6 +14,7 @@ uuid.workspace = true
 canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
 canon-meta = { path = "../canon-meta" }
 canon-goal = { path = "../canon-goal" }
+canon-semantic-state = { path = "../canon-semantic-state" }
 canon-tools-search = { path = "../canon-tools-search" }
 canon-tools-patch = { path = "../canon-tools-patch" }
 canon_invariant = { package = "canon-invariant", path = "../canon-invariant" }

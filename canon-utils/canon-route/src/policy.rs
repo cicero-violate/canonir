@@ -1,6 +1,7 @@
 use crate::{context::RouteContext, decision::RouteDecision};
 use canon_decision::RouteKind;
 use canon_event::RuntimeEvent;
+use canon_semantic_state::SemanticStateSummary;
 use serde_json::Value;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +32,7 @@ pub enum VerifyOutcomeClass {
 pub enum RoutePolicyRule {
     ForcePlanOnRepeatedObserve,
     ForcePlanOnMissingTarget,
+    ForcePlanOnBlockedValidation,
     CycleCapToPlan,
     CycleCapToObserve,
 }
@@ -204,6 +206,7 @@ impl RoutePolicyRule {
         match self {
             Self::ForcePlanOnRepeatedObserve => "repeated observe on unchanged state requires plan",
             Self::ForcePlanOnMissingTarget => "target workspace missing requires bootstrap plan",
+            Self::ForcePlanOnBlockedValidation => "validation is blocked by planning preconditions; forcing plan",
             Self::CycleCapToPlan => "cycle cap reached but actionable failure remains; forcing plan",
             Self::CycleCapToObserve => "cycle cap reached without terminal success; forcing observe",
         }
@@ -213,6 +216,7 @@ impl RoutePolicyRule {
         match self {
             Self::ForcePlanOnRepeatedObserve => "repeated observe on unchanged state requires plan",
             Self::ForcePlanOnMissingTarget => "target workspace missing requires bootstrap plan",
+            Self::ForcePlanOnBlockedValidation => "validation blocked by preconditions requires plan",
             Self::CycleCapToPlan => "cycle cap conclude blocked by actionable failure",
             Self::CycleCapToObserve => "cycle cap conclude downgraded to observe",
         }
@@ -222,6 +226,7 @@ impl RoutePolicyRule {
         match self {
             Self::ForcePlanOnRepeatedObserve => "observe would not advance state; forcing plan",
             Self::ForcePlanOnMissingTarget => "target workspace missing; verify/observe would not bootstrap the project",
+            Self::ForcePlanOnBlockedValidation => "validation would fail before required repair work; forcing plan",
             Self::CycleCapToPlan => "recent failure evidence requires replanning instead of terminal conclude",
             Self::CycleCapToObserve => "no terminal success signal exists; refresh context instead of terminal conclude",
         }
@@ -308,14 +313,14 @@ pub fn evaluate_route_dispatch(
             deterministic: None,
         };
     }
-    if ctx.target_workspace_missing && ctx.planned_pending == 0 {
+    if ctx.target_workspace_missing_state() && ctx.planned_pending == 0 {
         return RouteDispatchEvaluation {
             suppression: None,
             deterministic: Some(DeterministicRouteDecision {
                 route: RouteKind::Plan,
                 rationale: format!(
                     "target workspace is missing at {}; route directly to plan to create/bootstrap it",
-                    ctx.target_workspace_path.as_deref().unwrap_or("unknown")
+                    ctx.target_workspace_path_state().unwrap_or("unknown")
                 ),
                 confidence: 0.99,
                 prompt_tag: "deterministic:target_workspace_missing",
@@ -532,8 +537,14 @@ pub fn evaluate_route_transition(
             {
                 rules.push(RoutePolicyRule::ForcePlanOnRepeatedObserve);
             }
-            if ctx.target_workspace_missing && ctx.planned_pending == 0 && decision.lane != RouteKind::Plan {
+            if ctx.target_workspace_missing_state() && ctx.planned_pending == 0 && decision.lane != RouteKind::Plan {
                 rules.push(RoutePolicyRule::ForcePlanOnMissingTarget);
+            }
+            if decision.lane == RouteKind::Verify
+                && ctx.validation_blocked_state()
+                && ctx.planned_pending == 0
+            {
+                rules.push(RoutePolicyRule::ForcePlanOnBlockedValidation);
             }
             if let Some(fallback_lane) = cycle_cap_fallback_lane(ctx, decision) {
                 rules.push(if fallback_lane == RouteKind::Plan {
@@ -605,7 +616,10 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
 
 fn apply_rule(decision: &mut RouteDecision, rule: RoutePolicyRule) {
     match rule {
-        RoutePolicyRule::ForcePlanOnRepeatedObserve | RoutePolicyRule::ForcePlanOnMissingTarget | RoutePolicyRule::CycleCapToPlan => {
+        RoutePolicyRule::ForcePlanOnRepeatedObserve
+        | RoutePolicyRule::ForcePlanOnMissingTarget
+        | RoutePolicyRule::ForcePlanOnBlockedValidation
+        | RoutePolicyRule::CycleCapToPlan => {
             decision.lane = RouteKind::Plan;
         }
         RoutePolicyRule::CycleCapToObserve => {
@@ -642,6 +656,13 @@ pub fn cycle_cap_fallback_lane(ctx: &RouteContext, decision: &RouteDecision) -> 
 }
 
 pub fn has_actionable_failure(ctx: &RouteContext) -> bool {
+    if semantic_repair_state_is_actionable(&ctx.semantic_summary)
+        || ctx.validation_blocked_state()
+        || ctx.compiler_repair_required_state()
+        || !ctx.planning_preconditions_state().is_empty()
+    {
+        return true;
+    }
     if let Some(class) = latest_verify_outcome(ctx) {
         return matches!(class, VerifyOutcomeClass::CompilerFailure | VerifyOutcomeClass::FailedNoCompilerSignal);
     }
@@ -664,6 +685,12 @@ pub fn has_actionable_failure(ctx: &RouteContext) -> bool {
             r.get("action").and_then(|v| v.as_str()) != Some("run_command")
                 && r.get("success").and_then(|v| v.as_bool()) == Some(false)
         })
+}
+
+pub fn semantic_repair_state_is_actionable(summary: &SemanticStateSummary) -> bool {
+    summary.validation_blocked_by_preconditions
+        || summary.compiler_repair_required
+        || !summary.repair_intents.is_empty()
 }
 
 pub fn latest_verify_outcome(ctx: &RouteContext) -> Option<VerifyOutcomeClass> {
@@ -946,6 +973,39 @@ mod tests {
     }
 
     #[test]
+    fn semantic_repair_state_counts_as_actionable_failure() {
+        let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.repair_intents =
+            vec!["repair_intent=create_missing_modules priority=4".into()];
+        assert!(has_actionable_failure(&ctx));
+    }
+
+    #[test]
+    fn semantic_target_path_is_used_for_missing_target_dispatch() {
+        let mut ctx = RouteContext::default();
+        ctx.context_ready = true;
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.path_exists = false;
+        ctx.semantic_summary.target_root = Some("/tmp/semantic-target".into());
+        let eval = evaluate_route_dispatch(
+            &ctx,
+            RoutePolicyState {
+                last_control_kind: None,
+                pending_required_successor: None,
+            },
+            RouteDispatchState {
+                pending_request_id: None,
+                awaiting_control_successor: None,
+                route_emitted_for_current_control: false,
+            },
+        );
+        let deterministic = eval.deterministic.expect("expected deterministic dispatch");
+        assert_eq!(deterministic.rule, DeterministicRouteRule::MissingTargetPlan);
+        assert!(deterministic.rationale.contains("/tmp/semantic-target"));
+    }
+
+    #[test]
     fn apply_route_policy_forces_plan_on_repeated_observe() {
         let ctx = RouteContext::default();
         let mut d = decision(RouteKind::Observe, RouteKind::Observe, "accepted");
@@ -964,7 +1024,8 @@ mod tests {
     #[test]
     fn apply_route_policy_forces_plan_for_missing_target_without_work() {
         let mut ctx = RouteContext::default();
-        ctx.target_workspace_missing = true;
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.path_exists = false;
         let mut d = decision(RouteKind::Verify, RouteKind::Verify, "accepted");
         let rules = apply_route_policy(
             &ctx,
@@ -975,6 +1036,28 @@ mod tests {
             &mut d,
         );
         assert_eq!(rules, vec![RoutePolicyRule::ForcePlanOnMissingTarget]);
+        assert_eq!(d.lane, RouteKind::Plan);
+    }
+
+    #[test]
+    fn apply_route_policy_forces_plan_when_validation_is_precondition_blocked() {
+        let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.path_exists = true;
+        ctx.semantic_summary.validation_blocked_by_preconditions = true;
+        ctx.semantic_summary.planning_preconditions = vec![
+            "must_create_entrypoint=true repair=create_src_main_or_lib_before_cargo_check".into(),
+        ];
+        let mut d = decision(RouteKind::Verify, RouteKind::Verify, "accepted");
+        let rules = apply_route_policy(
+            &ctx,
+            RoutePolicyState {
+                last_control_kind: None,
+                pending_required_successor: None,
+            },
+            &mut d,
+        );
+        assert_eq!(rules, vec![RoutePolicyRule::ForcePlanOnBlockedValidation]);
         assert_eq!(d.lane, RouteKind::Plan);
     }
 

@@ -1363,7 +1363,11 @@ fn assert_route_row(row: &RouteTransitionRow) {
     ctx.consecutive_invalid_plan_batches = row.context.consecutive_invalid_plan_batches;
     ctx.planned_pending = row.context.planned_pending;
     ctx.bootstrap_refresh_required = row.context.bootstrap_refresh_required;
-    ctx.target_workspace_missing = row.context.target_workspace_missing;
+    if row.context.target_workspace_missing {
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.path_exists = false;
+        ctx.semantic_summary.target_root = Some("/tmp/matrix-target".to_string());
+    }
     ctx.finish_ready = row.context.finish_ready;
     ctx.last_action_failed = row.context.last_action_failed;
     if row.context.pending_tool_results_empty {
@@ -1400,7 +1404,11 @@ fn assert_route_dispatch_row(row: &RouteDispatchRow) {
     ctx.context_ready = row.context.context_ready;
     ctx.consecutive_invalid_plan_batches = row.context.consecutive_invalid_plan_batches;
     ctx.planned_pending = row.context.planned_pending;
-    ctx.target_workspace_missing = row.context.target_workspace_missing;
+    if row.context.target_workspace_missing {
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.path_exists = false;
+        ctx.semantic_summary.target_root = Some("/tmp/matrix-target".to_string());
+    }
     apply_route_outcome_context(&mut ctx, &row.context);
     let eval = evaluate_route_dispatch(
         &ctx,

@@ -17,6 +17,7 @@ canon-meta = { path = "../canon-meta" }
 canon_decision = { package = "canon-decision", path = "../canon-decision" }
 canon_judgment = { package = "canon-judgment", path = "../canon-judgment" }
 canon_goal = { package = "canon-goal", path = "../canon-goal" }
+canon-semantic-state = { path = "../canon-semantic-state" }
 canon_exec = { package = "canon-exec", path = "../canon-exec" }
 canon_runtime_supervisor = { package = "canon-runtime-supervisor", path = "../canon-runtime-supervisor" }
 canon_invariant = { package = "canon-invariant", path = "../canon-invariant" }

@@ -250,9 +250,10 @@ impl RouteExecutor {
         self.force_fresh_route_once = false;
         if let Some(emitter) = self.emitter.as_ref() {
             let tid = self.current_trigger.clone().expect("try_dispatch_route called without current_trigger");
+            let semantic_summary_block = self.ctx.semantic_summary.render_route_block();
             emitter.emit_with_parents(canon_event::RuntimeEvent::Llm(LlmCall {
                 request_id,
-                prompt,
+                prompt: format!("{prompt}\n\n{semantic_summary_block}"),
                 role: Some("router".to_string()),
                 agent_id: Some("router_chatgpt_group".to_string()),
                 dispatched: true,

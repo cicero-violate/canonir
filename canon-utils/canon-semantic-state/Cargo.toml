@@ -1,0 +1,12 @@
+[package]
+name = "canon-semantic-state"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "canon_semantic_state"
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
