@@ -30,6 +30,20 @@ pub enum RepairIntent {
     FixTraitBoundFailure,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ActionIntent {
+    BootstrapWorkspace,
+    InitCargoProject,
+    ValidateCargoCheck,
+    CreateEntrypoint(PathBuf),
+    CreateModuleFile(PathBuf),
+    FixDeadCodeConflict(PathBuf),
+    FixUnresolvedImport(PathBuf),
+    DefineMissingSymbol(PathBuf),
+    ResolveDuplicateDefinition(PathBuf),
+    FixTraitBoundFailure(PathBuf),
+}
+
 pub fn derive_preconditions(
     workspace_model: Option<&WorkspaceModel>,
     compiler_errors: &[serde_json::Value],
@@ -211,6 +225,7 @@ pub fn validate_preconditions(
     semantic_summary: &SemanticStateSummary,
 ) -> Result<(), String> {
     let intents = derive_repair_intents(preconditions);
+    let action_intents = collect_action_intents(actions, target_root);
     if preconditions.contains(&PlanningPrecondition::MustBootstrapWorkspace) && !contains_bootstrap_action(actions) {
         return Err("target workspace is missing; first plan must create/init the workspace".to_string());
     }
@@ -237,25 +252,25 @@ pub fn validate_preconditions(
     }
     if preconditions.contains(&PlanningPrecondition::MustFixUnresolvedImport)
         && contains_cargo_check(actions)
-        && !contains_expected_hint_target(actions, semantic_summary, "unresolved_import", target_root)
+        && !contains_expected_hint_target(&action_intents, semantic_summary, "unresolved_import", target_root)
     {
         return Err("cargo check planned before fixing unresolved import".to_string());
     }
     if preconditions.contains(&PlanningPrecondition::MustDefineMissingSymbol)
         && contains_cargo_check(actions)
-        && !contains_expected_hint_target(actions, semantic_summary, "missing_symbol", target_root)
+        && !contains_expected_hint_target(&action_intents, semantic_summary, "missing_symbol", target_root)
     {
         return Err("cargo check planned before defining or importing missing symbol".to_string());
     }
     if preconditions.contains(&PlanningPrecondition::MustResolveDuplicateDefinition)
         && contains_cargo_check(actions)
-        && !contains_expected_hint_target(actions, semantic_summary, "duplicate_definition", target_root)
+        && !contains_expected_hint_target(&action_intents, semantic_summary, "duplicate_definition", target_root)
     {
         return Err("cargo check planned before resolving duplicate definition".to_string());
     }
     if preconditions.contains(&PlanningPrecondition::MustFixTraitBoundFailure)
         && contains_cargo_check(actions)
-        && !contains_expected_hint_target(actions, semantic_summary, "trait_bound_failure", target_root)
+        && !contains_expected_hint_target(&action_intents, semantic_summary, "trait_bound_failure", target_root)
     {
         return Err("cargo check planned before fixing actionable trait bound failure".to_string());
     }
@@ -271,16 +286,21 @@ fn validate_highest_priority_intent(
     intent: &RepairIntent,
     semantic_summary: &SemanticStateSummary,
 ) -> Result<(), String> {
+    let action_intents = collect_action_intents(actions, target_root);
     let satisfied = match intent {
-        RepairIntent::BootstrapWorkspace => contains_bootstrap_action(actions),
-        RepairIntent::InitCargoProject => contains_cargo_init(actions),
-        RepairIntent::CreateEntrypoint => contains_expected_entrypoint_target(actions, semantic_summary, target_root),
-        RepairIntent::CreateMissingModules => contains_expected_module_target(actions, semantic_summary, target_root),
-        RepairIntent::FixDeadCodeForbidConflict => contains_expected_dead_code_target(actions, semantic_summary, target_root),
-        RepairIntent::FixUnresolvedImport => contains_expected_hint_target(actions, semantic_summary, "unresolved_import", target_root),
-        RepairIntent::DefineMissingSymbol => contains_expected_hint_target(actions, semantic_summary, "missing_symbol", target_root),
-        RepairIntent::ResolveDuplicateDefinition => contains_expected_hint_target(actions, semantic_summary, "duplicate_definition", target_root),
-        RepairIntent::FixTraitBoundFailure => contains_expected_hint_target(actions, semantic_summary, "trait_bound_failure", target_root),
+        RepairIntent::BootstrapWorkspace => {
+            action_intents.iter().any(|intent| matches!(intent, ActionIntent::BootstrapWorkspace | ActionIntent::InitCargoProject))
+        }
+        RepairIntent::InitCargoProject => {
+            action_intents.iter().any(|intent| matches!(intent, ActionIntent::InitCargoProject))
+        }
+        RepairIntent::CreateEntrypoint => contains_expected_entrypoint_target(&action_intents, semantic_summary, target_root),
+        RepairIntent::CreateMissingModules => contains_expected_module_target(&action_intents, semantic_summary, target_root),
+        RepairIntent::FixDeadCodeForbidConflict => contains_expected_dead_code_target(&action_intents, semantic_summary, target_root),
+        RepairIntent::FixUnresolvedImport => contains_expected_hint_target(&action_intents, semantic_summary, "unresolved_import", target_root),
+        RepairIntent::DefineMissingSymbol => contains_expected_hint_target(&action_intents, semantic_summary, "missing_symbol", target_root),
+        RepairIntent::ResolveDuplicateDefinition => contains_expected_hint_target(&action_intents, semantic_summary, "duplicate_definition", target_root),
+        RepairIntent::FixTraitBoundFailure => contains_expected_hint_target(&action_intents, semantic_summary, "trait_bound_failure", target_root),
     };
     if satisfied {
         Ok(())
@@ -302,76 +322,49 @@ fn validate_highest_priority_intent(
 }
 
 fn contains_expected_entrypoint_target(
-    actions: &[canon_event::LoopPlanned],
+    action_intents: &[ActionIntent],
     semantic_summary: &SemanticStateSummary,
     target_root: &Path,
 ) -> bool {
     let expected = expected_entrypoint_paths(semantic_summary, target_root);
-    if expected.is_empty() {
-        contains_entrypoint_creation(actions, target_root)
-    } else {
-        actions
-            .iter()
-            .any(|action| creates_any_owned_paths(action, target_root, &expected))
-    }
+    action_intents.iter().any(|intent| match intent {
+        ActionIntent::CreateEntrypoint(path) => expected.is_empty() || expected.iter().any(|candidate| candidate == path),
+        _ => false,
+    })
 }
 
 fn contains_expected_module_target(
-    actions: &[canon_event::LoopPlanned],
+    action_intents: &[ActionIntent],
     semantic_summary: &SemanticStateSummary,
     target_root: &Path,
 ) -> bool {
     let expected = expected_module_paths(semantic_summary, target_root);
-    if expected.is_empty() {
-        contains_module_creation(actions, target_root)
-    } else {
-        actions
-            .iter()
-            .any(|action| creates_any_owned_paths(action, target_root, &expected))
-    }
+    action_intents.iter().any(|intent| match intent {
+        ActionIntent::CreateModuleFile(path) => expected.is_empty() || expected.iter().any(|candidate| candidate == path),
+        _ => false,
+    })
 }
 
 fn contains_expected_dead_code_target(
-    actions: &[canon_event::LoopPlanned],
+    action_intents: &[ActionIntent],
     semantic_summary: &SemanticStateSummary,
     target_root: &Path,
 ) -> bool {
     let expected = expected_dead_code_paths(semantic_summary, target_root);
-    if expected.is_empty() {
-        contains_dead_code_conflict_fix(actions, target_root)
-    } else {
-        actions.iter().any(|action| {
-            touches_any_owned_paths(action, target_root, &expected)
-                && (action.action_kind != "apply_patch"
-                    || action
-                        .action_payload
-                        .get("patch")
-                        .and_then(|v| v.as_str())
-                        .is_some_and(|patch| patch.contains("allow(dead_code)")))
-        })
-    }
+    action_intents.iter().any(|intent| match intent {
+        ActionIntent::FixDeadCodeConflict(path) => expected.is_empty() || expected.iter().any(|candidate| candidate == path),
+        _ => false,
+    })
 }
 
 fn contains_expected_hint_target(
-    actions: &[canon_event::LoopPlanned],
+    action_intents: &[ActionIntent],
     semantic_summary: &SemanticStateSummary,
     hint_kind: &str,
     target_root: &Path,
 ) -> bool {
     let expected = expected_hint_paths(semantic_summary, hint_kind, target_root);
-    if expected.is_empty() {
-        actions.iter().any(|action| {
-            !normalized_touched_paths(action, target_root).is_empty()
-                && action_matches_hint_kind(action, hint_kind)
-        })
-    } else {
-        actions
-            .iter()
-            .any(|action| {
-                touches_any_owned_paths(action, target_root, &expected)
-                    && action_matches_hint_kind(action, hint_kind)
-            })
-    }
+    action_intents.iter().any(|intent| match_action_intent(intent, hint_kind, &expected))
 }
 
 fn contains_bootstrap_action(actions: &[canon_event::LoopPlanned]) -> bool {
@@ -413,6 +406,84 @@ fn contains_entrypoint_creation(actions: &[canon_event::LoopPlanned], target_roo
     actions
         .iter()
         .any(|action| touches_any_path(action, target_root, &[main.as_path(), lib.as_path()]))
+}
+
+fn collect_action_intents(actions: &[canon_event::LoopPlanned], target_root: &Path) -> Vec<ActionIntent> {
+    let mut out = Vec::new();
+    for action in actions {
+        classify_action_intents(action, target_root, &mut out);
+    }
+    out
+}
+
+fn classify_action_intents(
+    action: &canon_event::LoopPlanned,
+    target_root: &Path,
+    out: &mut Vec<ActionIntent>,
+) {
+    if action.action_kind == "run_command" {
+        if let Some(cmd) = action.action_payload.get("cmd").and_then(|v| v.as_str()) {
+            if cmd.contains("cargo new") {
+                out.push(ActionIntent::BootstrapWorkspace);
+            }
+            if cmd.contains("cargo init") {
+                out.push(ActionIntent::InitCargoProject);
+            }
+            if cmd.contains("cargo check") {
+                out.push(ActionIntent::ValidateCargoCheck);
+            }
+        }
+    }
+
+    let touched = normalized_touched_paths(action, target_root);
+    let created = normalized_created_paths(action, target_root);
+    let patch = action
+        .action_payload
+        .get("patch")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    for path in &created {
+        let path_text = path.to_string_lossy();
+        if path_text.ends_with("src/main.rs") || path_text.ends_with("src/lib.rs") {
+            out.push(ActionIntent::CreateEntrypoint(path.clone()));
+        } else if path_text.ends_with(".rs") {
+            out.push(ActionIntent::CreateModuleFile(path.clone()));
+        }
+    }
+
+    for path in &touched {
+        if patch.contains("allow(dead_code)")
+            && (path.to_string_lossy().ends_with("src/lib.rs")
+                || path.to_string_lossy().ends_with("src/main.rs"))
+        {
+            out.push(ActionIntent::FixDeadCodeConflict(path.clone()));
+        }
+        if is_import_edit(patch) {
+            out.push(ActionIntent::FixUnresolvedImport(path.clone()));
+        }
+        if is_missing_symbol_edit(patch) {
+            out.push(ActionIntent::DefineMissingSymbol(path.clone()));
+        }
+        if is_duplicate_definition_edit(patch) {
+            out.push(ActionIntent::ResolveDuplicateDefinition(path.clone()));
+        }
+        if is_trait_bound_edit(patch) {
+            out.push(ActionIntent::FixTraitBoundFailure(path.clone()));
+        }
+    }
+}
+
+fn match_action_intent(intent: &ActionIntent, hint_kind: &str, expected: &[PathBuf]) -> bool {
+    match (hint_kind, intent) {
+        ("unresolved_import", ActionIntent::FixUnresolvedImport(path))
+        | ("missing_symbol", ActionIntent::DefineMissingSymbol(path))
+        | ("duplicate_definition", ActionIntent::ResolveDuplicateDefinition(path))
+        | ("trait_bound_failure", ActionIntent::FixTraitBoundFailure(path)) => {
+            expected.is_empty() || expected.iter().any(|candidate| candidate == path)
+        }
+        _ => false,
+    }
 }
 
 fn contains_module_creation(actions: &[canon_event::LoopPlanned], target_root: &Path) -> bool {
@@ -517,50 +588,6 @@ fn touches_any_path(action: &canon_event::LoopPlanned, target_root: &Path, expec
     expected.iter().any(|path| touched.iter().any(|candidate| candidate == path))
 }
 
-fn touches_any_owned_paths(action: &canon_event::LoopPlanned, target_root: &Path, expected: &[PathBuf]) -> bool {
-    let touched = normalized_touched_paths(action, target_root);
-    expected.iter().any(|path| touched.iter().any(|candidate| candidate == path))
-}
-
-fn creates_any_owned_paths(action: &canon_event::LoopPlanned, target_root: &Path, expected: &[PathBuf]) -> bool {
-    let created = normalized_created_paths(action, target_root);
-    expected.iter().any(|path| created.iter().any(|candidate| candidate == path))
-}
-
-fn action_matches_hint_kind(action: &canon_event::LoopPlanned, hint_kind: &str) -> bool {
-    if action.action_kind != "apply_patch" {
-        return true;
-    }
-    let Some(patch) = action.action_payload.get("patch").and_then(|v| v.as_str()) else {
-        return true;
-    };
-    match hint_kind {
-        "unresolved_import" => {
-            patch.contains("use ")
-                || patch.contains("mod ")
-                || patch.contains("pub use ")
-                || patch.contains("extern crate ")
-        }
-        "missing_symbol" => {
-            (patch.contains("fn ")
-                && !patch.contains("fn main"))
-                || patch.contains("struct ")
-                || patch.contains("enum ")
-                || patch.contains("type ")
-                || patch.contains("const ")
-                || patch.contains("let ")
-                || patch.contains("impl ")
-                || patch.contains("use ")
-        }
-        "duplicate_definition" => {
-            patch.contains("rename")
-                || has_definition_edit(patch)
-        }
-        "trait_bound_failure" => has_trait_bound_edit(patch),
-        _ => true,
-    }
-}
-
 fn has_definition_edit(patch: &str) -> bool {
     patch.lines().any(|line| {
         (line.starts_with('+') || line.starts_with('-'))
@@ -581,6 +608,32 @@ fn has_trait_bound_edit(patch: &str) -> bool {
                 || line.contains("derive(")
                 || line.contains(": "))
     })
+}
+
+fn is_import_edit(patch: &str) -> bool {
+    patch.contains("use ")
+        || patch.contains("mod ")
+        || patch.contains("pub use ")
+        || patch.contains("extern crate ")
+}
+
+fn is_missing_symbol_edit(patch: &str) -> bool {
+    (patch.contains("fn ") && !patch.contains("fn main"))
+        || patch.contains("struct ")
+        || patch.contains("enum ")
+        || patch.contains("type ")
+        || patch.contains("const ")
+        || patch.contains("let ")
+        || patch.contains("impl ")
+        || patch.contains("use ")
+}
+
+fn is_duplicate_definition_edit(patch: &str) -> bool {
+    patch.contains("rename") || has_definition_edit(patch)
+}
+
+fn is_trait_bound_edit(patch: &str) -> bool {
+    has_trait_bound_edit(patch)
 }
 
 fn normalized_touched_paths(action: &canon_event::LoopPlanned, target_root: &Path) -> Vec<PathBuf> {
