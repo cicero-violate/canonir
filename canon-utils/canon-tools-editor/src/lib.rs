@@ -85,6 +85,16 @@ pub fn move_symbol_pairs(project: &Path, moves: &[(String, String)]) -> RenameRu
             return report;
         }
     };
+    if let Err(err) = session.validate_invariants() {
+        publish_invariant_error(
+            project,
+            "move_symbol_index",
+            &err.to_string(),
+            serde_json::json!({ "moves": moves }),
+        );
+        report.error = Some(err.to_string());
+        return report;
+    }
     let mut editor = match ProjectEditor::load_with_session(project, session) {
         Ok(editor) => editor,
         Err(err) => {
@@ -94,6 +104,32 @@ pub fn move_symbol_pairs(project: &Path, moves: &[(String, String)]) -> RenameRu
     };
 
     for (symbol_id, new_module_path) in moves {
+        if !editor
+            .session
+            .as_ref()
+            .is_some_and(|index| index.contains(symbol_id))
+        {
+            let message = format!("preflight invariant: move symbol not in index: {symbol_id}");
+            publish_invariant_error(
+                project,
+                "move_symbol_preflight",
+                &message,
+                serde_json::json!({ "symbol_id": symbol_id, "new_module_path": new_module_path }),
+            );
+            report.error = Some(message);
+            return report;
+        }
+        if !editor.registry.module_files.contains_key(new_module_path) {
+            let message = format!("preflight invariant: target module not in index: {new_module_path}");
+            publish_invariant_error(
+                project,
+                "move_symbol_preflight",
+                &message,
+                serde_json::json!({ "symbol_id": symbol_id, "new_module_path": new_module_path }),
+            );
+            report.error = Some(message);
+            return report;
+        }
         let handle = match editor.synthetic_handle_from_symbol_id(symbol_id) {
             Ok(handle) => handle,
             Err(err) => {
@@ -125,6 +161,24 @@ pub fn move_symbol_pairs(project: &Path, moves: &[(String, String)]) -> RenameRu
             return report;
         }
         Ok(preview) => report.def_paths.push(preview),
+    }
+
+    for (symbol_id, new_module_path) in moves {
+        let name = symbol_id.rsplit("::").next().unwrap_or(symbol_id.as_str());
+        let moved_symbol = format!("{new_module_path}::{name}");
+        if source_symbol_exists_in_sources(&editor.registry.sources, symbol_id)
+            || !source_symbol_exists_in_sources(&editor.registry.sources, &moved_symbol)
+        {
+            let message = format!("post invariant: move verification failed for {symbol_id} -> {moved_symbol}");
+            publish_invariant_error(
+                project,
+                "move_symbol_post",
+                &message,
+                serde_json::json!({ "symbol_id": symbol_id, "moved_symbol": moved_symbol }),
+            );
+            report.error = Some(message);
+            return report;
+        }
     }
 
     if let Err(err) = editor.commit() {
@@ -159,9 +213,46 @@ pub fn add_import_paths(project: &Path, imports: &[(String, String)]) -> RenameR
     let mut report = RenameRunReport::default();
     for (path, import_path) in imports {
         let full_path = project.join(path);
+        if !full_path.exists() {
+            let message = format!("preflight invariant: import target file missing: {}", full_path.display());
+            publish_invariant_error(
+                project,
+                "add_import_preflight",
+                &message,
+                serde_json::json!({ "path": path, "import": import_path }),
+            );
+            report.error = Some(message);
+            return report;
+        }
+        if !is_canonical_import_path(import_path) {
+            let message = format!("preflight invariant: import path is not canonical: {import_path}");
+            publish_invariant_error(
+                project,
+                "add_import_preflight",
+                &message,
+                serde_json::json!({ "path": path, "import": import_path }),
+            );
+            report.error = Some(message);
+            return report;
+        }
         if let Err(err) = add_import_path(&full_path, import_path) {
             report.error = Some(format!("{err:?}"));
             return report;
+        }
+        let import_line = format!("use {import_path};");
+        match stdfs::read_to_string(&full_path) {
+            Ok(content) if content.lines().any(|line| line.trim() == import_line) => {}
+            _ => {
+                let message = format!("post invariant: import not present after apply: {import_path}");
+                publish_invariant_error(
+                    project,
+                    "add_import_post",
+                    &message,
+                    serde_json::json!({ "path": path, "import": import_path }),
+                );
+                report.error = Some(message);
+                return report;
+            }
         }
         report.def_paths.push(path.clone());
     }
@@ -191,8 +282,30 @@ pub fn create_module_files(
     let mut report = RenameRunReport::default();
     for (path, module_name) in modules {
         let full_path = project.join(path);
+        if full_path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+            let message = format!("preflight invariant: module path must be a Rust source file: {}", full_path.display());
+            publish_invariant_error(
+                project,
+                "create_module_preflight",
+                &message,
+                serde_json::json!({ "path": path, "module": module_name }),
+            );
+            report.error = Some(message);
+            return report;
+        }
         if let Err(err) = create_module_file(&full_path, module_name.as_deref()) {
             report.error = Some(format!("{err:?}"));
+            return report;
+        }
+        if !full_path.exists() {
+            let message = format!("post invariant: module file not created: {}", full_path.display());
+            publish_invariant_error(
+                project,
+                "create_module_post",
+                &message,
+                serde_json::json!({ "path": path, "module": module_name }),
+            );
+            report.error = Some(message);
             return report;
         }
         report.def_paths.push(path.clone());
@@ -337,6 +450,60 @@ fn add_import_path(file_path: &Path, import_path: &str) -> anyhow::Result<()> {
     content.insert_str(insert_at, &(rendered + "\n"));
     stdfs::write(file_path, content)?;
     Ok(())
+}
+
+fn is_canonical_import_path(import_path: &str) -> bool {
+    let trimmed = import_path.trim();
+    !trimmed.is_empty()
+        && (trimmed.starts_with("crate::")
+            || trimmed.starts_with("self::")
+            || trimmed.starts_with("super::")
+            || trimmed.starts_with("std::")
+            || trimmed.starts_with("core::")
+            || trimmed.starts_with("alloc::"))
+}
+
+fn source_symbol_exists_in_sources(
+    sources: &std::collections::HashMap<std::path::PathBuf, String>,
+    symbol_id: &str,
+) -> bool {
+    let Some((module_path, name)) = symbol_id.rsplit_once("::") else {
+        return false;
+    };
+    let expected_file = module_source_file(module_path);
+    let Some((_, content)) = sources
+        .iter()
+        .find(|(path, _)| path.ends_with(&expected_file)) else {
+        return false;
+    };
+    let Ok(ast) = syn::parse_file(content) else {
+        return false;
+    };
+    ast.items.iter().any(|item| match item {
+        syn::Item::Fn(item) => item.sig.ident == name,
+        syn::Item::Struct(item) => item.ident == name,
+        syn::Item::Enum(item) => item.ident == name,
+        syn::Item::Trait(item) => item.ident == name,
+        syn::Item::Type(item) => item.ident == name,
+        syn::Item::Const(item) => item.ident == name,
+        syn::Item::Static(item) => item.ident == name,
+        syn::Item::Mod(item) => item.ident == name,
+        _ => false,
+    })
+}
+
+fn module_source_file(module_path: &str) -> std::path::PathBuf {
+    let segments: Vec<&str> = module_path.split("::").filter(|segment| !segment.is_empty() && *segment != "crate").collect();
+    let mut path = std::path::PathBuf::from("src");
+    if segments.is_empty() {
+        path.push("lib.rs");
+        return path;
+    }
+    for segment in &segments[..segments.len().saturating_sub(1)] {
+        path.push(segment);
+    }
+    path.push(format!("{}.rs", segments[segments.len() - 1]));
+    path
 }
 
 fn define_symbol_stub(file_path: &Path, symbol: &str, kind: &str) -> anyhow::Result<()> {

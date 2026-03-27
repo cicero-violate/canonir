@@ -1377,12 +1377,6 @@ pub fn classify_planned_action_intents(
                             if patch.contains("allow(dead_code)") {
                                 out.push(SemanticActionIntent::FixDeadCodeConflict(path.clone()));
                             }
-                            if is_import_edit(patch) {
-                                out.push(SemanticActionIntent::FixUnresolvedImport(path.clone()));
-                            }
-                            if is_missing_symbol_edit(patch) {
-                                out.push(SemanticActionIntent::DefineMissingSymbol(path.clone()));
-                            }
                             if is_duplicate_definition_edit(patch) {
                                 out.push(SemanticActionIntent::ResolveDuplicateDefinition(path.clone()));
                             }
@@ -1604,24 +1598,6 @@ fn normalize_path(path: &Path, target_root: Option<&Path>) -> PathBuf {
     } else {
         target_root.map(|root| root.join(path)).unwrap_or_else(|| path.to_path_buf())
     }
-}
-
-fn is_import_edit(patch: &str) -> bool {
-    patch.contains("use ")
-        || patch.contains("mod ")
-        || patch.contains("pub use ")
-        || patch.contains("extern crate ")
-}
-
-fn is_missing_symbol_edit(patch: &str) -> bool {
-    (patch.contains("fn ") && !patch.contains("fn main"))
-        || patch.contains("struct ")
-        || patch.contains("enum ")
-        || patch.contains("type ")
-        || patch.contains("const ")
-        || patch.contains("let ")
-        || patch.contains("impl ")
-        || patch.contains("use ")
 }
 
 fn is_duplicate_definition_edit(patch: &str) -> bool {

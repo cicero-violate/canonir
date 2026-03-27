@@ -758,12 +758,6 @@ fn classify_action_intents(
         {
             out.push(ActionIntent::FixDeadCodeConflict(path.clone()));
         }
-        if is_import_edit(patch) {
-            out.push(ActionIntent::FixUnresolvedImport(path.clone()));
-        }
-        if is_missing_symbol_edit(patch) {
-            out.push(ActionIntent::DefineMissingSymbol(path.clone()));
-        }
         if is_duplicate_definition_edit(patch) {
             out.push(ActionIntent::ResolveDuplicateDefinition(path.clone()));
         }
@@ -930,24 +924,6 @@ fn has_trait_bound_edit(patch: &str) -> bool {
                 || line.contains("derive(")
                 || line.contains(": "))
     })
-}
-
-fn is_import_edit(patch: &str) -> bool {
-    patch.contains("use ")
-        || patch.contains("mod ")
-        || patch.contains("pub use ")
-        || patch.contains("extern crate ")
-}
-
-fn is_missing_symbol_edit(patch: &str) -> bool {
-    (patch.contains("fn ") && !patch.contains("fn main"))
-        || patch.contains("struct ")
-        || patch.contains("enum ")
-        || patch.contains("type ")
-        || patch.contains("const ")
-        || patch.contains("let ")
-        || patch.contains("impl ")
-        || patch.contains("use ")
 }
 
 fn is_duplicate_definition_edit(patch: &str) -> bool {
@@ -1379,7 +1355,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_unresolved_import_repair_that_targets_expected_file() {
+    fn rejects_unresolved_import_patch_inference_now_that_semantic_action_exists() {
         let actions = vec![planned_import_patch("src/lib.rs")];
         let summary = SemanticStateSummary {
             complete: true,
@@ -1398,7 +1374,7 @@ mod tests {
             &[PlanningPrecondition::MustFixUnresolvedImport],
             &summary,
         );
-        assert!(result.is_ok());
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1494,7 +1470,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_missing_symbol_repair_that_targets_expected_file() {
+    fn rejects_missing_symbol_patch_inference_now_that_semantic_action_exists() {
         let actions = vec![planned_apply_patch("src/main.rs")];
         let summary = SemanticStateSummary {
             complete: true,
@@ -1513,7 +1489,7 @@ mod tests {
             &[PlanningPrecondition::MustDefineMissingSymbol],
             &summary,
         );
-        assert!(result.is_ok());
+        assert!(result.is_err());
     }
 
     #[test]

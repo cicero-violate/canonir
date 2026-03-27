@@ -552,6 +552,24 @@ fn move_symbol_invalid_missing_symbol() {
 }
 
 #[test]
+fn move_symbol_invalid_missing_target_module() {
+    let dir = temp_project();
+    write_project_files(
+        dir.path(),
+        &[
+            ("src/lib.rs", "pub mod alpha;\n"),
+            ("src/alpha.rs", "pub struct Worker;\n"),
+        ],
+    );
+    write_graph_artifact_from_source(dir.path());
+    let report = move_symbol_pairs(
+        dir.path(),
+        &[("crate::alpha::Worker".into(), "crate::beta".into())],
+    );
+    assert!(report.error.is_some());
+}
+
+#[test]
 fn import_resolution_simple_case() {
     let dir = temp_project();
     write_project_files(
@@ -626,6 +644,17 @@ fn import_resolution_invalid_missing_file() {
 }
 
 #[test]
+fn import_resolution_invalid_non_canonical_path() {
+    let dir = temp_project();
+    write_project_files(dir.path(), &[("src/lib.rs", "pub fn run() {}\n")]);
+    let report = add_import_paths(
+        dir.path(),
+        &[("src/lib.rs".into(), "foo::Bar".into())],
+    );
+    assert!(report.error.is_some());
+}
+
+#[test]
 fn module_creation_simple_case() {
     let dir = temp_project();
     write_project_files(dir.path(), &[("src/lib.rs", "pub mod merge;\n")]);
@@ -670,4 +699,15 @@ fn module_creation_existing_file_is_stable() {
     let merge = fs::read_to_string(dir.path().join("src/merge.rs")).unwrap();
     assert!(merge.contains("pub struct Merge;"));
     assert_graph_and_invariants(dir.path(), &["crate::merge::Merge"], &[]);
+}
+
+#[test]
+fn module_creation_invalid_non_rust_path() {
+    let dir = temp_project();
+    write_project_files(dir.path(), &[("src/lib.rs", "pub fn run() {}\n")]);
+    let report = create_module_files(
+        dir.path(),
+        &[("src/merge.txt".into(), Some("merge".into()))],
+    );
+    assert!(report.error.is_some());
 }
