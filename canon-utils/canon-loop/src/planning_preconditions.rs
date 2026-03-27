@@ -745,6 +745,27 @@ mod tests {
         }
     }
 
+    fn planned_trait_bound_patch(path: &str) -> canon_event::LoopPlanned {
+        canon_event::LoopPlanned {
+            tick: 0,
+            action_kind: "apply_patch".to_string(),
+            action_payload: serde_json::json!({
+                "patch": format!("*** Begin Patch\n*** Update File: {path}\n@@\n+impl Clone for Foo {{ fn clone(&self) -> Self {{ Self }} }}\n*** End Patch\n")
+            }),
+            reason: String::new(),
+            llm_request_id: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            signals: None,
+            depends_on: Vec::new(),
+        }
+    }
+
     #[test]
     fn derives_workspace_preconditions() {
         let model = WorkspaceModel {
@@ -964,7 +985,7 @@ mod tests {
 
     #[test]
     fn accepts_trait_bound_repair_that_targets_expected_file() {
-        let actions = vec![planned_apply_patch("src/lib.rs")];
+        let actions = vec![planned_trait_bound_patch("src/lib.rs")];
         let summary = SemanticStateSummary {
             complete: true,
             target_root: Some("/tmp/example".into()),
@@ -1248,6 +1269,7 @@ mod tests {
             FirstBatchCategory::HintTargetEdit => vec![match state.hint {
                 CompilerHintAxis::UnresolvedImport => planned_import_patch("src/lib.rs"),
                 CompilerHintAxis::MissingSymbol => planned_missing_symbol_patch("src/main.rs"),
+                CompilerHintAxis::TraitBound => planned_trait_bound_patch("src/lib.rs"),
                 _ => planned_apply_patch("src/lib.rs"),
             }],
             FirstBatchCategory::WrongEdit => vec![planned_apply_patch("src/other.rs")],
