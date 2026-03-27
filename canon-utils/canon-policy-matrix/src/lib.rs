@@ -225,18 +225,40 @@ pub enum InvalidPlanRetryFamily {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum JudgmentScenarioFamily {
+    PlannerBootstrapWorkspace,
+    PlannerInitCargoProject,
+    PlannerCreateEntrypoint,
     PlannerCreateMissingModules,
+    PlannerFixDeadCodeConflict,
     PlannerFixUnresolvedImport,
-    RouteSemanticRepairActionable,
-    RouteSemanticHintActionable,
+    PlannerDefineMissingSymbol,
+    PlannerResolveDuplicateDefinition,
+    PlannerFixTraitBoundFailure,
+    RouteSemanticPreconditionActionable,
+    RouteSemanticRepairIntentActionable,
+    RouteSemanticValidationBlockedActionable,
+    RouteSemanticUnresolvedImportActionable,
+    RouteSemanticDuplicateDefinitionActionable,
+    RouteSemanticTraitBoundActionable,
 }
 
 impl JudgmentScenarioFamily {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 15] = [
+        Self::PlannerBootstrapWorkspace,
+        Self::PlannerInitCargoProject,
+        Self::PlannerCreateEntrypoint,
         Self::PlannerCreateMissingModules,
+        Self::PlannerFixDeadCodeConflict,
         Self::PlannerFixUnresolvedImport,
-        Self::RouteSemanticRepairActionable,
-        Self::RouteSemanticHintActionable,
+        Self::PlannerDefineMissingSymbol,
+        Self::PlannerResolveDuplicateDefinition,
+        Self::PlannerFixTraitBoundFailure,
+        Self::RouteSemanticPreconditionActionable,
+        Self::RouteSemanticRepairIntentActionable,
+        Self::RouteSemanticValidationBlockedActionable,
+        Self::RouteSemanticUnresolvedImportActionable,
+        Self::RouteSemanticDuplicateDefinitionActionable,
+        Self::RouteSemanticTraitBoundActionable,
     ];
 }
 
@@ -1177,15 +1199,7 @@ pub fn planner_judgment_rows() -> Vec<PlannerJudgmentRow> {
                             let Some(primary) = preconditions.first() else {
                                 continue;
                             };
-                            let family = match primary {
-                                PlanningPrecondition::MustCreateMissingModules => {
-                                    JudgmentScenarioFamily::PlannerCreateMissingModules
-                                }
-                                PlanningPrecondition::MustFixUnresolvedImport => {
-                                    JudgmentScenarioFamily::PlannerFixUnresolvedImport
-                                }
-                                _ => continue,
-                            };
+                            let family = planner_family_for_precondition(primary);
                             let actions = planner_actions_for_state(state);
                             rows.push(PlannerJudgmentRow {
                                 name: Box::leak(
@@ -1223,10 +1237,8 @@ pub fn route_semantic_actionability_rows() -> Vec<RouteSemanticActionabilityRow>
                         if !valid_route_semantic_state(state) {
                             continue;
                         }
-                        let family = if state.hint != RouteHintState::None {
-                            JudgmentScenarioFamily::RouteSemanticHintActionable
-                        } else {
-                            JudgmentScenarioFamily::RouteSemanticRepairActionable
+                        let Some(family) = route_family_for_state(state) else {
+                            continue;
                         };
                         rows.push(RouteSemanticActionabilityRow {
                             name: Box::leak(
@@ -1382,6 +1394,32 @@ fn planner_actions_for_state(state: PlannerJudgmentState) -> Vec<canon_event::Lo
     }
 }
 
+fn planner_family_for_precondition(precondition: &PlanningPrecondition) -> JudgmentScenarioFamily {
+    match precondition {
+        PlanningPrecondition::MustBootstrapWorkspace => JudgmentScenarioFamily::PlannerBootstrapWorkspace,
+        PlanningPrecondition::MustInitCargoProject => JudgmentScenarioFamily::PlannerInitCargoProject,
+        PlanningPrecondition::MustCreateEntrypoint => JudgmentScenarioFamily::PlannerCreateEntrypoint,
+        PlanningPrecondition::MustCreateMissingModules => {
+            JudgmentScenarioFamily::PlannerCreateMissingModules
+        }
+        PlanningPrecondition::MustFixDeadCodeForbidConflict => {
+            JudgmentScenarioFamily::PlannerFixDeadCodeConflict
+        }
+        PlanningPrecondition::MustFixUnresolvedImport => {
+            JudgmentScenarioFamily::PlannerFixUnresolvedImport
+        }
+        PlanningPrecondition::MustDefineMissingSymbol => {
+            JudgmentScenarioFamily::PlannerDefineMissingSymbol
+        }
+        PlanningPrecondition::MustResolveDuplicateDefinition => {
+            JudgmentScenarioFamily::PlannerResolveDuplicateDefinition
+        }
+        PlanningPrecondition::MustFixTraitBoundFailure => {
+            JudgmentScenarioFamily::PlannerFixTraitBoundFailure
+        }
+    }
+}
+
 fn planner_action_matches_primary_intent(state: PlannerJudgmentState) -> bool {
     match planner_preconditions_for_state(state).first() {
         Some(PlanningPrecondition::MustBootstrapWorkspace) => {
@@ -1472,6 +1510,31 @@ fn route_state_is_actionable(state: RouteSemanticState) -> bool {
             || state.preconditions == RoutePreconditionState::Present
             || state.repair_intents == RouteRepairIntentState::Present
             || state.hint != RouteHintState::None)
+}
+
+fn route_family_for_state(state: RouteSemanticState) -> Option<JudgmentScenarioFamily> {
+    if state.completeness != RouteSummaryCompleteness::Complete {
+        return None;
+    }
+    if state.validation_blocked == RouteValidationBlockedState::Yes {
+        return Some(JudgmentScenarioFamily::RouteSemanticValidationBlockedActionable);
+    }
+    if state.repair_intents == RouteRepairIntentState::Present {
+        return Some(JudgmentScenarioFamily::RouteSemanticRepairIntentActionable);
+    }
+    if state.preconditions == RoutePreconditionState::Present {
+        return Some(JudgmentScenarioFamily::RouteSemanticPreconditionActionable);
+    }
+    match state.hint {
+        RouteHintState::UnresolvedImport => {
+            Some(JudgmentScenarioFamily::RouteSemanticUnresolvedImportActionable)
+        }
+        RouteHintState::DuplicateDefinition => {
+            Some(JudgmentScenarioFamily::RouteSemanticDuplicateDefinitionActionable)
+        }
+        RouteHintState::TraitBound => Some(JudgmentScenarioFamily::RouteSemanticTraitBoundActionable),
+        RouteHintState::None => None,
+    }
 }
 
 fn planner_judgment_state_count(valid_only: bool) -> usize {
@@ -2513,5 +2576,17 @@ mod tests {
             "missing judgment families: {:?}",
             report.judgment_missing
         );
+        assert_eq!(report.planner_generated_total, 1056);
+        assert_eq!(report.planner_generated_valid, 165);
+        assert_eq!(report.route_generated_total, 64);
+        assert_eq!(report.route_generated_valid, 33);
+    }
+
+    #[test]
+    fn generated_judgment_rows_are_consistent_with_expected_counts() {
+        let planner_rows = planner_judgment_rows();
+        let route_rows = route_semantic_actionability_rows();
+        assert_eq!(planner_rows.len(), 154);
+        assert_eq!(route_rows.len(), 31);
     }
 }
