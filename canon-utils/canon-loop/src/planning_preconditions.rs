@@ -556,12 +556,7 @@ fn action_matches_hint_kind(action: &canon_event::LoopPlanned, hint_kind: &str) 
             patch.contains("rename")
                 || has_definition_edit(patch)
         }
-        "trait_bound_failure" => {
-            patch.contains("impl ")
-                || patch.contains(": ")
-                || patch.contains("where ")
-                || patch.contains("derive(")
-        }
+        "trait_bound_failure" => has_trait_bound_edit(patch),
         _ => true,
     }
 }
@@ -575,6 +570,16 @@ fn has_definition_edit(patch: &str) -> bool {
                 || line.contains("type ")
                 || line.contains("const ")
                 || line.contains("impl "))
+    })
+}
+
+fn has_trait_bound_edit(patch: &str) -> bool {
+    patch.lines().any(|line| {
+        (line.starts_with('+') || line.starts_with('-'))
+            && (line.contains("impl ")
+                || line.contains("where ")
+                || line.contains("derive(")
+                || line.contains(": "))
     })
 }
 
