@@ -261,6 +261,7 @@ pub enum JudgmentScenarioFamily {
     PlannerTrendIntentMismatch,
     PlannerRetryNoSemanticProgress,
     PlannerRetryTrendStalled,
+    PlannerRetryMisalignmentPressure,
     RouteSemanticPreconditionActionable,
     RouteSemanticRepairIntentActionable,
     RouteSemanticValidationBlockedActionable,
@@ -268,6 +269,7 @@ pub enum JudgmentScenarioFamily {
     RouteSemanticDuplicateDefinitionActionable,
     RouteSemanticTraitBoundActionable,
     RouteTrendStallActionable,
+    RouteMisalignmentActionable,
     RouteObjectiveContradiction,
     GoalRouteObjectiveDrift,
     RouteObjectiveContradictionEvent,
@@ -275,7 +277,7 @@ pub enum JudgmentScenarioFamily {
 }
 
 impl JudgmentScenarioFamily {
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 27] = [
         Self::PlannerBootstrapWorkspace,
         Self::PlannerInitCargoProject,
         Self::PlannerCreateEntrypoint,
@@ -290,6 +292,7 @@ impl JudgmentScenarioFamily {
         Self::PlannerTrendIntentMismatch,
         Self::PlannerRetryNoSemanticProgress,
         Self::PlannerRetryTrendStalled,
+        Self::PlannerRetryMisalignmentPressure,
         Self::RouteSemanticPreconditionActionable,
         Self::RouteSemanticRepairIntentActionable,
         Self::RouteSemanticValidationBlockedActionable,
@@ -297,6 +300,7 @@ impl JudgmentScenarioFamily {
         Self::RouteSemanticDuplicateDefinitionActionable,
         Self::RouteSemanticTraitBoundActionable,
         Self::RouteTrendStallActionable,
+        Self::RouteMisalignmentActionable,
         Self::RouteObjectiveContradiction,
         Self::GoalRouteObjectiveDrift,
         Self::RouteObjectiveContradictionEvent,
@@ -1442,22 +1446,40 @@ pub fn route_semantic_actionability_rows() -> Vec<RouteSemanticActionabilityRow>
 }
 
 pub fn route_trend_actionability_rows() -> Vec<RouteSemanticActionabilityRow> {
-    vec![RouteSemanticActionabilityRow {
-        name: "route_trend_stall_actionability",
-        family: JudgmentScenarioFamily::RouteTrendStallActionable,
-        summary: SemanticStateSummary {
-            complete: true,
-            path_exists: true,
-            cargo_project: true,
-            ..SemanticStateSummary::default()
+    vec![
+        RouteSemanticActionabilityRow {
+            name: "route_trend_stall_actionability",
+            family: JudgmentScenarioFamily::RouteTrendStallActionable,
+            summary: SemanticStateSummary {
+                complete: true,
+                path_exists: true,
+                cargo_project: true,
+                ..SemanticStateSummary::default()
+            },
+            objective_trend_state: canon_semantic_state::ObjectiveTrendState {
+                repeated_stall_count: 1,
+                current_no_progress_streak: 1,
+                ..canon_semantic_state::ObjectiveTrendState::default()
+            },
+            expected_actionable: true,
         },
-        objective_trend_state: canon_semantic_state::ObjectiveTrendState {
-            repeated_stall_count: 1,
-            current_no_progress_streak: 1,
-            ..canon_semantic_state::ObjectiveTrendState::default()
+        RouteSemanticActionabilityRow {
+            name: "route_misalignment_actionability",
+            family: JudgmentScenarioFamily::RouteMisalignmentActionable,
+            summary: SemanticStateSummary {
+                complete: true,
+                path_exists: true,
+                cargo_project: true,
+                ..SemanticStateSummary::default()
+            },
+            objective_trend_state: canon_semantic_state::ObjectiveTrendState {
+                route_objective_contradiction_events: 1,
+                goal_objective_drift_events: 1,
+                ..canon_semantic_state::ObjectiveTrendState::default()
+            },
+            expected_actionable: true,
         },
-        expected_actionable: true,
-    }]
+    ]
 }
 
 pub fn planner_objective_alignment_rows() -> Vec<PlannerObjectiveAlignmentRow> {
@@ -2224,6 +2246,19 @@ pub fn planner_recovery_rows() -> Vec<PlannerRecoveryRow> {
             objective_trend_state: canon_semantic_state::ObjectiveTrendState {
                 repeated_stall_count: 1,
                 current_no_progress_streak: 1,
+                ..canon_semantic_state::ObjectiveTrendState::default()
+            },
+            expected_retry: RetryPolicy::CorrectiveRetry,
+        },
+        PlannerRecoveryRow {
+            name: "planner_retry_misalignment_pressure",
+            family: JudgmentScenarioFamily::PlannerRetryMisalignmentPressure,
+            reason: None,
+            consecutive_invalid_plan_batches: 0,
+            recent_execution_results: Vec::new(),
+            objective_trend_state: canon_semantic_state::ObjectiveTrendState {
+                route_objective_contradiction_events: 1,
+                goal_objective_drift_events: 1,
                 ..canon_semantic_state::ObjectiveTrendState::default()
             },
             expected_retry: RetryPolicy::CorrectiveRetry,

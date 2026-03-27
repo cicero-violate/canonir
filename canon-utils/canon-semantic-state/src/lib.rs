@@ -319,6 +319,7 @@ pub struct SelfDevelopmentObjectiveState {
     pub consecutive_invalid_plan_batches: u32,
     pub validation_blocked_by_preconditions: bool,
     pub compiler_repair_required: bool,
+    pub misalignment_pressure_score: u32,
 }
 
 impl SelfDevelopmentObjectiveState {
@@ -327,7 +328,7 @@ impl SelfDevelopmentObjectiveState {
     }
 
     pub fn repair_pressure_score(&self) -> u32 {
-        let mut score = self.consecutive_invalid_plan_batches;
+        let mut score = self.consecutive_invalid_plan_batches + self.misalignment_pressure_score;
         if self.validation_blocked_by_preconditions {
             score += 1;
         }
@@ -353,6 +354,7 @@ impl SelfDevelopmentObjectiveState {
                 self.validation_blocked_by_preconditions
             ),
             format!("compiler_repair_required={}", self.compiler_repair_required),
+            format!("misalignment_pressure_score={}", self.misalignment_pressure_score),
             format!("repair_pressure_score={}", self.repair_pressure_score()),
             format!("repair_loop_stalled={}", self.is_stalled()),
         ]
@@ -436,6 +438,10 @@ impl ObjectiveTrendState {
         self.repair_resolution_rate() - (self.invalid_plan_rate() * 0.5)
     }
 
+    pub fn misalignment_pressure_score(&self) -> u32 {
+        self.route_objective_contradiction_events + self.goal_objective_drift_events
+    }
+
     pub fn render_lines(&self) -> Vec<String> {
         vec![
             format!("repair_resolution_rate={:.2}", self.repair_resolution_rate()),
@@ -470,6 +476,8 @@ impl ObjectiveTrendState {
     pub fn primary_objective(&self, objective_state: &SelfDevelopmentObjectiveState) -> &'static str {
         if objective_state.validation_blocked_by_preconditions {
             "remove validation blockers before attempting verification"
+        } else if objective_state.misalignment_pressure_score > 0 {
+            "realign goal, route, and planning objectives"
         } else if objective_state.compiler_repair_required {
             "reduce compiler repair pressure"
         } else if self.current_no_progress_streak >= 2 || self.repeated_stall_count > 0 {
@@ -681,6 +689,7 @@ pub fn derive_self_development_objective_state(
     semantic_summary: &SemanticStateSummary,
     consecutive_invalid_plan_batches: u32,
     recent_execution_results: &[SemanticExecutionResultRecord],
+    objective_trend_state: &ObjectiveTrendState,
 ) -> SelfDevelopmentObjectiveState {
     SelfDevelopmentObjectiveState {
         semantic_progress_rate: semantic_progress_rate(recent_execution_results),
@@ -688,6 +697,7 @@ pub fn derive_self_development_objective_state(
         consecutive_invalid_plan_batches,
         validation_blocked_by_preconditions: semantic_summary.validation_blocked_by_preconditions,
         compiler_repair_required: semantic_summary.compiler_repair_required,
+        misalignment_pressure_score: objective_trend_state.misalignment_pressure_score(),
     }
 }
 

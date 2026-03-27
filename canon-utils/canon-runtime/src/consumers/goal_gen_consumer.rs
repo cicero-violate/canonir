@@ -88,6 +88,7 @@ impl EventConsumer for GoalGenConsumer {
                         &self.semantic_summary,
                         0,
                         &[],
+                        &self.objective_trend_state,
                     ),
                     objective_trend_state: self.objective_trend_state.clone(),
                     target_workspace: Some(GOALGEN_PROJECTS_DIR.to_string()),
@@ -320,7 +321,7 @@ fn current_primary_objective(
     semantic_summary: &SemanticStateSummary,
     objective_trend_state: &ObjectiveTrendState,
 ) -> String {
-    let objective_state = derive_self_development_objective_state(semantic_summary, 0, &[]);
+    let objective_state = derive_self_development_objective_state(semantic_summary, 0, &[], objective_trend_state);
     objective_trend_state.primary_objective(&objective_state).to_string()
 }
 

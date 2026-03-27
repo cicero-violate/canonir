@@ -167,6 +167,7 @@ impl RouteContext {
             &self.semantic_summary,
             self.consecutive_invalid_plan_batches,
             &self.recent_execution_results,
+            &self.objective_trend_state,
         );
         LlmSemanticContext {
             mission_summary: if self.mission_summary.is_empty() {
@@ -198,6 +199,7 @@ impl RouteContext {
             &self.semantic_summary,
             self.consecutive_invalid_plan_batches,
             &self.recent_execution_results,
+            &self.objective_trend_state,
         )
     }
 

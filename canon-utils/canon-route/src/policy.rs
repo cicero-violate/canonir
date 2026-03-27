@@ -269,6 +269,7 @@ fn route_choice_contradicts_objective(ctx: &RouteContext, lane: RouteKind) -> bo
             || ctx.compiler_repair_required_state()
             || !ctx.planning_preconditions_state().is_empty()
             || ctx.objective_state().repair_pressure_score() > 0
+            || ctx.objective_state().misalignment_pressure_score > 0
             || (ctx.objective_trend_state.repeated_stall_count > 0
                 && ctx.objective_trend_state.current_no_progress_streak > 0))
 }
@@ -720,6 +721,9 @@ pub fn cycle_cap_fallback_lane(ctx: &RouteContext, decision: &RouteDecision) -> 
 
 pub fn has_actionable_failure(ctx: &RouteContext) -> bool {
     if latest_no_semantic_progress(&ctx.recent_execution_results) {
+        return true;
+    }
+    if ctx.objective_state().misalignment_pressure_score > 0 {
         return true;
     }
     if ctx.objective_state().is_stalled() {

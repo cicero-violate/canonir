@@ -445,6 +445,9 @@ pub fn retry_policy_for_planning_context(
     if base != RetryPolicy::None {
         return base;
     }
+    if objective_trend_state.misalignment_pressure_score() > 0 {
+        return RetryPolicy::CorrectiveRetry;
+    }
     if objective_trend_state.repeated_stall_count > 0 && objective_trend_state.current_no_progress_streak > 0 {
         return RetryPolicy::CorrectiveRetry;
     }
@@ -501,6 +504,12 @@ pub fn planner_hint_lines(
     if objective_trend_state.invalid_plan_rate() > 0.5 && objective_trend_state.planning_attempts >= 3 {
         out.push(
             "Programmatic tip: invalid-plan rate is high; simplify the next batch and avoid mixing multiple repair strategies."
+                .to_string(),
+        );
+    }
+    if objective_trend_state.misalignment_pressure_score() > 0 {
+        out.push(
+            "Programmatic tip: contradiction events indicate goal/route drift; explicitly realign the next batch with the active repair objective."
                 .to_string(),
         );
     }
