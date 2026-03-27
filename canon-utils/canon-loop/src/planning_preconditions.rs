@@ -709,7 +709,10 @@ fn created_paths(action: &canon_event::LoopPlanned) -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_preconditions, validate_preconditions, PlanningPrecondition};
+    use super::{
+        collect_action_intents, derive_preconditions, validate_preconditions, ActionIntent,
+        PlanningPrecondition,
+    };
     use crate::env_model::{EntrypointKind, WorkspaceModel};
     use canon_semantic_state::{CompilerHintKind, CompilerHintRecord, SemanticStateSummary};
     use std::path::Path;
@@ -1121,27 +1124,33 @@ mod tests {
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum FirstBatchCategory {
-        Bootstrap,
-        CargoInit,
-        EntrypointEdit,
-        ModuleEdit,
-        DeadCodeEdit,
-        HintTargetEdit,
+    enum ActionIntentCase {
+        BootstrapWorkspace,
+        InitCargoProject,
+        CreateEntrypoint,
+        CreateModuleFile,
+        FixDeadCodeConflict,
+        FixUnresolvedImport,
+        DefineMissingSymbol,
+        ResolveDuplicateDefinition,
+        FixTraitBoundFailure,
         WrongEdit,
-        CargoCheckOnly,
+        ValidateCargoCheck,
     }
 
-    impl FirstBatchCategory {
-        const ALL: [Self; 8] = [
-            Self::Bootstrap,
-            Self::CargoInit,
-            Self::EntrypointEdit,
-            Self::ModuleEdit,
-            Self::DeadCodeEdit,
-            Self::HintTargetEdit,
+    impl ActionIntentCase {
+        const ALL: [Self; 11] = [
+            Self::BootstrapWorkspace,
+            Self::InitCargoProject,
+            Self::CreateEntrypoint,
+            Self::CreateModuleFile,
+            Self::FixDeadCodeConflict,
+            Self::FixUnresolvedImport,
+            Self::DefineMissingSymbol,
+            Self::ResolveDuplicateDefinition,
+            Self::FixTraitBoundFailure,
             Self::WrongEdit,
-            Self::CargoCheckOnly,
+            Self::ValidateCargoCheck,
         ];
     }
 
@@ -1152,7 +1161,7 @@ mod tests {
         entrypoint: EntrypointState,
         module_gap: ModuleGapState,
         hint: CompilerHintAxis,
-        batch: FirstBatchCategory,
+        batch: ActionIntentCase,
     }
 
     fn valid_judgment_state(state: JudgmentState) -> bool {
@@ -1265,9 +1274,8 @@ mod tests {
     }
 
     fn actions_for_category(state: JudgmentState) -> Vec<canon_event::LoopPlanned> {
-        let category = state.batch;
-        match category {
-            FirstBatchCategory::Bootstrap => vec![canon_event::LoopPlanned {
+        match state.batch {
+            ActionIntentCase::BootstrapWorkspace => vec![canon_event::LoopPlanned {
                 tick: 0,
                 action_kind: "run_command".to_string(),
                 action_payload: serde_json::json!({"cmd":"cargo new example","cwd":"/tmp"}),
@@ -1283,7 +1291,7 @@ mod tests {
                 signals: None,
                 depends_on: Vec::new(),
             }],
-            FirstBatchCategory::CargoInit => vec![canon_event::LoopPlanned {
+            ActionIntentCase::InitCargoProject => vec![canon_event::LoopPlanned {
                 tick: 0,
                 action_kind: "run_command".to_string(),
                 action_payload: serde_json::json!({"cmd":"cargo init","cwd":"/tmp/example"}),
@@ -1299,9 +1307,9 @@ mod tests {
                 signals: None,
                 depends_on: Vec::new(),
             }],
-            FirstBatchCategory::EntrypointEdit => vec![planned_entrypoint_patch("src/main.rs")],
-            FirstBatchCategory::ModuleEdit => vec![planned_apply_patch("src/index.rs")],
-            FirstBatchCategory::DeadCodeEdit => vec![canon_event::LoopPlanned {
+            ActionIntentCase::CreateEntrypoint => vec![planned_entrypoint_patch("src/main.rs")],
+            ActionIntentCase::CreateModuleFile => vec![planned_apply_patch("src/index.rs")],
+            ActionIntentCase::FixDeadCodeConflict => vec![canon_event::LoopPlanned {
                 tick: 0,
                 action_kind: "apply_patch".to_string(),
                 action_payload: serde_json::json!({
@@ -1319,14 +1327,29 @@ mod tests {
                 signals: None,
                 depends_on: Vec::new(),
             }],
-            FirstBatchCategory::HintTargetEdit => vec![match state.hint {
-                CompilerHintAxis::UnresolvedImport => planned_import_patch("src/lib.rs"),
-                CompilerHintAxis::MissingSymbol => planned_missing_symbol_patch("src/main.rs"),
-                CompilerHintAxis::TraitBound => planned_trait_bound_patch("src/lib.rs"),
-                _ => planned_apply_patch("src/lib.rs"),
+            ActionIntentCase::FixUnresolvedImport => vec![planned_import_patch("src/lib.rs")],
+            ActionIntentCase::DefineMissingSymbol => vec![planned_missing_symbol_patch("src/main.rs")],
+            ActionIntentCase::ResolveDuplicateDefinition => vec![canon_event::LoopPlanned {
+                tick: 0,
+                action_kind: "apply_patch".to_string(),
+                action_payload: serde_json::json!({
+                    "patch": "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-pub struct Engine;\n+pub struct EngineV2;\n*** End Patch\n"
+                }),
+                reason: String::new(),
+                llm_request_id: None,
+                trace_id: None,
+                execution_id: None,
+                span_id: None,
+                parent_span_id: None,
+                plan_id: None,
+                plan_step_id: None,
+                action_id: None,
+                signals: None,
+                depends_on: Vec::new(),
             }],
-            FirstBatchCategory::WrongEdit => vec![planned_apply_patch("src/other.rs")],
-            FirstBatchCategory::CargoCheckOnly => vec![canon_event::LoopPlanned {
+            ActionIntentCase::FixTraitBoundFailure => vec![planned_trait_bound_patch("src/lib.rs")],
+            ActionIntentCase::WrongEdit => vec![planned_apply_patch("src/other.rs")],
+            ActionIntentCase::ValidateCargoCheck => vec![canon_event::LoopPlanned {
                 tick: 0,
                 action_kind: "run_command".to_string(),
                 action_payload: serde_json::json!({"cmd":"cargo check","cwd":"/tmp/example"}),
@@ -1351,37 +1374,74 @@ mod tests {
             Some(PlanningPrecondition::MustBootstrapWorkspace) => {
                 matches!(
                     state.batch,
-                    FirstBatchCategory::Bootstrap | FirstBatchCategory::CargoInit
+                    ActionIntentCase::BootstrapWorkspace | ActionIntentCase::InitCargoProject
                 )
             }
             Some(PlanningPrecondition::MustInitCargoProject) => {
-                state.batch == FirstBatchCategory::CargoInit
+                state.batch == ActionIntentCase::InitCargoProject
             }
             Some(PlanningPrecondition::MustCreateEntrypoint) => {
                 matches!(
                     state.batch,
-                    FirstBatchCategory::EntrypointEdit | FirstBatchCategory::HintTargetEdit
+                    ActionIntentCase::CreateEntrypoint
                 )
             }
             Some(PlanningPrecondition::MustCreateMissingModules) => {
-                state.batch == FirstBatchCategory::ModuleEdit
+                state.batch == ActionIntentCase::CreateModuleFile
             }
             Some(PlanningPrecondition::MustFixDeadCodeForbidConflict) => {
-                state.batch == FirstBatchCategory::DeadCodeEdit
+                state.batch == ActionIntentCase::FixDeadCodeConflict
             }
             Some(PlanningPrecondition::MustFixUnresolvedImport) => {
-                state.batch == FirstBatchCategory::HintTargetEdit
+                state.batch == ActionIntentCase::FixUnresolvedImport
             }
             Some(PlanningPrecondition::MustDefineMissingSymbol) => {
-                state.batch == FirstBatchCategory::HintTargetEdit
+                state.batch == ActionIntentCase::DefineMissingSymbol
             }
             Some(PlanningPrecondition::MustResolveDuplicateDefinition) => {
-                state.batch == FirstBatchCategory::HintTargetEdit
+                state.batch == ActionIntentCase::ResolveDuplicateDefinition
             }
             Some(PlanningPrecondition::MustFixTraitBoundFailure) => {
-                state.batch == FirstBatchCategory::HintTargetEdit
+                state.batch == ActionIntentCase::FixTraitBoundFailure
             }
             None => true,
+        }
+    }
+
+    fn batch_emits_expected_action_intent(state: JudgmentState, actions: &[canon_event::LoopPlanned]) -> bool {
+        let intents = collect_action_intents(actions, Path::new("/tmp/example"));
+        match state.batch {
+            ActionIntentCase::BootstrapWorkspace => {
+                intents.iter().any(|intent| matches!(intent, ActionIntent::BootstrapWorkspace))
+            }
+            ActionIntentCase::InitCargoProject => {
+                intents.iter().any(|intent| matches!(intent, ActionIntent::InitCargoProject))
+            }
+            ActionIntentCase::CreateEntrypoint => {
+                intents.iter().any(|intent| matches!(intent, ActionIntent::CreateEntrypoint(_)))
+            }
+            ActionIntentCase::CreateModuleFile => {
+                intents.iter().any(|intent| matches!(intent, ActionIntent::CreateModuleFile(_)))
+            }
+            ActionIntentCase::FixDeadCodeConflict => {
+                intents.iter().any(|intent| matches!(intent, ActionIntent::FixDeadCodeConflict(_)))
+            }
+            ActionIntentCase::FixUnresolvedImport => {
+                intents.iter().any(|intent| matches!(intent, ActionIntent::FixUnresolvedImport(_)))
+            }
+            ActionIntentCase::DefineMissingSymbol => {
+                intents.iter().any(|intent| matches!(intent, ActionIntent::DefineMissingSymbol(_)))
+            }
+            ActionIntentCase::ResolveDuplicateDefinition => intents
+                .iter()
+                .any(|intent| matches!(intent, ActionIntent::ResolveDuplicateDefinition(_))),
+            ActionIntentCase::FixTraitBoundFailure => {
+                intents.iter().any(|intent| matches!(intent, ActionIntent::FixTraitBoundFailure(_)))
+            }
+            ActionIntentCase::WrongEdit => intents.is_empty(),
+            ActionIntentCase::ValidateCargoCheck => {
+                intents.iter().any(|intent| matches!(intent, ActionIntent::ValidateCargoCheck))
+            }
         }
     }
 
@@ -1394,7 +1454,7 @@ mod tests {
                 for entrypoint in EntrypointState::ALL {
                     for module_gap in ModuleGapState::ALL {
                         for hint in CompilerHintAxis::ALL {
-                            for batch in FirstBatchCategory::ALL {
+                            for batch in ActionIntentCase::ALL {
                                 total += 1;
                                 let state = JudgmentState {
                                     path,
@@ -1411,6 +1471,11 @@ mod tests {
                                 let summary = semantic_summary_for_state(state);
                                 let preconditions = preconditions_for_state(state);
                                 let actions = actions_for_category(state);
+                                assert!(
+                                    batch_emits_expected_action_intent(state, &actions),
+                                    "batch {:?} did not emit expected action intent",
+                                    state.batch
+                                );
                                 let result = validate_preconditions(
                                     &actions,
                                     Path::new("/tmp/example"),

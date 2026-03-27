@@ -1,5 +1,6 @@
 use canon_decision::RouteKind;
 use canon_event::{LoopActed, PlanningCompleted, RuntimeEvent};
+use canon_loop::planning_preconditions::{validate_preconditions, PlanningPrecondition};
 use canon_loop::policy::{
     classify_invalid_plan_reason, evaluate_loop_runtime, evaluate_loop_transition, evaluate_recovery_event,
     evaluate_recovery_execution, evaluate_bootstrap_effects, retry_policy_for_invalid_plan,
@@ -19,6 +20,7 @@ use canon_route::{
         RunCommandOutcomeClass, SuccessorConsumptionRule, VerifyOutcomeClass,
     },
 };
+use canon_semantic_state::{CompilerHintKind, CompilerHintRecord, SemanticStateSummary};
 
 #[derive(Clone, Debug)]
 pub enum TransitionRow {
@@ -39,6 +41,8 @@ pub enum TransitionRow {
     RouteEmitEffect(RouteEmitEffectRow),
     RouteRecovery(RouteRecoveryRow),
     SuccessorConsumption(SuccessorConsumptionRow),
+    PlannerJudgment(PlannerJudgmentRow),
+    RouteSemanticActionability(RouteSemanticActionabilityRow),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -217,6 +221,41 @@ pub enum InvalidPlanRetryFamily {
     PathOrCwdCorrectiveRetry,
     MissingContextCorrectiveRetry,
     UnknownCorrectiveRetry,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum JudgmentScenarioFamily {
+    PlannerCreateMissingModules,
+    PlannerFixUnresolvedImport,
+    RouteSemanticRepairActionable,
+    RouteSemanticHintActionable,
+}
+
+impl JudgmentScenarioFamily {
+    pub const ALL: [Self; 4] = [
+        Self::PlannerCreateMissingModules,
+        Self::PlannerFixUnresolvedImport,
+        Self::RouteSemanticRepairActionable,
+        Self::RouteSemanticHintActionable,
+    ];
+}
+
+#[derive(Clone, Debug)]
+pub struct PlannerJudgmentRow {
+    pub name: &'static str,
+    pub family: JudgmentScenarioFamily,
+    pub actions: Vec<canon_event::LoopPlanned>,
+    pub preconditions: Vec<PlanningPrecondition>,
+    pub summary: SemanticStateSummary,
+    pub expected_ok: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct RouteSemanticActionabilityRow {
+    pub name: &'static str,
+    pub family: JudgmentScenarioFamily,
+    pub summary: SemanticStateSummary,
+    pub expected_actionable: bool,
 }
 
 impl InvalidPlanRetryFamily {
@@ -469,6 +508,8 @@ pub struct CoverageReport {
     pub verify_missing: Vec<VerifyOutcomeFamily>,
     pub invalid_plan_retry_covered: Vec<InvalidPlanRetryFamily>,
     pub invalid_plan_retry_missing: Vec<InvalidPlanRetryFamily>,
+    pub judgment_covered: Vec<JudgmentScenarioFamily>,
+    pub judgment_missing: Vec<JudgmentScenarioFamily>,
 }
 
 pub fn assert_transition_rows(rows: &[TransitionRow]) {
@@ -491,6 +532,10 @@ pub fn assert_transition_rows(rows: &[TransitionRow]) {
             TransitionRow::RouteEmitEffect(row) => assert_route_emit_effect_row(row),
             TransitionRow::RouteRecovery(row) => assert_route_recovery_row(row),
             TransitionRow::SuccessorConsumption(row) => assert_successor_consumption_row(row),
+            TransitionRow::PlannerJudgment(row) => assert_planner_judgment_row(row),
+            TransitionRow::RouteSemanticActionability(row) => {
+                assert_route_semantic_actionability_row(row)
+            }
         }
     }
 }
@@ -517,6 +562,10 @@ pub fn coverage_report(rows: &[TransitionRow]) -> CoverageReport {
             TransitionRow::InvalidPlanRetry(row) => push_unique(&mut report.invalid_plan_retry_covered, row.family),
             TransitionRow::RouteRecovery(row) => push_unique(&mut report.route_covered, row.family),
             TransitionRow::SuccessorConsumption(row) => push_unique(&mut report.route_covered, row.family),
+            TransitionRow::PlannerJudgment(row) => push_unique(&mut report.judgment_covered, row.family),
+            TransitionRow::RouteSemanticActionability(row) => {
+                push_unique(&mut report.judgment_covered, row.family)
+            }
         }
     }
 
@@ -527,6 +576,7 @@ pub fn coverage_report(rows: &[TransitionRow]) -> CoverageReport {
     report.verify_missing = missing_families(&VerifyOutcomeFamily::ALL, &report.verify_covered);
     report.invalid_plan_retry_missing =
         missing_families(&InvalidPlanRetryFamily::ALL, &report.invalid_plan_retry_covered);
+    report.judgment_missing = missing_families(&JudgmentScenarioFamily::ALL, &report.judgment_covered);
 
     report
 }
@@ -550,6 +600,12 @@ pub fn baseline_transition_rows() -> Vec<TransitionRow> {
     rows.extend(invalid_plan_retry_rows().into_iter().map(TransitionRow::InvalidPlanRetry));
     rows.extend(route_recovery_rows().into_iter().map(TransitionRow::RouteRecovery));
     rows.extend(successor_consumption_rows().into_iter().map(TransitionRow::SuccessorConsumption));
+    rows.extend(planner_judgment_rows().into_iter().map(TransitionRow::PlannerJudgment));
+    rows.extend(
+        route_semantic_actionability_rows()
+            .into_iter()
+            .map(TransitionRow::RouteSemanticActionability),
+    );
     rows
 }
 
@@ -920,6 +976,75 @@ pub fn successor_consumption_rows() -> Vec<SuccessorConsumptionRow> {
         awaiting_control_successor: Some("loop_acted"),
         expected_rule: SuccessorConsumptionRule::ClearAwaitingControlSuccessor,
     }]
+}
+
+pub fn planner_judgment_rows() -> Vec<PlannerJudgmentRow> {
+    vec![
+        PlannerJudgmentRow {
+            name: "planner_create_missing_modules_accepts_module_creation",
+            family: JudgmentScenarioFamily::PlannerCreateMissingModules,
+            actions: vec![planned_add_file("src/index.rs", "+pub struct Index;\n")],
+            preconditions: vec![PlanningPrecondition::MustCreateMissingModules],
+            summary: SemanticStateSummary {
+                complete: true,
+                target_root: Some("/tmp/example".into()),
+                module_gaps: vec!["index -> src/index.rs".into()],
+                ..SemanticStateSummary::default()
+            },
+            expected_ok: true,
+        },
+        PlannerJudgmentRow {
+            name: "planner_fix_unresolved_import_accepts_import_edit",
+            family: JudgmentScenarioFamily::PlannerFixUnresolvedImport,
+            actions: vec![planned_update_file("src/lib.rs", "+use crate::foo;\n")],
+            preconditions: vec![PlanningPrecondition::MustFixUnresolvedImport],
+            summary: SemanticStateSummary {
+                complete: true,
+                target_root: Some("/tmp/example".into()),
+                compiler_hints: vec![CompilerHintRecord::new(
+                    CompilerHintKind::UnresolvedImport,
+                    "compiler reports unresolved import `crate::foo`",
+                    "fix import",
+                    vec!["src/lib.rs".into()],
+                )],
+                ..SemanticStateSummary::default()
+            },
+            expected_ok: true,
+        },
+    ]
+}
+
+pub fn route_semantic_actionability_rows() -> Vec<RouteSemanticActionabilityRow> {
+    vec![
+        RouteSemanticActionabilityRow {
+            name: "route_semantic_repair_intent_is_actionable",
+            family: JudgmentScenarioFamily::RouteSemanticRepairActionable,
+            summary: SemanticStateSummary {
+                complete: true,
+                repair_intents: vec![
+                    "repair_intent=create_missing_modules priority=4 first_batch=create_declared_module_files"
+                        .into(),
+                ],
+                ..SemanticStateSummary::default()
+            },
+            expected_actionable: true,
+        },
+        RouteSemanticActionabilityRow {
+            name: "route_semantic_hint_is_actionable",
+            family: JudgmentScenarioFamily::RouteSemanticHintActionable,
+            summary: SemanticStateSummary {
+                complete: true,
+                compiler_hints: vec![CompilerHintRecord::new(
+                    CompilerHintKind::DuplicateDefinition,
+                    "compiler reports duplicate definition for `Engine`",
+                    "remove duplicate",
+                    vec!["src/lib.rs".into()],
+                )],
+                ..SemanticStateSummary::default()
+            },
+            expected_actionable: true,
+        },
+    ]
 }
 
 pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
@@ -1353,6 +1478,12 @@ pub fn coverage_report_markdown(rows: &[TransitionRow]) -> String {
         &report.invalid_plan_retry_missing,
         |v| format!("{:?}", v),
     ));
+    out.push_str(&coverage_section(
+        "Judgment coverage",
+        &report.judgment_covered,
+        &report.judgment_missing,
+        |v| format!("{:?}", v),
+    ));
     out
 }
 
@@ -1493,6 +1624,33 @@ fn assert_successor_consumption_row(row: &SuccessorConsumptionRow) {
     let event = to_runtime_event(&row.event);
     let eval = evaluate_successor_consumption(&event, row.awaiting_control_successor);
     assert_eq!(eval.rule, row.expected_rule, "successor consumption row {} mismatch", row.name);
+}
+
+fn assert_planner_judgment_row(row: &PlannerJudgmentRow) {
+    let result = validate_preconditions(
+        &row.actions,
+        std::path::Path::new("/tmp/example"),
+        &row.preconditions,
+        &row.summary,
+    );
+    assert_eq!(
+        result.is_ok(),
+        row.expected_ok,
+        "planner judgment row {} mismatch: {:?}",
+        row.name,
+        result
+    );
+}
+
+fn assert_route_semantic_actionability_row(row: &RouteSemanticActionabilityRow) {
+    let mut ctx = RouteContext::default();
+    ctx.semantic_summary = row.summary.clone();
+    assert_eq!(
+        canon_route::policy::has_actionable_failure(&ctx),
+        row.expected_actionable,
+        "route semantic actionability row {} mismatch",
+        row.name
+    );
 }
 
 fn assert_run_command_outcome_row(row: &RunCommandOutcomeRow) {
@@ -1671,6 +1829,48 @@ fn run_command_result_value(outcome: RunCommandOutcomeClass) -> serde_json::Valu
     })
 }
 
+fn planned_add_file(path: &str, body: &str) -> canon_event::LoopPlanned {
+    canon_event::LoopPlanned {
+        tick: 0,
+        action_kind: "apply_patch".to_string(),
+        action_payload: serde_json::json!({
+            "patch": format!("*** Begin Patch\n*** Add File: {path}\n{body}*** End Patch\n")
+        }),
+        reason: String::new(),
+        llm_request_id: None,
+        trace_id: None,
+        execution_id: None,
+        span_id: None,
+        parent_span_id: None,
+        plan_id: None,
+        plan_step_id: None,
+        action_id: None,
+        signals: None,
+        depends_on: Vec::new(),
+    }
+}
+
+fn planned_update_file(path: &str, added_line: &str) -> canon_event::LoopPlanned {
+    canon_event::LoopPlanned {
+        tick: 0,
+        action_kind: "apply_patch".to_string(),
+        action_payload: serde_json::json!({
+            "patch": format!("*** Begin Patch\n*** Update File: {path}\n@@\n{added_line}*** End Patch\n")
+        }),
+        reason: String::new(),
+        llm_request_id: None,
+        trace_id: None,
+        execution_id: None,
+        span_id: None,
+        parent_span_id: None,
+        plan_id: None,
+        plan_step_id: None,
+        action_id: None,
+        signals: None,
+        depends_on: Vec::new(),
+    }
+}
+
 fn apply_patch_result_value(outcome: ApplyPatchOutcomeClass) -> serde_json::Value {
     let (success, stdout) = match outcome {
         ApplyPatchOutcomeClass::Success => (true, "apply_patch ok: added 1 modified 0 deleted 0"),
@@ -1794,6 +1994,11 @@ mod tests {
             report.invalid_plan_retry_missing.is_empty(),
             "missing invalid-plan retry families: {:?}",
             report.invalid_plan_retry_missing
+        );
+        assert!(
+            report.judgment_missing.is_empty(),
+            "missing judgment families: {:?}",
+            report.judgment_missing
         );
     }
 }

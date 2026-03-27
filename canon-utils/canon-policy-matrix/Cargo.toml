@@ -12,4 +12,5 @@ canon_decision = { package = "canon-decision", path = "../canon-decision" }
 canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
 canon_loop = { package = "canon-loop", path = "../canon-loop" }
 canon_route = { package = "canon-route", path = "../canon-route" }
+canon_semantic_state = { package = "canon-semantic-state", path = "../canon-semantic-state" }
 serde_json.workspace = true
