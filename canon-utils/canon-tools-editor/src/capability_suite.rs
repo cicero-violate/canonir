@@ -8,7 +8,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex, OnceLock};
 use tempfile::TempDir;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -23,24 +22,6 @@ fn temp_project() -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("src")).unwrap();
     dir
-}
-
-fn reports_env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
-fn with_local_reports_env<T>(project: &Path, f: impl FnOnce() -> T) -> T {
-    let _guard = reports_env_lock().lock().unwrap();
-    let reports_root = project.join("state/reports_out/crates/unknown");
-    let previous = std::env::var_os("CANON_REPORTS_OUT");
-    std::env::set_var("CANON_REPORTS_OUT", &reports_root);
-    let result = f();
-    match previous {
-        Some(value) => std::env::set_var("CANON_REPORTS_OUT", value),
-        None => std::env::remove_var("CANON_REPORTS_OUT"),
-    }
-    result
 }
 
 fn write_project_files(project: &Path, files: &[(&str, &str)]) {
@@ -238,61 +219,6 @@ fn write_graph_artifact_from_source(project: &Path) {
     .unwrap();
 }
 
-fn write_report_spans_from_source(project: &Path) {
-    let out_dir = project.join("state/reports_out/crates/unknown/graph");
-    fs::create_dir_all(&out_dir).unwrap();
-    let symbols = collect_source_symbols(project);
-    let mut kinds = serde_json::Map::new();
-    let mut lines = Vec::new();
-    let files: Vec<PathBuf> = walkdir::WalkDir::new(project.join("src"))
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("rs"))
-        .map(|entry| entry.path().to_path_buf())
-        .collect();
-    for symbol in symbols {
-        if symbol.kind == "module" {
-            continue;
-        }
-        let symbol_id = format!("{}::{}", symbol.module_path, symbol.symbol);
-        kinds.insert(symbol_id.clone(), serde_json::Value::String(symbol.kind.clone()));
-        for file in &files {
-            let content = fs::read_to_string(file).unwrap();
-            let mut offset = 0usize;
-            while let Some(found) = content[offset..].find(&symbol.symbol) {
-                let lo = offset + found;
-                let hi = lo + symbol.symbol.len();
-                let left_ok = lo == 0
-                    || !content[..lo]
-                        .chars()
-                        .next_back()
-                        .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
-                let right_ok = hi == content.len()
-                    || !content[hi..]
-                        .chars()
-                        .next()
-                        .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
-                if left_ok && right_ok {
-                    lines.push(serde_json::json!({
-                        "symbol_id": symbol_id,
-                        "file": file.display().to_string(),
-                        "lo": lo,
-                        "hi": hi,
-                    }));
-                }
-                offset = hi;
-            }
-        }
-    }
-    fs::write(out_dir.join("symbols.json"), serde_json::to_vec(&kinds).unwrap()).unwrap();
-    let mut data = String::new();
-    for line in lines {
-        data.push_str(&serde_json::to_string(&line).unwrap());
-        data.push('\n');
-    }
-    fs::write(out_dir.join("symbol_spans.jsonl"), data).unwrap();
-}
-
 fn cargo_check(project: &Path) {
     let output = Command::new("cargo")
         .arg("check")
@@ -311,7 +237,7 @@ fn cargo_check(project: &Path) {
 
 fn assert_graph_and_invariants(project: &Path, expected: &[&str], absent: &[&str]) {
     write_graph_artifact_from_source(project);
-    let index = with_local_reports_env(project, || SymbolIndex::build(project).unwrap());
+    let index = SymbolIndex::build(project).unwrap();
     let symbols: BTreeSet<String> = collect_source_symbols(project)
         .into_iter()
         .filter(|symbol| symbol.kind != "module")
@@ -354,12 +280,9 @@ fn rename_symbol_simple_case() {
         )],
     );
     write_graph_artifact_from_source(dir.path());
-    write_report_spans_from_source(dir.path());
-    let report = with_local_reports_env(dir.path(), || {
-        let index = SymbolIndex::build(dir.path()).unwrap();
-        assert!(index.spans_for("crate::helper").is_some(), "missing helper spans");
-        rename_symbol_pairs(dir.path(), &[("crate::helper".into(), "crate::compute".into())])
-    });
+    let index = SymbolIndex::build(dir.path()).unwrap();
+    assert!(index.spans_for("crate::helper").is_some(), "missing helper spans");
+    let report = rename_symbol_pairs(dir.path(), &[("crate::helper".into(), "crate::compute".into())]);
     assert!(report.error.is_none(), "{:?}", report.error);
     let code = fs::read_to_string(dir.path().join("src/lib.rs")).unwrap();
     assert!(code.contains("fn compute()"));
@@ -382,15 +305,12 @@ fn rename_symbol_cross_module_references() {
         ],
     );
     write_graph_artifact_from_source(dir.path());
-    write_report_spans_from_source(dir.path());
-    let report = with_local_reports_env(dir.path(), || {
-        let index = SymbolIndex::build(dir.path()).unwrap();
-        assert!(index.spans_for("crate::alpha::Foo").is_some(), "missing Foo spans");
-        rename_symbol_pairs(
-            dir.path(),
-            &[("crate::alpha::Foo".into(), "crate::alpha::Bar".into())],
-        )
-    });
+    let index = SymbolIndex::build(dir.path()).unwrap();
+    assert!(index.spans_for("crate::alpha::Foo").is_some(), "missing Foo spans");
+    let report = rename_symbol_pairs(
+        dir.path(),
+        &[("crate::alpha::Foo".into(), "crate::alpha::Bar".into())],
+    );
     assert!(report.error.is_none(), "{:?}", report.error);
     let beta = fs::read_to_string(dir.path().join("src/beta.rs")).unwrap();
     assert!(beta.contains("use crate::alpha::Bar;"));
@@ -417,13 +337,10 @@ fn rename_symbol_duplicate_symbol_is_rejected() {
         ],
     );
     write_graph_artifact_from_source(dir.path());
-    write_report_spans_from_source(dir.path());
-    let report = with_local_reports_env(dir.path(), || {
-        rename_symbol_pairs(
-            dir.path(),
-            &[("crate::beta::Foo".into(), "crate::beta::FooBeta".into())],
-        )
-    });
+    let report = rename_symbol_pairs(
+        dir.path(),
+        &[("crate::beta::Foo".into(), "crate::beta::FooBeta".into())],
+    );
     assert!(report.error.is_some());
 }
 
@@ -445,15 +362,12 @@ fn rename_symbol_trait_impl_interaction() {
         ],
     );
     write_graph_artifact_from_source(dir.path());
-    write_report_spans_from_source(dir.path());
-    let report = with_local_reports_env(dir.path(), || {
-        let index = SymbolIndex::build(dir.path()).unwrap();
-        assert!(index.spans_for("crate::alpha::Worker").is_some(), "missing Worker spans");
-        rename_symbol_pairs(
-            dir.path(),
-            &[("crate::alpha::Worker".into(), "crate::alpha::Runnable".into())],
-        )
-    });
+    let index = SymbolIndex::build(dir.path()).unwrap();
+    assert!(index.spans_for("crate::alpha::Worker").is_some(), "missing Worker spans");
+    let report = rename_symbol_pairs(
+        dir.path(),
+        &[("crate::alpha::Worker".into(), "crate::alpha::Runnable".into())],
+    );
     assert!(report.error.is_none(), "{:?}", report.error);
     let alpha = fs::read_to_string(dir.path().join("src/alpha.rs")).unwrap();
     let beta = fs::read_to_string(dir.path().join("src/beta.rs")).unwrap();
@@ -472,12 +386,10 @@ fn rename_symbol_invalid_missing_symbol() {
     let dir = temp_project();
     write_project_files(dir.path(), &[("src/lib.rs", "pub fn run() {}\n")]);
     write_graph_artifact_from_source(dir.path());
-    let report = with_local_reports_env(dir.path(), || {
-        rename_symbol_pairs(
-            dir.path(),
-            &[("crate::missing::Nope".into(), "crate::missing::Nope2".into())],
-        )
-    });
+    let report = rename_symbol_pairs(
+        dir.path(),
+        &[("crate::missing::Nope".into(), "crate::missing::Nope2".into())],
+    );
     assert!(report.error.is_some());
 }
 

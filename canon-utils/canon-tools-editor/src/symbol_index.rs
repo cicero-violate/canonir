@@ -61,9 +61,7 @@ impl SymbolIndex {
     }
 
     pub fn build(project_root: &Path) -> Result<Self> {
-        if let Ok(mut index) = Self::from_graph_artifact(project_root) {
-            let out_dir = reports_out_dir(project_root)?;
-            let _ = index.merge_report_spans(&out_dir);
+        if let Ok(index) = Self::from_graph_artifact(project_root) {
             return Ok(index);
         }
         let out_dir = reports_out_dir(project_root)?;
@@ -164,9 +162,20 @@ impl SymbolIndex {
                 return Err(anyhow!("index invariant: catalog symbol missing kind: {symbol_id}"));
             }
         }
+        let mut seen = HashSet::new();
+        for (symbol_id, _) in &self.symbol_catalog {
+            if !seen.insert(symbol_id) {
+                return Err(anyhow!("index invariant: duplicate canonical symbol id: {symbol_id}"));
+            }
+        }
         for symbol_id in self.span_index.keys() {
             if !self.symbol_kinds.contains_key(symbol_id) {
                 return Err(anyhow!("index invariant: spans reference unresolved symbol: {symbol_id}"));
+            }
+        }
+        for (symbol_id, kind) in &self.symbol_kinds {
+            if kind != "module" && kind != "MODULE" && !self.span_index.contains_key(symbol_id) {
+                return Err(anyhow!("index invariant: reachable symbol missing reference coverage: {symbol_id}"));
             }
         }
         Ok(())
@@ -176,11 +185,13 @@ impl SymbolIndex {
 impl SymbolIndex {
     fn from_graph_artifact(project_root: &Path) -> Result<Self> {
         let (_summary, ir) = load_latest_workspace_graph_artifact(project_root)?;
+        let mut span_index: HashMap<String, HashMap<PathBuf, Vec<SpanRange>>> = HashMap::new();
         let mut symbol_kinds = HashMap::new();
         let mut symbol_catalog = Vec::new();
         let mut module_files = HashMap::new();
         let mut file_modules: HashMap<PathBuf, Vec<String>> = HashMap::new();
         let mut files = HashSet::new();
+        let mut normalized_sources = HashMap::new();
         let source_root = project_root.join("src");
 
         for entry in WalkDir::new(project_root).into_iter().filter_map(|e| e.ok()) {
@@ -193,6 +204,9 @@ impl SymbolIndex {
             }
             let path_buf = path.to_path_buf();
             files.insert(path_buf.clone());
+            if let Ok(source) = std::fs::read_to_string(&path_buf) {
+                normalized_sources.insert(path_buf.clone(), source);
+            }
             let module_path = module_path_from_file_guess(project_root, &source_root, &path_buf)?;
             module_files.insert(module_path.clone(), path_buf.clone());
             file_modules.entry(path_buf).or_default().push(module_path);
@@ -208,16 +222,21 @@ impl SymbolIndex {
                 .cloned()
                 .unwrap_or_else(|| "crate".to_string());
             let symbol_id = format!("{module_path}::{name}");
+            if symbol_kinds.contains_key(&symbol_id) {
+                return Err(anyhow!("graph index invariant: duplicate canonical symbol id: {symbol_id}"));
+            }
             symbol_kinds.insert(symbol_id.clone(), kind.clone());
             symbol_catalog.push((symbol_id, kind));
         }
         symbol_catalog.sort_by(|a, b| a.0.cmp(&b.0));
+        build_source_spans(&symbol_catalog, &normalized_sources, &mut span_index);
+        dedup_spans(&mut span_index);
 
         Ok(Self {
-            span_index: HashMap::new(),
+            span_index,
             symbol_kinds,
             symbol_catalog,
-            normalized_sources: HashMap::new(),
+            normalized_sources,
             tlog_offset: 0,
             module_files,
             file_modules,
@@ -225,25 +244,47 @@ impl SymbolIndex {
             uses_crate_prefix: true,
         })
     }
+}
 
-    fn merge_report_spans(&mut self, out_dir: &Path) -> Result<()> {
-        let graph_dir = if out_dir.file_name().and_then(|s| s.to_str()) == Some("graph") {
-            out_dir.to_path_buf()
-        } else {
-            ReportLayout::from_crate_root(out_dir.to_path_buf()).graph_dir()
-        };
-        let spans_path = graph_dir.join("symbol_spans.jsonl");
-        if !spans_path.exists() {
-            return Ok(());
+fn build_source_spans(
+    symbol_catalog: &[(String, String)],
+    normalized_sources: &HashMap<PathBuf, String>,
+    span_index: &mut HashMap<String, HashMap<PathBuf, Vec<SpanRange>>>,
+) {
+    for (symbol_id, kind) in symbol_catalog {
+        if kind == "module" || kind == "MODULE" {
+            continue;
         }
-        let reader = BufReader::new(File::open(&spans_path)?);
-        self.span_index.clear();
-        for line in reader.lines() {
-            let line = line?;
-            apply_span_line(&line, &mut self.span_index, &mut self.files)?;
+        let ident = symbol_id.rsplit("::").next().unwrap_or(symbol_id.as_str());
+        for (path, source) in normalized_sources {
+            let mut offset = 0usize;
+            while let Some(found) = source[offset..].find(ident) {
+                let lo = offset + found;
+                let hi = lo + ident.len();
+                let left_ok = lo == 0
+                    || !source[..lo]
+                        .chars()
+                        .next_back()
+                        .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+                let right_ok = hi == source.len()
+                    || !source[hi..]
+                        .chars()
+                        .next()
+                        .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+                if left_ok && right_ok {
+                    span_index
+                        .entry(symbol_id.clone())
+                        .or_default()
+                        .entry(path.clone())
+                        .or_default()
+                        .push(SpanRange {
+                            lo: lo as u32,
+                            hi: hi as u32,
+                        });
+                }
+                offset = hi;
+            }
         }
-        dedup_spans(&mut self.span_index);
-        Ok(())
     }
 }
 
