@@ -1701,6 +1701,7 @@ mod tests {
             )],
             validation_blocked_by_preconditions: true,
             compiler_repair_required: true,
+            ..SemanticStateSummary::default()
         };
         let restored = SemanticStateSummary::from_workspace_facts(&summary.to_workspace_facts());
         assert_eq!(restored, summary);
@@ -1752,8 +1753,8 @@ mod tests {
             ..SemanticStateSummary::default()
         };
         let trend = ObjectiveTrendState {
-            route_objective_contradiction_events: 2,
-            goal_objective_drift_events: 1,
+            route_objective_contradiction_events: 3,
+            goal_objective_drift_events: 2,
             ..ObjectiveTrendState::default()
         };
         let objective_state = derive_self_development_objective_state(&summary, 0, &[], &trend);

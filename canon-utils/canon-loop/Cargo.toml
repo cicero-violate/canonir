@@ -22,3 +22,6 @@ canon-tools-search = { path = "../canon-tools-search" }
 canon-tools-patch = { path = "../canon-tools-patch" }
 canon_invariant = { package = "canon-invariant", path = "../canon-invariant" }
 canon-proc-macros = { path = "../canon-proc-macros" }
+
+[dev-dependencies]
+canon-ir = { path = "../../canon-ir" }

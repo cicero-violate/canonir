@@ -53,7 +53,7 @@ pub fn extract_compiler_hints(errors: &[serde_json::Value]) -> Vec<CompilerHintR
             hints.push(CompilerHintRecord::new(
                 CompilerHintKind::DuplicateDefinition,
                 format!("compiler reports duplicate definition for `{symbol}`"),
-                "remove or rename the duplicate definition before cargo check",
+                "use semantic rename or remove the duplicate definition before cargo check",
                 target_files,
             ));
             continue;

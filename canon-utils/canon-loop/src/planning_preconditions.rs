@@ -124,7 +124,7 @@ pub fn planner_lines(preconditions: &[PlanningPrecondition]) -> Vec<String> {
                 "must_define_missing_symbol=true repair=define_or_import_missing_symbol".to_string()
             }
             PlanningPrecondition::MustResolveDuplicateDefinition => {
-                "must_resolve_duplicate_definition=true repair=remove_or_rename_duplicate_definition".to_string()
+                "must_resolve_duplicate_definition=true repair=semantic_rename_or_remove_duplicate_definition".to_string()
             }
             PlanningPrecondition::MustFixTraitBoundFailure => {
                 "must_fix_trait_bound_failure=true repair=edit_local_type_impl_or_callsite_for_trait_bound".to_string()
@@ -213,7 +213,7 @@ pub fn repair_intent_lines(intents: &[RepairIntent]) -> Vec<String> {
                 "repair_intent=define_missing_symbol priority=7 first_batch=define_or_import_symbol".to_string()
             }
             RepairIntent::ResolveDuplicateDefinition => {
-                "repair_intent=resolve_duplicate_definition priority=8 first_batch=remove_or_rename_duplicate".to_string()
+                "repair_intent=resolve_duplicate_definition priority=8 first_batch=semantic_rename_duplicate".to_string()
             }
             RepairIntent::FixTraitBoundFailure => {
                 "repair_intent=fix_trait_bound_failure priority=9 first_batch=edit_type_impl_or_callsite".to_string()
@@ -1060,6 +1060,52 @@ mod tests {
         }
     }
 
+    fn planned_rename_symbol(path: &str) -> canon_event::LoopPlanned {
+        canon_event::LoopPlanned {
+            tick: 0,
+            action_kind: "edit.rename_symbol".to_string(),
+            action_payload: serde_json::json!({
+                "old": "crate::alpha::Foo",
+                "new": "crate::alpha::FooAlpha",
+                "path": path,
+            }),
+            reason: String::new(),
+            llm_request_id: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            signals: None,
+            depends_on: Vec::new(),
+        }
+    }
+
+    fn planned_move_symbol(path: &str) -> canon_event::LoopPlanned {
+        canon_event::LoopPlanned {
+            tick: 0,
+            action_kind: "edit.move_symbol".to_string(),
+            action_payload: serde_json::json!({
+                "symbol_id": "crate::alpha::Foo",
+                "new_module_path": "crate::beta",
+                "path": path,
+            }),
+            reason: String::new(),
+            llm_request_id: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            signals: None,
+            depends_on: Vec::new(),
+        }
+    }
+
     #[test]
     fn derives_workspace_preconditions() {
         let model = WorkspaceModel {
@@ -1252,6 +1298,52 @@ mod tests {
             &summary,
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn accepts_duplicate_definition_semantic_rename() {
+        let actions = vec![planned_rename_symbol("src/lib.rs")];
+        let summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some("/tmp/example".into()),
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::DuplicateDefinition,
+                "compiler reports duplicate definition for `Foo`",
+                "use semantic rename before cargo check",
+                vec!["src/lib.rs".into()],
+            )],
+            ..SemanticStateSummary::default()
+        };
+        let result = validate_preconditions(
+            &actions,
+            Path::new("/tmp/example"),
+            &[PlanningPrecondition::MustResolveDuplicateDefinition],
+            &summary,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn restructure_strategy_requires_move_symbol_action() {
+        let actions = vec![planned_move_symbol("src/alpha.rs")];
+        let summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some("/tmp/example".into()),
+            graph_artifact_id: Some("artifact".into()),
+            graph_module_edge_count: Some(40),
+            graph_call_edge_count: Some(2),
+            ..SemanticStateSummary::default()
+        };
+        let objective_state =
+            canon_semantic_state::derive_self_development_objective_state(&summary, 0, &[], &Default::default());
+        let result = super::validate_development_strategy_alignment(
+            &actions,
+            Path::new("/tmp/example"),
+            &summary,
+            &objective_state,
+            &Default::default(),
+        );
+        assert!(result.is_ok());
     }
 
     #[test]

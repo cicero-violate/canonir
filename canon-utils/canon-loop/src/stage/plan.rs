@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use canon_analysis::{graph_backed_module_moves, graph_backed_rename_candidates};
 use canon_event::{new_error_occurred, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, LlmCall, LoopActed, LoopObserved, LoopPlanned, PlanningCompleted, RouteSelected, RuntimeEvent, ToolCall, ToolResult};
 use canon_goal::parse_agent_goal_markdown;
 use canon_invariant::decision_trace_payload;
@@ -924,6 +925,7 @@ fn build_context_base(
         .unwrap_or_else(|| workspace.display().to_string());
     let semantic_planner_block = llm_semantic_context.render_planner_base_block();
     let planner_skill_block = build_planner_skill_block(llm_semantic_context);
+    let graph_strategy_block = build_graph_strategy_block(llm_semantic_context);
 
     let search_hints = build_search_hints(&goal_text, workspace);
     let workspace_tree = build_workspace_tree(std::path::Path::new(&target_workspace), 3, 0);
@@ -939,6 +941,8 @@ fn build_context_base(
 
 {planner_skill_block}
 
+{graph_strategy_block}
+
 ━━━ CONTEXT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Relevant files:{search_hints}
@@ -947,6 +951,7 @@ Relevant files:{search_hints}
         goal_text = goal_text,
         semantic_planner_block = semantic_planner_block,
         planner_skill_block = planner_skill_block,
+        graph_strategy_block = graph_strategy_block,
         workspace_tree = workspace_tree,
         search_hints = search_hints,
         sub_agent_section = sub_agent_section,
@@ -977,6 +982,71 @@ fn build_planner_skill_block(llm_semantic_context: &LlmSemanticContext) -> Strin
         .collect::<Vec<_>>()
         .join("\n\n");
     format!("Planner skills:\n{rendered}")
+}
+
+fn build_graph_strategy_block(llm_semantic_context: &LlmSemanticContext) -> String {
+    let strategy = primary_development_strategy_kind(
+        &llm_semantic_context.objective_state,
+        &llm_semantic_context.objective_trend_state,
+        &llm_semantic_context.semantic_summary,
+    );
+    let Some(target_workspace) = llm_semantic_context
+        .target_workspace
+        .as_deref()
+        .or(llm_semantic_context.semantic_summary.target_root.as_deref())
+    else {
+        return "Graph strategy hints:\n- none".to_string();
+    };
+    let workspace = Path::new(target_workspace);
+    match strategy {
+        canon_semantic_state::DevelopmentStrategyKind::PlanSymbolAwareRename => {
+            match graph_backed_rename_candidates(workspace, 3) {
+                Ok(candidates) if !candidates.is_empty() => {
+                    let lines = candidates
+                        .into_iter()
+                        .map(|candidate| {
+                            let path = candidate.file_path.unwrap_or_else(|| "src/lib.rs".to_string());
+                            format!(
+                                "- rename candidate: `{}` -> `{}`\n  suggested action: {{\"action\":\"edit.rename_symbol\",\"old\":\"{}\",\"new\":\"{}\",\"path\":\"{}\"}}",
+                                candidate.symbol_path,
+                                candidate.suggested_path,
+                                candidate.symbol_path,
+                                candidate.suggested_path,
+                                path
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    format!("Graph strategy hints:\n{lines}")
+                }
+                _ => "Graph strategy hints:\n- none".to_string(),
+            }
+        }
+        canon_semantic_state::DevelopmentStrategyKind::RestructureModules => {
+            match graph_backed_module_moves(workspace, 3) {
+                Ok(candidates) if !candidates.is_empty() => {
+                    let lines = candidates
+                        .into_iter()
+                        .map(|candidate| {
+                            let path = candidate.file_path.unwrap_or_else(|| "src/lib.rs".to_string());
+                            format!(
+                                "- module hotspot move: `{}` -> `{}`\n  suggested action: {{\"action\":\"edit.move_symbol\",\"symbol_id\":\"{}\",\"new_module_path\":\"{}\",\"path\":\"{}\"}}",
+                                candidate.symbol_path,
+                                candidate.to_module_path,
+                                candidate.symbol_path,
+                                candidate.to_module_path,
+                                path
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    format!("Graph strategy hints:\n{lines}")
+                }
+                _ => "Graph strategy hints:\n- none".to_string(),
+            }
+        }
+        _ => "Graph strategy hints:\n- none".to_string(),
+    }
 }
 
 /// Tier-3 context: fast-changing delta sent on every planning call.
@@ -1459,4 +1529,357 @@ fn parse_value_to_action(value: serde_json::Value) -> Option<ActionPlan> {
 fn action_payload_with_cwd(cmd: String, cwd: Option<String>) -> serde_json::Value {
     let cwd = cwd.unwrap_or_else(|| ".".to_string());
     serde_json::json!({ "cmd": cmd, "cwd": cwd })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_graph_strategy_block, validate_action_batch};
+    use canon_event::LoopPlanned;
+    use canon_ir::{csr_graph::CsrGraph, CanonIR, CanonNodeKind};
+    use canon_semantic_state::{
+        derive_self_development_objective_state, CompilerHintKind, CompilerHintRecord,
+        DevelopmentStrategyKind, LlmSemanticContext, ObjectiveTrendState, SemanticStateSummary,
+    };
+    use serde_json::json;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use uuid::Uuid;
+
+    fn temp_workspace() -> PathBuf {
+        let path = std::env::temp_dir().join(format!("canon-loop-{}", Uuid::new_v4()));
+        fs::create_dir_all(path.join("src")).unwrap();
+        path
+    }
+
+    fn write_latest_graph_artifact(workspace: &Path, ir: &CanonIR) {
+        let artifact_id = Uuid::new_v4().simple().to_string();
+        let artifact_dir = workspace.join("state").join("graph");
+        fs::create_dir_all(artifact_dir.join("index").join("by_crate")).unwrap();
+        fs::create_dir_all(artifact_dir.join("index").join("by_hash")).unwrap();
+        let artifact_path = artifact_dir.join(format!("{artifact_id}.json"));
+        fs::write(&artifact_path, serde_json::to_vec(ir).unwrap()).unwrap();
+        let summary = canon_analysis::GraphArtifactSummary {
+            artifact_id: artifact_id.clone(),
+            artifact_path: artifact_path.clone(),
+            crate_name: "example".to_string(),
+            node_count: ir.nodes.len(),
+            edge_count: ir.module_graph.edge_count() + ir.call_graph.edge_count() + ir.cfg_graph.edge_count(),
+            file_count: 2,
+            call_edge_count: ir.call_graph.edge_count(),
+            module_edge_count: ir.module_graph.edge_count(),
+            cfg_edge_count: ir.cfg_graph.edge_count(),
+        };
+        let index = canon_analysis::GraphArtifactIndex {
+            latest_workspace: summary.clone(),
+        };
+        fs::write(
+            artifact_dir.join("index").join("latest_workspace.json"),
+            serde_json::to_vec(&index).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            artifact_dir.join("index").join("by_crate").join("example.json"),
+            serde_json::to_vec(&summary).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            artifact_dir.join("index").join("by_hash").join(format!("{artifact_id}.json")),
+            serde_json::to_vec(&summary).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn rename_ir() -> CanonIR {
+        let mut ir = CanonIR::new();
+        let mod_alpha = ir.intern_path("crate::alpha").unwrap();
+        let mod_beta = ir.intern_path("crate::beta").unwrap();
+        let foo = ir.intern_name("Foo");
+        let alpha_id = ir.push_node(CanonNodeKind::Module { path_id: mod_alpha, flags: 0 });
+        let beta_id = ir.push_node(CanonNodeKind::Module { path_id: mod_beta, flags: 0 });
+        let foo_alpha = ir.push_node(CanonNodeKind::Struct {
+            name_id: foo,
+            generics: Vec::new(),
+            fields: Vec::new(),
+            derives: Vec::new(),
+            attrs: Vec::new(),
+            flags: 0,
+            struct_kind: 0,
+        });
+        let foo_beta = ir.push_node(CanonNodeKind::Struct {
+            name_id: foo,
+            generics: Vec::new(),
+            fields: Vec::new(),
+            derives: Vec::new(),
+            attrs: Vec::new(),
+            flags: 0,
+            struct_kind: 0,
+        });
+        let node_data = ir.nodes.iter().map(|node| node.id).collect::<Vec<_>>();
+        ir.module_graph = CsrGraph::from_edges(
+            node_data.clone(),
+            vec![
+                (alpha_id.0, foo_alpha.0, canon_ir::EdgeKind::Contains),
+                (beta_id.0, foo_beta.0, canon_ir::EdgeKind::Contains),
+            ],
+        );
+        ir.call_graph = CsrGraph::from_edges(node_data.clone(), Vec::new());
+        ir.cfg_graph = CsrGraph::from_edges(node_data, Vec::new());
+        ir
+    }
+
+    fn restructure_ir() -> CanonIR {
+        let mut ir = CanonIR::new();
+        let mod_alpha = ir.intern_path("crate::alpha").unwrap();
+        let mod_beta = ir.intern_path("crate::beta").unwrap();
+        let worker = ir.intern_name("Worker");
+        let caller = ir.intern_name("call_worker");
+        let alpha_id = ir.push_node(CanonNodeKind::Module { path_id: mod_alpha, flags: 0 });
+        let beta_id = ir.push_node(CanonNodeKind::Module { path_id: mod_beta, flags: 0 });
+        let worker_id = ir.push_node(CanonNodeKind::Struct {
+            name_id: worker,
+            generics: Vec::new(),
+            fields: Vec::new(),
+            derives: Vec::new(),
+            attrs: Vec::new(),
+            flags: 0,
+            struct_kind: 0,
+        });
+        let caller_id = ir.push_node(CanonNodeKind::Fn {
+            name_id: caller,
+            sig_id: worker_id,
+            body: None,
+            attrs: Vec::new(),
+            flags: 0,
+        });
+        let node_data = ir.nodes.iter().map(|node| node.id).collect::<Vec<_>>();
+        ir.module_graph = CsrGraph::from_edges(
+            node_data.clone(),
+            vec![
+                (alpha_id.0, worker_id.0, canon_ir::EdgeKind::Contains),
+                (beta_id.0, caller_id.0, canon_ir::EdgeKind::Contains),
+                (alpha_id.0, beta_id.0, canon_ir::EdgeKind::Reexports),
+                (alpha_id.0, beta_id.0, canon_ir::EdgeKind::Reexports),
+                (alpha_id.0, beta_id.0, canon_ir::EdgeKind::Reexports),
+                (alpha_id.0, beta_id.0, canon_ir::EdgeKind::Reexports),
+                (alpha_id.0, beta_id.0, canon_ir::EdgeKind::Reexports),
+            ],
+        );
+        ir.call_graph = CsrGraph::from_edges(
+            node_data.clone(),
+            vec![(caller_id.0, worker_id.0, canon_ir::EdgeKind::Calls)],
+        );
+        ir.cfg_graph = CsrGraph::from_edges(node_data, Vec::new());
+        ir
+    }
+
+    fn context_for_strategy(
+        workspace: &Path,
+        semantic_summary: SemanticStateSummary,
+        trend: ObjectiveTrendState,
+    ) -> LlmSemanticContext {
+        let objective_state =
+            derive_self_development_objective_state(&semantic_summary, 0, &[], &trend);
+        LlmSemanticContext {
+            mission_summary: None,
+            semantic_summary,
+            objective_state,
+            objective_trend_state: trend,
+            target_workspace: Some(workspace.display().to_string()),
+            workspace_loc: None,
+            error_count: None,
+            warning_count: None,
+            route_rationale: None,
+            route_confidence: None,
+            invalid_plan_reason: None,
+            invalid_plan_planned_count: None,
+            consecutive_invalid_plan_batches: 0,
+            low_level_diagnostics: Vec::new(),
+            recent_actions: Vec::new(),
+            recent_tool_results: Vec::new(),
+            recent_execution_results: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn graph_strategy_block_prefers_semantic_rename_payloads() {
+        let workspace = temp_workspace();
+        fs::write(workspace.join("src").join("alpha.rs"), "pub struct Foo;\n").unwrap();
+        fs::write(workspace.join("src").join("beta.rs"), "pub struct Foo;\n").unwrap();
+        write_latest_graph_artifact(&workspace, &rename_ir());
+        let semantic_summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some(workspace.display().to_string()),
+            path_exists: true,
+            cargo_project: true,
+            graph_artifact_id: Some("artifact".into()),
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::DuplicateDefinition,
+                "duplicate definition",
+                "use semantic rename",
+                vec!["src/lib.rs".into()],
+            )],
+            ..SemanticStateSummary::default()
+        };
+        let block = build_graph_strategy_block(&context_for_strategy(
+            &workspace,
+            semantic_summary,
+            ObjectiveTrendState::default(),
+        ));
+        assert!(block.contains("\"action\":\"edit.rename_symbol\""));
+        assert!(!block.contains("\"action\":\"apply_patch\""));
+        assert!(block.contains("\"path\":\"src/alpha.rs\"") || block.contains("\"path\":\"src/beta.rs\""));
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn graph_strategy_block_emits_move_symbol_payloads() {
+        let workspace = temp_workspace();
+        fs::write(workspace.join("src").join("alpha.rs"), "pub struct Worker;\n").unwrap();
+        fs::write(workspace.join("src").join("beta.rs"), "pub fn call_worker() {}\n").unwrap();
+        write_latest_graph_artifact(&workspace, &restructure_ir());
+        let semantic_summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some(workspace.display().to_string()),
+            path_exists: true,
+            cargo_project: true,
+            graph_artifact_id: Some("artifact".into()),
+            rust_file_count: Some(12),
+            graph_module_edge_count: Some(48),
+            graph_call_edge_count: Some(1),
+            source_files: vec!["tests/cohesion_test.rs".into()],
+            ..SemanticStateSummary::default()
+        };
+        let trend = ObjectiveTrendState {
+            baseline_module_gap_count: Some(0),
+            current_module_gap_count: Some(3),
+            ..ObjectiveTrendState::default()
+        };
+        let block = build_graph_strategy_block(&context_for_strategy(&workspace, semantic_summary, trend));
+        assert!(block.contains("\"action\":\"edit.move_symbol\""));
+        assert!(block.contains("\"new_module_path\":\"crate::beta\""));
+        assert!(block.contains("\"path\":\"src/alpha.rs\""));
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn validate_action_batch_accepts_semantic_rename_action() {
+        let workspace = temp_workspace();
+        let semantic_summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some(workspace.display().to_string()),
+            path_exists: true,
+            cargo_project: true,
+            graph_artifact_id: Some("artifact".into()),
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::DuplicateDefinition,
+                "duplicate definition",
+                "rename duplicate",
+                vec!["src/alpha.rs".into()],
+            )],
+            ..SemanticStateSummary::default()
+        };
+        let rename = LoopPlanned {
+            tick: 1,
+            action_kind: "edit.rename_symbol".to_string(),
+            action_payload: json!({
+                "old": "crate::alpha::Foo",
+                "new": "crate::alpha::FooAlpha",
+                "path": "src/alpha.rs"
+            }),
+            reason: "semantic rename".to_string(),
+            llm_request_id: None,
+            signals: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            depends_on: Vec::new(),
+        };
+        assert!(validate_action_batch(
+            &[rename],
+            crate::policy::RetryPolicy::CorrectiveRetry,
+            &semantic_summary,
+            &ObjectiveTrendState::default(),
+            &[],
+        )
+        .is_ok());
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn validate_action_batch_accepts_move_symbol_action() {
+        let workspace = temp_workspace();
+        let semantic_summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some(workspace.display().to_string()),
+            path_exists: true,
+            cargo_project: true,
+            graph_artifact_id: Some("artifact".into()),
+            rust_file_count: Some(12),
+            graph_module_edge_count: Some(48),
+            graph_call_edge_count: Some(1),
+            source_files: vec!["tests/cohesion_test.rs".into()],
+            ..SemanticStateSummary::default()
+        };
+        let trend = ObjectiveTrendState {
+            baseline_module_gap_count: Some(0),
+            current_module_gap_count: Some(3),
+            ..ObjectiveTrendState::default()
+        };
+        let move_symbol = LoopPlanned {
+            tick: 1,
+            action_kind: "edit.move_symbol".to_string(),
+            action_payload: json!({
+                "symbol_id": "crate::alpha::Worker",
+                "new_module_path": "crate::beta",
+                "path": "src/alpha.rs"
+            }),
+            reason: "module restructure".to_string(),
+            llm_request_id: None,
+            signals: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            depends_on: Vec::new(),
+        };
+        assert!(validate_action_batch(
+            &[move_symbol],
+            crate::policy::RetryPolicy::CorrectiveRetry,
+            &semantic_summary,
+            &trend,
+            &[],
+        )
+        .is_ok());
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn graph_rename_strategy_is_selected_for_duplicate_definition_context() {
+        let summary = SemanticStateSummary {
+            complete: true,
+            path_exists: true,
+            cargo_project: true,
+            graph_artifact_id: Some("artifact".into()),
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::DuplicateDefinition,
+                "duplicate definition",
+                "rename duplicate",
+                vec!["src/lib.rs".into()],
+            )],
+            ..SemanticStateSummary::default()
+        };
+        let trend = ObjectiveTrendState::default();
+        let objective_state = derive_self_development_objective_state(&summary, 0, &[], &trend);
+        assert_eq!(
+            canon_semantic_state::primary_development_strategy_kind(&objective_state, &trend, &summary),
+            DevelopmentStrategyKind::PlanSymbolAwareRename
+        );
+    }
 }

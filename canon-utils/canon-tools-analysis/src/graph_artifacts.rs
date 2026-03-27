@@ -29,6 +29,7 @@ pub struct GraphRenameCandidate {
     pub suggested_path: String,
     pub kind: String,
     pub module_path: Option<String>,
+    pub file_path: Option<String>,
     pub duplicate_count: usize,
 }
 
@@ -46,6 +47,7 @@ pub struct GraphModuleMoveCandidate {
     pub from_module_path: String,
     pub to_module_path: String,
     pub kind: String,
+    pub file_path: Option<String>,
     pub external_reference_count: usize,
 }
 
@@ -93,6 +95,7 @@ pub fn duplicate_definition_rename_candidates(ir: &CanonIR, limit: usize) -> Vec
                 suggested_path: qualify_symbol_path(module_path.as_deref(), &new_name),
                 kind: kind.clone(),
                 module_path: module_path.clone(),
+                file_path: None,
                 duplicate_count: entries.len(),
             });
         }
@@ -144,7 +147,14 @@ pub fn module_cohesion_hotspots(ir: &CanonIR, limit: usize) -> Vec<ModuleCohesio
 
 pub fn graph_backed_rename_candidates(workspace_root: &Path, limit: usize) -> Result<Vec<GraphRenameCandidate>> {
     let (_, ir) = load_latest_workspace_graph_artifact(workspace_root)?;
-    Ok(duplicate_definition_rename_candidates(&ir, limit))
+    let mut out = duplicate_definition_rename_candidates(&ir, limit);
+    for candidate in &mut out {
+        candidate.file_path = candidate
+            .module_path
+            .as_deref()
+            .and_then(|module_path| workspace_relative_path_for_module(workspace_root, module_path));
+    }
+    Ok(out)
 }
 
 pub fn graph_backed_module_hotspots(workspace_root: &Path, limit: usize) -> Result<Vec<ModuleCohesionHotspot>> {
@@ -154,7 +164,11 @@ pub fn graph_backed_module_hotspots(workspace_root: &Path, limit: usize) -> Resu
 
 pub fn graph_backed_module_moves(workspace_root: &Path, limit: usize) -> Result<Vec<GraphModuleMoveCandidate>> {
     let (_, ir) = load_latest_workspace_graph_artifact(workspace_root)?;
-    Ok(module_move_candidates(&ir, limit))
+    let mut out = module_move_candidates(&ir, limit);
+    for candidate in &mut out {
+        candidate.file_path = workspace_relative_path_for_module(workspace_root, &candidate.from_module_path);
+    }
+    Ok(out)
 }
 
 fn module_membership_map(ir: &CanonIR) -> HashMap<u32, String> {
@@ -186,6 +200,7 @@ fn module_move_candidates(ir: &CanonIR, limit: usize) -> Vec<GraphModuleMoveCand
             from_module_path: hotspot.module_path,
             to_module_path,
             kind,
+            file_path: None,
             external_reference_count,
         });
         if out.len() >= limit {
@@ -302,6 +317,26 @@ fn sanitize_identifier(value: &str) -> String {
     out
 }
 
+fn workspace_relative_path_for_module(workspace_root: &Path, module_path: &str) -> Option<String> {
+    let mut segments = module_path
+        .split("::")
+        .filter(|segment| !segment.is_empty() && *segment != "crate")
+        .collect::<Vec<_>>();
+    let path = if segments.is_empty() {
+        workspace_root.join("src/lib.rs")
+    } else {
+        let leaf = segments.pop()?;
+        let mut base = workspace_root.join("src");
+        for segment in segments {
+            base.push(segment);
+        }
+        base.join(format!("{leaf}.rs"))
+    };
+    path.strip_prefix(workspace_root)
+        .ok()
+        .map(|relative| relative.to_string_lossy().to_string())
+}
+
 pub fn latest_graph_artifact_path(workspace_root: &Path) -> Result<PathBuf> {
     let index_path = workspace_root
         .join("state")
@@ -313,4 +348,80 @@ pub fn latest_graph_artifact_path(workspace_root: &Path) -> Result<PathBuf> {
         return Err(anyhow!("latest graph artifact path is empty"));
     }
     Ok(index.latest_workspace.artifact_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{duplicate_definition_rename_candidates, module_cohesion_hotspots, module_move_candidates};
+    use canon_ir::{csr_graph::CsrGraph, CanonIR, CanonNodeKind};
+
+    fn sample_ir() -> CanonIR {
+        let mut ir = CanonIR::new();
+        let mod_alpha = ir.intern_path("crate::alpha").unwrap();
+        let mod_beta = ir.intern_path("crate::beta").unwrap();
+        let foo = ir.intern_name("Foo");
+        let bar = ir.intern_name("Bar");
+        let alpha_id = ir.push_node(CanonNodeKind::Module { path_id: mod_alpha, flags: 0 });
+        let beta_id = ir.push_node(CanonNodeKind::Module { path_id: mod_beta, flags: 0 });
+        let foo_alpha = ir.push_node(CanonNodeKind::Struct {
+            name_id: foo,
+            generics: Vec::new(),
+            fields: Vec::new(),
+            derives: Vec::new(),
+            attrs: Vec::new(),
+            flags: 0,
+            struct_kind: 0,
+        });
+        let foo_beta = ir.push_node(CanonNodeKind::Struct {
+            name_id: foo,
+            generics: Vec::new(),
+            fields: Vec::new(),
+            derives: Vec::new(),
+            attrs: Vec::new(),
+            flags: 0,
+            struct_kind: 0,
+        });
+        let bar_alpha = ir.push_node(CanonNodeKind::Fn {
+            name_id: bar,
+            sig_id: foo_alpha,
+            body: None,
+            attrs: Vec::new(),
+            flags: 0,
+        });
+        let node_data = ir.nodes.iter().map(|node| node.id).collect::<Vec<_>>();
+        ir.module_graph = CsrGraph::from_edges(
+            node_data.clone(),
+            vec![
+                (alpha_id.0, foo_alpha.0, canon_ir::EdgeKind::Contains),
+                (alpha_id.0, bar_alpha.0, canon_ir::EdgeKind::Contains),
+                (beta_id.0, foo_beta.0, canon_ir::EdgeKind::Contains),
+            ],
+        );
+        ir.call_graph = CsrGraph::from_edges(
+            node_data,
+            vec![
+                (foo_alpha.0, bar_alpha.0, canon_ir::EdgeKind::Calls),
+                (foo_beta.0, bar_alpha.0, canon_ir::EdgeKind::Calls),
+            ],
+        );
+        ir
+    }
+
+    #[test]
+    fn duplicate_definition_candidates_are_graph_backed() {
+        let ir = sample_ir();
+        let candidates = duplicate_definition_rename_candidates(&ir, 8);
+        assert!(candidates.iter().any(|candidate| candidate.symbol_path == "crate::alpha::Foo"));
+        assert!(candidates.iter().any(|candidate| candidate.symbol_path == "crate::beta::Foo"));
+    }
+
+    #[test]
+    fn module_hotspots_and_move_candidates_are_derived_from_graph() {
+        let ir = sample_ir();
+        let hotspots = module_cohesion_hotspots(&ir, 4);
+        assert!(hotspots.iter().any(|hotspot| hotspot.module_path == "crate::alpha"));
+        let moves = module_move_candidates(&ir, 4);
+        assert!(moves.len() <= 4);
+        assert!(moves.iter().all(|candidate| !candidate.to_module_path.is_empty()));
+    }
 }
