@@ -325,6 +325,9 @@ impl EventConsumer for LoopStageExecutor {
                 self.ctx.last_observed = Some(o.clone());
                 self.ctx.last_observed_tick = Some(o.tick);
                 self.ctx.errors_before = o.error_count;
+                self.ctx
+                    .objective_trend_state
+                    .record_observation(o.error_count, &o.semantic_summary);
             }
             RuntimeEvent::LoopActed(a) => {
                 let action_outcome = classify_action_outcome(&a.action_kind, a.success, &a.stdout, &a.stderr);

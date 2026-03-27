@@ -118,6 +118,10 @@ impl EventConsumer for GoalGenConsumer {
                         )
                     })
                     .unwrap_or_default();
+                let selected_goal_objective = current_primary_objective(
+                    &self.semantic_summary,
+                    &self.objective_trend_state,
+                );
                 if !objective_override.is_empty() {
                     if let Some(emitter) = &self.emitter {
                         emitter.emit_with_parents(
@@ -138,8 +142,10 @@ impl EventConsumer for GoalGenConsumer {
                 EventOutcome::emit(RuntimeEvent::Llm(LlmCall {
                     request_id: request_id.clone(),
                     prompt: format!(
-                        "{prompt}\n\n{}{}",
+                        "{prompt}\n\n{}\n\nGoal generation target objective:\n- {}\n- {}\n{}",
                         semantic_context.render_goal_gen_block(),
+                        selected_goal_objective.as_str(),
+                        selected_goal_objective.focus_text(),
                         objective_override
                     ),
                     role: Some("goal_gen".to_string()),
@@ -246,6 +252,8 @@ impl EventConsumer for GoalGenConsumer {
             }
             (_, RuntimeEvent::LoopObserved(observed)) => {
                 self.semantic_summary = observed.semantic_summary.clone();
+                self.objective_trend_state
+                    .record_observation(observed.error_count, &self.semantic_summary);
                 EventOutcome::NoOp("goal_gen_observed_update")
             }
             (_, RuntimeEvent::RouteSelected(_)) => {

@@ -414,6 +414,12 @@ pub struct ObjectiveTrendState {
     pub repeated_stall_count: u32,
     pub route_objective_contradiction_events: u32,
     pub goal_objective_drift_events: u32,
+    pub baseline_error_count: Option<u32>,
+    pub current_error_count: Option<u32>,
+    pub baseline_module_gap_count: Option<u32>,
+    pub current_module_gap_count: Option<u32>,
+    pub baseline_test_surface_count: Option<u32>,
+    pub current_test_surface_count: Option<u32>,
     pub last_goodness: Option<f32>,
     pub last_delta_g: Option<f32>,
 }
@@ -451,6 +457,29 @@ impl ObjectiveTrendState {
         self.last_delta_g = Some(delta_g);
     }
 
+    pub fn record_observation(&mut self, error_count: usize, semantic_summary: &SemanticStateSummary) {
+        let error_count = error_count as u32;
+        self.current_error_count = Some(error_count);
+        self.baseline_error_count.get_or_insert(error_count);
+
+        let module_gap_count = semantic_summary.module_gaps.len() as u32;
+        self.current_module_gap_count = Some(module_gap_count);
+        self.baseline_module_gap_count.get_or_insert(module_gap_count);
+
+        let test_surface_count = semantic_summary
+            .source_files
+            .iter()
+            .filter(|path| {
+                path.contains("/tests/")
+                    || path.starts_with("tests/")
+                    || path.ends_with("_test.rs")
+                    || path.ends_with("_tests.rs")
+            })
+            .count() as u32;
+        self.current_test_surface_count = Some(test_surface_count);
+        self.baseline_test_surface_count.get_or_insert(test_surface_count);
+    }
+
     pub fn record_route_objective_contradiction(&mut self) {
         self.route_objective_contradiction_events =
             self.route_objective_contradiction_events.saturating_add(1);
@@ -484,6 +513,20 @@ impl ObjectiveTrendState {
         self.route_objective_contradiction_events + self.goal_objective_drift_events
     }
 
+    pub fn compiler_error_delta(&self) -> i32 {
+        self.current_error_count.unwrap_or(0) as i32 - self.baseline_error_count.unwrap_or(0) as i32
+    }
+
+    pub fn module_gap_delta(&self) -> i32 {
+        self.current_module_gap_count.unwrap_or(0) as i32
+            - self.baseline_module_gap_count.unwrap_or(0) as i32
+    }
+
+    pub fn test_surface_delta(&self) -> i32 {
+        self.current_test_surface_count.unwrap_or(0) as i32
+            - self.baseline_test_surface_count.unwrap_or(0) as i32
+    }
+
     pub fn render_lines(&self) -> Vec<String> {
         vec![
             format!("repair_resolution_rate={:.2}", self.repair_resolution_rate()),
@@ -498,6 +541,9 @@ impl ObjectiveTrendState {
                 "goal_objective_drift_events={}",
                 self.goal_objective_drift_events
             ),
+            format!("compiler_error_delta={}", self.compiler_error_delta()),
+            format!("module_gap_delta={}", self.module_gap_delta()),
+            format!("test_surface_delta={}", self.test_surface_delta()),
             format!("total_execution_results={}", self.total_execution_results),
             format!("planning_attempts={}", self.planning_attempts),
             format!(
@@ -550,12 +596,14 @@ pub fn derive_development_objectives(
             kind: DevelopmentObjectiveKind::ReduceCompilerFailures,
             priority_score: u32::from(objective_state.compiler_repair_required)
                 + u32::from(objective_state.validation_blocked_by_preconditions)
-                + u32::from(!semantic_summary.compiler_hints.is_empty()),
+                + u32::from(!semantic_summary.compiler_hints.is_empty())
+                + objective_trend_state.compiler_error_delta().max(0) as u32,
             rationale: "compiler repair pressure is still present".to_string(),
             progress_summary: format!(
-                "compiler_repair_required={} validation_blocked={}",
+                "compiler_repair_required={} validation_blocked={} compiler_error_delta={}",
                 objective_state.compiler_repair_required,
-                objective_state.validation_blocked_by_preconditions
+                objective_state.validation_blocked_by_preconditions,
+                objective_trend_state.compiler_error_delta()
             ),
         },
         DevelopmentObjective {
@@ -571,9 +619,13 @@ pub fn derive_development_objectives(
         DevelopmentObjective {
             kind: DevelopmentObjectiveKind::IncreaseTestCoverage,
             priority_score: u32::from(semantic_summary.cargo_project && !has_test_files)
-                + u32::from(semantic_summary.path_exists && semantic_summary.cargo_project),
+                + u32::from(semantic_summary.path_exists && semantic_summary.cargo_project)
+                + u32::from(objective_trend_state.test_surface_delta() <= 0),
             rationale: "the workspace has little or no visible test surface".to_string(),
-            progress_summary: format!("has_test_files={has_test_files} rust_file_count={rust_file_count}"),
+            progress_summary: format!(
+                "has_test_files={has_test_files} rust_file_count={rust_file_count} test_surface_delta={}",
+                objective_trend_state.test_surface_delta()
+            ),
         },
         DevelopmentObjective {
             kind: DevelopmentObjectiveKind::DecreaseInvalidPlanRate,
@@ -603,12 +655,14 @@ pub fn derive_development_objectives(
         DevelopmentObjective {
             kind: DevelopmentObjectiveKind::ImproveModuleCohesion,
             priority_score: semantic_summary.module_gaps.len() as u32
-                + u32::from(rust_file_count >= 8),
+                + u32::from(rust_file_count >= 8)
+                + objective_trend_state.module_gap_delta().max(0) as u32,
             rationale: "module gaps or graph sprawl indicate structural cohesion issues".to_string(),
             progress_summary: format!(
-                "module_gaps={} rust_file_count={}",
+                "module_gaps={} rust_file_count={} module_gap_delta={}",
                 semantic_summary.module_gaps.len(),
-                rust_file_count
+                rust_file_count,
+                objective_trend_state.module_gap_delta()
             ),
         },
     ];

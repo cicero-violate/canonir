@@ -240,6 +240,8 @@ impl RouteContext {
                 self.context_ready = goal_present || *error_count > 0;
                 self.bootstrap_refresh_required = false;
                 self.semantic_summary = semantic_summary.clone();
+                self.objective_trend_state
+                    .record_observation(*error_count, &self.semantic_summary);
                 if let Some(goal_text) = goal_text {
                     if !Self::goal_is_placeholder(goal_text) {
                         self.mission_raw = goal_text.clone();
