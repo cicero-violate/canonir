@@ -542,7 +542,8 @@ fn action_matches_hint_kind(action: &canon_event::LoopPlanned, hint_kind: &str) 
                 || patch.contains("extern crate ")
         }
         "missing_symbol" => {
-            patch.contains("fn ")
+            (patch.contains("fn ")
+                && !patch.contains("fn main"))
                 || patch.contains("struct ")
                 || patch.contains("enum ")
                 || patch.contains("type ")
@@ -661,12 +662,54 @@ mod tests {
         }
     }
 
+    fn planned_entrypoint_patch(path: &str) -> canon_event::LoopPlanned {
+        canon_event::LoopPlanned {
+            tick: 0,
+            action_kind: "apply_patch".to_string(),
+            action_payload: serde_json::json!({
+                "patch": format!("*** Begin Patch\n*** Add File: {path}\n+fn main() {{}}\n*** End Patch\n")
+            }),
+            reason: String::new(),
+            llm_request_id: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            signals: None,
+            depends_on: Vec::new(),
+        }
+    }
+
     fn planned_import_patch(path: &str) -> canon_event::LoopPlanned {
         canon_event::LoopPlanned {
             tick: 0,
             action_kind: "apply_patch".to_string(),
             action_payload: serde_json::json!({
                 "patch": format!("*** Begin Patch\n*** Update File: {path}\n@@\n+use crate::foo;\n*** End Patch\n")
+            }),
+            reason: String::new(),
+            llm_request_id: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            signals: None,
+            depends_on: Vec::new(),
+        }
+    }
+
+    fn planned_missing_symbol_patch(path: &str) -> canon_event::LoopPlanned {
+        canon_event::LoopPlanned {
+            tick: 0,
+            action_kind: "apply_patch".to_string(),
+            action_payload: serde_json::json!({
+                "patch": format!("*** Begin Patch\n*** Update File: {path}\n@@\n+fn run() {{}}\n*** End Patch\n")
             }),
             reason: String::new(),
             llm_request_id: None,
@@ -1162,7 +1205,7 @@ mod tests {
                 signals: None,
                 depends_on: Vec::new(),
             }],
-            FirstBatchCategory::EntrypointEdit => vec![planned_apply_patch("src/main.rs")],
+            FirstBatchCategory::EntrypointEdit => vec![planned_entrypoint_patch("src/main.rs")],
             FirstBatchCategory::ModuleEdit => vec![planned_apply_patch("src/index.rs")],
             FirstBatchCategory::DeadCodeEdit => vec![canon_event::LoopPlanned {
                 tick: 0,
@@ -1184,7 +1227,7 @@ mod tests {
             }],
             FirstBatchCategory::HintTargetEdit => vec![match state.hint {
                 CompilerHintAxis::UnresolvedImport => planned_import_patch("src/lib.rs"),
-                CompilerHintAxis::MissingSymbol => planned_apply_patch("src/main.rs"),
+                CompilerHintAxis::MissingSymbol => planned_missing_symbol_patch("src/main.rs"),
                 _ => planned_apply_patch("src/lib.rs"),
             }],
             FirstBatchCategory::WrongEdit => vec![planned_apply_patch("src/other.rs")],
