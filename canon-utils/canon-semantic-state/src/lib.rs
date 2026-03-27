@@ -289,6 +289,146 @@ impl SemanticStateSummary {
     }
 }
 
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LlmSemanticContext {
+    pub mission_summary: Option<String>,
+    pub semantic_summary: SemanticStateSummary,
+    pub target_workspace: Option<String>,
+    pub workspace_loc: Option<usize>,
+    pub error_count: Option<usize>,
+    pub warning_count: Option<usize>,
+    pub route_rationale: Option<String>,
+    pub route_confidence: Option<f64>,
+    pub invalid_plan_reason: Option<String>,
+    pub invalid_plan_planned_count: Option<usize>,
+    pub consecutive_invalid_plan_batches: u32,
+    pub low_level_diagnostics: Vec<String>,
+    pub recent_actions: Vec<String>,
+    pub recent_tool_results: Vec<String>,
+}
+
+impl LlmSemanticContext {
+    pub fn render_goal_gen_block(&self) -> String {
+        let mut lines = Vec::new();
+        if let Some(mission) = &self.mission_summary {
+            lines.push(format!("mission_summary={mission}"));
+        }
+        lines.push(format!("semantic_complete={}", self.semantic_summary.complete));
+        lines.push(format!("path_exists={}", self.semantic_summary.path_exists));
+        lines.push(format!("cargo_project={}", self.semantic_summary.cargo_project));
+        if let Some(entrypoint_kind) = &self.semantic_summary.entrypoint_kind {
+            lines.push(format!("entrypoint_kind={entrypoint_kind}"));
+        }
+        if !self.semantic_summary.compiler_hints.is_empty() {
+            lines.push(format!(
+                "compiler_hint_kinds={}",
+                self.semantic_summary.compiler_hint_kinds().join("|")
+            ));
+        }
+        format!("LLM semantic context:
+{}", render_bullets(&lines))
+    }
+
+    pub fn render_router_block(&self) -> String {
+        let mut lines = vec![
+            format!("semantic_complete={}", self.semantic_summary.complete),
+            format!("validation_blocked={}", self.semantic_summary.validation_blocked_by_preconditions),
+            format!("compiler_repair_required={}", self.semantic_summary.compiler_repair_required),
+        ];
+        if let Some(rationale) = &self.route_rationale {
+            lines.push(format!("route_rationale={rationale}"));
+        }
+        if let Some(confidence) = self.route_confidence {
+            lines.push(format!("route_confidence={confidence:.2}"));
+        }
+        lines.push(self.semantic_summary.compact_block());
+        format!("LLM semantic context:
+{}", render_bullets(&lines))
+    }
+
+    pub fn render_planner_base_block(&self) -> String {
+        let mut sections = vec![self.semantic_summary.render_planner_block()];
+        if !self.low_level_diagnostics.is_empty() {
+            sections.push(format!(
+                "Low-level diagnostics:
+{}",
+                render_bullets(&self.low_level_diagnostics)
+            ));
+        }
+        sections.join("
+
+")
+    }
+
+    pub fn render_planner_delta_block(&self) -> String {
+        let route_section = match &self.route_rationale {
+            Some(rationale) if !rationale.is_empty() => {
+                let conf = self
+                    .route_confidence
+                    .map(|value| format!("{value:.2}"))
+                    .unwrap_or_else(|| "n/a".to_string());
+                format!("Route rationale: {rationale}
+Route confidence: {conf}")
+            }
+            _ => "Route rationale: (not provided)".to_string(),
+        };
+        let invalid_plan_section = match &self.invalid_plan_reason {
+            Some(reason) => format!(
+                "Invalid plan memory: consecutive_invalid_plan_batches={count}; last_invalid_plan_planned_count={planned}; last_invalid_plan_reason={reason}",
+                count = self.consecutive_invalid_plan_batches,
+                planned = self
+                    .invalid_plan_planned_count
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "NA".to_string()),
+            ),
+            None => "Invalid plan memory: none".to_string(),
+        };
+        let compiler_hints = self
+            .semantic_summary
+            .compiler_hints
+            .iter()
+            .map(CompilerHintRecord::render_line)
+            .collect::<Vec<_>>();
+        let mut sections = vec![
+            format!(
+                "TARGET WORKSPACE: {}
+All relative paths resolve against TARGET WORKSPACE (not its parent).
+LOC: {}  |  Errors: {}  |  Warnings: {}",
+                self.target_workspace.as_deref().unwrap_or("NA"),
+                self.workspace_loc
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "NA".to_string()),
+                self.error_count
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "NA".to_string()),
+                self.warning_count
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "NA".to_string()),
+            ),
+            route_section,
+            invalid_plan_section,
+            format!("Compiler repair hints:
+{}", render_bullets(&compiler_hints)),
+            format!("Semantic summary:
+{}", self.semantic_summary.compact_block()),
+        ];
+        if !self.recent_actions.is_empty() {
+            sections.push(format!("Recent actions:
+{}", self.recent_actions.join("
+")));
+        }
+        if !self.recent_tool_results.is_empty() {
+            sections.push(format!("Recent tool results:
+{}", self.recent_tool_results.join("
+")));
+        }
+        sections.join("
+
+")
+    }
+}
+
 fn render_bullets(lines: &[String]) -> String {
     if lines.is_empty() {
         "- none".to_string()

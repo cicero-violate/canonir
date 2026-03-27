@@ -3,7 +3,7 @@ use std::path::Path;
 use canon_event::{new_error_occurred, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, LlmCall, LoopActed, LoopObserved, LoopPlanned, PlanningCompleted, RouteSelected, RuntimeEvent, ToolCall, ToolResult};
 use canon_goal::parse_agent_goal_markdown;
 use canon_invariant::decision_trace_payload;
-use canon_semantic_state::SemanticStateSummary;
+use canon_semantic_state::{LlmSemanticContext, SemanticStateSummary};
 use canon_tools_search::search_files;
 use canon_tools_patch::parse_patch;
 use std::collections::hash_map::DefaultHasher;
@@ -558,9 +558,6 @@ fn handle_observed(
     // Tier 3 (prompt / delta): LOC, errors, recent actions/results — sent every call.
     let sub_agent_section = ctx.context_merger.prompt_section();
     let workspace_clone = ctx.workspace.clone();
-    let context_base = build_context_base(observed, &workspace_clone, &sub_agent_section, &semantic_summary);
-    let context_base_hash = hash_str(&context_base);
-
     let target_workspace = semantic_summary
         .target_root
         .clone()
@@ -570,11 +567,9 @@ fn handle_observed(
         (Some(r), c) if !r.is_empty() && r != HEURISTIC_RATIONALE => (Some(r), c.map(|v| v as f64)),
         _ => (ctx.last_route_rationale_non_empty.as_deref(), ctx.last_route_confidence_non_empty),
     };
-
-    let context_delta = build_context_delta(
+    let llm_semantic_context = build_llm_semantic_context(
         &semantic_summary,
-        observed.error_count,
-        observed.warning_count,
+        observed,
         &ctx.batch_acted,
         &ctx.batch_tool_results,
         &target_workspace,
@@ -582,6 +577,16 @@ fn handle_observed(
         confidence_for_prompt,
         ctx.last_invalid_plan_reason.as_deref(),
         ctx.last_invalid_plan_planned_count,
+        ctx.consecutive_invalid_plan_batches,
+    );
+    let context_base = build_context_base(observed, &workspace_clone, &sub_agent_section, &llm_semantic_context);
+    let context_base_hash = hash_str(&context_base);
+
+    let context_delta = build_context_delta(
+        &llm_semantic_context,
+        &ctx.batch_acted,
+        &ctx.batch_tool_results,
+        ctx.last_invalid_plan_reason.as_deref(),
         ctx.consecutive_invalid_plan_batches,
     );
 
@@ -820,18 +825,18 @@ fn build_context_base(
     observed: &LoopObserved,
     workspace: &Path,
     sub_agent_section: &str,
-    semantic_summary: &SemanticStateSummary,
+    llm_semantic_context: &LlmSemanticContext,
 ) -> String {
     let goal_text = observed.goal_text.clone().unwrap_or_else(|| "<no goal provided>".to_string());
-    let target_workspace = semantic_summary
-        .target_root
+    let target_workspace = llm_semantic_context
+        .target_workspace
         .clone()
+        .or_else(|| llm_semantic_context.semantic_summary.target_root.clone())
         .unwrap_or_else(|| workspace.display().to_string());
-    let semantic_planner_block = semantic_summary.render_planner_block();
+    let semantic_planner_block = llm_semantic_context.render_planner_base_block();
 
     let search_hints = build_search_hints(&goal_text, workspace);
     let workspace_tree = build_workspace_tree(std::path::Path::new(&target_workspace), 3, 0);
-    let low_level_workspace_facts = render_low_level_workspace_facts(&observed.observe_diagnostics);
 
     format!(
         r#"GOAL:
@@ -841,7 +846,6 @@ fn build_context_base(
 {workspace_tree}
 
 {semantic_planner_block}
-{low_level_workspace_facts}
 
 ━━━ CONTEXT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -851,7 +855,6 @@ Relevant files:{search_hints}
         goal_text = goal_text,
         semantic_planner_block = semantic_planner_block,
         workspace_tree = workspace_tree,
-        low_level_workspace_facts = low_level_workspace_facts,
         search_hints = search_hints,
         sub_agent_section = sub_agent_section,
     )
@@ -861,68 +864,17 @@ Relevant files:{search_hints}
 /// Contains only the fields that change after each action: LOC, error counts,
 /// recent actions and tool results. Does NOT include GOAL or workspace tree.
 fn build_context_delta(
-    semantic_summary: &SemanticStateSummary,
-    error_count: usize,
-    warning_count: usize,
+    llm_semantic_context: &LlmSemanticContext,
     batch_acted: &[LoopActed],
     batch_tool_results: &[ToolResult],
-    target_workspace: &str,
-    route_rationale: Option<&str>,
-    route_confidence: Option<f64>,
     last_invalid_plan_reason: Option<&str>,
-    last_invalid_plan_planned_count: Option<usize>,
     consecutive_invalid_plan_batches: u32,
 ) -> String {
-    // Count LOC only for the target project directory (Rust files only, excluding target/).
-    let workspace_loc = count_loc_in_workspace(std::path::Path::new(target_workspace));
-    let semantic_block = semantic_summary.compact_block();
-
-    let recent_actions = batch_acted
-        .iter()
-        .rev()
-        .take(24)
-        .map(|a| {
-            let mut entry = format!("- action={} success={} exit_code={:?}", a.action_kind, a.success, a.exit_code);
-            let stdout = a.stdout.trim();
-            let stderr = a.stderr.trim();
-            if !stdout.is_empty() {
-                let truncated = if stdout.len() > 800 { &stdout[..800] } else { stdout };
-                entry.push_str(&format!("\n  stdout: {truncated}"));
-            }
-            if !stderr.is_empty() {
-                let truncated = if stderr.len() > 400 { &stderr[..400] } else { stderr };
-                entry.push_str(&format!("\n  stderr: {truncated}"));
-            }
-            entry
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let recent_results = batch_tool_results
-        .iter()
-        .rev()
-        .take(12)
-        .map(|r| {
-            let content = serde_json::to_string_pretty(&r.output).unwrap_or_else(|_| r.output.to_string());
-            let truncated = if content.len() > 600 { &content[..600] } else { &content };
-            format!("- kind={} success={}\n  output: {}", r.kind, r.success, truncated)
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
     let destructive_warning = batch_acted.iter().any(|a| a.stderr.trim() == "rejected_destructive_command");
     let destructive_note = if destructive_warning {
         "WARNING: A previous plan was blocked as destructive. Do NOT include destructive commands; they will fail.\n"
     } else {
         ""
-    };
-
-    let route_section = match route_rationale {
-        Some(r) if !r.is_empty() => {
-            let conf = route_confidence.map(|c| format!("{:.2}", c)).unwrap_or_else(|| "n/a".to_string());
-            format!("Route rationale: {r}\nRoute confidence: {conf}\n")
-        }
-        _ => "Route rationale: (not provided)\n".to_string(),
     };
 
     let invalid_plan_section = match last_invalid_plan_reason {
@@ -937,15 +889,9 @@ fn build_context_delta(
                     "Retry policy: corrective retry. Fix the specific invalid-plan issue and retry directly; discovery is not required unless you are missing file context.",
                 RetryPolicy::None => "Retry policy: none.",
             };
-            format!(
-                "Invalid plan memory: consecutive_invalid_plan_batches={count}; last_invalid_plan_planned_count={planned}; last_invalid_plan_reason={reason}\n{policy_text}\n",
-                count = consecutive_invalid_plan_batches,
-                planned = last_invalid_plan_planned_count
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "NA".to_string()),
-            )
+            format!("{}\n{policy_text}", llm_semantic_context.render_planner_delta_block())
         }
-        None => "Invalid plan memory: none\n".to_string(),
+        None => llm_semantic_context.render_planner_delta_block(),
     };
 
     let planner_hint = build_planner_hint(
@@ -954,72 +900,82 @@ fn build_context_delta(
         last_invalid_plan_reason,
         consecutive_invalid_plan_batches,
     );
-    let compiler_repair_hints = {
-        let lines = semantic_summary
-            .compiler_hints
-            .iter()
-            .map(|hint| hint.render_line())
-            .collect::<Vec<_>>();
-        if lines.is_empty() {
-            "none".to_string()
-        } else {
-            lines.into_iter().map(|line| format!("- {line}")).collect::<Vec<_>>().join("\n")
-        }
-    };
 
     format!(
-        r#"TARGET WORKSPACE: {target_workspace}
-All relative paths resolve against TARGET WORKSPACE (not its parent).
-LOC: {loc}  |  Errors: {errors}  |  Warnings: {warnings}
-{route_section}
-{invalid_plan_section}
-Compiler repair hints:
-{compiler_repair_hints}
-
-Semantic summary:
-{semantic_block}
+        r#"{invalid_plan_section}
 
 Planner hint:
 {planner_hint}
 
-{destructive_note}
-Recent actions (most recent first — read_file stdout contains file contents):
-{recent_actions}
-
-Recent tool results:
-{recent_results}
-"#,
-        target_workspace = target_workspace,
-        loc = workspace_loc,
-        errors = error_count,
-        warnings = warning_count,
-        destructive_note = destructive_note,
+{destructive_note}"#,
         invalid_plan_section = invalid_plan_section,
-        compiler_repair_hints = compiler_repair_hints,
-        semantic_block = semantic_block,
         planner_hint = planner_hint,
-        recent_actions = if recent_actions.is_empty() { "(none)".to_string() } else { recent_actions },
-        recent_results = if recent_results.is_empty() { "(none)".to_string() } else { recent_results },
+        destructive_note = destructive_note,
     )
 }
 
-fn low_level_workspace_facts(observe_diagnostics: &[String]) -> Vec<String> {
-    observe_diagnostics.to_vec()
-}
-
-fn render_low_level_workspace_facts(observe_diagnostics: &[String]) -> String {
-    let facts = low_level_workspace_facts(observe_diagnostics);
-    if facts.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "Low-level diagnostics:\n{}\n",
-            facts
-                .iter()
-                .map(|fact| format!("- {fact}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
+fn build_llm_semantic_context(
+    semantic_summary: &SemanticStateSummary,
+    observed: &LoopObserved,
+    batch_acted: &[LoopActed],
+    batch_tool_results: &[ToolResult],
+    target_workspace: &str,
+    route_rationale: Option<&str>,
+    route_confidence: Option<f64>,
+    last_invalid_plan_reason: Option<&str>,
+    last_invalid_plan_planned_count: Option<usize>,
+    consecutive_invalid_plan_batches: u32,
+) -> LlmSemanticContext {
+    let recent_actions = batch_acted
+        .iter()
+        .rev()
+        .take(24)
+        .map(|action| {
+            let mut entry =
+                format!("- action={} success={} exit_code={:?}", action.action_kind, action.success, action.exit_code);
+            let stdout = action.stdout.trim();
+            let stderr = action.stderr.trim();
+            if !stdout.is_empty() {
+                let truncated = if stdout.len() > 800 { &stdout[..800] } else { stdout };
+                entry.push_str(&format!("\n  stdout: {truncated}"));
+            }
+            if !stderr.is_empty() {
+                let truncated = if stderr.len() > 400 { &stderr[..400] } else { stderr };
+                entry.push_str(&format!("\n  stderr: {truncated}"));
+            }
+            entry
+        })
+        .collect::<Vec<_>>();
+    let recent_tool_results = batch_tool_results
+        .iter()
+        .rev()
+        .take(12)
+        .map(|result| {
+            let content =
+                serde_json::to_string_pretty(&result.output).unwrap_or_else(|_| result.output.to_string());
+            let truncated = if content.len() > 600 { &content[..600] } else { &content };
+            format!("- kind={} success={}\n  output: {}", result.kind, result.success, truncated)
+        })
+        .collect::<Vec<_>>();
+    LlmSemanticContext {
+        mission_summary: observed
+            .goal_text
+            .as_deref()
+            .map(parse_agent_goal_markdown)
+            .map(|goal| canon_goal::summarize_goal(&goal)),
+        semantic_summary: semantic_summary.clone(),
+        target_workspace: Some(target_workspace.to_string()),
+        workspace_loc: Some(count_loc_in_workspace(std::path::Path::new(target_workspace))),
+        error_count: Some(observed.error_count),
+        warning_count: Some(observed.warning_count),
+        route_rationale: route_rationale.map(str::to_string),
+        route_confidence,
+        invalid_plan_reason: last_invalid_plan_reason.map(str::to_string),
+        invalid_plan_planned_count: last_invalid_plan_planned_count,
+        consecutive_invalid_plan_batches,
+        low_level_diagnostics: observed.observe_diagnostics.clone(),
+        recent_actions,
+        recent_tool_results,
     }
 }
 
