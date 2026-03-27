@@ -1714,7 +1714,7 @@ fn planner_actions_for_state(state: PlannerJudgmentState) -> Vec<canon_event::Lo
             vec![planned_run_command("cargo init", "/tmp/example")]
         }
         PlannerActionCase::CreateEntrypoint => vec![planned_add_file("src/main.rs", "+fn main() {}\n")],
-        PlannerActionCase::CreateModuleFile => vec![planned_add_file("src/index.rs", "+pub struct Index;\n")],
+        PlannerActionCase::CreateModuleFile => vec![planned_create_module_file("src/index.rs", "index")],
         PlannerActionCase::FixDeadCodeConflict => {
             vec![planned_update_file("src/lib.rs", "-#![allow(dead_code)]\n+#![allow(dead_code)]\n")]
         }
@@ -1724,10 +1724,9 @@ fn planner_actions_for_state(state: PlannerJudgmentState) -> Vec<canon_event::Lo
         PlannerActionCase::DefineMissingSymbol => {
             vec![planned_define_symbol_stub("src/main.rs", "run", "fn")]
         }
-        PlannerActionCase::ResolveDuplicateDefinition => vec![planned_update_file(
-            "src/lib.rs",
-            "-pub struct Engine;\n+pub struct EngineV2;\n",
-        )],
+        PlannerActionCase::ResolveDuplicateDefinition => {
+            vec![planned_rename_symbol("src/lib.rs", "crate::alpha::Engine", "crate::alpha::EngineV2")]
+        }
         PlannerActionCase::FixTraitBoundFailure => vec![planned_update_file(
             "src/lib.rs",
             "+impl Clone for Foo { fn clone(&self) -> Self { Self } }\n",
@@ -3023,6 +3022,51 @@ fn planned_define_symbol_stub(path: &str, symbol: &str, kind: &str) -> canon_eve
             "path": path,
             "symbol": symbol,
             "kind": kind,
+        }),
+        reason: String::new(),
+        llm_request_id: None,
+        trace_id: None,
+        execution_id: None,
+        span_id: None,
+        parent_span_id: None,
+        plan_id: None,
+        plan_step_id: None,
+        action_id: None,
+        signals: None,
+        depends_on: Vec::new(),
+    }
+}
+
+fn planned_rename_symbol(path: &str, old: &str, new: &str) -> canon_event::LoopPlanned {
+    canon_event::LoopPlanned {
+        tick: 0,
+        action_kind: "edit.rename_symbol".to_string(),
+        action_payload: serde_json::json!({
+            "path": path,
+            "old": old,
+            "new": new,
+        }),
+        reason: String::new(),
+        llm_request_id: None,
+        trace_id: None,
+        execution_id: None,
+        span_id: None,
+        parent_span_id: None,
+        plan_id: None,
+        plan_step_id: None,
+        action_id: None,
+        signals: None,
+        depends_on: Vec::new(),
+    }
+}
+
+fn planned_create_module_file(path: &str, module: &str) -> canon_event::LoopPlanned {
+    canon_event::LoopPlanned {
+        tick: 0,
+        action_kind: "edit.create_module_file".to_string(),
+        action_payload: serde_json::json!({
+            "path": path,
+            "module": module,
         }),
         reason: String::new(),
         llm_request_id: None,
