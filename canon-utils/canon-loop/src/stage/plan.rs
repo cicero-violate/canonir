@@ -590,7 +590,6 @@ fn handle_observed(
     let context_delta = build_context_delta(
         &llm_semantic_context,
         &ctx.batch_acted,
-        &ctx.batch_tool_results,
         ctx.last_invalid_plan_reason.as_deref(),
         ctx.consecutive_invalid_plan_batches,
     );
@@ -871,7 +870,6 @@ Relevant files:{search_hints}
 fn build_context_delta(
     llm_semantic_context: &LlmSemanticContext,
     batch_acted: &[LoopActed],
-    batch_tool_results: &[ToolResult],
     last_invalid_plan_reason: Option<&str>,
     consecutive_invalid_plan_batches: u32,
 ) -> String {
@@ -919,7 +917,6 @@ fn build_context_delta(
 
     let planner_hint = build_planner_hint(
         batch_acted,
-        batch_tool_results,
         last_invalid_plan_reason,
         consecutive_invalid_plan_batches,
         &llm_semantic_context.recent_execution_results,
@@ -1007,7 +1004,6 @@ fn build_llm_semantic_context(
 
 fn build_planner_hint(
     batch_acted: &[LoopActed],
-    batch_tool_results: &[ToolResult],
     last_invalid_plan_reason: Option<&str>,
     consecutive_invalid_plan_batches: u32,
     recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
@@ -1026,14 +1022,6 @@ fn build_planner_hint(
                         a.stdout.clone()
                     },
                 )
-            })
-            .or_else(|| {
-                batch_tool_results
-                    .iter()
-                    .rev()
-                    .find(|r| !r.success)
-                    .map(|r| (r.kind.as_str(), r.output.to_string()))
-                    .map(|(kind, text)| (kind.to_string(), text))
             })
     } else {
         None
