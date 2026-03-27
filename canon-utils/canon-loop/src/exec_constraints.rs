@@ -24,23 +24,51 @@ pub struct ExecState {
 
 impl ExecState {
     pub fn from_semantic_summary(target_root: &Path, summary: &SemanticStateSummary) -> Self {
+        let real_cargo_project = target_root.join("Cargo.toml").exists();
+        let real_entrypoint_missing =
+            !target_root.join("src/main.rs").exists() && !target_root.join("src/lib.rs").exists();
+        let failure_scope_localized = summary.failure_scope.as_deref() == Some("localized")
+            || !summary.module_gaps.is_empty()
+            || summary.compiler_hints.iter().any(|hint| {
+                hint.kind_enum().is_some_and(|kind| {
+                    matches!(
+                        kind,
+                        canon_semantic_state::CompilerHintKind::MissingModule
+                            | canon_semantic_state::CompilerHintKind::DeadCodeForbidConflict
+                            | canon_semantic_state::CompilerHintKind::MissingEntrypoint
+                            | canon_semantic_state::CompilerHintKind::UnresolvedImport
+                            | canon_semantic_state::CompilerHintKind::MissingSymbol
+                            | canon_semantic_state::CompilerHintKind::DuplicateDefinition
+                            | canon_semantic_state::CompilerHintKind::TraitBoundFailure
+                    )
+                }) && hint
+                    .target_files
+                    .iter()
+                    .any(|path| !path.trim().is_empty() && path != "none")
+            });
         Self {
             target_root: target_root.to_path_buf(),
             semantic_path_exists: summary.path_exists,
             semantic_cargo_project: summary.cargo_project,
             real_path_exists: target_root.exists(),
-            real_cargo_project: target_root.join("Cargo.toml").exists(),
+            real_cargo_project,
             actionable_failure: summary.validation_blocked_by_preconditions
                 || summary.compiler_repair_required
                 || !summary.planning_preconditions.is_empty()
                 || !summary.module_gaps.is_empty()
-                || summary.has_actionable_compiler_hints(),
+                || summary.has_actionable_compiler_hints()
+                || summary
+                    .primary_failure_class()
+                    .as_deref()
+                    .is_some_and(|class| class != "no_actionable_failure"),
             validation_blocked: summary.validation_blocked_by_preconditions,
             entrypoint_missing: matches!(summary.entrypoint_kind.as_deref(), Some("none") | None)
-                && summary.cargo_project,
+                && summary.cargo_project
+                && real_cargo_project
+                && real_entrypoint_missing,
             module_gaps_present: !summary.module_gaps.is_empty(),
             failure_class_no_actionable: summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
-            failure_scope_localized: summary.failure_scope.as_deref() == Some("localized"),
+            failure_scope_localized,
             failure_scope_workspace: summary.failure_scope.as_deref() == Some("workspace"),
             failure_scope_tooling: summary.failure_scope.as_deref() == Some("tooling"),
         }
@@ -61,6 +89,7 @@ impl ExecState {
             failure_scope_localized: self.failure_scope_localized,
             failure_scope_workspace: self.failure_scope_workspace,
             failure_scope_tooling: self.failure_scope_tooling,
+            route_objective_contradiction: false,
         }
     }
 }
@@ -265,15 +294,16 @@ mod tests {
     }
 
     fn semantic_summary(semantic: SemanticWorkspaceState) -> SemanticStateSummary {
-        let (path_exists, cargo_project) = match semantic {
-            SemanticWorkspaceState::Missing => (false, false),
-            SemanticWorkspaceState::ExistingNonCargo => (true, false),
-            SemanticWorkspaceState::ExistingCargo => (true, true),
+        let (path_exists, cargo_project, entrypoint_kind) = match semantic {
+            SemanticWorkspaceState::Missing => (false, false, None),
+            SemanticWorkspaceState::ExistingNonCargo => (true, false, None),
+            SemanticWorkspaceState::ExistingCargo => (true, true, Some("bin".to_string())),
         };
         SemanticStateSummary {
             complete: true,
             path_exists,
             cargo_project,
+            entrypoint_kind,
             ..SemanticStateSummary::default()
         }
     }
@@ -301,6 +331,7 @@ mod tests {
             (RealWorkspaceState::Missing, ActionCase::CargoCheck) => "forbid_validate_missing",
             (RealWorkspaceState::Missing, _) => "allow",
             (RealWorkspaceState::ExistingNonCargo, ActionCase::CargoNew) => "rewrite_init",
+            (RealWorkspaceState::ExistingNonCargo, ActionCase::CargoCheck) => "allow",
             (RealWorkspaceState::ExistingNonCargo, _) => "allow",
             (RealWorkspaceState::ExistingCargo, ActionCase::CargoInit | ActionCase::CargoNew) => "forbid",
             (RealWorkspaceState::ExistingCargo, ActionCase::CargoCheck) => "allow",

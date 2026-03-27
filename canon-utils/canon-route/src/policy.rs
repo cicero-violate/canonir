@@ -278,11 +278,12 @@ fn route_constraint_state(ctx: &RouteContext) -> ConstraintState {
         failure_scope_localized: ctx.semantic_summary.failure_scope.as_deref() == Some("localized"),
         failure_scope_workspace: ctx.semantic_summary.failure_scope.as_deref() == Some("workspace"),
         failure_scope_tooling: ctx.semantic_summary.failure_scope.as_deref() == Some("tooling"),
+        route_objective_contradiction: route_choice_contradicts_objective(ctx, RouteKind::Verify),
     }
 }
 
 pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decision: &mut RouteDecision) -> Vec<RoutePolicyRule> {
-    let mut rules = evaluate_route_transition(ctx, state, None, Some(decision)).rules;
+    let rules = evaluate_route_transition(ctx, state, None, Some(decision)).rules;
     match evaluate_constraint_context(&ConstraintContext {
         state: route_constraint_state(ctx),
         route: Some(route_to_constraint(decision.lane)),
@@ -309,30 +310,21 @@ pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decis
             decision.lane = RouteKind::Plan;
             decision.should_stop = false;
             decision.changed = true;
-            decision.note = if reason.contains("required files are still missing") {
+            decision.note = if reason.contains("objective") {
+                "objective contradiction requires plan".to_string()
+            } else if reason.contains("required files are still missing") {
                 "required files still missing requires plan".to_string()
             } else {
                 "validation timing requires plan".to_string()
             };
-            decision
-                .gate_rules_fired
-                .push("meta_invariant_validation_timing".to_string());
+            decision.gate_rules_fired.push(if reason.contains("objective") {
+                "meta_invariant_route_objective_alignment".to_string()
+            } else {
+                "meta_invariant_validation_timing".to_string()
+            });
         }
         ConstraintDecision::Allow | ConstraintDecision::Forbid(_) | ConstraintDecision::RewriteAction(_, _) => {}
         ConstraintDecision::RewriteRoute(_, _) => {}
-    }
-    let already_forced_plan = rules.iter().any(|rule| {
-        matches!(
-            rule,
-            RoutePolicyRule::ForcePlanOnRepeatedObserve
-                | RoutePolicyRule::ForcePlanOnMissingTarget
-                | RoutePolicyRule::ForcePlanOnBlockedValidation
-                | RoutePolicyRule::CycleCapToPlan
-                | RoutePolicyRule::ForcePlanOnObjectiveContradiction
-        )
-    });
-    if !already_forced_plan && route_choice_contradicts_objective(ctx, decision.lane) {
-        rules.push(RoutePolicyRule::ForcePlanOnObjectiveContradiction);
     }
     for rule in &rules {
         apply_rule(decision, *rule);
@@ -494,6 +486,74 @@ fn derive_deterministic_route_from_constraints(
     }
 }
 
+fn dispatch_route_proposal(ctx: &RouteContext) -> Option<RouteProposal> {
+    if ctx.planned_pending == 0 && workspace_state_drift_detected(&ctx.semantic_summary) {
+        return Some(RouteProposal::StateDriftObserve);
+    }
+    if ctx.target_workspace_missing_state() && ctx.planned_pending == 0 {
+        return Some(RouteProposal::MissingTargetPlan);
+    }
+    if ctx.planned_pending == 0 && ctx.validation_blocked_state() {
+        return Some(RouteProposal::BlockedValidationPlan);
+    }
+    if ctx.planned_pending == 0
+        && ctx.semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure")
+        && !ctx.finish_ready
+    {
+        return Some(RouteProposal::NoSemanticProgressPlan);
+    }
+    if ctx.context_ready && ctx.planned_pending == 0 && ctx.consecutive_invalid_plan_batches > 0 {
+        return Some(RouteProposal::InvalidPlanReplan);
+    }
+    None
+}
+
+fn event_route_proposal(ctx: &RouteContext, event: &RuntimeEvent) -> Option<RouteProposal> {
+    match event {
+        RuntimeEvent::LoopActed(_a) if ctx.bootstrap_refresh_required => {
+            Some(RouteProposal::BootstrapRefreshObserve)
+        }
+        RuntimeEvent::LoopActed(_)
+            if ctx.planned_pending == 0
+                && ctx.pending_tool_result_ids.is_empty()
+                && workspace_state_drift_detected(&ctx.semantic_summary) =>
+        {
+            Some(RouteProposal::StateDriftObserve)
+        }
+        RuntimeEvent::LoopActed(a) if a.action_kind == "done" && ctx.planned_pending == 0 => {
+            Some(RouteProposal::DoneVerify)
+        }
+        RuntimeEvent::LoopActed(_)
+            if ctx.planned_pending == 0
+                && ctx.pending_tool_result_ids.is_empty()
+                && latest_semantic_progress(&ctx.recent_execution_results)
+                && !ctx.validation_blocked_state() =>
+        {
+            Some(RouteProposal::SemanticProgressVerify)
+        }
+        RuntimeEvent::LoopActed(_)
+            if ctx.planned_pending == 0
+                && ctx.pending_tool_result_ids.is_empty()
+                && latest_no_semantic_progress(&ctx.recent_execution_results)
+                && !ctx.finish_ready =>
+        {
+            Some(RouteProposal::NoSemanticProgressPlan)
+        }
+        RuntimeEvent::LoopActed(_) if ctx.planned_pending > 0 && ctx.pending_tool_result_ids.is_empty() => {
+            Some(RouteProposal::ContinueAct)
+        }
+        RuntimeEvent::PlanningCompleted(_) if ctx.planned_pending > 0 && ctx.pending_tool_result_ids.is_empty() => {
+            Some(RouteProposal::PlannedToAct)
+        }
+        RuntimeEvent::PlanningCompleted(pc)
+            if pc.status == "missing_observed_context" && ctx.pending_tool_result_ids.is_empty() =>
+        {
+            Some(RouteProposal::MissingObservedContextObserve)
+        }
+        _ => None,
+    }
+}
+
 pub fn evaluate_route_dispatch(
     ctx: &RouteContext,
     policy_state: RoutePolicyState<'_>,
@@ -566,58 +626,21 @@ pub fn evaluate_route_dispatch(
             deterministic: None,
         };
     }
-    if ctx.planned_pending == 0 && workspace_state_drift_detected(&ctx.semantic_summary) {
+    if let Some(proposal) = dispatch_route_proposal(ctx) {
         return RouteDispatchEvaluation {
             suppression: None,
-            deterministic: Some(derive_deterministic_route_from_constraints(
-                ctx,
-                RouteProposal::StateDriftObserve,
-            )),
-        };
-    }
-    if ctx.target_workspace_missing_state() && ctx.planned_pending == 0 {
-        return RouteDispatchEvaluation {
-            suppression: None,
-            deterministic: Some(derive_deterministic_route_from_constraints(
-                ctx,
-                RouteProposal::MissingTargetPlan,
-            )),
-        };
-    }
-    if ctx.planned_pending == 0 && ctx.validation_blocked_state() {
-        return RouteDispatchEvaluation {
-            suppression: None,
-            deterministic: Some(derive_deterministic_route_from_constraints(
-                ctx,
-                RouteProposal::BlockedValidationPlan,
-            )),
-        };
-    }
-    if ctx.planned_pending == 0
-        && ctx.semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure")
-        && !ctx.finish_ready
-    {
-        return RouteDispatchEvaluation {
-            suppression: None,
-            deterministic: Some(derive_deterministic_route_from_constraints(
-                ctx,
-                RouteProposal::NoSemanticProgressPlan,
-            )),
-        };
-    }
-    if ctx.context_ready && ctx.planned_pending == 0 && ctx.consecutive_invalid_plan_batches > 0 {
-        return RouteDispatchEvaluation {
-            suppression: None,
-            deterministic: Some(derive_deterministic_route_from_constraints(
-                ctx,
-                RouteProposal::InvalidPlanReplan,
-            )),
+            deterministic: Some(derive_deterministic_route_from_constraints(ctx, proposal)),
         };
     }
     RouteDispatchEvaluation {
         suppression: None,
         deterministic: None,
     }
+}
+
+pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -> Option<DeterministicRouteDecision> {
+    event_route_proposal(ctx, event)
+        .map(|proposal| derive_deterministic_route_from_constraints(ctx, proposal))
 }
 
 pub fn evaluate_route_emit(state: RouteEmitState<'_>) -> RouteEmitEvaluation {
@@ -814,14 +837,8 @@ pub fn evaluate_route_transition(
             {
                 rules.push(RoutePolicyRule::ForcePlanOnRepeatedObserve);
             }
-            if ctx.target_workspace_missing_state() && ctx.planned_pending == 0 && decision.lane != RouteKind::Plan {
-                rules.push(RoutePolicyRule::ForcePlanOnMissingTarget);
-            }
-            if decision.lane == RouteKind::Verify
-                && ctx.validation_blocked_state()
-                && ctx.planned_pending == 0
-            {
-                rules.push(RoutePolicyRule::ForcePlanOnBlockedValidation);
+            if let Some(rule) = shared_route_policy_rule(ctx, decision) {
+                rules.push(rule);
             }
             if let Some(fallback_lane) = cycle_cap_fallback_lane(ctx, decision) {
                 rules.push(if fallback_lane == RouteKind::Plan {
@@ -835,59 +852,28 @@ pub fn evaluate_route_transition(
     RouteTransitionEvaluation { deterministic, rules }
 }
 
-pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -> Option<DeterministicRouteDecision> {
-    match event {
-        RuntimeEvent::LoopActed(_a) if ctx.bootstrap_refresh_required => Some(
-            derive_deterministic_route_from_constraints(ctx, RouteProposal::BootstrapRefreshObserve),
-        ),
-        RuntimeEvent::LoopActed(_)
-            if ctx.planned_pending == 0
-                && ctx.pending_tool_result_ids.is_empty()
-                && workspace_state_drift_detected(&ctx.semantic_summary) =>
-        {
-            Some(derive_deterministic_route_from_constraints(
-                ctx,
-                RouteProposal::StateDriftObserve,
-            ))
-        }
-        RuntimeEvent::LoopActed(a) if a.action_kind == "done" && ctx.planned_pending == 0 => Some(
-            derive_deterministic_route_from_constraints(ctx, RouteProposal::DoneVerify),
-        ),
-        RuntimeEvent::LoopActed(_)
-            if ctx.planned_pending == 0
-                && ctx.pending_tool_result_ids.is_empty()
-                && latest_semantic_progress(&ctx.recent_execution_results)
-                && !ctx.validation_blocked_state() =>
-        {
-            Some(derive_deterministic_route_from_constraints(
-                ctx,
-                RouteProposal::SemanticProgressVerify,
-            ))
-        }
-        RuntimeEvent::LoopActed(_)
-            if ctx.planned_pending == 0
-                && ctx.pending_tool_result_ids.is_empty()
-                && latest_no_semantic_progress(&ctx.recent_execution_results)
-                && !ctx.finish_ready =>
-        {
-            Some(derive_deterministic_route_from_constraints(
-                ctx,
-                RouteProposal::NoSemanticProgressPlan,
-            ))
-        }
-        RuntimeEvent::LoopActed(_) if ctx.planned_pending > 0 && ctx.pending_tool_result_ids.is_empty() => Some(
-            derive_deterministic_route_from_constraints(ctx, RouteProposal::ContinueAct),
-        ),
-        RuntimeEvent::PlanningCompleted(_) if ctx.planned_pending > 0 && ctx.pending_tool_result_ids.is_empty() => Some(
-            derive_deterministic_route_from_constraints(ctx, RouteProposal::PlannedToAct),
-        ),
-        RuntimeEvent::PlanningCompleted(pc)
-            if pc.status == "missing_observed_context" && ctx.pending_tool_result_ids.is_empty() =>
-        {
-            Some(derive_deterministic_route_from_constraints(
-                ctx,
-                RouteProposal::MissingObservedContextObserve,
-            ))
+fn shared_route_policy_rule(
+    ctx: &RouteContext,
+    decision: &RouteDecision,
+) -> Option<RoutePolicyRule> {
+    let eval = evaluate_constraint_context(&ConstraintContext {
+        state: route_constraint_state(ctx),
+        route: Some(route_to_constraint(decision.lane)),
+        action: None,
+        deterministic_route: None,
+    });
+    match eval {
+        ConstraintDecision::RewriteRoute(ConstraintRoute::Plan, _) => {
+            let state = route_constraint_state(ctx);
+            if !state.real_path_exists {
+                Some(RoutePolicyRule::ForcePlanOnMissingTarget)
+            } else if state.route_objective_contradiction
+                && matches!(decision.lane, RouteKind::Verify | RouteKind::Conclude)
+            {
+                Some(RoutePolicyRule::ForcePlanOnObjectiveContradiction)
+            } else {
+                Some(RoutePolicyRule::ForcePlanOnBlockedValidation)
+            }
         }
         _ => None,
     }
@@ -935,6 +921,8 @@ fn apply_shared_route_constraint(
             noop_reason: "route_executor_constraint_plan",
             rule: if !real_path_exists {
                 DeterministicRouteRule::MissingTargetPlan
+            } else if reason.contains("objective") {
+                DeterministicRouteRule::InvalidPlanReplan
             } else {
                 DeterministicRouteRule::NoSemanticProgressPlan
             },

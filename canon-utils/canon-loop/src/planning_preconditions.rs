@@ -4,7 +4,6 @@ use canon_invariant::{
     evaluate_constraint_context,
     meta_invariant_classify_planned_action_class as classify_plan_action_class,
     meta_invariant_failure_scope_is_sufficient,
-    meta_invariant_has_actionable_failure,
     meta_invariant_high_invalid_plan_requires_simple_batch,
     meta_invariant_no_progress_forces_change,
     meta_invariant_tool_selection_correctness,
@@ -367,6 +366,47 @@ pub fn validate_preconditions(
     Ok(())
 }
 
+fn has_targeted_localized_hint(semantic_summary: &SemanticStateSummary) -> bool {
+    semantic_summary.compiler_hints.iter().any(|hint| {
+        hint.kind_enum().is_some_and(|kind| {
+            matches!(
+                kind,
+                canon_semantic_state::CompilerHintKind::MissingModule
+                    | canon_semantic_state::CompilerHintKind::DeadCodeForbidConflict
+                    | canon_semantic_state::CompilerHintKind::MissingEntrypoint
+                    | canon_semantic_state::CompilerHintKind::UnresolvedImport
+                    | canon_semantic_state::CompilerHintKind::MissingSymbol
+                    | canon_semantic_state::CompilerHintKind::DuplicateDefinition
+                    | canon_semantic_state::CompilerHintKind::TraitBoundFailure
+            )
+        }) && hint
+            .target_files
+            .iter()
+            .any(|path| !path.trim().is_empty() && path != "none")
+    })
+}
+
+fn effective_actionable_failure(semantic_summary: &SemanticStateSummary) -> bool {
+    semantic_summary.validation_blocked_by_preconditions
+        || semantic_summary.compiler_repair_required
+        || !semantic_summary.planning_preconditions.is_empty()
+        || !semantic_summary.module_gaps.is_empty()
+        || semantic_summary.has_actionable_compiler_hints()
+        || semantic_summary
+            .primary_failure_class()
+            .as_deref()
+            .is_some_and(|class| class != "no_actionable_failure")
+}
+
+fn effective_failure_scope_flags(semantic_summary: &SemanticStateSummary) -> (bool, bool, bool) {
+    let localized = semantic_summary.failure_scope.as_deref() == Some("localized")
+        || !semantic_summary.module_gaps.is_empty()
+        || has_targeted_localized_hint(semantic_summary);
+    let workspace = semantic_summary.failure_scope.as_deref() == Some("workspace");
+    let tooling = semantic_summary.failure_scope.as_deref() == Some("tooling");
+    (localized, workspace, tooling)
+}
+
 fn validate_validation_action_constraints(
     actions: &[canon_event::LoopPlanned],
     target_root: &Path,
@@ -375,26 +415,25 @@ fn validate_validation_action_constraints(
     if !contains_cargo_check(actions) {
         return Ok(());
     }
+    let (failure_scope_localized, failure_scope_workspace, failure_scope_tooling) =
+        effective_failure_scope_flags(semantic_summary);
     match evaluate_constraint_context(&ConstraintContext {
         state: ConstraintState {
             semantic_path_exists: semantic_summary.path_exists,
             semantic_cargo_project: semantic_summary.cargo_project,
             real_path_exists: target_root.exists(),
             real_cargo_project: target_root.join("Cargo.toml").exists(),
-            actionable_failure: semantic_summary.validation_blocked_by_preconditions
-                || semantic_summary.compiler_repair_required
-                || !semantic_summary.planning_preconditions.is_empty()
-                || !semantic_summary.module_gaps.is_empty()
-                || semantic_summary.has_actionable_compiler_hints(),
+            actionable_failure: effective_actionable_failure(semantic_summary),
             validation_blocked: semantic_summary.validation_blocked_by_preconditions,
             entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
                 && semantic_summary.cargo_project,
             module_gaps_present: !semantic_summary.module_gaps.is_empty(),
             recent_no_semantic_progress: false,
             failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
-            failure_scope_localized: semantic_summary.failure_scope.as_deref() == Some("localized"),
-            failure_scope_workspace: semantic_summary.failure_scope.as_deref() == Some("workspace"),
-            failure_scope_tooling: semantic_summary.failure_scope.as_deref() == Some("tooling"),
+            failure_scope_localized,
+            failure_scope_workspace,
+            failure_scope_tooling,
+            route_objective_contradiction: false,
         },
         route: None,
         action: Some(ConstraintAction::Validation),
@@ -441,14 +480,22 @@ pub fn validate_objective_route_plan_alignment(
     });
 
     let objective_requires_repair =
-        semantic_summary.validation_blocked_by_preconditions
-            || semantic_summary.compiler_repair_required
-            || !semantic_summary.planning_preconditions.is_empty()
+        effective_actionable_failure(semantic_summary)
             || primary_objective.contains("remove validation blockers")
             || primary_objective.contains("reduce compiler repair pressure")
             || primary_objective.contains("break the stalled repair loop")
             || primary_objective.contains("lower invalid-plan rate")
             || primary_objective.contains("increase repair resolution rate");
+
+    if route_choice == "plan" && objective_requires_repair && has_validation_intent && !has_repair_intent {
+        return Err(
+            "first planned batch contradicts the active repair objective; it validates without addressing the repair target"
+                .to_string(),
+        );
+    }
+
+    let (failure_scope_localized, failure_scope_workspace, failure_scope_tooling) =
+        effective_failure_scope_flags(semantic_summary);
 
     match evaluate_constraint_context(&ConstraintContext {
         state: ConstraintState {
@@ -463,9 +510,10 @@ pub fn validate_objective_route_plan_alignment(
             module_gaps_present: !semantic_summary.module_gaps.is_empty(),
             recent_no_semantic_progress: false,
             failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
-            failure_scope_localized: semantic_summary.failure_scope.as_deref() == Some("localized"),
-            failure_scope_workspace: semantic_summary.failure_scope.as_deref() == Some("workspace"),
-            failure_scope_tooling: semantic_summary.failure_scope.as_deref() == Some("tooling"),
+            failure_scope_localized,
+            failure_scope_workspace,
+            failure_scope_tooling,
+            route_objective_contradiction: false,
         },
         route: match route_choice {
             "observe" => Some(ConstraintRoute::Observe),
@@ -492,13 +540,6 @@ pub fn validate_objective_route_plan_alignment(
             return Err(reason.to_string())
         }
         ConstraintDecision::Allow => {}
-    }
-
-    if route_choice == "plan" && objective_requires_repair && has_validation_intent && !has_repair_intent {
-        return Err(
-            "first planned batch contradicts the active repair objective; it validates without addressing the repair target"
-                .to_string(),
-        );
     }
 
     Ok(())
@@ -832,13 +873,9 @@ fn validate_no_actionable_failure(
                 | ActionIntent::FixTraitBoundFailure(_)
         )
     });
-    let actionable_failure = meta_invariant_has_actionable_failure(
-        semantic_summary.validation_blocked_by_preconditions,
-        semantic_summary.compiler_repair_required,
-        semantic_summary.planning_preconditions.len(),
-        semantic_summary.compiler_hints.len(),
-        semantic_summary.module_gaps.len(),
-    );
+    let actionable_failure = effective_actionable_failure(semantic_summary);
+    let (failure_scope_localized, failure_scope_workspace, failure_scope_tooling) =
+        effective_failure_scope_flags(semantic_summary);
     if has_repair_intent {
         match evaluate_constraint_context(&ConstraintContext {
             state: ConstraintState {
@@ -853,18 +890,26 @@ fn validate_no_actionable_failure(
                 module_gaps_present: !semantic_summary.module_gaps.is_empty(),
                 recent_no_semantic_progress: false,
                 failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
-                failure_scope_localized: semantic_summary.failure_scope.as_deref() == Some("localized"),
-                failure_scope_workspace: semantic_summary.failure_scope.as_deref() == Some("workspace"),
-                failure_scope_tooling: semantic_summary.failure_scope.as_deref() == Some("tooling"),
+                failure_scope_localized,
+                failure_scope_workspace,
+                failure_scope_tooling,
+                route_objective_contradiction: false,
             },
             route: None,
             action: Some(ConstraintAction::RepairLocalized),
             deterministic_route: None,
         }) {
             ConstraintDecision::Allow => {}
-            ConstraintDecision::Forbid(reason) => return Err(reason.to_string()),
-            ConstraintDecision::RewriteAction(_, reason) | ConstraintDecision::RewriteRoute(_, reason) => {
+            ConstraintDecision::Forbid(reason)
+                if reason.contains("no actionable failure") =>
+            {
                 return Err(reason.to_string())
+            }
+            ConstraintDecision::Forbid(_) => {}
+            ConstraintDecision::RewriteAction(_, reason) | ConstraintDecision::RewriteRoute(_, reason) => {
+                if reason.contains("no actionable failure") {
+                    return Err(reason.to_string());
+                }
             }
         }
     }
@@ -944,25 +989,24 @@ fn validate_repair_action_legality(
     target_root: &Path,
     semantic_summary: &SemanticStateSummary,
 ) -> Result<(), String> {
+    let (failure_scope_localized, failure_scope_workspace, failure_scope_tooling) =
+        effective_failure_scope_flags(semantic_summary);
     let state = ConstraintState {
         semantic_path_exists: semantic_summary.path_exists,
         semantic_cargo_project: semantic_summary.cargo_project,
         real_path_exists: target_root.exists(),
         real_cargo_project: target_root.join("Cargo.toml").exists(),
-        actionable_failure: semantic_summary.validation_blocked_by_preconditions
-            || semantic_summary.compiler_repair_required
-            || !semantic_summary.planning_preconditions.is_empty()
-            || !semantic_summary.module_gaps.is_empty()
-            || semantic_summary.has_actionable_compiler_hints(),
+        actionable_failure: effective_actionable_failure(semantic_summary),
         validation_blocked: semantic_summary.validation_blocked_by_preconditions,
         entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
             && semantic_summary.cargo_project,
         module_gaps_present: !semantic_summary.module_gaps.is_empty(),
         recent_no_semantic_progress: false,
         failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
-        failure_scope_localized: semantic_summary.failure_scope.as_deref() == Some("localized"),
-        failure_scope_workspace: semantic_summary.failure_scope.as_deref() == Some("workspace"),
-        failure_scope_tooling: semantic_summary.failure_scope.as_deref() == Some("tooling"),
+        failure_scope_localized,
+        failure_scope_workspace,
+        failure_scope_tooling,
+        route_objective_contradiction: false,
     };
     for planned in actions {
         let Some(action) = classify_constraint_action_for_plan(planned) else {

@@ -219,6 +219,7 @@ impl LoopStageExecutor {
                 failure_scope_localized: semantic_summary.failure_scope.as_deref() == Some("localized"),
                 failure_scope_workspace: semantic_summary.failure_scope.as_deref() == Some("workspace"),
                 failure_scope_tooling: semantic_summary.failure_scope.as_deref() == Some("tooling"),
+                route_objective_contradiction: false,
             },
             route: None,
             action: constraint_action,
