@@ -48,6 +48,17 @@ impl LoopStageExecutor {
             self.ctx.pending_required_successor = Some(expected.to_string());
         }
     }
+
+    fn is_successful_bootstrap_action(a: &canon_event::LoopActed) -> bool {
+        if a.action_kind != "run_command" || !a.success {
+            return false;
+        }
+        let text = if !a.stdout.is_empty() { &a.stdout } else { &a.stderr };
+        text.contains("Creating binary (application) package")
+            || text.contains("Creating library package")
+            || text.contains("Creating binary (application) `")
+            || text.contains("Creating library `")
+    }
 }
 
 impl EventConsumer for LoopStageExecutor {
@@ -69,20 +80,156 @@ impl EventConsumer for LoopStageExecutor {
 
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
-        // State accumulation (mutations that do not emit).
-        let mut trigger_observe = false;
-        let mut force_observe_recovery = false;
-        self.record_control_state(event, &trigger_id);
-        match event {
-            RuntimeEvent::Debug(debug) if debug.kind == "recovery_event" => {
-                if debug
+        if let RuntimeEvent::Debug(debug) = event {
+            if debug.kind == "recovery_event" {
+                let expected = debug
                     .payload
                     .get("context")
                     .and_then(|v| v.get("expected_successor"))
                     .and_then(|v| v.as_str())
-                    == Some("loop_observed")
+                    .unwrap_or("unknown");
+                if let Some(emitter) = self.ctx.emitter.as_ref() {
+                    emitter.emit_child(
+                        RuntimeEvent::Debug(canon_event::DebugEvent {
+                            source: "loop_stage_executor".to_string(),
+                            kind: "recovery_received".to_string(),
+                            payload: decision_trace_payload(
+                                "recovery event received by loop stage executor",
+                                serde_json::json!({
+                                    "expected_successor": expected,
+                                    "trigger_kind": canon_event::event_kind_str(event),
+                                }),
+                            ),
+                        }),
+                        vec![trigger_id.clone()],
+                        file!(),
+                        line!(),
+                    );
+                }
+
+                if expected == "loop_rewarded" {
+                    if self.ctx.pending_required_successor.as_deref() != Some("loop_rewarded") {
+                        if let Some(emitter) = self.ctx.emitter.as_ref() {
+                            emitter.emit_child(
+                                RuntimeEvent::Debug(canon_event::DebugEvent {
+                                    source: "loop_stage_executor".to_string(),
+                                    kind: "reward_recovery_skipped_already_satisfied".to_string(),
+                                    payload: decision_trace_payload(
+                                        "reward recovery skipped because loop_rewarded is no longer the pending successor",
+                                        serde_json::json!({
+                                            "pending_required_successor": self.ctx.pending_required_successor,
+                                            "last_control_kind": self.ctx.last_control_kind,
+                                            "last_control_event_id": self.ctx.last_control_event_id,
+                                        }),
+                                    ),
+                                }),
+                                vec![trigger_id.clone()],
+                                file!(),
+                                line!(),
+                            );
+                        }
+                        return EventOutcome::NoOp("reward_recovery_already_satisfied");
+                    }
+                    let Some(last_verified) = self.ctx.last_verified.clone() else {
+                        if let Some(emitter) = self.ctx.emitter.as_ref() {
+                            emitter.emit_child(
+                                RuntimeEvent::Debug(canon_event::DebugEvent {
+                                    source: "loop_stage_executor".to_string(),
+                                    kind: "reward_recovery_missing_context".to_string(),
+                                    payload: decision_trace_payload(
+                                        "reward recovery requested but no last verified event is available",
+                                        serde_json::json!({
+                                            "trigger_kind": canon_event::event_kind_str(event),
+                                        }),
+                                    ),
+                                }),
+                                vec![trigger_id.clone()],
+                                file!(),
+                                line!(),
+                            );
+                            emitter.emit_child(
+                                RuntimeEvent::ErrorOccurred(canon_event::new_error_occurred(
+                                    "reward_stall",
+                                    "loop_stage_executor",
+                                    "reward recovery requested without last_verified context".to_string(),
+                                    "warning",
+                                    serde_json::json!({ "recoverable": true }),
+                                    None,
+                                )),
+                                vec![trigger_id.clone()],
+                                file!(),
+                                line!(),
+                            );
+                        }
+                        return EventOutcome::NoOp("reward_recovery_missing_context");
+                    };
+                    match crate::stage::reward::execute(last_verified, &mut self.ctx) {
+                        Ok(LoopStageResult::Emit(e)) => {
+                            if let Some(emitter) = self.ctx.emitter.as_ref() {
+                                emitter.emit_with_parents(e, vec![trigger_id.clone()], file!(), line!());
+                            }
+                        }
+                        Ok(LoopStageResult::EmitMany(evs)) => {
+                            if let Some(emitter) = self.ctx.emitter.as_ref() {
+                                for event in evs {
+                                    emitter.emit_with_parents(event, vec![trigger_id.clone()], file!(), line!());
+                                }
+                            }
+                        }
+                        Ok(LoopStageResult::Deferred) | Ok(LoopStageResult::Noop) => {
+                            if let Some(emitter) = self.ctx.emitter.as_ref() {
+                                emitter.emit_child(
+                                    RuntimeEvent::Debug(canon_event::DebugEvent {
+                                        source: "loop_stage_executor".to_string(),
+                                        kind: "reward_recovery_noop".to_string(),
+                                        payload: decision_trace_payload(
+                                            "reward recovery produced no events",
+                                            serde_json::json!({}),
+                                        ),
+                                    }),
+                                    vec![trigger_id.clone()],
+                                    file!(),
+                                    line!(),
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            if let Some(emitter) = self.ctx.emitter.as_ref() {
+                                emitter.emit_child(
+                                    RuntimeEvent::ErrorOccurred(canon_event::new_error_occurred(
+                                        "reward_recovery_execution",
+                                        "loop_stage_executor",
+                                        err.to_string(),
+                                        "error",
+                                        serde_json::json!({ "event": canon_event::event_kind_str(event) }),
+                                        None,
+                                    )),
+                                    vec![trigger_id.clone()],
+                                    file!(),
+                                    line!(),
+                                );
+                            }
+                        }
+                    }
+                    return EventOutcome::NoOp("reward_recovery_executed");
+                }
+            }
+        }
+        // State accumulation (mutations that do not emit).
+        let mut trigger_observe = false;
+        let mut force_observe_recovery = false;
+        let mut force_reward_recovery = false;
+        match event {
+            RuntimeEvent::Debug(debug) if debug.kind == "recovery_event" => {
+                match debug
+                    .payload
+                    .get("context")
+                    .and_then(|v| v.get("expected_successor"))
+                    .and_then(|v| v.as_str())
                 {
-                    force_observe_recovery = true;
+                    Some("loop_observed") => force_observe_recovery = true,
+                    Some("loop_rewarded") => force_reward_recovery = true,
+                    _ => {}
                 }
             }
             RuntimeEvent::RouteSelected(rs) => {
@@ -146,8 +293,39 @@ impl EventConsumer for LoopStageExecutor {
                 for task in self.ctx.dep_tracker.complete(&a.action_kind) {
                     self.ctx.scheduler.push(task);
                 }
+                if Self::is_successful_bootstrap_action(a) {
+                    self.ctx.scheduler.clear();
+                    self.ctx.dep_tracker.clear();
+                    self.ctx.pending_act = None;
+                    self.ctx.active_batch_llm_request_id = None;
+                    self.ctx.act_batch_tracker.clear();
+                    if let Some(emitter) = self.ctx.emitter.as_ref() {
+                        emitter.emit_child(
+                            RuntimeEvent::Debug(canon_event::DebugEvent {
+                                source: "loop_stage_executor".to_string(),
+                                kind: "bootstrap_refresh_required".to_string(),
+                                payload: decision_trace_payload(
+                                    "successful bootstrap invalidated queued plan work; forcing a fresh observe is required",
+                                    serde_json::json!({
+                                        "action_kind": a.action_kind,
+                                        "success": a.success,
+                                        "target_workspace": self.ctx
+                                            .goal_text
+                                            .as_deref()
+                                            .and_then(|t| canon_goal::parse_agent_goal_markdown(t).target_path)
+                                            .map(|p| p.display().to_string()),
+                                    }),
+                                ),
+                            }),
+                            vec![trigger_id.clone()],
+                            file!(),
+                            line!(),
+                        );
+                    }
+                }
             }
             RuntimeEvent::LoopVerified(v) => {
+                self.ctx.last_verified = Some(v.clone());
                 self.ctx.last_verify_trace_id = v.trace_id.clone();
                 self.ctx.last_verify_execution_id = v.execution_id.clone();
                 if v.passed {
@@ -330,6 +508,7 @@ impl EventConsumer for LoopStageExecutor {
             | RuntimeEvent::CapabilityResolved(_)
             | RuntimeEvent::InvariantDiscovered(_) => {}
         }
+        self.record_control_state(event, &trigger_id);
 
         // Emit LoopObserved when state changes (event-driven, not tick-driven).
         let suppress_observe_on_invariant =
@@ -375,6 +554,8 @@ impl EventConsumer for LoopStageExecutor {
                     }
                 }
             }
+        } else if force_reward_recovery && !self.ctx.halted {
+            // Handled eagerly for recovery_event before generic processing.
         } else if trigger_observe && !self.ctx.halted && !suppress_observe_on_invariant {
             if observe_blocked_by_successor {
                 if let Some(emitter) = self.ctx.emitter.as_ref() {

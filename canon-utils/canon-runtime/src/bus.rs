@@ -63,8 +63,12 @@ fn should_count_as_noop_violation(consumer: &str, reason: &str) -> bool {
             reason,
             "route_executor_idle_dispatch"
                 | "route_executor_plan_dispatch"
+                | "route_executor_planned_to_act"
+                | "route_executor_continue_act"
+                | "route_executor_bootstrap_refresh"
                 | "route_executor_batch_settled"
                 | "route_executor_done_verify"
+                | "route_executor_missing_observed_context"
                 | "route_executor_completion"
                 | "route_executor_failure_reroute"
                 | "route_executor_unrelated_completion"

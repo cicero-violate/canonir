@@ -75,6 +75,11 @@ impl Scheduler {
         self.heap.len()
     }
 
+    pub fn clear(&mut self) {
+        self.heap.clear();
+        self.agent_active.clear();
+    }
+
     pub fn push(&mut self, mut task: ScheduledTask) {
         task.seq = self.seq;
         self.seq = self.seq.saturating_add(1);
@@ -214,5 +219,10 @@ impl DependencyTracker {
             }
         }
         ready
+    }
+
+    pub fn clear(&mut self) {
+        self.waiting.clear();
+        self.unblocks.clear();
     }
 }

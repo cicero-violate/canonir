@@ -33,43 +33,54 @@ pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext, trigger_id: E
         );
         return Ok(LoopStageResult::Noop);
     }
-    let mut events = Vec::new();
-    while ctx.pending_act.is_none() {
-        let filtered_batch_id = ctx.active_batch_llm_request_id.clone();
-        let scheduler_len_before = ctx.scheduler.len();
-        let task = if let Some(batch_id) = filtered_batch_id.as_deref() {
-            ctx.scheduler.pop_for_llm(Some(batch_id))
-        } else {
-            ctx.scheduler.pop_any()
-        };
-        let Some(task) = task else {
-            if scheduler_len_before > 0 {
-                emit_act_stall_with_context(
-                    ctx,
-                    &trigger_id,
-                    "scheduler has queued work but no dispatchable task was returned",
-                    serde_json::json!({
-                        "scheduler_len": scheduler_len_before,
-                        "filtered_batch_id": filtered_batch_id,
-                        "dispatch_mode": if filtered_batch_id.is_some() { "pop_for_llm" } else { "pop_any" },
-                    }),
-                );
-            }
-            ctx.active_batch_llm_request_id = None;
-            break;
-        };
-        ctx.active_batch_llm_request_id = task.plan.llm_request_id.clone();
-        match dispatch_plan(ctx, &task.plan, &trigger_id)? {
-            LoopStageResult::Emit(e) => events.push(e),
-            LoopStageResult::EmitMany(evs) => events.extend(evs),
-            LoopStageResult::Deferred | LoopStageResult::Noop => {}
-        }
-    }
-    if events.is_empty() {
-        Ok(LoopStageResult::Noop)
+    let filtered_batch_id = ctx.active_batch_llm_request_id.clone();
+    let scheduler_len_before = ctx.scheduler.len();
+    let task = if let Some(batch_id) = filtered_batch_id.as_deref() {
+        ctx.scheduler.pop_for_llm(Some(batch_id))
     } else {
-        Ok(LoopStageResult::EmitMany(events))
-    }
+        ctx.scheduler.pop_any()
+    };
+    let task = match task {
+        Some(task) => task,
+        None => {
+            if scheduler_len_before > 0 && filtered_batch_id.is_some() {
+                // A stale batch affinity can strand otherwise dispatchable work from a newer plan.
+                ctx.active_batch_llm_request_id = None;
+                if let Some(task) = ctx.scheduler.pop_any() {
+                    task
+                } else {
+                    emit_act_stall_with_context(
+                        ctx,
+                        &trigger_id,
+                        "scheduler has queued work but no dispatchable task was returned",
+                        serde_json::json!({
+                            "scheduler_len": scheduler_len_before,
+                            "filtered_batch_id": filtered_batch_id,
+                            "dispatch_mode": "pop_for_llm_then_pop_any",
+                        }),
+                    );
+                    return Ok(LoopStageResult::Noop);
+                }
+            } else {
+                if scheduler_len_before > 0 {
+                    emit_act_stall_with_context(
+                        ctx,
+                        &trigger_id,
+                        "scheduler has queued work but no dispatchable task was returned",
+                        serde_json::json!({
+                            "scheduler_len": scheduler_len_before,
+                            "filtered_batch_id": filtered_batch_id,
+                            "dispatch_mode": if filtered_batch_id.is_some() { "pop_for_llm" } else { "pop_any" },
+                        }),
+                    );
+                }
+                ctx.active_batch_llm_request_id = None;
+                return Ok(LoopStageResult::Noop);
+            }
+        }
+    };
+    ctx.active_batch_llm_request_id = task.plan.llm_request_id.clone();
+    dispatch_plan(ctx, &task.plan, &trigger_id)
 }
 
 fn emit_act_stall(ctx: &LoopContext, trigger_id: &EventId, reason: &str) {
@@ -122,7 +133,7 @@ fn emit_act_stall_with_context(
     );
 }
 
-pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
+pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, _trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     let Some(pending) = ctx.pending_act.take() else {
         return Ok(LoopStageResult::Noop);
     };
@@ -171,38 +182,17 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     let acted_event = emit_acted(pending, stdout, stderr, exit_code, duration_ms, success, Some(tool_result_id));
     events.push(acted_event);
 
-    events.push(RuntimeEvent::RouteSelected(RouteSelected {
-        tick: ctx.current_tick,
-        approved_route: "verify".to_string(),
-        suggested_route: "verify".to_string(),
-        prompt: String::new(),
-        rationale: String::new(),
-        gate_rules_fired: Vec::new(),
-        gate_should_stop: false,
-        model_json: String::new(),
-        confidence: Some(1.0),
-        gate_changed: false,
-        gate_note: String::new(),
-    }));
     if !success && action_kind == "run_command" {
         events.extend(abort_active_batch(ctx));
-    } else {
-        // Continue dispatching remaining same-batch actions.
-        while ctx.pending_act.is_none() {
-            let Some(next) = ctx.scheduler.pop_for_llm(llm_request_id.as_deref()).map(|t| t.plan) else {
-                break;
-            };
-            match dispatch_plan(ctx, &next, &trigger_id)? {
-                LoopStageResult::Emit(e) => events.push(e),
-                LoopStageResult::EmitMany(evs) => events.extend(evs),
-                _ => {}
-            }
-        }
+    } else if ctx.pending_act.is_none() {
+        // One route_selected(act) should produce one control successor (loop_acted).
+        // Do not auto-dispatch more actions here; let routing select act again if work remains.
+        ctx.active_batch_llm_request_id = None;
     }
     Ok(LoopStageResult::EmitMany(events))
 }
 
-pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
+pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext, _trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     let Some(pending) = ctx.pending_act.take() else {
         return Ok(LoopStageResult::Noop);
     };
@@ -257,17 +247,8 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext, trigger_id: Ev
     events.push(emit_acted(pending, String::new(), f.error.clone(), None, duration_ms, false, Some(tool_result_id)));
     if action_kind == "run_command" {
         events.extend(abort_active_batch(ctx));
-    } else {
-        while ctx.pending_act.is_none() {
-            let Some(next) = ctx.scheduler.pop_for_llm(llm_request_id.as_deref()).map(|t| t.plan) else {
-                break;
-            };
-            match dispatch_plan(ctx, &next, &trigger_id)? {
-                LoopStageResult::Emit(e) => events.push(e),
-                LoopStageResult::EmitMany(evs) => events.extend(evs),
-                _ => {}
-            }
-        }
+    } else if ctx.pending_act.is_none() {
+        ctx.active_batch_llm_request_id = None;
     }
     Ok(LoopStageResult::EmitMany(events))
 }

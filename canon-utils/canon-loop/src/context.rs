@@ -1,6 +1,6 @@
 use crate::merge::{ContextMerger, FileWriteTracker, WorkspaceDirtyTracker};
 use crate::scheduler::{DependencyTracker, Scheduler};
-use canon_event::{EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, ToolResult};
+use canon_event::{EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, LoopVerified, ToolResult};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -138,6 +138,7 @@ pub struct LoopContext {
     pub last_verify_execution_id: Option<String>,
     pub last_act_span_id: Option<String>,
     pub last_acted: Option<LoopActed>,
+    pub last_verified: Option<LoopVerified>,
     pub last_verified_action_key: Option<String>,
 
     // Reward
@@ -212,6 +213,7 @@ impl LoopContext {
             last_verify_execution_id: None,
             last_act_span_id: None,
             last_acted: None,
+            last_verified: None,
             last_verified_action_key: None,
             errors_before: 0,
             stagnant_ticks: 0,

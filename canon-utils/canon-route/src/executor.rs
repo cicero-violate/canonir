@@ -499,6 +499,20 @@ impl EventConsumer for RouteExecutor {
         // This eliminates up to 1s of RouteTick latency on each transition.
         // After a `done` action, force verify so finish_ready can be set correctly.
         if let RuntimeEvent::LoopActed(a) = event {
+            if self.ctx.bootstrap_refresh_required {
+                if self.pending_request_id.as_deref() == Some("deterministic") {
+                    self.pending_request_id = None;
+                }
+                self.ctx.bootstrap_refresh_required = false;
+                let json = serde_json::json!({
+                    "route": "observe",
+                    "rationale": "bootstrap command succeeded; refresh workspace facts before further planning or execution",
+                    "confidence": 0.99,
+                })
+                .to_string();
+                self.emit_decision(&json, "deterministic:bootstrap_refresh_observe".to_string());
+                return EventOutcome::NoOp("route_executor_bootstrap_refresh");
+            }
             if a.action_kind == "done" && self.ctx.planned_pending == 0 {
                 if self.pending_request_id.as_deref() == Some("deterministic") {
                     self.pending_request_id = None;
@@ -511,6 +525,22 @@ impl EventConsumer for RouteExecutor {
                 .to_string();
                 self.emit_decision(&json, "deterministic:done_verify".to_string());
                 return EventOutcome::NoOp("route_executor_done_verify");
+            }
+            if self.ctx.planned_pending > 0 && self.ctx.pending_tool_result_ids.is_empty() {
+                if self.pending_request_id.as_deref() == Some("deterministic") {
+                    self.pending_request_id = None;
+                }
+                let json = serde_json::json!({
+                    "route": "act",
+                    "rationale": format!(
+                        "previous act completed and {} planned actions remain; continue acting",
+                        self.ctx.planned_pending
+                    ),
+                    "confidence": 0.99,
+                })
+                .to_string();
+                self.emit_decision(&json, "deterministic:continue_act".to_string());
+                return EventOutcome::NoOp("route_executor_continue_act");
             }
         }
 
@@ -769,6 +799,22 @@ impl RouteExecutor {
                 "{} [{}]",
                 decision.rationale,
                 "observe would not advance state; forcing plan"
+            );
+        }
+        if self.ctx.target_workspace_missing
+            && self.ctx.planned_pending == 0
+            && decision.lane.as_str() != "plan"
+        {
+            decision.lane = RouteKind::Plan;
+            decision.changed = true;
+            decision.note = "target workspace missing requires bootstrap plan".to_string();
+            decision
+                .gate_rules_fired
+                .push("target workspace missing requires bootstrap plan".to_string());
+            decision.rationale = format!(
+                "{} [{}]",
+                decision.rationale,
+                "target workspace missing; verify/observe would not bootstrap the project"
             );
         }
         let route_event = RuntimeEvent::RouteSelected(RouteSelected {

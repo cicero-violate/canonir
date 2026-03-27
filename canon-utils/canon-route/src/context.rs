@@ -61,6 +61,7 @@ pub struct RouteContext {
     pub consecutive_invalid_plan_batches: u32,
     pub target_workspace_missing: bool,
     pub target_workspace_path: Option<String>,
+    pub bootstrap_refresh_required: bool,
     pub last_halt_reason: Option<String>,
     /// Maps action_id → (action_kind, llm_request_id) for enriching ToolResult metadata.
     action_meta: HashMap<String, (String, Option<String>)>,
@@ -138,6 +139,7 @@ impl RouteContext {
                 self.context_ready = goal_present || *error_count > 0;
                 self.target_workspace_missing = false;
                 self.target_workspace_path = None;
+                self.bootstrap_refresh_required = false;
                 for fact in workspace_facts {
                     if let Some(rest) = fact.strip_prefix("target_path_exists=false path=") {
                         self.target_workspace_missing = true;
@@ -196,6 +198,11 @@ impl RouteContext {
                     if tool_result_id.is_some() {
                         self.pending_tool_result_ids.remove(tool_call_id);
                     }
+                }
+                if is_successful_bootstrap(action_kind, *success, stderr) {
+                    self.target_workspace_missing = false;
+                    self.bootstrap_refresh_required = true;
+                    self.planned_pending = 0;
                 }
                 self.last_action_kind = action_kind.clone();
                 let mut summary = format!("executed action={} success={} capability_request_id={}", self.last_action_kind, success, capability_request_id);
@@ -273,6 +280,12 @@ impl RouteContext {
                         self.target_workspace_path.as_deref().unwrap_or("unknown")
                     ),
                 );
+            }
+            RuntimeEvent::Debug(debug) if debug.kind == "bootstrap_refresh_required" => {
+                self.bootstrap_refresh_required = true;
+                self.target_workspace_missing = false;
+                self.planned_pending = 0;
+                self.push_journal("observe", "bootstrap_refresh_required");
             }
             RuntimeEvent::ToolCall(ToolCall { tool_call_id, kind, .. }) => {
                 // Opening a new call: if set was empty this starts a new batch.
@@ -355,6 +368,15 @@ impl RouteContext {
             _ => {}
         }
     }
+}
+
+fn is_successful_bootstrap(action_kind: &str, success: bool, stderr: &str) -> bool {
+    success
+        && action_kind == "run_command"
+        && (stderr.contains("Creating binary (application) package")
+            || stderr.contains("Creating library package")
+            || stderr.contains("Creating binary (application) `")
+            || stderr.contains("Creating library `"))
 }
 
 #[cfg(test)]
