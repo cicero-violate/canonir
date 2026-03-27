@@ -9,3 +9,4 @@ once_cell.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 serde_yaml = "0.9"
+canon-semantic-state = { path = "../canon-semantic-state" }

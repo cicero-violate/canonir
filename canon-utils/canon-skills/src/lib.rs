@@ -1,4 +1,5 @@
 use anyhow::Result;
+use canon_semantic_state::{DevelopmentObjectiveKind, DevelopmentStrategyKind};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use serde::Deserialize;
@@ -22,7 +23,27 @@ pub struct Skill {
     pub name: String,
     pub description: String,
     pub effort: Option<LlmEffort>,
+    pub objectives: Vec<DevelopmentObjectiveKind>,
+    pub strategies: Vec<DevelopmentStrategyKind>,
+    pub tools: Vec<String>,
+    pub preconditions: Vec<String>,
     pub prompt: String,
+}
+
+impl Skill {
+    pub fn supports(
+        &self,
+        objective: Option<DevelopmentObjectiveKind>,
+        strategy: Option<DevelopmentStrategyKind>,
+    ) -> bool {
+        let objective_ok = objective.is_none_or(|objective| {
+            self.objectives.is_empty() || self.objectives.contains(&objective)
+        });
+        let strategy_ok = strategy.is_none_or(|strategy| {
+            self.strategies.is_empty() || self.strategies.contains(&strategy)
+        });
+        objective_ok && strategy_ok
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -31,6 +52,64 @@ struct SkillFrontmatter {
     description: Option<String>,
     effort: Option<LlmEffort>,
     includes: Option<Vec<String>>,
+    objectives: Option<Vec<SkillObjective>>,
+    strategies: Option<Vec<SkillStrategy>>,
+    tools: Option<Vec<String>>,
+    preconditions: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SkillObjective {
+    ReduceCompilerFailures,
+    ReduceContradictionRate,
+    IncreaseTestCoverage,
+    DecreaseInvalidPlanRate,
+    ReduceStalledLoopFrequency,
+    ImproveModuleCohesion,
+}
+
+impl From<SkillObjective> for DevelopmentObjectiveKind {
+    fn from(value: SkillObjective) -> Self {
+        match value {
+            SkillObjective::ReduceCompilerFailures => Self::ReduceCompilerFailures,
+            SkillObjective::ReduceContradictionRate => Self::ReduceContradictionRate,
+            SkillObjective::IncreaseTestCoverage => Self::IncreaseTestCoverage,
+            SkillObjective::DecreaseInvalidPlanRate => Self::DecreaseInvalidPlanRate,
+            SkillObjective::ReduceStalledLoopFrequency => Self::ReduceStalledLoopFrequency,
+            SkillObjective::ImproveModuleCohesion => Self::ImproveModuleCohesion,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SkillStrategy {
+    FixConfigLintPolicy,
+    ApplyTargetedCompilerRepair,
+    DiscoverTestSurface,
+    AddRegressionTest,
+    SimplifyPlanBatch,
+    RealignObjectiveFlow,
+    RefreshContextBeforeRetry,
+    CreateMissingModules,
+    RestructureModules,
+}
+
+impl From<SkillStrategy> for DevelopmentStrategyKind {
+    fn from(value: SkillStrategy) -> Self {
+        match value {
+            SkillStrategy::FixConfigLintPolicy => Self::FixConfigLintPolicy,
+            SkillStrategy::ApplyTargetedCompilerRepair => Self::ApplyTargetedCompilerRepair,
+            SkillStrategy::DiscoverTestSurface => Self::DiscoverTestSurface,
+            SkillStrategy::AddRegressionTest => Self::AddRegressionTest,
+            SkillStrategy::SimplifyPlanBatch => Self::SimplifyPlanBatch,
+            SkillStrategy::RealignObjectiveFlow => Self::RealignObjectiveFlow,
+            SkillStrategy::RefreshContextBeforeRetry => Self::RefreshContextBeforeRetry,
+            SkillStrategy::CreateMissingModules => Self::CreateMissingModules,
+            SkillStrategy::RestructureModules => Self::RestructureModules,
+        }
+    }
 }
 
 pub struct SkillRegistry {
@@ -85,10 +164,47 @@ impl SkillRegistry {
             name: fm.name.unwrap_or_else(|| skill_path.to_string()),
             description: fm.description.unwrap_or_default(),
             effort: fm.effort,
+            objectives: fm
+                .objectives
+                .unwrap_or_default()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            strategies: fm
+                .strategies
+                .unwrap_or_default()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            tools: fm.tools.unwrap_or_default(),
+            preconditions: fm.preconditions.unwrap_or_default(),
             prompt,
         });
         self.cache.write().insert(skill_path.to_string(), skill.clone());
         Ok(skill)
+    }
+
+    pub fn select_for(
+        &self,
+        objective: DevelopmentObjectiveKind,
+        strategy: DevelopmentStrategyKind,
+    ) -> Result<Vec<Arc<Skill>>> {
+        let mut out = Vec::new();
+        for entry in fs::read_dir(&self.skills_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let skill = self.load(stem)?;
+            if skill.supports(Some(objective), Some(strategy)) {
+                out.push(skill);
+            }
+        }
+        Ok(out)
     }
 }
 
