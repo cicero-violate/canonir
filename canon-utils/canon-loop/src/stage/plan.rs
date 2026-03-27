@@ -1012,28 +1012,32 @@ fn build_planner_hint(
     consecutive_invalid_plan_batches: u32,
     recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
 ) -> String {
-    let last_failure = batch_acted
-        .iter()
-        .rev()
-        .find(|a| !a.success && (!a.stderr.trim().is_empty() || !a.stdout.trim().is_empty()))
-        .map(|a| {
-            (
-                a.action_kind.clone(),
-                if !a.stderr.trim().is_empty() {
-                    a.stderr.clone()
-                } else {
-                    a.stdout.clone()
-                },
-            )
-        })
-        .or_else(|| {
-            batch_tool_results
-                .iter()
-                .rev()
-                .find(|r| !r.success)
-                .map(|r| (r.kind.as_str(), r.output.to_string()))
-                .map(|(kind, text)| (kind.to_string(), text))
-        });
+    let last_failure = if recent_execution_results.is_empty() {
+        batch_acted
+            .iter()
+            .rev()
+            .find(|a| !a.success && (!a.stderr.trim().is_empty() || !a.stdout.trim().is_empty()))
+            .map(|a| {
+                (
+                    a.action_kind.clone(),
+                    if !a.stderr.trim().is_empty() {
+                        a.stderr.clone()
+                    } else {
+                        a.stdout.clone()
+                    },
+                )
+            })
+            .or_else(|| {
+                batch_tool_results
+                    .iter()
+                    .rev()
+                    .find(|r| !r.success)
+                    .map(|r| (r.kind.as_str(), r.output.to_string()))
+                    .map(|(kind, text)| (kind.to_string(), text))
+            })
+    } else {
+        None
+    };
     let hint_lines = planner_hint_lines(
         last_invalid_plan_reason,
         consecutive_invalid_plan_batches,

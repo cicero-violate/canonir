@@ -719,6 +719,9 @@ pub fn has_actionable_failure(ctx: &RouteContext) -> bool {
                 | ApplyPatchOutcomeClass::OtherFailure
         );
     }
+    if !ctx.recent_execution_results.is_empty() {
+        return false;
+    }
     ctx.last_action_failed
         || ctx.recent_tool_results.iter().rev().any(|r| {
             r.get("action").and_then(|v| v.as_str()) != Some("run_command")
@@ -1071,6 +1074,19 @@ mod tests {
             vec!["src/main.rs".into()],
         )];
         assert!(has_actionable_failure(&ctx));
+    }
+
+    #[test]
+    fn execution_semantics_disable_generic_failure_fallbacks() {
+        let mut ctx = RouteContext::default();
+        ctx.last_action_failed = true;
+        ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
+            "module_created",
+            "module file created",
+            vec!["/tmp/example/src/index.rs".into()],
+            true,
+        ));
+        assert!(!has_actionable_failure(&ctx));
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]

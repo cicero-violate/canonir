@@ -480,6 +480,9 @@ pub fn planner_hint_lines(
                 .to_string(),
         );
     }
+    if let Some(result) = recent_execution_results.iter().rev().next() {
+        out.push(format!("Recent execution semantics: {}", result.render_line()));
+    }
     if let (Some(kind), Some(text)) = (last_failed_action_kind, last_failed_text) {
         let text = text.trim().replace('\n', " ");
         let text = if text.len() > 240 { format!("{}...", &text[..240]) } else { text };
@@ -578,6 +581,7 @@ mod tests {
         );
         let hints = planner_hint_lines(None, 0, &results, None, None).join("\n");
         assert!(hints.contains("no semantic progress"));
+        assert!(hints.contains("Recent execution semantics:"));
     }
 
     #[test]
