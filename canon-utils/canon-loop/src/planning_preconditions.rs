@@ -556,8 +556,29 @@ fn touched_paths(action: &canon_event::LoopPlanned) -> Vec<PathBuf> {
 mod tests {
     use super::{derive_preconditions, validate_preconditions, PlanningPrecondition};
     use crate::env_model::{EntrypointKind, WorkspaceModel};
-    use canon_semantic_state::SemanticStateSummary;
+    use canon_semantic_state::{CompilerHintKind, CompilerHintRecord, SemanticStateSummary};
     use std::path::Path;
+
+    fn planned_apply_patch(path: &str) -> canon_event::LoopPlanned {
+        canon_event::LoopPlanned {
+            tick: 0,
+            action_kind: "apply_patch".to_string(),
+            action_payload: serde_json::json!({
+                "patch": format!("*** Begin Patch\n*** Add File: {path}\n+pub struct Stub;\n*** End Patch\n")
+            }),
+            reason: String::new(),
+            llm_request_id: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            signals: None,
+            depends_on: Vec::new(),
+        }
+    }
 
     #[test]
     fn derives_workspace_preconditions() {
@@ -705,5 +726,97 @@ mod tests {
                 PlanningPrecondition::MustFixUnresolvedImport,
             ]
         );
+    }
+
+    #[test]
+    fn accepts_unresolved_import_repair_that_targets_expected_file() {
+        let actions = vec![planned_apply_patch("src/lib.rs")];
+        let summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some("/tmp/example".into()),
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::UnresolvedImport,
+                "compiler reports unresolved import `crate::foo`",
+                "fix the import",
+                vec!["src/lib.rs".into()],
+            )],
+            ..SemanticStateSummary::default()
+        };
+        let result = validate_preconditions(
+            &actions,
+            Path::new("/tmp/example"),
+            &[PlanningPrecondition::MustFixUnresolvedImport],
+            &summary,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn rejects_duplicate_definition_repair_that_targets_wrong_file() {
+        let actions = vec![planned_apply_patch("src/other.rs")];
+        let summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some("/tmp/example".into()),
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::DuplicateDefinition,
+                "compiler reports duplicate definition for `Engine`",
+                "remove or rename the duplicate",
+                vec!["src/lib.rs".into()],
+            )],
+            ..SemanticStateSummary::default()
+        };
+        let result = validate_preconditions(
+            &actions,
+            Path::new("/tmp/example"),
+            &[PlanningPrecondition::MustResolveDuplicateDefinition],
+            &summary,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn accepts_missing_symbol_repair_that_targets_expected_file() {
+        let actions = vec![planned_apply_patch("src/main.rs")];
+        let summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some("/tmp/example".into()),
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::MissingSymbol,
+                "compiler cannot find `run` in scope",
+                "define or import the missing symbol",
+                vec!["src/main.rs".into()],
+            )],
+            ..SemanticStateSummary::default()
+        };
+        let result = validate_preconditions(
+            &actions,
+            Path::new("/tmp/example"),
+            &[PlanningPrecondition::MustDefineMissingSymbol],
+            &summary,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn accepts_trait_bound_repair_that_targets_expected_file() {
+        let actions = vec![planned_apply_patch("src/lib.rs")];
+        let summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some("/tmp/example".into()),
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::TraitBoundFailure,
+                "compiler reports unsatisfied trait bound `Foo: Clone`",
+                "edit the local type, impl, or call site",
+                vec!["src/lib.rs".into()],
+            )],
+            ..SemanticStateSummary::default()
+        };
+        let result = validate_preconditions(
+            &actions,
+            Path::new("/tmp/example"),
+            &[PlanningPrecondition::MustFixTraitBoundFailure],
+            &summary,
+        );
+        assert!(result.is_ok());
     }
 }

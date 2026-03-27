@@ -996,6 +996,45 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_definition_hint_counts_as_actionable_failure() {
+        let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.compiler_hints = vec![CompilerHintRecord::new(
+            CompilerHintKind::DuplicateDefinition,
+            "compiler reports duplicate definition for `Engine`",
+            "remove or rename the duplicate definition before cargo check",
+            vec!["src/lib.rs".into()],
+        )];
+        assert!(has_actionable_failure(&ctx));
+    }
+
+    #[test]
+    fn trait_bound_hint_counts_as_actionable_failure() {
+        let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.compiler_hints = vec![CompilerHintRecord::new(
+            CompilerHintKind::TraitBoundFailure,
+            "compiler reports unsatisfied trait bound `Foo: Clone`",
+            "edit the local type, impl, or call site to satisfy the required trait bound",
+            vec!["src/lib.rs".into()],
+        )];
+        assert!(has_actionable_failure(&ctx));
+    }
+
+    #[test]
+    fn missing_symbol_hint_counts_as_actionable_failure() {
+        let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.compiler_hints = vec![CompilerHintRecord::new(
+            CompilerHintKind::MissingSymbol,
+            "compiler cannot find `run` in scope",
+            "define the missing symbol or import it before cargo check",
+            vec!["src/main.rs".into()],
+        )];
+        assert!(has_actionable_failure(&ctx));
+    }
+
+    #[test]
     fn semantic_target_path_is_used_for_missing_target_dispatch() {
         let mut ctx = RouteContext::default();
         ctx.context_ready = true;
