@@ -36,7 +36,8 @@ pub use events::{
     FileEvent, FilePatch, FileRead, FileWrite, GoalEdgeDefined, GoalGraphCheckpointed, GoalNodeCreated, GoalNodeRetracted, GoalNodeRewritten, GoalSelected, InlineModule, InvariantDiscovered, LlmCall, LlmResult,
     LocatedEvent, LoopActed, LoopObserved, LoopPlanned, PlanningCompleted, LoopRewarded, LoopVerified, MoveSymbol, NodeCompleted, NodeFailed, NodeReady, NodeStarted, PolicyBaselineUpdated, ProcessResult, PromptLoaded,
     RenameDir, RenameModule, RenameSymbol, RequestDispatch, RouteSelected, RouteTick, RuntimeEvent, RuntimeStateUpdated, RustcEventConsumer, SubTaskResult, SystemConfigLoaded, Tick, ToolBatchSettled,
-    ToolCall, ToolResult, GoodnessSnapshot,
+    ToolCall, ToolResult, GoodnessSnapshot, RustcCaptureStarted, RustcGraphArtifactWritten,
+    RustcCaptureCompleted, RustcCaptureFailed,
     event_kind_str,
     EVENT_SCHEMA_VERSION,
 };

@@ -1,6 +1,9 @@
 use anyhow::Result;
 use crate::capture::SymbolSpanBundle;
-use canon_event::{CanonEvent, CanonPayload, CanonPayloadMeta, EventId, EventKind};
+use canon_event::{
+    write_shaped_event_auto, CanonPayloadMeta, EventId, EventKind, RustcCaptureCompleted,
+    RustcCaptureFailed, RustcCaptureStarted, RustcGraphArtifactWritten,
+};
 use canon_ir::ir::CanonIR;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -23,6 +26,13 @@ impl CaptureMode {
 
     pub fn emits_structural_events(self) -> bool {
         matches!(self, Self::Structural)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sparse => "sparse",
+            Self::Structural => "structural",
+        }
     }
 }
 
@@ -66,35 +76,90 @@ pub fn write_graph_artifact(
     })
 }
 
+pub fn emit_capture_started(
+    tlog_path: &Path,
+    crate_name: &str,
+    capture_mode: CaptureMode,
+) -> Result<EventId> {
+    write_shaped_event_auto(
+        tlog_path,
+        "rustc",
+        EventKind::RustcCaptureStarted,
+        &RustcCaptureStarted {
+            crate_name: crate_name.to_string(),
+            capture_mode: capture_mode.as_str().to_string(),
+            started: true,
+        },
+        Vec::new(),
+        true,
+        CanonPayloadMeta { file: file!().to_string(), line: line!() },
+    )
+}
+
 pub fn emit_graph_artifact_summary(
     tlog_path: &Path,
     summary: &GraphArtifactSummary,
-) -> Result<()> {
-    let payload = CanonPayload::from_data(
-        serde_json::json!({ "crate_name": summary.crate_name }),
-        serde_json::json!({
-            "artifact_id": summary.artifact_id,
-            "nodes": summary.node_count,
-            "edges": summary.edge_count,
-            "files": summary.file_count,
-            "call_edges": summary.call_edge_count,
-            "module_edges": summary.module_edge_count,
-            "cfg_edges": summary.cfg_edge_count,
-        }),
-        serde_json::json!({ "artifact_id": summary.artifact_id }),
-        CanonPayloadMeta { file: file!().to_string(), line: line!() },
-        serde_json::to_value(summary)?,
-    );
-    let event = CanonEvent::new(
-        EventId::new(canon_event::new_event_id()),
+) -> Result<EventId> {
+    write_shaped_event_auto(
+        tlog_path,
+        "rustc",
+        EventKind::RustcGraphArtifactWritten,
+        &RustcGraphArtifactWritten {
+            crate_name: summary.crate_name.clone(),
+            artifact_id: summary.artifact_id.clone(),
+            artifact_path: summary.artifact_path.display().to_string(),
+            node_count: summary.node_count as u64,
+            edge_count: summary.edge_count as u64,
+            file_count: summary.file_count as u64,
+            call_edge_count: summary.call_edge_count as u64,
+            module_edge_count: summary.module_edge_count as u64,
+            cfg_edge_count: summary.cfg_edge_count as u64,
+        },
         Vec::new(),
-        "rustc".to_string(),
-        EventKind::Debug,
-        canon_event::now_millis(),
-        payload,
         true,
-    );
-    canon_event::write_canon_event_auto(tlog_path, &event)
+        CanonPayloadMeta { file: file!().to_string(), line: line!() },
+    )
+}
+
+pub fn emit_capture_completed(
+    tlog_path: &Path,
+    crate_name: &str,
+    artifact_id: &str,
+    parent_ids: Vec<EventId>,
+) -> Result<EventId> {
+    write_shaped_event_auto(
+        tlog_path,
+        "rustc",
+        EventKind::RustcCaptureCompleted,
+        &RustcCaptureCompleted {
+            crate_name: crate_name.to_string(),
+            artifact_id: artifact_id.to_string(),
+            completed: true,
+        },
+        parent_ids,
+        false,
+        CanonPayloadMeta { file: file!().to_string(), line: line!() },
+    )
+}
+
+pub fn emit_capture_failed(
+    tlog_path: &Path,
+    crate_name: &str,
+    message: &str,
+    parent_ids: Vec<EventId>,
+) -> Result<EventId> {
+    write_shaped_event_auto(
+        tlog_path,
+        "rustc",
+        EventKind::RustcCaptureFailed,
+        &RustcCaptureFailed {
+            crate_name: crate_name.to_string(),
+            message: message.to_string(),
+        },
+        parent_ids.clone(),
+        parent_ids.is_empty(),
+        CanonPayloadMeta { file: file!().to_string(), line: line!() },
+    )
 }
 
 fn total_edge_count(ir: &CanonIR) -> usize {

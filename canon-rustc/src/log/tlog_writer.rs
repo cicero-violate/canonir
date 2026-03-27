@@ -52,6 +52,9 @@ impl TlogWriter {
     }
 
     pub fn write_session(&mut self, project: &str) -> Result<()> {
+        if !self.capture_mode.emits_structural_events() {
+            return Ok(());
+        }
         self.emit_rustc_event(RustcEvent::SessionStart(canon_event::SessionStart {
             project: project.to_string(), schema: 2, byte_offset: self.session_start_offset,
         }))
@@ -138,6 +141,9 @@ impl TlogWriter {
     }
 
     pub fn write_compilation_unit_finished(&mut self, crate_name: &str) -> Result<()> {
+        if !self.capture_mode.emits_structural_events() {
+            return Ok(());
+        }
         self.emit_rustc_event(RustcEvent::CompilationUnitFinished(canon_event::CompilationUnitFinished {
             crate_name: crate_name.to_string(), finished: true,
         }))

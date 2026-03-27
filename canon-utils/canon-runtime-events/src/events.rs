@@ -534,6 +534,55 @@ canon_event_struct!(
     }
 );
 
+canon_event_struct!(
+    #[impl_shape]
+    #[event(class = "Effect")]
+    RustcCaptureStarted {
+        #[input] crate_name: String,
+        #[input] capture_mode: String,
+        #[delta]
+        #[output] started: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    #[event(class = "Effect")]
+    RustcGraphArtifactWritten {
+        #[input] crate_name: String,
+        #[input] artifact_id: String,
+        #[input] artifact_path: String,
+        #[delta]
+        #[output] node_count: u64,
+        #[output] edge_count: u64,
+        #[output] file_count: u64,
+        #[output] call_edge_count: u64,
+        #[output] module_edge_count: u64,
+        #[output] cfg_edge_count: u64,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    #[event(class = "Effect")]
+    RustcCaptureCompleted {
+        #[input] crate_name: String,
+        #[input] artifact_id: String,
+        #[delta]
+        #[output] completed: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    #[event(class = "Effect")]
+    RustcCaptureFailed {
+        #[input] crate_name: String,
+        #[delta]
+        #[output] message: String,
+    }
+);
+
 // ---------------------------------------------------------------------------
 // Tool events
 // ---------------------------------------------------------------------------
@@ -951,6 +1000,10 @@ canon_event_enum!(RuntimeEvent {
     SystemConfigLoaded(SystemConfigLoaded),
     AgentRegistered(AgentRegistered),
     PromptLoaded(PromptLoaded),
+    RustcCaptureStarted(RustcCaptureStarted),
+    RustcGraphArtifactWritten(RustcGraphArtifactWritten),
+    RustcCaptureCompleted(RustcCaptureCompleted),
+    RustcCaptureFailed(RustcCaptureFailed),
     ToolCall(ToolCall),
     ToolResult(ToolResult),
     ToolBatchSettled(ToolBatchSettled),
@@ -990,6 +1043,10 @@ pub fn event_kind_str(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::ErrorOccurred(_) => "error_occurred",
         RuntimeEvent::Debug(_) => "debug",
         RuntimeEvent::PromptLoaded(_) => "prompt_loaded",
+        RuntimeEvent::RustcCaptureStarted(_) => "rustc_capture_started",
+        RuntimeEvent::RustcGraphArtifactWritten(_) => "rustc_graph_artifact_written",
+        RuntimeEvent::RustcCaptureCompleted(_) => "rustc_capture_completed",
+        RuntimeEvent::RustcCaptureFailed(_) => "rustc_capture_failed",
         RuntimeEvent::RuntimeStateUpdated(_) => "runtime_state_updated",
         RuntimeEvent::ToolCall(_) => "tool_call",
         RuntimeEvent::ToolResult(_) => "tool_result",

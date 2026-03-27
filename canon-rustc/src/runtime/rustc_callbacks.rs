@@ -1,4 +1,7 @@
-use crate::artifacts::{emit_graph_artifact_summary, write_graph_artifact, CaptureMode};
+use crate::artifacts::{
+    emit_capture_completed, emit_capture_failed, emit_capture_started,
+    emit_graph_artifact_summary, write_graph_artifact, CaptureMode,
+};
 use crate::runtime::flags::{
     find_flag_value, find_flag_values, is_cargo_registry_path, workspace_root_from_output_dir,
 };
@@ -49,6 +52,7 @@ impl Callbacks for RustcCaptureCallbacks {
             install_panic_hook();
             let crate_name = self.crate_name.as_deref().unwrap_or("unknown");
             let tlog_path = workspace_root.join("state/event_log/event.tlog");
+            let capture_started_id = emit_capture_started(&tlog_path, crate_name, self.capture_mode).ok();
             if let Ok(mut writer) = TlogWriter::open(&tlog_path) {
                 if let Err(err) = writer.write_session(crate_name) {
                     append_rustc_log(
@@ -74,7 +78,12 @@ impl Callbacks for RustcCaptureCallbacks {
                         kinds: std::collections::HashMap::new(),
                     });
                     if let Ok(summary) = write_graph_artifact(&workspace_root, crate_name, &ir, Some(&bundle)) {
-                        let _ = emit_graph_artifact_summary(&tlog_path, &summary);
+                        let artifact_event_id = emit_graph_artifact_summary(&tlog_path, &summary).ok();
+                        let mut parents = Vec::new();
+                        if let Some(id) = artifact_event_id.or(capture_started_id.clone()) {
+                            parents.push(id);
+                        }
+                        let _ = emit_capture_completed(&tlog_path, crate_name, &summary.artifact_id, parents);
                     }
                     if self.capture_mode.emits_structural_events()
                         && let Err(err) = emit_ir_tlog(&ir, &tlog_path, crate_name, Some(&bundle))
@@ -96,6 +105,11 @@ impl Callbacks for RustcCaptureCallbacks {
                         &self.output_dir,
                         &format!("canon_kernel: capture failed: {err:?}"),
                     );
+                    let mut parents = Vec::new();
+                    if let Some(id) = capture_started_id {
+                        parents.push(id);
+                    }
+                    let _ = emit_capture_failed(&tlog_path, crate_name, &message, parents);
                     if matches!(std::env::var("CANON_RUSTC_STRICT").as_deref(), Ok("1" | "true" | "TRUE")) {
                         std::process::exit(1);
                     }

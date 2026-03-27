@@ -1,5 +1,5 @@
 use crate::tlog::{emit_canon_event_json, BinarySegmentWriter};
-use crate::{CanonEvent, CanonPayload, CanonPayloadMeta, EventId, EventKind};
+use crate::{CanonEvent, CanonPayload, CanonPayloadMeta, CanonPayloadShape, EventId, EventKind};
 use anyhow::Result;
 use serde_json::Value;
 use std::cell::RefCell;
@@ -66,6 +66,36 @@ pub fn write_canon_event_auto(path: &Path, event: &CanonEvent) -> Result<()> {
     } else {
         emit_canon_event_json(path, event)
     }
+}
+
+pub fn write_shaped_event_auto<T: CanonPayloadShape>(
+    path: &Path,
+    actor: &str,
+    kind: EventKind,
+    shape: &T,
+    parent_ids: Vec<EventId>,
+    root: bool,
+    meta: CanonPayloadMeta,
+) -> Result<EventId> {
+    let id = EventId::new(new_event_id());
+    let payload = CanonPayload::from_data(
+        shape.payload_input(),
+        shape.payload_output(),
+        shape.payload_delta(),
+        meta,
+        shape.payload_data(),
+    );
+    let event = CanonEvent::new(
+        id.clone(),
+        parent_ids,
+        actor.to_string(),
+        kind,
+        now_millis(),
+        payload,
+        root,
+    );
+    write_canon_event_auto(path, &event)?;
+    Ok(id)
 }
 
 pub fn new_event_id() -> String {
