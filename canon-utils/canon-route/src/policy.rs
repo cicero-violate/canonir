@@ -691,6 +691,7 @@ pub fn semantic_repair_state_is_actionable(summary: &SemanticStateSummary) -> bo
     summary.validation_blocked_by_preconditions
         || summary.compiler_repair_required
         || !summary.repair_intents.is_empty()
+        || summary.has_actionable_compiler_hints()
 }
 
 pub fn latest_verify_outcome(ctx: &RouteContext) -> Option<VerifyOutcomeClass> {
@@ -978,6 +979,16 @@ mod tests {
         ctx.semantic_summary.complete = true;
         ctx.semantic_summary.repair_intents =
             vec!["repair_intent=create_missing_modules priority=4".into()];
+        assert!(has_actionable_failure(&ctx));
+    }
+
+    #[test]
+    fn semantic_compiler_hints_count_as_actionable_failure() {
+        let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.compiler_hints = vec![
+            "kind=unresolved_import targets=src/lib.rs summary=compiler reports unresolved import `crate::foo` repair=add the missing import target or correct the import path before cargo check".into(),
+        ];
         assert!(has_actionable_failure(&ctx));
     }
 

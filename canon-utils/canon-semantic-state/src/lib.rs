@@ -135,6 +135,28 @@ impl SemanticStateSummary {
         lines
     }
 
+    pub fn compiler_hint_kinds(&self) -> Vec<&str> {
+        self.compiler_hints
+            .iter()
+            .filter_map(|line| parse_compiler_hint_kind(line))
+            .collect()
+    }
+
+    pub fn has_actionable_compiler_hints(&self) -> bool {
+        self.compiler_hint_kinds().into_iter().any(|kind| {
+            matches!(
+                kind,
+                "missing_module"
+                    | "dead_code_forbid_conflict"
+                    | "missing_entrypoint"
+                    | "unresolved_import"
+                    | "missing_symbol"
+                    | "duplicate_definition"
+                    | "trait_bound_failure"
+            )
+        })
+    }
+
     pub fn compact_block(&self) -> String {
         let mut parts = vec![
             format!("version={}", self.version),
@@ -161,15 +183,19 @@ impl SemanticStateSummary {
         if !self.repair_intents.is_empty() {
             parts.push(format!("repair_intents={}", self.repair_intents.join("|")));
         }
+        if !self.compiler_hints.is_empty() {
+            parts.push(format!("compiler_hint_kinds={}", self.compiler_hint_kinds().join("|")));
+        }
         parts.join("\n")
     }
 
     pub fn render_planner_block(&self) -> String {
         format!(
-            "Environment model:\n{}\n\nPlanning preconditions:\n{}\n\nRepair intents:\n{}\n\nSemantic summary:\n{}",
+            "Environment model:\n{}\n\nPlanning preconditions:\n{}\n\nRepair intents:\n{}\n\nCompiler hints:\n{}\n\nSemantic summary:\n{}",
             render_bullets(&self.planner_lines()),
             render_bullets(&self.planning_preconditions),
             render_bullets(&self.repair_intents),
+            render_bullets(&self.compiler_hints),
             self.compact_block(),
         )
     }
@@ -189,6 +215,15 @@ fn render_bullets(lines: &[String]) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     }
+}
+
+fn parse_compiler_hint_kind(line: &str) -> Option<&str> {
+    let marker = "kind=";
+    let start = line.find(marker)? + marker.len();
+    let tail = &line[start..];
+    let end = tail.find(' ').unwrap_or(tail.len());
+    let kind = &tail[..end];
+    if kind.is_empty() { None } else { Some(kind) }
 }
 
 #[cfg(test)]
@@ -228,9 +263,25 @@ mod tests {
             cargo_project: true,
             planning_preconditions: vec!["must_create_entrypoint=true".into()],
             repair_intents: vec!["repair_intent=create_entrypoint priority=3".into()],
+            compiler_hints: vec![
+                "kind=missing_symbol targets=src/main.rs summary=compiler cannot find `run` in scope repair=define the missing symbol or import it before cargo check".into(),
+            ],
             ..SemanticStateSummary::default()
         };
         assert!(summary.render_planner_block().contains("Planning preconditions:"));
+        assert!(summary.render_planner_block().contains("Compiler hints:"));
         assert!(summary.render_route_block().contains("Semantic summary:"));
+        assert!(summary.compact_block().contains("compiler_hint_kinds=missing_symbol"));
+    }
+
+    #[test]
+    fn actionable_compiler_hints_are_detected() {
+        let summary = SemanticStateSummary {
+            compiler_hints: vec![
+                "kind=duplicate_definition targets=src/lib.rs summary=compiler reports duplicate definition repair=remove duplicate".into(),
+            ],
+            ..SemanticStateSummary::default()
+        };
+        assert!(summary.has_actionable_compiler_hints());
     }
 }
