@@ -991,15 +991,15 @@ const PLANNER_SYSTEM_INSTRUCTIONS: &str = r#"You are a code-editing agent. Produ
 
 6. edit.add_import — add a semantic import to an existing Rust file
    {"action":"edit.add_import","import":"crate::foo::Bar","path":"src/lib.rs"}
-   Use this for unresolved-import repairs before falling back to apply_patch.
+   Default tool for unresolved-import repairs.
 
 7. edit.define_symbol_stub — add a semantic stub for a missing symbol
    {"action":"edit.define_symbol_stub","symbol":"run","kind":"fn","path":"src/lib.rs"}
-   Use this for missing-symbol repairs before falling back to apply_patch.
+   Default tool for missing-symbol repairs.
 
 8. edit.create_module_file — create a declared missing module file directly
    {"action":"edit.create_module_file","module":"merge","path":"src/merge.rs"}
-   Use this for missing-module repairs before falling back to apply_patch.
+   Default tool for missing-module repairs.
 
 9. run_command — run a shell command
    {"action":"run_command","cmd":"cargo build","cwd":"<TARGET_WORKSPACE>"}
@@ -1015,10 +1015,13 @@ Step 1 — Discover (only when unsure of project state or missing file contents)
   → Results appear in "Recent actions" on your next call.
 
 Step 2 — Create/Edit (after seeing discovery results):
-  Use apply_patch (*** Add File for new, *** Update File for existing).
-  Use edit.rename_symbol for semantic duplicate-resolution renames when graph context supports it.
-  Use edit.move_symbol for semantic module restructuring when graph hotspots indicate a better module boundary.
-  Use edit.add_import, edit.define_symbol_stub, and edit.create_module_file for localized semantic repairs before textual patching.
+  Use semantic editor actions first for covered compiler repairs.
+  - edit.rename_symbol for duplicate-definition repairs
+  - edit.move_symbol for module restructuring
+  - edit.add_import for unresolved imports
+  - edit.define_symbol_stub for missing symbols
+  - edit.create_module_file for missing modules
+  Use apply_patch only for edits not covered by the semantic editor stack.
   Use run_command for cargo/shell operations.
   The "done" action must be the ONLY action in a batch, and only after verification has shown the goal is met.
 

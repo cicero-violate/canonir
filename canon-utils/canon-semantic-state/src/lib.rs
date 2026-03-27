@@ -1367,8 +1367,6 @@ pub fn classify_planned_action_intents(
                             let text = path.to_string_lossy();
                             if text.ends_with("src/main.rs") || text.ends_with("src/lib.rs") {
                                 out.push(SemanticActionIntent::CreateEntrypoint(path));
-                            } else if text.ends_with(".rs") {
-                                out.push(SemanticActionIntent::CreateModuleFile(path));
                             }
                         }
                         canon_tools_patch::Hunk::UpdateFile { path, .. }
@@ -1376,9 +1374,6 @@ pub fn classify_planned_action_intents(
                             let path = normalize_path(&path, target_root);
                             if patch.contains("allow(dead_code)") {
                                 out.push(SemanticActionIntent::FixDeadCodeConflict(path.clone()));
-                            }
-                            if is_duplicate_definition_edit(patch) {
-                                out.push(SemanticActionIntent::ResolveDuplicateDefinition(path.clone()));
                             }
                             if is_trait_bound_edit(patch) {
                                 out.push(SemanticActionIntent::FixTraitBoundFailure(path));
@@ -1608,10 +1603,6 @@ fn normalize_path(path: &Path, target_root: Option<&Path>) -> PathBuf {
     }
 }
 
-fn is_duplicate_definition_edit(patch: &str) -> bool {
-    patch.contains("rename") || has_definition_edit(patch)
-}
-
 fn is_trait_bound_edit(patch: &str) -> bool {
     patch.lines().any(|line| {
         if !(line.starts_with('+') || line.starts_with('-')) {
@@ -1622,24 +1613,6 @@ fn is_trait_bound_edit(patch: &str) -> bool {
             || content.contains("where ")
             || content.contains("derive(")
             || content.contains(": ")
-    })
-}
-
-fn has_definition_edit(patch: &str) -> bool {
-    patch.lines().any(|line| {
-        if !(line.starts_with('+') || line.starts_with('-')) {
-            return false;
-        }
-        let content = line[1..].trim_start();
-        let content = content
-            .strip_prefix("pub(crate) ")
-            .or_else(|| content.strip_prefix("pub "))
-            .unwrap_or(content);
-        content.starts_with("fn ")
-            || content.starts_with("struct ")
-            || content.starts_with("enum ")
-            || content.starts_with("type ")
-            || content.starts_with("const ")
     })
 }
 

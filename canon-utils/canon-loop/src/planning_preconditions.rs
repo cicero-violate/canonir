@@ -746,8 +746,6 @@ fn classify_action_intents(
         let path_text = path.to_string_lossy();
         if path_text.ends_with("src/main.rs") || path_text.ends_with("src/lib.rs") {
             out.push(ActionIntent::CreateEntrypoint(path.clone()));
-        } else if path_text.ends_with(".rs") {
-            out.push(ActionIntent::CreateModuleFile(path.clone()));
         }
     }
 
@@ -757,9 +755,6 @@ fn classify_action_intents(
                 || path.to_string_lossy().ends_with("src/main.rs"))
         {
             out.push(ActionIntent::FixDeadCodeConflict(path.clone()));
-        }
-        if is_duplicate_definition_edit(patch) {
-            out.push(ActionIntent::ResolveDuplicateDefinition(path.clone()));
         }
         if is_trait_bound_edit(patch) {
             out.push(ActionIntent::FixTraitBoundFailure(path.clone()));
@@ -781,9 +776,17 @@ fn match_action_intent(intent: &ActionIntent, hint_kind: &str, expected: &[PathB
 
 fn contains_module_creation(actions: &[canon_event::LoopPlanned], target_root: &Path) -> bool {
     actions.iter().any(|action| {
-        touched_paths(action)
-            .into_iter()
-            .any(|path| path.starts_with(target_root.join("src")) && path.extension().and_then(|s| s.to_str()) == Some("rs"))
+        action.action_kind == "edit.create_module_file"
+            && action
+                .action_payload
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from)
+                .map(|path| if path.is_absolute() { path } else { target_root.join(path) })
+                .is_some_and(|path| {
+                    path.starts_with(target_root.join("src"))
+                        && path.extension().and_then(|s| s.to_str()) == Some("rs")
+                })
     })
 }
 
@@ -898,24 +901,6 @@ fn touches_any_path(action: &canon_event::LoopPlanned, target_root: &Path, expec
     expected.iter().any(|path| touched.iter().any(|candidate| candidate == path))
 }
 
-fn has_definition_edit(patch: &str) -> bool {
-    patch.lines().any(|line| {
-        if !(line.starts_with('+') || line.starts_with('-')) {
-            return false;
-        }
-        let content = line[1..].trim_start();
-        let content = content
-            .strip_prefix("pub(crate) ")
-            .or_else(|| content.strip_prefix("pub "))
-            .unwrap_or(content);
-        content.starts_with("fn ")
-            || content.starts_with("struct ")
-            || content.starts_with("enum ")
-            || content.starts_with("type ")
-            || content.starts_with("const ")
-    })
-}
-
 fn has_trait_bound_edit(patch: &str) -> bool {
     patch.lines().any(|line| {
         (line.starts_with('+') || line.starts_with('-'))
@@ -924,10 +909,6 @@ fn has_trait_bound_edit(patch: &str) -> bool {
                 || line.contains("derive(")
                 || line.contains(": "))
     })
-}
-
-fn is_duplicate_definition_edit(patch: &str) -> bool {
-    patch.contains("rename") || has_definition_edit(patch)
 }
 
 fn is_trait_bound_edit(patch: &str) -> bool {
@@ -1270,7 +1251,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_missing_module_repair_that_targets_expected_path() {
+    fn rejects_missing_module_patch_inference_now_that_semantic_action_exists() {
         let actions = vec![canon_event::LoopPlanned {
             tick: 0,
             action_kind: "apply_patch".to_string(),
@@ -1301,7 +1282,7 @@ mod tests {
             &[PlanningPrecondition::MustCreateMissingModules],
             &summary,
         );
-        assert!(result.is_ok());
+        assert!(result.is_err());
     }
 
     #[test]
