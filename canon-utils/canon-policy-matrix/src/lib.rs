@@ -258,6 +258,174 @@ pub struct RouteSemanticActionabilityRow {
     pub expected_actionable: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlannerPathState {
+    Missing,
+    Present,
+}
+
+impl PlannerPathState {
+    pub const ALL: [Self; 2] = [Self::Missing, Self::Present];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlannerCargoState {
+    Missing,
+    Present,
+}
+
+impl PlannerCargoState {
+    pub const ALL: [Self; 2] = [Self::Missing, Self::Present];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlannerEntrypointState {
+    Missing,
+    Main,
+}
+
+impl PlannerEntrypointState {
+    pub const ALL: [Self; 2] = [Self::Missing, Self::Main];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlannerModuleGapState {
+    None,
+    Present,
+}
+
+impl PlannerModuleGapState {
+    pub const ALL: [Self; 2] = [Self::None, Self::Present];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlannerHintState {
+    None,
+    DeadCode,
+    UnresolvedImport,
+    MissingSymbol,
+    DuplicateDefinition,
+    TraitBound,
+}
+
+impl PlannerHintState {
+    pub const ALL: [Self; 6] = [
+        Self::None,
+        Self::DeadCode,
+        Self::UnresolvedImport,
+        Self::MissingSymbol,
+        Self::DuplicateDefinition,
+        Self::TraitBound,
+    ];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlannerActionCase {
+    BootstrapWorkspace,
+    InitCargoProject,
+    CreateEntrypoint,
+    CreateModuleFile,
+    FixDeadCodeConflict,
+    FixUnresolvedImport,
+    DefineMissingSymbol,
+    ResolveDuplicateDefinition,
+    FixTraitBoundFailure,
+    WrongEdit,
+    ValidateCargoCheck,
+}
+
+impl PlannerActionCase {
+    pub const ALL: [Self; 11] = [
+        Self::BootstrapWorkspace,
+        Self::InitCargoProject,
+        Self::CreateEntrypoint,
+        Self::CreateModuleFile,
+        Self::FixDeadCodeConflict,
+        Self::FixUnresolvedImport,
+        Self::DefineMissingSymbol,
+        Self::ResolveDuplicateDefinition,
+        Self::FixTraitBoundFailure,
+        Self::WrongEdit,
+        Self::ValidateCargoCheck,
+    ];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlannerJudgmentState {
+    pub path: PlannerPathState,
+    pub cargo: PlannerCargoState,
+    pub entrypoint: PlannerEntrypointState,
+    pub module_gap: PlannerModuleGapState,
+    pub hint: PlannerHintState,
+    pub action: PlannerActionCase,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteSummaryCompleteness {
+    Incomplete,
+    Complete,
+}
+
+impl RouteSummaryCompleteness {
+    pub const ALL: [Self; 2] = [Self::Incomplete, Self::Complete];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoutePreconditionState {
+    None,
+    Present,
+}
+
+impl RoutePreconditionState {
+    pub const ALL: [Self; 2] = [Self::None, Self::Present];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteRepairIntentState {
+    None,
+    Present,
+}
+
+impl RouteRepairIntentState {
+    pub const ALL: [Self; 2] = [Self::None, Self::Present];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteHintState {
+    None,
+    UnresolvedImport,
+    DuplicateDefinition,
+    TraitBound,
+}
+
+impl RouteHintState {
+    pub const ALL: [Self; 4] = [
+        Self::None,
+        Self::UnresolvedImport,
+        Self::DuplicateDefinition,
+        Self::TraitBound,
+    ];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteValidationBlockedState {
+    No,
+    Yes,
+}
+
+impl RouteValidationBlockedState {
+    pub const ALL: [Self; 2] = [Self::No, Self::Yes];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RouteSemanticState {
+    pub completeness: RouteSummaryCompleteness,
+    pub preconditions: RoutePreconditionState,
+    pub repair_intents: RouteRepairIntentState,
+    pub hint: RouteHintState,
+    pub validation_blocked: RouteValidationBlockedState,
+}
+
 impl InvalidPlanRetryFamily {
     pub const ALL: [Self; 5] = [
         Self::MixedBatchDiscoveryOnly,
@@ -979,72 +1147,323 @@ pub fn successor_consumption_rows() -> Vec<SuccessorConsumptionRow> {
 }
 
 pub fn planner_judgment_rows() -> Vec<PlannerJudgmentRow> {
-    vec![
-        PlannerJudgmentRow {
-            name: "planner_create_missing_modules_accepts_module_creation",
-            family: JudgmentScenarioFamily::PlannerCreateMissingModules,
-            actions: vec![planned_add_file("src/index.rs", "+pub struct Index;\n")],
-            preconditions: vec![PlanningPrecondition::MustCreateMissingModules],
-            summary: SemanticStateSummary {
-                complete: true,
-                target_root: Some("/tmp/example".into()),
-                module_gaps: vec!["index -> src/index.rs".into()],
-                ..SemanticStateSummary::default()
-            },
-            expected_ok: true,
-        },
-        PlannerJudgmentRow {
-            name: "planner_fix_unresolved_import_accepts_import_edit",
-            family: JudgmentScenarioFamily::PlannerFixUnresolvedImport,
-            actions: vec![planned_update_file("src/lib.rs", "+use crate::foo;\n")],
-            preconditions: vec![PlanningPrecondition::MustFixUnresolvedImport],
-            summary: SemanticStateSummary {
-                complete: true,
-                target_root: Some("/tmp/example".into()),
-                compiler_hints: vec![CompilerHintRecord::new(
-                    CompilerHintKind::UnresolvedImport,
-                    "compiler reports unresolved import `crate::foo`",
-                    "fix import",
-                    vec!["src/lib.rs".into()],
-                )],
-                ..SemanticStateSummary::default()
-            },
-            expected_ok: true,
-        },
-    ]
+    let mut rows = Vec::new();
+    for path in PlannerPathState::ALL {
+        for cargo in PlannerCargoState::ALL {
+            for entrypoint in PlannerEntrypointState::ALL {
+                for module_gap in PlannerModuleGapState::ALL {
+                    for hint in PlannerHintState::ALL {
+                        for action in PlannerActionCase::ALL {
+                            let state = PlannerJudgmentState {
+                                path,
+                                cargo,
+                                entrypoint,
+                                module_gap,
+                                hint,
+                                action,
+                            };
+                            if !valid_planner_judgment_state(state) {
+                                continue;
+                            }
+                            let preconditions = planner_preconditions_for_state(state);
+                            let Some(primary) = preconditions.first() else {
+                                continue;
+                            };
+                            let family = match primary {
+                                PlanningPrecondition::MustCreateMissingModules => {
+                                    JudgmentScenarioFamily::PlannerCreateMissingModules
+                                }
+                                PlanningPrecondition::MustFixUnresolvedImport => {
+                                    JudgmentScenarioFamily::PlannerFixUnresolvedImport
+                                }
+                                _ => continue,
+                            };
+                            let actions = planner_actions_for_state(state);
+                            rows.push(PlannerJudgmentRow {
+                                name: Box::leak(
+                                    format!("planner_judgment_{state:?}").into_boxed_str(),
+                                ),
+                                family,
+                                actions,
+                                preconditions: preconditions.clone(),
+                                summary: planner_summary_for_state(state),
+                                expected_ok: planner_action_matches_primary_intent(state),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    rows
 }
 
 pub fn route_semantic_actionability_rows() -> Vec<RouteSemanticActionabilityRow> {
-    vec![
-        RouteSemanticActionabilityRow {
-            name: "route_semantic_repair_intent_is_actionable",
-            family: JudgmentScenarioFamily::RouteSemanticRepairActionable,
-            summary: SemanticStateSummary {
-                complete: true,
-                repair_intents: vec![
-                    "repair_intent=create_missing_modules priority=4 first_batch=create_declared_module_files"
-                        .into(),
-                ],
-                ..SemanticStateSummary::default()
-            },
-            expected_actionable: true,
-        },
-        RouteSemanticActionabilityRow {
-            name: "route_semantic_hint_is_actionable",
-            family: JudgmentScenarioFamily::RouteSemanticHintActionable,
-            summary: SemanticStateSummary {
-                complete: true,
-                compiler_hints: vec![CompilerHintRecord::new(
-                    CompilerHintKind::DuplicateDefinition,
-                    "compiler reports duplicate definition for `Engine`",
-                    "remove duplicate",
-                    vec!["src/lib.rs".into()],
-                )],
-                ..SemanticStateSummary::default()
-            },
-            expected_actionable: true,
-        },
-    ]
+    let mut rows = Vec::new();
+    for completeness in RouteSummaryCompleteness::ALL {
+        for preconditions in RoutePreconditionState::ALL {
+            for repair_intents in RouteRepairIntentState::ALL {
+                for hint in RouteHintState::ALL {
+                    for validation_blocked in RouteValidationBlockedState::ALL {
+                        let state = RouteSemanticState {
+                            completeness,
+                            preconditions,
+                            repair_intents,
+                            hint,
+                            validation_blocked,
+                        };
+                        if !valid_route_semantic_state(state) {
+                            continue;
+                        }
+                        let family = if state.hint != RouteHintState::None {
+                            JudgmentScenarioFamily::RouteSemanticHintActionable
+                        } else {
+                            JudgmentScenarioFamily::RouteSemanticRepairActionable
+                        };
+                        rows.push(RouteSemanticActionabilityRow {
+                            name: Box::leak(
+                                format!("route_semantic_actionability_{state:?}")
+                                    .into_boxed_str(),
+                            ),
+                            family,
+                            summary: route_summary_for_state(state),
+                            expected_actionable: route_state_is_actionable(state),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    rows
+}
+
+fn valid_planner_judgment_state(state: PlannerJudgmentState) -> bool {
+    if state.path == PlannerPathState::Missing {
+        return state.cargo == PlannerCargoState::Missing
+            && state.entrypoint == PlannerEntrypointState::Missing
+            && state.module_gap == PlannerModuleGapState::None
+            && state.hint == PlannerHintState::None;
+    }
+    if state.cargo == PlannerCargoState::Missing {
+        return state.entrypoint == PlannerEntrypointState::Missing
+            && state.module_gap == PlannerModuleGapState::None
+            && state.hint == PlannerHintState::None;
+    }
+    if state.entrypoint == PlannerEntrypointState::Missing {
+        return state.module_gap == PlannerModuleGapState::None && state.hint == PlannerHintState::None;
+    }
+    true
+}
+
+fn planner_preconditions_for_state(state: PlannerJudgmentState) -> Vec<PlanningPrecondition> {
+    let mut out = Vec::new();
+    if state.path == PlannerPathState::Missing {
+        out.push(PlanningPrecondition::MustBootstrapWorkspace);
+        return out;
+    }
+    if state.cargo == PlannerCargoState::Missing {
+        out.push(PlanningPrecondition::MustInitCargoProject);
+        return out;
+    }
+    if state.entrypoint == PlannerEntrypointState::Missing {
+        out.push(PlanningPrecondition::MustCreateEntrypoint);
+        return out;
+    }
+    if state.module_gap == PlannerModuleGapState::Present {
+        out.push(PlanningPrecondition::MustCreateMissingModules);
+    }
+    match state.hint {
+        PlannerHintState::None => {}
+        PlannerHintState::DeadCode => out.push(PlanningPrecondition::MustFixDeadCodeForbidConflict),
+        PlannerHintState::UnresolvedImport => out.push(PlanningPrecondition::MustFixUnresolvedImport),
+        PlannerHintState::MissingSymbol => out.push(PlanningPrecondition::MustDefineMissingSymbol),
+        PlannerHintState::DuplicateDefinition => {
+            out.push(PlanningPrecondition::MustResolveDuplicateDefinition)
+        }
+        PlannerHintState::TraitBound => out.push(PlanningPrecondition::MustFixTraitBoundFailure),
+    }
+    out
+}
+
+fn planner_summary_for_state(state: PlannerJudgmentState) -> SemanticStateSummary {
+    let mut summary = SemanticStateSummary {
+        complete: true,
+        target_root: Some("/tmp/example".into()),
+        path_exists: state.path == PlannerPathState::Present,
+        cargo_project: state.cargo == PlannerCargoState::Present,
+        entrypoint_kind: Some(
+            match state.entrypoint {
+                PlannerEntrypointState::Missing => "none",
+                PlannerEntrypointState::Main => "bin",
+            }
+            .to_string(),
+        ),
+        source_files: vec!["src/main.rs".into(), "src/lib.rs".into()],
+        ..SemanticStateSummary::default()
+    };
+    if state.module_gap == PlannerModuleGapState::Present {
+        summary.module_gaps = vec!["index -> src/index.rs".into()];
+    }
+    summary.compiler_hints = match state.hint {
+        PlannerHintState::None => Vec::new(),
+        PlannerHintState::DeadCode => vec![CompilerHintRecord::new(
+            CompilerHintKind::DeadCodeForbidConflict,
+            "dead_code conflict",
+            "remove allow(dead_code)",
+            vec!["src/lib.rs".into()],
+        )],
+        PlannerHintState::UnresolvedImport => vec![CompilerHintRecord::new(
+            CompilerHintKind::UnresolvedImport,
+            "unresolved import",
+            "fix import",
+            vec!["src/lib.rs".into()],
+        )],
+        PlannerHintState::MissingSymbol => vec![CompilerHintRecord::new(
+            CompilerHintKind::MissingSymbol,
+            "missing symbol",
+            "define or import symbol",
+            vec!["src/main.rs".into()],
+        )],
+        PlannerHintState::DuplicateDefinition => vec![CompilerHintRecord::new(
+            CompilerHintKind::DuplicateDefinition,
+            "duplicate definition",
+            "remove duplicate",
+            vec!["src/lib.rs".into()],
+        )],
+        PlannerHintState::TraitBound => vec![CompilerHintRecord::new(
+            CompilerHintKind::TraitBoundFailure,
+            "trait bound failure",
+            "fix trait bound",
+            vec!["src/lib.rs".into()],
+        )],
+    };
+    summary
+}
+
+fn planner_actions_for_state(state: PlannerJudgmentState) -> Vec<canon_event::LoopPlanned> {
+    match state.action {
+        PlannerActionCase::BootstrapWorkspace => {
+            vec![planned_run_command("cargo new example", "/tmp")]
+        }
+        PlannerActionCase::InitCargoProject => {
+            vec![planned_run_command("cargo init", "/tmp/example")]
+        }
+        PlannerActionCase::CreateEntrypoint => vec![planned_add_file("src/main.rs", "+fn main() {}\n")],
+        PlannerActionCase::CreateModuleFile => vec![planned_add_file("src/index.rs", "+pub struct Index;\n")],
+        PlannerActionCase::FixDeadCodeConflict => {
+            vec![planned_update_file("src/lib.rs", "-#![allow(dead_code)]\n+#![allow(dead_code)]\n")]
+        }
+        PlannerActionCase::FixUnresolvedImport => {
+            vec![planned_update_file("src/lib.rs", "+use crate::foo;\n")]
+        }
+        PlannerActionCase::DefineMissingSymbol => {
+            vec![planned_update_file("src/main.rs", "+fn run() {}\n")]
+        }
+        PlannerActionCase::ResolveDuplicateDefinition => vec![planned_update_file(
+            "src/lib.rs",
+            "-pub struct Engine;\n+pub struct EngineV2;\n",
+        )],
+        PlannerActionCase::FixTraitBoundFailure => vec![planned_update_file(
+            "src/lib.rs",
+            "+impl Clone for Foo { fn clone(&self) -> Self { Self } }\n",
+        )],
+        PlannerActionCase::WrongEdit => vec![planned_add_file("src/other.rs", "+pub struct Other;\n")],
+        PlannerActionCase::ValidateCargoCheck => {
+            vec![planned_run_command("cargo check", "/tmp/example")]
+        }
+    }
+}
+
+fn planner_action_matches_primary_intent(state: PlannerJudgmentState) -> bool {
+    match planner_preconditions_for_state(state).first() {
+        Some(PlanningPrecondition::MustBootstrapWorkspace) => {
+            matches!(
+                state.action,
+                PlannerActionCase::BootstrapWorkspace | PlannerActionCase::InitCargoProject
+            )
+        }
+        Some(PlanningPrecondition::MustInitCargoProject) => {
+            state.action == PlannerActionCase::InitCargoProject
+        }
+        Some(PlanningPrecondition::MustCreateEntrypoint) => {
+            state.action == PlannerActionCase::CreateEntrypoint
+        }
+        Some(PlanningPrecondition::MustCreateMissingModules) => {
+            state.action == PlannerActionCase::CreateModuleFile
+        }
+        Some(PlanningPrecondition::MustFixDeadCodeForbidConflict) => {
+            state.action == PlannerActionCase::FixDeadCodeConflict
+        }
+        Some(PlanningPrecondition::MustFixUnresolvedImport) => {
+            state.action == PlannerActionCase::FixUnresolvedImport
+        }
+        Some(PlanningPrecondition::MustDefineMissingSymbol) => {
+            state.action == PlannerActionCase::DefineMissingSymbol
+        }
+        Some(PlanningPrecondition::MustResolveDuplicateDefinition) => {
+            state.action == PlannerActionCase::ResolveDuplicateDefinition
+        }
+        Some(PlanningPrecondition::MustFixTraitBoundFailure) => {
+            state.action == PlannerActionCase::FixTraitBoundFailure
+        }
+        None => true,
+    }
+}
+
+fn valid_route_semantic_state(state: RouteSemanticState) -> bool {
+    if state.completeness == RouteSummaryCompleteness::Incomplete {
+        return state.preconditions == RoutePreconditionState::None
+            && state.repair_intents == RouteRepairIntentState::None
+            && state.hint == RouteHintState::None
+            && state.validation_blocked == RouteValidationBlockedState::No;
+    }
+    true
+}
+
+fn route_summary_for_state(state: RouteSemanticState) -> SemanticStateSummary {
+    let mut summary = SemanticStateSummary {
+        complete: state.completeness == RouteSummaryCompleteness::Complete,
+        validation_blocked_by_preconditions: state.validation_blocked == RouteValidationBlockedState::Yes,
+        ..SemanticStateSummary::default()
+    };
+    if state.preconditions == RoutePreconditionState::Present {
+        summary.planning_preconditions =
+            vec!["must_create_missing_modules=true repair=create_declared_module_files_before_cargo_check".into()];
+    }
+    if state.repair_intents == RouteRepairIntentState::Present {
+        summary.repair_intents =
+            vec!["repair_intent=create_missing_modules priority=4 first_batch=create_declared_module_files".into()];
+    }
+    summary.compiler_hints = match state.hint {
+        RouteHintState::None => Vec::new(),
+        RouteHintState::UnresolvedImport => vec![CompilerHintRecord::new(
+            CompilerHintKind::UnresolvedImport,
+            "compiler reports unresolved import `crate::foo`",
+            "fix import",
+            vec!["src/lib.rs".into()],
+        )],
+        RouteHintState::DuplicateDefinition => vec![CompilerHintRecord::new(
+            CompilerHintKind::DuplicateDefinition,
+            "compiler reports duplicate definition for `Engine`",
+            "remove duplicate",
+            vec!["src/lib.rs".into()],
+        )],
+        RouteHintState::TraitBound => vec![CompilerHintRecord::new(
+            CompilerHintKind::TraitBoundFailure,
+            "compiler reports unsatisfied trait bound `Foo: Clone`",
+            "fix trait bound",
+            vec!["src/lib.rs".into()],
+        )],
+    };
+    summary
+}
+
+fn route_state_is_actionable(state: RouteSemanticState) -> bool {
+    state.completeness == RouteSummaryCompleteness::Complete
+        && (state.validation_blocked == RouteValidationBlockedState::Yes
+            || state.preconditions == RoutePreconditionState::Present
+            || state.repair_intents == RouteRepairIntentState::Present
+            || state.hint != RouteHintState::None)
 }
 
 pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
