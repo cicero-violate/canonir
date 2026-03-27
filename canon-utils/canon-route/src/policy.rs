@@ -1,7 +1,7 @@
 use crate::{context::RouteContext, decision::RouteDecision};
 use canon_decision::RouteKind;
 use canon_event::RuntimeEvent;
-use canon_semantic_state::SemanticStateSummary;
+use canon_semantic_state::{CompilerHintKind, CompilerHintRecord, SemanticStateSummary};
 use serde_json::Value;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -986,9 +986,12 @@ mod tests {
     fn semantic_compiler_hints_count_as_actionable_failure() {
         let mut ctx = RouteContext::default();
         ctx.semantic_summary.complete = true;
-        ctx.semantic_summary.compiler_hints = vec![
-            "kind=unresolved_import targets=src/lib.rs summary=compiler reports unresolved import `crate::foo` repair=add the missing import target or correct the import path before cargo check".into(),
-        ];
+        ctx.semantic_summary.compiler_hints = vec![CompilerHintRecord::new(
+            CompilerHintKind::UnresolvedImport,
+            "compiler reports unresolved import `crate::foo`",
+            "add the missing import target or correct the import path before cargo check",
+            vec!["src/lib.rs".into()],
+        )];
         assert!(has_actionable_failure(&ctx));
     }
 

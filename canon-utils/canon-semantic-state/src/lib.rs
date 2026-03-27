@@ -1,5 +1,86 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CompilerHintKind {
+    MissingModule,
+    DeadCodeForbidConflict,
+    MissingEntrypoint,
+    UnresolvedImport,
+    MissingSymbol,
+    DuplicateDefinition,
+    TraitBoundFailure,
+    GenericCompilerFailure,
+}
+
+impl CompilerHintKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::MissingModule => "missing_module",
+            Self::DeadCodeForbidConflict => "dead_code_forbid_conflict",
+            Self::MissingEntrypoint => "missing_entrypoint",
+            Self::UnresolvedImport => "unresolved_import",
+            Self::MissingSymbol => "missing_symbol",
+            Self::DuplicateDefinition => "duplicate_definition",
+            Self::TraitBoundFailure => "trait_bound_failure",
+            Self::GenericCompilerFailure => "generic_compiler_failure",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "missing_module" => Some(Self::MissingModule),
+            "dead_code_forbid_conflict" => Some(Self::DeadCodeForbidConflict),
+            "missing_entrypoint" => Some(Self::MissingEntrypoint),
+            "unresolved_import" => Some(Self::UnresolvedImport),
+            "missing_symbol" => Some(Self::MissingSymbol),
+            "duplicate_definition" => Some(Self::DuplicateDefinition),
+            "trait_bound_failure" => Some(Self::TraitBoundFailure),
+            "generic_compiler_failure" => Some(Self::GenericCompilerFailure),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CompilerHintRecord {
+    pub kind: String,
+    pub summary: String,
+    pub suggested_repair: String,
+    pub target_files: Vec<String>,
+}
+
+impl CompilerHintRecord {
+    pub fn new(
+        kind: CompilerHintKind,
+        summary: impl Into<String>,
+        suggested_repair: impl Into<String>,
+        target_files: Vec<String>,
+    ) -> Self {
+        Self {
+            kind: kind.as_str().to_string(),
+            summary: summary.into(),
+            suggested_repair: suggested_repair.into(),
+            target_files,
+        }
+    }
+
+    pub fn kind_enum(&self) -> Option<CompilerHintKind> {
+        CompilerHintKind::from_str(&self.kind)
+    }
+
+    pub fn render_line(&self) -> String {
+        let targets = if self.target_files.is_empty() {
+            "none".to_string()
+        } else {
+            self.target_files.join("|")
+        };
+        format!(
+            "kind={} targets={} summary={} repair={}",
+            self.kind, targets, self.summary, self.suggested_repair
+        )
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SemanticStateSummary {
     pub version: u32,
@@ -15,7 +96,7 @@ pub struct SemanticStateSummary {
     pub module_gaps: Vec<String>,
     pub planning_preconditions: Vec<String>,
     pub repair_intents: Vec<String>,
-    pub compiler_hints: Vec<String>,
+    pub compiler_hints: Vec<CompilerHintRecord>,
     pub validation_blocked_by_preconditions: bool,
     pub compiler_repair_required: bool,
 }
@@ -55,7 +136,7 @@ impl SemanticStateSummary {
             facts.push(format!("semantic.repair_intent={intent}"));
         }
         for hint in &self.compiler_hints {
-            facts.push(format!("semantic.compiler_hint={hint}"));
+            facts.push(format!("semantic.compiler_hint={}", hint.render_line()));
         }
         facts.push(format!(
             "semantic.validation_blocked_by_preconditions={}",
@@ -98,7 +179,9 @@ impl SemanticStateSummary {
             } else if let Some(value) = fact.strip_prefix("semantic.repair_intent=") {
                 summary.repair_intents.push(value.to_string());
             } else if let Some(value) = fact.strip_prefix("semantic.compiler_hint=") {
-                summary.compiler_hints.push(value.to_string());
+                if let Some(hint) = parse_compiler_hint_record(value) {
+                    summary.compiler_hints.push(hint);
+                }
             } else if let Some(value) =
                 fact.strip_prefix("semantic.validation_blocked_by_preconditions=")
             {
@@ -136,24 +219,23 @@ impl SemanticStateSummary {
     }
 
     pub fn compiler_hint_kinds(&self) -> Vec<&str> {
-        self.compiler_hints
-            .iter()
-            .filter_map(|line| parse_compiler_hint_kind(line))
-            .collect()
+        self.compiler_hints.iter().map(|hint| hint.kind.as_str()).collect()
     }
 
     pub fn has_actionable_compiler_hints(&self) -> bool {
-        self.compiler_hint_kinds().into_iter().any(|kind| {
-            matches!(
-                kind,
-                "missing_module"
-                    | "dead_code_forbid_conflict"
-                    | "missing_entrypoint"
-                    | "unresolved_import"
-                    | "missing_symbol"
-                    | "duplicate_definition"
-                    | "trait_bound_failure"
-            )
+        self.compiler_hints.iter().any(|hint| {
+            hint.kind_enum().is_some_and(|kind| {
+                matches!(
+                    kind,
+                    CompilerHintKind::MissingModule
+                        | CompilerHintKind::DeadCodeForbidConflict
+                        | CompilerHintKind::MissingEntrypoint
+                        | CompilerHintKind::UnresolvedImport
+                        | CompilerHintKind::MissingSymbol
+                        | CompilerHintKind::DuplicateDefinition
+                        | CompilerHintKind::TraitBoundFailure
+                )
+            })
         })
     }
 
@@ -167,10 +249,7 @@ impl SemanticStateSummary {
                 "entrypoint_kind={}",
                 self.entrypoint_kind.as_deref().unwrap_or("NA")
             ),
-            format!(
-                "crate_name={}",
-                self.crate_name.as_deref().unwrap_or("NA")
-            ),
+            format!("crate_name={}", self.crate_name.as_deref().unwrap_or("NA")),
             format!(
                 "validation_blocked={}",
                 self.validation_blocked_by_preconditions
@@ -190,12 +269,17 @@ impl SemanticStateSummary {
     }
 
     pub fn render_planner_block(&self) -> String {
+        let compiler_hint_lines = self
+            .compiler_hints
+            .iter()
+            .map(CompilerHintRecord::render_line)
+            .collect::<Vec<_>>();
         format!(
             "Environment model:\n{}\n\nPlanning preconditions:\n{}\n\nRepair intents:\n{}\n\nCompiler hints:\n{}\n\nSemantic summary:\n{}",
             render_bullets(&self.planner_lines()),
             render_bullets(&self.planning_preconditions),
             render_bullets(&self.repair_intents),
-            render_bullets(&self.compiler_hints),
+            render_bullets(&compiler_hint_lines),
             self.compact_block(),
         )
     }
@@ -217,18 +301,43 @@ fn render_bullets(lines: &[String]) -> String {
     }
 }
 
-fn parse_compiler_hint_kind(line: &str) -> Option<&str> {
-    let marker = "kind=";
+fn parse_compiler_hint_record(line: &str) -> Option<CompilerHintRecord> {
+    let kind = parse_field(line, "kind=")?;
+    let targets = parse_field(line, "targets=").unwrap_or_else(|| "none".to_string());
+    let summary = parse_field(line, "summary=").unwrap_or_default();
+    let repair = parse_field(line, "repair=").unwrap_or_default();
+    let target_files = if targets == "none" || targets.is_empty() {
+        Vec::new()
+    } else {
+        targets.split('|').map(|s| s.trim().to_string()).collect()
+    };
+    Some(CompilerHintRecord {
+        kind,
+        summary,
+        suggested_repair: repair,
+        target_files,
+    })
+}
+
+fn parse_field(line: &str, marker: &str) -> Option<String> {
     let start = line.find(marker)? + marker.len();
     let tail = &line[start..];
-    let end = tail.find(' ').unwrap_or(tail.len());
-    let kind = &tail[..end];
-    if kind.is_empty() { None } else { Some(kind) }
+    let end = tail.find(next_field_delimiter(marker)).unwrap_or(tail.len());
+    Some(tail[..end].trim().to_string())
+}
+
+fn next_field_delimiter(marker: &str) -> &'static str {
+    match marker {
+        "kind=" => " targets=",
+        "targets=" => " summary=",
+        "summary=" => " repair=",
+        _ => "",
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::SemanticStateSummary;
+    use super::{CompilerHintKind, CompilerHintRecord, SemanticStateSummary};
 
     #[test]
     fn round_trip_workspace_facts() {
@@ -246,7 +355,12 @@ mod tests {
             module_gaps: vec!["index -> src/index.rs".into()],
             planning_preconditions: vec!["must_create_missing_modules=true".into()],
             repair_intents: vec!["repair_intent=create_missing_modules".into()],
-            compiler_hints: vec!["compiler reports missing module `index`".into()],
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::MissingModule,
+                "compiler reports missing module `index`",
+                "create the missing module file",
+                vec!["src/lib.rs".into()],
+            )],
             validation_blocked_by_preconditions: true,
             compiler_repair_required: true,
         };
@@ -263,9 +377,12 @@ mod tests {
             cargo_project: true,
             planning_preconditions: vec!["must_create_entrypoint=true".into()],
             repair_intents: vec!["repair_intent=create_entrypoint priority=3".into()],
-            compiler_hints: vec![
-                "kind=missing_symbol targets=src/main.rs summary=compiler cannot find `run` in scope repair=define the missing symbol or import it before cargo check".into(),
-            ],
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::MissingSymbol,
+                "compiler cannot find `run` in scope",
+                "define the missing symbol or import it before cargo check",
+                vec!["src/main.rs".into()],
+            )],
             ..SemanticStateSummary::default()
         };
         assert!(summary.render_planner_block().contains("Planning preconditions:"));
@@ -277,9 +394,12 @@ mod tests {
     #[test]
     fn actionable_compiler_hints_are_detected() {
         let summary = SemanticStateSummary {
-            compiler_hints: vec![
-                "kind=duplicate_definition targets=src/lib.rs summary=compiler reports duplicate definition repair=remove duplicate".into(),
-            ],
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::DuplicateDefinition,
+                "compiler reports duplicate definition",
+                "remove duplicate",
+                vec!["src/lib.rs".into()],
+            )],
             ..SemanticStateSummary::default()
         };
         assert!(summary.has_actionable_compiler_hints());

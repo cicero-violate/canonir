@@ -1,6 +1,6 @@
-use crate::compiler_hints::{extract_compiler_hints, CompilerHintKind};
+use crate::compiler_hints::extract_compiler_hints;
 use crate::env_model::{EntrypointKind, WorkspaceModel};
-use canon_semantic_state::SemanticStateSummary;
+use canon_semantic_state::{CompilerHintKind, SemanticStateSummary};
 use canon_tools_patch::parse_patch;
 use std::path::{Path, PathBuf};
 
@@ -52,23 +52,26 @@ pub fn derive_preconditions(
     }
 
     for hint in extract_compiler_hints(compiler_errors) {
-        if hint.kind == CompilerHintKind::DeadCodeForbidConflict
+        let Some(kind) = hint.kind_enum() else {
+            continue;
+        };
+        if kind == CompilerHintKind::DeadCodeForbidConflict
             && !out.contains(&PlanningPrecondition::MustFixDeadCodeForbidConflict)
         {
             out.push(PlanningPrecondition::MustFixDeadCodeForbidConflict);
-        } else if hint.kind == CompilerHintKind::UnresolvedImport
+        } else if kind == CompilerHintKind::UnresolvedImport
             && !out.contains(&PlanningPrecondition::MustFixUnresolvedImport)
         {
             out.push(PlanningPrecondition::MustFixUnresolvedImport);
-        } else if hint.kind == CompilerHintKind::MissingSymbol
+        } else if kind == CompilerHintKind::MissingSymbol
             && !out.contains(&PlanningPrecondition::MustDefineMissingSymbol)
         {
             out.push(PlanningPrecondition::MustDefineMissingSymbol);
-        } else if hint.kind == CompilerHintKind::DuplicateDefinition
+        } else if kind == CompilerHintKind::DuplicateDefinition
             && !out.contains(&PlanningPrecondition::MustResolveDuplicateDefinition)
         {
             out.push(PlanningPrecondition::MustResolveDuplicateDefinition);
-        } else if hint.kind == CompilerHintKind::TraitBoundFailure
+        } else if kind == CompilerHintKind::TraitBoundFailure
             && !out.contains(&PlanningPrecondition::MustFixTraitBoundFailure)
         {
             out.push(PlanningPrecondition::MustFixTraitBoundFailure);
@@ -482,36 +485,25 @@ fn expected_hint_paths(
     target_root: &Path,
 ) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    for line in &semantic_summary.compiler_hints {
-        if !line.contains(&format!("kind={hint_kind}")) {
+    for hint in &semantic_summary.compiler_hints {
+        if hint.kind != hint_kind {
             continue;
         }
-        let Some(targets) = parse_compiler_hint_targets(line) else {
-            continue;
-        };
-        for target in targets {
+        for target in &hint.target_files {
             if target == "none" {
                 continue;
             }
-            let candidate = PathBuf::from(&target);
-            out.push(if candidate.is_absolute() { candidate } else { target_root.join(target) });
+            let candidate = PathBuf::from(target);
+            out.push(if candidate.is_absolute() {
+                candidate
+            } else {
+                target_root.join(target)
+            });
         }
     }
     out.sort();
     out.dedup();
     out
-}
-
-fn parse_compiler_hint_targets(line: &str) -> Option<Vec<String>> {
-    let marker = "targets=";
-    let start = line.find(marker)? + marker.len();
-    let tail = &line[start..];
-    let end = tail.find(" summary=").unwrap_or(tail.len());
-    let raw = tail[..end].trim();
-    if raw.is_empty() {
-        return None;
-    }
-    Some(raw.split('|').map(|s| s.trim().to_string()).collect())
 }
 
 fn touches_any_path(action: &canon_event::LoopPlanned, target_root: &Path, expected: &[&Path]) -> bool {

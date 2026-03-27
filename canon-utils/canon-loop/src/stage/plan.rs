@@ -955,7 +955,11 @@ fn build_context_delta(
         consecutive_invalid_plan_batches,
     );
     let compiler_repair_hints = {
-        let lines = semantic_summary.compiler_hints.clone();
+        let lines = semantic_summary
+            .compiler_hints
+            .iter()
+            .map(|hint| hint.render_line())
+            .collect::<Vec<_>>();
         if lines.is_empty() {
             "none".to_string()
         } else {
