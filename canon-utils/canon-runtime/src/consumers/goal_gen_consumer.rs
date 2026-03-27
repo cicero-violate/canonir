@@ -2,7 +2,8 @@ use canon_event::{new_error_occurred, CapabilityResult, EventConsumer, EventEmit
 use canon_prompt_events::goal_prompt_loaded_event;
 use canon_proc_macros::must_emit;
 use canon_semantic_state::{
-    derive_self_development_objective_state, LlmSemanticContext, ObjectiveTrendState, SemanticStateSummary,
+    derive_self_development_objective_state, primary_development_objective_kind, DevelopmentObjectiveKind,
+    LlmSemanticContext, ObjectiveTrendState, SemanticStateSummary,
 };
 use canon_skills::global_registry;
 use uuid::Uuid;
@@ -24,7 +25,7 @@ pub struct GoalGenConsumer {
     emitter: Option<EventEmitterHandle>,
     semantic_summary: SemanticStateSummary,
     objective_trend_state: ObjectiveTrendState,
-    last_route_objective: Option<String>,
+    last_route_objective: Option<DevelopmentObjectiveKind>,
 }
 
 impl GoalGenConsumer {
@@ -108,11 +109,12 @@ impl EventConsumer for GoalGenConsumer {
                 let current_goal_objective = infer_goal_objective(content);
                 let objective_override = self
                     .last_route_objective
-                    .as_deref()
-                    .filter(|route_objective| goal_objective_drift(current_goal_objective, route_objective))
+                    .filter(|route_objective| goal_objective_drift(current_goal_objective, *route_objective))
                     .map(|route_objective| {
                         format!(
-                            "\n\nGoal objective override:\n- The current runtime objective has drifted.\n- Rewrite the goal so it prioritizes: {route_objective}"
+                            "\n\nGoal objective override:\n- The current runtime objective has drifted.\n- Choose the typed development objective `{}` first.\n- Rewrite the goal so it prioritizes: {}",
+                            route_objective.as_str(),
+                            route_objective.focus_text()
                         )
                     })
                     .unwrap_or_default();
@@ -123,8 +125,8 @@ impl EventConsumer for GoalGenConsumer {
                                 source: "goal_gen_consumer".to_string(),
                                 kind: "goal_objective_drift".to_string(),
                                 payload: serde_json::json!({
-                                    "goal_objective": current_goal_objective,
-                                    "route_objective": self.last_route_objective,
+                                    "goal_objective": current_goal_objective.map(DevelopmentObjectiveKind::as_str),
+                                    "route_objective": self.last_route_objective.map(DevelopmentObjectiveKind::as_str),
                                 }),
                             }),
                             vec![trigger_id.clone()],
@@ -320,32 +322,40 @@ impl EventConsumer for GoalGenConsumer {
 fn current_primary_objective(
     semantic_summary: &SemanticStateSummary,
     objective_trend_state: &ObjectiveTrendState,
-) -> String {
+) -> DevelopmentObjectiveKind {
     let objective_state = derive_self_development_objective_state(semantic_summary, 0, &[], objective_trend_state);
-    objective_trend_state.primary_objective(&objective_state).to_string()
+    primary_development_objective_kind(&objective_state, objective_trend_state, semantic_summary)
 }
 
-fn infer_goal_objective(goal_text: &str) -> &str {
+fn infer_goal_objective(goal_text: &str) -> Option<DevelopmentObjectiveKind> {
     let lower = goal_text.to_ascii_lowercase();
-    if lower.contains("fix")
+    if lower.contains("test") || lower.contains("coverage") {
+        Some(DevelopmentObjectiveKind::IncreaseTestCoverage)
+    } else if lower.contains("cohesion") || lower.contains("module") || lower.contains("refactor") {
+        Some(DevelopmentObjectiveKind::ImproveModuleCohesion)
+    } else if lower.contains("invalid plan") || lower.contains("planning") {
+        Some(DevelopmentObjectiveKind::DecreaseInvalidPlanRate)
+    } else if lower.contains("contradiction") || lower.contains("drift") || lower.contains("align") {
+        Some(DevelopmentObjectiveKind::ReduceContradictionRate)
+    } else if lower.contains("stall") || lower.contains("progress") {
+        Some(DevelopmentObjectiveKind::ReduceStalledLoopFrequency)
+    } else if lower.contains("fix")
         || lower.contains("repair")
         || lower.contains("resolve")
         || lower.contains("compile")
         || lower.contains("error")
     {
-        "repair"
+        Some(DevelopmentObjectiveKind::ReduceCompilerFailures)
     } else {
-        "sustain"
+        None
     }
 }
 
-fn goal_objective_drift(goal_objective: &str, route_objective: &str) -> bool {
-    let route_focus = if route_objective.contains("sustain semantic progress") {
-        "sustain"
-    } else {
-        "repair"
-    };
-    goal_objective != route_focus
+fn goal_objective_drift(
+    goal_objective: Option<DevelopmentObjectiveKind>,
+    route_objective: DevelopmentObjectiveKind,
+) -> bool {
+    goal_objective.is_some_and(|goal| goal != route_objective)
 }
 
 fn is_placeholder_goal(goal: &str) -> bool {

@@ -322,6 +322,48 @@ pub struct SelfDevelopmentObjectiveState {
     pub misalignment_pressure_score: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DevelopmentObjectiveKind {
+    ReduceCompilerFailures,
+    ReduceContradictionRate,
+    IncreaseTestCoverage,
+    DecreaseInvalidPlanRate,
+    ReduceStalledLoopFrequency,
+    ImproveModuleCohesion,
+}
+
+impl DevelopmentObjectiveKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReduceCompilerFailures => "reduce_compiler_failures",
+            Self::ReduceContradictionRate => "reduce_contradiction_rate",
+            Self::IncreaseTestCoverage => "increase_test_coverage",
+            Self::DecreaseInvalidPlanRate => "decrease_invalid_plan_rate",
+            Self::ReduceStalledLoopFrequency => "reduce_stalled_loop_frequency",
+            Self::ImproveModuleCohesion => "improve_module_cohesion",
+        }
+    }
+
+    pub fn focus_text(self) -> &'static str {
+        match self {
+            Self::ReduceCompilerFailures => "reduce compiler failures",
+            Self::ReduceContradictionRate => "reduce contradiction rate",
+            Self::IncreaseTestCoverage => "increase test coverage",
+            Self::DecreaseInvalidPlanRate => "decrease invalid-plan rate",
+            Self::ReduceStalledLoopFrequency => "reduce stalled-loop frequency",
+            Self::ImproveModuleCohesion => "improve module cohesion",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DevelopmentObjective {
+    pub kind: DevelopmentObjectiveKind,
+    pub priority_score: u32,
+    pub rationale: String,
+    pub progress_summary: String,
+}
+
 impl SelfDevelopmentObjectiveState {
     pub fn is_stalled(&self) -> bool {
         self.semantic_no_progress_streak >= 2 || self.consecutive_invalid_plan_batches >= 2
@@ -474,27 +516,138 @@ impl ObjectiveTrendState {
     }
 
     pub fn primary_objective(&self, objective_state: &SelfDevelopmentObjectiveState) -> &'static str {
-        if objective_state.validation_blocked_by_preconditions {
-            "remove validation blockers before attempting verification"
-        } else if objective_state.misalignment_pressure_score > 0 {
-            "realign goal, route, and planning objectives"
-        } else if objective_state.compiler_repair_required {
-            "reduce compiler repair pressure"
-        } else if self.current_no_progress_streak >= 2 || self.repeated_stall_count > 0 {
-            "break the stalled repair loop with a different strategy"
-        } else if self.invalid_plan_rate() > 0.5 && self.planning_attempts >= 3 {
-            "lower invalid-plan rate by simplifying planned batches"
-        } else if self.repair_resolution_rate() < 0.5 && self.total_execution_results >= 3 {
-            "increase repair resolution rate"
-        } else {
-            "sustain semantic progress while reducing repair pressure"
-        }
+        primary_development_objective_kind(objective_state, self, &SemanticStateSummary::default())
+            .focus_text()
     }
+}
+
+pub fn primary_development_objective_kind(
+    objective_state: &SelfDevelopmentObjectiveState,
+    objective_trend_state: &ObjectiveTrendState,
+    semantic_summary: &SemanticStateSummary,
+) -> DevelopmentObjectiveKind {
+    derive_development_objectives(semantic_summary, objective_state, objective_trend_state)
+        .into_iter()
+        .next()
+        .map(|objective| objective.kind)
+        .unwrap_or(DevelopmentObjectiveKind::ReduceCompilerFailures)
+}
+
+pub fn derive_development_objectives(
+    semantic_summary: &SemanticStateSummary,
+    objective_state: &SelfDevelopmentObjectiveState,
+    objective_trend_state: &ObjectiveTrendState,
+) -> Vec<DevelopmentObjective> {
+    let has_test_files = semantic_summary.source_files.iter().any(|path| {
+        path.contains("/tests/")
+            || path.starts_with("tests/")
+            || path.ends_with("_test.rs")
+            || path.ends_with("_tests.rs")
+    });
+    let rust_file_count = semantic_summary.rust_file_count.unwrap_or(0);
+    let mut objectives = vec![
+        DevelopmentObjective {
+            kind: DevelopmentObjectiveKind::ReduceCompilerFailures,
+            priority_score: u32::from(objective_state.compiler_repair_required)
+                + u32::from(objective_state.validation_blocked_by_preconditions)
+                + u32::from(!semantic_summary.compiler_hints.is_empty()),
+            rationale: "compiler repair pressure is still present".to_string(),
+            progress_summary: format!(
+                "compiler_repair_required={} validation_blocked={}",
+                objective_state.compiler_repair_required,
+                objective_state.validation_blocked_by_preconditions
+            ),
+        },
+        DevelopmentObjective {
+            kind: DevelopmentObjectiveKind::ReduceContradictionRate,
+            priority_score: objective_state.misalignment_pressure_score,
+            rationale: "goal/route/planner drift has been observed".to_string(),
+            progress_summary: format!(
+                "route_contradictions={} goal_drifts={}",
+                objective_trend_state.route_objective_contradiction_events,
+                objective_trend_state.goal_objective_drift_events
+            ),
+        },
+        DevelopmentObjective {
+            kind: DevelopmentObjectiveKind::IncreaseTestCoverage,
+            priority_score: u32::from(semantic_summary.cargo_project && !has_test_files)
+                + u32::from(semantic_summary.path_exists && semantic_summary.cargo_project),
+            rationale: "the workspace has little or no visible test surface".to_string(),
+            progress_summary: format!("has_test_files={has_test_files} rust_file_count={rust_file_count}"),
+        },
+        DevelopmentObjective {
+            kind: DevelopmentObjectiveKind::DecreaseInvalidPlanRate,
+            priority_score: if objective_trend_state.invalid_plan_rate() > 0.0 {
+                1 + objective_trend_state.invalid_plan_events
+            } else {
+                0
+            },
+            rationale: "invalid plans are reducing execution throughput".to_string(),
+            progress_summary: format!(
+                "invalid_plan_events={} invalid_plan_rate={:.2}",
+                objective_trend_state.invalid_plan_events,
+                objective_trend_state.invalid_plan_rate()
+            ),
+        },
+        DevelopmentObjective {
+            kind: DevelopmentObjectiveKind::ReduceStalledLoopFrequency,
+            priority_score: objective_trend_state.repeated_stall_count
+                + objective_state.semantic_no_progress_streak as u32,
+            rationale: "the loop is repeating without semantic progress".to_string(),
+            progress_summary: format!(
+                "no_progress_streak={} repeated_stall_count={}",
+                objective_state.semantic_no_progress_streak,
+                objective_trend_state.repeated_stall_count
+            ),
+        },
+        DevelopmentObjective {
+            kind: DevelopmentObjectiveKind::ImproveModuleCohesion,
+            priority_score: semantic_summary.module_gaps.len() as u32
+                + u32::from(rust_file_count >= 8),
+            rationale: "module gaps or graph sprawl indicate structural cohesion issues".to_string(),
+            progress_summary: format!(
+                "module_gaps={} rust_file_count={}",
+                semantic_summary.module_gaps.len(),
+                rust_file_count
+            ),
+        },
+    ];
+    objectives.sort_by(|a, b| {
+        b.priority_score
+            .cmp(&a.priority_score)
+            .then_with(|| a.kind.as_str().cmp(b.kind.as_str()))
+    });
+    objectives
+}
+
+fn development_objective_lines(
+    semantic_summary: &SemanticStateSummary,
+    objective_state: &SelfDevelopmentObjectiveState,
+    objective_trend_state: &ObjectiveTrendState,
+) -> Vec<String> {
+    derive_development_objectives(semantic_summary, objective_state, objective_trend_state)
+        .into_iter()
+        .filter(|objective| objective.priority_score > 0)
+        .map(|objective| {
+            format!(
+                "kind={} priority={} progress={} rationale={}",
+                objective.kind.as_str(),
+                objective.priority_score,
+                objective.progress_summary,
+                objective.rationale
+            )
+        })
+        .collect()
 }
 
 impl LlmSemanticContext {
     pub fn render_goal_gen_block(&self) -> String {
         let mut lines = Vec::new();
+        let primary_objective = primary_development_objective_kind(
+            &self.objective_state,
+            &self.objective_trend_state,
+            &self.semantic_summary,
+        );
         if let Some(mission) = &self.mission_summary {
             lines.push(format!("mission_summary={mission}"));
         }
@@ -512,7 +665,13 @@ impl LlmSemanticContext {
         }
         lines.push(format!(
             "primary_objective={}",
-            self.objective_trend_state.primary_objective(&self.objective_state)
+            primary_objective.as_str()
+        ));
+        lines.push(format!("primary_objective_focus={}", primary_objective.focus_text()));
+        lines.extend(development_objective_lines(
+            &self.semantic_summary,
+            &self.objective_state,
+            &self.objective_trend_state,
         ));
         lines.extend(self.objective_state.render_lines());
         lines.extend(self.objective_trend_state.render_lines());
@@ -521,6 +680,11 @@ impl LlmSemanticContext {
     }
 
     pub fn render_router_block(&self) -> String {
+        let primary_objective = primary_development_objective_kind(
+            &self.objective_state,
+            &self.objective_trend_state,
+            &self.semantic_summary,
+        );
         let mut lines = vec![
             format!("semantic_complete={}", self.semantic_summary.complete),
             format!("validation_blocked={}", self.semantic_summary.validation_blocked_by_preconditions),
@@ -535,8 +699,9 @@ impl LlmSemanticContext {
         lines.push(self.semantic_summary.compact_block());
         lines.push(format!(
             "primary_objective={}",
-            self.objective_trend_state.primary_objective(&self.objective_state)
+            primary_objective.as_str()
         ));
+        lines.push(format!("primary_objective_focus={}", primary_objective.focus_text()));
         if !self.recent_execution_results.is_empty() {
             lines.push(format!(
                 "execution_results={}",
@@ -547,6 +712,11 @@ impl LlmSemanticContext {
                     .join("|")
             ));
         }
+        lines.extend(development_objective_lines(
+            &self.semantic_summary,
+            &self.objective_state,
+            &self.objective_trend_state,
+        ));
         lines.extend(self.objective_state.render_lines());
         lines.extend(self.objective_trend_state.render_lines());
         format!("LLM semantic context:
@@ -554,11 +724,25 @@ impl LlmSemanticContext {
     }
 
     pub fn render_planner_base_block(&self) -> String {
+        let primary_objective = primary_development_objective_kind(
+            &self.objective_state,
+            &self.objective_trend_state,
+            &self.semantic_summary,
+        );
         let mut sections = vec![
             self.semantic_summary.render_planner_block(),
             format!(
-                "Primary objective:\n- {}",
-                self.objective_trend_state.primary_objective(&self.objective_state)
+                "Primary objective:\n- {} ({})",
+                primary_objective.as_str(),
+                primary_objective.focus_text()
+            ),
+            format!(
+                "Development objectives:\n{}",
+                render_bullets(&development_objective_lines(
+                    &self.semantic_summary,
+                    &self.objective_state,
+                    &self.objective_trend_state,
+                ))
             ),
         ];
         if !self.low_level_diagnostics.is_empty() {
@@ -595,6 +779,11 @@ impl LlmSemanticContext {
     }
 
     pub fn render_planner_delta_block(&self) -> String {
+        let primary_objective = primary_development_objective_kind(
+            &self.objective_state,
+            &self.objective_trend_state,
+            &self.semantic_summary,
+        );
         let route_section = match &self.route_rationale {
             Some(rationale) if !rationale.is_empty() => {
                 let conf = self
@@ -646,8 +835,17 @@ LOC: {}  |  Errors: {}  |  Warnings: {}",
             format!("Semantic summary:
 {}", self.semantic_summary.compact_block()),
             format!(
-                "Primary objective:\n- {}",
-                self.objective_trend_state.primary_objective(&self.objective_state)
+                "Primary objective:\n- {} ({})",
+                primary_objective.as_str(),
+                primary_objective.focus_text()
+            ),
+            format!(
+                "Development objectives:\n{}",
+                render_bullets(&development_objective_lines(
+                    &self.semantic_summary,
+                    &self.objective_state,
+                    &self.objective_trend_state,
+                ))
             ),
         ];
         if !self.recent_actions.is_empty() {
@@ -1129,7 +1327,10 @@ fn next_field_delimiter(marker: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompilerHintKind, CompilerHintRecord, SemanticStateSummary};
+    use super::{
+        derive_development_objectives, derive_self_development_objective_state, CompilerHintKind,
+        CompilerHintRecord, DevelopmentObjectiveKind, ObjectiveTrendState, SemanticStateSummary,
+    };
 
     #[test]
     fn round_trip_workspace_facts() {
@@ -1195,5 +1396,24 @@ mod tests {
             ..SemanticStateSummary::default()
         };
         assert!(summary.has_actionable_compiler_hints());
+    }
+
+    #[test]
+    fn development_objectives_prioritize_contradictions_when_present() {
+        let summary = SemanticStateSummary {
+            complete: true,
+            path_exists: true,
+            cargo_project: true,
+            ..SemanticStateSummary::default()
+        };
+        let trend = ObjectiveTrendState {
+            route_objective_contradiction_events: 2,
+            goal_objective_drift_events: 1,
+            ..ObjectiveTrendState::default()
+        };
+        let objective_state = derive_self_development_objective_state(&summary, 0, &[], &trend);
+        let objectives = derive_development_objectives(&summary, &objective_state, &trend);
+        assert_eq!(objectives[0].kind, DevelopmentObjectiveKind::ReduceContradictionRate);
+        assert!(objectives[0].priority_score > 0);
     }
 }

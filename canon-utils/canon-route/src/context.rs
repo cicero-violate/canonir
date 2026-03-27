@@ -4,7 +4,8 @@ use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
 use canon_semantic_state::{
     classify_planned_action_intents, derive_objective_trend_state, derive_self_development_objective_state,
     execution_results_for_action, LlmSemanticContext, ObjectiveTrendState, SemanticActionIntent,
-    SemanticExecutionResultRecord, SemanticStateSummary, semantic_no_progress_streak, semantic_progress_rate,
+    SemanticExecutionResultRecord, SemanticStateSummary, primary_development_objective_kind,
+    semantic_no_progress_streak, semantic_progress_rate,
 };
 use crate::causal::update_causal_graph;
 use canon_judgment::{LlmSignals, RuntimeSignals};
@@ -124,8 +125,14 @@ impl RouteContext {
     }
 
     pub fn snapshot_text(&self) -> String {
+        let objective_state = self.objective_state();
+        let primary_objective = primary_development_objective_kind(
+            &objective_state,
+            &self.objective_trend_state,
+            &self.semantic_summary,
+        );
         format!(
-            "tick={tick}\ncontext_ready={context}\nworkspace_dirty={dirty}\nplanned_pending={pending}\nacted_unverified={unverified}\nfinish_ready={finish}\nlast_action_kind={action}\ngoodness={goodness}\ndelta_g={delta_g}\nconsecutive_invalid_plan_batches={invalid_count}\nlast_invalid_plan_planned_count={invalid_planned}\nlast_invalid_plan_reason={invalid_reason}\ntarget_workspace_missing={target_missing}\ntarget_workspace_path={target_path}\nplanning_preconditions={planning_preconditions}\nvalidation_blocked_by_preconditions={validation_blocked}\ncompiler_repair_required={compiler_repair}\nsemantic_summary_version={semantic_version}\nsemantic_summary_complete={semantic_complete}\nsemantic_progress_rate={semantic_progress_rate:.2}\nsemantic_no_progress_streak={semantic_no_progress_streak}\nhalted={halted}\nlast_halt_reason={halt_reason}",
+            "tick={tick}\ncontext_ready={context}\nworkspace_dirty={dirty}\nplanned_pending={pending}\nacted_unverified={unverified}\nfinish_ready={finish}\nlast_action_kind={action}\ngoodness={goodness}\ndelta_g={delta_g}\nconsecutive_invalid_plan_batches={invalid_count}\nlast_invalid_plan_planned_count={invalid_planned}\nlast_invalid_plan_reason={invalid_reason}\ntarget_workspace_missing={target_missing}\ntarget_workspace_path={target_path}\nplanning_preconditions={planning_preconditions}\nvalidation_blocked_by_preconditions={validation_blocked}\ncompiler_repair_required={compiler_repair}\nprimary_development_objective={primary_objective}\nmisalignment_pressure_score={misalignment_pressure}\nsemantic_summary_version={semantic_version}\nsemantic_summary_complete={semantic_complete}\nsemantic_progress_rate={semantic_progress_rate:.2}\nsemantic_no_progress_streak={semantic_no_progress_streak}\nhalted={halted}\nlast_halt_reason={halt_reason}",
             tick = self.scheduler_tick,
             context = self.context_ready,
             dirty = self.workspace_dirty_tracker.any_dirty(),
@@ -153,6 +160,8 @@ impl RouteContext {
             },
             validation_blocked = self.validation_blocked_state(),
             compiler_repair = self.compiler_repair_required_state(),
+            primary_objective = primary_objective.as_str(),
+            misalignment_pressure = objective_state.misalignment_pressure_score,
             semantic_version = self.semantic_summary.version,
             semantic_complete = self.semantic_summary.complete,
             semantic_progress_rate = semantic_progress_rate(&self.recent_execution_results),
