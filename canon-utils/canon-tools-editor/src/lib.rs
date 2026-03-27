@@ -102,6 +102,7 @@ pub fn move_symbol_pairs(project: &Path, moves: &[(String, String)]) -> RenameRu
             return report;
         }
     };
+    let mut move_verifications = Vec::new();
 
     for (symbol_id, new_module_path) in moves {
         let canonical_symbol_id = editor
@@ -142,6 +143,21 @@ pub fn move_symbol_pairs(project: &Path, moves: &[(String, String)]) -> RenameRu
                 return report;
             }
         };
+        let target_file = match editor.registry.module_files.get(new_module_path).cloned() {
+            Some(path) => path,
+            None => {
+                let message = format!("preflight invariant: target module not in index: {new_module_path}");
+                publish_invariant_error(
+                    project,
+                    "move_symbol_preflight",
+                    &message,
+                    serde_json::json!({ "symbol_id": canonical_symbol_id, "new_module_path": new_module_path }),
+                );
+                report.error = Some(message);
+                return report;
+            }
+        };
+        move_verifications.push((canonical_symbol_id.clone(), handle.file.clone(), target_file, new_module_path.clone()));
         let op = EditOp::MoveSymbol {
             handle,
             symbol_id: canonical_symbol_id.clone(),
@@ -168,23 +184,23 @@ pub fn move_symbol_pairs(project: &Path, moves: &[(String, String)]) -> RenameRu
         Ok(preview) => report.def_paths.push(preview),
     }
 
-    for (symbol_id, new_module_path) in moves {
-        let canonical_symbol_id = editor
-            .session
-            .as_ref()
-            .map(|index| index.resolve_symbol_id(symbol_id))
-            .unwrap_or_else(|| symbol_id.clone());
+    for (canonical_symbol_id, old_file, new_file, new_module_path) in move_verifications {
         let name = canonical_symbol_id.rsplit("::").next().unwrap_or(canonical_symbol_id.as_str());
         let moved_symbol = format!("{new_module_path}::{name}");
-        if source_symbol_exists_in_sources(&editor.registry.sources, &canonical_symbol_id)
-            || !source_symbol_exists_in_sources(&editor.registry.sources, &moved_symbol)
-        {
+        let old_present = source_file_contains_symbol(&editor.registry.sources, &old_file, name);
+        let new_present = source_file_contains_symbol(&editor.registry.sources, &new_file, name);
+        if old_present || !new_present {
             let message = format!("post invariant: move verification failed for {canonical_symbol_id} -> {moved_symbol}");
             publish_invariant_error(
                 project,
                 "move_symbol_post",
                 &message,
-                serde_json::json!({ "symbol_id": canonical_symbol_id, "moved_symbol": moved_symbol }),
+                serde_json::json!({
+                    "symbol_id": canonical_symbol_id,
+                    "moved_symbol": moved_symbol,
+                    "old_present": old_present,
+                    "new_present": new_present,
+                }),
             );
             report.error = Some(message);
             return report;
@@ -589,47 +605,28 @@ fn add_import_path(file_path: &Path, import_path: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn source_symbol_exists_in_sources(
+fn source_file_contains_symbol(
     sources: &std::collections::HashMap<std::path::PathBuf, String>,
-    symbol_id: &str,
+    file: &Path,
+    symbol_name: &str,
 ) -> bool {
-    let Some((module_path, name)) = symbol_id.rsplit_once("::") else {
-        return false;
-    };
-    let expected_file = module_source_file(module_path);
-    let Some((_, content)) = sources
-        .iter()
-        .find(|(path, _)| path.ends_with(&expected_file)) else {
+    let Some(content) = sources.get(file) else {
         return false;
     };
     let Ok(ast) = syn::parse_file(content) else {
         return false;
     };
     ast.items.iter().any(|item| match item {
-        syn::Item::Fn(item) => item.sig.ident == name,
-        syn::Item::Struct(item) => item.ident == name,
-        syn::Item::Enum(item) => item.ident == name,
-        syn::Item::Trait(item) => item.ident == name,
-        syn::Item::Type(item) => item.ident == name,
-        syn::Item::Const(item) => item.ident == name,
-        syn::Item::Static(item) => item.ident == name,
-        syn::Item::Mod(item) => item.ident == name,
+        syn::Item::Fn(item) => item.sig.ident == symbol_name,
+        syn::Item::Struct(item) => item.ident == symbol_name,
+        syn::Item::Enum(item) => item.ident == symbol_name,
+        syn::Item::Trait(item) => item.ident == symbol_name,
+        syn::Item::Type(item) => item.ident == symbol_name,
+        syn::Item::Const(item) => item.ident == symbol_name,
+        syn::Item::Static(item) => item.ident == symbol_name,
+        syn::Item::Mod(item) => item.ident == symbol_name,
         _ => false,
     })
-}
-
-fn module_source_file(module_path: &str) -> std::path::PathBuf {
-    let segments: Vec<&str> = module_path.split("::").filter(|segment| !segment.is_empty() && *segment != "crate").collect();
-    let mut path = std::path::PathBuf::from("src");
-    if segments.is_empty() {
-        path.push("lib.rs");
-        return path;
-    }
-    for segment in &segments[..segments.len().saturating_sub(1)] {
-        path.push(segment);
-    }
-    path.push(format!("{}.rs", segments[segments.len() - 1]));
-    path
 }
 
 fn define_symbol_stub(file_path: &Path, symbol: &str, kind: &str) -> anyhow::Result<()> {

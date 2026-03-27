@@ -143,8 +143,20 @@ impl ProjectEditor {
     }
 
     pub fn synthetic_handle_from_symbol_id(&self, symbol_id: &str) -> Result<SymbolHandle> {
-        let (module_path, name) = symbol_id.rsplit_once("::").ok_or_else(|| anyhow!("invalid symbol id: {symbol_id}"))?;
-        let kind = self.session.as_ref().and_then(|session| session.symbol_kind(symbol_id)).map(symbol_kind_from_str).unwrap_or(SymbolKind::Fn);
+        let canonical_symbol_id = self
+            .session
+            .as_ref()
+            .map(|session| session.resolve_symbol_id(symbol_id))
+            .unwrap_or_else(|| symbol_id.to_string());
+        let (module_path, name) = canonical_symbol_id
+            .rsplit_once("::")
+            .ok_or_else(|| anyhow!("invalid symbol id: {symbol_id}"))?;
+        let kind = self
+            .session
+            .as_ref()
+            .and_then(|session| session.symbol_kind(&canonical_symbol_id))
+            .map(symbol_kind_from_str)
+            .unwrap_or(SymbolKind::Fn);
         let file = self.registry.module_files.get(module_path).cloned().unwrap_or_else(PathBuf::new);
         Ok(SymbolHandle { file, module_path: module_path.to_string(), name: name.to_string(), kind })
     }
