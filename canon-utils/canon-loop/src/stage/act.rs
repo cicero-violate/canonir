@@ -1,6 +1,9 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use canon_editor::{move_symbol_pairs, rename_symbol_pairs};
+use canon_editor::{
+    add_import_paths, create_module_files, define_symbol_stubs, move_symbol_pairs,
+    rename_symbol_pairs,
+};
 use canon_event::{
     new_error_occurred, BashInvoke, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, FileEvent, FilePatch, FileWrite, LoopActed, LoopPlanned, ProcessResult, RouteSelected, RuntimeEvent, ToolCall, ToolResult,
 };
@@ -657,6 +660,133 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                     artifact_n: 0,
                     llm_request_id: planned.llm_request_id.clone(),
                 },
+                stdout,
+                stderr,
+                None,
+                duration_ms,
+                success,
+                None,
+            );
+            Ok(LoopStageResult::EmitMany(vec![tool_result, acted]))
+        }
+        "edit.add_import" => {
+            let import = planned.action_payload.get("import").and_then(|v| v.as_str());
+            let path = planned.action_payload.get("path").and_then(|v| v.as_str());
+            let (Some(import), Some(path)) = (import, path) else {
+                ctx.mark_batch_inline_completion(planned, false);
+                return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_add_import_args")));
+            };
+            let project = planned
+                .action_payload
+                .get("project")
+                .and_then(|v| v.as_str())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| ctx.workspace.clone());
+            let node_id = tool_node_id(planned);
+            let started = Instant::now();
+            let report = add_import_paths(&project, &[(path.to_string(), import.to_string())]);
+            let duration_ms = started.elapsed().as_millis() as u64;
+            let success = report.error.is_none();
+            let stdout = if success {
+                format!("add_import ok: {import} -> {path}")
+            } else {
+                String::new()
+            };
+            let stderr = report.error.unwrap_or_default();
+            ctx.mark_batch_inline_completion(planned, success);
+            let tool_result = inline_tool_result(
+                "edit.add_import",
+                &node_id,
+                serde_json::json!({"stdout": stdout, "stderr": stderr, "duration_ms": duration_ms, "success": success, "import": import, "path": path}),
+                success,
+            );
+            let acted = emit_acted(
+                PendingAct { tick: planned.tick, action_kind: planned.action_kind.clone(), tool_kind: "edit.add_import".to_string(), request_id: String::new(), tool_call_id: String::new(), node_id: node_id.clone(), started_at: started, trace_id: planned.trace_id.clone(), execution_id: planned.execution_id.clone(), parent_span_id: planned.span_id.clone(), plan_id: planned.plan_id.clone(), plan_step_id: planned.plan_step_id.clone(), action_id: planned.action_id.clone(), artifact_n: 0, llm_request_id: planned.llm_request_id.clone() },
+                stdout,
+                stderr,
+                None,
+                duration_ms,
+                success,
+                None,
+            );
+            Ok(LoopStageResult::EmitMany(vec![tool_result, acted]))
+        }
+        "edit.define_symbol_stub" => {
+            let symbol = planned.action_payload.get("symbol").and_then(|v| v.as_str());
+            let kind = planned.action_payload.get("kind").and_then(|v| v.as_str()).unwrap_or("fn");
+            let path = planned.action_payload.get("path").and_then(|v| v.as_str());
+            let (Some(symbol), Some(path)) = (symbol, path) else {
+                ctx.mark_batch_inline_completion(planned, false);
+                return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_define_symbol_stub_args")));
+            };
+            let project = planned
+                .action_payload
+                .get("project")
+                .and_then(|v| v.as_str())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| ctx.workspace.clone());
+            let node_id = tool_node_id(planned);
+            let started = Instant::now();
+            let report = define_symbol_stubs(&project, &[(path.to_string(), symbol.to_string(), kind.to_string())]);
+            let duration_ms = started.elapsed().as_millis() as u64;
+            let success = report.error.is_none();
+            let stdout = if success {
+                format!("define_symbol_stub ok: {symbol} ({kind}) -> {path}")
+            } else {
+                String::new()
+            };
+            let stderr = report.error.unwrap_or_default();
+            ctx.mark_batch_inline_completion(planned, success);
+            let tool_result = inline_tool_result(
+                "edit.define_symbol_stub",
+                &node_id,
+                serde_json::json!({"stdout": stdout, "stderr": stderr, "duration_ms": duration_ms, "success": success, "symbol": symbol, "kind": kind, "path": path}),
+                success,
+            );
+            let acted = emit_acted(
+                PendingAct { tick: planned.tick, action_kind: planned.action_kind.clone(), tool_kind: "edit.define_symbol_stub".to_string(), request_id: String::new(), tool_call_id: String::new(), node_id: node_id.clone(), started_at: started, trace_id: planned.trace_id.clone(), execution_id: planned.execution_id.clone(), parent_span_id: planned.span_id.clone(), plan_id: planned.plan_id.clone(), plan_step_id: planned.plan_step_id.clone(), action_id: planned.action_id.clone(), artifact_n: 0, llm_request_id: planned.llm_request_id.clone() },
+                stdout,
+                stderr,
+                None,
+                duration_ms,
+                success,
+                None,
+            );
+            Ok(LoopStageResult::EmitMany(vec![tool_result, acted]))
+        }
+        "edit.create_module_file" => {
+            let path = planned.action_payload.get("path").and_then(|v| v.as_str());
+            let module = planned.action_payload.get("module").and_then(|v| v.as_str());
+            let Some(path) = path else {
+                ctx.mark_batch_inline_completion(planned, false);
+                return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_create_module_file_args")));
+            };
+            let project = planned
+                .action_payload
+                .get("project")
+                .and_then(|v| v.as_str())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| ctx.workspace.clone());
+            let node_id = tool_node_id(planned);
+            let started = Instant::now();
+            let report = create_module_files(&project, &[(path.to_string(), module.map(ToString::to_string))]);
+            let duration_ms = started.elapsed().as_millis() as u64;
+            let success = report.error.is_none();
+            let stdout = if success {
+                format!("create_module_file ok: {path}")
+            } else {
+                String::new()
+            };
+            let stderr = report.error.unwrap_or_default();
+            ctx.mark_batch_inline_completion(planned, success);
+            let tool_result = inline_tool_result(
+                "edit.create_module_file",
+                &node_id,
+                serde_json::json!({"stdout": stdout, "stderr": stderr, "duration_ms": duration_ms, "success": success, "path": path, "module": module}),
+                success,
+            );
+            let acted = emit_acted(
+                PendingAct { tick: planned.tick, action_kind: planned.action_kind.clone(), tool_kind: "edit.create_module_file".to_string(), request_id: String::new(), tool_call_id: String::new(), node_id: node_id.clone(), started_at: started, trace_id: planned.trace_id.clone(), execution_id: planned.execution_id.clone(), parent_span_id: planned.span_id.clone(), plan_id: planned.plan_id.clone(), plan_step_id: planned.plan_step_id.clone(), action_id: planned.action_id.clone(), artifact_n: 0, llm_request_id: planned.llm_request_id.clone() },
                 stdout,
                 stderr,
                 None,

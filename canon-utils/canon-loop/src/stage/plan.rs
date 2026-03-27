@@ -227,6 +227,86 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
                 signals: signals.clone(),
                 depends_on: action.depends_on.clone(),
             }),
+            LlmAction::AddImport { path, import } => out.push(LoopPlanned {
+                tick: pending.tick,
+                action_kind: "edit.add_import".to_string(),
+                action_payload: serde_json::json!({ "path": path, "import": import }),
+                reason: "llm_add_import".to_string(),
+                llm_request_id: Some(req_id.clone()),
+                trace_id: Some(pending.trace_id.clone()),
+                execution_id: Some(pending.execution_id.clone()),
+                span_id: Some(planned_span_id.clone()),
+                parent_span_id: Some(pending.span_id.clone()),
+                plan_id: Some(pending.plan_id.clone()),
+                plan_step_id: Some(plan_step_id.clone()),
+                action_id: Some(action_id.clone()),
+                signals: signals.clone(),
+                depends_on: action.depends_on.clone(),
+            }),
+            LlmAction::DefineSymbolStub { path, symbol, kind } => out.push(LoopPlanned {
+                tick: pending.tick,
+                action_kind: "edit.define_symbol_stub".to_string(),
+                action_payload: serde_json::json!({ "path": path, "symbol": symbol, "kind": kind }),
+                reason: "llm_define_symbol_stub".to_string(),
+                llm_request_id: Some(req_id.clone()),
+                trace_id: Some(pending.trace_id.clone()),
+                execution_id: Some(pending.execution_id.clone()),
+                span_id: Some(planned_span_id.clone()),
+                parent_span_id: Some(pending.span_id.clone()),
+                plan_id: Some(pending.plan_id.clone()),
+                plan_step_id: Some(plan_step_id.clone()),
+                action_id: Some(action_id.clone()),
+                signals: signals.clone(),
+                depends_on: action.depends_on.clone(),
+            }),
+            LlmAction::CreateModuleFile { path, module } => out.push(LoopPlanned {
+                tick: pending.tick,
+                action_kind: "edit.create_module_file".to_string(),
+                action_payload: serde_json::json!({ "path": path, "module": module }),
+                reason: "llm_create_module_file".to_string(),
+                llm_request_id: Some(req_id.clone()),
+                trace_id: Some(pending.trace_id.clone()),
+                execution_id: Some(pending.execution_id.clone()),
+                span_id: Some(planned_span_id.clone()),
+                parent_span_id: Some(pending.span_id.clone()),
+                plan_id: Some(pending.plan_id.clone()),
+                plan_step_id: Some(plan_step_id.clone()),
+                action_id: Some(action_id.clone()),
+                signals: signals.clone(),
+                depends_on: action.depends_on.clone(),
+            }),
+            LlmAction::MoveSymbol { path, symbol_id, new_module_path } => out.push(LoopPlanned {
+                tick: pending.tick,
+                action_kind: "edit.move_symbol".to_string(),
+                action_payload: serde_json::json!({ "path": path, "symbol_id": symbol_id, "new_module_path": new_module_path }),
+                reason: "llm_move_symbol".to_string(),
+                llm_request_id: Some(req_id.clone()),
+                trace_id: Some(pending.trace_id.clone()),
+                execution_id: Some(pending.execution_id.clone()),
+                span_id: Some(planned_span_id.clone()),
+                parent_span_id: Some(pending.span_id.clone()),
+                plan_id: Some(pending.plan_id.clone()),
+                plan_step_id: Some(plan_step_id.clone()),
+                action_id: Some(action_id.clone()),
+                signals: signals.clone(),
+                depends_on: action.depends_on.clone(),
+            }),
+            LlmAction::RenameSymbol { path, old, new } => out.push(LoopPlanned {
+                tick: pending.tick,
+                action_kind: "edit.rename_symbol".to_string(),
+                action_payload: serde_json::json!({ "path": path, "old": old, "new": new }),
+                reason: "llm_rename_symbol".to_string(),
+                llm_request_id: Some(req_id.clone()),
+                trace_id: Some(pending.trace_id.clone()),
+                execution_id: Some(pending.execution_id.clone()),
+                span_id: Some(planned_span_id.clone()),
+                parent_span_id: Some(pending.span_id.clone()),
+                plan_id: Some(pending.plan_id.clone()),
+                plan_step_id: Some(plan_step_id.clone()),
+                action_id: Some(action_id.clone()),
+                signals: signals.clone(),
+                depends_on: action.depends_on.clone(),
+            }),
             LlmAction::Done { reason } => {
                 if let Some(goal_text) = &pending.goal_text {
                     let required_loc = extract_required_loc(goal_text);
@@ -388,7 +468,16 @@ fn validate_action_batch(
     let has_execution = actions.iter().any(|a| {
         matches!(
             a.action_kind.as_str(),
-            "patch_file" | "apply_patch" | "write_file" | "run_command" | "done" | "edit.rename_symbol" | "edit.move_symbol"
+            "patch_file"
+                | "apply_patch"
+                | "write_file"
+                | "run_command"
+                | "done"
+                | "edit.rename_symbol"
+                | "edit.move_symbol"
+                | "edit.add_import"
+                | "edit.define_symbol_stub"
+                | "edit.create_module_file"
         )
     });
     if retry_policy == RetryPolicy::DiscoveryOnly && has_execution {
@@ -463,6 +552,39 @@ fn validate_action_batch(
                 }
                 validate_workspace_relative_path(path, &target_root)
                     .map_err(|e| format!("edit.move_symbol path is invalid: {e}"))?;
+            }
+            "edit.add_import" => {
+                let Some(import) = action.action_payload.get("import").and_then(|v| v.as_str()) else {
+                    return Err("edit.add_import missing import payload".to_string());
+                };
+                let Some(path) = action.action_payload.get("path").and_then(|v| v.as_str()) else {
+                    return Err("edit.add_import missing path payload".to_string());
+                };
+                if import.trim().is_empty() {
+                    return Err("edit.add_import requires non-empty import path".to_string());
+                }
+                validate_workspace_relative_path(path, &target_root)
+                    .map_err(|e| format!("edit.add_import path is invalid: {e}"))?;
+            }
+            "edit.define_symbol_stub" => {
+                let Some(symbol) = action.action_payload.get("symbol").and_then(|v| v.as_str()) else {
+                    return Err("edit.define_symbol_stub missing symbol payload".to_string());
+                };
+                let Some(path) = action.action_payload.get("path").and_then(|v| v.as_str()) else {
+                    return Err("edit.define_symbol_stub missing path payload".to_string());
+                };
+                if symbol.trim().is_empty() {
+                    return Err("edit.define_symbol_stub requires non-empty symbol".to_string());
+                }
+                validate_workspace_relative_path(path, &target_root)
+                    .map_err(|e| format!("edit.define_symbol_stub path is invalid: {e}"))?;
+            }
+            "edit.create_module_file" => {
+                let Some(path) = action.action_payload.get("path").and_then(|v| v.as_str()) else {
+                    return Err("edit.create_module_file missing path payload".to_string());
+                };
+                validate_workspace_relative_path(path, &target_root)
+                    .map_err(|e| format!("edit.create_module_file path is invalid: {e}"))?;
             }
             "read_file" | "list_dir" | "write_file" | "patch_file" => {
                 let Some(path) = action.action_payload.get("path").and_then(|v| v.as_str()) else {
@@ -805,6 +927,11 @@ enum LlmAction {
     ApplyPatch { patch: String },
     ReadFile { path: String },
     ListDir { path: String },
+    AddImport { path: String, import: String },
+    DefineSymbolStub { path: String, symbol: String, kind: String },
+    CreateModuleFile { path: String, module: Option<String> },
+    MoveSymbol { path: String, symbol_id: String, new_module_path: String },
+    RenameSymbol { path: String, old: String, new: String },
 }
 
 #[derive(Clone)]
@@ -862,11 +989,23 @@ const PLANNER_SYSTEM_INSTRUCTIONS: &str = r#"You are a code-editing agent. Produ
    {"action":"edit.move_symbol","symbol_id":"crate::old_mod::Thing","new_module_path":"crate::new_mod","path":"src/old_mod.rs"}
    Use this for module-restructure / cohesion strategies driven by graph hotspots.
 
-6. run_command — run a shell command
+6. edit.add_import — add a semantic import to an existing Rust file
+   {"action":"edit.add_import","import":"crate::foo::Bar","path":"src/lib.rs"}
+   Use this for unresolved-import repairs before falling back to apply_patch.
+
+7. edit.define_symbol_stub — add a semantic stub for a missing symbol
+   {"action":"edit.define_symbol_stub","symbol":"run","kind":"fn","path":"src/lib.rs"}
+   Use this for missing-symbol repairs before falling back to apply_patch.
+
+8. edit.create_module_file — create a declared missing module file directly
+   {"action":"edit.create_module_file","module":"merge","path":"src/merge.rs"}
+   Use this for missing-module repairs before falling back to apply_patch.
+
+9. run_command — run a shell command
    {"action":"run_command","cmd":"cargo build","cwd":"<TARGET_WORKSPACE>"}
    cwd must be absolute. Use TARGET WORKSPACE (provided in context) or a subdir.
 
-7. done — declare goal complete
+10. done — declare goal complete
    {"action":"done","reason":"..."}
 
 ━━━ WORKFLOW ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -879,6 +1018,7 @@ Step 2 — Create/Edit (after seeing discovery results):
   Use apply_patch (*** Add File for new, *** Update File for existing).
   Use edit.rename_symbol for semantic duplicate-resolution renames when graph context supports it.
   Use edit.move_symbol for semantic module restructuring when graph hotspots indicate a better module boundary.
+  Use edit.add_import, edit.define_symbol_stub, and edit.create_module_file for localized semantic repairs before textual patching.
   Use run_command for cargo/shell operations.
   The "done" action must be the ONLY action in a batch, and only after verification has shown the goal is met.
 
@@ -926,6 +1066,7 @@ fn build_context_base(
     let semantic_planner_block = llm_semantic_context.render_planner_base_block();
     let planner_skill_block = build_planner_skill_block(llm_semantic_context);
     let graph_strategy_block = build_graph_strategy_block(llm_semantic_context);
+    let semantic_repair_block = build_semantic_repair_block(llm_semantic_context);
 
     let search_hints = build_search_hints(&goal_text, workspace);
     let workspace_tree = build_workspace_tree(std::path::Path::new(&target_workspace), 3, 0);
@@ -943,6 +1084,8 @@ fn build_context_base(
 
 {graph_strategy_block}
 
+{semantic_repair_block}
+
 ━━━ CONTEXT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Relevant files:{search_hints}
@@ -952,6 +1095,7 @@ Relevant files:{search_hints}
         semantic_planner_block = semantic_planner_block,
         planner_skill_block = planner_skill_block,
         graph_strategy_block = graph_strategy_block,
+        semantic_repair_block = semantic_repair_block,
         workspace_tree = workspace_tree,
         search_hints = search_hints,
         sub_agent_section = sub_agent_section,
@@ -1046,6 +1190,63 @@ fn build_graph_strategy_block(llm_semantic_context: &LlmSemanticContext) -> Stri
             }
         }
         _ => "Graph strategy hints:\n- none".to_string(),
+    }
+}
+
+fn build_semantic_repair_block(llm_semantic_context: &LlmSemanticContext) -> String {
+    let mut lines = Vec::new();
+    for gap in &llm_semantic_context.semantic_summary.module_gaps {
+        if let Some((module, path)) = gap.split_once(" -> ") {
+            lines.push(format!(
+                "- missing module `{}`\n  suggested action: {{\"action\":\"edit.create_module_file\",\"module\":\"{}\",\"path\":\"{}\"}}",
+                module.trim(),
+                module.trim(),
+                path.trim()
+            ));
+        }
+    }
+
+    for hint in &llm_semantic_context.semantic_summary.compiler_hints {
+        let Some(target) = hint.target_files.first() else {
+            continue;
+        };
+        match hint.kind_enum() {
+            Some(canon_semantic_state::CompilerHintKind::UnresolvedImport) => {
+                if let Some(import_path) = extract_backticked_symbol(&hint.summary) {
+                    lines.push(format!(
+                        "- unresolved import `{}`\n  suggested action: {{\"action\":\"edit.add_import\",\"import\":\"{}\",\"path\":\"{}\"}}",
+                        import_path, import_path, target
+                    ));
+                }
+            }
+            Some(canon_semantic_state::CompilerHintKind::MissingSymbol) => {
+                if let Some(symbol) = extract_backticked_symbol(&hint.summary) {
+                    lines.push(format!(
+                        "- missing symbol `{}`\n  suggested action: {{\"action\":\"edit.define_symbol_stub\",\"symbol\":\"{}\",\"kind\":\"fn\",\"path\":\"{}\"}}",
+                        symbol, symbol, target
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if lines.is_empty() {
+        "Semantic repair hints:\n- none".to_string()
+    } else {
+        format!("Semantic repair hints:\n{}", lines.join("\n"))
+    }
+}
+
+fn extract_backticked_symbol(text: &str) -> Option<String> {
+    let start = text.find('`')?;
+    let tail = &text[start + 1..];
+    let end = tail.find('`')?;
+    let value = tail[..end].trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
     }
 }
 
@@ -1502,6 +1703,67 @@ fn parse_value_to_action(value: serde_json::Value) -> Option<ActionPlan> {
                 let path = value.get("path").and_then(|v| v.as_str()).unwrap_or(".");
                 return Some(ActionPlan { action: LlmAction::ListDir { path: path.to_string() }, depends_on });
             }
+            "edit.rename_symbol" => {
+                let path = value.get("path").and_then(|v| v.as_str())?;
+                let old = value.get("old").and_then(|v| v.as_str())?;
+                let new = value.get("new").and_then(|v| v.as_str())?;
+                return Some(ActionPlan {
+                    action: LlmAction::RenameSymbol {
+                        path: path.to_string(),
+                        old: old.to_string(),
+                        new: new.to_string(),
+                    },
+                    depends_on,
+                });
+            }
+            "edit.move_symbol" => {
+                let path = value.get("path").and_then(|v| v.as_str())?;
+                let symbol_id = value.get("symbol_id").and_then(|v| v.as_str())?;
+                let new_module_path = value.get("new_module_path").and_then(|v| v.as_str())?;
+                return Some(ActionPlan {
+                    action: LlmAction::MoveSymbol {
+                        path: path.to_string(),
+                        symbol_id: symbol_id.to_string(),
+                        new_module_path: new_module_path.to_string(),
+                    },
+                    depends_on,
+                });
+            }
+            "edit.add_import" => {
+                let path = value.get("path").and_then(|v| v.as_str())?;
+                let import = value.get("import").and_then(|v| v.as_str())?;
+                return Some(ActionPlan {
+                    action: LlmAction::AddImport {
+                        path: path.to_string(),
+                        import: import.to_string(),
+                    },
+                    depends_on,
+                });
+            }
+            "edit.define_symbol_stub" => {
+                let path = value.get("path").and_then(|v| v.as_str())?;
+                let symbol = value.get("symbol").and_then(|v| v.as_str())?;
+                let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("fn");
+                return Some(ActionPlan {
+                    action: LlmAction::DefineSymbolStub {
+                        path: path.to_string(),
+                        symbol: symbol.to_string(),
+                        kind: kind.to_string(),
+                    },
+                    depends_on,
+                });
+            }
+            "edit.create_module_file" => {
+                let path = value.get("path").and_then(|v| v.as_str())?;
+                let module = value.get("module").and_then(|v| v.as_str()).map(ToString::to_string);
+                return Some(ActionPlan {
+                    action: LlmAction::CreateModuleFile {
+                        path: path.to_string(),
+                        module,
+                    },
+                    depends_on,
+                });
+            }
             _ => return None,
         }
     }
@@ -1533,7 +1795,7 @@ fn action_payload_with_cwd(cmd: String, cwd: Option<String>) -> serde_json::Valu
 
 #[cfg(test)]
 mod tests {
-    use super::{build_graph_strategy_block, validate_action_batch};
+    use super::{build_graph_strategy_block, build_semantic_repair_block, validate_action_batch};
     use canon_event::LoopPlanned;
     use canon_ir::{csr_graph::CsrGraph, CanonIR, CanonNodeKind};
     use canon_semantic_state::{
@@ -1881,5 +2143,41 @@ mod tests {
             canon_semantic_state::primary_development_strategy_kind(&objective_state, &trend, &summary),
             DevelopmentStrategyKind::PlanSymbolAwareRename
         );
+    }
+
+    #[test]
+    fn semantic_repair_block_prefers_editor_actions_for_local_repairs() {
+        let workspace = temp_workspace();
+        let semantic_summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some(workspace.display().to_string()),
+            path_exists: true,
+            cargo_project: true,
+            module_gaps: vec!["merge -> src/merge.rs".into()],
+            compiler_hints: vec![
+                CompilerHintRecord::new(
+                    CompilerHintKind::UnresolvedImport,
+                    "compiler reports unresolved import `crate::foo`",
+                    "add import",
+                    vec!["src/lib.rs".into()],
+                ),
+                CompilerHintRecord::new(
+                    CompilerHintKind::MissingSymbol,
+                    "compiler cannot find `run` in scope",
+                    "define symbol",
+                    vec!["src/main.rs".into()],
+                ),
+            ],
+            ..SemanticStateSummary::default()
+        };
+        let block = build_semantic_repair_block(&context_for_strategy(
+            &workspace,
+            semantic_summary,
+            ObjectiveTrendState::default(),
+        ));
+        assert!(block.contains("\"action\":\"edit.create_module_file\""));
+        assert!(block.contains("\"action\":\"edit.add_import\""));
+        assert!(block.contains("\"action\":\"edit.define_symbol_stub\""));
+        let _ = fs::remove_dir_all(workspace);
     }
 }

@@ -151,7 +151,14 @@ impl RetryPolicy {
 pub fn classify_action(action_kind: &str, stdout: &str, stderr: &str) -> CommandClass {
     match action_kind {
         "list_dir" | "read_file" | "search_files" => CommandClass::Discovery,
-        "apply_patch" | "write_file" | "patch_file" | "edit.rename_symbol" | "edit.move_symbol" => CommandClass::Edit,
+        "apply_patch"
+        | "write_file"
+        | "patch_file"
+        | "edit.rename_symbol"
+        | "edit.move_symbol"
+        | "edit.add_import"
+        | "edit.define_symbol_stub"
+        | "edit.create_module_file" => CommandClass::Edit,
         "done" => CommandClass::Completion,
         "run_command" if is_bootstrap_command_output(stdout, stderr) => CommandClass::Bootstrap,
         "run_command" => CommandClass::Validation,
@@ -167,7 +174,12 @@ pub fn classify_action_outcome(action_kind: &str, success: bool, stdout: &str, s
         "run_command" if success => ActionOutcomeClass::ValidationSuccess,
         "run_command" if looks_like_compiler_failure(text) => ActionOutcomeClass::ValidationFailureCompiler,
         "run_command" if looks_semantically_failed(text) => ActionOutcomeClass::SemanticFailure,
-        "apply_patch" | "edit.rename_symbol" | "edit.move_symbol" if success => ActionOutcomeClass::EditSuccess,
+        "apply_patch"
+        | "edit.rename_symbol"
+        | "edit.move_symbol"
+        | "edit.add_import"
+        | "edit.define_symbol_stub"
+        | "edit.create_module_file" if success => ActionOutcomeClass::EditSuccess,
         "apply_patch" if text.contains("No such file or directory") || text.contains("Failed to read file to update") => {
             ActionOutcomeClass::PatchMissingTargetFile
         }

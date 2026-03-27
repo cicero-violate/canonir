@@ -695,6 +695,45 @@ fn classify_action_intents(
         return;
     }
 
+    if action.action_kind == "edit.add_import" {
+        if let Some(path) = action
+            .action_payload
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+        {
+            let normalized = if path.is_absolute() { path } else { target_root.join(path) };
+            out.push(ActionIntent::FixUnresolvedImport(normalized));
+        }
+        return;
+    }
+
+    if action.action_kind == "edit.define_symbol_stub" {
+        if let Some(path) = action
+            .action_payload
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+        {
+            let normalized = if path.is_absolute() { path } else { target_root.join(path) };
+            out.push(ActionIntent::DefineMissingSymbol(normalized));
+        }
+        return;
+    }
+
+    if action.action_kind == "edit.create_module_file" {
+        if let Some(path) = action
+            .action_payload
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+        {
+            let normalized = if path.is_absolute() { path } else { target_root.join(path) };
+            out.push(ActionIntent::CreateModuleFile(normalized));
+        }
+        return;
+    }
+
     let touched = normalized_touched_paths(action, target_root);
     let created = normalized_created_paths(action, target_root);
     let patch = action
@@ -1106,6 +1145,73 @@ mod tests {
         }
     }
 
+    fn planned_add_import(path: &str) -> canon_event::LoopPlanned {
+        canon_event::LoopPlanned {
+            tick: 0,
+            action_kind: "edit.add_import".to_string(),
+            action_payload: serde_json::json!({
+                "import": "crate::foo",
+                "path": path,
+            }),
+            reason: String::new(),
+            llm_request_id: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            signals: None,
+            depends_on: Vec::new(),
+        }
+    }
+
+    fn planned_define_symbol_stub(path: &str) -> canon_event::LoopPlanned {
+        canon_event::LoopPlanned {
+            tick: 0,
+            action_kind: "edit.define_symbol_stub".to_string(),
+            action_payload: serde_json::json!({
+                "symbol": "run",
+                "kind": "fn",
+                "path": path,
+            }),
+            reason: String::new(),
+            llm_request_id: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            signals: None,
+            depends_on: Vec::new(),
+        }
+    }
+
+    fn planned_create_module_file(path: &str) -> canon_event::LoopPlanned {
+        canon_event::LoopPlanned {
+            tick: 0,
+            action_kind: "edit.create_module_file".to_string(),
+            action_payload: serde_json::json!({
+                "module": "index",
+                "path": path,
+            }),
+            reason: String::new(),
+            llm_request_id: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            signals: None,
+            depends_on: Vec::new(),
+        }
+    }
+
     #[test]
     fn derives_workspace_preconditions() {
         let model = WorkspaceModel {
@@ -1223,6 +1329,24 @@ mod tests {
     }
 
     #[test]
+    fn accepts_missing_module_semantic_create_module_file() {
+        let actions = vec![planned_create_module_file("src/index.rs")];
+        let summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some("/tmp/example".into()),
+            module_gaps: vec!["index -> src/index.rs".into()],
+            ..SemanticStateSummary::default()
+        };
+        let result = validate_preconditions(
+            &actions,
+            Path::new("/tmp/example"),
+            &[PlanningPrecondition::MustCreateMissingModules],
+            &summary,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn repair_intents_preserve_priority_order() {
         let intents = super::derive_repair_intents(&[
             PlanningPrecondition::MustBootstrapWorkspace,
@@ -1257,6 +1381,29 @@ mod tests {
     #[test]
     fn accepts_unresolved_import_repair_that_targets_expected_file() {
         let actions = vec![planned_import_patch("src/lib.rs")];
+        let summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some("/tmp/example".into()),
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::UnresolvedImport,
+                "compiler reports unresolved import `crate::foo`",
+                "fix the import",
+                vec!["src/lib.rs".into()],
+            )],
+            ..SemanticStateSummary::default()
+        };
+        let result = validate_preconditions(
+            &actions,
+            Path::new("/tmp/example"),
+            &[PlanningPrecondition::MustFixUnresolvedImport],
+            &summary,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn accepts_unresolved_import_semantic_add_import() {
+        let actions = vec![planned_add_import("src/lib.rs")];
         let summary = SemanticStateSummary {
             complete: true,
             target_root: Some("/tmp/example".into()),
@@ -1349,6 +1496,29 @@ mod tests {
     #[test]
     fn accepts_missing_symbol_repair_that_targets_expected_file() {
         let actions = vec![planned_apply_patch("src/main.rs")];
+        let summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some("/tmp/example".into()),
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::MissingSymbol,
+                "compiler cannot find `run` in scope",
+                "define or import the missing symbol",
+                vec!["src/main.rs".into()],
+            )],
+            ..SemanticStateSummary::default()
+        };
+        let result = validate_preconditions(
+            &actions,
+            Path::new("/tmp/example"),
+            &[PlanningPrecondition::MustDefineMissingSymbol],
+            &summary,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn accepts_missing_symbol_semantic_stub() {
+        let actions = vec![planned_define_symbol_stub("src/main.rs")];
         let summary = SemanticStateSummary {
             complete: true,
             target_root: Some("/tmp/example".into()),

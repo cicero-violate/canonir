@@ -12,6 +12,7 @@ pub mod verify;
 
 use std::path::Path;
 use std::sync::Arc;
+use std::fs as stdfs;
 
 use anyhow::anyhow;
 
@@ -152,6 +153,51 @@ pub fn restructure_modules_from_latest_graph(project: &Path, limit: usize) -> Re
     }
 }
 
+pub fn add_import_paths(project: &Path, imports: &[(String, String)]) -> RenameRunReport {
+    let mut report = RenameRunReport::default();
+    for (path, import_path) in imports {
+        let full_path = project.join(path);
+        if let Err(err) = add_import_path(&full_path, import_path) {
+            report.error = Some(format!("{err:?}"));
+            return report;
+        }
+        report.def_paths.push(path.clone());
+    }
+    report
+}
+
+pub fn define_symbol_stubs(
+    project: &Path,
+    stubs: &[(String, String, String)],
+) -> RenameRunReport {
+    let mut report = RenameRunReport::default();
+    for (path, symbol, kind) in stubs {
+        let full_path = project.join(path);
+        if let Err(err) = define_symbol_stub(&full_path, symbol, kind) {
+            report.error = Some(format!("{err:?}"));
+            return report;
+        }
+        report.def_paths.push(path.clone());
+    }
+    report
+}
+
+pub fn create_module_files(
+    project: &Path,
+    modules: &[(String, Option<String>)],
+) -> RenameRunReport {
+    let mut report = RenameRunReport::default();
+    for (path, module_name) in modules {
+        let full_path = project.join(path);
+        if let Err(err) = create_module_file(&full_path, module_name.as_deref()) {
+            report.error = Some(format!("{err:?}"));
+            return report;
+        }
+        report.def_paths.push(path.clone());
+    }
+    report
+}
+
 pub fn rename_symbol_pairs_with_session(project: &Path, session: Arc<SymbolIndex>, renames: &[(String, String)]) -> RenameRunReport {
     let mut report = RenameRunReport::default();
     let mut editor = match ProjectEditor::load_with_session(project, session) {
@@ -194,4 +240,131 @@ pub fn rename_symbol_pairs_with_session(project: &Path, session: Arc<SymbolIndex
     }
 
     report
+}
+
+fn add_import_path(file_path: &Path, import_path: &str) -> anyhow::Result<()> {
+    let mut content = stdfs::read_to_string(file_path)?;
+    let import_line = format!("use {import_path};");
+    if content.lines().any(|line| line.trim() == import_line) {
+        return Ok(());
+    }
+    let parsed = syn::parse_str::<syn::ItemUse>(&import_line)?;
+    let rendered = prettyplease::unparse(&syn::File {
+        shebang: None,
+        attrs: Vec::new(),
+        items: vec![syn::Item::Use(parsed)],
+    });
+    let insert_at = import_insertion_offset(&content);
+    content.insert_str(insert_at, &(rendered + "\n"));
+    stdfs::write(file_path, content)?;
+    Ok(())
+}
+
+fn define_symbol_stub(file_path: &Path, symbol: &str, kind: &str) -> anyhow::Result<()> {
+    let mut content = stdfs::read_to_string(file_path)?;
+    if content.contains(&format!("fn {symbol}"))
+        || content.contains(&format!("struct {symbol}"))
+        || content.contains(&format!("enum {symbol}"))
+        || content.contains(&format!("trait {symbol}"))
+        || content.contains(&format!("type {symbol}"))
+        || content.contains(&format!("const {symbol}"))
+    {
+        return Ok(());
+    }
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push('\n');
+    content.push_str(&stub_for_symbol(symbol, kind));
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+    stdfs::write(file_path, content)?;
+    Ok(())
+}
+
+fn create_module_file(file_path: &Path, module_name: Option<&str>) -> anyhow::Result<()> {
+    if file_path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = file_path.parent() {
+        stdfs::create_dir_all(parent)?;
+    }
+    let module_name = module_name
+        .or_else(|| file_path.file_stem().and_then(|stem| stem.to_str()))
+        .unwrap_or("module");
+    let content = format!("// module: {module_name}\n");
+    stdfs::write(file_path, content)?;
+    Ok(())
+}
+
+fn import_insertion_offset(content: &str) -> usize {
+    let mut offset = 0usize;
+    for line in content.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if trimmed.starts_with("#!") || trimmed.is_empty() {
+            offset += line.len();
+            continue;
+        }
+        break;
+    }
+    offset
+}
+
+fn stub_for_symbol(symbol: &str, kind: &str) -> String {
+    match kind {
+        "struct" => format!("pub struct {symbol};\n"),
+        "enum" => format!("pub enum {symbol} {{\n    Todo,\n}}\n"),
+        "trait" => format!("pub trait {symbol} {{}}\n"),
+        "type" => format!("pub type {symbol} = ();\n"),
+        "const" => format!("pub const {symbol}: () = ();\n"),
+        _ => format!("pub fn {symbol}() {{\n    todo!()\n}}\n"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{add_import_paths, create_module_files, define_symbol_stubs};
+    use std::fs;
+
+    #[test]
+    fn add_import_paths_inserts_use_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("lib.rs");
+        fs::write(&file, "#![allow(unused)]\n\npub fn run() {}\n").unwrap();
+        let report = add_import_paths(dir.path(), &[("src/lib.rs".into(), "crate::cli::Cli".into())]);
+        assert!(report.error.is_none());
+        let updated = fs::read_to_string(file).unwrap();
+        assert!(updated.contains("use crate::cli::Cli;"));
+    }
+
+    #[test]
+    fn define_symbol_stubs_appends_function_stub() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("lib.rs");
+        fs::write(&file, "pub fn existing() {}\n").unwrap();
+        let report = define_symbol_stubs(
+            dir.path(),
+            &[("src/lib.rs".into(), "run".into(), "fn".into())],
+        );
+        assert!(report.error.is_none());
+        let updated = fs::read_to_string(file).unwrap();
+        assert!(updated.contains("pub fn run()"));
+    }
+
+    #[test]
+    fn create_module_files_writes_missing_module() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = create_module_files(
+            dir.path(),
+            &[("src/merge.rs".into(), Some("merge".into()))],
+        );
+        assert!(report.error.is_none());
+        let created = fs::read_to_string(dir.path().join("src/merge.rs")).unwrap();
+        assert!(created.contains("module: merge"));
+    }
 }
