@@ -1157,7 +1157,10 @@ mod tests {
                 state.batch == FirstBatchCategory::CargoInit
             }
             Some(PlanningPrecondition::MustCreateEntrypoint) => {
-                state.batch == FirstBatchCategory::EntrypointEdit
+                matches!(
+                    state.batch,
+                    FirstBatchCategory::EntrypointEdit | FirstBatchCategory::HintTargetEdit
+                )
             }
             Some(PlanningPrecondition::MustCreateMissingModules) => {
                 state.batch == FirstBatchCategory::ModuleEdit
