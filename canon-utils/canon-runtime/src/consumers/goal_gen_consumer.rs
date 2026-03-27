@@ -8,6 +8,7 @@ use canon_semantic_state::{
 };
 use canon_skills::global_registry;
 use uuid::Uuid;
+use crate::consumers::harness_repair_mode::harness_repair_mode_enabled;
 
 const AGENT_GOAL_PATH: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts/AGENT_GOAL.md";
 const GOALGEN_PROJECTS_DIR: &str = "/workspace/ai_sandbox/canon/test_projects/goalgen";
@@ -67,6 +68,9 @@ impl EventConsumer for GoalGenConsumer {
 
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
+        if harness_repair_mode_enabled() {
+            return EventOutcome::NoOp("goal_gen_suppressed_for_harness_repair");
+        }
         match (&self.state, event) {
             (State::Waiting, RuntimeEvent::PromptLoaded(p)) => {
                 let content = p.payload.get("content").and_then(|v| v.as_str()).unwrap_or("");

@@ -1,6 +1,7 @@
 use crate::stage::observe;
 use crate::{
     context::LoopContext,
+    harness_repair::{evaluate_harness_repair_loop, HarnessRepairDecision},
     policy::{
         classify_action_outcome, evaluate_loop_runtime, evaluate_loop_transition, evaluate_recovery_event,
         evaluate_recovery_execution, evaluate_error_observe, evaluate_bootstrap_effects,
@@ -38,6 +39,19 @@ impl LoopStageExecutor {
     pub fn with_agent_id(mut self, id: String) -> Self {
         self.ctx.agent_id = Some(id);
         self
+    }
+
+    pub fn evaluate_harness_repair(&self) -> HarnessRepairDecision {
+        evaluate_harness_repair_loop(&self.ctx.harness_repair_state())
+    }
+
+    pub fn evaluate_harness_repair_for_target(
+        &mut self,
+        target: &crate::harness_repair::HarnessRepairTarget,
+        failure_output: &str,
+    ) -> crate::harness_repair::HarnessRepairDirective {
+        self.ctx.prime_harness_repair_target(target, failure_output);
+        crate::harness_repair::build_harness_repair_directive(&self.ctx.harness_repair_state(), target)
     }
 
     fn record_control_state(&mut self, event: &RuntimeEvent, trigger_id: &EventId) {

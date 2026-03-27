@@ -2,6 +2,7 @@ pub mod context;
 pub mod compiler_hints;
 pub mod env_model;
 pub mod exec_constraints;
+pub mod harness_repair;
 pub mod planning_preconditions;
 pub mod policy;
 pub mod result;
@@ -15,5 +16,10 @@ mod tests_env_model;
 
 pub use context::LoopContext;
 pub use executor::LoopStageExecutor;
+pub use harness_repair::{
+    build_harness_repair_directive, evaluate_harness_repair_loop, HarnessRepairAction,
+    HarnessRepairDecision, HarnessRepairDirective, HarnessRepairPhase, HarnessRepairState,
+    HarnessRepairTarget,
+};
 pub use result::LoopStageResult;
 pub use stage::LoopStageEvent;

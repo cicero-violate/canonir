@@ -8,4 +8,6 @@ pub mod error_logger;
 pub mod failure_store;
 pub mod goal_gen_consumer;
 pub mod goal_graph_consumer;
+pub mod harness_repair_consumer;
+pub mod harness_repair_mode;
 pub mod watchdog_consumer;

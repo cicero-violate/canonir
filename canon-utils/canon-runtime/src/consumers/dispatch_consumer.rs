@@ -168,7 +168,7 @@ fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_
     runtime.set_tlog_path(tlog);
 
     // Prime the sub-agent with its goal inside the sub-agent runtime, not the parent bus.
-    let _ = runtime.emit_event(RuntimeEvent::LoopObserved(LoopObserved {
+    let _ = runtime.emit_event_with_parents(RuntimeEvent::LoopObserved(LoopObserved {
             tick: 0,
             goal_text: Some(req.task_prompt.clone()),
             error_count: 0,
@@ -176,7 +176,7 @@ fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_
             compiler_errors: vec![],
             semantic_summary: canon_semantic_state::SemanticStateSummary::default(),
             observe_diagnostics: vec![],
-        }));
+        }), vec![trigger_id.clone()], file!(), line!());
 
     let deadline = Instant::now() + Duration::from_secs(SUB_AGENT_TIMEOUT_SECS);
     while !halted.load(Ordering::Relaxed) && Instant::now() < deadline {

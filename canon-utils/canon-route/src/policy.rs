@@ -252,20 +252,41 @@ impl RoutePolicyRule {
     }
 }
 
+fn has_explicit_missing_target(ctx: &RouteContext) -> bool {
+    ctx.semantic_summary.target_root.is_some() && ctx.target_workspace_missing_state()
+}
+
 fn route_constraint_state(ctx: &RouteContext) -> ConstraintState {
+    let has_semantic_target_state = ctx.semantic_summary.complete || ctx.semantic_summary.target_root.is_some();
     let (real_path_exists, real_cargo_project) = ctx
         .semantic_summary
         .target_root
         .as_deref()
         .map(Path::new)
         .map(|root| (root.exists(), root.join("Cargo.toml").exists()))
-        .unwrap_or((
-            ctx.semantic_summary.path_exists,
-            ctx.semantic_summary.cargo_project,
-        ));
+        .unwrap_or_else(|| {
+            if has_explicit_missing_target(ctx) {
+                (
+                    ctx.semantic_summary.path_exists,
+                    ctx.semantic_summary.cargo_project,
+                )
+            } else {
+                (true, ctx.semantic_summary.cargo_project)
+            }
+        });
+    let semantic_path_exists = if has_semantic_target_state {
+        ctx.semantic_summary.path_exists
+    } else {
+        real_path_exists
+    };
+    let semantic_cargo_project = if has_semantic_target_state {
+        ctx.semantic_summary.cargo_project
+    } else {
+        real_cargo_project
+    };
     ConstraintState {
-        semantic_path_exists: ctx.semantic_summary.path_exists,
-        semantic_cargo_project: ctx.semantic_summary.cargo_project,
+        semantic_path_exists,
+        semantic_cargo_project,
         real_path_exists,
         real_cargo_project,
         actionable_failure: has_actionable_failure(ctx),
@@ -345,9 +366,7 @@ fn route_to_constraint(route: RouteKind) -> ConstraintRoute {
 
 fn route_choice_contradicts_objective(ctx: &RouteContext, lane: RouteKind) -> bool {
     matches!(lane, RouteKind::Verify | RouteKind::Conclude)
-        && (ctx.validation_blocked_state()
-            || ctx.compiler_repair_required_state()
-            || !ctx.planning_preconditions_state().is_empty()
+        && (ctx.compiler_repair_required_state()
             || ctx.objective_state().repair_pressure_score() > 0
             || ctx.objective_state().misalignment_pressure_score > 0
             || (ctx.objective_trend_state.repeated_stall_count > 0
@@ -490,7 +509,7 @@ fn dispatch_route_proposal(ctx: &RouteContext) -> Option<RouteProposal> {
     if ctx.planned_pending == 0 && workspace_state_drift_detected(&ctx.semantic_summary) {
         return Some(RouteProposal::StateDriftObserve);
     }
-    if ctx.target_workspace_missing_state() && ctx.planned_pending == 0 {
+    if has_explicit_missing_target(ctx) && ctx.planned_pending == 0 {
         return Some(RouteProposal::MissingTargetPlan);
     }
     if ctx.planned_pending == 0 && ctx.validation_blocked_state() {
@@ -831,21 +850,28 @@ pub fn evaluate_route_transition(
     let mut rules = Vec::new();
     if deterministic.is_none() {
         if let Some(decision) = decision {
+            let mut has_primary_transition_rule = false;
+            let cycle_cap_rule = cycle_cap_fallback_lane(ctx, decision).map(|fallback_lane| {
+                if fallback_lane == RouteKind::Plan {
+                    RoutePolicyRule::CycleCapToPlan
+                } else {
+                    RoutePolicyRule::CycleCapToObserve
+                }
+            });
             if decision.lane == RouteKind::Observe
                 && state.pending_required_successor == Some("route_selected")
                 && state.last_control_kind == Some("loop_observed")
             {
                 rules.push(RoutePolicyRule::ForcePlanOnRepeatedObserve);
+                has_primary_transition_rule = true;
             }
-            if let Some(rule) = shared_route_policy_rule(ctx, decision) {
+            if !has_primary_transition_rule && cycle_cap_rule.is_none() {
+                if let Some(rule) = shared_route_policy_rule(ctx, decision) {
+                    rules.push(rule);
+                }
+            }
+            if let Some(rule) = cycle_cap_rule {
                 rules.push(rule);
-            }
-            if let Some(fallback_lane) = cycle_cap_fallback_lane(ctx, decision) {
-                rules.push(if fallback_lane == RouteKind::Plan {
-                    RoutePolicyRule::CycleCapToPlan
-                } else {
-                    RoutePolicyRule::CycleCapToObserve
-                });
             }
         }
     }
@@ -863,16 +889,21 @@ fn shared_route_policy_rule(
         deterministic_route: None,
     });
     match eval {
-        ConstraintDecision::RewriteRoute(ConstraintRoute::Plan, _) => {
+        ConstraintDecision::RewriteRoute(ConstraintRoute::Plan, reason) => {
             let state = route_constraint_state(ctx);
-            if !state.real_path_exists {
+            if reason.contains("target workspace is missing") && has_explicit_missing_target(ctx) {
                 Some(RoutePolicyRule::ForcePlanOnMissingTarget)
+            } else if reason.contains("validation")
+                || reason.contains("required files are still missing")
+                || reason.contains("repair work remains")
+            {
+                Some(RoutePolicyRule::ForcePlanOnBlockedValidation)
             } else if state.route_objective_contradiction
                 && matches!(decision.lane, RouteKind::Verify | RouteKind::Conclude)
             {
                 Some(RoutePolicyRule::ForcePlanOnObjectiveContradiction)
             } else {
-                Some(RoutePolicyRule::ForcePlanOnBlockedValidation)
+                None
             }
         }
         _ => None,
@@ -883,6 +914,24 @@ fn apply_shared_route_constraint(
     ctx: &RouteContext,
     decision: DeterministicRouteDecision,
 ) -> Option<DeterministicRouteDecision> {
+    if matches!(decision.rule, DeterministicRouteRule::SemanticProgressVerify)
+        && !ctx.validation_blocked_state()
+        && ctx.semantic_summary.module_gaps.is_empty()
+        && !has_explicit_missing_target(ctx)
+        && !route_choice_contradicts_objective(ctx, RouteKind::Verify)
+    {
+        return Some(decision);
+    }
+    if matches!(
+        decision.rule,
+        DeterministicRouteRule::BootstrapRefreshObserve
+            | DeterministicRouteRule::DoneVerify
+            | DeterministicRouteRule::ContinueAct
+            | DeterministicRouteRule::PlannedToAct
+            | DeterministicRouteRule::MissingObservedContextObserve
+    ) {
+        return Some(decision);
+    }
     let real_path_exists = route_constraint_state(ctx).real_path_exists;
     match evaluate_constraint_context(&ConstraintContext {
         state: route_constraint_state(ctx),
@@ -919,10 +968,14 @@ fn apply_shared_route_constraint(
             confidence: 0.99,
             prompt_tag: "deterministic:constraint_plan",
             noop_reason: "route_executor_constraint_plan",
-            rule: if !real_path_exists {
+            rule: if reason.contains("target workspace is missing") && has_explicit_missing_target(ctx) && !real_path_exists {
                 DeterministicRouteRule::MissingTargetPlan
             } else if reason.contains("objective") {
                 DeterministicRouteRule::InvalidPlanReplan
+            } else if reason.contains("required files are still missing")
+                || reason.contains("repair work remains")
+            {
+                DeterministicRouteRule::BlockedValidationPlan
             } else {
                 DeterministicRouteRule::NoSemanticProgressPlan
             },

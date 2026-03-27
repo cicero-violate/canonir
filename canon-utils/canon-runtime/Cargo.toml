@@ -23,6 +23,11 @@ name = "llm_smoke_test"
 path = "src/bin/llm_smoke_test.rs"
 test = false
 
+[[bin]]
+name = "canon-harness-repair"
+path = "src/bin/harness_repair.rs"
+test = false
+
 [dependencies]
 anyhow = { workspace = true }
 canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }

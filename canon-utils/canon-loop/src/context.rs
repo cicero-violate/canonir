@@ -1,4 +1,5 @@
 use crate::merge::{ContextMerger, FileWriteTracker, WorkspaceDirtyTracker};
+use crate::harness_repair::{HarnessRepairState, HarnessRepairTarget};
 use crate::scheduler::{DependencyTracker, Scheduler};
 use canon_event::{EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, LoopVerified, ToolResult};
 use canon_semantic_state::{ObjectiveTrendState, SemanticActionIntent, SemanticExecutionResultRecord};
@@ -240,6 +241,38 @@ impl LoopContext {
             last_observed_goal_hash: 0,
             last_observed_facts_hash: 0,
             current_tick: 0,
+        }
+    }
+
+    pub fn harness_repair_state(&self) -> HarnessRepairState {
+        HarnessRepairState::from_loop_context(self)
+    }
+
+    pub fn prime_harness_repair_target(&mut self, target: &HarnessRepairTarget, failure_output: &str) {
+        self.goal_text = Some(match (&target.crate_name, &target.failing_test) {
+            (Some(crate_name), Some(test_name)) => {
+                format!("repair harness failure in crate `{crate_name}` for test `{test_name}`")
+            }
+            (Some(crate_name), None) => format!("repair harness failure in crate `{crate_name}`"),
+            (None, Some(test_name)) => format!("repair harness failure for test `{test_name}`"),
+            (None, None) => "repair harness failure".to_string(),
+        });
+        let (failure_class, failure_scope) = crate::compiler_hints::classify_failure_metadata(failure_output);
+        if self.last_observed.is_none() {
+            self.last_observed = Some(canon_event::LoopObserved {
+                tick: self.current_tick,
+                error_count: 0,
+                warning_count: 0,
+                compiler_errors: Vec::new(),
+                goal_text: self.goal_text.clone(),
+                semantic_summary: canon_semantic_state::SemanticStateSummary::default(),
+                observe_diagnostics: Vec::new(),
+            });
+        }
+        if let Some(observed) = self.last_observed.as_mut() {
+            observed.semantic_summary.complete = true;
+            observed.semantic_summary.failure_class = Some(failure_class.as_str().to_string());
+            observed.semantic_summary.failure_scope = Some(failure_scope.as_str().to_string());
         }
     }
 }

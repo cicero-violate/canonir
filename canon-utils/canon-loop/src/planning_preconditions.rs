@@ -391,6 +391,8 @@ fn effective_actionable_failure(semantic_summary: &SemanticStateSummary) -> bool
         || semantic_summary.compiler_repair_required
         || !semantic_summary.planning_preconditions.is_empty()
         || !semantic_summary.module_gaps.is_empty()
+        || matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
+            && semantic_summary.cargo_project
         || semantic_summary.has_actionable_compiler_hints()
         || semantic_summary
             .primary_failure_class()
@@ -401,10 +403,23 @@ fn effective_actionable_failure(semantic_summary: &SemanticStateSummary) -> bool
 fn effective_failure_scope_flags(semantic_summary: &SemanticStateSummary) -> (bool, bool, bool) {
     let localized = semantic_summary.failure_scope.as_deref() == Some("localized")
         || !semantic_summary.module_gaps.is_empty()
+        || (matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
+            && semantic_summary.cargo_project)
         || has_targeted_localized_hint(semantic_summary);
     let workspace = semantic_summary.failure_scope.as_deref() == Some("workspace");
     let tooling = semantic_summary.failure_scope.as_deref() == Some("tooling");
     (localized, workspace, tooling)
+}
+
+fn planner_workspace_presence(
+    target_root: &Path,
+    semantic_summary: &SemanticStateSummary,
+) -> (bool, bool) {
+    if target_root.exists() {
+        (true, target_root.join("Cargo.toml").exists())
+    } else {
+        (semantic_summary.path_exists, semantic_summary.cargo_project)
+    }
 }
 
 fn validate_validation_action_constraints(
@@ -417,12 +432,14 @@ fn validate_validation_action_constraints(
     }
     let (failure_scope_localized, failure_scope_workspace, failure_scope_tooling) =
         effective_failure_scope_flags(semantic_summary);
+    let (real_path_exists, real_cargo_project) =
+        planner_workspace_presence(target_root, semantic_summary);
     match evaluate_constraint_context(&ConstraintContext {
         state: ConstraintState {
             semantic_path_exists: semantic_summary.path_exists,
             semantic_cargo_project: semantic_summary.cargo_project,
-            real_path_exists: target_root.exists(),
-            real_cargo_project: target_root.join("Cargo.toml").exists(),
+            real_path_exists,
+            real_cargo_project,
             actionable_failure: effective_actionable_failure(semantic_summary),
             validation_blocked: semantic_summary.validation_blocked_by_preconditions,
             entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
@@ -991,11 +1008,13 @@ fn validate_repair_action_legality(
 ) -> Result<(), String> {
     let (failure_scope_localized, failure_scope_workspace, failure_scope_tooling) =
         effective_failure_scope_flags(semantic_summary);
+    let (real_path_exists, real_cargo_project) =
+        planner_workspace_presence(target_root, semantic_summary);
     let state = ConstraintState {
         semantic_path_exists: semantic_summary.path_exists,
         semantic_cargo_project: semantic_summary.cargo_project,
-        real_path_exists: target_root.exists(),
-        real_cargo_project: target_root.join("Cargo.toml").exists(),
+        real_path_exists,
+        real_cargo_project,
         actionable_failure: effective_actionable_failure(semantic_summary),
         validation_blocked: semantic_summary.validation_blocked_by_preconditions,
         entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)

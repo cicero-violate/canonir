@@ -16,6 +16,8 @@ use canon_runtime::consumers::dispatch_consumer::DispatchConsumer;
 use canon_runtime::consumers::error_logger::ErrorLogger;
 use canon_runtime::consumers::goal_gen_consumer::GoalGenConsumer;
 use canon_runtime::consumers::goal_graph_consumer::GoalGraphConsumer;
+use canon_runtime::consumers::harness_repair_consumer::HarnessRepairConsumer;
+use canon_runtime::consumers::harness_repair_mode::harness_repair_mode_enabled;
 use canon_runtime::consumers::watchdog_consumer::WatchdogConsumer;
 use canon_runtime::hooks::{AuditLogHook, CapabilityRateLimitHook, CostCapHook, HookChain};
 use canon_runtime::{spawn_kernel_processor, EventRuntime, KernelMsg};
@@ -253,8 +255,8 @@ fn main() -> Result<()> {
     }
 
     let agent_registry = AgentRegistryHandle::default();
+    let harness_mode = harness_repair_mode_enabled();
     let mut consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
-        Box::new(GoalGenConsumer::new(tlog_path.clone())),
         Box::new(AnalystConsumer::new(tlog_path.clone())),
         Box::new(LoopStageExecutor::new(workspace.clone(), tlog_path.clone()).with_agent_id("planner_chatgpt_group".to_string())),
         Box::new(RouteExecutor::new(workspace.clone())),
@@ -264,8 +266,12 @@ fn main() -> Result<()> {
         Box::new(AgentRegistryConsumer::new(agent_registry.clone())),
         Box::new(DispatchConsumer::new()),
         Box::new(GoalGraphConsumer::new()),
+        Box::new(HarnessRepairConsumer::new(workspace.clone(), tlog_path.clone())),
         Box::new(WatchdogConsumer::new()),
     ];
+    if !harness_mode {
+        consumers.insert(0, Box::new(GoalGenConsumer::new(tlog_path.clone())));
+    }
     // Goodness consumer logs metrics and emits GoodnessSnapshot on LoopVerified.
     let goodness_root = tlog_path.parent().map(|p| p.to_path_buf());
     consumers.push(Box::new(canon_goodness::GoodnessConsumer::new(goodness_root)));
@@ -300,7 +306,6 @@ fn main() -> Result<()> {
         let goal_content = std::fs::read_to_string(AGENT_GOAL_PATH).unwrap_or_else(|_| "# goal-pending\n".to_string());
         runtime.emit_event(runtime_goal_prompt_loaded(&goal_content)).ok();
     }
-
     // Read events that already exist in L at startup (in-memory after this point).
     let bootstrap_events: Vec<AnyEvent> = if tlog_path.exists() { read_any_events_from_path_with_start_seq(&tlog_path, start_seq).unwrap_or_default() } else { vec![] };
 

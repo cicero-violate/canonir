@@ -107,6 +107,69 @@ pub enum ConstraintDecision {
     RewriteAction(ConstraintAction, &'static str),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HarnessPrimitiveCapability {
+    ReadSearch,
+    StructuredEdit,
+    ApplyPatch,
+    RunVerifier,
+    ObserveDiagnostics,
+}
+
+impl HarnessPrimitiveCapability {
+    pub const MINIMAL_SELF_REPAIR_SET: [Self; 5] = [
+        Self::ReadSearch,
+        Self::StructuredEdit,
+        Self::ApplyPatch,
+        Self::RunVerifier,
+        Self::ObserveDiagnostics,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadSearch => "read_search",
+            Self::StructuredEdit => "structured_edit",
+            Self::ApplyPatch => "apply_patch",
+            Self::RunVerifier => "run_verifier",
+            Self::ObserveDiagnostics => "observe_diagnostics",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HarnessCapabilityState {
+    pub read_search: bool,
+    pub structured_edit: bool,
+    pub apply_patch: bool,
+    pub run_verifier: bool,
+    pub observe_diagnostics: bool,
+}
+
+impl HarnessCapabilityState {
+    pub fn has(self, capability: HarnessPrimitiveCapability) -> bool {
+        match capability {
+            HarnessPrimitiveCapability::ReadSearch => self.read_search,
+            HarnessPrimitiveCapability::StructuredEdit => self.structured_edit,
+            HarnessPrimitiveCapability::ApplyPatch => self.apply_patch,
+            HarnessPrimitiveCapability::RunVerifier => self.run_verifier,
+            HarnessPrimitiveCapability::ObserveDiagnostics => self.observe_diagnostics,
+        }
+    }
+}
+
+pub fn meta_invariant_harness_self_repair_missing_capabilities(
+    state: HarnessCapabilityState,
+) -> Vec<HarnessPrimitiveCapability> {
+    HarnessPrimitiveCapability::MINIMAL_SELF_REPAIR_SET
+        .into_iter()
+        .filter(|capability| !state.has(*capability))
+        .collect()
+}
+
+pub fn meta_invariant_harness_self_repair_ready(state: HarnessCapabilityState) -> bool {
+    meta_invariant_harness_self_repair_missing_capabilities(state).is_empty()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MetaInvariantBootstrapToolChoice {
     CargoNew,
@@ -653,6 +716,11 @@ mod tests {
         ConstraintDecision, ConstraintRoute, ConstraintState, MetaInvariantVerifierOutcome,
         MetaInvariantVerifierSequenceStep,
     };
+    use crate::{
+        meta_invariant_harness_self_repair_missing_capabilities,
+        meta_invariant_harness_self_repair_ready, HarnessCapabilityState,
+        HarnessPrimitiveCapability,
+    };
 
     #[test]
     fn meta_invariant_all_results_update_policy_passed_is_positive() {
@@ -772,6 +840,35 @@ mod tests {
                 ConstraintRoute::Observe,
                 "meta_invariant_state_reality_authority: semantic state disagrees with reality; refresh observation first",
             )
+        );
+    }
+
+    #[test]
+    fn harness_self_repair_requires_minimal_capability_basis() {
+        let ready = HarnessCapabilityState {
+            read_search: true,
+            structured_edit: true,
+            apply_patch: true,
+            run_verifier: true,
+            observe_diagnostics: true,
+        };
+        assert!(meta_invariant_harness_self_repair_ready(ready));
+
+        let missing = meta_invariant_harness_self_repair_missing_capabilities(
+            HarnessCapabilityState {
+                read_search: true,
+                structured_edit: false,
+                apply_patch: true,
+                run_verifier: false,
+                observe_diagnostics: true,
+            },
+        );
+        assert_eq!(
+            missing,
+            vec![
+                HarnessPrimitiveCapability::StructuredEdit,
+                HarnessPrimitiveCapability::RunVerifier,
+            ]
         );
     }
 

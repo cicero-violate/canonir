@@ -357,6 +357,18 @@ impl EventRuntime {
         Ok(())
     }
 
+    pub fn emit_event_with_parents(
+        &mut self,
+        event: RuntimeEvent,
+        parent_ids: Vec<canon_event::EventId>,
+        file: &'static str,
+        line: u32,
+    ) -> Result<()> {
+        self.handle_runtime_event_located_with_parents(event, file, line, parent_ids)?;
+        self.drain_emitted_events()?;
+        Ok(())
+    }
+
     fn handle_runtime_event(&mut self, event: RuntimeEvent) -> Result<()> {
         self.handle_runtime_event_located_with_parents(event, "", 0, Vec::new())
     }

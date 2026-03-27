@@ -1,0 +1,5 @@
+target test passed
+crate: canon-route
+test: policy::tests::apply_route_policy_forces_plan_when_validation_is_precondition_blocked
+mode: always-dispatch
+instruction: inspect harness state, validate the constrained loop, and choose the next verification or repair step if needed
