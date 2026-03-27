@@ -1014,27 +1014,6 @@ mod tests {
         }
     }
 
-    fn planned_import_patch(path: &str) -> canon_event::LoopPlanned {
-        canon_event::LoopPlanned {
-            tick: 0,
-            action_kind: "apply_patch".to_string(),
-            action_payload: serde_json::json!({
-                "patch": format!("*** Begin Patch\n*** Update File: {path}\n@@\n+use crate::foo;\n*** End Patch\n")
-            }),
-            reason: String::new(),
-            llm_request_id: None,
-            trace_id: None,
-            execution_id: None,
-            span_id: None,
-            parent_span_id: None,
-            plan_id: None,
-            plan_step_id: None,
-            action_id: None,
-            signals: None,
-            depends_on: Vec::new(),
-        }
-    }
-
     fn planned_trait_bound_patch(path: &str) -> canon_event::LoopPlanned {
         canon_event::LoopPlanned {
             tick: 0,
@@ -1337,14 +1316,31 @@ mod tests {
 
     #[test]
     fn rejects_unresolved_import_patch_inference_now_that_semantic_action_exists() {
-        let actions = vec![planned_import_patch("src/lib.rs")];
+        let actions = vec![canon_event::LoopPlanned {
+            tick: 0,
+            action_kind: "apply_patch".to_string(),
+            action_payload: serde_json::json!({
+                "patch": "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n+use crate::foo;\n*** End Patch\n"
+            }),
+            reason: String::new(),
+            llm_request_id: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            signals: None,
+            depends_on: Vec::new(),
+        }];
         let summary = SemanticStateSummary {
             complete: true,
             target_root: Some("/tmp/example".into()),
             compiler_hints: vec![CompilerHintRecord::new(
                 CompilerHintKind::UnresolvedImport,
                 "compiler reports unresolved import `crate::foo`",
-                "fix the import",
+                "use semantic import repair",
                 vec!["src/lib.rs".into()],
             )],
             ..SemanticStateSummary::default()
@@ -1367,7 +1363,7 @@ mod tests {
             compiler_hints: vec![CompilerHintRecord::new(
                 CompilerHintKind::UnresolvedImport,
                 "compiler reports unresolved import `crate::foo`",
-                "fix the import",
+                "use semantic import repair",
                 vec!["src/lib.rs".into()],
             )],
             ..SemanticStateSummary::default()

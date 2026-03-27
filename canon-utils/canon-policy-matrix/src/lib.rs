@@ -1680,13 +1680,13 @@ fn planner_summary_for_state(state: PlannerJudgmentState) -> SemanticStateSummar
         PlannerHintState::UnresolvedImport => vec![CompilerHintRecord::new(
             CompilerHintKind::UnresolvedImport,
             "unresolved import",
-            "fix import",
+            "use semantic import repair",
             vec!["src/lib.rs".into()],
         )],
         PlannerHintState::MissingSymbol => vec![CompilerHintRecord::new(
             CompilerHintKind::MissingSymbol,
             "missing symbol",
-            "define or import symbol",
+            "use semantic symbol definition or import repair",
             vec!["src/main.rs".into()],
         )],
         PlannerHintState::DuplicateDefinition => vec![CompilerHintRecord::new(
