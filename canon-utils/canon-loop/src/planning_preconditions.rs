@@ -11,6 +11,10 @@ pub enum PlanningPrecondition {
     MustCreateEntrypoint,
     MustCreateMissingModules,
     MustFixDeadCodeForbidConflict,
+    MustFixUnresolvedImport,
+    MustDefineMissingSymbol,
+    MustResolveDuplicateDefinition,
+    MustFixTraitBoundFailure,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,6 +24,10 @@ pub enum RepairIntent {
     CreateEntrypoint,
     CreateMissingModules,
     FixDeadCodeForbidConflict,
+    FixUnresolvedImport,
+    DefineMissingSymbol,
+    ResolveDuplicateDefinition,
+    FixTraitBoundFailure,
 }
 
 pub fn derive_preconditions(
@@ -48,6 +56,22 @@ pub fn derive_preconditions(
             && !out.contains(&PlanningPrecondition::MustFixDeadCodeForbidConflict)
         {
             out.push(PlanningPrecondition::MustFixDeadCodeForbidConflict);
+        } else if hint.kind == CompilerHintKind::UnresolvedImport
+            && !out.contains(&PlanningPrecondition::MustFixUnresolvedImport)
+        {
+            out.push(PlanningPrecondition::MustFixUnresolvedImport);
+        } else if hint.kind == CompilerHintKind::MissingSymbol
+            && !out.contains(&PlanningPrecondition::MustDefineMissingSymbol)
+        {
+            out.push(PlanningPrecondition::MustDefineMissingSymbol);
+        } else if hint.kind == CompilerHintKind::DuplicateDefinition
+            && !out.contains(&PlanningPrecondition::MustResolveDuplicateDefinition)
+        {
+            out.push(PlanningPrecondition::MustResolveDuplicateDefinition);
+        } else if hint.kind == CompilerHintKind::TraitBoundFailure
+            && !out.contains(&PlanningPrecondition::MustFixTraitBoundFailure)
+        {
+            out.push(PlanningPrecondition::MustFixTraitBoundFailure);
         }
     }
     out
@@ -72,6 +96,18 @@ pub fn planner_lines(preconditions: &[PlanningPrecondition]) -> Vec<String> {
             PlanningPrecondition::MustFixDeadCodeForbidConflict => {
                 "must_fix_dead_code_forbid_conflict=true repair=remove_allow_dead_code_or_make_code_used".to_string()
             }
+            PlanningPrecondition::MustFixUnresolvedImport => {
+                "must_fix_unresolved_import=true repair=edit_import_or_define_missing_import_target".to_string()
+            }
+            PlanningPrecondition::MustDefineMissingSymbol => {
+                "must_define_missing_symbol=true repair=define_or_import_missing_symbol".to_string()
+            }
+            PlanningPrecondition::MustResolveDuplicateDefinition => {
+                "must_resolve_duplicate_definition=true repair=remove_or_rename_duplicate_definition".to_string()
+            }
+            PlanningPrecondition::MustFixTraitBoundFailure => {
+                "must_fix_trait_bound_failure=true repair=edit_local_type_impl_or_callsite_for_trait_bound".to_string()
+            }
         })
         .collect()
 }
@@ -85,6 +121,10 @@ pub fn derive_repair_intents(preconditions: &[PlanningPrecondition]) -> Vec<Repa
             PlanningPrecondition::MustCreateEntrypoint => RepairIntent::CreateEntrypoint,
             PlanningPrecondition::MustCreateMissingModules => RepairIntent::CreateMissingModules,
             PlanningPrecondition::MustFixDeadCodeForbidConflict => RepairIntent::FixDeadCodeForbidConflict,
+            PlanningPrecondition::MustFixUnresolvedImport => RepairIntent::FixUnresolvedImport,
+            PlanningPrecondition::MustDefineMissingSymbol => RepairIntent::DefineMissingSymbol,
+            PlanningPrecondition::MustResolveDuplicateDefinition => RepairIntent::ResolveDuplicateDefinition,
+            PlanningPrecondition::MustFixTraitBoundFailure => RepairIntent::FixTraitBoundFailure,
         };
         if !intents.contains(&intent) {
             intents.push(intent);
@@ -106,6 +146,14 @@ pub fn derive_preconditions_from_lines(lines: &[String]) -> Vec<PlanningPrecondi
             Some(PlanningPrecondition::MustCreateMissingModules)
         } else if line.contains("must_fix_dead_code_forbid_conflict=true") {
             Some(PlanningPrecondition::MustFixDeadCodeForbidConflict)
+        } else if line.contains("must_fix_unresolved_import=true") {
+            Some(PlanningPrecondition::MustFixUnresolvedImport)
+        } else if line.contains("must_define_missing_symbol=true") {
+            Some(PlanningPrecondition::MustDefineMissingSymbol)
+        } else if line.contains("must_resolve_duplicate_definition=true") {
+            Some(PlanningPrecondition::MustResolveDuplicateDefinition)
+        } else if line.contains("must_fix_trait_bound_failure=true") {
+            Some(PlanningPrecondition::MustFixTraitBoundFailure)
         } else {
             None
         };
@@ -136,6 +184,18 @@ pub fn repair_intent_lines(intents: &[RepairIntent]) -> Vec<String> {
             }
             RepairIntent::FixDeadCodeForbidConflict => {
                 "repair_intent=fix_dead_code_forbid_conflict priority=5 first_batch=edit_conflicting_allow_dead_code".to_string()
+            }
+            RepairIntent::FixUnresolvedImport => {
+                "repair_intent=fix_unresolved_import priority=6 first_batch=edit_import_or_define_target".to_string()
+            }
+            RepairIntent::DefineMissingSymbol => {
+                "repair_intent=define_missing_symbol priority=7 first_batch=define_or_import_symbol".to_string()
+            }
+            RepairIntent::ResolveDuplicateDefinition => {
+                "repair_intent=resolve_duplicate_definition priority=8 first_batch=remove_or_rename_duplicate".to_string()
+            }
+            RepairIntent::FixTraitBoundFailure => {
+                "repair_intent=fix_trait_bound_failure priority=9 first_batch=edit_type_impl_or_callsite".to_string()
             }
         })
         .collect()
@@ -172,6 +232,30 @@ pub fn validate_preconditions(
     {
         return Err("cargo check planned before fixing allow(dead_code) vs forbid(dead_code) conflict".to_string());
     }
+    if preconditions.contains(&PlanningPrecondition::MustFixUnresolvedImport)
+        && contains_cargo_check(actions)
+        && !contains_expected_hint_target(actions, semantic_summary, "unresolved_import", target_root)
+    {
+        return Err("cargo check planned before fixing unresolved import".to_string());
+    }
+    if preconditions.contains(&PlanningPrecondition::MustDefineMissingSymbol)
+        && contains_cargo_check(actions)
+        && !contains_expected_hint_target(actions, semantic_summary, "missing_symbol", target_root)
+    {
+        return Err("cargo check planned before defining or importing missing symbol".to_string());
+    }
+    if preconditions.contains(&PlanningPrecondition::MustResolveDuplicateDefinition)
+        && contains_cargo_check(actions)
+        && !contains_expected_hint_target(actions, semantic_summary, "duplicate_definition", target_root)
+    {
+        return Err("cargo check planned before resolving duplicate definition".to_string());
+    }
+    if preconditions.contains(&PlanningPrecondition::MustFixTraitBoundFailure)
+        && contains_cargo_check(actions)
+        && !contains_expected_hint_target(actions, semantic_summary, "trait_bound_failure", target_root)
+    {
+        return Err("cargo check planned before fixing actionable trait bound failure".to_string());
+    }
     if let Some(highest_priority) = intents.first() {
         validate_highest_priority_intent(actions, target_root, highest_priority, semantic_summary)?;
     }
@@ -190,6 +274,10 @@ fn validate_highest_priority_intent(
         RepairIntent::CreateEntrypoint => contains_expected_entrypoint_target(actions, semantic_summary, target_root),
         RepairIntent::CreateMissingModules => contains_expected_module_target(actions, semantic_summary, target_root),
         RepairIntent::FixDeadCodeForbidConflict => contains_expected_dead_code_target(actions, semantic_summary, target_root),
+        RepairIntent::FixUnresolvedImport => contains_expected_hint_target(actions, semantic_summary, "unresolved_import", target_root),
+        RepairIntent::DefineMissingSymbol => contains_expected_hint_target(actions, semantic_summary, "missing_symbol", target_root),
+        RepairIntent::ResolveDuplicateDefinition => contains_expected_hint_target(actions, semantic_summary, "duplicate_definition", target_root),
+        RepairIntent::FixTraitBoundFailure => contains_expected_hint_target(actions, semantic_summary, "trait_bound_failure", target_root),
     };
     if satisfied {
         Ok(())
@@ -202,6 +290,10 @@ fn validate_highest_priority_intent(
             RepairIntent::FixDeadCodeForbidConflict => {
                 "first planned batch must address the allow(dead_code) vs forbid(dead_code) conflict".to_string()
             }
+            RepairIntent::FixUnresolvedImport => "first planned batch must target the unresolved import location".to_string(),
+            RepairIntent::DefineMissingSymbol => "first planned batch must target the missing symbol location".to_string(),
+            RepairIntent::ResolveDuplicateDefinition => "first planned batch must target the duplicate definition location".to_string(),
+            RepairIntent::FixTraitBoundFailure => "first planned batch must target the trait-bound failure location".to_string(),
         })
     }
 }
@@ -215,7 +307,9 @@ fn contains_expected_entrypoint_target(
     if expected.is_empty() {
         contains_entrypoint_creation(actions, target_root)
     } else {
-        actions.iter().any(|action| touches_any_owned_paths(action, &expected))
+        actions
+            .iter()
+            .any(|action| touches_any_owned_paths(action, target_root, &expected))
     }
 }
 
@@ -228,7 +322,9 @@ fn contains_expected_module_target(
     if expected.is_empty() {
         contains_module_creation(actions, target_root)
     } else {
-        actions.iter().any(|action| touches_any_owned_paths(action, &expected))
+        actions
+            .iter()
+            .any(|action| touches_any_owned_paths(action, target_root, &expected))
     }
 }
 
@@ -242,7 +338,7 @@ fn contains_expected_dead_code_target(
         contains_dead_code_conflict_fix(actions, target_root)
     } else {
         actions.iter().any(|action| {
-            touches_any_owned_paths(action, &expected)
+            touches_any_owned_paths(action, target_root, &expected)
                 && (action.action_kind != "apply_patch"
                     || action
                         .action_payload
@@ -250,6 +346,22 @@ fn contains_expected_dead_code_target(
                         .and_then(|v| v.as_str())
                         .is_some_and(|patch| patch.contains("allow(dead_code)")))
         })
+    }
+}
+
+fn contains_expected_hint_target(
+    actions: &[canon_event::LoopPlanned],
+    semantic_summary: &SemanticStateSummary,
+    hint_kind: &str,
+    target_root: &Path,
+) -> bool {
+    let expected = expected_hint_paths(semantic_summary, hint_kind, target_root);
+    if expected.is_empty() {
+        actions.iter().any(|action| !normalized_touched_paths(action, target_root).is_empty())
+    } else {
+        actions
+            .iter()
+            .any(|action| touches_any_owned_paths(action, target_root, &expected))
     }
 }
 
@@ -289,7 +401,9 @@ fn contains_cargo_check(actions: &[canon_event::LoopPlanned]) -> bool {
 fn contains_entrypoint_creation(actions: &[canon_event::LoopPlanned], target_root: &Path) -> bool {
     let main = target_root.join("src/main.rs");
     let lib = target_root.join("src/lib.rs");
-    actions.iter().any(|action| touches_any_path(action, &[main.as_path(), lib.as_path()]))
+    actions
+        .iter()
+        .any(|action| touches_any_path(action, target_root, &[main.as_path(), lib.as_path()]))
 }
 
 fn contains_module_creation(actions: &[canon_event::LoopPlanned], target_root: &Path) -> bool {
@@ -302,7 +416,11 @@ fn contains_module_creation(actions: &[canon_event::LoopPlanned], target_root: &
 
 fn contains_dead_code_conflict_fix(actions: &[canon_event::LoopPlanned], target_root: &Path) -> bool {
     actions.iter().any(|action| {
-        if !touches_any_path(action, &[target_root.join("src/lib.rs").as_path(), target_root.join("src/main.rs").as_path()]) {
+        if !touches_any_path(
+            action,
+            target_root,
+            &[target_root.join("src/lib.rs").as_path(), target_root.join("src/main.rs").as_path()],
+        ) {
             return false;
         }
         if action.action_kind == "apply_patch" {
@@ -358,14 +476,59 @@ fn expected_dead_code_paths(semantic_summary: &SemanticStateSummary, target_root
     out
 }
 
-fn touches_any_path(action: &canon_event::LoopPlanned, expected: &[&Path]) -> bool {
-    let touched = touched_paths(action);
+fn expected_hint_paths(
+    semantic_summary: &SemanticStateSummary,
+    hint_kind: &str,
+    target_root: &Path,
+) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for line in &semantic_summary.compiler_hints {
+        if !line.contains(&format!("kind={hint_kind}")) {
+            continue;
+        }
+        let Some(targets) = parse_compiler_hint_targets(line) else {
+            continue;
+        };
+        for target in targets {
+            if target == "none" {
+                continue;
+            }
+            let candidate = PathBuf::from(&target);
+            out.push(if candidate.is_absolute() { candidate } else { target_root.join(target) });
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn parse_compiler_hint_targets(line: &str) -> Option<Vec<String>> {
+    let marker = "targets=";
+    let start = line.find(marker)? + marker.len();
+    let tail = &line[start..];
+    let end = tail.find(" summary=").unwrap_or(tail.len());
+    let raw = tail[..end].trim();
+    if raw.is_empty() {
+        return None;
+    }
+    Some(raw.split('|').map(|s| s.trim().to_string()).collect())
+}
+
+fn touches_any_path(action: &canon_event::LoopPlanned, target_root: &Path, expected: &[&Path]) -> bool {
+    let touched = normalized_touched_paths(action, target_root);
     expected.iter().any(|path| touched.iter().any(|candidate| candidate == path))
 }
 
-fn touches_any_owned_paths(action: &canon_event::LoopPlanned, expected: &[PathBuf]) -> bool {
-    let touched = touched_paths(action);
+fn touches_any_owned_paths(action: &canon_event::LoopPlanned, target_root: &Path, expected: &[PathBuf]) -> bool {
+    let touched = normalized_touched_paths(action, target_root);
     expected.iter().any(|path| touched.iter().any(|candidate| candidate == path))
+}
+
+fn normalized_touched_paths(action: &canon_event::LoopPlanned, target_root: &Path) -> Vec<PathBuf> {
+    touched_paths(action)
+        .into_iter()
+        .map(|path| if path.is_absolute() { path } else { target_root.join(path) })
+        .collect()
 }
 
 fn touched_paths(action: &canon_event::LoopPlanned) -> Vec<PathBuf> {
@@ -540,12 +703,14 @@ mod tests {
         let derived = super::derive_preconditions_from_lines(&[
             "must_create_entrypoint=true repair=create_src_main_or_lib_before_cargo_check".into(),
             "must_fix_dead_code_forbid_conflict=true repair=remove_allow_dead_code_or_make_code_used".into(),
+            "must_fix_unresolved_import=true repair=edit_import_or_define_missing_import_target".into(),
         ]);
         assert_eq!(
             derived,
             vec![
                 PlanningPrecondition::MustCreateEntrypoint,
                 PlanningPrecondition::MustFixDeadCodeForbidConflict,
+                PlanningPrecondition::MustFixUnresolvedImport,
             ]
         );
     }
