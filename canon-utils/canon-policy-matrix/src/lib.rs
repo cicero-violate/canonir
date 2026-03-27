@@ -4,9 +4,11 @@ use canon_loop::planning_preconditions::{validate_preconditions, PlanningPrecond
 use canon_loop::policy::{
     classify_invalid_plan_reason, evaluate_loop_runtime, evaluate_loop_transition, evaluate_recovery_event,
     evaluate_recovery_execution, evaluate_bootstrap_effects, retry_policy_for_invalid_plan,
+    retry_policy_for_planning_context,
     ActionOutcomeClass, BootstrapRule, InvalidPlanReasonClass, LoopRecoveryRule, LoopRuntimeRule,
     ObserveExecutionMode, RecoveryEventRule, RecoveryOperation, RetryPolicy, StageExecutionOutcomeClass,
 };
+use canon_loop::stage::reward::{evaluate_reward_semantics, RewardSemantics};
 use canon_route::{
     context::RouteContext,
     decision::RouteDecision,
@@ -39,6 +41,8 @@ pub enum TransitionRow {
     RecoveryEvent(RecoveryEventRow),
     RecoveryExecution(RecoveryExecutionRow),
     BootstrapEffect(BootstrapEffectRow),
+    PlannerRecovery(PlannerRecoveryRow),
+    RewardSemantics(RewardSemanticsRow),
     RouteFailure(RouteFailureRow),
     RouteEmitEffect(RouteEmitEffectRow),
     RouteRecovery(RouteRecoveryRow),
@@ -142,10 +146,12 @@ pub enum LoopScenarioFamily {
     ObserveTriggeredDeferred,
     ObserveTriggeredNoop,
     BootstrapInvalidatesQueuedWork,
+    RewardSemanticProgress,
+    RewardNoSemanticProgress,
 }
 
 impl LoopScenarioFamily {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 26] = [
         Self::InvalidPlanClearsSuppression,
         Self::InvalidPlanNoRecoveryForOtherStatus,
         Self::ActStallTriggersObserve,
@@ -170,6 +176,8 @@ impl LoopScenarioFamily {
         Self::ObserveTriggeredDeferred,
         Self::ObserveTriggeredNoop,
         Self::BootstrapInvalidatesQueuedWork,
+        Self::RewardSemanticProgress,
+        Self::RewardNoSemanticProgress,
     ];
 }
 
@@ -240,6 +248,7 @@ pub enum JudgmentScenarioFamily {
     PlannerDefineMissingSymbol,
     PlannerResolveDuplicateDefinition,
     PlannerFixTraitBoundFailure,
+    PlannerRetryNoSemanticProgress,
     RouteSemanticPreconditionActionable,
     RouteSemanticRepairIntentActionable,
     RouteSemanticValidationBlockedActionable,
@@ -249,7 +258,7 @@ pub enum JudgmentScenarioFamily {
 }
 
 impl JudgmentScenarioFamily {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::PlannerBootstrapWorkspace,
         Self::PlannerInitCargoProject,
         Self::PlannerCreateEntrypoint,
@@ -259,6 +268,7 @@ impl JudgmentScenarioFamily {
         Self::PlannerDefineMissingSymbol,
         Self::PlannerResolveDuplicateDefinition,
         Self::PlannerFixTraitBoundFailure,
+        Self::PlannerRetryNoSemanticProgress,
         Self::RouteSemanticPreconditionActionable,
         Self::RouteSemanticRepairIntentActionable,
         Self::RouteSemanticValidationBlockedActionable,
@@ -624,6 +634,27 @@ pub struct BootstrapEffectRow {
 }
 
 #[derive(Clone, Debug)]
+pub struct PlannerRecoveryRow {
+    pub name: &'static str,
+    pub family: JudgmentScenarioFamily,
+    pub reason: Option<&'static str>,
+    pub consecutive_invalid_plan_batches: u32,
+    pub recent_execution_results: Vec<SemanticExecutionResultRecord>,
+    pub expected_retry: RetryPolicy,
+}
+
+#[derive(Clone, Debug)]
+pub struct RewardSemanticsRow {
+    pub name: &'static str,
+    pub family: LoopScenarioFamily,
+    pub compiler_clean: bool,
+    pub last_action_success: bool,
+    pub last_action_kind: &'static str,
+    pub recent_execution_results: Vec<SemanticExecutionResultRecord>,
+    pub expected: RewardSemantics,
+}
+
+#[derive(Clone, Debug)]
 pub struct RouteFailureRow {
     pub name: &'static str,
     pub family: RouteScenarioFamily,
@@ -730,6 +761,8 @@ pub fn assert_transition_rows(rows: &[TransitionRow]) {
             TransitionRow::RecoveryEvent(row) => assert_recovery_event_row(row),
             TransitionRow::RecoveryExecution(row) => assert_recovery_execution_row(row),
             TransitionRow::BootstrapEffect(row) => assert_bootstrap_effect_row(row),
+            TransitionRow::PlannerRecovery(row) => assert_planner_recovery_row(row),
+            TransitionRow::RewardSemantics(row) => assert_reward_semantics_row(row),
             TransitionRow::RouteFailure(row) => assert_route_failure_row(row),
             TransitionRow::RouteEmitEffect(row) => assert_route_emit_effect_row(row),
             TransitionRow::RouteRecovery(row) => assert_route_recovery_row(row),
@@ -758,6 +791,8 @@ pub fn coverage_report(rows: &[TransitionRow]) -> CoverageReport {
             TransitionRow::RecoveryEvent(row) => push_unique(&mut report.loop_covered, row.family),
             TransitionRow::RecoveryExecution(row) => push_unique(&mut report.loop_covered, row.family),
             TransitionRow::BootstrapEffect(row) => push_unique(&mut report.loop_covered, row.family),
+            TransitionRow::PlannerRecovery(row) => push_unique(&mut report.judgment_covered, row.family),
+            TransitionRow::RewardSemantics(row) => push_unique(&mut report.loop_covered, row.family),
             TransitionRow::RunCommandOutcome(row) => push_unique(&mut report.run_command_covered, row.family),
             TransitionRow::ApplyPatchOutcome(row) => push_unique(&mut report.apply_patch_covered, row.family),
             TransitionRow::VerifyOutcome(row) => push_unique(&mut report.verify_covered, row.family),
@@ -800,6 +835,8 @@ pub fn baseline_transition_rows() -> Vec<TransitionRow> {
     rows.extend(recovery_event_rows().into_iter().map(TransitionRow::RecoveryEvent));
     rows.extend(recovery_execution_rows().into_iter().map(TransitionRow::RecoveryExecution));
     rows.extend(bootstrap_effect_rows().into_iter().map(TransitionRow::BootstrapEffect));
+    rows.extend(planner_recovery_rows().into_iter().map(TransitionRow::PlannerRecovery));
+    rows.extend(reward_semantics_rows().into_iter().map(TransitionRow::RewardSemantics));
     rows.extend(run_command_outcome_rows().into_iter().map(TransitionRow::RunCommandOutcome));
     rows.extend(apply_patch_outcome_rows().into_iter().map(TransitionRow::ApplyPatchOutcome));
     rows.extend(verify_outcome_rows().into_iter().map(TransitionRow::VerifyOutcome));
@@ -1912,6 +1949,61 @@ pub fn bootstrap_effect_rows() -> Vec<BootstrapEffectRow> {
     }]
 }
 
+pub fn planner_recovery_rows() -> Vec<PlannerRecoveryRow> {
+    vec![PlannerRecoveryRow {
+        name: "planner_retry_no_semantic_progress",
+        family: JudgmentScenarioFamily::PlannerRetryNoSemanticProgress,
+        reason: None,
+        consecutive_invalid_plan_batches: 0,
+        recent_execution_results: vec![SemanticExecutionResultRecord::new(
+            "no_semantic_progress",
+            "action failed",
+            Vec::new(),
+            false,
+        )],
+        expected_retry: RetryPolicy::CorrectiveRetry,
+    }]
+}
+
+pub fn reward_semantics_rows() -> Vec<RewardSemanticsRow> {
+    vec![
+        RewardSemanticsRow {
+            name: "reward_semantic_progress",
+            family: LoopScenarioFamily::RewardSemanticProgress,
+            compiler_clean: false,
+            last_action_success: true,
+            last_action_kind: "apply_patch",
+            recent_execution_results: vec![SemanticExecutionResultRecord::new(
+                "module_created",
+                "module file created",
+                vec!["/tmp/example/src/index.rs".into()],
+                true,
+            )],
+            expected: RewardSemantics {
+                reward: -0.6,
+                resets_stagnation: true,
+            },
+        },
+        RewardSemanticsRow {
+            name: "reward_no_semantic_progress",
+            family: LoopScenarioFamily::RewardNoSemanticProgress,
+            compiler_clean: false,
+            last_action_success: false,
+            last_action_kind: "apply_patch",
+            recent_execution_results: vec![SemanticExecutionResultRecord::new(
+                "no_semantic_progress",
+                "action failed",
+                Vec::new(),
+                false,
+            )],
+            expected: RewardSemantics {
+                reward: -1.6,
+                resets_stagnation: false,
+            },
+        },
+    ]
+}
+
 pub fn run_command_outcome_rows() -> Vec<RunCommandOutcomeRow> {
     vec![
         RunCommandOutcomeRow {
@@ -2418,6 +2510,44 @@ fn assert_bootstrap_effect_row(row: &BootstrapEffectRow) {
         "bootstrap effect row {} emit mismatch",
         row.name
     );
+}
+
+fn assert_planner_recovery_row(row: &PlannerRecoveryRow) {
+    assert_eq!(
+        retry_policy_for_planning_context(
+            row.reason,
+            row.consecutive_invalid_plan_batches,
+            &row.recent_execution_results,
+        ),
+        row.expected_retry,
+        "planner recovery row {} mismatch",
+        row.name
+    );
+}
+
+fn assert_reward_semantics_row(row: &RewardSemanticsRow) {
+    let mut ctx = canon_loop::LoopContext::new("/tmp/example".into(), "/tmp/tlog".into());
+    ctx.last_action_success = row.last_action_success;
+    ctx.last_action_kind = row.last_action_kind.to_string();
+    ctx.recent_execution_results = row.recent_execution_results.clone();
+    let verified = canon_event::LoopVerified {
+        tick: 0,
+        passed: row.compiler_clean,
+        compiler_clean: row.compiler_clean,
+        tlog_clean: true,
+        error_count: if row.compiler_clean { 0 } else { 1 },
+        diagnostics: if row.compiler_clean {
+            Vec::new()
+        } else {
+            vec!["error".into()]
+        },
+        trace_id: None,
+        execution_id: None,
+        span_id: None,
+        parent_span_id: None,
+    };
+    let actual = evaluate_reward_semantics(&ctx, &verified);
+    assert_eq!(actual, row.expected, "reward semantics row {} mismatch", row.name);
 }
 
 fn run_command_result_value(outcome: RunCommandOutcomeClass) -> serde_json::Value {

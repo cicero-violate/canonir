@@ -3,6 +3,12 @@ use canon_semantic_state::{latest_no_semantic_progress, latest_semantic_progress
 
 use crate::{context::LoopContext, result::LoopStageResult};
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RewardSemantics {
+    pub reward: f32,
+    pub resets_stagnation: bool,
+}
+
 pub fn execute_conclude(_rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
     let rewarded = LoopRewarded {
         tick: ctx.current_tick,
@@ -24,8 +30,7 @@ pub fn execute_conclude(_rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Re
 pub fn execute(v: LoopVerified, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
     ctx.last_reward_trace_id = v.trace_id.clone();
     ctx.last_reward_execution_id = v.execution_id.clone();
-    let reward = compute_reward(ctx, &v);
-    let semantic_progress = latest_semantic_progress(&ctx.recent_execution_results);
+    let semantics = evaluate_reward_semantics(ctx, &v);
     // Verify/reward is evaluative, not terminal: ordinary compiler failures should replan,
     // not halt the loop. Terminal halts only come from explicit conclude routing.
     let halt = false;
@@ -36,14 +41,14 @@ pub fn execute(v: LoopVerified, ctx: &mut LoopContext) -> anyhow::Result<LoopSta
         stagnant_ticks: ctx.stagnant_ticks,
         span_id: v.span_id.clone(),
         parent_span_id: v.parent_span_id.clone(),
-        reward,
+        reward: semantics.reward,
         halt,
         goodness: ctx.goodness.unwrap_or(0.0),
         delta_g: ctx.delta_g.unwrap_or(0.0),
         trace_id: v.trace_id.clone(),
         execution_id: v.execution_id.clone(),
     };
-    if v.compiler_clean || semantic_progress {
+    if semantics.resets_stagnation {
         ctx.stagnant_ticks = 0;
     } else {
         ctx.stagnant_ticks = ctx.stagnant_ticks.saturating_add(1);
@@ -53,7 +58,7 @@ pub fn execute(v: LoopVerified, ctx: &mut LoopContext) -> anyhow::Result<LoopSta
     Ok(LoopStageResult::Emit(RuntimeEvent::LoopRewarded(rewarded)))
 }
 
-fn compute_reward(ctx: &LoopContext, v: &LoopVerified) -> f32 {
+pub fn evaluate_reward_semantics(ctx: &LoopContext, v: &LoopVerified) -> RewardSemantics {
     let mut reward = if v.compiler_clean { 1.0_f32 } else { -1.0_f32 };
     if !ctx.last_action_success {
         reward -= 0.2;
@@ -66,12 +71,15 @@ fn compute_reward(ctx: &LoopContext, v: &LoopVerified) -> f32 {
     } else if latest_no_semantic_progress(&ctx.recent_execution_results) {
         reward -= 0.4;
     }
-    reward
+    RewardSemantics {
+        reward,
+        resets_stagnation: v.compiler_clean || latest_semantic_progress(&ctx.recent_execution_results),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_reward, execute};
+    use super::{evaluate_reward_semantics, execute};
     use crate::context::LoopContext;
     use canon_event::LoopVerified;
     use canon_semantic_state::SemanticExecutionResultRecord;
@@ -96,14 +104,14 @@ mod tests {
     fn semantic_progress_improves_reward() {
         let mut ctx = LoopContext::new(PathBuf::from("/tmp"), PathBuf::from("/tmp/tlog"));
         let verified = base_verified();
-        let base = compute_reward(&ctx, &verified);
+        let base = evaluate_reward_semantics(&ctx, &verified).reward;
         ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
             "module_created",
             "module file created",
             vec!["/tmp/src/index.rs".into()],
             true,
         ));
-        assert!(compute_reward(&ctx, &verified) > base);
+        assert!(evaluate_reward_semantics(&ctx, &verified).reward > base);
     }
 
     #[test]
