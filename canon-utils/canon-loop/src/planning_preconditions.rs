@@ -594,6 +594,10 @@ fn has_definition_edit(patch: &str) -> bool {
             return false;
         }
         let content = line[1..].trim_start();
+        let content = content
+            .strip_prefix("pub(crate) ")
+            .or_else(|| content.strip_prefix("pub "))
+            .unwrap_or(content);
         content.starts_with("fn ")
             || content.starts_with("struct ")
             || content.starts_with("enum ")
