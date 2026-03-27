@@ -493,4 +493,25 @@ mod tests {
         let result = gate.review(&pick(RouteKind::Verify), &signals);
         assert_eq!(result.lane, RouteKind::Conclude);
     }
+
+    #[test]
+    fn repair_pressure_blocks_conclude() {
+        let mut gate = Gatekeeper::new(GuardConfig::default());
+        let signals = RuntimeSignals {
+            context_ready: true,
+            has_queued_plan: false,
+            workspace_dirty: false,
+            performed_recently: false,
+            repair_stalled: false,
+            repair_pressure_score: 2,
+            finish_ready: false,
+            last_action_kind: String::new(),
+            llm_signals: None,
+            goodness: None,
+            delta_g: None,
+        };
+        let result = gate.review(&pick(RouteKind::Conclude), &signals);
+        assert_eq!(result.lane, RouteKind::Plan);
+        assert!(result.note.contains("repair pressure"));
+    }
 }

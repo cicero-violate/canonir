@@ -115,6 +115,23 @@ impl EventConsumer for GoalGenConsumer {
                         )
                     })
                     .unwrap_or_default();
+                if !objective_override.is_empty() {
+                    if let Some(emitter) = &self.emitter {
+                        emitter.emit_with_parents(
+                            RuntimeEvent::Debug(canon_event::DebugEvent {
+                                source: "goal_gen_consumer".to_string(),
+                                kind: "goal_objective_drift".to_string(),
+                                payload: serde_json::json!({
+                                    "goal_objective": current_goal_objective,
+                                    "route_objective": self.last_route_objective,
+                                }),
+                            }),
+                            vec![trigger_id.clone()],
+                            file!(),
+                            line!(),
+                        );
+                    }
+                }
                 EventOutcome::emit(RuntimeEvent::Llm(LlmCall {
                     request_id: request_id.clone(),
                     prompt: format!(

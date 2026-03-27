@@ -18,6 +18,7 @@ use crate::{
         evaluate_route_recovery, evaluate_route_transition, evaluate_successor_consumption,
         RouteCacheRule, RouteCacheState, RouteDispatchState, RouteEmitRule, RouteEmitState,
         RouteEventDispatchRule, RoutePolicyState,
+        RoutePolicyRule,
     },
 };
 
@@ -612,7 +613,7 @@ impl RouteExecutor {
             should_stop: false,
             prompt,
         });
-        let _rules = apply_route_policy(
+        let rules = apply_route_policy(
             &self.ctx,
             RoutePolicyState {
                 last_control_kind: self.last_control_kind.as_deref(),
@@ -620,6 +621,23 @@ impl RouteExecutor {
             },
             &mut decision,
         );
+        if rules.contains(&RoutePolicyRule::ForcePlanOnObjectiveContradiction) {
+            let tid = self.current_trigger.clone().expect("emit_decision called without current_trigger set");
+            emitter.emit_child(
+                RuntimeEvent::Debug(canon_event::DebugEvent {
+                    source: "route_executor".to_string(),
+                    kind: "route_objective_contradiction".to_string(),
+                    payload: serde_json::json!({
+                        "rewritten_lane": decision.lane.as_str(),
+                        "suggested_route": decision.suggested_route.as_str(),
+                        "rationale": decision.rationale.clone(),
+                    }),
+                }),
+                vec![tid.clone()],
+                file!(),
+                line!(),
+            );
+        }
         let route_event = RuntimeEvent::RouteSelected(RouteSelected {
             tick: self.ctx.scheduler_tick,
             approved_route: decision.lane.as_str().to_string(),
