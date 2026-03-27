@@ -8,5 +8,5 @@ name = "canon_semantic_state"
 path = "src/lib.rs"
 
 [dependencies]
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

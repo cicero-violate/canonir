@@ -322,7 +322,12 @@ fn parse_compiler_hint_record(line: &str) -> Option<CompilerHintRecord> {
 fn parse_field(line: &str, marker: &str) -> Option<String> {
     let start = line.find(marker)? + marker.len();
     let tail = &line[start..];
-    let end = tail.find(next_field_delimiter(marker)).unwrap_or(tail.len());
+    let delimiter = next_field_delimiter(marker);
+    let end = if delimiter.is_empty() {
+        tail.len()
+    } else {
+        tail.find(delimiter).unwrap_or(tail.len())
+    };
     Some(tail[..end].trim().to_string())
 }
 
