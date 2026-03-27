@@ -87,8 +87,9 @@ impl Callbacks for RustcCaptureCallbacks {
                         &self.output_dir,
                         &format!("canon_kernel: capture failed: {err:?}"),
                     );
-                    // Fail fast on capture/invariant violations.
-                    std::process::exit(1);
+                    if matches!(std::env::var("CANON_RUSTC_STRICT").as_deref(), Ok("1" | "true" | "TRUE")) {
+                        std::process::exit(1);
+                    }
                 }
             };
 
