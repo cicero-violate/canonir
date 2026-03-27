@@ -1,5 +1,5 @@
 [build]
-# rustc-wrapper = "/workspace/ai_sandbox/canon/canon_rustc/target/debug/canon-rustc"
+rustc-wrapper = "/workspace/ai_sandbox/canon/canon_rustc/target/debug/canon-rustc"
 # rustflags = ["-Awarnings"]
 rustflags = [
 "-Dwarnings",
