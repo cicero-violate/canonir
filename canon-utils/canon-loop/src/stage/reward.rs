@@ -1,4 +1,5 @@
 use canon_event::{RuntimeEvent, LoopRewarded, LoopVerified, RouteSelected};
+use canon_invariant::meta_invariant_all_results_update_policy;
 use canon_semantic_state::{
     latest_graph_proof_failed, latest_graph_proof_verified, latest_no_semantic_progress,
     latest_semantic_progress,
@@ -62,7 +63,13 @@ pub fn execute(v: LoopVerified, ctx: &mut LoopContext) -> anyhow::Result<LoopSta
 }
 
 pub fn evaluate_reward_semantics(ctx: &LoopContext, v: &LoopVerified) -> RewardSemantics {
-    let mut reward = if v.compiler_clean { 1.0_f32 } else { -1.0_f32 };
+    let policy_update =
+        meta_invariant_all_results_update_policy(v.passed, v.compiler_clean, &v.diagnostics);
+    let mut reward = if policy_update.reward_bias == "positive" {
+        1.0_f32
+    } else {
+        -1.0_f32
+    };
     if ctx.last_action_kind == "done" {
         reward += 0.5;
     }
@@ -86,7 +93,7 @@ pub fn evaluate_reward_semantics(ctx: &LoopContext, v: &LoopVerified) -> RewardS
     }
     RewardSemantics {
         reward,
-        resets_stagnation: v.compiler_clean
+        resets_stagnation: policy_update.reward_bias == "positive"
             || (latest_semantic_progress(&ctx.recent_execution_results)
                 && !latest_graph_proof_failed(&ctx.recent_execution_results)),
     }

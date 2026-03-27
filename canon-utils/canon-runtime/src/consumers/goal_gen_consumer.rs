@@ -333,7 +333,8 @@ impl EventConsumer for GoalGenConsumer {
             | (_, RuntimeEvent::RustcCaptureStarted(_))
             | (_, RuntimeEvent::RustcGraphArtifactWritten(_))
             | (_, RuntimeEvent::RustcCaptureCompleted(_))
-            | (_, RuntimeEvent::RustcCaptureFailed(_)) => EventOutcome::NoOp("goal_gen_noop"),
+            | (_, RuntimeEvent::RustcCaptureFailed(_))
+            | (_, RuntimeEvent::VerifierPolicyUpdated(_)) => EventOutcome::NoOp("goal_gen_noop"),
         }
     }
 }

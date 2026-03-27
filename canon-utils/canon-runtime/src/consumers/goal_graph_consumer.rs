@@ -136,7 +136,8 @@ impl EventConsumer for GoalGraphConsumer {
             | RuntimeEvent::RustcCaptureStarted(_)
             | RuntimeEvent::RustcGraphArtifactWritten(_)
             | RuntimeEvent::RustcCaptureCompleted(_)
-            | RuntimeEvent::RustcCaptureFailed(_) => {}
+            | RuntimeEvent::RustcCaptureFailed(_)
+            | RuntimeEvent::VerifierPolicyUpdated(_) => {}
         }
         EventOutcome::NoOp("goal_graph_noop")
     }

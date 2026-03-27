@@ -248,6 +248,12 @@ impl EventRuntime {
                                 self.drain_emitted_events()?;
                             }
                         }
+                        "verifier_policy_updated" => {
+                            if let Ok(decoded) = serde_json::from_value::<canon_event::events::VerifierPolicyUpdated>(data.clone()) {
+                                self.handle_replayed_event(RuntimeEvent::VerifierPolicyUpdated(decoded), parents)?;
+                                self.drain_emitted_events()?;
+                            }
+                        }
                         "loop_rewarded" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::LoopRewarded>(data.clone()) {
                                 self.handle_replayed_event(RuntimeEvent::LoopRewarded(decoded), parents)?;
@@ -691,6 +697,7 @@ fn runtime_event_to_wire(
         RuntimeEvent::PlanningCompleted(p) => (canon_event::EventKind::PlanningCompleted, payload_from_shape(p, emit_file, emit_line)),
         RuntimeEvent::LoopActed(p) => (canon_event::EventKind::LoopActed, payload_from_shape(p, emit_file, emit_line)),
         RuntimeEvent::LoopVerified(p) => (canon_event::EventKind::LoopVerified, payload_from_shape(p, emit_file, emit_line)),
+        RuntimeEvent::VerifierPolicyUpdated(p) => (canon_event::EventKind::VerifierPolicyUpdated, payload_from_shape(p, emit_file, emit_line)),
         RuntimeEvent::LoopRewarded(p) => (canon_event::EventKind::LoopRewarded, payload_from_shape(p, emit_file, emit_line)),
         RuntimeEvent::RouteTick(p) => (canon_event::EventKind::RouteTick, payload_from_shape(p, emit_file, emit_line)),
         RuntimeEvent::RouteSelected(p) => (canon_event::EventKind::RouteSelected, payload_from_shape(p, emit_file, emit_line)),
@@ -721,6 +728,7 @@ fn runtime_event_to_wire(
         RuntimeEvent::PlanningCompleted(_) => "plan",
         RuntimeEvent::LoopActed(_) => "act",
         RuntimeEvent::LoopVerified(_) => "verify",
+        RuntimeEvent::VerifierPolicyUpdated(_) => "verify",
         RuntimeEvent::LoopRewarded(_) => "reward",
         RuntimeEvent::RouteTick(_) | RuntimeEvent::RouteSelected(_) => "supervisor",
         RuntimeEvent::CapabilityCompleted(_) | RuntimeEvent::CapabilityFailed(_) => "event-runtime",

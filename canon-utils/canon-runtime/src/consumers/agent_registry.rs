@@ -166,7 +166,8 @@ impl EventConsumer for AgentRegistryConsumer {
             | RuntimeEvent::RustcCaptureStarted(_)
             | RuntimeEvent::RustcGraphArtifactWritten(_)
             | RuntimeEvent::RustcCaptureCompleted(_)
-            | RuntimeEvent::RustcCaptureFailed(_) => EventOutcome::NoOp("agent_registry_ignored"),
+            | RuntimeEvent::RustcCaptureFailed(_)
+            | RuntimeEvent::VerifierPolicyUpdated(_) => EventOutcome::NoOp("agent_registry_ignored"),
         }
     }
 }

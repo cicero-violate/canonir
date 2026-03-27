@@ -1,5 +1,8 @@
 use crate::{context::RouteContext, decision::RouteDecision};
-use canon_invariant::semantic_summary_has_actionable_failure;
+use canon_invariant::{
+    meta_invariant_all_results_update_policy, meta_invariant_classify_verifier_outcome,
+    meta_invariant_has_actionable_failure, MetaInvariantVerifierOutcome,
+};
 use canon_decision::RouteKind;
 use canon_event::RuntimeEvent;
 use canon_semantic_state::{latest_no_semantic_progress, latest_semantic_progress, SemanticStateSummary};
@@ -743,7 +746,7 @@ pub fn has_actionable_failure(ctx: &RouteContext) -> bool {
         return true;
     }
     if semantic_repair_state_is_actionable(&ctx.semantic_summary)
-        || semantic_summary_has_actionable_failure(
+        || meta_invariant_has_actionable_failure(
             ctx.semantic_summary.validation_blocked_by_preconditions,
             ctx.semantic_summary.compiler_repair_required,
             ctx.semantic_summary.planning_preconditions.len(),
@@ -784,19 +787,31 @@ pub fn latest_verify_outcome(ctx: &RouteContext) -> Option<VerifyOutcomeClass> {
     if !ctx.verify_seen {
         return None;
     }
-    if ctx.last_verify_passed && ctx.last_verify_compiler_clean {
-        Some(VerifyOutcomeClass::Passed)
-    } else if ctx
-        .last_verify_diagnostics
-        .iter()
-        .any(|d| looks_like_compiler_failure(d))
-    {
-        Some(VerifyOutcomeClass::CompilerFailure)
-    } else if !ctx.last_verify_diagnostics.is_empty() || !ctx.last_verify_passed || !ctx.last_verify_compiler_clean {
-        Some(VerifyOutcomeClass::FailedNoCompilerSignal)
-    } else {
-        None
+    Some(match meta_invariant_classify_verifier_outcome(
+        ctx.last_verify_passed,
+        ctx.last_verify_compiler_clean,
+        &ctx.last_verify_diagnostics,
+    ) {
+        MetaInvariantVerifierOutcome::Passed => VerifyOutcomeClass::Passed,
+        MetaInvariantVerifierOutcome::CompilerFailure => VerifyOutcomeClass::CompilerFailure,
+        MetaInvariantVerifierOutcome::FailedNoCompilerSignal => {
+            VerifyOutcomeClass::FailedNoCompilerSignal
+        }
+    })
+}
+
+pub fn latest_verify_policy_update(ctx: &RouteContext) -> Option<String> {
+    if !ctx.verify_seen {
+        return None;
     }
+    Some(
+        meta_invariant_all_results_update_policy(
+            ctx.last_verify_passed,
+            ctx.last_verify_compiler_clean,
+            &ctx.last_verify_diagnostics,
+        )
+        .as_summary(),
+    )
 }
 
 pub fn latest_run_command_outcome(ctx: &RouteContext) -> Option<RunCommandOutcomeClass> {

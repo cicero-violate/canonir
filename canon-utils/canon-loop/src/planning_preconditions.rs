@@ -1,12 +1,12 @@
 use crate::compiler_hints::extract_compiler_hints;
 use crate::env_model::{EntrypointKind, WorkspaceModel};
 use canon_invariant::{
-    classify_planned_action_class as classify_plan_action_class,
-    failure_scope_is_sufficient,
-    high_invalid_plan_pressure_requires_single_action,
+    meta_invariant_classify_planned_action_class as classify_plan_action_class,
+    meta_invariant_failure_scope_is_sufficient,
+    meta_invariant_has_actionable_failure,
+    meta_invariant_high_invalid_plan_requires_simple_batch,
+    meta_invariant_no_progress_forces_change,
     PlannedActionClass,
-    semantic_summary_has_actionable_failure,
-    stalled_loop_forbids_action_class,
 };
 use canon_semantic_state::{
     primary_development_strategy_kind, CompilerHintKind, DevelopmentStrategyKind, ObjectiveTrendState,
@@ -507,7 +507,7 @@ pub fn validate_trend_intent_alignment(
     recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
     objective_trend_state: &canon_semantic_state::ObjectiveTrendState,
 ) -> Result<(), String> {
-    if high_invalid_plan_pressure_requires_single_action(
+    if meta_invariant_high_invalid_plan_requires_simple_batch(
         objective_trend_state.invalid_plan_rate(),
         objective_trend_state.planning_attempts,
     ) && actions.len() > 1
@@ -520,7 +520,7 @@ pub fn validate_trend_intent_alignment(
 
     if objective_trend_state.current_no_progress_streak >= 2 {
         if let Some(first_class) = first_action_class(actions) {
-            if stalled_loop_forbids_action_class(
+            if meta_invariant_no_progress_forces_change(
                 objective_trend_state.current_no_progress_streak,
                 first_class,
             ) {
@@ -677,7 +677,7 @@ fn validate_no_actionable_failure(
                 | ActionIntent::FixTraitBoundFailure(_)
         )
     });
-    let actionable_failure = semantic_summary_has_actionable_failure(
+    let actionable_failure = meta_invariant_has_actionable_failure(
         semantic_summary.validation_blocked_by_preconditions,
         semantic_summary.compiler_repair_required,
         semantic_summary.planning_preconditions.len(),
@@ -709,7 +709,7 @@ fn validate_failure_scope(
         )
     });
     if has_localized_repair
-        && !failure_scope_is_sufficient(
+        && !meta_invariant_failure_scope_is_sufficient(
             semantic_summary.compiler_repair_required,
             semantic_summary.compiler_hints.len(),
             semantic_summary.failure_scope.as_deref(),

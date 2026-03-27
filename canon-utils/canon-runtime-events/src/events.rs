@@ -391,6 +391,26 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
+    #[event(class = "Control", next = [RouteSelected, LoopRewarded])]
+    VerifierPolicyUpdated {
+        #[input] tick: u64,
+        #[output] verifier_outcome: String,
+        #[output] retry_policy: String,
+        #[output] reward_bias: String,
+        #[delta] actionable_failure: bool,
+        #[serde(default)]
+        trace_id: Option<String>,
+        #[serde(default)]
+        execution_id: Option<String>,
+        #[serde(default)]
+        span_id: Option<String>,
+        #[serde(default)]
+        parent_span_id: Option<String>,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
     #[event(class = "Control", next = [RouteSelected, LoopObserved])]
     LoopRewarded {
         #[input] tick: u64,
@@ -979,6 +999,7 @@ canon_event_enum!(RuntimeEvent {
     PlanningCompleted(PlanningCompleted),
     LoopActed(LoopActed),
     LoopVerified(LoopVerified),
+    VerifierPolicyUpdated(VerifierPolicyUpdated),
     LoopRewarded(LoopRewarded),
     GoodnessSnapshot(GoodnessSnapshot),
     InvariantDiscovered(InvariantDiscovered),
@@ -1034,6 +1055,7 @@ pub fn event_kind_str(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::PlanningCompleted(_) => "planning_completed",
         RuntimeEvent::LoopActed(_) => "loop_acted",
         RuntimeEvent::LoopVerified(_) => "loop_verified",
+        RuntimeEvent::VerifierPolicyUpdated(_) => "verifier_policy_updated",
         RuntimeEvent::LoopRewarded(_) => "loop_rewarded",
         RuntimeEvent::GoodnessSnapshot(_) => "goodness_snapshot",
         RuntimeEvent::InvariantDiscovered(_) => "invariant_discovered",

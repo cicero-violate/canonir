@@ -122,7 +122,8 @@ impl EventConsumer for WatchdogConsumer {
             | RuntimeEvent::RustcCaptureStarted(_)
             | RuntimeEvent::RustcGraphArtifactWritten(_)
             | RuntimeEvent::RustcCaptureCompleted(_)
-            | RuntimeEvent::RustcCaptureFailed(_) => EventOutcome::NoOp("watchdog_not_a_stage_event"),
+            | RuntimeEvent::RustcCaptureFailed(_)
+            | RuntimeEvent::VerifierPolicyUpdated(_) => EventOutcome::NoOp("watchdog_not_a_stage_event"),
         }
     }
 }

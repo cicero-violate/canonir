@@ -13,8 +13,12 @@ use crate::{
 };
 use canon_event::{AgentRegistered, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, GoalEdgeDefined, RuntimeEvent, Tick};
 use canon_invariant::{
-    classify_planned_action_class, decision_trace_payload, is_localized_repair_action,
-    semantic_summary_has_actionable_failure, stalled_loop_forbids_action_class,
+    decision_trace_payload, meta_invariant_action_must_declare_verifier,
+    meta_invariant_all_results_update_policy,
+    meta_invariant_any_action_cites_failure,
+    meta_invariant_classify_planned_action_class, meta_invariant_expected_verifier,
+    meta_invariant_has_actionable_failure, meta_invariant_is_localized_repair_action,
+    meta_invariant_no_progress_forces_change,
 };
 use canon_proc_macros::must_emit;
 use canon_semantic_state::{classify_planned_action_intents, execution_results_for_action, SemanticExecutionResultRecord};
@@ -132,14 +136,17 @@ impl LoopStageExecutor {
             .map(|observed| &observed.semantic_summary)
             .cloned()
             .unwrap_or_default();
-        let action_class = classify_planned_action_class(planned.action_kind.as_str(), &planned.action_payload);
-        if stalled_loop_forbids_action_class(
+        let action_class = meta_invariant_classify_planned_action_class(
+            planned.action_kind.as_str(),
+            &planned.action_payload,
+        );
+        if meta_invariant_no_progress_forces_change(
             self.ctx.objective_trend_state.current_no_progress_streak,
             action_class,
         )
         {
             return Some((
-                "stall_requires_state_change",
+                "meta_invariant_no_progress_forces_change",
                 "stalled loop forbids passive discovery or verification as the next first action".to_string(),
                 serde_json::json!({
                     "action_kind": planned.action_kind,
@@ -148,16 +155,16 @@ impl LoopStageExecutor {
                 }),
             ));
         }
-        let actionable_failure = semantic_summary_has_actionable_failure(
+        let actionable_failure = meta_invariant_has_actionable_failure(
             semantic_summary.validation_blocked_by_preconditions,
             semantic_summary.compiler_repair_required,
             semantic_summary.planning_preconditions.len(),
             semantic_summary.compiler_hints.len(),
             semantic_summary.module_gaps.len(),
         );
-        if is_localized_repair_action(planned.action_kind.as_str()) && !actionable_failure {
+        if meta_invariant_is_localized_repair_action(planned.action_kind.as_str()) && !actionable_failure {
             return Some((
-                "no_actionable_failure_for_repair",
+                "meta_invariant_plan_must_cite_failure",
                 "localized repair action is forbidden because there is no actionable failure in the current semantic context"
                     .to_string(),
                 serde_json::json!({
@@ -165,6 +172,36 @@ impl LoopStageExecutor {
                     "compiler_repair_required": semantic_summary.compiler_repair_required,
                     "compiler_hints": semantic_summary.compiler_hints.len(),
                     "planning_preconditions": semantic_summary.planning_preconditions.len(),
+                }),
+            ));
+        }
+        if !meta_invariant_any_action_cites_failure(
+            &planned.action_payload,
+            semantic_summary.primary_failure_class().as_deref(),
+        ) {
+            return Some((
+                "meta_invariant_plan_must_cite_failure",
+                "planned action does not cite the active failure_class".to_string(),
+                serde_json::json!({
+                    "action_kind": planned.action_kind,
+                    "active_failure_class": semantic_summary.primary_failure_class(),
+                    "cited_failure_class": planned.action_payload.get("failure_class").and_then(|v| v.as_str()),
+                }),
+            ));
+        }
+        if !meta_invariant_action_must_declare_verifier(
+            planned.action_kind.as_str(),
+            &planned.action_payload,
+        ) {
+            return Some((
+                "meta_invariant_action_must_declare_verifier",
+                "mutating planned actions must declare the expected verifier".to_string(),
+                serde_json::json!({
+                    "action_kind": planned.action_kind,
+                    "expected_verifier": meta_invariant_expected_verifier(
+                        planned.action_kind.as_str(),
+                        &planned.action_payload,
+                    ),
                 }),
             ));
         }
@@ -557,6 +594,32 @@ impl EventConsumer for LoopStageExecutor {
                 }
             }
             RuntimeEvent::LoopVerified(v) => {
+                let policy_update = meta_invariant_all_results_update_policy(
+                    v.passed,
+                    v.compiler_clean,
+                    &v.diagnostics,
+                );
+                let result = SemanticExecutionResultRecord::new(
+                    match policy_update.retry_policy {
+                        "corrective_retry" => "verifier_policy_corrective_retry",
+                        _ => "verifier_policy_none",
+                    },
+                    format!(
+                        "meta_invariant_all_results_update_policy {}",
+                        policy_update.as_summary()
+                    ),
+                    Vec::new(),
+                    !policy_update.actionable_failure,
+                )
+                .with_attempted_kind("verify_result");
+                self.ctx
+                    .objective_trend_state
+                    .record_execution_results(std::slice::from_ref(&result));
+                self.ctx.recent_execution_results.push(result);
+                if self.ctx.recent_execution_results.len() > 16 {
+                    let drop_n = self.ctx.recent_execution_results.len() - 16;
+                    self.ctx.recent_execution_results.drain(0..drop_n);
+                }
                 self.ctx.last_verified = Some(v.clone());
                 self.ctx.last_verify_trace_id = v.trace_id.clone();
                 self.ctx.last_verify_execution_id = v.execution_id.clone();
@@ -761,7 +824,8 @@ impl EventConsumer for LoopStageExecutor {
             | RuntimeEvent::CapabilityInvoked(_)
             | RuntimeEvent::CapabilityResolved(_)
             | RuntimeEvent::InvariantDiscovered(_)
-            | RuntimeEvent::RustcCaptureStarted(_) => {}
+            | RuntimeEvent::RustcCaptureStarted(_)
+            | RuntimeEvent::VerifierPolicyUpdated(_) => {}
         }
         self.record_control_state(event, &trigger_id);
 

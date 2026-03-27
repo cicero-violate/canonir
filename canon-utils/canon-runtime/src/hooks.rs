@@ -254,6 +254,7 @@ impl PreHook for WatchdogPreHook {
                 self.last_stage.lock().unwrap().insert("verified", self.current_tick.load(std::sync::atomic::Ordering::SeqCst));
                 HookDecision::Allow
             }
+            RuntimeEvent::VerifierPolicyUpdated(_) => HookDecision::Allow,
             RuntimeEvent::LoopRewarded(_) => {
                 self.last_stage.lock().unwrap().insert("rewarded", self.current_tick.load(std::sync::atomic::Ordering::SeqCst));
                 HookDecision::Allow

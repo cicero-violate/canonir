@@ -38,6 +38,7 @@ fn is_error_event(event: &RuntimeEvent) -> bool {
         RuntimeEvent::NodeFailed(_) => true,
         RuntimeEvent::LoopActed(payload) => !payload.success,
         RuntimeEvent::LoopVerified(payload) => !payload.passed,
+        RuntimeEvent::VerifierPolicyUpdated(payload) => payload.actionable_failure,
         RuntimeEvent::LoopRewarded(payload) => payload.halt,
         RuntimeEvent::Code(canon_event::Code { delta, .. }) => matches!(delta.event, RustcEvent::PanicCaptured(_) | RustcEvent::InvariantViolation(_)),
         _ => false,
@@ -52,6 +53,7 @@ fn is_control_event(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::PlanningCompleted(_)
             | RuntimeEvent::LoopActed(_)
             | RuntimeEvent::LoopVerified(_)
+            | RuntimeEvent::VerifierPolicyUpdated(_)
             | RuntimeEvent::LoopRewarded(_)
     )
 }

@@ -71,6 +71,35 @@ impl FailureScopeKind {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FailureClassKind {
+    MissingModule,
+    DeadCodeForbidConflict,
+    MissingEntrypoint,
+    UnresolvedImport,
+    MissingSymbol,
+    DuplicateDefinition,
+    TraitBoundFailure,
+    GenericCompilerFailure,
+    NoActionableFailure,
+}
+
+impl FailureClassKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::MissingModule => "missing_module",
+            Self::DeadCodeForbidConflict => "dead_code_forbid_conflict",
+            Self::MissingEntrypoint => "missing_entrypoint",
+            Self::UnresolvedImport => "unresolved_import",
+            Self::MissingSymbol => "missing_symbol",
+            Self::DuplicateDefinition => "duplicate_definition",
+            Self::TraitBoundFailure => "trait_bound_failure",
+            Self::GenericCompilerFailure => "generic_compiler_failure",
+            Self::NoActionableFailure => "no_actionable_failure",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CompilerHintRecord {
     pub kind: String,
@@ -140,6 +169,7 @@ pub struct SemanticStateSummary {
     pub compiler_hints: Vec<CompilerHintRecord>,
     pub validation_blocked_by_preconditions: bool,
     pub compiler_repair_required: bool,
+    pub failure_class: Option<String>,
     pub failure_scope: Option<String>,
     pub graph_artifact_id: Option<String>,
     pub graph_node_count: Option<usize>,
@@ -195,6 +225,9 @@ impl SemanticStateSummary {
             "semantic.compiler_repair_required={}",
             self.compiler_repair_required
         ));
+        if let Some(value) = &self.failure_class {
+            facts.push(format!("semantic.failure_class={value}"));
+        }
         if let Some(value) = &self.failure_scope {
             facts.push(format!("semantic.failure_scope={value}"));
         }
@@ -243,6 +276,7 @@ impl SemanticStateSummary {
 
     pub fn apply_rustc_capture_failure(&mut self, message: &str) {
         self.compiler_repair_required = true;
+        self.failure_class = Some(FailureClassKind::GenericCompilerFailure.as_str().to_string());
         if !self.compiler_hints.iter().any(|hint| {
             hint.kind_enum() == Some(CompilerHintKind::GenericCompilerFailure)
                 && hint.summary == format!("rustc capture failed: {message}")
@@ -297,6 +331,8 @@ impl SemanticStateSummary {
                 summary.validation_blocked_by_preconditions = value == "true";
             } else if let Some(value) = fact.strip_prefix("semantic.compiler_repair_required=") {
                 summary.compiler_repair_required = value == "true";
+            } else if let Some(value) = fact.strip_prefix("semantic.failure_class=") {
+                summary.failure_class = Some(value.to_string());
             } else if let Some(value) = fact.strip_prefix("semantic.failure_scope=") {
                 summary.failure_scope = Some(value.to_string());
             } else if let Some(value) = fact.strip_prefix("semantic.graph_artifact_id=") {
@@ -330,6 +366,9 @@ impl SemanticStateSummary {
         lines.push(format!("cargo_project={}", self.cargo_project));
         if let Some(failure_scope) = &self.failure_scope {
             lines.push(format!("failure_scope={failure_scope}"));
+        }
+        if let Some(failure_class) = &self.failure_class {
+            lines.push(format!("failure_class={failure_class}"));
         }
         if let Some(crate_name) = &self.crate_name {
             lines.push(format!("crate_name={crate_name}"));
@@ -376,6 +415,15 @@ impl SemanticStateSummary {
         })
     }
 
+    pub fn primary_failure_class(&self) -> Option<String> {
+        if let Some(value) = &self.failure_class {
+            return Some(value.clone());
+        }
+        self.compiler_hints
+            .iter()
+            .find_map(|hint| hint.kind_enum().map(|kind| kind.as_str().to_string()))
+    }
+
     pub fn compact_block(&self) -> String {
         let mut parts = vec![
             format!("version={}", self.version),
@@ -395,6 +443,9 @@ impl SemanticStateSummary {
         ];
         if let Some(failure_scope) = &self.failure_scope {
             parts.push(format!("failure_scope={failure_scope}"));
+        }
+        if let Some(failure_class) = &self.failure_class {
+            parts.push(format!("failure_class={failure_class}"));
         }
         if !self.planning_preconditions.is_empty() {
             parts.push(format!("preconditions={}", self.planning_preconditions.join("|")));
@@ -1576,6 +1627,22 @@ pub fn latest_graph_proof_verified(results: &[SemanticExecutionResultRecord]) ->
 
 pub fn latest_graph_proof_failed(results: &[SemanticExecutionResultRecord]) -> bool {
     results.last().is_some_and(|result| result.kind == "graph_proof_failed")
+}
+
+pub fn latest_verifier_policy_requires_corrective_retry(
+    results: &[SemanticExecutionResultRecord],
+) -> bool {
+    results
+        .last()
+        .is_some_and(|result| result.kind == "verifier_policy_corrective_retry")
+}
+
+pub fn latest_verifier_policy_clears_retry(
+    results: &[SemanticExecutionResultRecord],
+) -> bool {
+    results
+        .last()
+        .is_some_and(|result| result.kind == "verifier_policy_none")
 }
 
 pub fn latest_no_semantic_progress(results: &[SemanticExecutionResultRecord]) -> bool {

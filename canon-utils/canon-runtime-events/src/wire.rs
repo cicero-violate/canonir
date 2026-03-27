@@ -32,6 +32,7 @@ pub enum EventKind {
     PlanningCompleted,
     LoopActed,
     LoopVerified,
+    VerifierPolicyUpdated,
     LoopRewarded,
     GoodnessSnapshot,
     InvariantDiscovered,
@@ -105,6 +106,7 @@ impl EventKind {
             EventKind::PlanningCompleted => "planning_completed",
             EventKind::LoopActed => "loop_acted",
             EventKind::LoopVerified => "loop_verified",
+            EventKind::VerifierPolicyUpdated => "verifier_policy_updated",
             EventKind::LoopRewarded => "loop_rewarded",
             EventKind::GoodnessSnapshot => "goodness_snapshot",
             EventKind::InvariantDiscovered => "invariant_discovered",
@@ -161,6 +163,7 @@ impl EventKind {
             | EventKind::PlanningCompleted
             | EventKind::LoopActed
             | EventKind::LoopVerified
+            | EventKind::VerifierPolicyUpdated
             | EventKind::LoopRewarded => EventClass::Control,
             _ => EventClass::Effect,
         }
@@ -169,11 +172,12 @@ impl EventKind {
     pub fn allowed_next(self) -> &'static [EventKind] {
         use EventKind::*;
         match self {
-            RouteSelected => &[LoopObserved, PlanningCompleted, LoopActed, LoopVerified, LoopRewarded],
+            RouteSelected => &[LoopObserved, PlanningCompleted, LoopActed, LoopVerified, VerifierPolicyUpdated, LoopRewarded],
             LoopObserved => &[RouteSelected],
             PlanningCompleted => &[RouteSelected],
             LoopActed => &[RouteSelected, LoopVerified],
             LoopVerified => &[LoopRewarded],
+            VerifierPolicyUpdated => &[RouteSelected, LoopRewarded],
             LoopRewarded => &[RouteSelected, LoopObserved],
             _ => &[],
         }
@@ -196,6 +200,7 @@ impl std::str::FromStr for EventKind {
             "planning_completed" => Ok(EventKind::PlanningCompleted),
             "loop_acted" => Ok(EventKind::LoopActed),
             "loop_verified" => Ok(EventKind::LoopVerified),
+            "verifier_policy_updated" => Ok(EventKind::VerifierPolicyUpdated),
             "loop_rewarded" => Ok(EventKind::LoopRewarded),
             "goodness_snapshot" => Ok(EventKind::GoodnessSnapshot),
             "route_tick" => Ok(EventKind::RouteTick),

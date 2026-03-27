@@ -3,7 +3,11 @@ use std::path::Path;
 use canon_analysis::{graph_backed_module_moves, graph_backed_rename_candidates};
 use canon_event::{new_error_occurred, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, LlmCall, LoopActed, LoopObserved, LoopPlanned, PlanningCompleted, RouteSelected, RuntimeEvent, ToolCall, ToolResult};
 use canon_goal::parse_agent_goal_markdown;
-use canon_invariant::decision_trace_payload;
+use canon_invariant::{
+    decision_trace_payload, meta_invariant_action_must_declare_verifier,
+    meta_invariant_all_failures_typed, meta_invariant_any_action_cites_failure,
+    meta_invariant_expected_verifier, meta_invariant_is_mutating_action,
+};
 use canon_semantic_state::{
     derive_self_development_objective_state, primary_development_objective_kind,
     primary_development_strategy_kind, LlmSemanticContext, ObjectiveTrendState,
@@ -381,6 +385,49 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
             ]));
         }
     };
+    let failure_scope = semantic_summary
+        .failure_scope
+        .clone()
+        .unwrap_or_else(|| "none".to_string());
+    if let Some(failure_class) = semantic_summary.primary_failure_class() {
+        for planned in &mut out {
+            if planned.action_kind == "done" {
+                continue;
+            }
+            if planned.action_payload.get("failure_class").is_none() {
+                planned.action_payload["failure_class"] =
+                    serde_json::Value::String(failure_class.clone());
+            }
+            if planned.action_payload.get("failure_scope").is_none() {
+                planned.action_payload["failure_scope"] =
+                    serde_json::Value::String(failure_scope.clone());
+            }
+            if planned.action_payload.get("verifier").is_none() {
+                if let Some(verifier) = meta_invariant_expected_verifier(
+                    planned.action_kind.as_str(),
+                    &planned.action_payload,
+                ) {
+                    planned.action_payload["verifier"] =
+                        serde_json::Value::String(verifier.to_string());
+                }
+            }
+        }
+    } else {
+        for planned in &mut out {
+            if planned.action_kind == "done" {
+                continue;
+            }
+            if planned.action_payload.get("verifier").is_none() {
+                if let Some(verifier) = meta_invariant_expected_verifier(
+                    planned.action_kind.as_str(),
+                    &planned.action_payload,
+                ) {
+                    planned.action_payload["verifier"] =
+                        serde_json::Value::String(verifier.to_string());
+                }
+            }
+        }
+    }
     if let Err(message) = validate_action_batch(
         &out,
         retry_policy,
@@ -507,7 +554,53 @@ fn validate_action_batch(
         );
     }
 
+    if semantic_summary.primary_failure_class().is_some()
+        && !meta_invariant_all_failures_typed(
+            semantic_summary.failure_class.as_deref(),
+            semantic_summary.failure_scope.as_deref(),
+        )
+    {
+        return Err(
+            "meta_invariant_all_failures_typed violated: active semantic failure must include both failure_class and failure_scope"
+                .to_string(),
+        );
+    }
+
     for action in actions {
+        if let Some(expected_failure_class) = semantic_summary.primary_failure_class() {
+            if action.action_kind != "done" {
+                if !meta_invariant_any_action_cites_failure(
+                    &action.action_payload,
+                    Some(expected_failure_class.as_str()),
+                ) {
+                    let cited_failure_class = action
+                        .action_payload
+                        .get("failure_class")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("<missing>");
+                    return Err(format!(
+                        "meta_invariant_plan_must_cite_failure violated: {} cites failure_class={} but active failure_class={}",
+                        action.action_kind, cited_failure_class, expected_failure_class
+                    ));
+                }
+            }
+        }
+        if meta_invariant_is_mutating_action(action.action_kind.as_str(), &action.action_payload)
+            && !meta_invariant_action_must_declare_verifier(
+                action.action_kind.as_str(),
+                &action.action_payload,
+            )
+        {
+            let expected = meta_invariant_expected_verifier(
+                action.action_kind.as_str(),
+                &action.action_payload,
+            )
+            .unwrap_or("unknown");
+            return Err(format!(
+                "meta_invariant_action_must_declare_verifier violated: {} must declare verifier={expected}",
+                action.action_kind
+            ));
+        }
         match action.action_kind.as_str() {
             "apply_patch" => {
                 let Some(patch) = action.action_payload.get("patch").and_then(|v| v.as_str()) else {
@@ -2039,6 +2132,8 @@ mod tests {
             target_root: Some(workspace.display().to_string()),
             path_exists: true,
             cargo_project: true,
+            failure_class: Some("duplicate_definition".into()),
+            failure_scope: Some("localized".into()),
             graph_artifact_id: Some("artifact".into()),
             compiler_hints: vec![CompilerHintRecord::new(
                 CompilerHintKind::DuplicateDefinition,
@@ -2054,7 +2149,9 @@ mod tests {
             action_payload: json!({
                 "old": "crate::alpha::Foo",
                 "new": "crate::alpha::FooAlpha",
-                "path": "src/alpha.rs"
+                "path": "src/alpha.rs",
+                "failure_class": "duplicate_definition",
+                "verifier": "graph_proof"
             }),
             reason: "semantic rename".to_string(),
             llm_request_id: None,
@@ -2087,6 +2184,8 @@ mod tests {
             target_root: Some(workspace.display().to_string()),
             path_exists: true,
             cargo_project: true,
+            failure_class: Some("missing_module".into()),
+            failure_scope: Some("localized".into()),
             graph_artifact_id: Some("artifact".into()),
             rust_file_count: Some(12),
             graph_module_edge_count: Some(48),
@@ -2105,7 +2204,9 @@ mod tests {
             action_payload: json!({
                 "symbol_id": "crate::alpha::Worker",
                 "new_module_path": "crate::beta",
-                "path": "src/alpha.rs"
+                "path": "src/alpha.rs",
+                "failure_class": "missing_module",
+                "verifier": "graph_proof"
             }),
             reason: "module restructure".to_string(),
             llm_request_id: None,
@@ -2127,6 +2228,52 @@ mod tests {
             &[],
         )
         .is_ok());
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn validate_action_batch_rejects_missing_verifier_for_mutation() {
+        let workspace = temp_workspace();
+        let semantic_summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some(workspace.display().to_string()),
+            path_exists: true,
+            cargo_project: true,
+            failure_class: Some("duplicate_definition".into()),
+            failure_scope: Some("localized".into()),
+            ..SemanticStateSummary::default()
+        };
+        let rename = LoopPlanned {
+            tick: 1,
+            action_kind: "edit.rename_symbol".to_string(),
+            action_payload: json!({
+                "old": "crate::alpha::Foo",
+                "new": "crate::alpha::FooAlpha",
+                "path": "src/alpha.rs",
+                "failure_class": "duplicate_definition"
+            }),
+            reason: "semantic rename".to_string(),
+            llm_request_id: None,
+            signals: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            depends_on: Vec::new(),
+        };
+        let result = validate_action_batch(
+            &[rename],
+            crate::policy::RetryPolicy::CorrectiveRetry,
+            &semantic_summary,
+            &ObjectiveTrendState::default(),
+            &[],
+        );
+        assert!(result
+            .unwrap_err()
+            .contains("meta_invariant_action_must_declare_verifier"));
         let _ = fs::remove_dir_all(workspace);
     }
 

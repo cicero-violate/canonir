@@ -504,6 +504,7 @@ impl EventConsumer for RouteExecutor {
             | RuntimeEvent::PlanningCompleted(_)
             | RuntimeEvent::LoopActed(_)
             | RuntimeEvent::LoopVerified(_)
+            | RuntimeEvent::VerifierPolicyUpdated(_)
             | RuntimeEvent::LoopRewarded(_)
             | RuntimeEvent::RouteSelected(_) => EventOutcome::NoOp("route_executor_noop"),
         }

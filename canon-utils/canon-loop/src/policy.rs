@@ -457,6 +457,14 @@ pub fn retry_policy_for_planning_context(
     if base != RetryPolicy::None {
         return base;
     }
+    if canon_semantic_state::latest_verifier_policy_requires_corrective_retry(
+        recent_execution_results,
+    ) {
+        return RetryPolicy::CorrectiveRetry;
+    }
+    if canon_semantic_state::latest_verifier_policy_clears_retry(recent_execution_results) {
+        return RetryPolicy::None;
+    }
     if objective_trend_state.misalignment_pressure_score() > 0 {
         return RetryPolicy::CorrectiveRetry;
     }
@@ -654,6 +662,21 @@ mod tests {
         let hints =
             planner_hint_lines(None, 0, &results, &ObjectiveTrendState::default(), None, None).join("\n");
         assert!(hints.contains("failed graph proof"));
+    }
+
+    #[test]
+    fn verifier_policy_update_forces_corrective_retry_context() {
+        let results = vec![SemanticExecutionResultRecord::new(
+            "verifier_policy_corrective_retry",
+            "meta_invariant_all_results_update_policy verifier_outcome=compiler_failure retry_policy=corrective_retry reward_bias=negative actionable_failure=true",
+            Vec::new(),
+            false,
+        )
+        .with_attempted_kind("verify_result")];
+        assert_eq!(
+            retry_policy_for_planning_context(None, 0, &results, &ObjectiveTrendState::default()),
+            RetryPolicy::CorrectiveRetry
+        );
     }
 
     #[test]

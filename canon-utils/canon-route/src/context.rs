@@ -1,5 +1,5 @@
 use canon_decision::JournalLine;
-use canon_event::{RuntimeEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult, SubTaskResult};
+use canon_event::{LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, RuntimeEvent, SubTaskResult, ToolCall, ToolResult};
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
 use canon_semantic_state::{
     classify_planned_action_intents, derive_objective_trend_state, derive_self_development_objective_state,
@@ -391,6 +391,18 @@ impl RouteContext {
                     || crate::helpers::evaluate_goal_satisfied(self.mission_goal_spec.as_ref(), workspace);
                 self.finish_ready = *compiler_clean && system_satisfied;
                 self.push_journal("verify", format!("passed={} done_action={done_action} system_satisfied={} diagnostics={}", compiler_clean, system_satisfied, diagnostics.join("|")));
+            }
+            RuntimeEvent::VerifierPolicyUpdated(updated) => {
+                self.push_journal(
+                    "policy_update",
+                    format!(
+                        "verifier_outcome={} retry_policy={} reward_bias={} actionable_failure={}",
+                        updated.verifier_outcome,
+                        updated.retry_policy,
+                        updated.reward_bias,
+                        updated.actionable_failure
+                    ),
+                );
             }
             RuntimeEvent::LoopRewarded(LoopRewarded { halt, .. }) => {
                 if *halt {

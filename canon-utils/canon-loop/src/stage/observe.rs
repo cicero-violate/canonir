@@ -135,6 +135,9 @@ fn build_observation_payload(
         planning_preconditions::derive_preconditions(Some(&model), compiler_errors);
     let repair_intents = planning_preconditions::derive_repair_intents(&planning_preconditions);
     let compiler_hints = crate::compiler_hints::planner_lines(compiler_errors);
+    let failure_class = compiler_hints
+        .iter()
+        .find_map(|hint| hint.kind_enum().map(|kind| kind.as_str().to_string()));
     let failure_scope = compiler_hints
         .iter()
         .filter_map(|hint| hint.failure_scope_enum())
@@ -177,6 +180,7 @@ fn build_observation_payload(
         validation_blocked_by_preconditions: !planning_preconditions.is_empty(),
         compiler_repair_required: planning_preconditions
             .contains(&planning_preconditions::PlanningPrecondition::MustFixDeadCodeForbidConflict),
+        failure_class,
         failure_scope,
         ..read_graph_summary(&target_root).unwrap_or_default()
     };
