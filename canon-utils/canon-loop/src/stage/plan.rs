@@ -441,7 +441,7 @@ fn planning_semantic_summary(observed: Option<&LoopObserved>) -> Result<Semantic
     let summary = observed
         .semantic_summary
         .clone()
-        .unwrap_or_else(|| SemanticStateSummary::from_workspace_facts(&observed.workspace_facts));
+        .ok_or_else(|| "semantic summary is missing".to_string())?;
     if !summary.complete {
         return Err("semantic summary is incomplete".to_string());
     }
@@ -829,8 +829,7 @@ fn build_context_base(
 
     let search_hints = build_search_hints(&goal_text, workspace);
     let workspace_tree = build_workspace_tree(std::path::Path::new(&target_workspace), 3, 0);
-    let low_level_workspace_facts =
-        render_low_level_workspace_facts(&observed.observe_diagnostics, &observed.workspace_facts);
+    let low_level_workspace_facts = render_low_level_workspace_facts(&observed.observe_diagnostics);
 
     format!(
         r#"GOAL:
@@ -998,19 +997,12 @@ Recent tool results:
     )
 }
 
-fn low_level_workspace_facts(observe_diagnostics: &[String], facts: &[String]) -> Vec<String> {
-    if !observe_diagnostics.is_empty() {
-        return observe_diagnostics.to_vec();
-    }
-    facts
-        .iter()
-        .filter(|fact| !fact.starts_with("semantic."))
-        .cloned()
-        .collect()
+fn low_level_workspace_facts(observe_diagnostics: &[String]) -> Vec<String> {
+    observe_diagnostics.to_vec()
 }
 
-fn render_low_level_workspace_facts(observe_diagnostics: &[String], facts: &[String]) -> String {
-    let facts = low_level_workspace_facts(observe_diagnostics, facts);
+fn render_low_level_workspace_facts(observe_diagnostics: &[String]) -> String {
+    let facts = low_level_workspace_facts(observe_diagnostics);
     if facts.is_empty() {
         String::new()
     } else {

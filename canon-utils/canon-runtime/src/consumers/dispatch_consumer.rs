@@ -171,7 +171,6 @@ fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_
             compiler_errors: vec![],
             semantic_summary: None,
             observe_diagnostics: vec![],
-            workspace_facts: vec![],
         }));
 
     let deadline = Instant::now() + Duration::from_secs(SUB_AGENT_TIMEOUT_SECS);

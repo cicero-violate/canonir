@@ -164,14 +164,14 @@ impl RouteContext {
 
     pub fn update_from_event(&mut self, event: &RuntimeEvent, workspace: &Path) {
         match event {
-            RuntimeEvent::LoopObserved(LoopObserved { goal_text, error_count, workspace_facts, semantic_summary, .. }) => {
+            RuntimeEvent::LoopObserved(LoopObserved { goal_text, error_count, semantic_summary, .. }) => {
                 let goal_present = goal_text
                     .as_ref()
                     .map(|v| !Self::goal_is_placeholder(v))
                     .unwrap_or(false);
                 let semantic = semantic_summary
                     .clone()
-                    .unwrap_or_else(|| SemanticStateSummary::from_workspace_facts(workspace_facts));
+                    .unwrap_or_default();
                 self.context_ready = goal_present || *error_count > 0;
                 self.bootstrap_refresh_required = false;
                 self.semantic_summary = semantic;
@@ -438,9 +438,8 @@ mod tests {
                 warning_count: 0,
                 compiler_errors: Vec::new(),
                 goal_text: Some("goal".into()),
-                semantic_summary: None,
+                semantic_summary: Some(SemanticStateSummary::default()),
                 observe_diagnostics: Vec::new(),
-                workspace_facts: Vec::new(),
             }),
             workspace,
         );
@@ -573,15 +572,18 @@ mod tests {
                 warning_count: 0,
                 compiler_errors: Vec::new(),
                 goal_text: Some("goal".into()),
-                semantic_summary: None,
+                semantic_summary: Some(SemanticStateSummary {
+                    version: SemanticStateSummary::VERSION,
+                    complete: true,
+                    planning_preconditions: vec![
+                        "must_create_entrypoint=true repair=create_src_main_or_lib_before_cargo_check".into(),
+                        "must_fix_dead_code_forbid_conflict=true repair=remove_allow_dead_code_or_make_code_used".into(),
+                    ],
+                    validation_blocked_by_preconditions: true,
+                    compiler_repair_required: true,
+                    ..SemanticStateSummary::default()
+                }),
                 observe_diagnostics: Vec::new(),
-                workspace_facts: vec![
-                    "semantic.complete=true".into(),
-                    "semantic.planning_precondition=must_create_entrypoint=true repair=create_src_main_or_lib_before_cargo_check".into(),
-                    "semantic.planning_precondition=must_fix_dead_code_forbid_conflict=true repair=remove_allow_dead_code_or_make_code_used".into(),
-                    "semantic.validation_blocked_by_preconditions=true".into(),
-                    "semantic.compiler_repair_required=true".into(),
-                ],
             }),
             workspace,
         );
@@ -592,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_workspace_facts_are_consumed() {
+    fn semantic_observation_payload_is_consumed() {
         let mut ctx = RouteContext::default();
         let workspace = Path::new("/tmp");
         ctx.update_from_event(
@@ -602,15 +604,19 @@ mod tests {
                 warning_count: 0,
                 compiler_errors: Vec::new(),
                 goal_text: Some("goal".into()),
-                semantic_summary: None,
+                semantic_summary: Some(SemanticStateSummary {
+                    version: SemanticStateSummary::VERSION,
+                    complete: true,
+                    target_root: Some("/tmp/example".into()),
+                    path_exists: false,
+                    planning_preconditions: vec![
+                        "must_bootstrap_workspace=true repair=cargo_init_or_create_workspace".into(),
+                    ],
+                    validation_blocked_by_preconditions: true,
+                    compiler_repair_required: false,
+                    ..SemanticStateSummary::default()
+                }),
                 observe_diagnostics: Vec::new(),
-                workspace_facts: vec![
-                    "semantic.target_root=/tmp/example".into(),
-                    "semantic.path_exists=false".into(),
-                    "semantic.planning_precondition=must_bootstrap_workspace=true repair=cargo_init_or_create_workspace".into(),
-                    "semantic.validation_blocked_by_preconditions=true".into(),
-                    "semantic.compiler_repair_required=false".into(),
-                ],
             }),
             workspace,
         );

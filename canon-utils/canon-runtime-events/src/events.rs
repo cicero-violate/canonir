@@ -291,8 +291,6 @@ canon_event_struct!(
         semantic_summary: Option<canon_semantic_state::SemanticStateSummary>,
         #[serde(default)]
         observe_diagnostics: Vec<String>,
-        #[serde(default)]
-        workspace_facts: Vec<String>,
     }
 );
 

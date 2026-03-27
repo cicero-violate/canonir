@@ -39,8 +39,8 @@ fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStage
         ctx.goal_text.hash(&mut h);
         h.finish()
     };
-    let (semantic_summary, observe_diagnostics, workspace_facts, observe_events) =
-        build_workspace_facts(&ctx.goal_text, &ctx.workspace, &ctx.recent_compiler_errors);
+    let (semantic_summary, observe_diagnostics, observe_events) =
+        build_observation_payload(&ctx.goal_text, &ctx.workspace, &ctx.recent_compiler_errors);
     let facts_hash = {
         let mut h = DefaultHasher::new();
         semantic_summary.hash(&mut h);
@@ -76,7 +76,6 @@ fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStage
         goal_text: ctx.goal_text.clone(),
         semantic_summary: Some(semantic_summary),
         observe_diagnostics,
-        workspace_facts,
     };
     let mut out = observe_events;
     out.push(RuntimeEvent::LoopObserved(payload));
@@ -120,17 +119,17 @@ fn scan_tlog_for_goal(tlog_path: &Path) -> Option<String> {
     found
 }
 
-fn build_workspace_facts(
+fn build_observation_payload(
     goal_text: &Option<String>,
     workspace: &Path,
     compiler_errors: &[serde_json::Value],
-) -> (SemanticStateSummary, Vec<String>, Vec<String>, Vec<RuntimeEvent>) {
+) -> (SemanticStateSummary, Vec<String>, Vec<RuntimeEvent>) {
     let Some(goal) = goal_text else {
-        return (SemanticStateSummary::default(), Vec::new(), Vec::new(), Vec::new());
+        return (SemanticStateSummary::default(), Vec::new(), Vec::new());
     };
     let mut search_hits = Vec::new();
     let Some(model) = WorkspaceModel::inspect(goal, workspace) else {
-        return (SemanticStateSummary::default(), Vec::new(), Vec::new(), Vec::new());
+        return (SemanticStateSummary::default(), Vec::new(), Vec::new());
     };
     let planning_preconditions =
         planning_preconditions::derive_preconditions(Some(&model), compiler_errors);
@@ -195,11 +194,8 @@ fn build_workspace_facts(
     }
 
     let observe_diagnostics = build_observe_diagnostics(&model, &listing, &search_hits);
-    let mut facts = summary.to_workspace_facts();
-    facts.extend(observe_diagnostics.clone());
-
     if !model.path_exists {
-        return (summary, observe_diagnostics, facts, Vec::new());
+        return (summary, observe_diagnostics, Vec::new());
     }
 
     let node_id = "observe_consumer".to_string();
@@ -262,7 +258,7 @@ fn build_workspace_facts(
         }),
     ));
 
-    (summary, observe_diagnostics, facts, events)
+    (summary, observe_diagnostics, events)
 }
 
 fn build_observe_diagnostics(
