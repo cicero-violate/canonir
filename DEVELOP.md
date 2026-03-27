@@ -74,6 +74,14 @@ Use this matrix as the source of truth for retry and transition policy. The key 
 - invalid `cwd` / invalid path / missing context -> `corrective_retry`
 - successful read-only discovery does not clear retry policy by itself
 
+### Cycle-cap policy
+
+- cycle cap must never force `conclude` when recent actionable failure evidence exists
+  - fallback: `plan`
+- cycle cap must not force `conclude` when there is no terminal success signal and `finish_ready=false`
+  - fallback: `observe`
+- `conclude` is reserved for explicit success / explicit stop, not generic stagnation
+
 ### Command-state closure checklist
 
 Every command path should define:

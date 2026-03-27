@@ -45,6 +45,10 @@ pub struct RouteContext {
     pub recent_tool_results: Vec<serde_json::Value>,
     pub finish_ready: bool,
     pub last_action_kind: String,
+    pub verify_seen: bool,
+    pub last_verify_passed: bool,
+    pub last_verify_compiler_clean: bool,
+    pub last_verify_diagnostics: Vec<String>,
     pub journal: Vec<JournalLine>,
     pub last_llm_signals: Option<serde_json::Value>,
     pub halted: bool,
@@ -181,12 +185,14 @@ impl RouteContext {
             }
             RuntimeEvent::LoopActed(LoopActed { action_kind, capability_request_id, tool_call_id, tool_result_id, success, stderr, action_id, .. }) => {
                 self.planned_pending = self.planned_pending.saturating_sub(1);
-                self.consecutive_invalid_plan_batches = 0;
-                self.last_invalid_plan_reason = None;
-                self.last_invalid_plan_planned_count = None;
+                const READ_ONLY_ACTIONS: &[&str] = &["list_dir", "read_file", "search_files", "done"];
+                if !READ_ONLY_ACTIONS.contains(&action_kind.as_str()) {
+                    self.consecutive_invalid_plan_batches = 0;
+                    self.last_invalid_plan_reason = None;
+                    self.last_invalid_plan_planned_count = None;
+                }
                 update_causal_graph(&mut self.causal_graph, event);
                 // Only mark dirty/acted_unverified for mutating actions.
-                const READ_ONLY_ACTIONS: &[&str] = &["list_dir", "read_file", "search_files", "done"];
                 if !READ_ONLY_ACTIONS.contains(&action_kind.as_str()) {
                     self.acted_unverified = true;
                     self.workspace_dirty_tracker.mark_dirty("orchestrator", action_id.as_deref());
@@ -216,6 +222,10 @@ impl RouteContext {
             }
             RuntimeEvent::LoopVerified(LoopVerified { compiler_clean, passed, diagnostics, .. }) => {
                 self.acted_unverified = false;
+                self.verify_seen = true;
+                self.last_verify_passed = *passed;
+                self.last_verify_compiler_clean = *compiler_clean;
+                self.last_verify_diagnostics = diagnostics.clone();
                 self.workspace_dirty_tracker.mark_verified("orchestrator");
                 let done_action = self.last_action_kind == "done";
                 let system_satisfied = done_action && *passed
@@ -452,6 +462,78 @@ mod tests {
             }),
             workspace,
         );
+        assert_eq!(ctx.planned_pending, 0);
+    }
+
+    #[test]
+    fn read_only_actions_preserve_invalid_plan_memory() {
+        let mut ctx = RouteContext::default();
+        let workspace = Path::new("/tmp");
+        ctx.consecutive_invalid_plan_batches = 2;
+        ctx.last_invalid_plan_reason = Some("invalid hunk at line 12".into());
+        ctx.last_invalid_plan_planned_count = Some(3);
+
+        ctx.update_from_event(
+            &RuntimeEvent::LoopActed(LoopActed {
+                tick: 1,
+                action_kind: "read_file".into(),
+                capability_request_id: "req".into(),
+                tool_call_id: None,
+                tool_result_id: None,
+                stdout: "contents".into(),
+                stderr: String::new(),
+                exit_code: None,
+                duration_ms: 0,
+                success: true,
+                trace_id: None,
+                execution_id: None,
+                span_id: None,
+                parent_span_id: None,
+                plan_id: None,
+                plan_step_id: None,
+                action_id: None,
+            }),
+            workspace,
+        );
+
+        assert_eq!(ctx.consecutive_invalid_plan_batches, 2);
+        assert_eq!(ctx.last_invalid_plan_reason.as_deref(), Some("invalid hunk at line 12"));
+        assert_eq!(ctx.last_invalid_plan_planned_count, Some(3));
+    }
+
+    #[test]
+    fn bootstrap_action_clears_missing_target_and_requests_refresh() {
+        let mut ctx = RouteContext::default();
+        let workspace = Path::new("/tmp");
+        ctx.target_workspace_missing = true;
+        ctx.target_workspace_path = Some("/tmp/example".into());
+        ctx.planned_pending = 2;
+
+        ctx.update_from_event(
+            &RuntimeEvent::LoopActed(LoopActed {
+                tick: 1,
+                action_kind: "run_command".into(),
+                capability_request_id: "req".into(),
+                tool_call_id: None,
+                tool_result_id: None,
+                stdout: String::new(),
+                stderr: "    Creating binary (application) package".into(),
+                exit_code: Some(0),
+                duration_ms: 0,
+                success: true,
+                trace_id: None,
+                execution_id: None,
+                span_id: None,
+                parent_span_id: None,
+                plan_id: None,
+                plan_step_id: None,
+                action_id: None,
+            }),
+            workspace,
+        );
+
+        assert!(!ctx.target_workspace_missing);
+        assert!(ctx.bootstrap_refresh_required);
         assert_eq!(ctx.planned_pending, 0);
     }
 }

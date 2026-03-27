@@ -1,6 +1,10 @@
 use crate::stage::observe;
 use crate::{
     context::LoopContext,
+    policy::{
+        classify_action_outcome, evaluate_loop_runtime, evaluate_loop_transition, ActionOutcomeClass,
+        LoopRecoveryRule, ObserveExecutionMode,
+    },
     result::LoopStageResult,
     scheduler::{infer_priority, ScheduledTask},
     stage::LoopStageEvent,
@@ -50,14 +54,10 @@ impl LoopStageExecutor {
     }
 
     fn is_successful_bootstrap_action(a: &canon_event::LoopActed) -> bool {
-        if a.action_kind != "run_command" || !a.success {
-            return false;
-        }
-        let text = if !a.stdout.is_empty() { &a.stdout } else { &a.stderr };
-        text.contains("Creating binary (application) package")
-            || text.contains("Creating library package")
-            || text.contains("Creating binary (application) `")
-            || text.contains("Creating library `")
+        matches!(
+            classify_action_outcome(&a.action_kind, a.success, &a.stdout, &a.stderr),
+            ActionOutcomeClass::BootstrapSuccess
+        )
     }
 }
 
@@ -107,7 +107,13 @@ impl EventConsumer for LoopStageExecutor {
                     );
                 }
 
-                if expected == "loop_rewarded" {
+                let transition = evaluate_loop_transition(
+                    self.ctx.pending_required_successor.as_deref(),
+                    None,
+                    None,
+                    Some(expected),
+                );
+                if transition.force_reward_recovery {
                     if self.ctx.pending_required_successor.as_deref() != Some("loop_rewarded") {
                         if let Some(emitter) = self.ctx.emitter.as_ref() {
                             emitter.emit_child(
@@ -228,7 +234,15 @@ impl EventConsumer for LoopStageExecutor {
                     .and_then(|v| v.as_str())
                 {
                     Some("loop_observed") => force_observe_recovery = true,
-                    Some("loop_rewarded") => force_reward_recovery = true,
+                    Some(expected) => {
+                        let transition = evaluate_loop_transition(
+                            self.ctx.pending_required_successor.as_deref(),
+                            None,
+                            None,
+                            Some(expected),
+                        );
+                        force_reward_recovery = transition.force_reward_recovery;
+                    }
                     _ => {}
                 }
             }
@@ -268,9 +282,12 @@ impl EventConsumer for LoopStageExecutor {
                 self.ctx.last_handled_observed_hash = None;
                 self.ctx.last_emitted_plan_hash = None;
                 self.ctx.last_delta_hash = None;
-                self.ctx.consecutive_invalid_plan_batches = 0;
-                self.ctx.last_invalid_plan_reason = None;
-                self.ctx.last_invalid_plan_planned_count = None;
+                const READ_ONLY_ACTIONS: &[&str] = &["list_dir", "read_file", "search_files", "done"];
+                if !READ_ONLY_ACTIONS.contains(&a.action_kind.as_str()) {
+                    self.ctx.consecutive_invalid_plan_batches = 0;
+                    self.ctx.last_invalid_plan_reason = None;
+                    self.ctx.last_invalid_plan_planned_count = None;
+                }
                 if let Some(action_id) = a.action_id.clone() {
                     if let Some(paths) = self.ctx.write_paths_by_action.remove(&action_id) {
                         for p in paths {
@@ -278,7 +295,6 @@ impl EventConsumer for LoopStageExecutor {
                         }
                     }
                     // Mark workspace dirty for mutating actions.
-                    const READ_ONLY_ACTIONS: &[&str] = &["list_dir", "read_file", "search_files", "done"];
                     if !READ_ONLY_ACTIONS.contains(&a.action_kind.as_str()) {
                         self.ctx.dirty_tracker.mark_dirty("orchestrator", Some(&action_id));
                     }
@@ -396,7 +412,12 @@ impl EventConsumer for LoopStageExecutor {
                 }
             }
             RuntimeEvent::PlanningCompleted(pc) => {
-                if pc.status == "invalid_plan" {
+                let transition =
+                    evaluate_loop_transition(self.ctx.pending_required_successor.as_deref(), Some(&pc.status), None, None);
+                if transition
+                    .recovery_rules
+                    .contains(&LoopRecoveryRule::ClearPlannerSuppressionOnInvalidPlan)
+                {
                     // Invalid plan is recoverable: clear planner suppression cursors so the
                     // same observed state/tick can immediately re-enter planning.
                     self.ctx.last_planned_observed_tick = None;
@@ -467,9 +488,13 @@ impl EventConsumer for LoopStageExecutor {
                         .get("fatal_invariant")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
-                if err.kind != "invariant_violation"
+                let transition =
+                    evaluate_loop_transition(self.ctx.pending_required_successor.as_deref(), None, Some(&err.kind), None);
+                let explicit_observe_recovery = transition.trigger_observe;
+                if explicit_observe_recovery
+                    || (err.kind != "invariant_violation"
                     && err.kind != "invalid_plan_batch"
-                    && !fatal_invariant_diag
+                    && !fatal_invariant_diag)
                 {
                     trigger_observe = true;
                 }
@@ -515,13 +540,16 @@ impl EventConsumer for LoopStageExecutor {
             matches!(event, RuntimeEvent::ErrorOccurred(err) if err.kind == "invariant_violation")
                 || matches!(event, RuntimeEvent::Code(code) if matches!(code.delta.event, canon_event::RustcEvent::InvariantViolation(_)));
 
-        let observe_blocked_by_successor = self
-            .ctx
-            .pending_required_successor
-            .as_deref()
-            .is_some_and(|expected| expected != "loop_observed");
+        let runtime_eval = evaluate_loop_runtime(
+            self.ctx.halted,
+            force_observe_recovery,
+            trigger_observe,
+            suppress_observe_on_invariant,
+            self.ctx.pending_required_successor.as_deref(),
+            matches!(event, RuntimeEvent::RouteSelected(_)),
+        );
 
-        if force_observe_recovery && !self.ctx.halted {
+        if runtime_eval.observe_mode == ObserveExecutionMode::Forced {
             match observe::execute_forced(&mut self.ctx) {
                 Ok(LoopStageResult::Emit(e)) => {
                     if let Some(emitter) = self.ctx.emitter.as_ref() {
@@ -556,29 +584,28 @@ impl EventConsumer for LoopStageExecutor {
             }
         } else if force_reward_recovery && !self.ctx.halted {
             // Handled eagerly for recovery_event before generic processing.
-        } else if trigger_observe && !self.ctx.halted && !suppress_observe_on_invariant {
-            if observe_blocked_by_successor {
-                if let Some(emitter) = self.ctx.emitter.as_ref() {
-                    emitter.emit_child(
-                        RuntimeEvent::Debug(canon_event::DebugEvent {
-                            source: "loop_stage_executor".to_string(),
-                            kind: "observe_suppressed_due_to_pending_successor".to_string(),
-                            payload: decision_trace_payload(
-                                "observe suppressed because another control successor is required",
-                                serde_json::json!({
-                                    "pending_required_successor": self.ctx.pending_required_successor,
-                                    "last_control_kind": self.ctx.last_control_kind,
-                                    "last_control_event_id": self.ctx.last_control_event_id,
-                                    "trigger_kind": canon_event::event_kind_str(event),
-                                }),
-                            ),
-                        }),
-                        vec![trigger_id.clone()],
-                        file!(),
-                        line!(),
-                    );
-                }
-            } else {
+        } else if runtime_eval.observe_mode == ObserveExecutionMode::SuppressedByPendingSuccessor {
+            if let Some(emitter) = self.ctx.emitter.as_ref() {
+                emitter.emit_child(
+                    RuntimeEvent::Debug(canon_event::DebugEvent {
+                        source: "loop_stage_executor".to_string(),
+                        kind: "observe_suppressed_due_to_pending_successor".to_string(),
+                        payload: decision_trace_payload(
+                            "observe suppressed because another control successor is required",
+                            serde_json::json!({
+                                "pending_required_successor": self.ctx.pending_required_successor,
+                                "last_control_kind": self.ctx.last_control_kind,
+                                "last_control_event_id": self.ctx.last_control_event_id,
+                                "trigger_kind": canon_event::event_kind_str(event),
+                            }),
+                        ),
+                    }),
+                    vec![trigger_id.clone()],
+                    file!(),
+                    line!(),
+                );
+            }
+        } else if runtime_eval.observe_mode == ObserveExecutionMode::Triggered {
             match observe::execute(&mut self.ctx) {
                 Ok(LoopStageResult::Emit(e)) => {
                     if let Some(emitter) = self.ctx.emitter.as_ref() {
@@ -615,11 +642,10 @@ impl EventConsumer for LoopStageExecutor {
                     }
                 }
             }
-            }
         }
 
-        if self.ctx.halted {
-            if matches!(event, RuntimeEvent::RouteSelected(_)) {
+        if runtime_eval.halt_blocks_stage {
+            if runtime_eval.warn_route_selected_while_halted {
                 if let Some(emitter) = self.ctx.emitter.as_ref() {
                     emitter.emit_child(
                         RuntimeEvent::Debug(canon_event::DebugEvent {

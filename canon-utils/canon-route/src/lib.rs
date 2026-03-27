@@ -3,6 +3,7 @@ pub mod decision;
 pub mod executor;
 pub mod helpers;
 pub mod causal;
+pub mod policy;
 
 pub use context::RouteContext;
 pub use decision::{decide_from_json, RouteDecision};

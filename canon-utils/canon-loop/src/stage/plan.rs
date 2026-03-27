@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     context::{LoopContext, PendingPlan},
+    policy::{planner_hint_lines, retry_policy_for_invalid_plan, RetryPolicy},
     result::LoopStageResult,
 };
 
@@ -250,8 +251,8 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     if out.is_empty() {
         return Ok(LoopStageResult::Noop);
     }
-    let discovery_only_retry = ctx.consecutive_invalid_plan_batches > 0;
-    if let Err(message) = validate_action_batch(&out, discovery_only_retry, pending.goal_text.as_deref()) {
+    let retry_policy = retry_policy_for_invalid_plan(ctx.last_invalid_plan_reason.as_deref(), ctx.consecutive_invalid_plan_batches);
+    if let Err(message) = validate_action_batch(&out, retry_policy, pending.goal_text.as_deref()) {
         ctx.last_planned_observed_tick = None;
         return Ok(LoopStageResult::EmitMany(vec![
             RuntimeEvent::Debug(canon_event::DebugEvent {
@@ -262,7 +263,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
                     serde_json::json!({
                         "reason": message,
                         "planned_count": out.len(),
-                        "discovery_only_retry": discovery_only_retry,
+                        "retry_policy": retry_policy.as_str(),
                     }),
                 ),
             }),
@@ -274,7 +275,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
                 serde_json::json!({
                     "planned_count": out.len(),
                     "recoverable": true,
-                    "discovery_only_retry": discovery_only_retry,
+                    "retry_policy": retry_policy.as_str(),
                 }),
                 None,
             )),
@@ -311,11 +312,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     Ok(LoopStageResult::EmitMany(events))
 }
 
-fn validate_action_batch(
-    actions: &[LoopPlanned],
-    discovery_only_retry: bool,
-    goal_text: Option<&str>,
-) -> Result<(), String> {
+fn validate_action_batch(actions: &[LoopPlanned], retry_policy: RetryPolicy, goal_text: Option<&str>) -> Result<(), String> {
     let target_root = goal_text
         .and_then(|goal| parse_agent_goal_markdown(goal).target_path)
         .unwrap_or_else(|| PathBuf::from("."));
@@ -326,11 +323,21 @@ fn validate_action_batch(
             "patch_file" | "apply_patch" | "write_file" | "run_command" | "done"
         )
     });
-    if discovery_only_retry && has_execution {
+    if retry_policy == RetryPolicy::DiscoveryOnly && has_execution {
         return Err(
             "discovery-only retry required after invalid plan batch; execution/edit actions are not allowed yet"
                 .to_string(),
         );
+    }
+    if retry_policy == RetryPolicy::SinglePatchOnly {
+        let apply_patch_count = actions.iter().filter(|a| a.action_kind == "apply_patch").count();
+        let has_non_patch = actions.iter().any(|a| a.action_kind != "apply_patch");
+        if apply_patch_count != 1 || has_non_patch {
+            return Err(
+                "single-patch retry required after apply_patch failure; emit exactly one apply_patch action and nothing else"
+                    .to_string(),
+            );
+        }
     }
     if has_discovery && has_execution {
         return Err(
@@ -621,7 +628,7 @@ const PLANNER_SYSTEM_INSTRUCTIONS: &str = r#"You are a code-editing agent. Produ
 1. list_dir — list what files/dirs exist (use BEFORE assuming project state)
    {"action":"list_dir","path":"."}
 
-2. read_file — read a file's current contents (use BEFORE editing it)
+2. read_file — read a file's current contents when you do not already have enough context to edit safely
    {"action":"read_file","path":"src/main.rs"}
    ⚠ Results appear in "Recent actions" on your NEXT call. Do not mix with edits.
 
@@ -659,7 +666,7 @@ const PLANNER_SYSTEM_INSTRUCTIONS: &str = r#"You are a code-editing agent. Produ
 
 ━━━ WORKFLOW ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Step 1 — Discover (when unsure of project state):
+Step 1 — Discover (only when unsure of project state or missing file contents):
   Emit ONLY list_dir and/or read_file. Do NOT mix with edits.
   → Results appear in "Recent actions" on your next call.
 
@@ -804,15 +811,34 @@ fn build_context_delta(
     };
 
     let invalid_plan_section = match last_invalid_plan_reason {
-        Some(reason) => format!(
-            "Invalid plan memory: consecutive_invalid_plan_batches={count}; last_invalid_plan_planned_count={planned}; last_invalid_plan_reason={reason}\nIf the previous batch mixed discovery with edits/execution, your next batch must be discovery-only (list_dir/read_file) and must not include apply_patch, write_file, run_command, patch_file, or done.\n",
-            count = consecutive_invalid_plan_batches,
-            planned = last_invalid_plan_planned_count
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "NA".to_string()),
-        ),
+        Some(reason) => {
+            let policy = retry_policy_for_invalid_plan(Some(reason), consecutive_invalid_plan_batches);
+            let policy_text = match policy {
+                RetryPolicy::DiscoveryOnly =>
+                    "Retry policy: discovery-only. Emit ONLY list_dir/read_file on the next batch.",
+                RetryPolicy::SinglePatchOnly =>
+                    "Retry policy: single-patch-only. Emit exactly one apply_patch action and nothing else on the next batch.",
+                RetryPolicy::CorrectiveRetry =>
+                    "Retry policy: corrective retry. Fix the specific invalid-plan issue and retry directly; discovery is not required unless you are missing file context.",
+                RetryPolicy::None => "Retry policy: none.",
+            };
+            format!(
+                "Invalid plan memory: consecutive_invalid_plan_batches={count}; last_invalid_plan_planned_count={planned}; last_invalid_plan_reason={reason}\n{policy_text}\n",
+                count = consecutive_invalid_plan_batches,
+                planned = last_invalid_plan_planned_count
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "NA".to_string()),
+            )
+        }
         None => "Invalid plan memory: none\n".to_string(),
     };
+
+    let planner_hint = build_planner_hint(
+        batch_acted,
+        batch_tool_results,
+        last_invalid_plan_reason,
+        consecutive_invalid_plan_batches,
+    );
 
     format!(
         r#"TARGET WORKSPACE: {target_workspace}
@@ -820,6 +846,9 @@ All relative paths resolve against TARGET WORKSPACE (not its parent).
 LOC: {loc}  |  Errors: {errors}  |  Warnings: {warnings}
 {route_section}
 {invalid_plan_section}
+Planner hint:
+{planner_hint}
+
 {destructive_note}
 Recent actions (most recent first — read_file stdout contains file contents):
 {recent_actions}
@@ -833,9 +862,63 @@ Recent tool results:
         warnings = observed.warning_count,
         destructive_note = destructive_note,
         invalid_plan_section = invalid_plan_section,
+        planner_hint = planner_hint,
         recent_actions = if recent_actions.is_empty() { "(none)".to_string() } else { recent_actions },
         recent_results = if recent_results.is_empty() { "(none)".to_string() } else { recent_results },
     )
+}
+
+fn build_planner_hint(
+    batch_acted: &[LoopActed],
+    batch_tool_results: &[ToolResult],
+    last_invalid_plan_reason: Option<&str>,
+    consecutive_invalid_plan_batches: u32,
+) -> String {
+    let last_failure = batch_acted
+        .iter()
+        .rev()
+        .find(|a| !a.success && (!a.stderr.trim().is_empty() || !a.stdout.trim().is_empty()))
+        .map(|a| {
+            (
+                a.action_kind.clone(),
+                if !a.stderr.trim().is_empty() {
+                    a.stderr.clone()
+                } else {
+                    a.stdout.clone()
+                },
+            )
+        })
+        .or_else(|| {
+            batch_tool_results
+                .iter()
+                .rev()
+                .find(|r| !r.success)
+                .map(|r| (r.kind.as_str(), r.output.to_string()))
+                .map(|(kind, text)| (kind.to_string(), text))
+        });
+    let hint_lines = planner_hint_lines(
+        last_invalid_plan_reason,
+        consecutive_invalid_plan_batches,
+        last_failure.as_ref().map(|(kind, _)| kind.as_str()),
+        last_failure
+            .as_ref()
+            .map(|(_, text)| truncate_hint_text(text, 240))
+            .as_deref(),
+    );
+    if hint_lines.is_empty() {
+        "none".to_string()
+    } else {
+        hint_lines.join("\n")
+    }
+}
+
+fn truncate_hint_text(text: &str, max_len: usize) -> String {
+    let trimmed = text.trim().replace('\n', " ");
+    if trimmed.len() > max_len {
+        format!("{}...", &trimmed[..max_len])
+    } else {
+        trimmed
+    }
 }
 
 fn hash_str(s: &str) -> u64 {

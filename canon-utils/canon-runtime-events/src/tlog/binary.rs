@@ -650,17 +650,17 @@ mod tests {
         );
         writer.write_canon_event(&route).unwrap();
 
-        let planned = event(
-            "plan-1",
-            EventKind::LoopPlanned,
+        let acted = event(
+            "act-1",
+            EventKind::LoopActed,
             2,
             json!({"action_kind":"noop"}),
-            json!({"signals":{}}),
+            json!({"success": true}),
         );
-        let err = writer.write_canon_event(&planned).unwrap_err().to_string();
+        let err = writer.write_canon_event(&acted).unwrap_err().to_string();
         assert!(err.contains("missing required successor"));
         assert!(err.contains("expected=loop_observed"));
-        assert!(err.contains("got=loop_planned"));
+        assert!(err.contains("got=loop_acted"));
     }
 
     #[test]

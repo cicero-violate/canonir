@@ -17,3 +17,8 @@ canon-proc-macros = { path = "../canon-proc-macros" }
 crc32fast = "1"
 fs2 = "0.4"
 uuid = { workspace = true }
+
+[[bin]]
+name = "emit_capability_event"
+path = "src/bin/emit_capability_event.rs"
+test = false

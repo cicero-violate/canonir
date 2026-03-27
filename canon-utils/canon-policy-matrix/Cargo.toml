@@ -1,0 +1,15 @@
+[package]
+name = "canon-policy-matrix"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "canon_policy_matrix"
+path = "src/lib.rs"
+
+[dependencies]
+canon_decision = { package = "canon-decision", path = "../canon-decision" }
+canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
+canon_loop = { package = "canon-loop", path = "../canon-loop" }
+canon_route = { package = "canon-route", path = "../canon-route" }
+serde_json.workspace = true
