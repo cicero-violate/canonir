@@ -1,5 +1,4 @@
-use canon_event::{RuntimeEvent, LoopRewarded, LoopVerified, RouteSelected};
-use canon_invariant::meta_invariant_all_results_update_policy;
+use canon_event::{events::VerifierPolicyUpdated, RuntimeEvent, LoopRewarded, LoopVerified, RouteSelected};
 use canon_semantic_state::{
     latest_graph_proof_failed, latest_graph_proof_verified, latest_no_semantic_progress,
     latest_semantic_progress,
@@ -62,10 +61,50 @@ pub fn execute(v: LoopVerified, ctx: &mut LoopContext) -> anyhow::Result<LoopSta
     Ok(LoopStageResult::Emit(RuntimeEvent::LoopRewarded(rewarded)))
 }
 
-pub fn evaluate_reward_semantics(ctx: &LoopContext, v: &LoopVerified) -> RewardSemantics {
-    let policy_update =
-        meta_invariant_all_results_update_policy(v.passed, v.compiler_clean, &v.diagnostics);
-    let mut reward = if policy_update.reward_bias == "positive" {
+pub fn execute_from_policy(
+    policy: VerifierPolicyUpdated,
+    ctx: &mut LoopContext,
+) -> anyhow::Result<LoopStageResult> {
+    let verified = ctx
+        .last_verified
+        .clone()
+        .expect("LoopVerified must be observed before VerifierPolicyUpdated reward evaluation");
+    ctx.last_reward_trace_id = policy.trace_id.clone().or_else(|| verified.trace_id.clone());
+    ctx.last_reward_execution_id = policy
+        .execution_id
+        .clone()
+        .or_else(|| verified.execution_id.clone());
+    let semantics = evaluate_reward_semantics(ctx, &verified);
+    let halt = false;
+    let rewarded = LoopRewarded {
+        tick: verified.tick,
+        errors_before: ctx.errors_before,
+        errors_after: ctx.error_count,
+        stagnant_ticks: ctx.stagnant_ticks,
+        span_id: verified.span_id.clone(),
+        parent_span_id: verified.parent_span_id.clone(),
+        reward: semantics.reward,
+        halt,
+        goodness: ctx.goodness.unwrap_or(0.0),
+        delta_g: ctx.delta_g.unwrap_or(0.0),
+        trace_id: ctx.last_reward_trace_id.clone(),
+        execution_id: ctx.last_reward_execution_id.clone(),
+    };
+    if semantics.resets_stagnation {
+        ctx.stagnant_ticks = 0;
+    } else {
+        ctx.stagnant_ticks = ctx.stagnant_ticks.saturating_add(1);
+        ctx.last_done_goal = None;
+    }
+    Ok(LoopStageResult::Emit(RuntimeEvent::LoopRewarded(rewarded)))
+}
+
+pub fn evaluate_reward_semantics(ctx: &LoopContext, _v: &LoopVerified) -> RewardSemantics {
+    let reward_bias = ctx
+        .last_verifier_reward_bias
+        .as_deref()
+        .expect("VerifierPolicyUpdated must be observed before reward evaluation");
+    let mut reward = if reward_bias == "positive" {
         1.0_f32
     } else {
         -1.0_f32
@@ -93,7 +132,7 @@ pub fn evaluate_reward_semantics(ctx: &LoopContext, v: &LoopVerified) -> RewardS
     }
     RewardSemantics {
         reward,
-        resets_stagnation: policy_update.reward_bias == "positive"
+        resets_stagnation: reward_bias == "positive"
             || (latest_semantic_progress(&ctx.recent_execution_results)
                 && !latest_graph_proof_failed(&ctx.recent_execution_results)),
     }
@@ -125,6 +164,7 @@ mod tests {
     #[test]
     fn semantic_progress_improves_reward() {
         let mut ctx = LoopContext::new(PathBuf::from("/tmp"), PathBuf::from("/tmp/tlog"));
+        ctx.last_verifier_reward_bias = Some("negative".into());
         let verified = base_verified();
         let base = evaluate_reward_semantics(&ctx, &verified).reward;
         ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
@@ -140,6 +180,7 @@ mod tests {
     fn semantic_progress_resets_stagnation_on_failed_verify() {
         let mut ctx = LoopContext::new(PathBuf::from("/tmp"), PathBuf::from("/tmp/tlog"));
         ctx.stagnant_ticks = 3;
+        ctx.last_verifier_reward_bias = Some("negative".into());
         ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
             "module_created",
             "module file created",
@@ -154,6 +195,7 @@ mod tests {
     #[test]
     fn graph_proof_failure_penalizes_reward() {
         let mut ctx = LoopContext::new(PathBuf::from("/tmp"), PathBuf::from("/tmp/tlog"));
+        ctx.last_verifier_reward_bias = Some("negative".into());
         let verified = base_verified();
         let base = evaluate_reward_semantics(&ctx, &verified).reward;
         ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(

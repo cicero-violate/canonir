@@ -92,9 +92,12 @@ impl FailureStore {
             RuntimeEvent::LoopActed(payload) if !payload.success => {
                 self.record_message("loop_acted_failed", &payload.stderr);
             }
-            RuntimeEvent::LoopVerified(payload) if !payload.passed => {
-                let msg = payload.diagnostics.join("; ");
-                self.record_message("loop_verified_failed", &msg);
+            RuntimeEvent::VerifierPolicyUpdated(payload) if payload.actionable_failure => {
+                let msg = format!(
+                    "verifier_outcome={} retry_policy={} reward_bias={}",
+                    payload.verifier_outcome, payload.retry_policy, payload.reward_bias
+                );
+                self.record_message("verifier_policy_updated_failure", &msg);
             }
             RuntimeEvent::LoopRewarded(payload) if payload.halt => {
                 self.record_message("loop_rewarded_halt", "stagnant:halt");

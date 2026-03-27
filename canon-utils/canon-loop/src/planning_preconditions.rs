@@ -1,11 +1,14 @@
 use crate::compiler_hints::extract_compiler_hints;
-use crate::env_model::{EntrypointKind, WorkspaceModel};
+use crate::env_model::{select_bootstrap_command, BootstrapCommandChoice, EntrypointKind, WorkspaceModel};
 use canon_invariant::{
+    evaluate_constraint_context,
     meta_invariant_classify_planned_action_class as classify_plan_action_class,
     meta_invariant_failure_scope_is_sufficient,
     meta_invariant_has_actionable_failure,
     meta_invariant_high_invalid_plan_requires_simple_batch,
     meta_invariant_no_progress_forces_change,
+    meta_invariant_tool_selection_correctness,
+    ConstraintAction, ConstraintContext, ConstraintDecision, ConstraintRoute, ConstraintState,
     PlannedActionClass,
 };
 use canon_semantic_state::{
@@ -141,7 +144,10 @@ pub fn planner_lines(preconditions: &[PlanningPrecondition]) -> Vec<String> {
         .collect()
 }
 
-pub fn derive_repair_intents(preconditions: &[PlanningPrecondition]) -> Vec<RepairIntent> {
+pub fn derive_repair_intents(
+    preconditions: &[PlanningPrecondition],
+    failure_scope: Option<&str>,
+) -> Vec<RepairIntent> {
     let mut intents = Vec::new();
     for precondition in preconditions {
         let intent = match precondition {
@@ -155,11 +161,56 @@ pub fn derive_repair_intents(preconditions: &[PlanningPrecondition]) -> Vec<Repa
             PlanningPrecondition::MustResolveDuplicateDefinition => RepairIntent::ResolveDuplicateDefinition,
             PlanningPrecondition::MustFixTraitBoundFailure => RepairIntent::FixTraitBoundFailure,
         };
+        if !repair_intent_allowed_for_scope(intent.clone(), failure_scope) {
+            continue;
+        }
         if !intents.contains(&intent) {
             intents.push(intent);
         }
     }
+    reorder_repair_intents_by_scope(&mut intents, failure_scope);
     intents
+}
+
+fn repair_intent_allowed_for_scope(intent: RepairIntent, failure_scope: Option<&str>) -> bool {
+    match failure_scope {
+        Some("workspace") | Some("tooling") => matches!(
+            intent,
+            RepairIntent::BootstrapWorkspace | RepairIntent::InitCargoProject
+        ),
+        _ => true,
+    }
+}
+
+fn reorder_repair_intents_by_scope(intents: &mut Vec<RepairIntent>, failure_scope: Option<&str>) {
+    let score = |intent: &RepairIntent| match failure_scope {
+        Some("localized") => match intent {
+            RepairIntent::CreateEntrypoint
+            | RepairIntent::CreateMissingModules
+            | RepairIntent::FixDeadCodeForbidConflict
+            | RepairIntent::FixUnresolvedImport
+            | RepairIntent::DefineMissingSymbol
+            | RepairIntent::ResolveDuplicateDefinition
+            | RepairIntent::FixTraitBoundFailure => 0,
+            RepairIntent::BootstrapWorkspace | RepairIntent::InitCargoProject => 1,
+        },
+        Some("workspace") | Some("tooling") => match intent {
+            RepairIntent::BootstrapWorkspace | RepairIntent::InitCargoProject => 0,
+            _ => 1,
+        },
+        _ => match intent {
+            RepairIntent::BootstrapWorkspace => 0,
+            RepairIntent::InitCargoProject => 1,
+            RepairIntent::CreateEntrypoint => 2,
+            RepairIntent::CreateMissingModules => 3,
+            RepairIntent::FixDeadCodeForbidConflict => 4,
+            RepairIntent::FixUnresolvedImport => 5,
+            RepairIntent::DefineMissingSymbol => 6,
+            RepairIntent::ResolveDuplicateDefinition => 7,
+            RepairIntent::FixTraitBoundFailure => 8,
+        },
+    };
+    intents.sort_by_key(score);
 }
 
 pub fn derive_preconditions_from_lines(lines: &[String]) -> Vec<PlanningPrecondition> {
@@ -236,14 +287,35 @@ pub fn validate_preconditions(
     preconditions: &[PlanningPrecondition],
     semantic_summary: &SemanticStateSummary,
 ) -> Result<(), String> {
-    let intents = derive_repair_intents(preconditions);
+    let intents = derive_repair_intents(preconditions, None);
     let action_intents = collect_action_intents(actions, target_root);
-    if preconditions.contains(&PlanningPrecondition::MustBootstrapWorkspace) && !contains_bootstrap_action(actions) {
-        return Err("target workspace is missing; first plan must create/init the workspace".to_string());
+    if preconditions.contains(&PlanningPrecondition::MustBootstrapWorkspace) {
+        match select_bootstrap_command(target_root) {
+            BootstrapCommandChoice::CargoNew
+                if !contains_expected_bootstrap_action(actions, BootstrapCommandChoice::CargoNew) =>
+            {
+                return Err("target workspace is missing; first plan must create the workspace with cargo new".to_string());
+            }
+            BootstrapCommandChoice::CargoInit
+                if !contains_expected_bootstrap_action(actions, BootstrapCommandChoice::CargoInit) =>
+            {
+                return Err("target directory exists but is not a Cargo project; first plan must initialize it with cargo init".to_string());
+            }
+            BootstrapCommandChoice::NoBootstrapNeeded => {
+                return Err(
+                    "semantic state says bootstrap is required, but the target already contains Cargo.toml; refresh observation before planning bootstrap"
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
     }
-    if preconditions.contains(&PlanningPrecondition::MustInitCargoProject) && !contains_cargo_init(actions) {
+    if preconditions.contains(&PlanningPrecondition::MustInitCargoProject)
+        && !contains_expected_bootstrap_action(actions, BootstrapCommandChoice::CargoInit)
+    {
         return Err("target directory exists but is not a Cargo project; first plan must initialize Cargo".to_string());
     }
+    validate_validation_action_constraints(actions, target_root, semantic_summary)?;
     if preconditions.contains(&PlanningPrecondition::MustCreateEntrypoint)
         && contains_cargo_check(actions)
         && !contains_entrypoint_creation(actions, target_root)
@@ -291,7 +363,61 @@ pub fn validate_preconditions(
     }
     validate_no_actionable_failure(actions, &action_intents, semantic_summary)?;
     validate_failure_scope(actions, &action_intents, semantic_summary)?;
+    validate_repair_action_legality(actions, target_root, semantic_summary)?;
     Ok(())
+}
+
+fn validate_validation_action_constraints(
+    actions: &[canon_event::LoopPlanned],
+    target_root: &Path,
+    semantic_summary: &SemanticStateSummary,
+) -> Result<(), String> {
+    if !contains_cargo_check(actions) {
+        return Ok(());
+    }
+    match evaluate_constraint_context(&ConstraintContext {
+        state: ConstraintState {
+            semantic_path_exists: semantic_summary.path_exists,
+            semantic_cargo_project: semantic_summary.cargo_project,
+            real_path_exists: target_root.exists(),
+            real_cargo_project: target_root.join("Cargo.toml").exists(),
+            actionable_failure: semantic_summary.validation_blocked_by_preconditions
+                || semantic_summary.compiler_repair_required
+                || !semantic_summary.planning_preconditions.is_empty()
+                || !semantic_summary.module_gaps.is_empty()
+                || semantic_summary.has_actionable_compiler_hints(),
+            validation_blocked: semantic_summary.validation_blocked_by_preconditions,
+            entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
+                && semantic_summary.cargo_project,
+            module_gaps_present: !semantic_summary.module_gaps.is_empty(),
+            recent_no_semantic_progress: false,
+            failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
+            failure_scope_localized: semantic_summary.failure_scope.as_deref() == Some("localized"),
+            failure_scope_workspace: semantic_summary.failure_scope.as_deref() == Some("workspace"),
+            failure_scope_tooling: semantic_summary.failure_scope.as_deref() == Some("tooling"),
+        },
+        route: None,
+        action: Some(ConstraintAction::Validation),
+        deterministic_route: None,
+    }) {
+        ConstraintDecision::Forbid(reason)
+            if reason.contains("target workspace is missing") =>
+        {
+            Err("cargo check planned before bootstrapping the target workspace".to_string())
+        }
+        ConstraintDecision::Forbid(reason)
+            if reason.contains("required files are still missing") && semantic_summary.entrypoint_kind.as_deref() == Some("none") =>
+        {
+            Err("cargo check planned before creating src/main.rs or src/lib.rs".to_string())
+        }
+        ConstraintDecision::Forbid(reason)
+            if reason.contains("required files are still missing") && !semantic_summary.module_gaps.is_empty() =>
+        {
+            Err("cargo check planned before creating missing declared module files".to_string())
+        }
+        ConstraintDecision::Forbid(_) => Ok(()),
+        _ => Ok(()),
+    }
 }
 
 pub fn validate_objective_route_plan_alignment(
@@ -324,8 +450,48 @@ pub fn validate_objective_route_plan_alignment(
             || primary_objective.contains("lower invalid-plan rate")
             || primary_objective.contains("increase repair resolution rate");
 
-    if route_choice == "verify" && objective_requires_repair {
-        return Err("route choice contradicts the active repair objective; verification is premature".to_string());
+    match evaluate_constraint_context(&ConstraintContext {
+        state: ConstraintState {
+            semantic_path_exists: semantic_summary.path_exists,
+            semantic_cargo_project: semantic_summary.cargo_project,
+            real_path_exists: semantic_summary.path_exists,
+            real_cargo_project: semantic_summary.cargo_project,
+            actionable_failure: objective_requires_repair,
+            validation_blocked: semantic_summary.validation_blocked_by_preconditions,
+            entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
+                && semantic_summary.cargo_project,
+            module_gaps_present: !semantic_summary.module_gaps.is_empty(),
+            recent_no_semantic_progress: false,
+            failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
+            failure_scope_localized: semantic_summary.failure_scope.as_deref() == Some("localized"),
+            failure_scope_workspace: semantic_summary.failure_scope.as_deref() == Some("workspace"),
+            failure_scope_tooling: semantic_summary.failure_scope.as_deref() == Some("tooling"),
+        },
+        route: match route_choice {
+            "observe" => Some(ConstraintRoute::Observe),
+            "plan" => Some(ConstraintRoute::Plan),
+            "act" => Some(ConstraintRoute::Act),
+            "verify" => Some(ConstraintRoute::Verify),
+            "conclude" => Some(ConstraintRoute::Conclude),
+            _ => None,
+        },
+        action: if has_validation_intent {
+            Some(ConstraintAction::Validation)
+        } else if has_repair_intent {
+            Some(ConstraintAction::RepairLocalized)
+        } else {
+            None
+        },
+        deterministic_route: None,
+    }) {
+        ConstraintDecision::RewriteRoute(ConstraintRoute::Plan, _) if route_choice == "verify" => {
+            return Err("route choice contradicts the active repair objective; verification is premature".to_string());
+        }
+        ConstraintDecision::Forbid(reason) => return Err(reason.to_string()),
+        ConstraintDecision::RewriteAction(_, reason) | ConstraintDecision::RewriteRoute(_, reason) => {
+            return Err(reason.to_string())
+        }
+        ConstraintDecision::Allow => {}
     }
 
     if route_choice == "plan" && objective_requires_repair && has_validation_intent && !has_repair_intent {
@@ -651,17 +817,6 @@ fn contains_expected_hint_target(
     action_intents.iter().any(|intent| match_action_intent(intent, hint_kind, &expected))
 }
 
-fn contains_bootstrap_action(actions: &[canon_event::LoopPlanned]) -> bool {
-    actions.iter().any(|action| {
-        action.action_kind == "run_command"
-            && action
-                .action_payload
-                .get("cmd")
-                .and_then(|v| v.as_str())
-                .is_some_and(|cmd| cmd.contains("cargo init") || cmd.contains("cargo new"))
-    })
-}
-
 fn validate_no_actionable_failure(
     _actions: &[canon_event::LoopPlanned],
     action_intents: &[ActionIntent],
@@ -684,11 +839,34 @@ fn validate_no_actionable_failure(
         semantic_summary.compiler_hints.len(),
         semantic_summary.module_gaps.len(),
     );
-    if has_repair_intent && !actionable_failure {
-        return Err(
-            "repair-oriented planning is forbidden because there is no actionable failure in the current semantic context"
-                .to_string(),
-        );
+    if has_repair_intent {
+        match evaluate_constraint_context(&ConstraintContext {
+            state: ConstraintState {
+                semantic_path_exists: semantic_summary.path_exists,
+                semantic_cargo_project: semantic_summary.cargo_project,
+                real_path_exists: semantic_summary.path_exists,
+                real_cargo_project: semantic_summary.cargo_project,
+                actionable_failure,
+                validation_blocked: semantic_summary.validation_blocked_by_preconditions,
+                entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
+                    && semantic_summary.cargo_project,
+                module_gaps_present: !semantic_summary.module_gaps.is_empty(),
+                recent_no_semantic_progress: false,
+                failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
+                failure_scope_localized: semantic_summary.failure_scope.as_deref() == Some("localized"),
+                failure_scope_workspace: semantic_summary.failure_scope.as_deref() == Some("workspace"),
+                failure_scope_tooling: semantic_summary.failure_scope.as_deref() == Some("tooling"),
+            },
+            route: None,
+            action: Some(ConstraintAction::RepairLocalized),
+            deterministic_route: None,
+        }) {
+            ConstraintDecision::Allow => {}
+            ConstraintDecision::Forbid(reason) => return Err(reason.to_string()),
+            ConstraintDecision::RewriteAction(_, reason) | ConstraintDecision::RewriteRoute(_, reason) => {
+                return Err(reason.to_string())
+            }
+        }
     }
     Ok(())
 }
@@ -723,14 +901,99 @@ fn validate_failure_scope(
     Ok(())
 }
 
-fn contains_cargo_init(actions: &[canon_event::LoopPlanned]) -> bool {
+fn classify_constraint_action_for_plan(planned: &canon_event::LoopPlanned) -> Option<ConstraintAction> {
+    match planned.action_kind.as_str() {
+        "run_command" => planned
+            .action_payload
+            .get("cmd")
+            .and_then(|v| v.as_str())
+            .map(|cmd| {
+                if cmd.contains("cargo init") {
+                    ConstraintAction::CargoInit
+                } else if cmd.contains("cargo new") {
+                    ConstraintAction::CargoNew
+                } else if cmd.contains("cargo check") || cmd.contains("cargo build") || cmd.contains("cargo test") {
+                    ConstraintAction::Validation
+                } else {
+                    ConstraintAction::RepairWorkspace
+                }
+            }),
+        "apply_patch" | "patch_file" | "write_file" => {
+            let path = planned.action_payload.get("path").and_then(|v| v.as_str()).unwrap_or_default();
+            if path.ends_with("Cargo.toml")
+                || path.ends_with(".cargo/config.toml")
+                || path.ends_with("rust-toolchain.toml")
+                || path.ends_with("rust-toolchain")
+            {
+                Some(ConstraintAction::RepairWorkspace)
+            } else {
+                Some(ConstraintAction::RepairLocalized)
+            }
+        }
+        "edit.rename_symbol"
+        | "edit.move_symbol"
+        | "edit.add_import"
+        | "edit.define_symbol_stub"
+        | "edit.create_module_file" => Some(ConstraintAction::RepairLocalized),
+        _ => None,
+    }
+}
+
+fn validate_repair_action_legality(
+    actions: &[canon_event::LoopPlanned],
+    target_root: &Path,
+    semantic_summary: &SemanticStateSummary,
+) -> Result<(), String> {
+    let state = ConstraintState {
+        semantic_path_exists: semantic_summary.path_exists,
+        semantic_cargo_project: semantic_summary.cargo_project,
+        real_path_exists: target_root.exists(),
+        real_cargo_project: target_root.join("Cargo.toml").exists(),
+        actionable_failure: semantic_summary.validation_blocked_by_preconditions
+            || semantic_summary.compiler_repair_required
+            || !semantic_summary.planning_preconditions.is_empty()
+            || !semantic_summary.module_gaps.is_empty()
+            || semantic_summary.has_actionable_compiler_hints(),
+        validation_blocked: semantic_summary.validation_blocked_by_preconditions,
+        entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
+            && semantic_summary.cargo_project,
+        module_gaps_present: !semantic_summary.module_gaps.is_empty(),
+        recent_no_semantic_progress: false,
+        failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
+        failure_scope_localized: semantic_summary.failure_scope.as_deref() == Some("localized"),
+        failure_scope_workspace: semantic_summary.failure_scope.as_deref() == Some("workspace"),
+        failure_scope_tooling: semantic_summary.failure_scope.as_deref() == Some("tooling"),
+    };
+    for planned in actions {
+        let Some(action) = classify_constraint_action_for_plan(planned) else {
+            continue;
+        };
+        match evaluate_constraint_context(&ConstraintContext {
+            state,
+            route: None,
+            action: Some(action),
+            deterministic_route: None,
+        }) {
+            ConstraintDecision::Allow => {}
+            ConstraintDecision::Forbid(reason) => return Err(reason.to_string()),
+            ConstraintDecision::RewriteAction(_, reason) | ConstraintDecision::RewriteRoute(_, reason) => {
+                return Err(reason.to_string())
+            }
+        }
+    }
+    Ok(())
+}
+
+fn contains_expected_bootstrap_action(
+    actions: &[canon_event::LoopPlanned],
+    expected_choice: BootstrapCommandChoice,
+) -> bool {
     actions.iter().any(|action| {
-        action.action_kind == "run_command"
-            && action
-                .action_payload
-                .get("cmd")
-                .and_then(|v| v.as_str())
-                .is_some_and(|cmd| cmd.contains("cargo init"))
+        meta_invariant_tool_selection_correctness(
+            expected_choice.as_str(),
+            &action.action_kind,
+            &action.action_payload,
+        )
     })
 }
 
@@ -1297,6 +1560,25 @@ mod tests {
         }
     }
 
+    fn planned_run_command(cmd: &str, cwd: &str) -> canon_event::LoopPlanned {
+        canon_event::LoopPlanned {
+            tick: 0,
+            action_kind: "run_command".to_string(),
+            action_payload: serde_json::json!({ "cmd": cmd, "cwd": cwd }),
+            reason: String::new(),
+            llm_request_id: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            signals: None,
+            depends_on: Vec::new(),
+        }
+    }
+
     #[test]
     fn derives_workspace_preconditions() {
         let model = WorkspaceModel {
@@ -1314,6 +1596,74 @@ mod tests {
         };
         let preconditions = derive_preconditions(Some(&model), &[]);
         assert!(preconditions.contains(&PlanningPrecondition::MustInitCargoProject));
+    }
+
+    #[test]
+    fn bootstrap_precondition_requires_cargo_new_for_missing_target() {
+        let root = std::env::temp_dir().join(format!("canon_bootstrap_missing_target_{}", uuid::Uuid::new_v4()));
+        let actions = vec![planned_run_command(
+            "cargo init --name event_sim_coverage .",
+            &root.display().to_string(),
+        )];
+        let err = validate_preconditions(
+            &actions,
+            &root,
+            &[PlanningPrecondition::MustBootstrapWorkspace],
+            &SemanticStateSummary::default(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "target workspace is missing; first plan must create the workspace with cargo new"
+        );
+    }
+
+    #[test]
+    fn bootstrap_precondition_requires_cargo_init_for_existing_non_cargo_target() {
+        let root = std::env::temp_dir().join(format!("canon_bootstrap_existing_dir_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let actions = vec![planned_run_command(
+            "cargo new event_sim_coverage",
+            &root.display().to_string(),
+        )];
+        let err = validate_preconditions(
+            &actions,
+            &root,
+            &[PlanningPrecondition::MustBootstrapWorkspace],
+            &SemanticStateSummary::default(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "target directory exists but is not a Cargo project; first plan must initialize it with cargo init"
+        );
+    }
+
+    #[test]
+    fn bootstrap_precondition_detects_state_vs_reality_mismatch() {
+        let root = std::env::temp_dir().join(format!("canon_bootstrap_state_mismatch_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"event_sim_coverage\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let actions = vec![planned_run_command(
+            "cargo init --name event_sim_coverage .",
+            &root.display().to_string(),
+        )];
+        let err = validate_preconditions(
+            &actions,
+            &root,
+            &[PlanningPrecondition::MustBootstrapWorkspace],
+            &SemanticStateSummary::default(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "semantic state says bootstrap is required, but the target already contains Cargo.toml; refresh observation before planning bootstrap"
+        );
     }
 
     #[test]
@@ -1341,6 +1691,29 @@ mod tests {
             &SemanticStateSummary::default(),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_cargo_check_before_bootstrapping_missing_workspace() {
+        let root = std::env::temp_dir().join(format!("canon_missing_workspace_validation_{}", uuid::Uuid::new_v4()));
+        let actions = vec![planned_run_command("cargo check", &root.display().to_string())];
+        let result = validate_preconditions(
+            &actions,
+            &root,
+            &[],
+            &SemanticStateSummary {
+                complete: true,
+                path_exists: false,
+                cargo_project: false,
+                target_root: Some(root.display().to_string()),
+                ..SemanticStateSummary::default()
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "cargo check planned before bootstrapping the target workspace"
+        );
     }
 
     #[test]
@@ -1436,7 +1809,7 @@ mod tests {
         let intents = super::derive_repair_intents(&[
             PlanningPrecondition::MustBootstrapWorkspace,
             PlanningPrecondition::MustCreateMissingModules,
-        ]);
+        ], None);
         assert_eq!(
             intents,
             vec![
@@ -1675,6 +2048,73 @@ mod tests {
         let result = validate_preconditions(&actions, Path::new("/tmp/example"), &[], &summary);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("no actionable failure"));
+    }
+
+    #[test]
+    fn action_intent_consistency_bootstrap_cannot_emit_verify_batch() {
+        let actions = vec![canon_event::LoopPlanned {
+            tick: 0,
+            action_kind: "run_command".to_string(),
+            action_payload: serde_json::json!({"cmd":"cargo check","cwd":"/tmp/example"}),
+            reason: String::new(),
+            llm_request_id: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            signals: None,
+            depends_on: Vec::new(),
+        }];
+        let summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some("/tmp/example".into()),
+            path_exists: false,
+            cargo_project: false,
+            planning_preconditions: vec![
+                "must_bootstrap_workspace=true repair=cargo_init_or_create_workspace".into(),
+            ],
+            ..SemanticStateSummary::default()
+        };
+        let result = super::validate_objective_route_plan_alignment(
+            &actions,
+            Path::new("/tmp/example"),
+            "plan",
+            "remove validation blockers",
+            &summary,
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("validates without addressing the repair target"));
+    }
+
+    #[test]
+    fn action_intent_consistency_repair_cannot_emit_noop_validation_route() {
+        let actions = vec![planned_add_import("src/lib.rs")];
+        let summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some("/tmp/example".into()),
+            compiler_repair_required: true,
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::UnresolvedImport,
+                "compiler reports unresolved import",
+                "use semantic import repair",
+                vec!["src/lib.rs".into()],
+            )],
+            ..SemanticStateSummary::default()
+        };
+        let result = super::validate_objective_route_plan_alignment(
+            &actions,
+            Path::new("/tmp/example"),
+            "verify",
+            "reduce compiler repair pressure",
+            &summary,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("verification is premature"));
     }
 
     #[test]

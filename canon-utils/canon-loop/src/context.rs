@@ -138,12 +138,13 @@ pub struct LoopContext {
     pub agent_id: Option<String>,
 
     // Verify
-    pub last_verify_trace_id: Option<String>,
-    pub last_verify_execution_id: Option<String>,
     pub last_act_span_id: Option<String>,
     pub last_acted: Option<LoopActed>,
     pub last_verified: Option<LoopVerified>,
-    pub last_verified_action_key: Option<String>,
+    pub last_verifier_outcome: Option<String>,
+    pub last_verifier_retry_policy: Option<String>,
+    pub last_verifier_reward_bias: Option<String>,
+    pub last_verifier_actionable_failure: Option<bool>,
 
     // Reward
     pub errors_before: usize,
@@ -215,12 +216,13 @@ impl LoopContext {
             context_merger: ContextMerger::default(),
             pending_decompose_request_id: None,
             agent_id: None,
-            last_verify_trace_id: None,
-            last_verify_execution_id: None,
             last_act_span_id: None,
             last_acted: None,
             last_verified: None,
-            last_verified_action_key: None,
+            last_verifier_outcome: None,
+            last_verifier_retry_policy: None,
+            last_verifier_reward_bias: None,
+            last_verifier_actionable_failure: None,
             errors_before: 0,
             stagnant_ticks: 0,
             last_action_kind: String::new(),

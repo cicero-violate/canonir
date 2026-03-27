@@ -176,8 +176,8 @@ impl EventKind {
             LoopObserved => &[RouteSelected],
             PlanningCompleted => &[RouteSelected],
             LoopActed => &[RouteSelected, LoopVerified],
-            LoopVerified => &[LoopRewarded],
-            VerifierPolicyUpdated => &[RouteSelected, LoopRewarded],
+            LoopVerified => &[VerifierPolicyUpdated],
+            VerifierPolicyUpdated => &[LoopRewarded],
             LoopRewarded => &[RouteSelected, LoopObserved],
             _ => &[],
         }
@@ -348,6 +348,59 @@ impl CanonEvent {
         payload: CanonPayload,
     ) -> Self {
         Self { id, parent_ids: Vec::new(), actor: actor.into(), kind, ts, payload, prev_event_id: None }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CanonEvent, CanonPayload, CanonPayloadMeta, EventId, EventKind};
+    use serde_json::json;
+
+    fn payload() -> CanonPayload {
+        CanonPayload {
+            input: json!({"x":1}),
+            output: json!({"y":1}),
+            delta: json!({"z":1}),
+            meta: CanonPayloadMeta { file: "test".to_string(), line: 1 },
+            data: json!({}),
+        }
+    }
+
+    #[test]
+    fn parent_causality_integrity_requires_parent_for_non_root_events() {
+        let result = std::panic::catch_unwind(|| {
+            CanonEvent::new(
+                EventId::new("child".to_string()),
+                Vec::new(),
+                "test",
+                EventKind::LoopObserved,
+                1,
+                payload(),
+                false,
+            )
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_parent_constructs_reconstructable_chain() {
+        let parent = CanonEvent::new_root(
+            EventId::new("parent".to_string()),
+            "test",
+            EventKind::RouteSelected,
+            1,
+            payload(),
+        );
+        let child = CanonEvent::from_parent(
+            &parent,
+            EventId::new("child".to_string()),
+            "test",
+            EventKind::LoopObserved,
+            2,
+            payload(),
+        );
+        assert_eq!(child.parent_ids.len(), 1);
+        assert_eq!(child.parent_ids[0].as_str(), parent.id.as_str());
     }
 }
 

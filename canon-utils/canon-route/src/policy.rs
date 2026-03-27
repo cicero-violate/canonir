@@ -1,12 +1,13 @@
 use crate::{context::RouteContext, decision::RouteDecision};
 use canon_invariant::{
-    meta_invariant_all_results_update_policy, meta_invariant_classify_verifier_outcome,
-    meta_invariant_has_actionable_failure, MetaInvariantVerifierOutcome,
+    evaluate_constraint_context, meta_invariant_has_actionable_failure, ConstraintContext,
+    ConstraintDecision, ConstraintRoute, ConstraintState,
 };
 use canon_decision::RouteKind;
 use canon_event::RuntimeEvent;
 use canon_semantic_state::{latest_no_semantic_progress, latest_semantic_progress, SemanticStateSummary};
 use serde_json::Value;
+use std::path::Path;
 
 #[cfg(test)]
 use canon_semantic_state::{CompilerHintKind, CompilerHintRecord, SemanticExecutionResultRecord};
@@ -14,6 +15,7 @@ use canon_semantic_state::{CompilerHintKind, CompilerHintRecord, SemanticExecuti
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunCommandOutcomeClass {
     BootstrapSuccess,
+    BootstrapSelectionMismatch,
     ValidationFailureCompiler,
     ValidationSuccess,
     SemanticFailure,
@@ -136,6 +138,7 @@ pub struct RouteCacheState<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeterministicRouteRule {
     BootstrapRefreshObserve,
+    StateDriftObserve,
     DoneVerify,
     SemanticProgressVerify,
     NoSemanticProgressPlan,
@@ -247,8 +250,92 @@ impl RoutePolicyRule {
     }
 }
 
+fn route_constraint_state(ctx: &RouteContext) -> ConstraintState {
+    let (real_path_exists, real_cargo_project) = ctx
+        .semantic_summary
+        .target_root
+        .as_deref()
+        .map(Path::new)
+        .map(|root| (root.exists(), root.join("Cargo.toml").exists()))
+        .unwrap_or((
+            ctx.semantic_summary.path_exists,
+            ctx.semantic_summary.cargo_project,
+        ));
+    ConstraintState {
+        semantic_path_exists: ctx.semantic_summary.path_exists,
+        semantic_cargo_project: ctx.semantic_summary.cargo_project,
+        real_path_exists,
+        real_cargo_project,
+        actionable_failure: has_actionable_failure(ctx),
+        validation_blocked: ctx.validation_blocked_state(),
+        entrypoint_missing: matches!(ctx.semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
+            && ctx.semantic_summary.cargo_project,
+        module_gaps_present: !ctx.semantic_summary.module_gaps.is_empty(),
+        recent_no_semantic_progress: latest_no_semantic_progress(&ctx.recent_execution_results),
+        failure_class_no_actionable: ctx.semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
+        failure_scope_localized: ctx.semantic_summary.failure_scope.as_deref() == Some("localized"),
+        failure_scope_workspace: ctx.semantic_summary.failure_scope.as_deref() == Some("workspace"),
+        failure_scope_tooling: ctx.semantic_summary.failure_scope.as_deref() == Some("tooling"),
+    }
+}
+
+fn derive_route_from_constraints(
+    ctx: &RouteContext,
+    proposed_route: RouteKind,
+    deterministic_route: Option<RouteKind>,
+) -> RouteKind {
+    match evaluate_constraint_context(&ConstraintContext {
+        state: route_constraint_state(ctx),
+        route: Some(route_to_constraint(proposed_route)),
+        action: None,
+        deterministic_route: deterministic_route.map(route_to_constraint),
+    }) {
+        ConstraintDecision::RewriteRoute(ConstraintRoute::Observe, _) => RouteKind::Observe,
+        ConstraintDecision::RewriteRoute(ConstraintRoute::Plan, _) => RouteKind::Plan,
+        _ => proposed_route,
+    }
+}
+
 pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decision: &mut RouteDecision) -> Vec<RoutePolicyRule> {
     let mut rules = evaluate_route_transition(ctx, state, None, Some(decision)).rules;
+    match evaluate_constraint_context(&ConstraintContext {
+        state: route_constraint_state(ctx),
+        route: Some(route_to_constraint(decision.lane)),
+        action: None,
+        deterministic_route: None,
+    }) {
+        ConstraintDecision::RewriteRoute(ConstraintRoute::Observe, reason) => {
+            decision.lane = RouteKind::Observe;
+            decision.should_stop = false;
+            decision.changed = true;
+            if reason.contains("no actionable failure") {
+                decision.note = "no actionable failure requires observe".to_string();
+                decision
+                    .gate_rules_fired
+                    .push("meta_invariant_no_actionable_failure".to_string());
+            } else {
+                decision.note = "state reality authority requires observe".to_string();
+                decision
+                    .gate_rules_fired
+                    .push("meta_invariant_state_reality_authority".to_string());
+            }
+        }
+        ConstraintDecision::RewriteRoute(ConstraintRoute::Plan, reason) => {
+            decision.lane = RouteKind::Plan;
+            decision.should_stop = false;
+            decision.changed = true;
+            decision.note = if reason.contains("required files are still missing") {
+                "required files still missing requires plan".to_string()
+            } else {
+                "validation timing requires plan".to_string()
+            };
+            decision
+                .gate_rules_fired
+                .push("meta_invariant_validation_timing".to_string());
+        }
+        ConstraintDecision::Allow | ConstraintDecision::Forbid(_) | ConstraintDecision::RewriteAction(_, _) => {}
+        ConstraintDecision::RewriteRoute(_, _) => {}
+    }
     let already_forced_plan = rules.iter().any(|rule| {
         matches!(
             rule,
@@ -266,6 +353,17 @@ pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decis
         apply_rule(decision, *rule);
     }
     rules
+}
+
+fn route_to_constraint(route: RouteKind) -> ConstraintRoute {
+    match route {
+        RouteKind::Observe => ConstraintRoute::Observe,
+        RouteKind::Plan => ConstraintRoute::Plan,
+        RouteKind::Act => ConstraintRoute::Act,
+        RouteKind::Verify => ConstraintRoute::Verify,
+        RouteKind::Conclude => ConstraintRoute::Conclude,
+        RouteKind::Decompose => ConstraintRoute::Plan,
+    }
 }
 
 fn route_choice_contradicts_objective(ctx: &RouteContext, lane: RouteKind) -> bool {
@@ -351,11 +449,25 @@ pub fn evaluate_route_dispatch(
             deterministic: None,
         };
     }
-    if ctx.target_workspace_missing_state() && ctx.planned_pending == 0 {
+    if ctx.planned_pending == 0 && workspace_state_drift_detected(&ctx.semantic_summary) {
         return RouteDispatchEvaluation {
             suppression: None,
             deterministic: Some(DeterministicRouteDecision {
-                route: RouteKind::Plan,
+                route: RouteKind::Observe,
+                rationale: "semantic workspace facts disagree with the filesystem; refresh observation before planning or verification".to_string(),
+                confidence: 0.99,
+                prompt_tag: "deterministic:state_drift_observe",
+                noop_reason: "route_executor_state_drift_observe",
+                rule: DeterministicRouteRule::StateDriftObserve,
+            }),
+        };
+    }
+    if ctx.target_workspace_missing_state() && ctx.planned_pending == 0 {
+        let route = derive_route_from_constraints(ctx, RouteKind::Observe, Some(RouteKind::Observe));
+        return RouteDispatchEvaluation {
+            suppression: None,
+            deterministic: Some(DeterministicRouteDecision {
+                route,
                 rationale: format!(
                     "target workspace is missing at {}; route directly to plan to create/bootstrap it",
                     ctx.target_workspace_path_state().unwrap_or("unknown")
@@ -464,7 +576,14 @@ pub fn evaluate_route_event_dispatch(
     }
 
     let idle = planned_pending == 0 && pending_tool_results_empty;
-    if idle && matches!(event, RuntimeEvent::LoopObserved(_) | RuntimeEvent::LoopActed(_) | RuntimeEvent::LoopVerified(_)) {
+    if idle
+        && matches!(
+            event,
+            RuntimeEvent::LoopObserved(_)
+                | RuntimeEvent::LoopActed(_)
+                | RuntimeEvent::VerifierPolicyUpdated(_)
+        )
+    {
         return RouteEventDispatchEvaluation {
             rule: RouteEventDispatchRule::IdleDispatch,
             should_dispatch: true,
@@ -542,6 +661,7 @@ pub fn evaluate_successor_consumption(
         RuntimeEvent::PlanningCompleted(_) => Some("planning_completed"),
         RuntimeEvent::LoopActed(_) => Some("loop_acted"),
         RuntimeEvent::LoopVerified(_) => Some("loop_verified"),
+        RuntimeEvent::VerifierPolicyUpdated(_) => Some("verifier_policy_updated"),
         RuntimeEvent::LoopRewarded(_) => Some("loop_rewarded"),
         _ => None,
     };
@@ -597,7 +717,7 @@ pub fn evaluate_route_transition(
 }
 
 pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -> Option<DeterministicRouteDecision> {
-    match event {
+    let decision = match event {
         RuntimeEvent::LoopActed(a) if ctx.bootstrap_refresh_required => Some(DeterministicRouteDecision {
             route: RouteKind::Observe,
             rationale: "bootstrap command succeeded; refresh workspace facts before further planning or execution".to_string(),
@@ -606,6 +726,20 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
             noop_reason: "route_executor_bootstrap_refresh",
             rule: DeterministicRouteRule::BootstrapRefreshObserve,
         }),
+        RuntimeEvent::LoopActed(_)
+            if ctx.planned_pending == 0
+                && ctx.pending_tool_result_ids.is_empty()
+                && workspace_state_drift_detected(&ctx.semantic_summary) =>
+        {
+            Some(DeterministicRouteDecision {
+                route: RouteKind::Observe,
+                rationale: "semantic workspace facts disagree with the filesystem; refresh observation before planning or verification".to_string(),
+                confidence: 0.99,
+                prompt_tag: "deterministic:state_drift_observe",
+                noop_reason: "route_executor_state_drift_observe",
+                rule: DeterministicRouteRule::StateDriftObserve,
+            })
+        }
         RuntimeEvent::LoopActed(a) if a.action_kind == "done" && ctx.planned_pending == 0 => Some(DeterministicRouteDecision {
             route: RouteKind::Verify,
             rationale: "done action executed; verify to confirm goal completion".to_string(),
@@ -633,33 +767,9 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
             if ctx.planned_pending == 0
                 && ctx.pending_tool_result_ids.is_empty()
                 && latest_no_semantic_progress(&ctx.recent_execution_results)
-                && has_actionable_failure(ctx)
                 && !ctx.finish_ready =>
         {
-            Some(DeterministicRouteDecision {
-                route: RouteKind::Plan,
-                rationale: "recent action produced no semantic progress; replan before retrying execution".to_string(),
-                confidence: 0.95,
-                prompt_tag: "deterministic:no_semantic_progress_plan",
-                noop_reason: "route_executor_no_semantic_progress_plan",
-                rule: DeterministicRouteRule::NoSemanticProgressPlan,
-            })
-        }
-        RuntimeEvent::LoopActed(_)
-            if ctx.planned_pending == 0
-                && ctx.pending_tool_result_ids.is_empty()
-                && latest_no_semantic_progress(&ctx.recent_execution_results)
-                && !has_actionable_failure(ctx)
-                && !ctx.finish_ready =>
-        {
-            Some(DeterministicRouteDecision {
-                route: RouteKind::Observe,
-                rationale: "recent action produced no semantic progress but no actionable failure is scoped; refresh observation instead of repair replanning".to_string(),
-                confidence: 0.9,
-                prompt_tag: "deterministic:no_actionable_failure_observe",
-                noop_reason: "route_executor_no_actionable_failure_observe",
-                rule: DeterministicRouteRule::NoActionableFailureObserve,
-            })
+            Some(no_progress_route_via_constraints(ctx))
         }
         RuntimeEvent::LoopActed(_) if ctx.planned_pending > 0 && ctx.pending_tool_result_ids.is_empty() => Some(DeterministicRouteDecision {
             route: RouteKind::Act,
@@ -696,7 +806,86 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
             })
         }
         _ => None,
+    }?;
+
+    apply_shared_route_constraint(ctx, decision)
+}
+
+fn no_progress_route_via_constraints(ctx: &RouteContext) -> DeterministicRouteDecision {
+    let actionable_failure = has_actionable_failure(ctx);
+    let proposed = DeterministicRouteDecision {
+        route: RouteKind::Plan,
+        rationale: "recent action produced no semantic progress; replan before retrying execution".to_string(),
+        confidence: 0.95,
+        prompt_tag: "deterministic:no_semantic_progress_plan",
+        noop_reason: "route_executor_no_semantic_progress_plan",
+        rule: DeterministicRouteRule::NoSemanticProgressPlan,
+    };
+    let normalized = apply_shared_route_constraint(ctx, proposed).unwrap_or(proposed);
+    if normalized.route == RouteKind::Observe && !actionable_failure {
+        return normalized;
     }
+    normalized
+}
+
+fn apply_shared_route_constraint(
+    ctx: &RouteContext,
+    decision: DeterministicRouteDecision,
+) -> Option<DeterministicRouteDecision> {
+    let real_path_exists = route_constraint_state(ctx).real_path_exists;
+    match evaluate_constraint_context(&ConstraintContext {
+        state: route_constraint_state(ctx),
+        route: Some(route_to_constraint(decision.route)),
+        action: None,
+        deterministic_route: Some(route_to_constraint(decision.route)),
+    }) {
+        ConstraintDecision::Allow | ConstraintDecision::Forbid(_) | ConstraintDecision::RewriteAction(_, _) => {
+            Some(decision)
+        }
+        ConstraintDecision::RewriteRoute(ConstraintRoute::Observe, reason) => Some(DeterministicRouteDecision {
+            route: RouteKind::Observe,
+            rationale: reason.to_string(),
+            confidence: 0.99,
+            prompt_tag: if reason.contains("no actionable failure") {
+                "deterministic:no_actionable_failure_observe"
+            } else {
+                "deterministic:state_drift_observe"
+            },
+            noop_reason: if reason.contains("no actionable failure") {
+                "route_executor_no_actionable_failure_observe"
+            } else {
+                "route_executor_state_drift_observe"
+            },
+            rule: if reason.contains("no actionable failure") {
+                DeterministicRouteRule::NoActionableFailureObserve
+            } else {
+                DeterministicRouteRule::StateDriftObserve
+            },
+        }),
+        ConstraintDecision::RewriteRoute(ConstraintRoute::Plan, reason) => Some(DeterministicRouteDecision {
+            route: RouteKind::Plan,
+            rationale: reason.to_string(),
+            confidence: 0.99,
+            prompt_tag: "deterministic:constraint_plan",
+            noop_reason: "route_executor_constraint_plan",
+            rule: if !real_path_exists {
+                DeterministicRouteRule::MissingTargetPlan
+            } else {
+                DeterministicRouteRule::NoSemanticProgressPlan
+            },
+        }),
+        ConstraintDecision::RewriteRoute(_, _) => Some(decision),
+    }
+}
+
+pub fn workspace_state_drift_detected(summary: &SemanticStateSummary) -> bool {
+    let Some(target_root) = summary.target_root.as_deref() else {
+        return false;
+    };
+    let root = Path::new(target_root);
+    let fs_path_exists = root.exists();
+    let fs_cargo_project = root.join("Cargo.toml").exists();
+    summary.path_exists != fs_path_exists || summary.cargo_project != fs_cargo_project
 }
 
 fn apply_rule(decision: &mut RouteDecision, rule: RoutePolicyRule) {
@@ -762,7 +951,9 @@ pub fn has_actionable_failure(ctx: &RouteContext) -> bool {
     if let Some(class) = latest_run_command_outcome(ctx) {
         return matches!(
             class,
-            RunCommandOutcomeClass::ValidationFailureCompiler | RunCommandOutcomeClass::SemanticFailure
+            RunCommandOutcomeClass::BootstrapSelectionMismatch
+                | RunCommandOutcomeClass::ValidationFailureCompiler
+                | RunCommandOutcomeClass::SemanticFailure
         );
     }
     if let Some(class) = latest_apply_patch_outcome(ctx) {
@@ -787,16 +978,10 @@ pub fn latest_verify_outcome(ctx: &RouteContext) -> Option<VerifyOutcomeClass> {
     if !ctx.verify_seen {
         return None;
     }
-    Some(match meta_invariant_classify_verifier_outcome(
-        ctx.last_verify_passed,
-        ctx.last_verify_compiler_clean,
-        &ctx.last_verify_diagnostics,
-    ) {
-        MetaInvariantVerifierOutcome::Passed => VerifyOutcomeClass::Passed,
-        MetaInvariantVerifierOutcome::CompilerFailure => VerifyOutcomeClass::CompilerFailure,
-        MetaInvariantVerifierOutcome::FailedNoCompilerSignal => {
-            VerifyOutcomeClass::FailedNoCompilerSignal
-        }
+    ctx.last_verifier_outcome.as_deref().map(|outcome| match outcome {
+        "passed" => VerifyOutcomeClass::Passed,
+        "compiler_failure" => VerifyOutcomeClass::CompilerFailure,
+        _ => VerifyOutcomeClass::FailedNoCompilerSignal,
     })
 }
 
@@ -804,14 +989,17 @@ pub fn latest_verify_policy_update(ctx: &RouteContext) -> Option<String> {
     if !ctx.verify_seen {
         return None;
     }
-    Some(
-        meta_invariant_all_results_update_policy(
-            ctx.last_verify_passed,
-            ctx.last_verify_compiler_clean,
-            &ctx.last_verify_diagnostics,
-        )
-        .as_summary(),
-    )
+    if let (Some(verifier_outcome), Some(retry_policy), Some(reward_bias), Some(actionable_failure)) = (
+        ctx.last_verifier_outcome.as_deref(),
+        ctx.last_verifier_retry_policy.as_deref(),
+        ctx.last_verifier_reward_bias.as_deref(),
+        ctx.last_verifier_actionable_failure,
+    ) {
+        return Some(format!(
+            "verifier_outcome={verifier_outcome} retry_policy={retry_policy} reward_bias={reward_bias} actionable_failure={actionable_failure}"
+        ));
+    }
+    None
 }
 
 pub fn latest_run_command_outcome(ctx: &RouteContext) -> Option<RunCommandOutcomeClass> {
@@ -846,6 +1034,8 @@ pub fn classify_run_command_result(result: &Value) -> RunCommandOutcomeClass {
 
     if success && is_bootstrap_output(text) {
         RunCommandOutcomeClass::BootstrapSuccess
+    } else if looks_like_bootstrap_selection_mismatch(text) {
+        RunCommandOutcomeClass::BootstrapSelectionMismatch
     } else if success && looks_semantically_failed(text) {
         RunCommandOutcomeClass::SemanticFailure
     } else if success {
@@ -892,6 +1082,14 @@ fn looks_like_compiler_failure(text: &str) -> bool {
     text.contains("error[E")
         || text.contains("could not compile")
         || text.contains("For more information about this error")
+}
+
+fn looks_like_bootstrap_selection_mismatch(text: &str) -> bool {
+    text.contains("`cargo init` cannot be run on existing Cargo packages")
+        || text.contains("use `cargo new` to create a package in a new subdirectory")
+        || text.contains("destination `")
+            && text.contains("already exists")
+            && text.contains("Use `cargo init` to initialize the directory")
 }
 
 fn looks_semantically_failed(text: &str) -> bool {
@@ -975,6 +1173,14 @@ mod tests {
                 serde_json::json!({
                     "action": "run_command",
                     "success": false,
+                    "output": {"Process": {"stderr": "error: `cargo init` cannot be run on existing Cargo packages\nhelp: use `cargo new` to create a package in a new subdirectory\n", "stdout": ""}}
+                }),
+                RunCommandOutcomeClass::BootstrapSelectionMismatch,
+            ),
+            (
+                serde_json::json!({
+                    "action": "run_command",
+                    "success": false,
                     "output": {"Process": {"stderr": "error[E0453]: allow(dead_code) incompatible with previous forbid", "stdout": ""}}
                 }),
                 RunCommandOutcomeClass::ValidationFailureCompiler,
@@ -1004,6 +1210,14 @@ mod tests {
 
     #[test]
     fn actionable_failure_prefers_explicit_run_command_classification() {
+        let mut ctx = RouteContext::default();
+        ctx.recent_tool_results.push(serde_json::json!({
+            "action": "run_command",
+            "success": false,
+            "output": {"Process": {"stderr": "error: `cargo init` cannot be run on existing Cargo packages\nhelp: use `cargo new` to create a package in a new subdirectory\n", "stdout": ""}}
+        }));
+        assert!(has_actionable_failure(&ctx));
+
         let mut ctx = RouteContext::default();
         ctx.recent_tool_results.push(serde_json::json!({
             "action": "run_command",
@@ -1062,22 +1276,17 @@ mod tests {
 
         let mut ctx = RouteContext::default();
         ctx.verify_seen = true;
-        ctx.last_verify_passed = true;
-        ctx.last_verify_compiler_clean = true;
+        ctx.last_verifier_outcome = Some("passed".into());
         assert_eq!(latest_verify_outcome(&ctx), Some(VerifyOutcomeClass::Passed));
 
         let mut ctx = RouteContext::default();
         ctx.verify_seen = true;
-        ctx.last_verify_passed = false;
-        ctx.last_verify_compiler_clean = false;
-        ctx.last_verify_diagnostics = vec!["error[E0453]: allow(dead_code) incompatible with previous forbid".into()];
+        ctx.last_verifier_outcome = Some("compiler_failure".into());
         assert_eq!(latest_verify_outcome(&ctx), Some(VerifyOutcomeClass::CompilerFailure));
 
         let mut ctx = RouteContext::default();
         ctx.verify_seen = true;
-        ctx.last_verify_passed = false;
-        ctx.last_verify_compiler_clean = false;
-        ctx.last_verify_diagnostics = vec!["no_actions_executed".into()];
+        ctx.last_verifier_outcome = Some("failed_no_compiler_signal".into());
         assert_eq!(latest_verify_outcome(&ctx), Some(VerifyOutcomeClass::FailedNoCompilerSignal));
     }
 
@@ -1336,6 +1545,125 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_observes_on_state_drift_before_missing_target_plan() {
+        let root = std::env::temp_dir().join(format!("canon_route_state_drift_dispatch_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"event_sim_coverage\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let mut ctx = RouteContext::default();
+        ctx.context_ready = true;
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.target_root = Some(root.display().to_string());
+        ctx.semantic_summary.path_exists = false;
+        ctx.semantic_summary.cargo_project = false;
+        let eval = evaluate_route_dispatch(
+            &ctx,
+            RoutePolicyState {
+                last_control_kind: None,
+                pending_required_successor: None,
+            },
+            RouteDispatchState {
+                pending_request_id: None,
+                awaiting_control_successor: None,
+                route_emitted_for_current_control: false,
+            },
+        );
+        let deterministic = eval.deterministic.expect("expected deterministic dispatch");
+        assert_eq!(deterministic.rule, DeterministicRouteRule::StateDriftObserve);
+        assert_eq!(deterministic.route, RouteKind::Observe);
+    }
+
+    #[test]
+    fn no_progress_bootstrap_mismatch_with_state_drift_forces_observe_refresh() {
+        let root = std::env::temp_dir().join(format!("canon_route_state_drift_acted_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"event_sim_coverage\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.target_root = Some(root.display().to_string());
+        ctx.semantic_summary.path_exists = false;
+        ctx.semantic_summary.cargo_project = false;
+        ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
+            "no_semantic_progress",
+            "init_cargo_project failed: error: `cargo init` cannot be run on existing Cargo packages",
+            Vec::new(),
+            false,
+        ));
+        ctx.recent_tool_results.push(serde_json::json!({
+            "action": "run_command",
+            "success": false,
+            "output": {"Process": {"stderr": "error: `cargo init` cannot be run on existing Cargo packages\nhelp: use `cargo new` to create a package in a new subdirectory\n", "stdout": ""}}
+        }));
+
+        let acted = canon_event::LoopActed {
+            tick: 0,
+            action_id: None,
+            action_kind: "run_command".into(),
+            capability_request_id: String::new(),
+            tool_call_id: None,
+            tool_result_id: None,
+            success: false,
+            exit_code: Some(101),
+            stdout: String::new(),
+            stderr: "error: `cargo init` cannot be run on existing Cargo packages".into(),
+            duration_ms: 0,
+            trace_id: None,
+            execution_id: None,
+            parent_span_id: None,
+            span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+        };
+        let decision = deterministic_route_for_event(&ctx, &RuntimeEvent::LoopActed(acted)).unwrap();
+        assert_eq!(decision.rule, DeterministicRouteRule::StateDriftObserve);
+        assert_eq!(decision.route, RouteKind::Observe);
+    }
+
+    #[test]
+    fn invalid_plan_replan_does_not_override_state_drift_refresh() {
+        let root = std::env::temp_dir().join(format!("canon_route_state_drift_invalid_plan_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"event_sim_coverage\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let mut ctx = RouteContext::default();
+        ctx.context_ready = true;
+        ctx.consecutive_invalid_plan_batches = 2;
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.target_root = Some(root.display().to_string());
+        ctx.semantic_summary.path_exists = false;
+        ctx.semantic_summary.cargo_project = false;
+
+        let eval = evaluate_route_dispatch(
+            &ctx,
+            RoutePolicyState {
+                last_control_kind: None,
+                pending_required_successor: None,
+            },
+            RouteDispatchState {
+                pending_request_id: None,
+                awaiting_control_successor: None,
+                route_emitted_for_current_control: false,
+            },
+        );
+        let deterministic = eval.deterministic.expect("expected deterministic dispatch");
+        assert_eq!(deterministic.rule, DeterministicRouteRule::StateDriftObserve);
+        assert_eq!(deterministic.route, RouteKind::Observe);
+    }
+
+    #[test]
     fn apply_route_policy_forces_plan_on_repeated_observe() {
         let ctx = RouteContext::default();
         let mut d = decision(RouteKind::Observe, RouteKind::Observe, "accepted");
@@ -1508,6 +1836,43 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_route_for_event_rewrites_verify_to_plan_when_module_gaps_remain() {
+        let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.cargo_project = true;
+        ctx.semantic_summary.entrypoint_kind = Some("bin".into());
+        ctx.semantic_summary.module_gaps = vec!["index -> src/index.rs".into()];
+        ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
+            "module_created",
+            "module file created",
+            vec!["/tmp/example/src/index.rs".into()],
+            true,
+        ));
+        let acted = canon_event::LoopActed {
+            tick: 0,
+            action_id: None,
+            action_kind: "apply_patch".into(),
+            capability_request_id: String::new(),
+            tool_call_id: None,
+            tool_result_id: None,
+            success: true,
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: 0,
+            trace_id: None,
+            execution_id: None,
+            parent_span_id: None,
+            span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+        };
+        let decision = deterministic_route_for_event(&ctx, &RuntimeEvent::LoopActed(acted)).unwrap();
+        assert_eq!(decision.route, RouteKind::Plan);
+        assert_eq!(decision.rule, DeterministicRouteRule::NoSemanticProgressPlan);
+    }
+
+    #[test]
     fn deterministic_route_for_event_replans_after_no_semantic_progress() {
         let mut ctx = RouteContext::default();
         ctx.semantic_summary.complete = true;
@@ -1574,6 +1939,172 @@ mod tests {
         let decision = deterministic_route_for_event(&ctx, &RuntimeEvent::LoopActed(acted)).unwrap();
         assert_eq!(decision.route, RouteKind::Observe);
         assert_eq!(decision.rule, DeterministicRouteRule::NoActionableFailureObserve);
+    }
+
+    #[test]
+    fn deterministic_route_for_event_observes_on_state_drift() {
+        let root = std::env::temp_dir().join(format!("canon_route_state_drift_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"route_state_drift\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.target_root = Some(root.display().to_string());
+        ctx.semantic_summary.path_exists = false;
+        ctx.semantic_summary.cargo_project = false;
+
+        let acted = canon_event::LoopActed {
+            tick: 0,
+            action_id: None,
+            action_kind: "run_command".into(),
+            capability_request_id: String::new(),
+            tool_call_id: None,
+            tool_result_id: None,
+            success: true,
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: 0,
+            trace_id: None,
+            execution_id: None,
+            parent_span_id: None,
+            span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+        };
+        let decision = deterministic_route_for_event(&ctx, &RuntimeEvent::LoopActed(acted)).unwrap();
+        assert_eq!(decision.route, RouteKind::Observe);
+        assert_eq!(decision.rule, DeterministicRouteRule::StateDriftObserve);
+    }
+
+    #[test]
+    fn route_objective_alignment_state_space_covers_primary_cases() {
+        struct DeterministicCase {
+            name: &'static str,
+            configure: fn(&mut RouteContext),
+            expected_lane: RouteKind,
+        }
+
+        let cases = [
+            DeterministicCase {
+                name: "no_actionable_failure_prefers_observe",
+                configure: |ctx| {
+                    ctx.semantic_summary.complete = true;
+                    ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
+                        "no_semantic_progress",
+                        "read_file produced no semantic delta",
+                        Vec::new(),
+                        false,
+                    ));
+                },
+                expected_lane: RouteKind::Observe,
+            },
+        ];
+
+        for case in cases {
+            let mut ctx = RouteContext::default();
+            (case.configure)(&mut ctx);
+            let event = RuntimeEvent::LoopActed(canon_event::LoopActed {
+                tick: 0,
+                action_id: None,
+                action_kind: "run_command".into(),
+                capability_request_id: String::new(),
+                tool_call_id: None,
+                tool_result_id: None,
+                success: true,
+                exit_code: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                duration_ms: 0,
+                trace_id: None,
+                execution_id: None,
+                parent_span_id: None,
+                span_id: None,
+                plan_id: None,
+                plan_step_id: None,
+            });
+            let decision = deterministic_route_for_event(&ctx, &event)
+                .unwrap_or_else(|| panic!("missing deterministic route for case {}", case.name));
+            assert_eq!(decision.route, case.expected_lane, "case {}", case.name);
+        }
+    }
+
+    #[test]
+    fn route_policy_alignment_state_space_covers_repair_pressure_rewrite() {
+        let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.compiler_repair_required = true;
+        let mut route_decision = decision(RouteKind::Verify, RouteKind::Verify, "accepted");
+        let rules = apply_route_policy(
+            &ctx,
+            RoutePolicyState {
+                last_control_kind: None,
+                pending_required_successor: None,
+            },
+            &mut route_decision,
+        );
+        assert!(
+            rules.iter().any(|rule| {
+                matches!(
+                    rule,
+                    RoutePolicyRule::ForcePlanOnObjectiveContradiction
+                        | RoutePolicyRule::ForcePlanOnBlockedValidation
+                        | RoutePolicyRule::ForcePlanOnMissingTarget
+                        | RoutePolicyRule::ForcePlanOnRepeatedObserve
+                        | RoutePolicyRule::CycleCapToPlan
+                )
+            }),
+            "expected a plan-forcing rule, got {:?}",
+            rules
+        );
+        assert_eq!(route_decision.lane, RouteKind::Plan);
+    }
+
+    #[test]
+    fn execution_result_classification_state_space_is_typed() {
+        let cases = [
+            (
+                serde_json::json!({
+                    "action": "run_command",
+                    "success": true,
+                    "output": {"Process": {"stderr": "", "stdout": "", "success": true}}
+                }),
+                RunCommandOutcomeClass::ValidationSuccess,
+            ),
+            (
+                serde_json::json!({
+                    "action": "run_command",
+                    "success": false,
+                    "output": {"Process": {"stderr": "error: `cargo init` cannot be run on existing Cargo packages\nhelp: use `cargo new` to create a package in a new subdirectory\n", "stdout": "", "success": false}}
+                }),
+                RunCommandOutcomeClass::BootstrapSelectionMismatch,
+            ),
+            (
+                serde_json::json!({
+                    "action": "run_command",
+                    "success": false,
+                    "output": {"Process": {"stderr": "error[E0432]: unresolved import", "stdout": "", "success": false}}
+                }),
+                RunCommandOutcomeClass::ValidationFailureCompiler,
+            ),
+            (
+                serde_json::json!({
+                    "action": "run_command",
+                    "success": false,
+                    "output": {"Process": {"stderr": "panic: semantic failure", "stdout": "", "success": false}}
+                }),
+                RunCommandOutcomeClass::SemanticFailure,
+            ),
+        ];
+
+        for (value, expected) in cases {
+            assert_eq!(classify_run_command_result(&value), expected);
+        }
     }
 
     #[test]

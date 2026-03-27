@@ -1410,6 +1410,7 @@ fn build_context_delta(
         consecutive_invalid_plan_batches,
         &llm_semantic_context.recent_execution_results,
         &llm_semantic_context.objective_trend_state,
+        semantic_summary,
     );
 
     format!(
@@ -1506,6 +1507,7 @@ fn build_planner_hint(
     consecutive_invalid_plan_batches: u32,
     recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
     objective_trend_state: &ObjectiveTrendState,
+    semantic_summary: &SemanticStateSummary,
 ) -> String {
     let last_failure = if recent_execution_results.is_empty() {
         batch_acted
@@ -1525,7 +1527,7 @@ fn build_planner_hint(
     } else {
         None
     };
-    let hint_lines = planner_hint_lines(
+    let mut hint_lines = planner_hint_lines(
         last_invalid_plan_reason,
         consecutive_invalid_plan_batches,
         recent_execution_results,
@@ -1536,6 +1538,23 @@ fn build_planner_hint(
             .map(|(_, text)| truncate_hint_text(text, 240))
             .as_deref(),
     );
+    if semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure") {
+        hint_lines.push(
+            "Programmatic tip: typed failure_class=no_actionable_failure; do not emit repair actions. Refresh observation instead."
+                .to_string(),
+        );
+    }
+    match semantic_summary.failure_scope.as_deref() {
+        Some("localized") => hint_lines.push(
+            "Programmatic tip: typed failure_scope=localized; prefer semantic/file repair on the targeted source paths. Avoid workspace-wide bootstrap or config changes unless fresh observation proves drift."
+                .to_string(),
+        ),
+        Some("workspace") | Some("tooling") => hint_lines.push(
+            "Programmatic tip: typed failure_scope=workspace/tooling; prefer observe, bootstrap, config, or tool-level repair. Avoid localized semantic/file edits as the first batch."
+                .to_string(),
+        ),
+        _ => {}
+    }
     if hint_lines.is_empty() {
         "none".to_string()
     } else {

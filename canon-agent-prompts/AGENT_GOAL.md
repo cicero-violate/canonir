@@ -1,21 +1,21 @@
-# Regex Engine with Execution Path Coverage Analyzer
+# SQL-Like Query Engine with Logical Optimization and Coverage Analyzer
 
-This project implements a custom regular expression engine in Rust that compiles patterns into automata and executes them against input strings while tracking which matching paths and edge cases are exercised. It is interesting because it exposes the internal nondeterministic behavior of regex engines and highlights untested matching branches, backtracking paths, and pattern edge cases that typical tests overlook.
+This project implements a Rust-based SQL-like query engine capable of parsing, planning, optimizing, and executing queries over in-memory tabular data, along with a coverage analysis system that tracks which query constructs, optimization paths, and execution strategies are exercised. It is interesting because query engines involve parsing, relational algebra, cost-based decisions, and multiple execution strategies, leading to a large and nuanced surface for discovering untested logic.
 
 ## Target
-- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/regex-coverage-engine`
+- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/sql-engine-coverage`
 
 ## Requirements
 
-1. Implement a Rust binary crate organized into modules such as `lexer`, `parser`, `ast`, `compiler`, `nfa`, `dfa`, `engine`, `state`, `backtrack`, `executor`, `trace`, `coverage`, `analysis`, `generator`, `report`, `cli`, and `errors`.
-2. Build a regex parser that supports literals, concatenation, alternation (`|`), repetition (`*`, `+`, `?`), grouping, and character classes.
-3. Define an abstract syntax tree (AST) representing parsed regex patterns.
-4. Implement a compiler that converts the AST into a nondeterministic finite automaton (NFA).
-5. Optionally implement NFA-to-DFA conversion for optimized execution paths.
-6. Develop an execution engine that matches input strings against the automaton, supporting both NFA simulation and backtracking modes.
-7. Design a state tracking system that records active states, transitions, and backtracking decisions during execution.
-8. Implement a trace system that logs transitions, branching decisions, and match attempts for each input string.
-9. Build a coverage tracking system that records which automaton states, transitions, and pattern constructs have been exercised.
-10. Develop an analysis module that identifies untested regex branches, unused alternations, and rare backtracking paths.
-11. Implement an input generator that produces strings aimed at exercising uncovered regex behaviors and edge cases.
-12. Provide reporting features including state/transition coverage summaries, pattern-level insights, and suggested inputs, with optional JSON export, and implement a CLI using `clap` with commands like `compile`, `match`, `trace`, `coverage`, and `report`, ensuring the implementation spans at least 800 lines of real Rust code across modules and compiles successfully with `cargo check`.
+1. Implement a Rust binary crate organized into modules such as `table`, `row`, `column`, `schema`, `value`, `storage`, `catalog`, `parser`, `lexer`, `ast`, `planner`, `logical_plan`, `physical_plan`, `optimizer`, `rules`, `executor`, `operators`, `join`, `filter`, `projection`, `aggregation`, `engine`, `trace`, `coverage`, `analysis`, `generator`, `report`, `cli`, and `errors`.
+2. Design an in-memory tabular storage system supporting multiple tables, schemas, and typed columns (integers, floats, strings, booleans).
+3. Implement a SQL-like parser supporting SELECT, WHERE, JOIN, GROUP BY, ORDER BY, and LIMIT clauses.
+4. Build an abstract syntax tree (AST) representation for parsed queries and validate semantic correctness.
+5. Develop a logical query planner that converts ASTs into relational algebra-style logical plans.
+6. Implement an optimizer that applies rule-based transformations such as predicate pushdown, projection pruning, and join reordering.
+7. Create a physical execution engine with operators for scanning, filtering, joining (nested loop and hash join), aggregation, and sorting.
+8. Support multiple execution strategies and switch between them based on simple heuristics or cost estimation.
+9. Handle edge cases such as NULL values, empty tables, invalid queries, type mismatches, and division by zero in expressions.
+10. Create a trace system that records parsing steps, plan transformations, operator execution, and intermediate results.
+11. Build a coverage tracking system that records which query constructs, optimization rules, execution operators, and edge cases have been exercised.
+12. Develop a query and data generator that produces synthetic tables and queries designed to exercise uncovered logical and physical plan paths, and provide reporting features including coverage summaries, execution statistics, and uncovered scenarios, with optional JSON export, along with a CLI using `clap` supporting commands like `load`, `query`, `explain`, `trace`, `coverage`, and `report`, ensuring the implementation spans at least 800 lines of real Rust code across modules and compiles successfully with `cargo check` without requiring external services.

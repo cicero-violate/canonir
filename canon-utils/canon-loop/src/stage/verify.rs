@@ -4,15 +4,13 @@ use std::process::Command;
 use canon_event::{events::VerifierPolicyUpdated, LoopVerified, RouteSelected, RuntimeEvent};
 use canon_invariant::meta_invariant_all_results_update_policy;
 use canon_goal::parse_agent_goal_markdown;
-use canon_semantic_state::{FailureClassKind, FailureScopeKind};
+use canon_semantic_state::FailureScopeKind;
 
 use crate::{context::LoopContext, result::LoopStageResult};
 
 pub fn execute(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
     let trace_id = Some(uuid::Uuid::new_v4().to_string());
     let execution_id = Some(uuid::Uuid::new_v4().to_string());
-    ctx.last_verify_trace_id = trace_id.clone();
-    ctx.last_verify_execution_id = execution_id.clone();
 
     let mut diagnostics: Vec<String> = Vec::new();
     let mut passed = true;
@@ -34,16 +32,18 @@ pub fn execute(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopS
         passed = false;
         diagnostics.push("cargo_check_failed".into());
         let hints = crate::compiler_hints::planner_lines(&[serde_json::Value::String(stderr.clone())]);
+        let (fallback_class, fallback_scope) = crate::compiler_hints::classify_failure_metadata(&stderr);
         let failure_class = hints
             .iter()
             .find_map(|hint| hint.kind_enum().map(|kind| kind.as_str().to_string()))
-            .unwrap_or_else(|| FailureClassKind::GenericCompilerFailure.as_str().to_string());
+            .unwrap_or_else(|| fallback_class.as_str().to_string());
         let failure_scope = hints
             .iter()
             .filter_map(|hint| hint.failure_scope_enum())
             .find(|scope| *scope != FailureScopeKind::None)
-            .map(|scope| scope.as_str().to_string())
-            .unwrap_or_else(|| FailureScopeKind::None.as_str().to_string());
+            .unwrap_or(fallback_scope)
+            .as_str()
+            .to_string();
         diagnostics.push(format!("failure_class={failure_class}"));
         diagnostics.push(format!("failure_scope={failure_scope}"));
         diagnostics.push(stderr);
@@ -83,8 +83,6 @@ pub fn execute(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopS
         span_id: verified.span_id.clone(),
         parent_span_id: verified.parent_span_id.clone(),
     };
-    ctx.last_verify_execution_id = verified.execution_id.clone();
-    ctx.last_verify_trace_id = verified.trace_id.clone();
     Ok(LoopStageResult::EmitMany(vec![
         RuntimeEvent::LoopVerified(verified),
         RuntimeEvent::VerifierPolicyUpdated(verifier_policy_updated),

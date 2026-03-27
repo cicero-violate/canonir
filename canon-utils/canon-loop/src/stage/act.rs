@@ -1,5 +1,5 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::{path::Path, process::Command};
+use std::{path::{Path, PathBuf}, process::Command};
 
 use canon_editor::{
     add_import_paths, create_module_files, define_symbol_stubs, move_symbol_pairs,
@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::{
     context::{DestructiveCmdPolicy, LoopContext, PendingAct},
+    exec_constraints::{validate_exec_action, ExecAction, ExecDecision, ExecState},
     merge::extract_written_paths,
     result::LoopStageResult,
 };
@@ -476,6 +477,51 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 ctx.mark_batch_inline_completion(planned, false);
                 return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_cmd")));
             };
+            let semantic_summary = ctx
+                .last_observed
+                .as_ref()
+                .map(|observed| observed.semantic_summary.clone())
+                .unwrap_or_default();
+            let target_root = PathBuf::from(cwd);
+            let mut exec_action = ExecAction::RunCommand {
+                cmd: cmd.to_string(),
+                cwd: target_root.clone(),
+            };
+            let exec_state = ExecState::from_semantic_summary(&target_root, &semantic_summary);
+            let mut rewrite_debug_event = None;
+            match validate_exec_action(&exec_state, &exec_action) {
+                ExecDecision::Allow => {}
+                ExecDecision::Forbid(reason) => {
+                    ctx.mark_batch_inline_completion(planned, false);
+                    return Ok(LoopStageResult::Emit(emit_exec_constraint_rejection(planned, reason)));
+                }
+                ExecDecision::Rewrite(rewritten, reason) => {
+                    rewrite_debug_event = Some(RuntimeEvent::Debug(canon_event::DebugEvent {
+                        source: "act_stage".to_string(),
+                        kind: "exec_constraint_rewrite".to_string(),
+                        payload: decision_trace_payload(
+                            reason,
+                            serde_json::json!({
+                                "original_action_kind": planned.action_kind,
+                                "original_payload": planned.action_payload,
+                                "rewritten_action": render_exec_action(&rewritten),
+                                "target_root": target_root,
+                            }),
+                        ),
+                    }));
+                    exec_action = rewritten;
+                }
+            }
+            let (cmd, cwd) = match &exec_action {
+                ExecAction::RunCommand { cmd, cwd } => (cmd.as_str(), cwd.to_string_lossy().to_string()),
+                ExecAction::Other { .. } => {
+                    ctx.mark_batch_inline_completion(planned, false);
+                    return Ok(LoopStageResult::Emit(emit_exec_constraint_rejection(
+                        planned,
+                        "meta_invariant_tool_selection_correctness: unsupported rewritten action kind",
+                    )));
+                }
+            };
             if is_potentially_destructive(cmd, &ctx.workspace) {
                 match ctx.destructive_cmd_policy {
                     DestructiveCmdPolicy::Block => {
@@ -507,6 +553,9 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
             ctx.mark_batch_dispatched(planned);
 
             let mut events = Vec::new();
+            if let Some(debug_event) = rewrite_debug_event {
+                events.push(debug_event);
+            }
             events.push(write_tool_call_artifact(ctx, artifact_n, "bash", &node_id, &tool_call_id, &request_id, &serde_json::json!({ "cmd": cmd, "cwd": cwd })));
             events.push(write_tool_result_pending_artifact(ctx, artifact_n, planned, "bash", &node_id, &tool_call_id, &request_id));
             events.push(RuntimeEvent::ToolCall(ToolCall {
@@ -517,7 +566,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 payload: serde_json::json!({ "cmd": cmd, "cwd": cwd }),
                 accepted: true,
             }));
-            events.push(RuntimeEvent::Bash(BashInvoke { request_id: request_id.clone(), cmd: cmd.to_string(), cwd: Some(cwd.to_string()), queued: true }));
+            events.push(RuntimeEvent::Bash(BashInvoke { request_id: request_id.clone(), cmd: cmd.to_string(), cwd: Some(cwd.clone()), queued: true }));
 
             ctx.pending_act = Some(PendingAct {
                 tick: planned.tick,
@@ -1262,6 +1311,41 @@ fn emit_missing_args(planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
         plan_step_id: planned.plan_step_id.clone(),
         action_id: planned.action_id.clone(),
     })
+}
+
+fn emit_exec_constraint_rejection(planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
+    RuntimeEvent::LoopActed(LoopActed {
+        tick: planned.tick,
+        action_kind: planned.action_kind.clone(),
+        capability_request_id: String::new(),
+        tool_call_id: None,
+        tool_result_id: None,
+        stdout: String::new(),
+        stderr: reason.to_string(),
+        exit_code: None,
+        duration_ms: 0,
+        success: false,
+        trace_id: planned.trace_id.clone(),
+        execution_id: planned.execution_id.clone(),
+        span_id: Some(Uuid::new_v4().to_string()),
+        parent_span_id: planned.span_id.clone(),
+        plan_id: planned.plan_id.clone(),
+        plan_step_id: planned.plan_step_id.clone(),
+        action_id: planned.action_id.clone(),
+    })
+}
+
+fn render_exec_action(action: &ExecAction) -> serde_json::Value {
+    match action {
+        ExecAction::RunCommand { cmd, cwd } => serde_json::json!({
+            "action_kind": "run_command",
+            "cmd": cmd,
+            "cwd": cwd,
+        }),
+        ExecAction::Other { action_kind } => serde_json::json!({
+            "action_kind": action_kind,
+        }),
+    }
 }
 
 fn emit_conflict(planned: &LoopPlanned, agent: &str, action: &str, path: &str) -> RuntimeEvent {

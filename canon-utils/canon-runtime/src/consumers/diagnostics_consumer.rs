@@ -80,10 +80,10 @@ impl EventConsumer for DiagnosticsConsumer {
                     reason = Some("halted");
                 }
             }
-            RuntimeEvent::LoopVerified(vr) => {
-                if !vr.passed {
+            RuntimeEvent::VerifierPolicyUpdated(vr) => {
+                if vr.actionable_failure {
                     p = true;
-                    reason = Some("verify_failed");
+                    reason = Some("verifier_policy_updated_failure");
                 }
             }
             RuntimeEvent::CapabilityFailed(_) => {

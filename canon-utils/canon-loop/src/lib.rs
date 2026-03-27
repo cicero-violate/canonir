@@ -1,6 +1,7 @@
 pub mod context;
 pub mod compiler_hints;
 pub mod env_model;
+pub mod exec_constraints;
 pub mod planning_preconditions;
 pub mod policy;
 pub mod result;

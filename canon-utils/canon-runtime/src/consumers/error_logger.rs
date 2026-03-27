@@ -130,18 +130,22 @@ fn event_to_payload(event: &RuntimeEvent) -> Option<(String, serde_json::Value)>
             ))
             .unwrap_or_else(|_| json!({})),
         )),
-        RuntimeEvent::LoopVerified(payload) if !payload.passed => Some((
+        RuntimeEvent::VerifierPolicyUpdated(payload) if payload.actionable_failure => Some((
             "verify".to_string(),
             serde_json::to_value(new_error_occurred(
-                "loop_verified_failed",
+                "verifier_policy_updated_failure",
                 "verify",
-                payload.diagnostics.join("; "),
+                format!(
+                    "verifier_outcome={} retry_policy={} reward_bias={}",
+                    payload.verifier_outcome, payload.retry_policy, payload.reward_bias
+                ),
                 "error",
                 json!({
                     "tick": payload.tick,
-                    "compiler_clean": payload.compiler_clean,
-                    "tlog_clean": payload.tlog_clean,
-                    "error_count": payload.error_count,
+                    "actionable_failure": payload.actionable_failure,
+                    "verifier_outcome": payload.verifier_outcome,
+                    "retry_policy": payload.retry_policy,
+                    "reward_bias": payload.reward_bias,
                 }),
                 payload.trace_id.clone(),
             ))

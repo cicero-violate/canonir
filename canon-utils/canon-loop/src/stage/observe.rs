@@ -133,16 +133,31 @@ fn build_observation_payload(
     };
     let planning_preconditions =
         planning_preconditions::derive_preconditions(Some(&model), compiler_errors);
-    let repair_intents = planning_preconditions::derive_repair_intents(&planning_preconditions);
+    let repair_intents = planning_preconditions::derive_repair_intents(&planning_preconditions, failure_scope.as_deref());
     let compiler_hints = crate::compiler_hints::planner_lines(compiler_errors);
+    let planning_precondition_lines = planning_preconditions::planner_lines(&planning_preconditions);
     let failure_class = compiler_hints
         .iter()
-        .find_map(|hint| hint.kind_enum().map(|kind| kind.as_str().to_string()));
+        .find_map(|hint| hint.kind_enum().map(|kind| kind.as_str().to_string()))
+        .or_else(|| {
+            if planning_preconditions.is_empty() && repair_intents.is_empty() {
+                Some(canon_semantic_state::FailureClassKind::NoActionableFailure.as_str().to_string())
+            } else {
+                None
+            }
+        });
     let failure_scope = compiler_hints
         .iter()
         .filter_map(|hint| hint.failure_scope_enum())
         .find(|scope| *scope != canon_semantic_state::FailureScopeKind::None)
-        .map(|scope| scope.as_str().to_string());
+        .map(|scope| scope.as_str().to_string())
+        .or_else(|| {
+            if planning_preconditions.is_empty() && repair_intents.is_empty() {
+                Some(canon_semantic_state::FailureScopeKind::None.as_str().to_string())
+            } else {
+                None
+            }
+        });
     let target_root = model.target_root.clone();
     let summary = SemanticStateSummary {
         version: SemanticStateSummary::VERSION,
@@ -174,7 +189,7 @@ fn build_observation_payload(
                 )
             })
             .collect(),
-        planning_preconditions: planning_preconditions::planner_lines(&planning_preconditions),
+        planning_preconditions: planning_precondition_lines,
         repair_intents: planning_preconditions::repair_intent_lines(&repair_intents),
         compiler_hints,
         validation_blocked_by_preconditions: !planning_preconditions.is_empty(),

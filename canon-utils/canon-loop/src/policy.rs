@@ -11,6 +11,7 @@ pub enum CommandClass {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActionOutcomeClass {
     BootstrapSuccess,
+    BootstrapSelectionMismatch,
     ValidationFailureCompiler,
     ValidationSuccess,
     SemanticFailure,
@@ -170,6 +171,9 @@ pub fn classify_action_outcome(action_kind: &str, success: bool, stdout: &str, s
     let text = if !stderr.is_empty() { stderr } else { stdout };
     match action_kind {
         "run_command" if success && is_bootstrap_command_output(stdout, stderr) => ActionOutcomeClass::BootstrapSuccess,
+        "run_command" if looks_like_bootstrap_selection_mismatch(text) => {
+            ActionOutcomeClass::BootstrapSelectionMismatch
+        }
         "run_command" if success && looks_semantically_failed(text) => ActionOutcomeClass::SemanticFailure,
         "run_command" if success => ActionOutcomeClass::ValidationSuccess,
         "run_command" if looks_like_compiler_failure(text) => ActionOutcomeClass::ValidationFailureCompiler,
@@ -568,6 +572,14 @@ fn looks_like_compiler_failure(text: &str) -> bool {
         || text.contains("For more information about this error")
 }
 
+fn looks_like_bootstrap_selection_mismatch(text: &str) -> bool {
+    text.contains("`cargo init` cannot be run on existing Cargo packages")
+        || text.contains("use `cargo new` to create a package in a new subdirectory")
+        || text.contains("destination `")
+            && text.contains("already exists")
+            && text.contains("Use `cargo init` to initialize the directory")
+}
+
 fn looks_semantically_failed(text: &str) -> bool {
     text.contains("test result: FAILED")
         || text.contains("failed")
@@ -696,6 +708,15 @@ mod tests {
         assert_eq!(
             classify_action_outcome("run_command", true, "", "Creating binary (application) package"),
             ActionOutcomeClass::BootstrapSuccess
+        );
+        assert_eq!(
+            classify_action_outcome(
+                "run_command",
+                false,
+                "",
+                "error: `cargo init` cannot be run on existing Cargo packages\nhelp: use `cargo new` to create a package in a new subdirectory"
+            ),
+            ActionOutcomeClass::BootstrapSelectionMismatch
         );
         assert_eq!(
             classify_action_outcome("run_command", false, "", "error[E0453]: allow(dead_code) incompatible with previous forbid"),

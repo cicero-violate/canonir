@@ -1,4 +1,4 @@
-use canon_semantic_state::{CompilerHintKind, CompilerHintRecord, FailureScopeKind};
+use canon_semantic_state::{CompilerHintKind, CompilerHintRecord, FailureClassKind, FailureScopeKind};
 
 pub fn extract_compiler_hints(errors: &[serde_json::Value]) -> Vec<CompilerHintRecord> {
     let mut hints = Vec::new();
@@ -75,6 +75,20 @@ pub fn extract_compiler_hints(errors: &[serde_json::Value]) -> Vec<CompilerHintR
             .with_failure_scope(scope));
             continue;
         }
+        if text.contains("target path does not exist")
+            || text.contains("could not find `Cargo.toml`")
+            || text.contains("failed to load manifest")
+            || text.contains("manifest path")
+        {
+            hints.push(CompilerHintRecord::new(
+                CompilerHintKind::GenericCompilerFailure,
+                truncate(&text, 140),
+                "repair or refresh the workspace/bootstrap state before cargo check",
+                target_files,
+            )
+            .with_failure_scope(FailureScopeKind::Workspace));
+            continue;
+        }
         if text.contains("error[E") || text.contains("could not compile") {
             hints.push(CompilerHintRecord::new(
                 CompilerHintKind::GenericCompilerFailure,
@@ -88,7 +102,7 @@ pub fn extract_compiler_hints(errors: &[serde_json::Value]) -> Vec<CompilerHintR
     dedup_hints(hints)
 }
 
-fn classify_failure_scope(text: &str, target_files: &[String]) -> FailureScopeKind {
+pub fn classify_failure_scope(text: &str, target_files: &[String]) -> FailureScopeKind {
     if text.contains("rustc capture failed") {
         return FailureScopeKind::Tooling;
     }
@@ -99,10 +113,47 @@ fn classify_failure_scope(text: &str, target_files: &[String]) -> FailureScopeKi
         || text.contains("Cargo.toml")
         || text.contains("workspace")
         || text.contains("forbid")
+        || text.contains("target path does not exist")
+        || text.contains("failed to load manifest")
+        || text.contains("manifest path")
+        || text.contains("cannot be run on existing Cargo packages")
+        || text.contains("use `cargo new`")
+        || text.contains("No such file or directory")
     {
         return FailureScopeKind::Workspace;
     }
-    FailureScopeKind::None
+    if text.contains("cargo ") || text.contains("process didn't exit successfully") {
+        return FailureScopeKind::Tooling;
+    }
+    FailureScopeKind::Tooling
+}
+
+pub fn classify_failure_metadata(text: &str) -> (FailureClassKind, FailureScopeKind) {
+    let target_files = extract_target_files(text);
+    (
+        classify_failure_class(text),
+        classify_failure_scope(text, &target_files),
+    )
+}
+
+pub fn classify_failure_class(text: &str) -> FailureClassKind {
+    if extract_missing_module_name(text).is_some() {
+        FailureClassKind::MissingModule
+    } else if text.contains("allow(dead_code) incompatible with previous forbid") {
+        FailureClassKind::DeadCodeForbidConflict
+    } else if text.contains("main function not found") || text.contains("`main` function not found") {
+        FailureClassKind::MissingEntrypoint
+    } else if extract_unresolved_import_symbol(text).is_some() {
+        FailureClassKind::UnresolvedImport
+    } else if extract_missing_symbol(text).is_some() {
+        FailureClassKind::MissingSymbol
+    } else if extract_duplicate_definition_symbol(text).is_some() {
+        FailureClassKind::DuplicateDefinition
+    } else if extract_trait_bound_summary(text).is_some() {
+        FailureClassKind::TraitBoundFailure
+    } else {
+        FailureClassKind::GenericCompilerFailure
+    }
 }
 
 pub fn planner_lines(errors: &[serde_json::Value]) -> Vec<CompilerHintRecord> {

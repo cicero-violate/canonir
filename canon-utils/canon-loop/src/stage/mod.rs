@@ -1,4 +1,4 @@
-use canon_event::{CapabilityCompleted, CapabilityFailed, EventId, RuntimeEvent, LoopVerified, RouteSelected};
+use canon_event::{events::VerifierPolicyUpdated, CapabilityCompleted, CapabilityFailed, EventId, RuntimeEvent, RouteSelected};
 
 use crate::{context::LoopContext, result::LoopStageResult};
 
@@ -18,7 +18,7 @@ pub enum LoopStageEvent {
     Conclude(RouteSelected),
     CapabilityDone(CapabilityCompleted),
     CapabilityFail(CapabilityFailed),
-    Reward(LoopVerified),
+    RewardPolicy(VerifierPolicyUpdated),
 }
 
 impl LoopStageEvent {
@@ -32,7 +32,7 @@ impl LoopStageEvent {
             LoopStageEvent::Conclude(d) => reward::execute_conclude(d, ctx),
             LoopStageEvent::CapabilityDone(c) => dispatch_capability_done(c, ctx, trigger_id),
             LoopStageEvent::CapabilityFail(f) => dispatch_capability_fail(f, ctx, trigger_id),
-            LoopStageEvent::Reward(v) => reward::execute(v, ctx),
+            LoopStageEvent::RewardPolicy(v) => reward::execute_from_policy(v, ctx),
         }
     }
 }
@@ -72,7 +72,7 @@ impl TryFrom<RuntimeEvent> for LoopStageEvent {
             },
             RuntimeEvent::CapabilityCompleted(c) => Ok(LoopStageEvent::CapabilityDone(c)),
             RuntimeEvent::CapabilityFailed(f) => Ok(LoopStageEvent::CapabilityFail(f)),
-            RuntimeEvent::LoopVerified(v) => Ok(LoopStageEvent::Reward(v)),
+            RuntimeEvent::VerifierPolicyUpdated(v) => Ok(LoopStageEvent::RewardPolicy(v)),
             other => Err(other),
         }
     }

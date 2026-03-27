@@ -32,6 +32,13 @@ pub struct WorkspaceModel {
     pub module_gaps: Vec<ModuleGap>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootstrapCommandChoice {
+    CargoNew,
+    CargoInit,
+    NoBootstrapNeeded,
+}
+
 impl WorkspaceModel {
     pub fn inspect(goal_text: &str, workspace: &Path) -> Option<Self> {
         let target_root = parse_agent_goal_markdown(goal_text)
@@ -145,6 +152,34 @@ impl WorkspaceModel {
     }
 }
 
+impl BootstrapCommandChoice {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CargoNew => "cargo_new",
+            Self::CargoInit => "cargo_init",
+            Self::NoBootstrapNeeded => "no_bootstrap_needed",
+        }
+    }
+}
+
+pub fn select_bootstrap_command(target_root: &Path) -> BootstrapCommandChoice {
+    if !target_root.exists() {
+        return BootstrapCommandChoice::CargoNew;
+    }
+    if !target_root.join("Cargo.toml").exists() {
+        return BootstrapCommandChoice::CargoInit;
+    }
+    BootstrapCommandChoice::NoBootstrapNeeded
+}
+
+pub fn semantic_state_matches_workspace_model(
+    path_exists: bool,
+    cargo_project: bool,
+    model: &WorkspaceModel,
+) -> bool {
+    path_exists == model.path_exists && cargo_project == model.cargo_toml_exists
+}
+
 impl EntrypointKind {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -180,6 +215,59 @@ fn collect_source_files(root: &Path) -> Vec<PathBuf> {
     collect_source_files_inner(root, root, &mut files);
     files.sort();
     files
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        semantic_state_matches_workspace_model, select_bootstrap_command, BootstrapCommandChoice,
+        WorkspaceModel,
+    };
+
+    #[test]
+    fn select_bootstrap_command_uses_cargo_new_for_missing_dir() {
+        let root = std::env::temp_dir().join(format!("canon_bootstrap_missing_{}", uuid::Uuid::new_v4()));
+        assert_eq!(select_bootstrap_command(&root), BootstrapCommandChoice::CargoNew);
+    }
+
+    #[test]
+    fn select_bootstrap_command_uses_cargo_init_for_existing_non_cargo_dir() {
+        let root = std::env::temp_dir().join(format!("canon_bootstrap_init_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(select_bootstrap_command(&root), BootstrapCommandChoice::CargoInit);
+    }
+
+    #[test]
+    fn select_bootstrap_command_rejects_bootstrap_for_existing_cargo_project() {
+        let root = std::env::temp_dir().join(format!("canon_bootstrap_existing_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"bootstrap_existing\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        assert_eq!(select_bootstrap_command(&root), BootstrapCommandChoice::NoBootstrapNeeded);
+    }
+
+    #[test]
+    fn semantic_state_matches_workspace_model_detects_state_vs_reality_mismatch() {
+        let root = std::env::temp_dir().join(format!("canon_state_match_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"state_match\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let model = WorkspaceModel::inspect(
+            &format!("# Goal\n\n## Target\n- Project path: `{}`\n", root.display()),
+            &root,
+        )
+        .unwrap();
+        assert!(!semantic_state_matches_workspace_model(false, false, &model));
+        assert!(semantic_state_matches_workspace_model(true, true, &model));
+    }
 }
 
 fn collect_source_files_inner(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {

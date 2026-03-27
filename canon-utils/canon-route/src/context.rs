@@ -51,9 +51,11 @@ pub struct RouteContext {
     pub finish_ready: bool,
     pub last_action_kind: String,
     pub verify_seen: bool,
-    pub last_verify_passed: bool,
-    pub last_verify_compiler_clean: bool,
     pub last_verify_diagnostics: Vec<String>,
+    pub last_verifier_outcome: Option<String>,
+    pub last_verifier_retry_policy: Option<String>,
+    pub last_verifier_reward_bias: Option<String>,
+    pub last_verifier_actionable_failure: Option<bool>,
     pub journal: Vec<JournalLine>,
     pub last_llm_signals: Option<serde_json::Value>,
     pub halted: bool,
@@ -267,8 +269,6 @@ impl RouteContext {
                 self.context_ready = true;
                 self.semantic_summary
                     .apply_rustc_capture_failure(&failed.message);
-                self.last_verify_diagnostics
-                    .push(format!("rustc capture failed: {}", failed.message));
                 self.push_journal(
                     "observe",
                     format!("rustc_capture_failed crate={} message={}", failed.crate_name, failed.message),
@@ -378,8 +378,6 @@ impl RouteContext {
             RuntimeEvent::LoopVerified(LoopVerified { compiler_clean, passed, diagnostics, .. }) => {
                 self.acted_unverified = false;
                 self.verify_seen = true;
-                self.last_verify_passed = *passed;
-                self.last_verify_compiler_clean = *compiler_clean;
                 self.last_verify_diagnostics = diagnostics.clone();
                 self.semantic_summary.compiler_repair_required = diagnostics.iter().any(|d| {
                     d.contains("allow(dead_code) incompatible with previous forbid")
@@ -393,6 +391,10 @@ impl RouteContext {
                 self.push_journal("verify", format!("passed={} done_action={done_action} system_satisfied={} diagnostics={}", compiler_clean, system_satisfied, diagnostics.join("|")));
             }
             RuntimeEvent::VerifierPolicyUpdated(updated) => {
+                self.last_verifier_outcome = Some(updated.verifier_outcome.clone());
+                self.last_verifier_retry_policy = Some(updated.retry_policy.clone());
+                self.last_verifier_reward_bias = Some(updated.reward_bias.clone());
+                self.last_verifier_actionable_failure = Some(updated.actionable_failure);
                 self.push_journal(
                     "policy_update",
                     format!(

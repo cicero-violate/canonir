@@ -13,12 +13,13 @@ use crate::{
 };
 use canon_event::{AgentRegistered, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, GoalEdgeDefined, RuntimeEvent, Tick};
 use canon_invariant::{
-    decision_trace_payload, meta_invariant_action_must_declare_verifier,
-    meta_invariant_all_results_update_policy,
+    decision_trace_payload, evaluate_constraint_context, meta_invariant_action_must_declare_verifier,
     meta_invariant_any_action_cites_failure,
     meta_invariant_classify_planned_action_class, meta_invariant_expected_verifier,
-    meta_invariant_has_actionable_failure, meta_invariant_is_localized_repair_action,
-    meta_invariant_no_progress_forces_change,
+    meta_invariant_has_actionable_failure,
+    meta_invariant_no_progress_forces_change, meta_invariant_verifier_sequence_contract,
+    ConstraintAction, ConstraintContext, ConstraintDecision, ConstraintState,
+    MetaInvariantVerifierSequenceStep,
 };
 use canon_proc_macros::must_emit;
 use canon_semantic_state::{classify_planned_action_intents, execution_results_for_action, SemanticExecutionResultRecord};
@@ -45,14 +46,15 @@ impl LoopStageExecutor {
                 "observe" => Some("loop_observed"),
                 "plan" => Some("planning_completed"),
                 "act" => Some("loop_acted"),
-                "verify" => Some("loop_verified"),
+                "verify" => Some("verifier_policy_updated"),
                 "conclude" => Some("loop_rewarded"),
                 _ => None,
             },
             RuntimeEvent::LoopObserved(_) => Some("route_selected"),
             RuntimeEvent::PlanningCompleted(_) => Some("route_selected"),
             RuntimeEvent::LoopActed(_) => Some("route_selected"),
-            RuntimeEvent::LoopVerified(_) => Some("loop_rewarded"),
+            RuntimeEvent::LoopVerified(_) => Some("verifier_policy_updated"),
+            RuntimeEvent::VerifierPolicyUpdated(_) => Some("loop_rewarded"),
             RuntimeEvent::LoopRewarded(_) => Some("route_selected"),
             _ => None,
         };
@@ -128,6 +130,39 @@ impl LoopStageExecutor {
         );
     }
 
+    fn should_reject_verifier_sequence(
+        &self,
+        event: &RuntimeEvent,
+    ) -> Option<(&'static str, String, serde_json::Value)> {
+        let step = match event {
+            RuntimeEvent::LoopVerified(_) => Some(MetaInvariantVerifierSequenceStep::LoopVerified),
+            RuntimeEvent::VerifierPolicyUpdated(_) => {
+                Some(MetaInvariantVerifierSequenceStep::VerifierPolicyUpdated)
+            }
+            RuntimeEvent::LoopRewarded(_) => Some(MetaInvariantVerifierSequenceStep::LoopRewarded),
+            _ => None,
+        }?;
+        let Some(reason) = meta_invariant_verifier_sequence_contract(
+            step,
+            self.ctx.last_control_kind.as_deref(),
+            self.ctx.pending_required_successor.as_deref(),
+            self.ctx.last_verified.is_some(),
+        ) else {
+            return None;
+        };
+        Some((
+            "meta_invariant_verifier_sequence_contract",
+            reason.to_string(),
+            serde_json::json!({
+                "event_kind": canon_event::event_kind_str(event),
+                "sequence_step": step.as_str(),
+                "last_control_kind": self.ctx.last_control_kind,
+                "pending_required_successor": self.ctx.pending_required_successor,
+                "has_last_verified": self.ctx.last_verified.is_some(),
+            }),
+        ))
+    }
+
     fn should_reject_planned_action(&self, planned: &canon_event::LoopPlanned) -> Option<(&'static str, String, serde_json::Value)> {
         let semantic_summary = self
             .ctx
@@ -162,16 +197,45 @@ impl LoopStageExecutor {
             semantic_summary.compiler_hints.len(),
             semantic_summary.module_gaps.len(),
         );
-        if meta_invariant_is_localized_repair_action(planned.action_kind.as_str()) && !actionable_failure {
+        let constraint_action = classify_constraint_action(planned);
+        let target_root = semantic_summary
+            .target_root
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.ctx.workspace.clone());
+        let constraint_decision = evaluate_constraint_context(&ConstraintContext {
+            state: ConstraintState {
+                semantic_path_exists: semantic_summary.path_exists,
+                semantic_cargo_project: semantic_summary.cargo_project,
+                real_path_exists: target_root.exists(),
+                real_cargo_project: target_root.join("Cargo.toml").exists(),
+                actionable_failure,
+                validation_blocked: semantic_summary.validation_blocked_by_preconditions,
+                entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
+                    && semantic_summary.cargo_project,
+                module_gaps_present: !semantic_summary.module_gaps.is_empty(),
+                recent_no_semantic_progress: false,
+                failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
+                failure_scope_localized: semantic_summary.failure_scope.as_deref() == Some("localized"),
+                failure_scope_workspace: semantic_summary.failure_scope.as_deref() == Some("workspace"),
+                failure_scope_tooling: semantic_summary.failure_scope.as_deref() == Some("tooling"),
+            },
+            route: None,
+            action: constraint_action,
+            deterministic_route: None,
+        });
+        if let ConstraintDecision::Forbid(reason) = constraint_decision {
             return Some((
-                "meta_invariant_plan_must_cite_failure",
-                "localized repair action is forbidden because there is no actionable failure in the current semantic context"
-                    .to_string(),
+                "meta_invariant_shared_constraint_forbid",
+                reason.to_string(),
                 serde_json::json!({
                     "action_kind": planned.action_kind,
+                    "constraint_action": constraint_action.map(|a| format!("{a:?}")),
                     "compiler_repair_required": semantic_summary.compiler_repair_required,
                     "compiler_hints": semantic_summary.compiler_hints.len(),
                     "planning_preconditions": semantic_summary.planning_preconditions.len(),
+                    "entrypoint_kind": semantic_summary.entrypoint_kind,
+                    "module_gaps": semantic_summary.module_gaps,
                 }),
             ));
         }
@@ -312,6 +376,35 @@ impl LoopStageExecutor {
     }
 }
 
+fn classify_constraint_action(planned: &canon_event::LoopPlanned) -> Option<ConstraintAction> {
+    match planned.action_kind.as_str() {
+        "run_command" => planned
+            .action_payload
+            .get("cmd")
+            .and_then(|v| v.as_str())
+            .map(|cmd| {
+                if cmd.contains("cargo init") {
+                    ConstraintAction::CargoInit
+                } else if cmd.contains("cargo new") {
+                    ConstraintAction::CargoNew
+                } else if cmd.contains("cargo check") || cmd.contains("cargo build") || cmd.contains("cargo test") {
+                    ConstraintAction::Validation
+                } else {
+                    ConstraintAction::RepairWorkspace
+                }
+            }),
+        "apply_patch"
+        | "patch_file"
+        | "write_file"
+        | "edit.rename_symbol"
+        | "edit.move_symbol"
+        | "edit.add_import"
+        | "edit.define_symbol_stub"
+        | "edit.create_module_file" => Some(ConstraintAction::RepairLocalized),
+        _ => None,
+    }
+}
+
 impl EventConsumer for LoopStageExecutor {
     fn filter(&self) -> EventFilter {
         EventFilter::All
@@ -331,6 +424,10 @@ impl EventConsumer for LoopStageExecutor {
 
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
+        if let Some((feature, reason, context)) = self.should_reject_verifier_sequence(event) {
+            self.emit_invariant_violation(&trigger_id, feature, &reason, context);
+            return EventOutcome::NoOp("verifier_sequence_invariant_violation");
+        }
         let recovery_eval = if let RuntimeEvent::Debug(debug) = event {
             if debug.kind == "recovery_event" {
                 let expected = debug
@@ -593,23 +690,25 @@ impl EventConsumer for LoopStageExecutor {
                     );
                 }
             }
-            RuntimeEvent::LoopVerified(v) => {
-                let policy_update = meta_invariant_all_results_update_policy(
-                    v.passed,
-                    v.compiler_clean,
-                    &v.diagnostics,
-                );
+            RuntimeEvent::VerifierPolicyUpdated(updated) => {
+                self.ctx.last_verifier_outcome = Some(updated.verifier_outcome.clone());
+                self.ctx.last_verifier_retry_policy = Some(updated.retry_policy.clone());
+                self.ctx.last_verifier_reward_bias = Some(updated.reward_bias.clone());
+                self.ctx.last_verifier_actionable_failure = Some(updated.actionable_failure);
                 let result = SemanticExecutionResultRecord::new(
-                    match policy_update.retry_policy {
+                    match updated.retry_policy.as_str() {
                         "corrective_retry" => "verifier_policy_corrective_retry",
                         _ => "verifier_policy_none",
                     },
                     format!(
-                        "meta_invariant_all_results_update_policy {}",
-                        policy_update.as_summary()
+                        "meta_invariant_all_results_update_policy verifier_outcome={} retry_policy={} reward_bias={} actionable_failure={}",
+                        updated.verifier_outcome,
+                        updated.retry_policy,
+                        updated.reward_bias,
+                        updated.actionable_failure
                     ),
                     Vec::new(),
-                    !policy_update.actionable_failure,
+                    !updated.actionable_failure,
                 )
                 .with_attempted_kind("verify_result");
                 self.ctx
@@ -620,9 +719,9 @@ impl EventConsumer for LoopStageExecutor {
                     let drop_n = self.ctx.recent_execution_results.len() - 16;
                     self.ctx.recent_execution_results.drain(0..drop_n);
                 }
+            }
+            RuntimeEvent::LoopVerified(v) => {
                 self.ctx.last_verified = Some(v.clone());
-                self.ctx.last_verify_trace_id = v.trace_id.clone();
-                self.ctx.last_verify_execution_id = v.execution_id.clone();
                 if v.passed {
                     self.ctx.error_count = 0;
                     self.ctx.warning_count = 0;
@@ -824,8 +923,7 @@ impl EventConsumer for LoopStageExecutor {
             | RuntimeEvent::CapabilityInvoked(_)
             | RuntimeEvent::CapabilityResolved(_)
             | RuntimeEvent::InvariantDiscovered(_)
-            | RuntimeEvent::RustcCaptureStarted(_)
-            | RuntimeEvent::VerifierPolicyUpdated(_) => {}
+            | RuntimeEvent::RustcCaptureStarted(_) => {}
         }
         self.record_control_state(event, &trigger_id);
 
@@ -904,5 +1002,99 @@ impl EventConsumer for LoopStageExecutor {
             ),
         }
         EventOutcome::NoOp("loop_stage_async")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LoopStageExecutor;
+    use canon_event::{
+        events::VerifierPolicyUpdated, EventConsumer, EventId, EventOutcome, LoopRewarded,
+        RouteSelected, RuntimeEvent,
+    };
+    use std::path::PathBuf;
+
+    fn route_selected(route: &str) -> RuntimeEvent {
+        RuntimeEvent::RouteSelected(RouteSelected {
+            tick: 0,
+            suggested_route: route.to_string(),
+            prompt: String::new(),
+            approved_route: route.to_string(),
+            rationale: String::new(),
+            confidence: None,
+            gate_note: String::new(),
+            gate_rules_fired: Vec::new(),
+            gate_changed: false,
+            gate_should_stop: false,
+            model_json: String::new(),
+        })
+    }
+
+    fn loop_rewarded() -> RuntimeEvent {
+        RuntimeEvent::LoopRewarded(LoopRewarded {
+            tick: 0,
+            errors_before: 0,
+            errors_after: 0,
+            stagnant_ticks: 0,
+            halt: false,
+            goodness: 0.0,
+            reward: 0.0,
+            delta_g: 0.0,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+        })
+    }
+
+    fn verifier_policy_updated() -> RuntimeEvent {
+        RuntimeEvent::VerifierPolicyUpdated(VerifierPolicyUpdated {
+            tick: 0,
+            verifier_outcome: "passed".to_string(),
+            retry_policy: "none".to_string(),
+            reward_bias: "positive".to_string(),
+            actionable_failure: false,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+        })
+    }
+
+    #[test]
+    fn rejects_loop_rewarded_before_verifier_policy_update() {
+        let mut executor =
+            LoopStageExecutor::new(PathBuf::from("/tmp/workspace"), PathBuf::from("/tmp/test.tlog"));
+        let _ = executor.on_event(&route_selected("verify"), EventId::new("route-selected"));
+        let outcome = executor.on_event(&loop_rewarded(), EventId::new("loop-rewarded"));
+        assert!(matches!(
+            outcome,
+            EventOutcome::NoOp("verifier_sequence_invariant_violation")
+        ));
+    }
+
+    #[test]
+    fn accepts_loop_rewarded_for_direct_conclude_route() {
+        let mut executor =
+            LoopStageExecutor::new(PathBuf::from("/tmp/workspace"), PathBuf::from("/tmp/test.tlog"));
+        let _ = executor.on_event(&route_selected("conclude"), EventId::new("route-selected"));
+        let outcome = executor.on_event(&loop_rewarded(), EventId::new("loop-rewarded"));
+        assert!(!matches!(
+            outcome,
+            EventOutcome::NoOp("verifier_sequence_invariant_violation")
+        ));
+    }
+
+    #[test]
+    fn rejects_verifier_policy_updated_before_loop_verified() {
+        let mut executor =
+            LoopStageExecutor::new(PathBuf::from("/tmp/workspace"), PathBuf::from("/tmp/test.tlog"));
+        let _ = executor.on_event(&route_selected("verify"), EventId::new("route-selected"));
+        let outcome =
+            executor.on_event(&verifier_policy_updated(), EventId::new("verifier-policy-updated"));
+        assert!(matches!(
+            outcome,
+            EventOutcome::NoOp("verifier_sequence_invariant_violation")
+        ));
     }
 }

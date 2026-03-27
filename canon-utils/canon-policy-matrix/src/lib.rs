@@ -192,6 +192,7 @@ impl LoopScenarioFamily {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RunCommandOutcomeFamily {
     BootstrapSuccess,
+    BootstrapSelectionMismatch,
     ValidationFailureCompiler,
     ValidationSuccess,
     SemanticFailure,
@@ -199,8 +200,9 @@ pub enum RunCommandOutcomeFamily {
 }
 
 impl RunCommandOutcomeFamily {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::BootstrapSuccess,
+        Self::BootstrapSelectionMismatch,
         Self::ValidationFailureCompiler,
         Self::ValidationSuccess,
         Self::SemanticFailure,
@@ -1769,10 +1771,7 @@ fn planner_family_for_precondition(precondition: &PlanningPrecondition) -> Judgm
 fn planner_action_matches_primary_intent(state: PlannerJudgmentState) -> bool {
     match planner_preconditions_for_state(state).first() {
         Some(PlanningPrecondition::MustBootstrapWorkspace) => {
-            matches!(
-                state.action,
-                PlannerActionCase::BootstrapWorkspace | PlannerActionCase::InitCargoProject
-            )
+            state.action == PlannerActionCase::BootstrapWorkspace
         }
         Some(PlanningPrecondition::MustInitCargoProject) => {
             state.action == PlannerActionCase::InitCargoProject
@@ -2319,6 +2318,12 @@ pub fn run_command_outcome_rows() -> Vec<RunCommandOutcomeRow> {
             expected: RunCommandOutcomeClass::ValidationFailureCompiler,
         },
         RunCommandOutcomeRow {
+            name: "run_command_bootstrap_selection_mismatch",
+            family: RunCommandOutcomeFamily::BootstrapSelectionMismatch,
+            input: RunCommandOutcomeClass::BootstrapSelectionMismatch,
+            expected: RunCommandOutcomeClass::BootstrapSelectionMismatch,
+        },
+        RunCommandOutcomeRow {
             name: "run_command_validation_success",
             family: RunCommandOutcomeFamily::ValidationSuccess,
             input: RunCommandOutcomeClass::ValidationSuccess,
@@ -2383,7 +2388,7 @@ pub fn verify_outcome_rows() -> Vec<VerifyOutcomeRow> {
             expected: VerifyOutcomeClass::Passed,
         },
         VerifyOutcomeRow {
-            name: "verify_failed_no_compiler_signal",
+            name: "verifier_policy_updated_failed_no_compiler_signal",
             family: VerifyOutcomeFamily::FailedNoCompilerSignal,
             input: VerifyOutcomeClass::FailedNoCompilerSignal,
             expected: VerifyOutcomeClass::FailedNoCompilerSignal,
@@ -2769,18 +2774,22 @@ fn apply_verify_outcome(ctx: &mut RouteContext, outcome: VerifyOutcomeClass) {
     ctx.verify_seen = true;
     match outcome {
         VerifyOutcomeClass::Passed => {
-            ctx.last_verify_passed = true;
-            ctx.last_verify_compiler_clean = true;
+            ctx.last_verifier_outcome = Some("passed".to_string());
+            ctx.last_verifier_retry_policy = Some("none".to_string());
+            ctx.last_verifier_reward_bias = Some("positive".to_string());
+            ctx.last_verifier_actionable_failure = Some(false);
         }
         VerifyOutcomeClass::CompilerFailure => {
-            ctx.last_verify_passed = false;
-            ctx.last_verify_compiler_clean = false;
-            ctx.last_verify_diagnostics = vec!["error[E0453]: compiler failure".to_string()];
+            ctx.last_verifier_outcome = Some("compiler_failure".to_string());
+            ctx.last_verifier_retry_policy = Some("corrective_retry".to_string());
+            ctx.last_verifier_reward_bias = Some("negative".to_string());
+            ctx.last_verifier_actionable_failure = Some(true);
         }
         VerifyOutcomeClass::FailedNoCompilerSignal => {
-            ctx.last_verify_passed = false;
-            ctx.last_verify_compiler_clean = false;
-            ctx.last_verify_diagnostics = vec!["failed without compiler diagnostics".to_string()];
+            ctx.last_verifier_outcome = Some("failed_no_compiler_signal".to_string());
+            ctx.last_verifier_retry_policy = Some("corrective_retry".to_string());
+            ctx.last_verifier_reward_bias = Some("negative".to_string());
+            ctx.last_verifier_actionable_failure = Some(true);
         }
     }
 }
@@ -2899,6 +2908,11 @@ fn assert_reward_semantics_row(row: &RewardSemanticsRow) {
     let mut ctx = canon_loop::LoopContext::new("/tmp/example".into(), "/tmp/tlog".into());
     ctx.last_action_kind = row.last_action_kind.to_string();
     ctx.recent_execution_results = row.recent_execution_results.clone();
+    ctx.last_verifier_reward_bias = Some(if row.compiler_clean {
+        "positive".to_string()
+    } else {
+        "negative".to_string()
+    });
     let verified = canon_event::LoopVerified {
         tick: 0,
         passed: row.compiler_clean,
@@ -2922,6 +2936,10 @@ fn assert_reward_semantics_row(row: &RewardSemanticsRow) {
 fn run_command_result_value(outcome: RunCommandOutcomeClass) -> serde_json::Value {
     let (success, stderr) = match outcome {
         RunCommandOutcomeClass::BootstrapSuccess => (true, "Creating binary (application) package"),
+        RunCommandOutcomeClass::BootstrapSelectionMismatch => (
+            false,
+            "error: `cargo init` cannot be run on existing Cargo packages\nhelp: use `cargo new` to create a package in a new subdirectory",
+        ),
         RunCommandOutcomeClass::ValidationFailureCompiler => (false, "error[E0453]: compiler failure"),
         RunCommandOutcomeClass::ValidationSuccess => (true, "Finished `dev` profile"),
         RunCommandOutcomeClass::SemanticFailure => (false, "test result: FAILED"),

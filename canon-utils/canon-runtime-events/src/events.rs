@@ -370,7 +370,7 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
-    #[event(class = "Control", next = [LoopRewarded])]
+    #[event(class = "Control", next = [VerifierPolicyUpdated])]
     LoopVerified {
         #[input] tick: u64,
         #[output] passed: bool,
@@ -391,7 +391,7 @@ canon_event_struct!(
 
 canon_event_struct!(
     #[impl_shape]
-    #[event(class = "Control", next = [RouteSelected, LoopRewarded])]
+    #[event(class = "Control", next = [LoopRewarded])]
     VerifierPolicyUpdated {
         #[input] tick: u64,
         #[output] verifier_outcome: String,

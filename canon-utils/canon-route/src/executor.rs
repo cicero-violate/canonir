@@ -1,6 +1,9 @@
 use canon_decision::RouteKind;
 use canon_event::{new_error_occurred, CapabilityResult, Code, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, LlmCall, RouteSelected, RuntimeEvent, ToolBatchSettled};
-use canon_invariant::{decision_trace_payload, invariant_violation_delta, invariant_violation_state};
+use canon_invariant::{
+    decision_trace_payload, invariant_violation_delta, invariant_violation_state,
+    meta_invariant_verifier_sequence_contract, MetaInvariantVerifierSequenceStep,
+};
 use canon_judgment::GuardConfig;
 use canon_proc_macros::must_emit;
 use canon_runtime_supervisor::judgment_loop::RouteController;
@@ -16,8 +19,8 @@ use crate::{
         apply_route_policy, evaluate_route_cache, evaluate_route_dispatch, evaluate_route_emit,
         evaluate_route_emit_effects, evaluate_route_event_dispatch, evaluate_route_failure,
         evaluate_route_recovery, evaluate_route_transition, evaluate_successor_consumption,
-        RouteCacheRule, RouteCacheState, RouteDispatchState, RouteEmitRule, RouteEmitState,
-        RouteEventDispatchRule, RoutePolicyState,
+        DeterministicRouteDecision, RouteCacheRule, RouteCacheState, RouteDispatchState,
+        RouteEmitRule, RouteEmitState, RouteEventDispatchRule, RoutePolicyState,
         RoutePolicyRule,
     },
 };
@@ -109,7 +112,7 @@ impl RouteExecutor {
                 "confidence": deterministic.confidence,
             })
             .to_string();
-            self.emit_decision(&json, deterministic.prompt_tag.to_string());
+            self.emit_deterministic_decision(&deterministic, &json);
             return;
         }
         let llm_semantic_context = self.ctx.llm_semantic_context();
@@ -323,6 +326,217 @@ impl RouteExecutor {
             line!(),
         );
     }
+
+    fn emit_invariant_violation(
+        &self,
+        trigger_id: &EventId,
+        feature: &str,
+        reason: &str,
+        context: serde_json::Value,
+    ) {
+        let Some(emitter) = self.emitter.as_ref() else {
+            return;
+        };
+        emitter.emit_child(
+            RuntimeEvent::InvariantDiscovered(canon_event::InvariantDiscovered {
+                feature: feature.to_string(),
+                confidence: 1.0,
+                support: 1,
+            }),
+            vec![trigger_id.clone()],
+            file!(),
+            line!(),
+        );
+        emitter.emit_child(
+            RuntimeEvent::ErrorOccurred(new_error_occurred(
+                "verifier_sequence_invariant_violation",
+                "route_executor",
+                format!("verifier sequence invariant violated: {reason}"),
+                "warning",
+                serde_json::json!({
+                    "feature": feature,
+                    "reason": reason,
+                    "context": context,
+                }),
+                None,
+            )),
+            vec![trigger_id.clone()],
+            file!(),
+            line!(),
+        );
+    }
+
+    fn should_reject_verifier_sequence(
+        &self,
+        event: &RuntimeEvent,
+    ) -> Option<(&'static str, String, serde_json::Value)> {
+        let step = match event {
+            RuntimeEvent::LoopVerified(_) => Some(MetaInvariantVerifierSequenceStep::LoopVerified),
+            RuntimeEvent::VerifierPolicyUpdated(_) => {
+                Some(MetaInvariantVerifierSequenceStep::VerifierPolicyUpdated)
+            }
+            RuntimeEvent::LoopRewarded(_) => Some(MetaInvariantVerifierSequenceStep::LoopRewarded),
+            _ => None,
+        }?;
+        let Some(reason) = meta_invariant_verifier_sequence_contract(
+            step,
+            self.last_control_kind.as_deref(),
+            self.pending_required_successor.as_deref(),
+            self.ctx.verify_seen,
+        ) else {
+            return None;
+        };
+        Some((
+            "meta_invariant_verifier_sequence_contract",
+            reason.to_string(),
+            serde_json::json!({
+                "event_kind": canon_event::event_kind_str(event),
+                "sequence_step": step.as_str(),
+                "last_control_kind": self.last_control_kind,
+                "pending_required_successor": self.pending_required_successor,
+                "verify_seen": self.ctx.verify_seen,
+                "awaiting_control_successor": self.awaiting_control_successor,
+            }),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RouteExecutor;
+    use crate::policy::{DeterministicRouteDecision, DeterministicRouteRule};
+    use crate::decision::RouteDecision;
+    use canon_decision::RouteKind;
+    use canon_event::{
+        events::VerifierPolicyUpdated, EventConsumer, EventId, EventOutcome, LoopRewarded,
+        RouteSelected, RuntimeEvent,
+    };
+    use std::path::PathBuf;
+
+    fn route_selected(route: &str) -> RuntimeEvent {
+        RuntimeEvent::RouteSelected(RouteSelected {
+            tick: 0,
+            suggested_route: route.to_string(),
+            prompt: String::new(),
+            approved_route: route.to_string(),
+            rationale: String::new(),
+            confidence: None,
+            gate_note: String::new(),
+            gate_rules_fired: Vec::new(),
+            gate_changed: false,
+            gate_should_stop: false,
+            model_json: String::new(),
+        })
+    }
+
+    fn loop_rewarded() -> RuntimeEvent {
+        RuntimeEvent::LoopRewarded(LoopRewarded {
+            tick: 0,
+            errors_before: 0,
+            errors_after: 0,
+            stagnant_ticks: 0,
+            halt: false,
+            goodness: 0.0,
+            reward: 0.0,
+            delta_g: 0.0,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+        })
+    }
+
+    fn verifier_policy_updated() -> RuntimeEvent {
+        RuntimeEvent::VerifierPolicyUpdated(VerifierPolicyUpdated {
+            tick: 0,
+            verifier_outcome: "passed".to_string(),
+            retry_policy: "none".to_string(),
+            reward_bias: "positive".to_string(),
+            actionable_failure: false,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+        })
+    }
+
+    #[test]
+    fn rejects_loop_rewarded_before_verifier_policy_update() {
+        let mut executor = RouteExecutor::new(PathBuf::from("/tmp/workspace"));
+        let _ = executor.on_event(&route_selected("verify"), EventId::new("route-selected"));
+        let outcome = executor.on_event(&loop_rewarded(), EventId::new("loop-rewarded"));
+        assert!(matches!(
+            outcome,
+            EventOutcome::NoOp("verifier_sequence_invariant_violation")
+        ));
+    }
+
+    #[test]
+    fn accepts_loop_rewarded_for_direct_conclude_route() {
+        let mut executor = RouteExecutor::new(PathBuf::from("/tmp/workspace"));
+        let _ = executor.on_event(&route_selected("conclude"), EventId::new("route-selected"));
+        let outcome = executor.on_event(&loop_rewarded(), EventId::new("loop-rewarded"));
+        assert!(!matches!(
+            outcome,
+            EventOutcome::NoOp("verifier_sequence_invariant_violation")
+        ));
+    }
+
+    #[test]
+    fn rejects_verifier_policy_updated_before_loop_verified() {
+        let mut executor = RouteExecutor::new(PathBuf::from("/tmp/workspace"));
+        let _ = executor.on_event(&route_selected("verify"), EventId::new("route-selected"));
+        let outcome =
+            executor.on_event(&verifier_policy_updated(), EventId::new("verifier-policy-updated"));
+        assert!(matches!(
+            outcome,
+            EventOutcome::NoOp("verifier_sequence_invariant_violation")
+        ));
+    }
+
+    fn deterministic_decision(rule: DeterministicRouteRule, route: RouteKind) -> DeterministicRouteDecision {
+        DeterministicRouteDecision {
+            route,
+            rationale: format!("{rule:?}"),
+            confidence: 0.99,
+            prompt_tag: "deterministic:test",
+            noop_reason: "test",
+            rule,
+        }
+    }
+
+    #[test]
+    fn deterministic_bootstrap_refresh_observe_is_authoritative() {
+        let decision: RouteDecision = RouteExecutor::decision_from_deterministic(&deterministic_decision(
+            DeterministicRouteRule::BootstrapRefreshObserve,
+            RouteKind::Observe,
+        ));
+        assert_eq!(decision.lane, RouteKind::Observe);
+        assert_eq!(decision.suggested_route, RouteKind::Observe);
+        assert!(!decision.changed);
+    }
+
+    #[test]
+    fn deterministic_no_actionable_failure_observe_is_authoritative() {
+        let decision: RouteDecision = RouteExecutor::decision_from_deterministic(&deterministic_decision(
+            DeterministicRouteRule::NoActionableFailureObserve,
+            RouteKind::Observe,
+        ));
+        assert_eq!(decision.lane, RouteKind::Observe);
+        assert_eq!(decision.suggested_route, RouteKind::Observe);
+        assert!(!decision.changed);
+    }
+
+    #[test]
+    fn deterministic_invalid_plan_replan_is_authoritative() {
+        let decision: RouteDecision = RouteExecutor::decision_from_deterministic(&deterministic_decision(
+            DeterministicRouteRule::InvalidPlanReplan,
+            RouteKind::Plan,
+        ));
+        assert_eq!(decision.lane, RouteKind::Plan);
+        assert_eq!(decision.suggested_route, RouteKind::Plan);
+        assert!(!decision.changed);
+    }
 }
 
 fn hash_str(value: &str) -> u64 {
@@ -351,6 +565,10 @@ impl EventConsumer for RouteExecutor {
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
         self.current_trigger = Some(trigger_id.clone());
+        if let Some((feature, reason, context)) = self.should_reject_verifier_sequence(event) {
+            self.emit_invariant_violation(&trigger_id, feature, &reason, context);
+            return EventOutcome::NoOp("verifier_sequence_invariant_violation");
+        }
         let successor_eval =
             evaluate_successor_consumption(event, self.awaiting_control_successor.as_deref());
         if successor_eval.clear_awaiting_control_successor {
@@ -405,7 +623,7 @@ impl EventConsumer for RouteExecutor {
                 "confidence": fast_path.confidence,
             })
             .to_string();
-            self.emit_decision(&json, fast_path.prompt_tag.to_string());
+            self.emit_deterministic_decision(&fast_path, &json);
             return EventOutcome::NoOp(fast_path.noop_reason);
         }
 
@@ -512,6 +730,76 @@ impl EventConsumer for RouteExecutor {
 }
 
 impl RouteExecutor {
+    fn emit_route_selected_from_decision(&mut self, decision: &RouteDecision, model_json: String) {
+        let Some(emitter) = self.emitter.as_ref() else {
+            return;
+        };
+        let route_event = RuntimeEvent::RouteSelected(RouteSelected {
+            tick: self.ctx.scheduler_tick,
+            approved_route: decision.lane.as_str().to_string(),
+            suggested_route: decision.suggested_route.as_str().to_string(),
+            rationale: decision.rationale.clone(),
+            confidence: decision.confidence,
+            gate_note: decision.note.clone(),
+            gate_rules_fired: decision.gate_rules_fired.clone(),
+            gate_changed: decision.changed,
+            gate_should_stop: decision.should_stop,
+            prompt: decision.prompt.clone(),
+            model_json,
+        });
+        let RuntimeEvent::RouteSelected(route_payload) = &route_event else {
+            unreachable!("route_event must be route_selected");
+        };
+        self.last_route_prompt_hash = Some(hash_str(&decision.prompt));
+        self.last_route_selected = Some(route_payload.clone());
+        let tid = self.current_trigger.clone().expect("emit_route_selected_from_decision called without current_trigger set");
+        self.awaiting_control_successor = match decision.lane.as_str() {
+            "observe" => Some("loop_observed".to_string()),
+            "plan" => Some("planning_completed".to_string()),
+            "act" => Some("loop_acted".to_string()),
+            "verify" => Some("verifier_policy_updated".to_string()),
+            "conclude" => Some("loop_rewarded".to_string()),
+            _ => None,
+        };
+        emitter.emit_with_parents(route_event, vec![tid], file!(), line!());
+        if self.pending_required_successor.as_deref() == Some("route_selected") {
+            self.last_route_emitted_for_control_id = self.last_control_event_id.clone();
+        }
+        let emit_effects = evaluate_route_emit_effects(decision);
+        if emit_effects.clear_pending_request {
+            self.pending_request_id = None;
+        }
+        if emit_effects.clear_pending_prompt {
+            self.pending_prompt = None;
+        }
+        if emit_effects.set_halted {
+            self.ctx.halted = true;
+        }
+    }
+
+    fn emit_deterministic_decision(
+        &mut self,
+        deterministic: &DeterministicRouteDecision,
+        model_json: &str,
+    ) {
+        let decision = Self::decision_from_deterministic(deterministic);
+        self.emit_route_selected_from_decision(&decision, model_json.to_string());
+    }
+
+    fn decision_from_deterministic(deterministic: &DeterministicRouteDecision) -> RouteDecision {
+        RouteDecision {
+            lane: deterministic.route,
+            suggested_route: deterministic.route,
+            rationale: deterministic.rationale.clone(),
+            confidence: Some(deterministic.confidence),
+            changed: false,
+            note: "deterministic_route".to_string(),
+            gate_rules_fired: vec![deterministic.prompt_tag.to_string()],
+            should_stop: false,
+            prompt: deterministic.prompt_tag.to_string(),
+        }
+    }
+
     fn suppression_payload(
         &self,
         reason: &str,
@@ -551,14 +839,15 @@ impl RouteExecutor {
                 "observe" => Some("loop_observed"),
                 "plan" => Some("planning_completed"),
                 "act" => Some("loop_acted"),
-                "verify" => Some("loop_verified"),
+                "verify" => Some("verifier_policy_updated"),
                 "conclude" => Some("loop_rewarded"),
                 _ => None,
             },
             RuntimeEvent::LoopObserved(_) => Some("route_selected"),
             RuntimeEvent::PlanningCompleted(_) => Some("route_selected"),
             RuntimeEvent::LoopActed(_) => Some("route_selected"),
-            RuntimeEvent::LoopVerified(_) => Some("loop_rewarded"),
+            RuntimeEvent::LoopVerified(_) => Some("verifier_policy_updated"),
+            RuntimeEvent::VerifierPolicyUpdated(_) => Some("loop_rewarded"),
             RuntimeEvent::LoopRewarded(_) => Some("route_selected"),
             _ => None,
         };
@@ -643,46 +932,6 @@ impl RouteExecutor {
                 line!(),
             );
         }
-        let route_event = RuntimeEvent::RouteSelected(RouteSelected {
-            tick: self.ctx.scheduler_tick,
-            approved_route: decision.lane.as_str().to_string(),
-            suggested_route: decision.suggested_route.as_str().to_string(),
-            rationale: decision.rationale.clone(),
-            confidence: decision.confidence,
-            gate_note: decision.note.clone(),
-            gate_rules_fired: decision.gate_rules_fired.clone(),
-            gate_changed: decision.changed,
-            gate_should_stop: decision.should_stop,
-            prompt: decision.prompt.clone(),
-            model_json: model_json.to_string(),
-        });
-        let RuntimeEvent::RouteSelected(route_payload) = &route_event else {
-            unreachable!("route_event must be route_selected");
-        };
-        self.last_route_prompt_hash = Some(hash_str(&decision.prompt));
-        self.last_route_selected = Some(route_payload.clone());
-        let tid = self.current_trigger.clone().expect("emit_decision called without current_trigger set");
-        self.awaiting_control_successor = match decision.lane.as_str() {
-            "observe" => Some("loop_observed".to_string()),
-            "plan" => Some("planning_completed".to_string()),
-            "act" => Some("loop_acted".to_string()),
-            "verify" => Some("loop_verified".to_string()),
-            "conclude" => Some("loop_rewarded".to_string()),
-            _ => None,
-        };
-        emitter.emit_with_parents(route_event, vec![tid], file!(), line!());
-        if self.pending_required_successor.as_deref() == Some("route_selected") {
-            self.last_route_emitted_for_control_id = self.last_control_event_id.clone();
-        }
-        let emit_effects = evaluate_route_emit_effects(&decision);
-        if emit_effects.clear_pending_request {
-            self.pending_request_id = None;
-        }
-        if emit_effects.clear_pending_prompt {
-            self.pending_prompt = None;
-        }
-        if emit_effects.set_halted {
-            self.ctx.halted = true;
-        }
+        self.emit_route_selected_from_decision(&decision, model_json.to_string());
     }
 }
