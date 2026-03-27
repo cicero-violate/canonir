@@ -1108,7 +1108,10 @@ mod tests {
         let highest = preconditions_for_state(state).into_iter().next();
         match highest {
             Some(PlanningPrecondition::MustBootstrapWorkspace) => {
-                state.batch == FirstBatchCategory::Bootstrap
+                matches!(
+                    state.batch,
+                    FirstBatchCategory::Bootstrap | FirstBatchCategory::CargoInit
+                )
             }
             Some(PlanningPrecondition::MustInitCargoProject) => {
                 state.batch == FirstBatchCategory::CargoInit
