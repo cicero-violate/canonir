@@ -552,7 +552,10 @@ fn action_matches_hint_kind(action: &canon_event::LoopPlanned, hint_kind: &str) 
                 || patch.contains("impl ")
                 || patch.contains("use ")
         }
-        "duplicate_definition" => patch.contains("-") || patch.contains("rename"),
+        "duplicate_definition" => {
+            patch.contains("rename")
+                || has_definition_edit(patch)
+        }
         "trait_bound_failure" => {
             patch.contains("impl ")
                 || patch.contains(": ")
@@ -561,6 +564,18 @@ fn action_matches_hint_kind(action: &canon_event::LoopPlanned, hint_kind: &str) 
         }
         _ => true,
     }
+}
+
+fn has_definition_edit(patch: &str) -> bool {
+    patch.lines().any(|line| {
+        (line.starts_with('+') || line.starts_with('-'))
+            && (line.contains("fn ")
+                || line.contains("struct ")
+                || line.contains("enum ")
+                || line.contains("type ")
+                || line.contains("const ")
+                || line.contains("impl "))
+    })
 }
 
 fn normalized_touched_paths(action: &canon_event::LoopPlanned, target_root: &Path) -> Vec<PathBuf> {
