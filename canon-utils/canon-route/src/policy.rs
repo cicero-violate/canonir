@@ -62,6 +62,38 @@ pub enum RouteCacheRule {
     SuppressDuplicatePrompt,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteEventDispatchRule {
+    None,
+    BatchSettled,
+    IdleDispatch,
+    RecoverableEmptyPlan,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteFailureRule {
+    HeuristicFailureReroute,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteEmitEffectRule {
+    None,
+    ClearDeterministicObserveSentinel,
+    HaltOnConclude,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteRecoveryRule {
+    None,
+    EmitExpectedSuccessorRecovery,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SuccessorConsumptionRule {
+    None,
+    ClearAwaitingControlSuccessor,
+}
+
 pub struct RoutePolicyState<'a> {
     pub last_control_kind: Option<&'a str>,
     pub pending_required_successor: Option<&'a str>,
@@ -138,6 +170,33 @@ pub struct RouteEmitEvaluation {
 
 pub struct RouteCacheEvaluation {
     pub rule: RouteCacheRule,
+}
+
+pub struct RouteEventDispatchEvaluation {
+    pub rule: RouteEventDispatchRule,
+    pub should_dispatch: bool,
+}
+
+pub struct RouteFailureEvaluation {
+    pub rule: RouteFailureRule,
+    pub model_json: String,
+}
+
+pub struct RouteEmitEffectsEvaluation {
+    pub clear_pending_request: bool,
+    pub clear_pending_prompt: bool,
+    pub set_halted: bool,
+    pub rules: Vec<RouteEmitEffectRule>,
+}
+
+pub struct RouteRecoveryEvaluation {
+    pub rule: RouteRecoveryRule,
+    pub expected_successor: Option<String>,
+}
+
+pub struct SuccessorConsumptionEvaluation {
+    pub rule: SuccessorConsumptionRule,
+    pub clear_awaiting_control_successor: bool,
 }
 
 impl RoutePolicyRule {
@@ -346,6 +405,114 @@ pub fn evaluate_route_cache(state: RouteCacheState<'_>) -> RouteCacheEvaluation 
     }
     RouteCacheEvaluation {
         rule: RouteCacheRule::SuppressDuplicatePrompt,
+    }
+}
+
+pub fn evaluate_route_event_dispatch(
+    event: &RuntimeEvent,
+    planned_pending: usize,
+    pending_tool_results_empty: bool,
+) -> RouteEventDispatchEvaluation {
+    if matches!(event, RuntimeEvent::ToolBatchSettled(_)) {
+        return RouteEventDispatchEvaluation {
+            rule: RouteEventDispatchRule::BatchSettled,
+            should_dispatch: true,
+        };
+    }
+
+    let idle = planned_pending == 0 && pending_tool_results_empty;
+    if idle && matches!(event, RuntimeEvent::LoopObserved(_) | RuntimeEvent::LoopActed(_) | RuntimeEvent::LoopVerified(_)) {
+        return RouteEventDispatchEvaluation {
+            rule: RouteEventDispatchRule::IdleDispatch,
+            should_dispatch: true,
+        };
+    }
+
+    if let RuntimeEvent::PlanningCompleted(pc) = event {
+        let recoverable_empty_plan = planned_pending == 0
+            && matches!(pc.status.as_str(), "invalid_plan" | "llm_failed" | "llm_timeout")
+            && pending_tool_results_empty;
+        if recoverable_empty_plan {
+            return RouteEventDispatchEvaluation {
+                rule: RouteEventDispatchRule::RecoverableEmptyPlan,
+                should_dispatch: true,
+            };
+        }
+    }
+
+    RouteEventDispatchEvaluation {
+        rule: RouteEventDispatchRule::None,
+        should_dispatch: false,
+    }
+}
+
+pub fn evaluate_route_failure(ctx: &RouteContext) -> RouteFailureEvaluation {
+    RouteFailureEvaluation {
+        rule: RouteFailureRule::HeuristicFailureReroute,
+        model_json: crate::helpers::heuristic_route_json(ctx),
+    }
+}
+
+pub fn evaluate_route_emit_effects(decision: &RouteDecision) -> RouteEmitEffectsEvaluation {
+    let mut rules = Vec::new();
+    let mut clear_pending_request = false;
+    let mut clear_pending_prompt = false;
+    let mut set_halted = false;
+
+    if decision.lane == RouteKind::Observe {
+        clear_pending_request = true;
+        clear_pending_prompt = true;
+        rules.push(RouteEmitEffectRule::ClearDeterministicObserveSentinel);
+    }
+    if decision.lane == RouteKind::Conclude {
+        set_halted = true;
+        rules.push(RouteEmitEffectRule::HaltOnConclude);
+    }
+
+    RouteEmitEffectsEvaluation {
+        clear_pending_request,
+        clear_pending_prompt,
+        set_halted,
+        rules,
+    }
+}
+
+pub fn evaluate_route_recovery(pending_required_successor: Option<&str>) -> RouteRecoveryEvaluation {
+    match pending_required_successor {
+        Some(expected) => RouteRecoveryEvaluation {
+            rule: RouteRecoveryRule::EmitExpectedSuccessorRecovery,
+            expected_successor: Some(expected.to_string()),
+        },
+        None => RouteRecoveryEvaluation {
+            rule: RouteRecoveryRule::None,
+            expected_successor: None,
+        },
+    }
+}
+
+pub fn evaluate_successor_consumption(
+    event: &RuntimeEvent,
+    awaiting_control_successor: Option<&str>,
+) -> SuccessorConsumptionEvaluation {
+    let matched = match event {
+        RuntimeEvent::LoopObserved(_) => Some("loop_observed"),
+        RuntimeEvent::PlanningCompleted(_) => Some("planning_completed"),
+        RuntimeEvent::LoopActed(_) => Some("loop_acted"),
+        RuntimeEvent::LoopVerified(_) => Some("loop_verified"),
+        RuntimeEvent::LoopRewarded(_) => Some("loop_rewarded"),
+        _ => None,
+    };
+
+    if matched.is_some() && matched == awaiting_control_successor {
+        SuccessorConsumptionEvaluation {
+            rule: SuccessorConsumptionRule::ClearAwaitingControlSuccessor,
+            clear_awaiting_control_successor: true,
+        }
+    } else {
+        SuccessorConsumptionEvaluation {
+            rule: SuccessorConsumptionRule::None,
+            clear_awaiting_control_successor: false,
+        }
     }
 }
 

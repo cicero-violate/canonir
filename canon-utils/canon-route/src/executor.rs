@@ -12,11 +12,12 @@ use uuid::Uuid;
 use crate::{
     context::RouteContext,
     decision::{decide_from_json, RouteDecision},
-    helpers::heuristic_route_json,
     policy::{
         apply_route_policy, evaluate_route_cache, evaluate_route_dispatch, evaluate_route_emit,
-        evaluate_route_transition, RouteCacheRule, RouteCacheState, RouteDispatchState, RouteEmitRule,
-        RouteEmitState, RoutePolicyState,
+        evaluate_route_emit_effects, evaluate_route_event_dispatch, evaluate_route_failure,
+        evaluate_route_recovery, evaluate_route_transition, evaluate_successor_consumption,
+        RouteCacheRule, RouteCacheState, RouteDispatchState, RouteEmitRule, RouteEmitState,
+        RouteEventDispatchRule, RoutePolicyState,
     },
 };
 
@@ -110,7 +111,6 @@ impl RouteExecutor {
             self.emit_decision(&json, deterministic.prompt_tag.to_string());
             return;
         }
-        // Deterministic fast-path disabled: always fall through to router LLM.
         let prompt = self.controller.build_prompt(&self.ctx.mission_summary, &self.ctx.snapshot_text(), &self.ctx.recent_tool_results, &self.ctx.journal);
         let prompt_hash = hash_str(&prompt);
         let mut should_force_fresh_now = false;
@@ -267,7 +267,8 @@ impl RouteExecutor {
     }
 
     fn emit_recovery_for_expected_successor(&self, emitter: &EventEmitterHandle, trigger_id: EventId) {
-        let Some(expected) = self.pending_required_successor.as_deref() else {
+        let recovery_eval = evaluate_route_recovery(self.pending_required_successor.as_deref());
+        let Some(expected) = recovery_eval.expected_successor.as_deref() else {
             return;
         };
         emitter.emit_child(
@@ -342,66 +343,10 @@ impl EventConsumer for RouteExecutor {
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
         self.current_trigger = Some(trigger_id.clone());
-        match event {
-            RuntimeEvent::LoopObserved(_) if self.awaiting_control_successor.as_deref() == Some("loop_observed") => {
-                self.awaiting_control_successor = None;
-            }
-            RuntimeEvent::PlanningCompleted(_) if self.awaiting_control_successor.as_deref() == Some("planning_completed") => {
-                self.awaiting_control_successor = None;
-            }
-            RuntimeEvent::LoopActed(_) if self.awaiting_control_successor.as_deref() == Some("loop_acted") => {
-                self.awaiting_control_successor = None;
-            }
-            RuntimeEvent::LoopVerified(_) if self.awaiting_control_successor.as_deref() == Some("loop_verified") => {
-                self.awaiting_control_successor = None;
-            }
-            RuntimeEvent::LoopRewarded(_) if self.awaiting_control_successor.as_deref() == Some("loop_rewarded") => {
-                self.awaiting_control_successor = None;
-            }
-            RuntimeEvent::Code(_)
-            | RuntimeEvent::Debug(_)
-            | RuntimeEvent::Edit(_)
-            | RuntimeEvent::ErrorOccurred(_)
-            | RuntimeEvent::Tick(_)
-            | RuntimeEvent::GoodnessSnapshot(_)
-            | RuntimeEvent::RouteTick(_)
-            | RuntimeEvent::RouteSelected(_)
-            | RuntimeEvent::Cargo(_)
-            | RuntimeEvent::File(_)
-            | RuntimeEvent::Bash(_)
-            | RuntimeEvent::Llm(_)
-            | RuntimeEvent::RequestDispatch(_)
-            | RuntimeEvent::SubTaskResult(_)
-            | RuntimeEvent::Analysis(_)
-            | RuntimeEvent::RuntimeStateUpdated(_)
-            | RuntimeEvent::NodeReady(_)
-            | RuntimeEvent::NodeStarted(_)
-            | RuntimeEvent::NodeCompleted(_)
-            | RuntimeEvent::NodeFailed(_)
-            | RuntimeEvent::CapabilityCompleted(_)
-            | RuntimeEvent::CapabilityFailed(_)
-            | RuntimeEvent::PolicyBaselineUpdated(_)
-            | RuntimeEvent::GoalSelected(_)
-            | RuntimeEvent::SystemConfigLoaded(_)
-            | RuntimeEvent::AgentRegistered(_)
-            | RuntimeEvent::PromptLoaded(_)
-            | RuntimeEvent::ToolCall(_)
-            | RuntimeEvent::ToolResult(_)
-            | RuntimeEvent::ToolBatchSettled(_)
-            | RuntimeEvent::GoalNodeCreated(_)
-            | RuntimeEvent::GoalNodeRetracted(_)
-            | RuntimeEvent::GoalNodeRewritten(_)
-            | RuntimeEvent::GoalEdgeDefined(_)
-            | RuntimeEvent::GoalGraphCheckpointed(_)
-            | RuntimeEvent::CapabilityInvoked(_)
-            | RuntimeEvent::CapabilityResolved(_)
-            | RuntimeEvent::InvariantDiscovered(_)
-            | RuntimeEvent::LoopObserved(_)
-            | RuntimeEvent::PlanningCompleted(_)
-            | RuntimeEvent::LoopActed(_)
-            | RuntimeEvent::LoopVerified(_)
-            | RuntimeEvent::LoopRewarded(_)
-            | RuntimeEvent::LoopPlanned(_) => {}
+        let successor_eval =
+            evaluate_successor_consumption(event, self.awaiting_control_successor.as_deref());
+        if successor_eval.clear_awaiting_control_successor {
+            self.awaiting_control_successor = None;
         }
         // Always accumulate state.
         self.ctx.update_from_event(event, &self.workspace);
@@ -416,13 +361,21 @@ impl EventConsumer for RouteExecutor {
                     any_failed,
                 }), vec![trigger_id.clone()], file!(), line!());
             }
-            self.try_dispatch_route();
-            return EventOutcome::NoOp("route_executor_batch_settled");
+            let eval = evaluate_route_event_dispatch(
+                &RuntimeEvent::ToolBatchSettled(ToolBatchSettled {
+                    tick: self.ctx.scheduler_tick,
+                    result_count,
+                    any_failed,
+                }),
+                self.ctx.planned_pending,
+                self.ctx.pending_tool_result_ids.is_empty(),
+            );
+            if eval.should_dispatch {
+                self.try_dispatch_route();
+                return EventOutcome::NoOp("route_executor_batch_settled");
+            }
         }
 
-        // Event-driven dispatch: fire immediately when the system becomes idle or context arrives.
-        // This eliminates up to 1s of RouteTick latency on each transition.
-        // After a `done` action, force verify so finish_ready can be set correctly.
         if let Some(fast_path) = evaluate_route_transition(
             &self.ctx,
             RoutePolicyState {
@@ -450,46 +403,30 @@ impl EventConsumer for RouteExecutor {
             return EventOutcome::NoOp(fast_path.noop_reason);
         }
 
-        let should_try = matches!(event, RuntimeEvent::LoopObserved(_) | RuntimeEvent::LoopActed(_) | RuntimeEvent::LoopVerified(_));
-        if should_try {
-            let idle = self.ctx.planned_pending == 0 && self.ctx.pending_tool_result_ids.is_empty();
-            if idle {
-                // Only clear the deterministic sentinel on real state transitions (acted/verified),
-                // not on bare observation. Clearing on every LoopObserved caused idle_plan to
-                // re-fire on every tick, producing thousands of RouteSelected(plan) events while
-                // the plan LLM response guard (last_handled_observed_hash) returned Noop — a
-                // closed loop with zero state transition.
-                if self.pending_request_id.as_deref() == Some("deterministic")
-                    && matches!(event, RuntimeEvent::LoopActed(_) | RuntimeEvent::LoopVerified(_))
-                {
-                    self.pending_request_id = None;
-                }
-                self.try_dispatch_route();
-                return EventOutcome::NoOp("route_executor_idle_dispatch");
+        let event_dispatch_eval =
+            evaluate_route_event_dispatch(event, self.ctx.planned_pending, self.ctx.pending_tool_result_ids.is_empty());
+        if matches!(event_dispatch_eval.rule, RouteEventDispatchRule::IdleDispatch) {
+            if self.pending_request_id.as_deref() == Some("deterministic")
+                && matches!(event, RuntimeEvent::LoopActed(_) | RuntimeEvent::LoopVerified(_))
+            {
+                self.pending_request_id = None;
             }
+            self.try_dispatch_route();
+            return EventOutcome::NoOp("route_executor_idle_dispatch");
         }
 
-        // Planning completed — route directly to act when work exists, or back to recovery
-        // for recoverable empty outcomes such as invalid_plan / llm_failed / llm_timeout.
-        // batch_settled is suppressed for plan-only batches so we trigger here instead.
-        if let RuntimeEvent::PlanningCompleted(pc) = event {
-            let recoverable_empty_plan = self.ctx.planned_pending == 0
-                && matches!(pc.status.as_str(), "invalid_plan" | "llm_failed" | "llm_timeout");
-            if recoverable_empty_plan && self.ctx.pending_tool_result_ids.is_empty() {
-                if self.pending_request_id.as_deref() == Some("deterministic") {
-                    self.pending_request_id = None;
-                }
-                self.try_dispatch_route();
-                return EventOutcome::NoOp("route_executor_plan_dispatch");
+        if matches!(event_dispatch_eval.rule, RouteEventDispatchRule::RecoverableEmptyPlan) {
+            if self.pending_request_id.as_deref() == Some("deterministic") {
+                self.pending_request_id = None;
             }
+            self.try_dispatch_route();
+            return EventOutcome::NoOp("route_executor_plan_dispatch");
         }
 
-        // Track tick counter from Tick events (replaces RouteTick).
         if let RuntimeEvent::Tick(t) = event {
             self.ctx.scheduler_tick = t.tick;
         }
 
-        // Handle routing LLM completion/failure.
         match event {
             RuntimeEvent::CapabilityCompleted(done) => {
                 if Some(&done.request_id) != self.pending_request_id.as_ref() || done.capability != "llm.call" {
@@ -513,8 +450,8 @@ impl EventConsumer for RouteExecutor {
                 let prompt = self.pending_prompt.clone().unwrap_or_default();
                 self.pending_request_id = None;
                 self.pending_prompt = None;
-                let model_json = heuristic_route_json(&self.ctx);
-                self.emit_decision(&model_json, prompt);
+                let failure_eval = evaluate_route_failure(&self.ctx);
+                self.emit_decision(&failure_eval.model_json, prompt);
                 EventOutcome::NoOp("route_executor_failure_reroute")
             }
             RuntimeEvent::Code(_)
@@ -709,18 +646,14 @@ impl RouteExecutor {
         if self.pending_required_successor.as_deref() == Some("route_selected") {
             self.last_route_emitted_for_control_id = self.last_control_event_id.clone();
         }
-        // "observe" produces LoopObserved as its follow-up event. LoopObserved is intentionally
-        // excluded from the sentinel-clear in on_event (to prevent plan-spam loops), so the
-        // deterministic sentinel would never be cleared for an observe route — causing a deadlock
-        // where try_dispatch_route returns early on every LoopObserved. Clear it here instead.
-        if decision.lane.as_str() == "observe" {
+        let emit_effects = evaluate_route_emit_effects(&decision);
+        if emit_effects.clear_pending_request {
             self.pending_request_id = None;
+        }
+        if emit_effects.clear_pending_prompt {
             self.pending_prompt = None;
         }
-        // Halt immediately when routing to conclude so that backlogged LoopObserved events
-        // in the bus queue don't each trigger another RouteSelected(conclude) before the
-        // LoopRewarded event propagates back to set ctx.halted.
-        if decision.lane.as_str() == "conclude" {
+        if emit_effects.set_halted {
             self.ctx.halted = true;
         }
     }

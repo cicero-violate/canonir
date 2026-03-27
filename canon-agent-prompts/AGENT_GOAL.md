@@ -1,21 +1,21 @@
-# Peer-to-Peer Gossip Protocol Simulator with Membership, Failure Detection, and State Dissemination
+# WebAssembly-Like Bytecode Virtual Machine with Validation, Execution, and Sandbox Isolation
 
-This project implements a peer-to-peer gossip protocol simulator in Rust that models how distributed systems propagate state across nodes using randomized communication. It includes membership management, failure detection, anti-entropy synchronization, and message dissemination strategies. The system simulates unreliable networks with delays, message loss, and partitions. This project is interesting because it combines distributed systems algorithms, probabilistic communication, simulation, and state convergence into a realistic and complex system inspired by protocols like SWIM and Cassandra gossip.
+This project implements a WebAssembly-like virtual machine in Rust that can load, validate, and execute a custom bytecode format. It includes a stack-based execution model, linear memory, function calls, and strict validation rules to ensure safety and sandboxing. The system mimics key concepts from WebAssembly but is simplified and fully self-contained. This project is interesting because it combines bytecode design, validation, sandboxing, and runtime execution into a secure and extensible virtual machine.
 
 ## Target
-- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/gossip_protocol_simulator`
+- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/wasm_like_vm`
 
 ## Requirements
 
-1. Implement a Rust binary crate structured into modules such as `node`, `cluster`, `membership`, `state`, `message`, `protocol`, `gossip`, `failure_detector`, `heartbeat`, `network`, `transport`, `scheduler`, `simulation`, `engine`, `cli`, and `errors`.
-2. Design a node model with unique IDs, local state, membership list, and versioned metadata for gossip dissemination.
-3. Implement a gossip protocol where nodes periodically select peers and exchange state information using push, pull, or push-pull strategies.
-4. Build a membership system that tracks node join, leave, and suspected/failed states with versioning and conflict resolution.
-5. Implement a failure detection mechanism (e.g., SWIM-style) using heartbeats, timeouts, and suspicion levels.
-6. Simulate a network layer that introduces configurable latency, message loss, duplication, and partitions.
-7. Implement anti-entropy synchronization to ensure eventual consistency across nodes even after message loss.
-8. Support state merging strategies that resolve conflicts using version vectors or timestamps.
-9. Build a scheduler that advances simulation time and triggers periodic gossip rounds and failure checks.
-10. Provide observability features such as cluster convergence metrics, message counts, and node state summaries.
-11. Provide a CLI using `clap` with commands like `simulate`, `partition`, `heal`, `status`, and `metrics`.
-12. Integrate structured logging with `tracing` to trace gossip exchanges, membership changes, failure detection events, and convergence behavior, and ensure the implementation spans at least 800 lines of real Rust code across modules and compiles successfully with `cargo check` without requiring external services.
+1. Implement a Rust binary crate structured into modules such as `bytecode`, `instruction`, `opcode`, `parser`, `validator`, `module`, `function`, `type_system`, `stack`, `memory`, `table`, `vm`, `executor`, `runtime`, `engine`, `cli`, and `errors`.
+2. Design a custom bytecode format supporting instructions for arithmetic, control flow (if, loop, block), function calls, and memory access.
+3. Implement a binary parser that reads bytecode modules from files and constructs an internal representation with sections (types, functions, code, memory).
+4. Build a validation phase that ensures type safety, correct stack usage, valid control flow, and function signatures before execution.
+5. Implement a stack-based virtual machine that executes instructions and maintains operand and call stacks.
+6. Support linear memory with bounds checking and instructions for load/store operations.
+7. Implement function calls with local variables, parameters, and return values, including call frames.
+8. Enforce sandboxing by preventing out-of-bounds memory access and invalid instruction execution.
+9. Support imports/exports for functions to allow interaction with host-provided functions.
+10. Implement basic optimization such as instruction decoding caching or simple JIT-like dispatch improvements.
+11. Provide a CLI using `clap` with commands like `run <module>`, `validate`, `disassemble`, and `inspect`.
+12. Integrate structured logging with `tracing` to trace parsing, validation, instruction execution, memory access, and function calls, and ensure the implementation spans at least 800 lines of real Rust code across modules and compiles successfully with `cargo check` without requiring external services.

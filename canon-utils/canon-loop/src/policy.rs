@@ -61,6 +61,66 @@ pub struct LoopRuntimeEvaluation {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecoveryEventRule {
+    None,
+    ForceObserve,
+    ExecuteRewardRecovery,
+    SkipRewardAlreadySatisfied,
+    MissingRewardContext,
+}
+
+pub struct RecoveryEventEvaluation {
+    pub rule: RecoveryEventRule,
+    pub force_observe_recovery: bool,
+    pub execute_reward_recovery: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecoveryOperation {
+    RewardRecovery,
+    ObserveForced,
+    ObserveTriggered,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StageExecutionOutcomeClass {
+    Emit,
+    EmitMany,
+    Deferred,
+    Noop,
+    Error,
+}
+
+pub struct RecoveryExecutionEvaluation {
+    pub debug_kind: Option<&'static str>,
+    pub debug_reason: Option<&'static str>,
+    pub error_kind: Option<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootstrapRule {
+    None,
+    InvalidateQueuedPlanWork,
+}
+
+pub struct BootstrapEvaluation {
+    pub rule: BootstrapRule,
+    pub clear_scheduler: bool,
+    pub clear_dep_tracker: bool,
+    pub clear_pending_act: bool,
+    pub clear_active_batch: bool,
+    pub clear_act_batch_tracker: bool,
+    pub emit_refresh_required: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorObserveRule {
+    None,
+    ExplicitRecovery,
+    GenericErrorObserve,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InvalidPlanReasonClass {
     MixedBatch,
     PatchFormat,
@@ -210,6 +270,126 @@ pub fn evaluate_loop_runtime(
         halt_blocks_stage,
         warn_route_selected_while_halted,
         rules,
+    }
+}
+
+pub fn evaluate_recovery_event(
+    expected_successor: Option<&str>,
+    pending_required_successor: Option<&str>,
+    has_last_verified: bool,
+) -> RecoveryEventEvaluation {
+    match expected_successor {
+        Some("loop_observed") => RecoveryEventEvaluation {
+            rule: RecoveryEventRule::ForceObserve,
+            force_observe_recovery: true,
+            execute_reward_recovery: false,
+        },
+        Some("loop_rewarded") if pending_required_successor != Some("loop_rewarded") => RecoveryEventEvaluation {
+            rule: RecoveryEventRule::SkipRewardAlreadySatisfied,
+            force_observe_recovery: false,
+            execute_reward_recovery: false,
+        },
+        Some("loop_rewarded") if !has_last_verified => RecoveryEventEvaluation {
+            rule: RecoveryEventRule::MissingRewardContext,
+            force_observe_recovery: false,
+            execute_reward_recovery: false,
+        },
+        Some("loop_rewarded") => RecoveryEventEvaluation {
+            rule: RecoveryEventRule::ExecuteRewardRecovery,
+            force_observe_recovery: false,
+            execute_reward_recovery: true,
+        },
+        _ => RecoveryEventEvaluation {
+            rule: RecoveryEventRule::None,
+            force_observe_recovery: false,
+            execute_reward_recovery: false,
+        },
+    }
+}
+
+pub fn evaluate_recovery_execution(
+    operation: RecoveryOperation,
+    outcome: StageExecutionOutcomeClass,
+) -> RecoveryExecutionEvaluation {
+    match (operation, outcome) {
+        (_, StageExecutionOutcomeClass::Emit | StageExecutionOutcomeClass::EmitMany) => RecoveryExecutionEvaluation {
+            debug_kind: None,
+            debug_reason: None,
+            error_kind: None,
+        },
+        (RecoveryOperation::RewardRecovery, StageExecutionOutcomeClass::Deferred | StageExecutionOutcomeClass::Noop) => {
+            RecoveryExecutionEvaluation {
+                debug_kind: Some("reward_recovery_noop"),
+                debug_reason: Some("reward recovery produced no events"),
+                error_kind: None,
+            }
+        }
+        (RecoveryOperation::RewardRecovery, StageExecutionOutcomeClass::Error) => RecoveryExecutionEvaluation {
+            debug_kind: None,
+            debug_reason: None,
+            error_kind: Some("reward_recovery_execution"),
+        },
+        (RecoveryOperation::ObserveForced | RecoveryOperation::ObserveTriggered, StageExecutionOutcomeClass::Deferred) => {
+            RecoveryExecutionEvaluation {
+                debug_kind: Some("observe_deferred"),
+                debug_reason: Some("observe returned deferred"),
+                error_kind: None,
+            }
+        }
+        (RecoveryOperation::ObserveForced | RecoveryOperation::ObserveTriggered, StageExecutionOutcomeClass::Noop) => {
+            RecoveryExecutionEvaluation {
+                debug_kind: Some("observe_noop"),
+                debug_reason: Some("observe returned noop"),
+                error_kind: None,
+            }
+        }
+        (RecoveryOperation::ObserveForced, StageExecutionOutcomeClass::Error) => RecoveryExecutionEvaluation {
+            debug_kind: None,
+            debug_reason: None,
+            error_kind: Some("observe_recovery_execution"),
+        },
+        (RecoveryOperation::ObserveTriggered, StageExecutionOutcomeClass::Error) => RecoveryExecutionEvaluation {
+            debug_kind: None,
+            debug_reason: None,
+            error_kind: Some("observe_stage_execution"),
+        },
+    }
+}
+
+pub fn evaluate_error_observe(
+    error_kind: &str,
+    explicit_observe_recovery: bool,
+    fatal_invariant_diag: bool,
+) -> ErrorObserveRule {
+    if explicit_observe_recovery {
+        return ErrorObserveRule::ExplicitRecovery;
+    }
+    if error_kind != "invariant_violation" && error_kind != "invalid_plan_batch" && !fatal_invariant_diag {
+        return ErrorObserveRule::GenericErrorObserve;
+    }
+    ErrorObserveRule::None
+}
+
+pub fn evaluate_bootstrap_effects(action_outcome: ActionOutcomeClass) -> BootstrapEvaluation {
+    if action_outcome == ActionOutcomeClass::BootstrapSuccess {
+        return BootstrapEvaluation {
+            rule: BootstrapRule::InvalidateQueuedPlanWork,
+            clear_scheduler: true,
+            clear_dep_tracker: true,
+            clear_pending_act: true,
+            clear_active_batch: true,
+            clear_act_batch_tracker: true,
+            emit_refresh_required: true,
+        };
+    }
+    BootstrapEvaluation {
+        rule: BootstrapRule::None,
+        clear_scheduler: false,
+        clear_dep_tracker: false,
+        clear_pending_act: false,
+        clear_active_batch: false,
+        clear_act_batch_tracker: false,
+        emit_refresh_required: false,
     }
 }
 

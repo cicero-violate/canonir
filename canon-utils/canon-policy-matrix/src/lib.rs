@@ -1,18 +1,22 @@
 use canon_decision::RouteKind;
 use canon_event::{LoopActed, PlanningCompleted, RuntimeEvent};
 use canon_loop::policy::{
-    classify_invalid_plan_reason, evaluate_loop_runtime, evaluate_loop_transition, retry_policy_for_invalid_plan,
-    InvalidPlanReasonClass, LoopRecoveryRule, LoopRuntimeRule, ObserveExecutionMode, RetryPolicy,
+    classify_invalid_plan_reason, evaluate_loop_runtime, evaluate_loop_transition, evaluate_recovery_event,
+    evaluate_recovery_execution, evaluate_bootstrap_effects, retry_policy_for_invalid_plan,
+    ActionOutcomeClass, BootstrapRule, InvalidPlanReasonClass, LoopRecoveryRule, LoopRuntimeRule,
+    ObserveExecutionMode, RecoveryEventRule, RecoveryOperation, RetryPolicy, StageExecutionOutcomeClass,
 };
 use canon_route::{
     context::RouteContext,
     decision::RouteDecision,
     policy::{
-        evaluate_route_cache, evaluate_route_dispatch, evaluate_route_emit, evaluate_route_transition,
-        latest_apply_patch_outcome, latest_run_command_outcome, latest_verify_outcome, ApplyPatchOutcomeClass,
-        DeterministicRouteRule, RouteCacheRule, RouteCacheState, RouteDispatchRule, RouteDispatchState,
-        RouteEmitRule, RouteEmitState, RoutePolicyRule, RoutePolicyState, RunCommandOutcomeClass,
-        VerifyOutcomeClass,
+        evaluate_route_cache, evaluate_route_dispatch, evaluate_route_emit, evaluate_route_emit_effects,
+        evaluate_route_failure, evaluate_route_recovery, evaluate_route_transition,
+        evaluate_successor_consumption, latest_apply_patch_outcome, latest_run_command_outcome,
+        latest_verify_outcome, ApplyPatchOutcomeClass, DeterministicRouteRule, RouteCacheRule,
+        RouteCacheState, RouteDispatchRule, RouteDispatchState, RouteEmitEffectRule, RouteEmitRule,
+        RouteEmitState, RouteFailureRule, RoutePolicyRule, RoutePolicyState, RouteRecoveryRule,
+        RunCommandOutcomeClass, SuccessorConsumptionRule, VerifyOutcomeClass,
     },
 };
 
@@ -28,6 +32,13 @@ pub enum TransitionRow {
     RouteEmit(RouteEmitRow),
     RouteCache(RouteCacheRow),
     LoopRuntime(LoopRuntimeRow),
+    RecoveryEvent(RecoveryEventRow),
+    RecoveryExecution(RecoveryExecutionRow),
+    BootstrapEffect(BootstrapEffectRow),
+    RouteFailure(RouteFailureRow),
+    RouteEmitEffect(RouteEmitEffectRow),
+    RouteRecovery(RouteRecoveryRow),
+    SuccessorConsumption(SuccessorConsumptionRow),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -55,10 +66,15 @@ pub enum RouteScenarioFamily {
     CacheReplay,
     CacheInvalidateObserve,
     CacheSuppressDuplicatePrompt,
+    FailureHeuristicReroute,
+    EmitEffectObserveClearsDeterministicSentinel,
+    EmitEffectConcludeHalts,
+    RecoveryEmitExpectedSuccessor,
+    SuccessorConsumesAwaiting,
 }
 
 impl RouteScenarioFamily {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 28] = [
         Self::BootstrapRefreshObserve,
         Self::DoneVerify,
         Self::ContinueAct,
@@ -82,6 +98,11 @@ impl RouteScenarioFamily {
         Self::CacheReplay,
         Self::CacheInvalidateObserve,
         Self::CacheSuppressDuplicatePrompt,
+        Self::FailureHeuristicReroute,
+        Self::EmitEffectObserveClearsDeterministicSentinel,
+        Self::EmitEffectConcludeHalts,
+        Self::RecoveryEmitExpectedSuccessor,
+        Self::SuccessorConsumesAwaiting,
     ];
 }
 
@@ -100,10 +121,21 @@ pub enum LoopScenarioFamily {
     RuntimeSuppressObserveOnInvariant,
     RuntimeSuppressObserveOnPendingSuccessor,
     RuntimeBlockWhenHalted,
+    RecoveryEventForceObserve,
+    RecoveryEventRewardExecute,
+    RecoveryEventRewardSkipSatisfied,
+    RecoveryEventRewardMissingContext,
+    RewardRecoveryNoop,
+    RewardRecoveryExecutionError,
+    ObserveForcedDeferred,
+    ObserveForcedNoop,
+    ObserveTriggeredDeferred,
+    ObserveTriggeredNoop,
+    BootstrapInvalidatesQueuedWork,
 }
 
 impl LoopScenarioFamily {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 24] = [
         Self::InvalidPlanClearsSuppression,
         Self::InvalidPlanNoRecoveryForOtherStatus,
         Self::ActStallTriggersObserve,
@@ -117,6 +149,17 @@ impl LoopScenarioFamily {
         Self::RuntimeSuppressObserveOnInvariant,
         Self::RuntimeSuppressObserveOnPendingSuccessor,
         Self::RuntimeBlockWhenHalted,
+        Self::RecoveryEventForceObserve,
+        Self::RecoveryEventRewardExecute,
+        Self::RecoveryEventRewardSkipSatisfied,
+        Self::RecoveryEventRewardMissingContext,
+        Self::RewardRecoveryNoop,
+        Self::RewardRecoveryExecutionError,
+        Self::ObserveForcedDeferred,
+        Self::ObserveForcedNoop,
+        Self::ObserveTriggeredDeferred,
+        Self::ObserveTriggeredNoop,
+        Self::BootstrapInvalidatesQueuedWork,
     ];
 }
 
@@ -202,6 +245,7 @@ pub struct RouteTransitionRow {
 pub struct RouteRowContext {
     pub halted: bool,
     pub context_ready: bool,
+    pub consecutive_invalid_plan_batches: u32,
     pub planned_pending: usize,
     pub pending_tool_results_empty: bool,
     pub bootstrap_refresh_required: bool,
@@ -312,6 +356,72 @@ pub struct LoopRuntimeRow {
 }
 
 #[derive(Clone, Debug)]
+pub struct RecoveryEventRow {
+    pub name: &'static str,
+    pub family: LoopScenarioFamily,
+    pub expected_successor: Option<&'static str>,
+    pub pending_required_successor: Option<&'static str>,
+    pub has_last_verified: bool,
+    pub expected_rule: RecoveryEventRule,
+    pub expected_force_observe_recovery: bool,
+    pub expected_execute_reward_recovery: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct RecoveryExecutionRow {
+    pub name: &'static str,
+    pub family: LoopScenarioFamily,
+    pub operation: RecoveryOperation,
+    pub outcome: StageExecutionOutcomeClass,
+    pub expected_debug_kind: Option<&'static str>,
+    pub expected_error_kind: Option<&'static str>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BootstrapEffectRow {
+    pub name: &'static str,
+    pub family: LoopScenarioFamily,
+    pub action_outcome: ActionOutcomeClass,
+    pub expected_rule: BootstrapRule,
+    pub expected_emit_refresh_required: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct RouteFailureRow {
+    pub name: &'static str,
+    pub family: RouteScenarioFamily,
+    pub expected_rule: RouteFailureRule,
+}
+
+#[derive(Clone, Debug)]
+pub struct RouteEmitEffectRow {
+    pub name: &'static str,
+    pub family: RouteScenarioFamily,
+    pub decision: RouteRowDecision,
+    pub expected_rules: Vec<RouteEmitEffectRule>,
+    pub expected_clear_pending_request: bool,
+    pub expected_clear_pending_prompt: bool,
+    pub expected_set_halted: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct RouteRecoveryRow {
+    pub name: &'static str,
+    pub family: RouteScenarioFamily,
+    pub pending_required_successor: Option<&'static str>,
+    pub expected_rule: RouteRecoveryRule,
+}
+
+#[derive(Clone, Debug)]
+pub struct SuccessorConsumptionRow {
+    pub name: &'static str,
+    pub family: RouteScenarioFamily,
+    pub event: RouteRowEvent,
+    pub awaiting_control_successor: Option<&'static str>,
+    pub expected_rule: SuccessorConsumptionRule,
+}
+
+#[derive(Clone, Debug)]
 pub struct RunCommandOutcomeRow {
     pub name: &'static str,
     pub family: RunCommandOutcomeFamily,
@@ -374,6 +484,13 @@ pub fn assert_transition_rows(rows: &[TransitionRow]) {
             TransitionRow::RouteEmit(row) => assert_route_emit_row(row),
             TransitionRow::RouteCache(row) => assert_route_cache_row(row),
             TransitionRow::LoopRuntime(row) => assert_loop_runtime_row(row),
+            TransitionRow::RecoveryEvent(row) => assert_recovery_event_row(row),
+            TransitionRow::RecoveryExecution(row) => assert_recovery_execution_row(row),
+            TransitionRow::BootstrapEffect(row) => assert_bootstrap_effect_row(row),
+            TransitionRow::RouteFailure(row) => assert_route_failure_row(row),
+            TransitionRow::RouteEmitEffect(row) => assert_route_emit_effect_row(row),
+            TransitionRow::RouteRecovery(row) => assert_route_recovery_row(row),
+            TransitionRow::SuccessorConsumption(row) => assert_successor_consumption_row(row),
         }
     }
 }
@@ -387,12 +504,19 @@ pub fn coverage_report(rows: &[TransitionRow]) -> CoverageReport {
             TransitionRow::RouteDispatch(row) => push_unique(&mut report.route_covered, row.family),
             TransitionRow::RouteEmit(row) => push_unique(&mut report.route_covered, row.family),
             TransitionRow::RouteCache(row) => push_unique(&mut report.route_covered, row.family),
+            TransitionRow::RouteFailure(row) => push_unique(&mut report.route_covered, row.family),
+            TransitionRow::RouteEmitEffect(row) => push_unique(&mut report.route_covered, row.family),
             TransitionRow::Loop(row) => push_unique(&mut report.loop_covered, row.family),
             TransitionRow::LoopRuntime(row) => push_unique(&mut report.loop_covered, row.family),
+            TransitionRow::RecoveryEvent(row) => push_unique(&mut report.loop_covered, row.family),
+            TransitionRow::RecoveryExecution(row) => push_unique(&mut report.loop_covered, row.family),
+            TransitionRow::BootstrapEffect(row) => push_unique(&mut report.loop_covered, row.family),
             TransitionRow::RunCommandOutcome(row) => push_unique(&mut report.run_command_covered, row.family),
             TransitionRow::ApplyPatchOutcome(row) => push_unique(&mut report.apply_patch_covered, row.family),
             TransitionRow::VerifyOutcome(row) => push_unique(&mut report.verify_covered, row.family),
             TransitionRow::InvalidPlanRetry(row) => push_unique(&mut report.invalid_plan_retry_covered, row.family),
+            TransitionRow::RouteRecovery(row) => push_unique(&mut report.route_covered, row.family),
+            TransitionRow::SuccessorConsumption(row) => push_unique(&mut report.route_covered, row.family),
         }
     }
 
@@ -413,12 +537,19 @@ pub fn baseline_transition_rows() -> Vec<TransitionRow> {
     rows.extend(route_dispatch_rows().into_iter().map(TransitionRow::RouteDispatch));
     rows.extend(route_emit_rows().into_iter().map(TransitionRow::RouteEmit));
     rows.extend(route_cache_rows().into_iter().map(TransitionRow::RouteCache));
+    rows.extend(route_failure_rows().into_iter().map(TransitionRow::RouteFailure));
+    rows.extend(route_emit_effect_rows().into_iter().map(TransitionRow::RouteEmitEffect));
     rows.extend(loop_transition_rows().into_iter().map(TransitionRow::Loop));
     rows.extend(loop_runtime_rows().into_iter().map(TransitionRow::LoopRuntime));
+    rows.extend(recovery_event_rows().into_iter().map(TransitionRow::RecoveryEvent));
+    rows.extend(recovery_execution_rows().into_iter().map(TransitionRow::RecoveryExecution));
+    rows.extend(bootstrap_effect_rows().into_iter().map(TransitionRow::BootstrapEffect));
     rows.extend(run_command_outcome_rows().into_iter().map(TransitionRow::RunCommandOutcome));
     rows.extend(apply_patch_outcome_rows().into_iter().map(TransitionRow::ApplyPatchOutcome));
     rows.extend(verify_outcome_rows().into_iter().map(TransitionRow::VerifyOutcome));
     rows.extend(invalid_plan_retry_rows().into_iter().map(TransitionRow::InvalidPlanRetry));
+    rows.extend(route_recovery_rows().into_iter().map(TransitionRow::RouteRecovery));
+    rows.extend(successor_consumption_rows().into_iter().map(TransitionRow::SuccessorConsumption));
     rows
 }
 
@@ -595,12 +726,39 @@ pub fn route_dispatch_rows() -> Vec<RouteDispatchRow> {
             expected_deterministic: None,
         },
         RouteDispatchRow {
+            name: "dispatch_suppress_context_not_ready",
+            family: RouteScenarioFamily::DispatchSuppressContextNotReady,
+            context: RouteRowContext { halted: false, context_ready: false, ..RouteRowContext::default() },
+            state: RouteRowState::default(),
+            dispatch: RouteDispatchRowState::default(),
+            expected_rule: Some(RouteDispatchRule::SuppressContextNotReady),
+            expected_deterministic: None,
+        },
+        RouteDispatchRow {
             name: "dispatch_suppress_pending_request",
             family: RouteScenarioFamily::DispatchSuppressPendingRequest,
             context: RouteRowContext { context_ready: true, pending_tool_results_empty: true, ..RouteRowContext::default() },
             state: RouteRowState::default(),
             dispatch: RouteDispatchRowState { pending_request_id: Some("req-1"), ..RouteDispatchRowState::default() },
             expected_rule: Some(RouteDispatchRule::SuppressPendingRequest),
+            expected_deterministic: None,
+        },
+        RouteDispatchRow {
+            name: "dispatch_suppress_awaiting_successor",
+            family: RouteScenarioFamily::DispatchSuppressAwaitingSuccessor,
+            context: RouteRowContext { context_ready: true, ..RouteRowContext::default() },
+            state: RouteRowState::default(),
+            dispatch: RouteDispatchRowState { awaiting_control_successor: Some("loop_acted"), ..RouteDispatchRowState::default() },
+            expected_rule: Some(RouteDispatchRule::SuppressAwaitingControlSuccessor),
+            expected_deterministic: None,
+        },
+        RouteDispatchRow {
+            name: "dispatch_suppress_duplicate_current_control",
+            family: RouteScenarioFamily::DispatchSuppressDuplicateCurrentControl,
+            context: RouteRowContext { context_ready: true, ..RouteRowContext::default() },
+            state: RouteRowState { last_control_kind: Some("loop_acted"), pending_required_successor: Some("route_selected") },
+            dispatch: RouteDispatchRowState { route_emitted_for_current_control: true, ..RouteDispatchRowState::default() },
+            expected_rule: Some(RouteDispatchRule::SuppressDuplicateRouteForCurrentControl),
             expected_deterministic: None,
         },
         RouteDispatchRow {
@@ -612,11 +770,28 @@ pub fn route_dispatch_rows() -> Vec<RouteDispatchRow> {
             expected_rule: None,
             expected_deterministic: Some(DeterministicRouteRule::MissingTargetPlan),
         },
+        RouteDispatchRow {
+            name: "dispatch_invalid_plan_replan",
+            family: RouteScenarioFamily::DispatchInvalidPlanReplan,
+            context: RouteRowContext { context_ready: true, consecutive_invalid_plan_batches: 2, pending_tool_results_empty: true, ..RouteRowContext::default() },
+            state: RouteRowState::default(),
+            dispatch: RouteDispatchRowState::default(),
+            expected_rule: None,
+            expected_deterministic: Some(DeterministicRouteRule::InvalidPlanReplan),
+        },
     ]
 }
 
 pub fn route_emit_rows() -> Vec<RouteEmitRow> {
     vec![
+        RouteEmitRow {
+            name: "emit_duplicate_before_successor",
+            family: RouteScenarioFamily::EmitDuplicateBeforeSuccessor,
+            awaiting_control_successor: Some("loop_observed"),
+            last_control_kind: None,
+            pending_required_successor: None,
+            expected_rule: RouteEmitRule::DuplicateEmitBeforeSuccessor,
+        },
         RouteEmitRow {
             name: "emit_illegal_control_reentry",
             family: RouteScenarioFamily::EmitIllegalControlReentry,
@@ -687,6 +862,64 @@ pub fn route_cache_rows() -> Vec<RouteCacheRow> {
             expected_rule: RouteCacheRule::SuppressDuplicatePrompt,
         },
     ]
+}
+
+pub fn route_failure_rows() -> Vec<RouteFailureRow> {
+    vec![RouteFailureRow {
+        name: "failure_heuristic_reroute",
+        family: RouteScenarioFamily::FailureHeuristicReroute,
+        expected_rule: RouteFailureRule::HeuristicFailureReroute,
+    }]
+}
+
+pub fn route_emit_effect_rows() -> Vec<RouteEmitEffectRow> {
+    vec![
+        RouteEmitEffectRow {
+            name: "emit_effect_observe_clears_deterministic_sentinel",
+            family: RouteScenarioFamily::EmitEffectObserveClearsDeterministicSentinel,
+            decision: RouteRowDecision {
+                lane: RouteKind::Observe,
+                suggested_route: RouteKind::Observe,
+                note: "accepted",
+            },
+            expected_rules: vec![RouteEmitEffectRule::ClearDeterministicObserveSentinel],
+            expected_clear_pending_request: true,
+            expected_clear_pending_prompt: true,
+            expected_set_halted: false,
+        },
+        RouteEmitEffectRow {
+            name: "emit_effect_conclude_halts",
+            family: RouteScenarioFamily::EmitEffectConcludeHalts,
+            decision: RouteRowDecision {
+                lane: RouteKind::Conclude,
+                suggested_route: RouteKind::Conclude,
+                note: "accepted",
+            },
+            expected_rules: vec![RouteEmitEffectRule::HaltOnConclude],
+            expected_clear_pending_request: false,
+            expected_clear_pending_prompt: false,
+            expected_set_halted: true,
+        },
+    ]
+}
+
+pub fn route_recovery_rows() -> Vec<RouteRecoveryRow> {
+    vec![RouteRecoveryRow {
+        name: "route_recovery_emit_expected_successor",
+        family: RouteScenarioFamily::RecoveryEmitExpectedSuccessor,
+        pending_required_successor: Some("loop_rewarded"),
+        expected_rule: RouteRecoveryRule::EmitExpectedSuccessorRecovery,
+    }]
+}
+
+pub fn successor_consumption_rows() -> Vec<SuccessorConsumptionRow> {
+    vec![SuccessorConsumptionRow {
+        name: "successor_consumes_awaiting",
+        family: RouteScenarioFamily::SuccessorConsumesAwaiting,
+        event: RouteRowEvent::LoopActed { action_kind: "apply_patch" },
+        awaiting_control_successor: Some("loop_acted"),
+        expected_rule: SuccessorConsumptionRule::ClearAwaitingControlSuccessor,
+    }]
 }
 
 pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
@@ -793,6 +1026,20 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
 pub fn loop_runtime_rows() -> Vec<LoopRuntimeRow> {
     vec![
         LoopRuntimeRow {
+            name: "runtime_triggered_observe",
+            family: LoopScenarioFamily::RuntimeTriggeredObserve,
+            halted: false,
+            force_observe_recovery: false,
+            trigger_observe: true,
+            suppress_observe_on_invariant: false,
+            pending_required_successor: None,
+            is_route_selected_event: false,
+            expected_mode: ObserveExecutionMode::Triggered,
+            expected_halt_blocks_stage: false,
+            expected_warn_route_selected_while_halted: false,
+            expected_rules: vec![LoopRuntimeRule::ExecuteTriggeredObserve],
+        },
+        LoopRuntimeRow {
             name: "runtime_forced_observe",
             family: LoopScenarioFamily::RuntimeForcedObserve,
             halted: false,
@@ -805,6 +1052,20 @@ pub fn loop_runtime_rows() -> Vec<LoopRuntimeRow> {
             expected_halt_blocks_stage: false,
             expected_warn_route_selected_while_halted: false,
             expected_rules: vec![LoopRuntimeRule::ExecuteForcedObserve],
+        },
+        LoopRuntimeRow {
+            name: "runtime_suppress_observe_on_invariant",
+            family: LoopScenarioFamily::RuntimeSuppressObserveOnInvariant,
+            halted: false,
+            force_observe_recovery: false,
+            trigger_observe: true,
+            suppress_observe_on_invariant: true,
+            pending_required_successor: None,
+            is_route_selected_event: false,
+            expected_mode: ObserveExecutionMode::SuppressedByInvariant,
+            expected_halt_blocks_stage: false,
+            expected_warn_route_selected_while_halted: false,
+            expected_rules: vec![LoopRuntimeRule::SuppressObserveOnInvariant],
         },
         LoopRuntimeRow {
             name: "runtime_suppress_observe_on_pending_successor",
@@ -835,6 +1096,114 @@ pub fn loop_runtime_rows() -> Vec<LoopRuntimeRow> {
             expected_rules: vec![LoopRuntimeRule::BlockStageWhenHalted, LoopRuntimeRule::WarnRouteSelectedWhileHalted],
         },
     ]
+}
+
+pub fn recovery_event_rows() -> Vec<RecoveryEventRow> {
+    vec![
+        RecoveryEventRow {
+            name: "recovery_event_force_observe",
+            family: LoopScenarioFamily::RecoveryEventForceObserve,
+            expected_successor: Some("loop_observed"),
+            pending_required_successor: Some("route_selected"),
+            has_last_verified: false,
+            expected_rule: RecoveryEventRule::ForceObserve,
+            expected_force_observe_recovery: true,
+            expected_execute_reward_recovery: false,
+        },
+        RecoveryEventRow {
+            name: "recovery_event_reward_execute",
+            family: LoopScenarioFamily::RecoveryEventRewardExecute,
+            expected_successor: Some("loop_rewarded"),
+            pending_required_successor: Some("loop_rewarded"),
+            has_last_verified: true,
+            expected_rule: RecoveryEventRule::ExecuteRewardRecovery,
+            expected_force_observe_recovery: false,
+            expected_execute_reward_recovery: true,
+        },
+        RecoveryEventRow {
+            name: "recovery_event_reward_skip_satisfied",
+            family: LoopScenarioFamily::RecoveryEventRewardSkipSatisfied,
+            expected_successor: Some("loop_rewarded"),
+            pending_required_successor: Some("route_selected"),
+            has_last_verified: true,
+            expected_rule: RecoveryEventRule::SkipRewardAlreadySatisfied,
+            expected_force_observe_recovery: false,
+            expected_execute_reward_recovery: false,
+        },
+        RecoveryEventRow {
+            name: "recovery_event_reward_missing_context",
+            family: LoopScenarioFamily::RecoveryEventRewardMissingContext,
+            expected_successor: Some("loop_rewarded"),
+            pending_required_successor: Some("loop_rewarded"),
+            has_last_verified: false,
+            expected_rule: RecoveryEventRule::MissingRewardContext,
+            expected_force_observe_recovery: false,
+            expected_execute_reward_recovery: false,
+        },
+    ]
+}
+
+pub fn recovery_execution_rows() -> Vec<RecoveryExecutionRow> {
+    vec![
+        RecoveryExecutionRow {
+            name: "reward_recovery_noop",
+            family: LoopScenarioFamily::RewardRecoveryNoop,
+            operation: RecoveryOperation::RewardRecovery,
+            outcome: StageExecutionOutcomeClass::Noop,
+            expected_debug_kind: Some("reward_recovery_noop"),
+            expected_error_kind: None,
+        },
+        RecoveryExecutionRow {
+            name: "reward_recovery_execution_error",
+            family: LoopScenarioFamily::RewardRecoveryExecutionError,
+            operation: RecoveryOperation::RewardRecovery,
+            outcome: StageExecutionOutcomeClass::Error,
+            expected_debug_kind: None,
+            expected_error_kind: Some("reward_recovery_execution"),
+        },
+        RecoveryExecutionRow {
+            name: "observe_forced_deferred",
+            family: LoopScenarioFamily::ObserveForcedDeferred,
+            operation: RecoveryOperation::ObserveForced,
+            outcome: StageExecutionOutcomeClass::Deferred,
+            expected_debug_kind: Some("observe_deferred"),
+            expected_error_kind: None,
+        },
+        RecoveryExecutionRow {
+            name: "observe_forced_noop",
+            family: LoopScenarioFamily::ObserveForcedNoop,
+            operation: RecoveryOperation::ObserveForced,
+            outcome: StageExecutionOutcomeClass::Noop,
+            expected_debug_kind: Some("observe_noop"),
+            expected_error_kind: None,
+        },
+        RecoveryExecutionRow {
+            name: "observe_triggered_deferred",
+            family: LoopScenarioFamily::ObserveTriggeredDeferred,
+            operation: RecoveryOperation::ObserveTriggered,
+            outcome: StageExecutionOutcomeClass::Deferred,
+            expected_debug_kind: Some("observe_deferred"),
+            expected_error_kind: None,
+        },
+        RecoveryExecutionRow {
+            name: "observe_triggered_noop",
+            family: LoopScenarioFamily::ObserveTriggeredNoop,
+            operation: RecoveryOperation::ObserveTriggered,
+            outcome: StageExecutionOutcomeClass::Noop,
+            expected_debug_kind: Some("observe_noop"),
+            expected_error_kind: None,
+        },
+    ]
+}
+
+pub fn bootstrap_effect_rows() -> Vec<BootstrapEffectRow> {
+    vec![BootstrapEffectRow {
+        name: "bootstrap_invalidates_queued_work",
+        family: LoopScenarioFamily::BootstrapInvalidatesQueuedWork,
+        action_outcome: ActionOutcomeClass::BootstrapSuccess,
+        expected_rule: BootstrapRule::InvalidateQueuedPlanWork,
+        expected_emit_refresh_required: true,
+    }]
 }
 
 pub fn run_command_outcome_rows() -> Vec<RunCommandOutcomeRow> {
@@ -991,6 +1360,7 @@ fn assert_route_row(row: &RouteTransitionRow) {
     let mut ctx = RouteContext::default();
     ctx.halted = row.context.halted;
     ctx.context_ready = row.context.context_ready;
+    ctx.consecutive_invalid_plan_batches = row.context.consecutive_invalid_plan_batches;
     ctx.planned_pending = row.context.planned_pending;
     ctx.bootstrap_refresh_required = row.context.bootstrap_refresh_required;
     ctx.target_workspace_missing = row.context.target_workspace_missing;
@@ -1028,6 +1398,7 @@ fn assert_route_dispatch_row(row: &RouteDispatchRow) {
     let mut ctx = RouteContext::default();
     ctx.halted = row.context.halted;
     ctx.context_ready = row.context.context_ready;
+    ctx.consecutive_invalid_plan_batches = row.context.consecutive_invalid_plan_batches;
     ctx.planned_pending = row.context.planned_pending;
     ctx.target_workspace_missing = row.context.target_workspace_missing;
     apply_route_outcome_context(&mut ctx, &row.context);
@@ -1074,6 +1445,46 @@ fn assert_route_cache_row(row: &RouteCacheRow) {
         can_emit_route_selected: row.state.can_emit_route_selected,
     });
     assert_eq!(eval.rule, row.expected_rule, "route cache row {} mismatch", row.name);
+}
+
+fn assert_route_failure_row(row: &RouteFailureRow) {
+    let eval = evaluate_route_failure(&RouteContext::default());
+    assert_eq!(eval.rule, row.expected_rule, "route failure row {} mismatch", row.name);
+}
+
+fn assert_route_emit_effect_row(row: &RouteEmitEffectRow) {
+    let decision = to_route_decision(&row.decision);
+    let eval = evaluate_route_emit_effects(&decision);
+    assert_eq!(eval.rules, row.expected_rules, "route emit effect row {} rules mismatch", row.name);
+    assert_eq!(
+        eval.clear_pending_request,
+        row.expected_clear_pending_request,
+        "route emit effect row {} clear request mismatch",
+        row.name
+    );
+    assert_eq!(
+        eval.clear_pending_prompt,
+        row.expected_clear_pending_prompt,
+        "route emit effect row {} clear prompt mismatch",
+        row.name
+    );
+    assert_eq!(
+        eval.set_halted,
+        row.expected_set_halted,
+        "route emit effect row {} halted mismatch",
+        row.name
+    );
+}
+
+fn assert_route_recovery_row(row: &RouteRecoveryRow) {
+    let eval = evaluate_route_recovery(row.pending_required_successor);
+    assert_eq!(eval.rule, row.expected_rule, "route recovery row {} mismatch", row.name);
+}
+
+fn assert_successor_consumption_row(row: &SuccessorConsumptionRow) {
+    let event = to_runtime_event(&row.event);
+    let eval = evaluate_successor_consumption(&event, row.awaiting_control_successor);
+    assert_eq!(eval.rule, row.expected_rule, "successor consumption row {} mismatch", row.name);
 }
 
 fn assert_run_command_outcome_row(row: &RunCommandOutcomeRow) {
@@ -1187,6 +1598,54 @@ fn assert_loop_runtime_row(row: &LoopRuntimeRow) {
         row.name
     );
     assert_eq!(eval.rules, row.expected_rules, "loop runtime row {} rules mismatch", row.name);
+}
+
+fn assert_recovery_event_row(row: &RecoveryEventRow) {
+    let eval = evaluate_recovery_event(
+        row.expected_successor,
+        row.pending_required_successor,
+        row.has_last_verified,
+    );
+    assert_eq!(eval.rule, row.expected_rule, "recovery event row {} rule mismatch", row.name);
+    assert_eq!(
+        eval.force_observe_recovery,
+        row.expected_force_observe_recovery,
+        "recovery event row {} observe mismatch",
+        row.name
+    );
+    assert_eq!(
+        eval.execute_reward_recovery,
+        row.expected_execute_reward_recovery,
+        "recovery event row {} reward mismatch",
+        row.name
+    );
+}
+
+fn assert_recovery_execution_row(row: &RecoveryExecutionRow) {
+    let eval = evaluate_recovery_execution(row.operation, row.outcome);
+    assert_eq!(
+        eval.debug_kind,
+        row.expected_debug_kind,
+        "recovery execution row {} debug mismatch",
+        row.name
+    );
+    assert_eq!(
+        eval.error_kind,
+        row.expected_error_kind,
+        "recovery execution row {} error mismatch",
+        row.name
+    );
+}
+
+fn assert_bootstrap_effect_row(row: &BootstrapEffectRow) {
+    let eval = evaluate_bootstrap_effects(row.action_outcome);
+    assert_eq!(eval.rule, row.expected_rule, "bootstrap effect row {} rule mismatch", row.name);
+    assert_eq!(
+        eval.emit_refresh_required,
+        row.expected_emit_refresh_required,
+        "bootstrap effect row {} emit mismatch",
+        row.name
+    );
 }
 
 fn run_command_result_value(outcome: RunCommandOutcomeClass) -> serde_json::Value {
