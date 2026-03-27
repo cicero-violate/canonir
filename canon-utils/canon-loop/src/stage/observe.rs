@@ -172,6 +172,7 @@ fn build_observation_payload(
         validation_blocked_by_preconditions: !planning_preconditions.is_empty(),
         compiler_repair_required: planning_preconditions
             .contains(&planning_preconditions::PlanningPrecondition::MustFixDeadCodeForbidConflict),
+        ..read_graph_summary(&target_root).unwrap_or_default()
     };
     let cargo_toml = target_root.join("Cargo.toml");
     let entrypoint = preferred_entrypoint(&target_root);
@@ -258,6 +259,37 @@ fn build_observation_payload(
     ));
 
     (summary, observe_diagnostics, events)
+}
+
+fn read_graph_summary(target_root: &Path) -> Option<SemanticStateSummary> {
+    let path = target_root
+        .join("state")
+        .join("graph")
+        .join("index")
+        .join("latest_workspace.json");
+    let raw = std::fs::read_to_string(path).ok()?;
+    let wrapper: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let summary = wrapper.get("latest_workspace").cloned().unwrap_or(wrapper);
+    let artifact_id = summary.get("artifact_id")?.as_str()?.to_string();
+    Some(SemanticStateSummary {
+        graph_artifact_id: Some(artifact_id),
+        graph_node_count: summary.get("node_count").and_then(|v| v.as_u64()).map(|v| v as usize),
+        graph_edge_count: summary.get("edge_count").and_then(|v| v.as_u64()).map(|v| v as usize),
+        graph_file_count: summary.get("file_count").and_then(|v| v.as_u64()).map(|v| v as usize),
+        graph_call_edge_count: summary
+            .get("call_edge_count")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize),
+        graph_module_edge_count: summary
+            .get("module_edge_count")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize),
+        graph_cfg_edge_count: summary
+            .get("cfg_edge_count")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize),
+        ..SemanticStateSummary::default()
+    })
 }
 
 fn build_observe_diagnostics(

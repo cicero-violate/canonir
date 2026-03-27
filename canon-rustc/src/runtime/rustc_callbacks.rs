@@ -1,6 +1,6 @@
 use crate::artifacts::{
     emit_capture_completed, emit_capture_failed, emit_capture_started,
-    emit_graph_artifact_summary, write_graph_artifact, CaptureMode,
+    emit_graph_artifact_summary_with_parents, write_graph_artifact, CaptureMode,
 };
 use crate::runtime::flags::{
     find_flag_value, find_flag_values, is_cargo_registry_path, workspace_root_from_output_dir,
@@ -78,11 +78,13 @@ impl Callbacks for RustcCaptureCallbacks {
                         kinds: std::collections::HashMap::new(),
                     });
                     if let Ok(summary) = write_graph_artifact(&workspace_root, crate_name, &ir, Some(&bundle)) {
-                        let artifact_event_id = emit_graph_artifact_summary(&tlog_path, &summary).ok();
-                        let mut parents = Vec::new();
-                        if let Some(id) = artifact_event_id.or(capture_started_id.clone()) {
-                            parents.push(id);
-                        }
+                        let artifact_event_id = emit_graph_artifact_summary_with_parents(
+                            &tlog_path,
+                            &summary,
+                            capture_started_id.clone().into_iter().collect(),
+                        )
+                        .ok();
+                        let parents = artifact_event_id.into_iter().collect();
                         let _ = emit_capture_completed(&tlog_path, crate_name, &summary.artifact_id, parents);
                     }
                     if self.capture_mode.emits_structural_events()

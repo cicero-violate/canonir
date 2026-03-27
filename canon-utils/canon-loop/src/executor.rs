@@ -602,7 +602,11 @@ impl EventConsumer for LoopStageExecutor {
             | RuntimeEvent::GoalGraphCheckpointed(_)
             | RuntimeEvent::CapabilityInvoked(_)
             | RuntimeEvent::CapabilityResolved(_)
-            | RuntimeEvent::InvariantDiscovered(_) => {}
+            | RuntimeEvent::InvariantDiscovered(_)
+            | RuntimeEvent::RustcCaptureStarted(_)
+            | RuntimeEvent::RustcGraphArtifactWritten(_)
+            | RuntimeEvent::RustcCaptureCompleted(_)
+            | RuntimeEvent::RustcCaptureFailed(_) => {}
         }
         self.record_control_state(event, &trigger_id);
 

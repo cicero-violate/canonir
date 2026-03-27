@@ -100,6 +100,13 @@ pub struct SemanticStateSummary {
     pub compiler_hints: Vec<CompilerHintRecord>,
     pub validation_blocked_by_preconditions: bool,
     pub compiler_repair_required: bool,
+    pub graph_artifact_id: Option<String>,
+    pub graph_node_count: Option<usize>,
+    pub graph_edge_count: Option<usize>,
+    pub graph_file_count: Option<usize>,
+    pub graph_call_edge_count: Option<usize>,
+    pub graph_module_edge_count: Option<usize>,
+    pub graph_cfg_edge_count: Option<usize>,
 }
 
 impl SemanticStateSummary {
@@ -147,6 +154,27 @@ impl SemanticStateSummary {
             "semantic.compiler_repair_required={}",
             self.compiler_repair_required
         ));
+        if let Some(value) = &self.graph_artifact_id {
+            facts.push(format!("semantic.graph_artifact_id={value}"));
+        }
+        if let Some(value) = self.graph_node_count {
+            facts.push(format!("semantic.graph_node_count={value}"));
+        }
+        if let Some(value) = self.graph_edge_count {
+            facts.push(format!("semantic.graph_edge_count={value}"));
+        }
+        if let Some(value) = self.graph_file_count {
+            facts.push(format!("semantic.graph_file_count={value}"));
+        }
+        if let Some(value) = self.graph_call_edge_count {
+            facts.push(format!("semantic.graph_call_edge_count={value}"));
+        }
+        if let Some(value) = self.graph_module_edge_count {
+            facts.push(format!("semantic.graph_module_edge_count={value}"));
+        }
+        if let Some(value) = self.graph_cfg_edge_count {
+            facts.push(format!("semantic.graph_cfg_edge_count={value}"));
+        }
         facts
     }
 
@@ -189,6 +217,20 @@ impl SemanticStateSummary {
                 summary.validation_blocked_by_preconditions = value == "true";
             } else if let Some(value) = fact.strip_prefix("semantic.compiler_repair_required=") {
                 summary.compiler_repair_required = value == "true";
+            } else if let Some(value) = fact.strip_prefix("semantic.graph_artifact_id=") {
+                summary.graph_artifact_id = Some(value.to_string());
+            } else if let Some(value) = fact.strip_prefix("semantic.graph_node_count=") {
+                summary.graph_node_count = value.parse::<usize>().ok();
+            } else if let Some(value) = fact.strip_prefix("semantic.graph_edge_count=") {
+                summary.graph_edge_count = value.parse::<usize>().ok();
+            } else if let Some(value) = fact.strip_prefix("semantic.graph_file_count=") {
+                summary.graph_file_count = value.parse::<usize>().ok();
+            } else if let Some(value) = fact.strip_prefix("semantic.graph_call_edge_count=") {
+                summary.graph_call_edge_count = value.parse::<usize>().ok();
+            } else if let Some(value) = fact.strip_prefix("semantic.graph_module_edge_count=") {
+                summary.graph_module_edge_count = value.parse::<usize>().ok();
+            } else if let Some(value) = fact.strip_prefix("semantic.graph_cfg_edge_count=") {
+                summary.graph_cfg_edge_count = value.parse::<usize>().ok();
             }
         }
         summary
@@ -215,6 +257,15 @@ impl SemanticStateSummary {
         }
         if !self.source_files.is_empty() {
             lines.push(format!("file_graph={}", self.source_files.join(", ")));
+        }
+        if let Some(graph_artifact_id) = &self.graph_artifact_id {
+            lines.push(format!("graph_artifact_id={graph_artifact_id}"));
+        }
+        if let Some(graph_node_count) = self.graph_node_count {
+            lines.push(format!("graph_node_count={graph_node_count}"));
+        }
+        if let Some(graph_edge_count) = self.graph_edge_count {
+            lines.push(format!("graph_edge_count={graph_edge_count}"));
         }
         lines
     }
@@ -265,6 +316,15 @@ impl SemanticStateSummary {
         }
         if !self.compiler_hints.is_empty() {
             parts.push(format!("compiler_hint_kinds={}", self.compiler_hint_kinds().join("|")));
+        }
+        if let Some(graph_artifact_id) = &self.graph_artifact_id {
+            parts.push(format!("graph_artifact_id={graph_artifact_id}"));
+        }
+        if let Some(graph_node_count) = self.graph_node_count {
+            parts.push(format!("graph_nodes={graph_node_count}"));
+        }
+        if let Some(graph_edge_count) = self.graph_edge_count {
+            parts.push(format!("graph_edges={graph_edge_count}"));
         }
         parts.join("\n")
     }
@@ -759,13 +819,21 @@ pub fn derive_development_objectives(
             kind: DevelopmentObjectiveKind::ImproveModuleCohesion,
             priority_score: semantic_summary.module_gaps.len() as u32
                 + u32::from(rust_file_count >= 8)
+                + u32::from(
+                    semantic_summary
+                        .graph_module_edge_count
+                        .zip(semantic_summary.graph_call_edge_count)
+                        .is_some_and(|(module_edges, call_edges)| module_edges > call_edges.saturating_mul(8)),
+                )
                 + objective_trend_state.module_gap_delta().max(0) as u32,
             rationale: "module gaps or graph sprawl indicate structural cohesion issues".to_string(),
             progress_summary: format!(
-                "module_gaps={} rust_file_count={} module_gap_delta={}",
+                "module_gaps={} rust_file_count={} module_gap_delta={} graph_module_edges={} graph_call_edges={}",
                 semantic_summary.module_gaps.len(),
                 rust_file_count,
-                objective_trend_state.module_gap_delta()
+                objective_trend_state.module_gap_delta(),
+                semantic_summary.graph_module_edge_count.unwrap_or(0),
+                semantic_summary.graph_call_edge_count.unwrap_or(0)
             ),
         },
     ];

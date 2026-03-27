@@ -49,6 +49,11 @@ pub struct GraphArtifactSummary {
     pub cfg_edge_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphArtifactIndex {
+    pub latest_workspace: GraphArtifactSummary,
+}
+
 pub fn write_graph_artifact(
     workspace_root: &Path,
     crate_name: &str,
@@ -63,7 +68,7 @@ pub fn write_graph_artifact(
     if !artifact_path.exists() {
         fs::write(&artifact_path, serialized)?;
     }
-    Ok(GraphArtifactSummary {
+    let summary = GraphArtifactSummary {
         artifact_id,
         artifact_path,
         crate_name: crate_name.to_string(),
@@ -73,7 +78,9 @@ pub fn write_graph_artifact(
         call_edge_count: ir.call_graph.edge_count(),
         module_edge_count: ir.module_graph.edge_count(),
         cfg_edge_count: ir.cfg_graph.edge_count(),
-    })
+    };
+    update_graph_artifact_index(workspace_root, &summary)?;
+    Ok(summary)
 }
 
 pub fn emit_capture_started(
@@ -100,6 +107,14 @@ pub fn emit_graph_artifact_summary(
     tlog_path: &Path,
     summary: &GraphArtifactSummary,
 ) -> Result<EventId> {
+    emit_graph_artifact_summary_with_parents(tlog_path, summary, Vec::new())
+}
+
+pub fn emit_graph_artifact_summary_with_parents(
+    tlog_path: &Path,
+    summary: &GraphArtifactSummary,
+    parent_ids: Vec<EventId>,
+) -> Result<EventId> {
     write_shaped_event_auto(
         tlog_path,
         "rustc",
@@ -115,8 +130,8 @@ pub fn emit_graph_artifact_summary(
             module_edge_count: summary.module_edge_count as u64,
             cfg_edge_count: summary.cfg_edge_count as u64,
         },
-        Vec::new(),
-        true,
+        parent_ids.clone(),
+        parent_ids.is_empty(),
         CanonPayloadMeta { file: file!().to_string(), line: line!() },
     )
 }
@@ -186,4 +201,27 @@ fn unique_file_count(span_bundle: Option<&SymbolSpanBundle>) -> usize {
         }
     }
     files.len()
+}
+
+fn update_graph_artifact_index(workspace_root: &Path, summary: &GraphArtifactSummary) -> Result<()> {
+    let index_dir = workspace_root.join("state").join("graph").join("index");
+    fs::create_dir_all(index_dir.join("by_crate"))?;
+    fs::create_dir_all(index_dir.join("by_hash"))?;
+
+    let latest_workspace = GraphArtifactIndex {
+        latest_workspace: summary.clone(),
+    };
+    fs::write(
+        index_dir.join("latest_workspace.json"),
+        serde_json::to_vec_pretty(&latest_workspace)?,
+    )?;
+    fs::write(
+        index_dir.join("by_crate").join(format!("{}.json", summary.crate_name)),
+        serde_json::to_vec_pretty(summary)?,
+    )?;
+    fs::write(
+        index_dir.join("by_hash").join(format!("{}.json", summary.artifact_id)),
+        serde_json::to_vec_pretty(summary)?,
+    )?;
+    Ok(())
 }
