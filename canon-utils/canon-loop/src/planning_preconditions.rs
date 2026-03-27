@@ -360,11 +360,17 @@ fn contains_expected_hint_target(
 ) -> bool {
     let expected = expected_hint_paths(semantic_summary, hint_kind, target_root);
     if expected.is_empty() {
-        actions.iter().any(|action| !normalized_touched_paths(action, target_root).is_empty())
+        actions.iter().any(|action| {
+            !normalized_touched_paths(action, target_root).is_empty()
+                && action_matches_hint_kind(action, hint_kind)
+        })
     } else {
         actions
             .iter()
-            .any(|action| touches_any_owned_paths(action, target_root, &expected))
+            .any(|action| {
+                touches_any_owned_paths(action, target_root, &expected)
+                    && action_matches_hint_kind(action, hint_kind)
+            })
     }
 }
 
@@ -519,6 +525,41 @@ fn touches_any_owned_paths(action: &canon_event::LoopPlanned, target_root: &Path
 fn creates_any_owned_paths(action: &canon_event::LoopPlanned, target_root: &Path, expected: &[PathBuf]) -> bool {
     let created = normalized_created_paths(action, target_root);
     expected.iter().any(|path| created.iter().any(|candidate| candidate == path))
+}
+
+fn action_matches_hint_kind(action: &canon_event::LoopPlanned, hint_kind: &str) -> bool {
+    if action.action_kind != "apply_patch" {
+        return true;
+    }
+    let Some(patch) = action.action_payload.get("patch").and_then(|v| v.as_str()) else {
+        return true;
+    };
+    match hint_kind {
+        "unresolved_import" => {
+            patch.contains("use ")
+                || patch.contains("mod ")
+                || patch.contains("pub use ")
+                || patch.contains("extern crate ")
+        }
+        "missing_symbol" => {
+            patch.contains("fn ")
+                || patch.contains("struct ")
+                || patch.contains("enum ")
+                || patch.contains("type ")
+                || patch.contains("const ")
+                || patch.contains("let ")
+                || patch.contains("impl ")
+                || patch.contains("use ")
+        }
+        "duplicate_definition" => patch.contains("-") || patch.contains("rename"),
+        "trait_bound_failure" => {
+            patch.contains("impl ")
+                || patch.contains(": ")
+                || patch.contains("where ")
+                || patch.contains("derive(")
+        }
+        _ => true,
+    }
 }
 
 fn normalized_touched_paths(action: &canon_event::LoopPlanned, target_root: &Path) -> Vec<PathBuf> {
