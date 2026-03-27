@@ -37,6 +37,6 @@ CANON_EVENT_EXECUTION="1"
 # rustflags = ["-Awarnings"]
 
 [env]
-# Set to "1" when you want to force-rebuild analysis_capture on the next cargo invocation.
-ANALYSIS_CAPTURE_FORCE_REFRESH = "1"
-ANALYSIS_ENGINE_DISABLE = "0"
+# # Set to "1" when you want to force-rebuild analysis_capture on the next cargo invocation.
+# ANALYSIS_CAPTURE_FORCE_REFRESH = "1"
+# ANALYSIS_ENGINE_DISABLE = "0"
