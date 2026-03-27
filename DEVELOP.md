@@ -53,6 +53,40 @@ Use this sequence when adding or upgrading behavior:
 - `run_command` must carry an absolute `cwd`.
 - Unknown `action_kind` is invalid.
 
+## Scenario Matrix
+
+Use this matrix as the source of truth for retry and transition policy. The key rule is that recovery is reason-specific, not generic.
+
+| Command class | Typical actions                           | Failure / outcome class          | Required recovery                                                                                        |
+| ---           | ---                                       | ---                              | ---                                                                                                      |
+| discovery     | `list_dir`, `read_file`, `search_files`   | target missing / path invalid    | route to `plan` for bootstrap or corrective retry; do not loop discovery forever                         |
+| discovery     | `list_dir`, `read_file`, `search_files`   | success, no new context          | preserve prior retry memory; do not clear invalid-plan state just because discovery succeeded            |
+| edit          | `apply_patch`, `write_file`, `patch_file` | patch-format / parse failure     | next retry is `single_patch_only`; one `apply_patch`, one file, no `run_command`                         |
+| edit          | `apply_patch`, `write_file`, `patch_file` | path/context mismatch            | corrective retry; discovery only if file contents are actually missing                                   |
+| validation    | `run_command` (`cargo check`, tests)      | compiler / semantic failure      | route to `plan`; carry stderr/stdout as planner hint; never force `conclude` only because of cycle count |
+| bootstrap     | `run_command` (`cargo init`, `cargo new`) | success                          | clear stale bootstrap state, clear queued pre-bootstrap work, force fresh `observe`                      |
+| completion    | `done`                                    | verify failed / goal unsatisfied | clear premature completion and replan                                                                    |
+
+### Retry policy mapping
+
+- `mixed discovery + execution` -> `discovery_only`
+- `apply_patch` parse / invalid hunk / malformed patch -> `single_patch_only`
+- invalid `cwd` / invalid path / missing context -> `corrective_retry`
+- successful read-only discovery does not clear retry policy by itself
+
+### Command-state closure checklist
+
+Every command path should define:
+
+- command class
+- success/failure/progress outcome class
+- which memory is preserved vs cleared
+- next required route
+- whether an observe refresh is forced
+- whether stale queued work must be dropped
+
+If any of those fields are implicit, the system is not fully closed.
+
 ## Runtime Robustness Rules
 
 - No panic in the writer path for recoverable invalid events.
