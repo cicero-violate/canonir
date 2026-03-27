@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CompilerHintKind {
@@ -306,6 +307,7 @@ pub struct LlmSemanticContext {
     pub low_level_diagnostics: Vec<String>,
     pub recent_actions: Vec<String>,
     pub recent_tool_results: Vec<String>,
+    pub recent_execution_results: Vec<SemanticExecutionResultRecord>,
 }
 
 impl LlmSemanticContext {
@@ -343,6 +345,16 @@ impl LlmSemanticContext {
             lines.push(format!("route_confidence={confidence:.2}"));
         }
         lines.push(self.semantic_summary.compact_block());
+        if !self.recent_execution_results.is_empty() {
+            lines.push(format!(
+                "execution_results={}",
+                self.recent_execution_results
+                    .iter()
+                    .map(SemanticExecutionResultRecord::render_line)
+                    .collect::<Vec<_>>()
+                    .join("|")
+            ));
+        }
         format!("LLM semantic context:
 {}", render_bullets(&lines))
     }
@@ -354,6 +366,19 @@ impl LlmSemanticContext {
                 "Low-level diagnostics:
 {}",
                 render_bullets(&self.low_level_diagnostics)
+            ));
+        }
+        if !self.recent_execution_results.is_empty() {
+            sections.push(format!(
+                "Execution semantics:
+{}",
+                render_bullets(
+                    &self
+                        .recent_execution_results
+                        .iter()
+                        .map(SemanticExecutionResultRecord::render_line)
+                        .collect::<Vec<_>>()
+                )
             ));
         }
         sections.join("
@@ -423,10 +448,234 @@ LOC: {}  |  Errors: {}  |  Warnings: {}",
 {}", self.recent_tool_results.join("
 ")));
         }
+        if !self.recent_execution_results.is_empty() {
+            sections.push(format!(
+                "Recent execution semantics:
+{}",
+                self.recent_execution_results
+                    .iter()
+                    .map(SemanticExecutionResultRecord::render_line)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        }
         sections.join("
 
 ")
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SemanticActionIntent {
+    BootstrapWorkspace,
+    InitCargoProject,
+    ValidateCargoCheck,
+    CreateEntrypoint(PathBuf),
+    CreateModuleFile(PathBuf),
+    FixDeadCodeConflict(PathBuf),
+    FixUnresolvedImport(PathBuf),
+    DefineMissingSymbol(PathBuf),
+    ResolveDuplicateDefinition(PathBuf),
+    FixTraitBoundFailure(PathBuf),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SemanticExecutionResultRecord {
+    pub kind: String,
+    pub summary: String,
+    pub target_files: Vec<String>,
+    pub semantic_progress: bool,
+}
+
+impl SemanticExecutionResultRecord {
+    pub fn new(
+        kind: impl Into<String>,
+        summary: impl Into<String>,
+        target_files: Vec<String>,
+        semantic_progress: bool,
+    ) -> Self {
+        Self {
+            kind: kind.into(),
+            summary: summary.into(),
+            target_files,
+            semantic_progress,
+        }
+    }
+
+    pub fn render_line(&self) -> String {
+        let targets = if self.target_files.is_empty() {
+            "none".to_string()
+        } else {
+            self.target_files.join("|")
+        };
+        format!(
+            "kind={} progress={} targets={} summary={}",
+            self.kind, self.semantic_progress, targets, self.summary
+        )
+    }
+}
+
+pub fn classify_planned_action_intents(
+    action_kind: &str,
+    action_payload: &serde_json::Value,
+    target_root: Option<&Path>,
+) -> Vec<SemanticActionIntent> {
+    let mut out = Vec::new();
+    match action_kind {
+        "run_command" => {
+            let cmd = action_payload.get("cmd").and_then(|v| v.as_str()).unwrap_or("");
+            if cmd.contains("cargo new ") {
+                out.push(SemanticActionIntent::BootstrapWorkspace);
+            }
+            if cmd.contains("cargo init") {
+                out.push(SemanticActionIntent::InitCargoProject);
+            }
+            if cmd.contains("cargo check") {
+                out.push(SemanticActionIntent::ValidateCargoCheck);
+            }
+        }
+        "apply_patch" => {
+            let patch = action_payload.get("patch").and_then(|v| v.as_str()).unwrap_or("");
+            if let Ok(args) = canon_tools_patch::parse_patch(patch) {
+                for hunk in args.hunks {
+                    match hunk {
+                        canon_tools_patch::Hunk::AddFile { path, .. } => {
+                            let path = normalize_path(&path, target_root);
+                            let text = path.to_string_lossy();
+                            if text.ends_with("src/main.rs") || text.ends_with("src/lib.rs") {
+                                out.push(SemanticActionIntent::CreateEntrypoint(path));
+                            } else if text.ends_with(".rs") {
+                                out.push(SemanticActionIntent::CreateModuleFile(path));
+                            }
+                        }
+                        canon_tools_patch::Hunk::UpdateFile { path, .. }
+                        | canon_tools_patch::Hunk::DeleteFile { path } => {
+                            let path = normalize_path(&path, target_root);
+                            if patch.contains("allow(dead_code)") {
+                                out.push(SemanticActionIntent::FixDeadCodeConflict(path.clone()));
+                            }
+                            if is_import_edit(patch) {
+                                out.push(SemanticActionIntent::FixUnresolvedImport(path.clone()));
+                            }
+                            if is_missing_symbol_edit(patch) {
+                                out.push(SemanticActionIntent::DefineMissingSymbol(path.clone()));
+                            }
+                            if is_duplicate_definition_edit(patch) {
+                                out.push(SemanticActionIntent::ResolveDuplicateDefinition(path.clone()));
+                            }
+                            if is_trait_bound_edit(patch) {
+                                out.push(SemanticActionIntent::FixTraitBoundFailure(path));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+pub fn execution_results_for_action(
+    intents: &[SemanticActionIntent],
+    success: bool,
+    stderr: &str,
+) -> Vec<SemanticExecutionResultRecord> {
+    if !success {
+        if intents.is_empty() {
+            return vec![SemanticExecutionResultRecord::new(
+                "no_semantic_progress",
+                format!("action failed: {}", stderr.trim()),
+                Vec::new(),
+                false,
+            )];
+        }
+        return intents
+            .iter()
+            .map(|intent| {
+                let (kind, targets) = intent_kind_and_targets(intent);
+                SemanticExecutionResultRecord::new(
+                    "no_semantic_progress",
+                    format!("{kind} failed: {}", stderr.trim()),
+                    targets,
+                    false,
+                )
+            })
+            .collect();
+    }
+    if intents.is_empty() {
+        return vec![SemanticExecutionResultRecord::new(
+            "no_semantic_progress",
+            "action succeeded without semantic state change classification",
+            Vec::new(),
+            false,
+        )];
+    }
+    intents
+        .iter()
+        .map(|intent| match intent {
+            SemanticActionIntent::BootstrapWorkspace => SemanticExecutionResultRecord::new(
+                "workspace_bootstrapped",
+                "workspace bootstrap command succeeded",
+                Vec::new(),
+                true,
+            ),
+            SemanticActionIntent::InitCargoProject => SemanticExecutionResultRecord::new(
+                "cargo_project_initialized",
+                "cargo project initialization succeeded",
+                Vec::new(),
+                true,
+            ),
+            SemanticActionIntent::ValidateCargoCheck => SemanticExecutionResultRecord::new(
+                "validation_attempted",
+                "cargo check executed",
+                Vec::new(),
+                false,
+            ),
+            SemanticActionIntent::CreateEntrypoint(path) => SemanticExecutionResultRecord::new(
+                "entrypoint_created",
+                "entrypoint file created",
+                vec![path.to_string_lossy().to_string()],
+                true,
+            ),
+            SemanticActionIntent::CreateModuleFile(path) => SemanticExecutionResultRecord::new(
+                "module_created",
+                "module file created",
+                vec![path.to_string_lossy().to_string()],
+                true,
+            ),
+            SemanticActionIntent::FixDeadCodeConflict(path) => SemanticExecutionResultRecord::new(
+                "dead_code_conflict_addressed",
+                "dead_code conflict edit applied",
+                vec![path.to_string_lossy().to_string()],
+                true,
+            ),
+            SemanticActionIntent::FixUnresolvedImport(path) => SemanticExecutionResultRecord::new(
+                "import_resolved",
+                "import repair edit applied",
+                vec![path.to_string_lossy().to_string()],
+                true,
+            ),
+            SemanticActionIntent::DefineMissingSymbol(path) => SemanticExecutionResultRecord::new(
+                "symbol_defined",
+                "missing symbol definition edit applied",
+                vec![path.to_string_lossy().to_string()],
+                true,
+            ),
+            SemanticActionIntent::ResolveDuplicateDefinition(path) => SemanticExecutionResultRecord::new(
+                "duplicate_resolved",
+                "duplicate definition repair applied",
+                vec![path.to_string_lossy().to_string()],
+                true,
+            ),
+            SemanticActionIntent::FixTraitBoundFailure(path) => SemanticExecutionResultRecord::new(
+                "trait_bound_fixed",
+                "trait bound repair edit applied",
+                vec![path.to_string_lossy().to_string()],
+                true,
+            ),
+        })
+        .collect()
 }
 
 fn render_bullets(lines: &[String]) -> String {
@@ -439,6 +688,96 @@ fn render_bullets(lines: &[String]) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     }
+}
+
+fn intent_kind_and_targets(intent: &SemanticActionIntent) -> (&'static str, Vec<String>) {
+    match intent {
+        SemanticActionIntent::BootstrapWorkspace => ("bootstrap_workspace", Vec::new()),
+        SemanticActionIntent::InitCargoProject => ("init_cargo_project", Vec::new()),
+        SemanticActionIntent::ValidateCargoCheck => ("validate_cargo_check", Vec::new()),
+        SemanticActionIntent::CreateEntrypoint(path) => {
+            ("create_entrypoint", vec![path.to_string_lossy().to_string()])
+        }
+        SemanticActionIntent::CreateModuleFile(path) => {
+            ("create_module_file", vec![path.to_string_lossy().to_string()])
+        }
+        SemanticActionIntent::FixDeadCodeConflict(path) => {
+            ("fix_dead_code_conflict", vec![path.to_string_lossy().to_string()])
+        }
+        SemanticActionIntent::FixUnresolvedImport(path) => {
+            ("fix_unresolved_import", vec![path.to_string_lossy().to_string()])
+        }
+        SemanticActionIntent::DefineMissingSymbol(path) => {
+            ("define_missing_symbol", vec![path.to_string_lossy().to_string()])
+        }
+        SemanticActionIntent::ResolveDuplicateDefinition(path) => {
+            ("resolve_duplicate_definition", vec![path.to_string_lossy().to_string()])
+        }
+        SemanticActionIntent::FixTraitBoundFailure(path) => {
+            ("fix_trait_bound_failure", vec![path.to_string_lossy().to_string()])
+        }
+    }
+}
+
+fn normalize_path(path: &Path, target_root: Option<&Path>) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        target_root.map(|root| root.join(path)).unwrap_or_else(|| path.to_path_buf())
+    }
+}
+
+fn is_import_edit(patch: &str) -> bool {
+    patch.contains("use ")
+        || patch.contains("mod ")
+        || patch.contains("pub use ")
+        || patch.contains("extern crate ")
+}
+
+fn is_missing_symbol_edit(patch: &str) -> bool {
+    (patch.contains("fn ") && !patch.contains("fn main"))
+        || patch.contains("struct ")
+        || patch.contains("enum ")
+        || patch.contains("type ")
+        || patch.contains("const ")
+        || patch.contains("let ")
+        || patch.contains("impl ")
+        || patch.contains("use ")
+}
+
+fn is_duplicate_definition_edit(patch: &str) -> bool {
+    patch.contains("rename") || has_definition_edit(patch)
+}
+
+fn is_trait_bound_edit(patch: &str) -> bool {
+    patch.lines().any(|line| {
+        if !(line.starts_with('+') || line.starts_with('-')) {
+            return false;
+        }
+        let content = line[1..].trim_start();
+        content.contains("impl ")
+            || content.contains("where ")
+            || content.contains("derive(")
+            || content.contains(": ")
+    })
+}
+
+fn has_definition_edit(patch: &str) -> bool {
+    patch.lines().any(|line| {
+        if !(line.starts_with('+') || line.starts_with('-')) {
+            return false;
+        }
+        let content = line[1..].trim_start();
+        let content = content
+            .strip_prefix("pub(crate) ")
+            .or_else(|| content.strip_prefix("pub "))
+            .unwrap_or(content);
+        content.starts_with("fn ")
+            || content.starts_with("struct ")
+            || content.starts_with("enum ")
+            || content.starts_with("type ")
+            || content.starts_with("const ")
+    })
 }
 
 fn parse_compiler_hint_record(line: &str) -> Option<CompilerHintRecord> {

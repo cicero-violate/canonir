@@ -572,6 +572,7 @@ fn handle_observed(
         observed,
         &ctx.batch_acted,
         &ctx.batch_tool_results,
+        &ctx.recent_execution_results,
         &target_workspace,
         rationale_for_prompt,
         confidence_for_prompt,
@@ -919,6 +920,7 @@ fn build_llm_semantic_context(
     observed: &LoopObserved,
     batch_acted: &[LoopActed],
     batch_tool_results: &[ToolResult],
+    recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
     target_workspace: &str,
     route_rationale: Option<&str>,
     route_confidence: Option<f64>,
@@ -976,6 +978,7 @@ fn build_llm_semantic_context(
         low_level_diagnostics: observed.observe_diagnostics.clone(),
         recent_actions,
         recent_tool_results,
+        recent_execution_results: recent_execution_results.to_vec(),
     }
 }
 

@@ -85,6 +85,7 @@ impl EventConsumer for GoalGenConsumer {
                     low_level_diagnostics: vec![format!("goalgen_projects_dir={GOALGEN_PROJECTS_DIR}")],
                     recent_actions: Vec::new(),
                     recent_tool_results: Vec::new(),
+                    recent_execution_results: Vec::new(),
                 };
                 EventOutcome::emit(RuntimeEvent::Llm(LlmCall {
                     request_id: request_id.clone(),

@@ -1,6 +1,7 @@
 use crate::merge::{ContextMerger, FileWriteTracker, WorkspaceDirtyTracker};
 use crate::scheduler::{DependencyTracker, Scheduler};
 use canon_event::{EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, LoopVerified, ToolResult};
+use canon_semantic_state::{SemanticActionIntent, SemanticExecutionResultRecord};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -99,6 +100,7 @@ pub struct LoopContext {
     pub last_done_goal: Option<String>,
     pub batch_acted: Vec<LoopActed>,
     pub batch_tool_results: Vec<ToolResult>,
+    pub recent_execution_results: Vec<SemanticExecutionResultRecord>,
     pub last_prompted_goal: Option<String>,
     // System prompt caching — tracks which static system prompt the executor has cached.
     pub last_system_prompt_id: Option<u64>,
@@ -122,6 +124,7 @@ pub struct LoopContext {
     pub active_batch_llm_request_id: Option<String>,
     pub queued_artifact_index: HashMap<String, u32>,
     pub act_batch_tracker: HashMap<String, BatchStatus>,
+    pub action_semantic_intents: HashMap<String, Vec<SemanticActionIntent>>,
     pub last_act_reconcile: Option<Instant>,
     pub destructive_cmd_policy: DestructiveCmdPolicy,
     pub file_write_tracker: FileWriteTracker,
@@ -182,6 +185,7 @@ impl LoopContext {
             last_done_goal: None,
             batch_acted: Vec::new(),
             batch_tool_results: Vec::new(),
+            recent_execution_results: Vec::new(),
             last_prompted_goal: None,
             last_system_prompt_id: None,
             last_context_base_id: None,
@@ -201,6 +205,7 @@ impl LoopContext {
             active_batch_llm_request_id: None,
             queued_artifact_index: HashMap::new(),
             act_batch_tracker: HashMap::new(),
+            action_semantic_intents: HashMap::new(),
             last_act_reconcile: None,
             destructive_cmd_policy: DestructiveCmdPolicy::from_env(),
             file_write_tracker: FileWriteTracker::default(),

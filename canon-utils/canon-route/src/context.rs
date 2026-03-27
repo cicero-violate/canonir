@@ -1,7 +1,10 @@
 use canon_decision::JournalLine;
 use canon_event::{RuntimeEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult, SubTaskResult};
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
-use canon_semantic_state::{LlmSemanticContext, SemanticStateSummary};
+use canon_semantic_state::{
+    classify_planned_action_intents, execution_results_for_action, LlmSemanticContext,
+    SemanticActionIntent, SemanticExecutionResultRecord, SemanticStateSummary,
+};
 use crate::causal::update_causal_graph;
 use canon_judgment::{LlmSignals, RuntimeSignals};
 use serde_json::json;
@@ -66,9 +69,11 @@ pub struct RouteContext {
     pub consecutive_invalid_plan_batches: u32,
     pub bootstrap_refresh_required: bool,
     pub semantic_summary: SemanticStateSummary,
+    pub recent_execution_results: Vec<SemanticExecutionResultRecord>,
     pub last_halt_reason: Option<String>,
     /// Maps action_id → (action_kind, llm_request_id) for enriching ToolResult metadata.
     action_meta: HashMap<String, (String, Option<String>)>,
+    action_semantic_intents: HashMap<String, Vec<SemanticActionIntent>>,
     pub causal_graph: crate::causal::CausalGraph,
 }
 
@@ -174,6 +179,7 @@ impl RouteContext {
             low_level_diagnostics: self.last_verify_diagnostics.clone(),
             recent_actions: Vec::new(),
             recent_tool_results: Vec::new(),
+            recent_execution_results: self.recent_execution_results.clone(),
         }
     }
 
@@ -215,6 +221,14 @@ impl RouteContext {
                 // Record action_id → (action_kind, llm_request_id) for ToolResult enrichment.
                 if let Some(aid) = action_id {
                     self.action_meta.insert(aid.clone(), (action_kind.clone(), llm_request_id.clone()));
+                    let target_root = self.semantic_summary.target_root.as_deref().map(Path::new);
+                    let intents = match event {
+                        RuntimeEvent::LoopPlanned(planned) => {
+                            classify_planned_action_intents(&planned.action_kind, &planned.action_payload, target_root)
+                        }
+                        _ => Vec::new(),
+                    };
+                    self.action_semantic_intents.insert(aid.clone(), intents);
                 }
                 let mut summary = format!("planned action={action_kind}");
                 if let Some(plan_id) = plan_id {
@@ -248,6 +262,16 @@ impl RouteContext {
                 if let Some(tool_call_id) = tool_call_id {
                     if tool_result_id.is_some() {
                         self.pending_tool_result_ids.remove(tool_call_id);
+                    }
+                }
+                if let Some(action_id) = action_id {
+                    if let Some(intents) = self.action_semantic_intents.remove(action_id) {
+                        let results = execution_results_for_action(&intents, *success, stderr);
+                        self.recent_execution_results.extend(results);
+                        if self.recent_execution_results.len() > 16 {
+                            let drop_n = self.recent_execution_results.len() - 16;
+                            self.recent_execution_results.drain(0..drop_n);
+                        }
                     }
                 }
                 if is_successful_bootstrap(action_kind, *success, stderr) {

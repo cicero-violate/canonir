@@ -14,6 +14,7 @@ use crate::{
 use canon_event::{AgentRegistered, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, GoalEdgeDefined, RuntimeEvent, Tick};
 use canon_invariant::decision_trace_payload;
 use canon_proc_macros::must_emit;
+use canon_semantic_state::{classify_planned_action_intents, execution_results_for_action};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -337,6 +338,14 @@ impl EventConsumer for LoopStageExecutor {
                     self.ctx.last_invalid_plan_planned_count = None;
                 }
                 if let Some(action_id) = a.action_id.clone() {
+                    if let Some(intents) = self.ctx.action_semantic_intents.remove(&action_id) {
+                        let results = execution_results_for_action(&intents, a.success, &a.stderr);
+                        self.ctx.recent_execution_results.extend(results);
+                        if self.ctx.recent_execution_results.len() > 16 {
+                            let drop_n = self.ctx.recent_execution_results.len() - 16;
+                            self.ctx.recent_execution_results.drain(0..drop_n);
+                        }
+                    }
                     if let Some(paths) = self.ctx.write_paths_by_action.remove(&action_id) {
                         for p in paths {
                             self.ctx.file_write_tracker.release(&p);
@@ -402,6 +411,17 @@ impl EventConsumer for LoopStageExecutor {
                 self.ctx.context_merger.absorb(r, &r.agent_id);
             }
             RuntimeEvent::LoopPlanned(p) => {
+                if let Some(action_id) = p.action_id.as_ref() {
+                    let target_root = self
+                        .ctx
+                        .last_observed
+                        .as_ref()
+                        .and_then(|observed| observed.semantic_summary.target_root.as_deref())
+                        .map(std::path::Path::new);
+                    let intents =
+                        classify_planned_action_intents(&p.action_kind, &p.action_payload, target_root);
+                    self.ctx.action_semantic_intents.insert(action_id.clone(), intents);
+                }
                 let priority = infer_priority(p, self.ctx.goodness, self.ctx.delta_g);
                 let task = ScheduledTask { priority, enqueued_at: Instant::now(), seq: 0, agent_id: None, plan: p.clone() };
                 if !p.depends_on.is_empty() {
