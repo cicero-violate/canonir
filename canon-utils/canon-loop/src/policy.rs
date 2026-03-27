@@ -444,7 +444,9 @@ pub fn retry_policy_for_planning_context(
     if base != RetryPolicy::None {
         return base;
     }
-    if latest_no_semantic_progress(recent_execution_results) {
+    if semantic_no_progress_streak(recent_execution_results) >= 2 {
+        RetryPolicy::CorrectiveRetry
+    } else if latest_no_semantic_progress(recent_execution_results) {
         RetryPolicy::CorrectiveRetry
     } else {
         RetryPolicy::None
@@ -477,6 +479,12 @@ pub fn planner_hint_lines(
     if latest_no_semantic_progress(recent_execution_results) {
         out.push(
             "Programmatic tip: the last executed batch produced no semantic progress; change the repair strategy instead of retrying the same edit."
+                .to_string(),
+        );
+    }
+    if semantic_no_progress_streak(recent_execution_results) >= 2 {
+        out.push(
+            "Programmatic tip: repeated no-progress batches indicate a stalled repair loop; change approach or refresh context before retrying."
                 .to_string(),
         );
     }
@@ -652,4 +660,4 @@ mod tests {
         }
     }
 }
-use canon_semantic_state::{latest_no_semantic_progress, SemanticExecutionResultRecord};
+use canon_semantic_state::{latest_no_semantic_progress, semantic_no_progress_streak, SemanticExecutionResultRecord};

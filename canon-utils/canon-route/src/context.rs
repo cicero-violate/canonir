@@ -2,7 +2,8 @@ use canon_decision::JournalLine;
 use canon_event::{RuntimeEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult, SubTaskResult};
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
 use canon_semantic_state::{
-    classify_planned_action_intents, execution_results_for_action, LlmSemanticContext,
+    classify_planned_action_intents, derive_self_development_objective_state, execution_results_for_action,
+    LlmSemanticContext,
     SemanticActionIntent, SemanticExecutionResultRecord, SemanticStateSummary, semantic_no_progress_streak,
     semantic_progress_rate,
 };
@@ -163,6 +164,11 @@ impl RouteContext {
     }
 
     pub fn llm_semantic_context(&self) -> LlmSemanticContext {
+        let objective_state = derive_self_development_objective_state(
+            &self.semantic_summary,
+            self.consecutive_invalid_plan_batches,
+            &self.recent_execution_results,
+        );
         LlmSemanticContext {
             mission_summary: if self.mission_summary.is_empty() {
                 None
@@ -170,6 +176,7 @@ impl RouteContext {
                 Some(self.mission_summary.clone())
             },
             semantic_summary: self.semantic_summary.clone(),
+            objective_state,
             target_workspace: self.semantic_summary.target_root.clone(),
             workspace_loc: None,
             error_count: None,
@@ -184,6 +191,14 @@ impl RouteContext {
             recent_tool_results: Vec::new(),
             recent_execution_results: self.recent_execution_results.clone(),
         }
+    }
+
+    pub fn objective_state(&self) -> canon_semantic_state::SelfDevelopmentObjectiveState {
+        derive_self_development_objective_state(
+            &self.semantic_summary,
+            self.consecutive_invalid_plan_batches,
+            &self.recent_execution_results,
+        )
     }
 
     pub fn push_journal(&mut self, lane: impl Into<String>, summary: impl Into<String>) {

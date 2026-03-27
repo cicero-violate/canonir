@@ -695,6 +695,9 @@ pub fn has_actionable_failure(ctx: &RouteContext) -> bool {
     if latest_no_semantic_progress(&ctx.recent_execution_results) {
         return true;
     }
+    if ctx.objective_state().is_stalled() {
+        return true;
+    }
     if semantic_repair_state_is_actionable(&ctx.semantic_summary)
         || ctx.validation_blocked_state()
         || ctx.compiler_repair_required_state()

@@ -1,7 +1,7 @@
 use canon_event::{new_error_occurred, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, LlmCall, RuntimeEvent};
 use canon_prompt_events::goal_prompt_loaded_event;
 use canon_proc_macros::must_emit;
-use canon_semantic_state::{LlmSemanticContext, SemanticStateSummary};
+use canon_semantic_state::{derive_self_development_objective_state, LlmSemanticContext, SemanticStateSummary};
 use canon_skills::global_registry;
 use uuid::Uuid;
 
@@ -73,6 +73,11 @@ impl EventConsumer for GoalGenConsumer {
                 let semantic_context = LlmSemanticContext {
                     mission_summary: None,
                     semantic_summary: self.semantic_summary.clone(),
+                    objective_state: derive_self_development_objective_state(
+                        &self.semantic_summary,
+                        0,
+                        &[],
+                    ),
                     target_workspace: Some(GOALGEN_PROJECTS_DIR.to_string()),
                     workspace_loc: None,
                     error_count: None,

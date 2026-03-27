@@ -3,7 +3,7 @@ use std::path::Path;
 use canon_event::{new_error_occurred, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, LlmCall, LoopActed, LoopObserved, LoopPlanned, PlanningCompleted, RouteSelected, RuntimeEvent, ToolCall, ToolResult};
 use canon_goal::parse_agent_goal_markdown;
 use canon_invariant::decision_trace_payload;
-use canon_semantic_state::{LlmSemanticContext, SemanticStateSummary};
+use canon_semantic_state::{derive_self_development_objective_state, LlmSemanticContext, SemanticStateSummary};
 use canon_tools_search::search_files;
 use canon_tools_patch::parse_patch;
 use std::collections::hash_map::DefaultHasher;
@@ -986,6 +986,11 @@ fn build_llm_semantic_context(
             .map(parse_agent_goal_markdown)
             .map(|goal| canon_goal::summarize_goal(&goal)),
         semantic_summary: semantic_summary.clone(),
+        objective_state: derive_self_development_objective_state(
+            semantic_summary,
+            consecutive_invalid_plan_batches,
+            recent_execution_results,
+        ),
         target_workspace: Some(target_workspace.to_string()),
         workspace_loc: Some(count_loc_in_workspace(std::path::Path::new(target_workspace))),
         error_count: Some(observed.error_count),

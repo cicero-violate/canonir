@@ -295,6 +295,7 @@ impl SemanticStateSummary {
 pub struct LlmSemanticContext {
     pub mission_summary: Option<String>,
     pub semantic_summary: SemanticStateSummary,
+    pub objective_state: SelfDevelopmentObjectiveState,
     pub target_workspace: Option<String>,
     pub workspace_loc: Option<usize>,
     pub error_count: Option<usize>,
@@ -308,6 +309,53 @@ pub struct LlmSemanticContext {
     pub recent_actions: Vec<String>,
     pub recent_tool_results: Vec<String>,
     pub recent_execution_results: Vec<SemanticExecutionResultRecord>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SelfDevelopmentObjectiveState {
+    pub semantic_progress_rate: f32,
+    pub semantic_no_progress_streak: usize,
+    pub consecutive_invalid_plan_batches: u32,
+    pub validation_blocked_by_preconditions: bool,
+    pub compiler_repair_required: bool,
+}
+
+impl SelfDevelopmentObjectiveState {
+    pub fn is_stalled(&self) -> bool {
+        self.semantic_no_progress_streak >= 2 || self.consecutive_invalid_plan_batches >= 2
+    }
+
+    pub fn repair_pressure_score(&self) -> u32 {
+        let mut score = self.consecutive_invalid_plan_batches;
+        if self.validation_blocked_by_preconditions {
+            score += 1;
+        }
+        if self.compiler_repair_required {
+            score += 1;
+        }
+        if self.semantic_no_progress_streak > 0 {
+            score += 1;
+        }
+        score
+    }
+
+    pub fn render_lines(&self) -> Vec<String> {
+        vec![
+            format!("semantic_progress_rate={:.2}", self.semantic_progress_rate),
+            format!("semantic_no_progress_streak={}", self.semantic_no_progress_streak),
+            format!(
+                "consecutive_invalid_plan_batches={}",
+                self.consecutive_invalid_plan_batches
+            ),
+            format!(
+                "validation_blocked_by_preconditions={}",
+                self.validation_blocked_by_preconditions
+            ),
+            format!("compiler_repair_required={}", self.compiler_repair_required),
+            format!("repair_pressure_score={}", self.repair_pressure_score()),
+            format!("repair_loop_stalled={}", self.is_stalled()),
+        ]
+    }
 }
 
 impl LlmSemanticContext {
@@ -328,16 +376,7 @@ impl LlmSemanticContext {
                 self.semantic_summary.compiler_hint_kinds().join("|")
             ));
         }
-        if !self.recent_execution_results.is_empty() {
-            lines.push(format!(
-                "semantic_progress_rate={:.2}",
-                semantic_progress_rate(&self.recent_execution_results)
-            ));
-            lines.push(format!(
-                "semantic_no_progress_streak={}",
-                semantic_no_progress_streak(&self.recent_execution_results)
-            ));
-        }
+        lines.extend(self.objective_state.render_lines());
         format!("LLM semantic context:
 {}", render_bullets(&lines))
     }
@@ -364,15 +403,8 @@ impl LlmSemanticContext {
                     .collect::<Vec<_>>()
                     .join("|")
             ));
-            lines.push(format!(
-                "semantic_progress_rate={:.2}",
-                semantic_progress_rate(&self.recent_execution_results)
-            ));
-            lines.push(format!(
-                "semantic_no_progress_streak={}",
-                semantic_no_progress_streak(&self.recent_execution_results)
-            ));
         }
+        lines.extend(self.objective_state.render_lines());
         format!("LLM semantic context:
 {}", render_bullets(&lines))
     }
@@ -399,9 +431,8 @@ impl LlmSemanticContext {
                 )
             ));
             sections.push(format!(
-                "Execution metrics:\n- semantic_progress_rate={:.2}\n- semantic_no_progress_streak={}",
-                semantic_progress_rate(&self.recent_execution_results),
-                semantic_no_progress_streak(&self.recent_execution_results),
+                "Execution metrics:\n{}",
+                render_bullets(&self.objective_state.render_lines()),
             ));
         }
         sections.join("
@@ -482,9 +513,27 @@ LOC: {}  |  Errors: {}  |  Warnings: {}",
                     .join("\n")
             ));
         }
+        sections.push(format!(
+            "Self-development objective state:\n{}",
+            render_bullets(&self.objective_state.render_lines())
+        ));
         sections.join("
 
 ")
+    }
+}
+
+pub fn derive_self_development_objective_state(
+    semantic_summary: &SemanticStateSummary,
+    consecutive_invalid_plan_batches: u32,
+    recent_execution_results: &[SemanticExecutionResultRecord],
+) -> SelfDevelopmentObjectiveState {
+    SelfDevelopmentObjectiveState {
+        semantic_progress_rate: semantic_progress_rate(recent_execution_results),
+        semantic_no_progress_streak: semantic_no_progress_streak(recent_execution_results),
+        consecutive_invalid_plan_batches,
+        validation_blocked_by_preconditions: semantic_summary.validation_blocked_by_preconditions,
+        compiler_repair_required: semantic_summary.compiler_repair_required,
     }
 }
 
