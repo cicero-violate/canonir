@@ -819,4 +819,375 @@ mod tests {
         );
         assert!(result.is_ok());
     }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum PathState {
+        Missing,
+        Present,
+    }
+
+    impl PathState {
+        const ALL: [Self; 2] = [Self::Missing, Self::Present];
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum CargoState {
+        Missing,
+        Present,
+    }
+
+    impl CargoState {
+        const ALL: [Self; 2] = [Self::Missing, Self::Present];
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum EntrypointState {
+        Missing,
+        Main,
+    }
+
+    impl EntrypointState {
+        const ALL: [Self; 2] = [Self::Missing, Self::Main];
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum ModuleGapState {
+        None,
+        Present,
+    }
+
+    impl ModuleGapState {
+        const ALL: [Self; 2] = [Self::None, Self::Present];
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum CompilerHintAxis {
+        None,
+        DeadCode,
+        UnresolvedImport,
+        MissingSymbol,
+        DuplicateDefinition,
+        TraitBound,
+    }
+
+    impl CompilerHintAxis {
+        const ALL: [Self; 6] = [
+            Self::None,
+            Self::DeadCode,
+            Self::UnresolvedImport,
+            Self::MissingSymbol,
+            Self::DuplicateDefinition,
+            Self::TraitBound,
+        ];
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum FirstBatchCategory {
+        Bootstrap,
+        CargoInit,
+        EntrypointEdit,
+        ModuleEdit,
+        DeadCodeEdit,
+        HintTargetEdit,
+        WrongEdit,
+        CargoCheckOnly,
+    }
+
+    impl FirstBatchCategory {
+        const ALL: [Self; 8] = [
+            Self::Bootstrap,
+            Self::CargoInit,
+            Self::EntrypointEdit,
+            Self::ModuleEdit,
+            Self::DeadCodeEdit,
+            Self::HintTargetEdit,
+            Self::WrongEdit,
+            Self::CargoCheckOnly,
+        ];
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct JudgmentState {
+        path: PathState,
+        cargo: CargoState,
+        entrypoint: EntrypointState,
+        module_gap: ModuleGapState,
+        hint: CompilerHintAxis,
+        batch: FirstBatchCategory,
+    }
+
+    fn valid_judgment_state(state: JudgmentState) -> bool {
+        if state.path == PathState::Missing {
+            return state.cargo == CargoState::Missing
+                && state.entrypoint == EntrypointState::Missing
+                && state.module_gap == ModuleGapState::None
+                && state.hint == CompilerHintAxis::None;
+        }
+        if state.cargo == CargoState::Missing {
+            return state.entrypoint == EntrypointState::Missing
+                && state.module_gap == ModuleGapState::None
+                && state.hint == CompilerHintAxis::None;
+        }
+        if state.entrypoint == EntrypointState::Missing {
+            return state.module_gap == ModuleGapState::None && state.hint == CompilerHintAxis::None;
+        }
+        true
+    }
+
+    fn semantic_summary_for_state(state: JudgmentState) -> SemanticStateSummary {
+        let mut summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some("/tmp/example".into()),
+            path_exists: state.path == PathState::Present,
+            cargo_project: state.cargo == CargoState::Present,
+            entrypoint_kind: Some(match state.entrypoint {
+                EntrypointState::Missing => "none",
+                EntrypointState::Main => "bin",
+            }
+            .to_string()),
+            source_files: vec!["src/main.rs".into(), "src/lib.rs".into()],
+            ..SemanticStateSummary::default()
+        };
+        if state.module_gap == ModuleGapState::Present {
+            summary.module_gaps = vec!["index -> src/index.rs".into()];
+        }
+        summary.compiler_hints = match state.hint {
+            CompilerHintAxis::None => Vec::new(),
+            CompilerHintAxis::DeadCode => vec![CompilerHintRecord::new(
+                CompilerHintKind::DeadCodeForbidConflict,
+                "dead_code conflict",
+                "remove allow(dead_code)",
+                vec!["src/lib.rs".into()],
+            )],
+            CompilerHintAxis::UnresolvedImport => vec![CompilerHintRecord::new(
+                CompilerHintKind::UnresolvedImport,
+                "unresolved import",
+                "fix import",
+                vec!["src/lib.rs".into()],
+            )],
+            CompilerHintAxis::MissingSymbol => vec![CompilerHintRecord::new(
+                CompilerHintKind::MissingSymbol,
+                "missing symbol",
+                "define or import symbol",
+                vec!["src/main.rs".into()],
+            )],
+            CompilerHintAxis::DuplicateDefinition => vec![CompilerHintRecord::new(
+                CompilerHintKind::DuplicateDefinition,
+                "duplicate definition",
+                "remove duplicate",
+                vec!["src/lib.rs".into()],
+            )],
+            CompilerHintAxis::TraitBound => vec![CompilerHintRecord::new(
+                CompilerHintKind::TraitBoundFailure,
+                "trait bound failure",
+                "fix trait bound",
+                vec!["src/lib.rs".into()],
+            )],
+        };
+        summary
+    }
+
+    fn preconditions_for_state(state: JudgmentState) -> Vec<PlanningPrecondition> {
+        let mut out = Vec::new();
+        if state.path == PathState::Missing {
+            out.push(PlanningPrecondition::MustBootstrapWorkspace);
+            return out;
+        }
+        if state.cargo == CargoState::Missing {
+            out.push(PlanningPrecondition::MustInitCargoProject);
+            return out;
+        }
+        if state.entrypoint == EntrypointState::Missing {
+            out.push(PlanningPrecondition::MustCreateEntrypoint);
+            return out;
+        }
+        if state.module_gap == ModuleGapState::Present {
+            out.push(PlanningPrecondition::MustCreateMissingModules);
+        }
+        match state.hint {
+            CompilerHintAxis::None => {}
+            CompilerHintAxis::DeadCode => {
+                out.push(PlanningPrecondition::MustFixDeadCodeForbidConflict)
+            }
+            CompilerHintAxis::UnresolvedImport => {
+                out.push(PlanningPrecondition::MustFixUnresolvedImport)
+            }
+            CompilerHintAxis::MissingSymbol => {
+                out.push(PlanningPrecondition::MustDefineMissingSymbol)
+            }
+            CompilerHintAxis::DuplicateDefinition => {
+                out.push(PlanningPrecondition::MustResolveDuplicateDefinition)
+            }
+            CompilerHintAxis::TraitBound => {
+                out.push(PlanningPrecondition::MustFixTraitBoundFailure)
+            }
+        }
+        out
+    }
+
+    fn actions_for_category(state: JudgmentState) -> Vec<canon_event::LoopPlanned> {
+        let category = state.batch;
+        match category {
+            FirstBatchCategory::Bootstrap => vec![canon_event::LoopPlanned {
+                tick: 0,
+                action_kind: "run_command".to_string(),
+                action_payload: serde_json::json!({"cmd":"cargo new example","cwd":"/tmp"}),
+                reason: String::new(),
+                llm_request_id: None,
+                trace_id: None,
+                execution_id: None,
+                span_id: None,
+                parent_span_id: None,
+                plan_id: None,
+                plan_step_id: None,
+                action_id: None,
+                signals: None,
+                depends_on: Vec::new(),
+            }],
+            FirstBatchCategory::CargoInit => vec![canon_event::LoopPlanned {
+                tick: 0,
+                action_kind: "run_command".to_string(),
+                action_payload: serde_json::json!({"cmd":"cargo init","cwd":"/tmp/example"}),
+                reason: String::new(),
+                llm_request_id: None,
+                trace_id: None,
+                execution_id: None,
+                span_id: None,
+                parent_span_id: None,
+                plan_id: None,
+                plan_step_id: None,
+                action_id: None,
+                signals: None,
+                depends_on: Vec::new(),
+            }],
+            FirstBatchCategory::EntrypointEdit => vec![planned_apply_patch("src/main.rs")],
+            FirstBatchCategory::ModuleEdit => vec![planned_apply_patch("src/index.rs")],
+            FirstBatchCategory::DeadCodeEdit => vec![canon_event::LoopPlanned {
+                tick: 0,
+                action_kind: "apply_patch".to_string(),
+                action_payload: serde_json::json!({
+                    "patch": "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-#![allow(dead_code)]\n+#![allow(dead_code)]\n*** End Patch\n"
+                }),
+                reason: String::new(),
+                llm_request_id: None,
+                trace_id: None,
+                execution_id: None,
+                span_id: None,
+                parent_span_id: None,
+                plan_id: None,
+                plan_step_id: None,
+                action_id: None,
+                signals: None,
+                depends_on: Vec::new(),
+            }],
+            FirstBatchCategory::HintTargetEdit => vec![planned_apply_patch(match state.hint {
+                CompilerHintAxis::MissingSymbol => "src/main.rs",
+                _ => "src/lib.rs",
+            })],
+            FirstBatchCategory::WrongEdit => vec![planned_apply_patch("src/other.rs")],
+            FirstBatchCategory::CargoCheckOnly => vec![canon_event::LoopPlanned {
+                tick: 0,
+                action_kind: "run_command".to_string(),
+                action_payload: serde_json::json!({"cmd":"cargo check","cwd":"/tmp/example"}),
+                reason: String::new(),
+                llm_request_id: None,
+                trace_id: None,
+                execution_id: None,
+                span_id: None,
+                parent_span_id: None,
+                plan_id: None,
+                plan_step_id: None,
+                action_id: None,
+                signals: None,
+                depends_on: Vec::new(),
+            }],
+        }
+    }
+
+    fn expected_batch_matches_highest_intent(state: JudgmentState) -> bool {
+        let highest = preconditions_for_state(state).into_iter().next();
+        match highest {
+            Some(PlanningPrecondition::MustBootstrapWorkspace) => {
+                state.batch == FirstBatchCategory::Bootstrap
+            }
+            Some(PlanningPrecondition::MustInitCargoProject) => {
+                state.batch == FirstBatchCategory::CargoInit
+            }
+            Some(PlanningPrecondition::MustCreateEntrypoint) => {
+                state.batch == FirstBatchCategory::EntrypointEdit
+            }
+            Some(PlanningPrecondition::MustCreateMissingModules) => {
+                state.batch == FirstBatchCategory::ModuleEdit
+            }
+            Some(PlanningPrecondition::MustFixDeadCodeForbidConflict) => {
+                state.batch == FirstBatchCategory::DeadCodeEdit
+            }
+            Some(PlanningPrecondition::MustFixUnresolvedImport) => {
+                state.batch == FirstBatchCategory::HintTargetEdit
+            }
+            Some(PlanningPrecondition::MustDefineMissingSymbol) => {
+                state.batch == FirstBatchCategory::HintTargetEdit
+            }
+            Some(PlanningPrecondition::MustResolveDuplicateDefinition) => {
+                state.batch == FirstBatchCategory::HintTargetEdit
+            }
+            Some(PlanningPrecondition::MustFixTraitBoundFailure) => {
+                state.batch == FirstBatchCategory::HintTargetEdit
+            }
+            None => true,
+        }
+    }
+
+    #[test]
+    fn judgment_state_space_is_exhaustively_validated() {
+        let mut total = 0usize;
+        let mut valid = 0usize;
+        for path in PathState::ALL {
+            for cargo in CargoState::ALL {
+                for entrypoint in EntrypointState::ALL {
+                    for module_gap in ModuleGapState::ALL {
+                        for hint in CompilerHintAxis::ALL {
+                            for batch in FirstBatchCategory::ALL {
+                                total += 1;
+                                let state = JudgmentState {
+                                    path,
+                                    cargo,
+                                    entrypoint,
+                                    module_gap,
+                                    hint,
+                                    batch,
+                                };
+                                if !valid_judgment_state(state) {
+                                    continue;
+                                }
+                                valid += 1;
+                                let summary = semantic_summary_for_state(state);
+                                let preconditions = preconditions_for_state(state);
+                                let actions = actions_for_category(state);
+                                let result = validate_preconditions(
+                                    &actions,
+                                    Path::new("/tmp/example"),
+                                    &preconditions,
+                                    &summary,
+                                );
+                                if expected_batch_matches_highest_intent(state) {
+                                    assert!(
+                                        result.is_ok(),
+                                        "expected ok for state {state:?}, got {result:?}"
+                                    );
+                                } else {
+                                    assert!(
+                                        result.is_err(),
+                                        "expected err for state {state:?}, got {result:?}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(valid > 0);
+        assert!(total > valid);
+    }
 }
