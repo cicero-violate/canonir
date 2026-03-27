@@ -348,11 +348,9 @@ impl EventConsumer for RouteExecutor {
         if successor_eval.clear_awaiting_control_successor {
             self.awaiting_control_successor = None;
         }
-        // Always accumulate state.
         self.ctx.update_from_event(event, &self.workspace);
         self.record_control_state(event, &trigger_id);
 
-        // Check if the batch just settled — emit the event and trigger routing.
         if let Some((result_count, any_failed)) = self.ctx.batch_settled.take() {
             if let Some(emitter) = self.emitter.as_ref() {
                 emitter.emit_with_parents(canon_event::RuntimeEvent::ToolBatchSettled(ToolBatchSettled {

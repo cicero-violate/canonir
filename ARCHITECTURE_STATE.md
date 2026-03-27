@@ -167,9 +167,9 @@ It covers:
 
 This is family coverage, not exhaustive full-state cross-product coverage.
 
-## What Is Still Operational
+## Operational Boundary
 
-The remaining executor logic is mostly operational, not policy-bearing:
+The remaining executor logic is operational, not policy-bearing:
 
 - event/context accumulation
 - scheduler and dependency tracker mutation
@@ -177,7 +177,10 @@ The remaining executor logic is mostly operational, not policy-bearing:
 - stage execution plumbing
 - event emission mechanics
 
-This is the intended steady-state boundary.
+The branch audit is complete at this boundary:
+
+- route and loop policy decide transition, suppression, recovery, and successor-consumption behavior
+- executors coordinate stage execution and emit the chosen events
 
 ## What Is Not Fully Closed Yet
 

@@ -291,7 +291,6 @@ impl EventConsumer for LoopStageExecutor {
                 }
             }
         }
-        // State accumulation (mutations that do not emit).
         let mut trigger_observe = false;
         let force_observe_recovery = recovery_eval
             .as_ref()
@@ -307,8 +306,6 @@ impl EventConsumer for LoopStageExecutor {
                 }
             }
             RuntimeEvent::Tick(Tick { tick, .. }) => {
-                // Tick is kept for cursor-save bookkeeping but no longer drives observation
-                // or timeout checks — the system is purely event-driven.
                 self.ctx.current_tick = *tick;
             }
             RuntimeEvent::AgentRegistered(AgentRegistered { payload }) => {
@@ -345,18 +342,13 @@ impl EventConsumer for LoopStageExecutor {
                             self.ctx.file_write_tracker.release(&p);
                         }
                     }
-                    // Mark workspace dirty for mutating actions.
                     if !READ_ONLY_ACTIONS.contains(&a.action_kind.as_str()) {
                         self.ctx.dirty_tracker.mark_dirty("orchestrator", Some(&action_id));
                     }
-                    // Release dependency waits — by UUID action_id first, then by
-                    // action_kind name so LLM-generated depends_on strings like
-                    // ["read_file", "apply_patch"] resolve correctly.
                     for task in self.ctx.dep_tracker.complete(&action_id) {
                         self.ctx.scheduler.push(task);
                     }
                 }
-                // Also signal by action_kind (LLM uses human-readable names in depends_on).
                 for task in self.ctx.dep_tracker.complete(&a.action_kind) {
                     self.ctx.scheduler.push(task);
                 }
@@ -468,8 +460,6 @@ impl EventConsumer for LoopStageExecutor {
                     .recovery_rules
                     .contains(&LoopRecoveryRule::ClearPlannerSuppressionOnInvalidPlan)
                 {
-                    // Invalid plan is recoverable: clear planner suppression cursors so the
-                    // same observed state/tick can immediately re-enter planning.
                     self.ctx.last_planned_observed_tick = None;
                     self.ctx.last_handled_observed_hash = None;
                     self.ctx.last_emitted_plan_hash = None;
@@ -584,7 +574,6 @@ impl EventConsumer for LoopStageExecutor {
         }
         self.record_control_state(event, &trigger_id);
 
-        // Emit LoopObserved when state changes (event-driven, not tick-driven).
         let suppress_observe_on_invariant =
             matches!(event, RuntimeEvent::ErrorOccurred(err) if err.kind == "invariant_violation")
                 || matches!(event, RuntimeEvent::Code(code) if matches!(code.delta.event, canon_event::RustcEvent::InvariantViolation(_)));
@@ -646,27 +635,18 @@ impl EventConsumer for LoopStageExecutor {
             return EventOutcome::NoOp("loop_stage_not_stage_event");
         };
         let res = stage.execute(&mut self.ctx, trigger_id.clone());
-        let Some(emitter) = self.ctx.emitter.clone() else {
+        if self.ctx.emitter.is_none() {
             return EventOutcome::NoOp("loop_stage_no_emitter");
-        };
+        }
         match res {
-            Ok(LoopStageResult::Emit(e)) => {
-                emitter.emit_with_parents(e, vec![trigger_id.clone()], file!(), line!());
-            }
-            Ok(LoopStageResult::EmitMany(evs)) => {
-                evs.into_iter().for_each(|e| {
-                    emitter.emit_with_parents(e, vec![trigger_id.clone()], file!(), line!());
-                });
-            }
-            Ok(LoopStageResult::Deferred) | Ok(LoopStageResult::Noop) => {}
-            Err(err) => emitter.emit_child(RuntimeEvent::ErrorOccurred(canon_event::new_error_occurred(
+            Ok(result) => self.emit_stage_result(&trigger_id, result),
+            Err(err) => self.emit_error(
+                &trigger_id,
                 "loop_stage_execution",
-                "loop_stage_executor",
                 err.to_string(),
                 "error",
                 serde_json::json!({ "event": format!("{:?}", event) }),
-                None,
-            )), vec![trigger_id.clone()], file!(), line!()),
+            ),
         }
         EventOutcome::NoOp("loop_stage_async")
     }
