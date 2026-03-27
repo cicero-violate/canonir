@@ -165,6 +165,15 @@ impl ProjectEditor {
             return Err(anyhow!("symbol index not initialized; use ProjectEditor::load"));
         };
         let (per_file, per_file_attr_pairs) = self.collect_symbol_replacements(&session, renames)?;
+        if !renames.is_empty() && per_file.is_empty() {
+            crate::tlog::publish_invariant_error(
+                &self.project_root,
+                "rename_symbol_apply",
+                "apply invariant: rename produced no replacements",
+                serde_json::json!({ "renames": renames }),
+            );
+            return Err(anyhow!("apply invariant: rename produced no replacements"));
+        }
         let mut touched = HashSet::new();
         for (path, mut replacements) in per_file {
             let attr_pairs = per_file_attr_pairs.get(&path).cloned().unwrap_or_default();
@@ -181,7 +190,24 @@ impl ProjectEditor {
         for (symbol_id, new_name) in renames {
             let old_ident = symbol_id.rsplit_once("::").map(|(_, s)| s).unwrap_or(symbol_id.as_str()).to_string();
             let norm = crate::edit::symbol_id::normalize_symbol_id(symbol_id);
-            let occurrences = session.spans_for(&norm).ok_or_else(|| anyhow!("symbol not found via kernel index: {symbol_id}"))?;
+            let Some(occurrences) = session.spans_for(&norm) else {
+                crate::tlog::publish_invariant_error(
+                    &self.project_root,
+                    "rename_symbol_index",
+                    &format!("collect invariant: symbol not found via kernel index: {symbol_id}"),
+                    serde_json::json!({ "symbol_id": symbol_id, "normalized": norm }),
+                );
+                return Err(anyhow!("collect invariant: symbol not found via kernel index: {symbol_id}"));
+            };
+            if occurrences.is_empty() {
+                crate::tlog::publish_invariant_error(
+                    &self.project_root,
+                    "rename_symbol_apply",
+                    &format!("apply invariant: symbol has no references to rename: {symbol_id}"),
+                    serde_json::json!({ "symbol_id": symbol_id, "new_name": new_name }),
+                );
+                return Err(anyhow!("apply invariant: symbol has no references to rename: {symbol_id}"));
+            }
             for (path, spans) in occurrences {
                 let entry = per_file.entry(path.clone()).or_default();
                 for span in spans {

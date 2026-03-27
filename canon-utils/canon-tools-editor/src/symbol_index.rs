@@ -138,6 +138,10 @@ impl SymbolIndex {
         self.symbol_kinds.get(symbol_id).map(|value| value.as_str())
     }
 
+    pub fn contains(&self, symbol_id: &str) -> bool {
+        self.symbol_kinds.contains_key(symbol_id)
+    }
+
     pub fn module_files(&self) -> &HashMap<String, PathBuf> {
         &self.module_files
     }
@@ -152,6 +156,20 @@ impl SymbolIndex {
 
     pub fn uses_crate_prefix(&self) -> bool {
         self.uses_crate_prefix
+    }
+
+    pub fn validate_invariants(&self) -> Result<()> {
+        for (symbol_id, _) in &self.symbol_catalog {
+            if !self.symbol_kinds.contains_key(symbol_id) {
+                return Err(anyhow!("index invariant: catalog symbol missing kind: {symbol_id}"));
+            }
+        }
+        for symbol_id in self.span_index.keys() {
+            if !self.symbol_kinds.contains_key(symbol_id) {
+                return Err(anyhow!("index invariant: spans reference unresolved symbol: {symbol_id}"));
+            }
+        }
+        Ok(())
     }
 }
 

@@ -17,9 +17,11 @@ use std::fs as stdfs;
 use anyhow::anyhow;
 
 use crate::symbol_index::SymbolIndex;
+use crate::tlog::publish_invariant_error;
 pub use consumer::EditConsumer;
 use edit::ProjectEditor;
 use structured::{EditOp, FieldMutation};
+use verify::verify_renames_applied;
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct RenameRunReport {
@@ -200,6 +202,16 @@ pub fn create_module_files(
 
 pub fn rename_symbol_pairs_with_session(project: &Path, session: Arc<SymbolIndex>, renames: &[(String, String)]) -> RenameRunReport {
     let mut report = RenameRunReport::default();
+    if let Err(err) = session.validate_invariants() {
+        publish_invariant_error(
+            project,
+            "rename_symbol_index",
+            &err.to_string(),
+            serde_json::json!({ "renames": renames }),
+        );
+        report.error = Some(err.to_string());
+        return report;
+    }
     let mut editor = match ProjectEditor::load_with_session(project, session) {
         Ok(editor) => editor,
         Err(err) => {
@@ -209,8 +221,46 @@ pub fn rename_symbol_pairs_with_session(project: &Path, session: Arc<SymbolIndex
     };
 
     for (old_symbol, new_symbol) in renames {
+        if !editor
+            .session
+            .as_ref()
+            .is_some_and(|index| index.contains(old_symbol))
+        {
+            let message = format!("preflight invariant: symbol not in index: {old_symbol}");
+            publish_invariant_error(
+                project,
+                "rename_symbol_preflight",
+                &message,
+                serde_json::json!({ "old_symbol": old_symbol, "new_symbol": new_symbol }),
+            );
+            report.error = Some(message);
+            return report;
+        }
+        if old_symbol != new_symbol
+            && editor
+                .session
+                .as_ref()
+                .is_some_and(|index| index.contains(new_symbol))
+        {
+            let message = format!("preflight invariant: target symbol already exists: {new_symbol}");
+            publish_invariant_error(
+                project,
+                "rename_symbol_preflight",
+                &message,
+                serde_json::json!({ "old_symbol": old_symbol, "new_symbol": new_symbol }),
+            );
+            report.error = Some(message);
+            return report;
+        }
         let Some(handle) = editor.registry.handles.get(old_symbol).cloned() else {
-            report.error = Some(format!("symbol not found in registry: {old_symbol}"));
+            let message = format!("preflight invariant: symbol not found in registry: {old_symbol}");
+            publish_invariant_error(
+                project,
+                "rename_symbol_preflight",
+                &message,
+                serde_json::json!({ "old_symbol": old_symbol, "new_symbol": new_symbol }),
+            );
+            report.error = Some(message);
             return report;
         };
         let new_ident = new_symbol.rsplit("::").next().unwrap_or(new_symbol.as_str());
@@ -237,6 +287,35 @@ pub fn rename_symbol_pairs_with_session(project: &Path, session: Arc<SymbolIndex
 
     if let Err(err) = editor.commit() {
         report.error = Some(format!("{err:?}"));
+        return report;
+    }
+
+    let verify = verify_renames_applied(
+        editor
+            .session
+            .as_ref()
+            .expect("editor session must exist for rename verification"),
+        &editor,
+        renames,
+    );
+    if verify.pairs_checked != renames.len() || verify.pairs_changed != renames.len() {
+        let message = format!(
+            "post invariant: rename verification mismatch checked={} changed={} expected={}",
+            verify.pairs_checked,
+            verify.pairs_changed,
+            renames.len()
+        );
+        publish_invariant_error(
+            project,
+            "rename_symbol_post",
+            &message,
+            serde_json::json!({
+                "pairs_checked": verify.pairs_checked,
+                "pairs_changed": verify.pairs_changed,
+                "expected": renames.len(),
+            }),
+        );
+        report.error = Some(message);
     }
 
     report
