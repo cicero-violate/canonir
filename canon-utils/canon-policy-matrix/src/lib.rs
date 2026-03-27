@@ -2217,7 +2217,7 @@ pub fn reward_semantics_rows() -> Vec<RewardSemanticsRow> {
                 false,
             )],
             expected: RewardSemantics {
-                reward: -1.6,
+                reward: -1.4,
                 resets_stagnation: false,
             },
         },
