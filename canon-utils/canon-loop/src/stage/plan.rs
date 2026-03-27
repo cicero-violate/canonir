@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::{
     context::{LoopContext, PendingPlan},
     planning_preconditions,
-    policy::{planner_hint_lines, retry_policy_for_invalid_plan, RetryPolicy},
+    policy::{planner_hint_lines, retry_policy_for_planning_context, RetryPolicy},
     result::LoopStageResult,
 };
 
@@ -253,7 +253,11 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     if out.is_empty() {
         return Ok(LoopStageResult::Noop);
     }
-    let retry_policy = retry_policy_for_invalid_plan(ctx.last_invalid_plan_reason.as_deref(), ctx.consecutive_invalid_plan_batches);
+    let retry_policy = retry_policy_for_planning_context(
+        ctx.last_invalid_plan_reason.as_deref(),
+        ctx.consecutive_invalid_plan_batches,
+        &ctx.recent_execution_results,
+    );
     let semantic_summary = match planning_semantic_summary(ctx.last_observed.as_ref()) {
         Ok(summary) => summary,
         Err(message) => {
@@ -880,7 +884,11 @@ fn build_context_delta(
 
     let invalid_plan_section = match last_invalid_plan_reason {
         Some(reason) => {
-            let policy = retry_policy_for_invalid_plan(Some(reason), consecutive_invalid_plan_batches);
+            let policy = retry_policy_for_planning_context(
+                Some(reason),
+                consecutive_invalid_plan_batches,
+                &llm_semantic_context.recent_execution_results,
+            );
             let policy_text = match policy {
                 RetryPolicy::DiscoveryOnly =>
                     "Retry policy: discovery-only. Emit ONLY list_dir/read_file on the next batch.",
@@ -892,7 +900,21 @@ fn build_context_delta(
             };
             format!("{}\n{policy_text}", llm_semantic_context.render_planner_delta_block())
         }
-        None => llm_semantic_context.render_planner_delta_block(),
+        None => {
+            let policy = retry_policy_for_planning_context(
+                None,
+                consecutive_invalid_plan_batches,
+                &llm_semantic_context.recent_execution_results,
+            );
+            if policy == RetryPolicy::CorrectiveRetry {
+                format!(
+                    "{}\nRetry policy: corrective retry. Recent execution made no semantic progress; change the repair strategy before retrying.",
+                    llm_semantic_context.render_planner_delta_block()
+                )
+            } else {
+                llm_semantic_context.render_planner_delta_block()
+            }
+        }
     };
 
     let planner_hint = build_planner_hint(
@@ -900,6 +922,7 @@ fn build_context_delta(
         batch_tool_results,
         last_invalid_plan_reason,
         consecutive_invalid_plan_batches,
+        &llm_semantic_context.recent_execution_results,
     );
 
     format!(
@@ -987,6 +1010,7 @@ fn build_planner_hint(
     batch_tool_results: &[ToolResult],
     last_invalid_plan_reason: Option<&str>,
     consecutive_invalid_plan_batches: u32,
+    recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
 ) -> String {
     let last_failure = batch_acted
         .iter()
@@ -1013,6 +1037,7 @@ fn build_planner_hint(
     let hint_lines = planner_hint_lines(
         last_invalid_plan_reason,
         consecutive_invalid_plan_batches,
+        recent_execution_results,
         last_failure.as_ref().map(|(kind, _)| kind.as_str()),
         last_failure
             .as_ref()

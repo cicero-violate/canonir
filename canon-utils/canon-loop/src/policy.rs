@@ -435,9 +435,26 @@ pub fn retry_policy_for_invalid_plan(reason: Option<&str>, consecutive_invalid_p
     }
 }
 
+pub fn retry_policy_for_planning_context(
+    reason: Option<&str>,
+    consecutive_invalid_plan_batches: u32,
+    recent_execution_results: &[SemanticExecutionResultRecord],
+) -> RetryPolicy {
+    let base = retry_policy_for_invalid_plan(reason, consecutive_invalid_plan_batches);
+    if base != RetryPolicy::None {
+        return base;
+    }
+    if latest_no_semantic_progress(recent_execution_results) {
+        RetryPolicy::CorrectiveRetry
+    } else {
+        RetryPolicy::None
+    }
+}
+
 pub fn planner_hint_lines(
     reason: Option<&str>,
     consecutive_invalid_plan_batches: u32,
+    recent_execution_results: &[SemanticExecutionResultRecord],
     last_failed_action_kind: Option<&str>,
     last_failed_text: Option<&str>,
 ) -> Vec<String> {
@@ -445,7 +462,7 @@ pub fn planner_hint_lines(
     if let Some(reason) = reason {
         out.push(format!("Previous invalid-plan reason: {reason}"));
     }
-    match retry_policy_for_invalid_plan(reason, consecutive_invalid_plan_batches) {
+    match retry_policy_for_planning_context(reason, consecutive_invalid_plan_batches, recent_execution_results) {
         RetryPolicy::None => {}
         RetryPolicy::DiscoveryOnly => out.push(
             "Programmatic tip: next batch must be discovery-only; emit only list_dir/read_file.".to_string(),
@@ -457,6 +474,12 @@ pub fn planner_hint_lines(
             "Programmatic tip: fix the previous invalid payload directly; do not default to discovery unless file contents are missing.".to_string(),
         ),
     }
+    if latest_no_semantic_progress(recent_execution_results) {
+        out.push(
+            "Programmatic tip: the last executed batch produced no semantic progress; change the repair strategy instead of retrying the same edit."
+                .to_string(),
+        );
+    }
     if let (Some(kind), Some(text)) = (last_failed_action_kind, last_failed_text) {
         let text = text.trim().replace('\n', " ");
         let text = if text.len() > 240 { format!("{}...", &text[..240]) } else { text };
@@ -465,6 +488,14 @@ pub fn planner_hint_lines(
         }
     }
     out
+}
+
+fn latest_no_semantic_progress(recent_execution_results: &[SemanticExecutionResultRecord]) -> bool {
+    recent_execution_results
+        .iter()
+        .rev()
+        .next()
+        .is_some_and(|result| !result.semantic_progress)
 }
 
 fn is_bootstrap_command_output(stdout: &str, stderr: &str) -> bool {
@@ -532,12 +563,29 @@ mod tests {
         let hints = planner_hint_lines(
             Some("invalid hunk at line 12"),
             2,
+            &[],
             Some("apply_patch"),
             Some("invalid hunk at line 12, unexpected line in update chunk"),
         );
         let text = hints.join("\n");
         assert!(text.contains("exactly one apply_patch"));
         assert!(text.contains("unexpected line in update chunk"));
+    }
+
+    #[test]
+    fn no_semantic_progress_forces_corrective_retry_context() {
+        let results = vec![SemanticExecutionResultRecord::new(
+            "no_semantic_progress",
+            "action failed",
+            Vec::new(),
+            false,
+        )];
+        assert_eq!(
+            retry_policy_for_planning_context(None, 0, &results),
+            RetryPolicy::CorrectiveRetry
+        );
+        let hints = planner_hint_lines(None, 0, &results, None, None).join("\n");
+        assert!(hints.contains("no semantic progress"));
     }
 
     #[test]
@@ -608,3 +656,4 @@ mod tests {
         }
     }
 }
+use canon_semantic_state::SemanticExecutionResultRecord;
