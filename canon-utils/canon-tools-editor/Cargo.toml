@@ -26,6 +26,7 @@ canon_event = { package = "canon-runtime-events", path = "../canon-runtime-event
 canon-meta = { path = "../canon-meta" }
 canon-exec = { path = "../canon-exec" }
 canon-proc-macros = { path = "../canon-proc-macros" }
+canon_analysis = { package = "canon-tools-analysis", path = "../canon-tools-analysis" }
 
 [dev-dependencies]
 tempfile.workspace = true

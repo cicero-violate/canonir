@@ -49,6 +49,30 @@ pub fn rename_symbol_pairs(project: &Path, renames: &[(String, String)]) -> Rena
     rename_symbol_pairs_with_session(project, session, renames)
 }
 
+pub fn rename_symbol_pairs_from_graph_candidates(
+    project: &Path,
+    candidates: &[canon_analysis::GraphRenameCandidate],
+) -> RenameRunReport {
+    let renames: Vec<(String, String)> = candidates
+        .iter()
+        .map(|candidate| (candidate.symbol_path.clone(), candidate.suggested_path.clone()))
+        .collect();
+    rename_symbol_pairs(project, &renames)
+}
+
+pub fn rename_duplicate_symbols_from_latest_graph(
+    project: &Path,
+    limit: usize,
+) -> RenameRunReport {
+    match canon_analysis::graph_backed_rename_candidates(project, limit) {
+        Ok(candidates) => rename_symbol_pairs_from_graph_candidates(project, &candidates),
+        Err(err) => RenameRunReport {
+            error: Some(format!("{err:?}")),
+            ..RenameRunReport::default()
+        },
+    }
+}
+
 pub fn rename_symbol_pairs_with_session(project: &Path, session: Arc<SymbolIndex>, renames: &[(String, String)]) -> RenameRunReport {
     let mut report = RenameRunReport::default();
     let mut editor = match ProjectEditor::load_with_session(project, session) {

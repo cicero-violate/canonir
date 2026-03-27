@@ -409,7 +409,15 @@ pub fn validate_development_strategy_alignment(
                 );
             }
         }
-        DevelopmentStrategyKind::PlanSymbolAwareRename => {}
+        DevelopmentStrategyKind::PlanSymbolAwareRename => {
+            let has_rename = actions.iter().any(|action| action.action_kind == "edit.rename_symbol");
+            if !has_rename {
+                return Err(
+                    "active development strategy requires a semantic rename action driven by graph-backed symbol context"
+                        .to_string(),
+                );
+            }
+        }
         DevelopmentStrategyKind::ApplyTargetedCompilerRepair
         | DevelopmentStrategyKind::RealignObjectiveFlow
         | DevelopmentStrategyKind::RestructureModules => {}
@@ -649,6 +657,19 @@ fn classify_action_intents(
                 out.push(ActionIntent::ValidateCargoCheck);
             }
         }
+    }
+
+    if action.action_kind == "edit.rename_symbol" {
+        if let Some(path) = action
+            .action_payload
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+        {
+            let normalized = if path.is_absolute() { path } else { target_root.join(path) };
+            out.push(ActionIntent::ResolveDuplicateDefinition(normalized));
+        }
+        return;
     }
 
     let touched = normalized_touched_paths(action, target_root);

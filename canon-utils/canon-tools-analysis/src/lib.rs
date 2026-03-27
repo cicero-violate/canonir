@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod capabilities;
+pub mod graph_artifacts;
 pub mod query;
 pub use query::{query_file, query_file_single, QueryConsumer, QueryError, QueryOptions, TlogQueryResult};
 // supervisor trigger: no-op change
@@ -15,6 +16,12 @@ pub mod semantics;
 pub mod workspace;
 
 pub use invariants::invariant_validator::run_invariant_pipeline;
+pub use graph_artifacts::{
+    duplicate_definition_rename_candidates, graph_backed_module_hotspots,
+    graph_backed_rename_candidates, latest_graph_artifact_path, load_graph_artifact,
+    load_latest_workspace_graph_artifact, module_cohesion_hotspots, GraphArtifactIndex,
+    GraphArtifactSummary, GraphRenameCandidate, ModuleCohesionHotspot,
+};
 pub use panic_types::PanicRecord;
 pub use repair::error_surface::{augment_with_errors, write_repair_surface};
 pub use report_pipeline::{generate_reports, generate_reports_for_crate, generate_reports_from_tlog};

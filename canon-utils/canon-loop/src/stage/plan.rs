@@ -387,7 +387,7 @@ fn validate_action_batch(
     let has_execution = actions.iter().any(|a| {
         matches!(
             a.action_kind.as_str(),
-            "patch_file" | "apply_patch" | "write_file" | "run_command" | "done"
+            "patch_file" | "apply_patch" | "write_file" | "run_command" | "done" | "edit.rename_symbol"
         )
     });
     if retry_policy == RetryPolicy::DiscoveryOnly && has_execution {
@@ -430,6 +430,22 @@ fn validate_action_batch(
                         if cwd.is_empty() { "<empty>" } else { cwd }
                     ));
                 }
+            }
+            "edit.rename_symbol" => {
+                let Some(old) = action.action_payload.get("old").and_then(|v| v.as_str()) else {
+                    return Err("edit.rename_symbol missing old payload".to_string());
+                };
+                let Some(new) = action.action_payload.get("new").and_then(|v| v.as_str()) else {
+                    return Err("edit.rename_symbol missing new payload".to_string());
+                };
+                let Some(path) = action.action_payload.get("path").and_then(|v| v.as_str()) else {
+                    return Err("edit.rename_symbol missing path payload".to_string());
+                };
+                if old.trim().is_empty() || new.trim().is_empty() {
+                    return Err("edit.rename_symbol requires non-empty old and new symbol paths".to_string());
+                }
+                validate_workspace_relative_path(path, &target_root)
+                    .map_err(|e| format!("edit.rename_symbol path is invalid: {e}"))?;
             }
             "read_file" | "list_dir" | "write_file" | "patch_file" => {
                 let Some(path) = action.action_payload.get("path").and_then(|v| v.as_str()) else {
@@ -796,7 +812,7 @@ const PLANNER_SYSTEM_INSTRUCTIONS: &str = r#"You are a code-editing agent. Produ
    {"action":"read_file","path":"src/main.rs"}
    ⚠ Results appear in "Recent actions" on your NEXT call. Do not mix with edits.
 
-3. apply_patch — create, update, or delete files  ← ONLY tool for file edits
+3. apply_patch — create, update, or delete files
    {"action":"apply_patch","patch":"*** Begin Patch\n...\n*** End Patch"}
 
    Patch format (paths MUST be relative to TARGET WORKSPACE):
@@ -821,11 +837,15 @@ const PLANNER_SYSTEM_INSTRUCTIONS: &str = r#"You are a code-editing agent. Produ
    - NEVER use absolute paths inside the patch string
    - NEVER prefix paths with the project directory name (use `src/main.rs`, NOT `myproject/src/main.rs`)
 
-4. run_command — run a shell command
+4. edit.rename_symbol — perform a semantic rename via the editor stack when graph-backed strategy calls for it
+   {"action":"edit.rename_symbol","old":"crate::module::OldName","new":"crate::module::NewName","path":"src/module.rs"}
+   Use this for duplicate-definition / rename flows when you have graph-backed symbol context.
+
+5. run_command — run a shell command
    {"action":"run_command","cmd":"cargo build","cwd":"<TARGET_WORKSPACE>"}
    cwd must be absolute. Use TARGET WORKSPACE (provided in context) or a subdir.
 
-5. done — declare goal complete
+6. done — declare goal complete
    {"action":"done","reason":"..."}
 
 ━━━ WORKFLOW ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -836,6 +856,7 @@ Step 1 — Discover (only when unsure of project state or missing file contents)
 
 Step 2 — Create/Edit (after seeing discovery results):
   Use apply_patch (*** Add File for new, *** Update File for existing).
+  Use edit.rename_symbol for semantic duplicate-resolution renames when graph context supports it.
   Use run_command for cargo/shell operations.
   The "done" action must be the ONLY action in a batch, and only after verification has shown the goal is met.
 

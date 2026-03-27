@@ -1306,6 +1306,16 @@ pub fn classify_planned_action_intents(
                 out.push(SemanticActionIntent::ValidateCargoCheck);
             }
         }
+        "edit.rename_symbol" => {
+            if let Some(path) = action_payload
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from)
+                .map(|path| normalize_path(&path, target_root))
+            {
+                out.push(SemanticActionIntent::ResolveDuplicateDefinition(path));
+            }
+        }
         "apply_patch" => {
             let patch = action_payload.get("patch").and_then(|v| v.as_str()).unwrap_or("");
             if let Ok(args) = canon_tools_patch::parse_patch(patch) {
