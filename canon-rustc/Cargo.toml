@@ -22,5 +22,6 @@ canon-ir = { path = "../canon-ir" }
 algorithms = { path = "../algorithms" }
 rustc-hash = "1"
 toml = "0.8"
+sha2 = "0.10"
 canon_event = { package = "canon-runtime-events", path = "../canon-utils/canon-runtime-events" }
 canon_types = { path = "../canon-utils/canon-types" }

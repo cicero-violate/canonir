@@ -1,6 +1,6 @@
+use crate::artifacts::{emit_graph_artifact_summary, write_graph_artifact, CaptureMode};
 use crate::runtime::flags::{
-    find_flag_value, find_flag_values, graph_output_dir, is_cargo_registry_path,
-    workspace_root_from_output_dir,
+    find_flag_value, find_flag_values, is_cargo_registry_path, workspace_root_from_output_dir,
 };
 use crate::runtime::crate_runtime::should_capture_crate;
 use crate::log::{append_rustc_log, emit_ir_tlog, install_panic_hook, set_panic_log_root, TlogWriter};
@@ -15,17 +15,21 @@ pub struct RustcCaptureCallbacks {
     output_dir: PathBuf,
     crate_name: Option<String>,
     crate_types: Vec<String>,
+    capture_mode: CaptureMode,
 }
 
 impl RustcCaptureCallbacks {
     pub fn new(argv: &[String]) -> Self {
         let crate_name = find_flag_value(argv, "--crate-name");
         let crate_types = find_flag_values(argv, "--crate-type");
-        let output_dir = graph_output_dir(argv);
+        let output_dir = find_flag_value(argv, "--out-dir")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         Self {
             output_dir,
             crate_name,
             crate_types,
+            capture_mode: CaptureMode::current(),
         }
     }
 }
@@ -69,7 +73,12 @@ impl Callbacks for RustcCaptureCallbacks {
                         spans_by_symbol: collect_symbol_spans(tcx),
                         kinds: std::collections::HashMap::new(),
                     });
-                    if let Err(err) = emit_ir_tlog(&ir, &tlog_path, crate_name, Some(&bundle)) {
+                    if let Ok(summary) = write_graph_artifact(&workspace_root, crate_name, &ir, Some(&bundle)) {
+                        let _ = emit_graph_artifact_summary(&tlog_path, &summary);
+                    }
+                    if self.capture_mode.emits_structural_events()
+                        && let Err(err) = emit_ir_tlog(&ir, &tlog_path, crate_name, Some(&bundle))
+                    {
                         append_rustc_log(
                             &self.output_dir,
                             &format!("canon_kernel: tlog emit failed: {err:?}"),

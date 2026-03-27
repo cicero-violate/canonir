@@ -6,6 +6,7 @@ use canon_ir::edge::EdgeKind as CanonEdgeKind;
 use canon_ir::ir::CanonIR;
 use canon_ir::node::{CanonId, CanonNodeKind};
 use crate::types::{EdgeKind, NodeKind};
+use crate::artifacts::CaptureMode;
 use crate::capture::{SpanInfo, SymbolSpanBundle};
 use crate::event_stream::event_engine::apply_delta;
 use crate::invariants;
@@ -18,6 +19,7 @@ pub struct TlogWriter {
     next_event_id: u64,
     next_tick: u64,
     state: RustcState,
+    capture_mode: CaptureMode,
 }
 
 impl TlogWriter {
@@ -45,6 +47,7 @@ impl TlogWriter {
                 graph_version: 2,
                 ..RustcState::default()
             },
+            capture_mode: CaptureMode::current(),
         })
     }
 
@@ -55,6 +58,9 @@ impl TlogWriter {
     }
 
     pub fn write_node(&mut self, sym: &str, kind: &str, file: &str, line: u32, col: u32, lo: u32, hi: u32) -> Result<()> {
+        if !self.capture_mode.emits_structural_events() {
+            return Ok(());
+        }
         self.emit_rustc_event(RustcEvent::NodeDefined(canon_event::NodeDefined {
             symbol: sym.to_string(), kind: kind.to_string(), file: file.to_string(),
             line, col, lo, hi,
@@ -62,30 +68,45 @@ impl TlogWriter {
     }
 
     pub fn write_edge(&mut self, src: &str, dst: &str, kind: &str) -> Result<()> {
+        if !self.capture_mode.emits_structural_events() {
+            return Ok(());
+        }
         self.emit_rustc_event(RustcEvent::EdgeDefined(canon_event::EdgeDefined {
             src: src.to_string(), dst: dst.to_string(), kind: kind.to_string(), defined: true,
         }))
     }
 
     pub fn write_callsite(&mut self, kind: &str, resolved: bool) -> Result<()> {
+        if !self.capture_mode.emits_structural_events() {
+            return Ok(());
+        }
         self.emit_rustc_event(RustcEvent::CallsiteObserved(canon_event::CallsiteObserved {
             kind: kind.to_string(), resolved,
         }))
     }
 
     pub fn write_file(&mut self, path: &str) -> Result<()> {
+        if !self.capture_mode.emits_structural_events() {
+            return Ok(());
+        }
         self.emit_rustc_event(RustcEvent::FileSeen(canon_event::FileSeen {
             path: path.to_string(), seen: true,
         }))
     }
 
     pub fn write_symbol(&mut self, sym: &str, kind: &str) -> Result<()> {
+        if !self.capture_mode.emits_structural_events() {
+            return Ok(());
+        }
         self.emit_rustc_event(RustcEvent::SymbolDefined(canon_event::SymbolDefined {
             symbol: sym.to_string(), kind: kind.to_string(), defined: true,
         }))
     }
 
     pub fn write_span(&mut self, sym: &str, span: &SpanInfo) -> Result<()> {
+        if !self.capture_mode.emits_structural_events() {
+            return Ok(());
+        }
         self.emit_rustc_event(RustcEvent::SpanDefined(canon_event::SpanDefined {
             symbol: sym.to_string(), file: span.file.clone(),
             line: span.line, col: span.col, lo: span.lo, hi: span.hi,
@@ -99,12 +120,18 @@ impl TlogWriter {
     }
 
     pub fn write_node_remove(&mut self, sym: &str) -> Result<()> {
+        if !self.capture_mode.emits_structural_events() {
+            return Ok(());
+        }
         self.emit_rustc_event(RustcEvent::NodeRemoved(canon_event::NodeRemoved {
             symbol: sym.to_string(), removed: true,
         }))
     }
 
     pub fn write_edge_remove(&mut self, src: &str, dst: &str, kind: &str) -> Result<()> {
+        if !self.capture_mode.emits_structural_events() {
+            return Ok(());
+        }
         self.emit_rustc_event(RustcEvent::EdgeRemoved(canon_event::EdgeRemoved {
             src: src.to_string(), dst: dst.to_string(), kind: kind.to_string(), removed: true,
         }))
