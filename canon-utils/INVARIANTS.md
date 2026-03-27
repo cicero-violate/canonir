@@ -194,3 +194,126 @@ Now the system can:
 ]
 
 Meta-invariants turn system into **invariant generator, not invariant consumer**.
+
+### Math Model
+
+[
+I_{meta} \subseteq {\text{events},\text{state},\text{plan},\text{action},\text{verify},\text{policy}}
+]
+
+---
+
+### Variables
+
+* ( E_v ) = event stream (tlog)
+* ( S_s ) = semantic state
+* ( P_l ) = planned batch
+* ( A_c ) = action record
+* ( V_r ) = verifier result
+* ( P_o ) = policy (route + retry + reward)
+* ( G = \max(I,E,C,A,R,P,S,D,T,K,X,B,L,F) )
+
+---
+
+### Equations
+
+1. **Classification invariant**
+   [
+   E_v \Rightarrow S_s.\text{failure_class},\text{failure_scope} \neq \varnothing
+   ]
+   Attach at **event → semantic state boundary**.
+
+2. **Plan binding invariant**
+   [
+   P_l \Rightarrow (\text{failure_class},\text{scope},\text{repair_class})
+   ]
+   Attach at **planner output (LoopPlanned)**.
+
+3. **Execution contract invariant**
+   [
+   A_c \Rightarrow \exists V_r.\text{expected_verifier}
+   ]
+   Attach at **action emission (LoopActed / ToolCall)**.
+
+4. **Verification invariant**
+   [
+   V_r \Rightarrow (\text{pass/fail},\text{evidence})
+   ]
+   Attach at **verify stage outputs**.
+
+5. **Feedback invariant**
+   [
+   V_r \Rightarrow P_o(\text{update})
+   ]
+   Attach at **policy layer (route/retry/reward)**.
+
+6. **Stall invariant**
+   [
+   \text{no progress} \Rightarrow \text{policy override}
+   ]
+   Attach at **executor / loop context**.
+
+---
+
+### Mapping to Your System
+
+* **canon-semantic-state**
+
+  * holds: failure_class + failure_scope
+  * enforces: classification completeness
+
+* **canon-loop (planner + preconditions)**
+
+  * enforces: plan must cite failure
+
+* **canon-loop (executor)**
+
+  * enforces: action must declare verifier
+  * enforces: stall → override
+
+* **canon-invariant**
+
+  * centralizes all checks (shared helpers)
+
+* **canon-route / policy**
+
+  * consumes verifier results
+  * updates retry / route / reward
+
+* **event log (tlog)**
+
+  * must carry all bindings explicitly
+  * no implicit state
+
+---
+
+### English Explanation
+
+Meta-invariants go on **boundaries**, not inside random logic.
+
+Specifically:
+
+* where **information is created** → enforce completeness
+* where **decisions are made** → enforce justification
+* where **effects happen** → enforce verification
+* where **results return** → enforce learning
+
+Do not scatter them.
+
+Anchor them to:
+
+1. semantic state (truth)
+2. planner output (intent)
+3. executor (effect)
+4. verifier (reality)
+5. policy (adaptation)
+
+---
+
+### Final
+
+[
+\max(...) = C, A, L
+]
+
+Attach invariants to **state transitions**, not functions.
