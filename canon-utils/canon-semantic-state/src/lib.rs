@@ -1521,6 +1521,14 @@ pub fn latest_semantic_progress(results: &[SemanticExecutionResultRecord]) -> bo
         .is_some_and(|result| result.semantic_progress)
 }
 
+pub fn latest_graph_proof_verified(results: &[SemanticExecutionResultRecord]) -> bool {
+    results.last().is_some_and(|result| result.kind == "graph_proof_verified")
+}
+
+pub fn latest_graph_proof_failed(results: &[SemanticExecutionResultRecord]) -> bool {
+    results.last().is_some_and(|result| result.kind == "graph_proof_failed")
+}
+
 pub fn latest_no_semantic_progress(results: &[SemanticExecutionResultRecord]) -> bool {
     results
         .iter()

@@ -1,9 +1,11 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{path::Path, process::Command};
 
 use canon_editor::{
     add_import_paths, create_module_files, define_symbol_stubs, move_symbol_pairs,
     rename_symbol_pairs,
 };
+use canon_analysis::{verify_graph_expectations, GraphProofExpectation};
 use canon_event::{
     new_error_occurred, BashInvoke, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, FileEvent, FilePatch, FileWrite, LoopActed, LoopPlanned, ProcessResult, RouteSelected, RuntimeEvent, ToolCall, ToolResult,
 };
@@ -18,6 +20,14 @@ use crate::{
     merge::extract_written_paths,
     result::LoopStageResult,
 };
+
+#[derive(Clone, Debug)]
+struct GraphProofOutcome {
+    verified: bool,
+    summary: String,
+    artifact_id: Option<String>,
+    failures: Vec<String>,
+}
 
 pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     if ctx.pending_act.is_some() {
@@ -89,6 +99,174 @@ pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext, trigger_id: E
 
 fn emit_act_stall(ctx: &LoopContext, trigger_id: &EventId, reason: &str) {
     emit_act_stall_with_context(ctx, trigger_id, reason, serde_json::json!({}));
+}
+
+fn module_path_from_relative_file(path: &str, module_hint: Option<&str>) -> String {
+    if let Some(module) = module_hint {
+        if module.starts_with("crate::") {
+            return module.to_string();
+        }
+        return format!("crate::{module}");
+    }
+    let path = Path::new(path);
+    let rel = path.strip_prefix("src").ok().unwrap_or(path);
+    let mut segments = rel
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    let filename = segments.pop().unwrap_or("lib.rs");
+    let mut module_segments = vec!["crate".to_string()];
+    for segment in segments {
+        if !segment.is_empty() {
+            module_segments.push(segment.to_string());
+        }
+    }
+    if let Some(stem) = filename.strip_suffix(".rs") {
+        if stem != "lib" && stem != "main" && stem != "mod" {
+            module_segments.push(stem.to_string());
+        }
+    }
+    module_segments.join("::")
+}
+
+fn semantic_graph_expectations(planned: &LoopPlanned) -> Vec<GraphProofExpectation> {
+    match planned.action_kind.as_str() {
+        "edit.rename_symbol" => {
+            let old = planned.action_payload.get("old").and_then(|v| v.as_str());
+            let new = planned.action_payload.get("new").and_then(|v| v.as_str());
+            let path = planned.action_payload.get("path").and_then(|v| v.as_str());
+            match (old, new, path) {
+                (Some(old), Some(new), Some(path)) => vec![GraphProofExpectation::Rename {
+                    old_symbol: old.to_string(),
+                    new_symbol: new.to_string(),
+                    path: path.to_string(),
+                }],
+                _ => Vec::new(),
+            }
+        }
+        "edit.move_symbol" => {
+            let symbol_id = planned.action_payload.get("symbol_id").and_then(|v| v.as_str());
+            let new_module_path = planned
+                .action_payload
+                .get("new_module_path")
+                .and_then(|v| v.as_str());
+            match (symbol_id, new_module_path) {
+                (Some(old_symbol), Some(new_module_path)) => {
+                    let name = old_symbol.rsplit("::").next().unwrap_or(old_symbol);
+                    let target_path = module_relative_file(new_module_path);
+                    vec![GraphProofExpectation::Move {
+                        old_symbol: old_symbol.to_string(),
+                        new_symbol: format!("{new_module_path}::{name}"),
+                        new_module_path: new_module_path.to_string(),
+                        path: target_path,
+                    }]
+                }
+                _ => Vec::new(),
+            }
+        }
+        "edit.add_import" => {
+            let import = planned.action_payload.get("import").and_then(|v| v.as_str());
+            let path = planned.action_payload.get("path").and_then(|v| v.as_str());
+            match (import, path) {
+                (Some(import), Some(path)) => vec![GraphProofExpectation::Import {
+                    import_path: import.to_string(),
+                    path: path.to_string(),
+                }],
+                _ => Vec::new(),
+            }
+        }
+        "edit.create_module_file" => {
+            let path = planned.action_payload.get("path").and_then(|v| v.as_str());
+            let module = planned.action_payload.get("module").and_then(|v| v.as_str());
+            match path {
+                Some(path) => vec![GraphProofExpectation::CreateModule {
+                    module_path: module_path_from_relative_file(path, module),
+                    path: path.to_string(),
+                }],
+                None => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn module_relative_file(module_path: &str) -> String {
+    let mut segments = module_path
+        .split("::")
+        .filter(|segment| !segment.is_empty() && *segment != "crate")
+        .collect::<Vec<_>>();
+    if segments.is_empty() {
+        return "src/lib.rs".to_string();
+    }
+    let leaf = segments.pop().unwrap();
+    if segments.is_empty() {
+        format!("src/{leaf}.rs")
+    } else {
+        format!("src/{}/{}.rs", segments.join("/"), leaf)
+    }
+}
+
+fn run_semantic_graph_proof(project: &Path, planned: &LoopPlanned) -> GraphProofOutcome {
+    let refresh = Command::new("cargo")
+        .arg("check")
+        .arg("--quiet")
+        .current_dir(project)
+        .env("CARGO_TARGET_DIR", project.join("target"))
+        .output();
+    let refresh = match refresh {
+        Ok(output) => output,
+        Err(err) => {
+            return GraphProofOutcome {
+                verified: false,
+                summary: format!("graph refresh failed: {err}"),
+                artifact_id: None,
+                failures: vec![format!("cargo check invocation failed: {err}")],
+            };
+        }
+    };
+    if !refresh.status.success() {
+        return GraphProofOutcome {
+            verified: false,
+            summary: "graph refresh failed after semantic action".to_string(),
+            artifact_id: None,
+            failures: vec![String::from_utf8_lossy(&refresh.stderr).trim().to_string()],
+        };
+    }
+    let expectations = semantic_graph_expectations(planned);
+    match verify_graph_expectations(project, &expectations) {
+        Ok(report) => GraphProofOutcome {
+            verified: report.verified,
+            summary: report.summary,
+            artifact_id: report.artifact_id,
+            failures: report.failures,
+        },
+        Err(err) => GraphProofOutcome {
+            verified: false,
+            summary: format!("graph proof failed to execute: {err}"),
+            artifact_id: None,
+            failures: vec![err.to_string()],
+        },
+    }
+}
+
+fn proof_debug_event(planned: &LoopPlanned, project: &Path, proof: &GraphProofOutcome) -> RuntimeEvent {
+    RuntimeEvent::Debug(canon_event::DebugEvent {
+        source: "act_stage".to_string(),
+        kind: if proof.verified {
+            "semantic_graph_proof_verified".to_string()
+        } else {
+            "semantic_graph_proof_failed".to_string()
+        },
+        payload: decision_trace_payload(
+            &proof.summary,
+            serde_json::json!({
+                "action_kind": planned.action_kind,
+                "project": project.display().to_string(),
+                "artifact_id": proof.artifact_id,
+                "failures": proof.failures,
+            }),
+        ),
+    })
 }
 
 fn emit_act_stall_with_context(
@@ -545,17 +723,36 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
             let started = Instant::now();
             let report = rename_symbol_pairs(&project, &[(old.to_string(), new.to_string())]);
             let duration_ms = started.elapsed().as_millis() as u64;
-            let success = report.error.is_none();
+            let mut success = report.error.is_none();
+            let proof = if success {
+                Some(run_semantic_graph_proof(&project, planned))
+            } else {
+                None
+            };
+            if let Some(proof) = &proof {
+                if !proof.verified {
+                    success = false;
+                }
+            }
             let stdout = if success {
                 if report.def_paths.is_empty() {
-                    format!("rename_symbol ok: {old} -> {new}")
+                    format!(
+                        "rename_symbol ok: {old} -> {new}{}",
+                        proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default()
+                    )
                 } else {
-                    format!("rename_symbol ok: {old} -> {new}\n{}", report.def_paths.join("\n"))
+                    format!(
+                        "rename_symbol ok: {old} -> {new}\n{}{}",
+                        report.def_paths.join("\n"),
+                        proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default()
+                    )
                 }
             } else {
                 String::new()
             };
-            let stderr = report.error.unwrap_or_default();
+            let stderr = report
+                .error
+                .unwrap_or_else(|| proof.as_ref().filter(|p| !p.verified).map(|p| p.failures.join("\n")).unwrap_or_default());
             ctx.mark_batch_inline_completion(planned, success);
             let tool_result = inline_tool_result(
                 "edit.rename_symbol",
@@ -595,7 +792,21 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 success,
                 None,
             );
-            Ok(LoopStageResult::EmitMany(vec![tool_result, acted]))
+            let mut events = vec![tool_result, acted];
+            if let Some(proof) = &proof {
+                events.push(proof_debug_event(planned, &project, proof));
+                if !proof.verified {
+                    events.push(RuntimeEvent::ErrorOccurred(new_error_occurred(
+                        "semantic_graph_proof_failed",
+                        "act_stage",
+                        proof.failures.join("\n"),
+                        "error",
+                        serde_json::json!({"action_kind": planned.action_kind, "artifact_id": proof.artifact_id}),
+                        None,
+                    )));
+                }
+            }
+            Ok(LoopStageResult::EmitMany(events))
         }
         "edit.move_symbol" => {
             let symbol_id = planned.action_payload.get("symbol_id").and_then(|v| v.as_str());
@@ -617,17 +828,36 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
             let started = Instant::now();
             let report = move_symbol_pairs(&project, &[(symbol_id.to_string(), new_module_path.to_string())]);
             let duration_ms = started.elapsed().as_millis() as u64;
-            let success = report.error.is_none();
+            let mut success = report.error.is_none();
+            let proof = if success {
+                Some(run_semantic_graph_proof(&project, planned))
+            } else {
+                None
+            };
+            if let Some(proof) = &proof {
+                if !proof.verified {
+                    success = false;
+                }
+            }
             let stdout = if success {
                 if report.def_paths.is_empty() {
-                    format!("move_symbol ok: {symbol_id} -> {new_module_path}")
+                    format!(
+                        "move_symbol ok: {symbol_id} -> {new_module_path}{}",
+                        proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default()
+                    )
                 } else {
-                    format!("move_symbol ok: {symbol_id} -> {new_module_path}\n{}", report.def_paths.join("\n"))
+                    format!(
+                        "move_symbol ok: {symbol_id} -> {new_module_path}\n{}{}",
+                        report.def_paths.join("\n"),
+                        proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default()
+                    )
                 }
             } else {
                 String::new()
             };
-            let stderr = report.error.unwrap_or_default();
+            let stderr = report
+                .error
+                .unwrap_or_else(|| proof.as_ref().filter(|p| !p.verified).map(|p| p.failures.join("\n")).unwrap_or_default());
             ctx.mark_batch_inline_completion(planned, success);
             let tool_result = inline_tool_result(
                 "edit.move_symbol",
@@ -667,7 +897,21 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 success,
                 None,
             );
-            Ok(LoopStageResult::EmitMany(vec![tool_result, acted]))
+            let mut events = vec![tool_result, acted];
+            if let Some(proof) = &proof {
+                events.push(proof_debug_event(planned, &project, proof));
+                if !proof.verified {
+                    events.push(RuntimeEvent::ErrorOccurred(new_error_occurred(
+                        "semantic_graph_proof_failed",
+                        "act_stage",
+                        proof.failures.join("\n"),
+                        "error",
+                        serde_json::json!({"action_kind": planned.action_kind, "artifact_id": proof.artifact_id}),
+                        None,
+                    )));
+                }
+            }
+            Ok(LoopStageResult::EmitMany(events))
         }
         "edit.add_import" => {
             let import = planned.action_payload.get("import").and_then(|v| v.as_str());
@@ -686,13 +930,28 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
             let started = Instant::now();
             let report = add_import_paths(&project, &[(path.to_string(), import.to_string())]);
             let duration_ms = started.elapsed().as_millis() as u64;
-            let success = report.error.is_none();
+            let mut success = report.error.is_none();
+            let proof = if success {
+                Some(run_semantic_graph_proof(&project, planned))
+            } else {
+                None
+            };
+            if let Some(proof) = &proof {
+                if !proof.verified {
+                    success = false;
+                }
+            }
             let stdout = if success {
-                format!("add_import ok: {import} -> {path}")
+                format!(
+                    "add_import ok: {import} -> {path}{}",
+                    proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default()
+                )
             } else {
                 String::new()
             };
-            let stderr = report.error.unwrap_or_default();
+            let stderr = report
+                .error
+                .unwrap_or_else(|| proof.as_ref().filter(|p| !p.verified).map(|p| p.failures.join("\n")).unwrap_or_default());
             ctx.mark_batch_inline_completion(planned, success);
             let tool_result = inline_tool_result(
                 "edit.add_import",
@@ -709,7 +968,21 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 success,
                 None,
             );
-            Ok(LoopStageResult::EmitMany(vec![tool_result, acted]))
+            let mut events = vec![tool_result, acted];
+            if let Some(proof) = &proof {
+                events.push(proof_debug_event(planned, &project, proof));
+                if !proof.verified {
+                    events.push(RuntimeEvent::ErrorOccurred(new_error_occurred(
+                        "semantic_graph_proof_failed",
+                        "act_stage",
+                        proof.failures.join("\n"),
+                        "error",
+                        serde_json::json!({"action_kind": planned.action_kind, "artifact_id": proof.artifact_id}),
+                        None,
+                    )));
+                }
+            }
+            Ok(LoopStageResult::EmitMany(events))
         }
         "edit.define_symbol_stub" => {
             let symbol = planned.action_payload.get("symbol").and_then(|v| v.as_str());
@@ -771,13 +1044,28 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
             let started = Instant::now();
             let report = create_module_files(&project, &[(path.to_string(), module.map(ToString::to_string))]);
             let duration_ms = started.elapsed().as_millis() as u64;
-            let success = report.error.is_none();
+            let mut success = report.error.is_none();
+            let proof = if success {
+                Some(run_semantic_graph_proof(&project, planned))
+            } else {
+                None
+            };
+            if let Some(proof) = &proof {
+                if !proof.verified {
+                    success = false;
+                }
+            }
             let stdout = if success {
-                format!("create_module_file ok: {path}")
+                format!(
+                    "create_module_file ok: {path}{}",
+                    proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default()
+                )
             } else {
                 String::new()
             };
-            let stderr = report.error.unwrap_or_default();
+            let stderr = report
+                .error
+                .unwrap_or_else(|| proof.as_ref().filter(|p| !p.verified).map(|p| p.failures.join("\n")).unwrap_or_default());
             ctx.mark_batch_inline_completion(planned, success);
             let tool_result = inline_tool_result(
                 "edit.create_module_file",
@@ -794,7 +1082,21 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 success,
                 None,
             );
-            Ok(LoopStageResult::EmitMany(vec![tool_result, acted]))
+            let mut events = vec![tool_result, acted];
+            if let Some(proof) = &proof {
+                events.push(proof_debug_event(planned, &project, proof));
+                if !proof.verified {
+                    events.push(RuntimeEvent::ErrorOccurred(new_error_occurred(
+                        "semantic_graph_proof_failed",
+                        "act_stage",
+                        proof.failures.join("\n"),
+                        "error",
+                        serde_json::json!({"action_kind": planned.action_kind, "artifact_id": proof.artifact_id}),
+                        None,
+                    )));
+                }
+            }
+            Ok(LoopStageResult::EmitMany(events))
         }
         "read_file" => {
             let path_str = planned.action_payload.get("path").and_then(|v| v.as_str());

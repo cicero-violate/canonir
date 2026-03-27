@@ -51,6 +51,37 @@ pub struct GraphModuleMoveCandidate {
     pub external_reference_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GraphProofExpectation {
+    Rename {
+        old_symbol: String,
+        new_symbol: String,
+        path: String,
+    },
+    Move {
+        old_symbol: String,
+        new_symbol: String,
+        new_module_path: String,
+        path: String,
+    },
+    Import {
+        import_path: String,
+        path: String,
+    },
+    CreateModule {
+        module_path: String,
+        path: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GraphProofReport {
+    pub verified: bool,
+    pub artifact_id: Option<String>,
+    pub summary: String,
+    pub failures: Vec<String>,
+}
+
 pub fn load_graph_artifact(path: &Path) -> Result<CanonIR> {
     let mut ir = serde_json::from_slice::<CanonIR>(&fs::read(path)?)?;
     ir.restore();
@@ -66,6 +97,71 @@ pub fn load_latest_workspace_graph_artifact(workspace_root: &Path) -> Result<(Gr
     let index = serde_json::from_slice::<GraphArtifactIndex>(&fs::read(index_path)?)?;
     let ir = load_graph_artifact(&index.latest_workspace.artifact_path)?;
     Ok((index.latest_workspace, ir))
+}
+
+pub fn verify_graph_expectations(
+    workspace_root: &Path,
+    expectations: &[GraphProofExpectation],
+) -> Result<GraphProofReport> {
+    let (summary, ir) = load_latest_workspace_graph_artifact(workspace_root)?;
+    let module_map = module_membership_map(&ir);
+    let symbol_map = graph_symbol_paths(&ir, &module_map);
+    let module_paths = ir
+        .nodes
+        .iter()
+        .filter_map(|node| match &node.kind {
+            CanonNodeKind::Module { path_id, .. } => Some(ir.lookup_path(*path_id).to_string()),
+            _ => None,
+        })
+        .collect::<std::collections::HashSet<_>>();
+
+    let mut failures = Vec::new();
+    for expectation in expectations {
+        match expectation {
+            GraphProofExpectation::Rename { old_symbol, new_symbol, path } => {
+                if symbol_map.contains_key(old_symbol) {
+                    failures.push(format!("old symbol still present after rename: {old_symbol}"));
+                }
+                if !symbol_map.contains_key(new_symbol) {
+                    failures.push(format!("new symbol missing after rename: {new_symbol}"));
+                }
+                if let Some((module_path, _)) = split_symbol_path(new_symbol) {
+                    verify_module_file_membership(workspace_root, &module_paths, module_path, path, &mut failures);
+                }
+            }
+            GraphProofExpectation::Move { old_symbol, new_symbol, new_module_path, path } => {
+                if symbol_map.contains_key(old_symbol) {
+                    failures.push(format!("old symbol still present after move: {old_symbol}"));
+                }
+                if !symbol_map.contains_key(new_symbol) {
+                    failures.push(format!("new symbol missing after move: {new_symbol}"));
+                }
+                verify_module_file_membership(workspace_root, &module_paths, new_module_path, path, &mut failures);
+            }
+            GraphProofExpectation::Import { import_path, path } => {
+                if !symbol_map.contains_key(import_path) {
+                    failures.push(format!("import target missing from graph: {import_path}"));
+                }
+                if let Some(module_path) = module_path_from_relative_file(path) {
+                    verify_module_file_membership(workspace_root, &module_paths, &module_path, path, &mut failures);
+                }
+            }
+            GraphProofExpectation::CreateModule { module_path, path } => {
+                verify_module_file_membership(workspace_root, &module_paths, module_path, path, &mut failures);
+            }
+        }
+    }
+
+    Ok(GraphProofReport {
+        verified: failures.is_empty(),
+        artifact_id: Some(summary.artifact_id.clone()),
+        summary: if failures.is_empty() {
+            format!("graph proof ok for {} expectation(s)", expectations.len())
+        } else {
+            format!("graph proof failed for {} expectation(s)", expectations.len())
+        },
+        failures,
+    })
 }
 
 pub fn duplicate_definition_rename_candidates(ir: &CanonIR, limit: usize) -> Vec<GraphRenameCandidate> {
@@ -183,6 +279,18 @@ fn module_membership_map(ir: &CanonIR) -> HashMap<u32, String> {
         }
     }
     membership
+}
+
+fn graph_symbol_paths(ir: &CanonIR, module_map: &HashMap<u32, String>) -> HashMap<String, &'static str> {
+    let mut out = HashMap::new();
+    for node in &ir.nodes {
+        let Some((name, kind)) = symbol_identity(ir, &node.kind) else {
+            continue;
+        };
+        let module_path = module_map.get(&node.id.0).map(String::as_str);
+        out.insert(qualify_symbol_path(module_path, &name), kind);
+    }
+    out
 }
 
 fn module_move_candidates(ir: &CanonIR, limit: usize) -> Vec<GraphModuleMoveCandidate> {
@@ -335,6 +443,53 @@ fn workspace_relative_path_for_module(workspace_root: &Path, module_path: &str) 
     path.strip_prefix(workspace_root)
         .ok()
         .map(|relative| relative.to_string_lossy().to_string())
+}
+
+fn module_path_from_relative_file(path: &str) -> Option<String> {
+    let path = Path::new(path);
+    let rel = path.strip_prefix("src").ok().unwrap_or(path);
+    let mut segments = rel
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    let filename = segments.pop()?;
+    let mut module_segments = vec!["crate".to_string()];
+    for segment in segments {
+        if !segment.is_empty() {
+            module_segments.push(segment.to_string());
+        }
+    }
+    let stem = filename.strip_suffix(".rs")?;
+    if stem != "lib" && stem != "main" && stem != "mod" {
+        module_segments.push(stem.to_string());
+    }
+    Some(module_segments.join("::"))
+}
+
+fn split_symbol_path(symbol_path: &str) -> Option<(&str, &str)> {
+    symbol_path.rsplit_once("::")
+}
+
+fn verify_module_file_membership(
+    workspace_root: &Path,
+    module_paths: &std::collections::HashSet<String>,
+    module_path: &str,
+    expected_path: &str,
+    failures: &mut Vec<String>,
+) {
+    if !module_paths.contains(module_path) {
+        failures.push(format!("module missing from graph: {module_path}"));
+        return;
+    }
+    let expected_rel = expected_path.replace('\\', "/");
+    let actual_rel = workspace_relative_path_for_module(workspace_root, module_path)
+        .unwrap_or_else(|| format!("missing-path-for:{module_path}"))
+        .replace('\\', "/");
+    if actual_rel != expected_rel {
+        failures.push(format!(
+            "module/file membership mismatch for {module_path}: expected {expected_rel}, got {actual_rel}"
+        ));
+    }
 }
 
 pub fn latest_graph_artifact_path(workspace_root: &Path) -> Result<PathBuf> {

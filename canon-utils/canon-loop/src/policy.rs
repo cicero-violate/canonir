@@ -463,7 +463,9 @@ pub fn retry_policy_for_planning_context(
     if objective_trend_state.repeated_stall_count > 0 && objective_trend_state.current_no_progress_streak > 0 {
         return RetryPolicy::CorrectiveRetry;
     }
-    if semantic_no_progress_streak(recent_execution_results) >= 2 {
+    if canon_semantic_state::latest_graph_proof_failed(recent_execution_results) {
+        RetryPolicy::CorrectiveRetry
+    } else if semantic_no_progress_streak(recent_execution_results) >= 2 {
         RetryPolicy::CorrectiveRetry
     } else if latest_no_semantic_progress(recent_execution_results) {
         RetryPolicy::CorrectiveRetry
@@ -504,6 +506,12 @@ pub fn planner_hint_lines(
     if latest_no_semantic_progress(recent_execution_results) {
         out.push(
             "Programmatic tip: the last executed batch produced no semantic progress; change the repair strategy instead of retrying the same edit."
+                .to_string(),
+        );
+    }
+    if canon_semantic_state::latest_graph_proof_failed(recent_execution_results) {
+        out.push(
+            "Programmatic tip: the last semantic edit failed graph proof; refresh compiler context and do not repeat the same symbolic edit unchanged."
                 .to_string(),
         );
     }
@@ -629,6 +637,23 @@ mod tests {
             planner_hint_lines(None, 0, &results, &ObjectiveTrendState::default(), None, None).join("\n");
         assert!(hints.contains("no semantic progress"));
         assert!(hints.contains("Recent execution semantics:"));
+    }
+
+    #[test]
+    fn graph_proof_failure_forces_corrective_retry_context() {
+        let results = vec![SemanticExecutionResultRecord::new(
+            "graph_proof_failed",
+            "semantic graph proof failed",
+            Vec::new(),
+            false,
+        )];
+        assert_eq!(
+            retry_policy_for_planning_context(None, 0, &results, &ObjectiveTrendState::default()),
+            RetryPolicy::CorrectiveRetry
+        );
+        let hints =
+            planner_hint_lines(None, 0, &results, &ObjectiveTrendState::default(), None, None).join("\n");
+        assert!(hints.contains("failed graph proof"));
     }
 
     #[test]

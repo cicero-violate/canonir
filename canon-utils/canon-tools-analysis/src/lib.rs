@@ -20,7 +20,8 @@ pub use graph_artifacts::{
     duplicate_definition_rename_candidates, graph_backed_module_hotspots,
     graph_backed_module_moves, graph_backed_rename_candidates, latest_graph_artifact_path,
     load_graph_artifact, load_latest_workspace_graph_artifact, module_cohesion_hotspots,
-    GraphArtifactIndex, GraphArtifactSummary, GraphModuleMoveCandidate, GraphRenameCandidate,
+    verify_graph_expectations, GraphArtifactIndex, GraphArtifactSummary,
+    GraphModuleMoveCandidate, GraphProofExpectation, GraphProofReport, GraphRenameCandidate,
     ModuleCohesionHotspot,
 };
 pub use panic_types::PanicRecord;

@@ -1,5 +1,8 @@
 use canon_event::{RuntimeEvent, LoopRewarded, LoopVerified, RouteSelected};
-use canon_semantic_state::{latest_no_semantic_progress, latest_semantic_progress};
+use canon_semantic_state::{
+    latest_graph_proof_failed, latest_graph_proof_verified, latest_no_semantic_progress,
+    latest_semantic_progress,
+};
 
 use crate::{context::LoopContext, result::LoopStageResult};
 
@@ -68,6 +71,11 @@ pub fn evaluate_reward_semantics(ctx: &LoopContext, v: &LoopVerified) -> RewardS
     } else if latest_no_semantic_progress(&ctx.recent_execution_results) {
         reward -= 0.4;
     }
+    if latest_graph_proof_verified(&ctx.recent_execution_results) {
+        reward += 0.2;
+    } else if latest_graph_proof_failed(&ctx.recent_execution_results) {
+        reward -= 0.4;
+    }
     if ctx.objective_trend_state.repair_resolution_rate() > 0.5 {
         reward += 0.2;
     }
@@ -78,7 +86,9 @@ pub fn evaluate_reward_semantics(ctx: &LoopContext, v: &LoopVerified) -> RewardS
     }
     RewardSemantics {
         reward,
-        resets_stagnation: v.compiler_clean || latest_semantic_progress(&ctx.recent_execution_results),
+        resets_stagnation: v.compiler_clean
+            || (latest_semantic_progress(&ctx.recent_execution_results)
+                && !latest_graph_proof_failed(&ctx.recent_execution_results)),
     }
 }
 
@@ -132,5 +142,19 @@ mod tests {
         let verified = base_verified();
         let _ = execute(verified, &mut ctx).unwrap();
         assert_eq!(ctx.stagnant_ticks, 0);
+    }
+
+    #[test]
+    fn graph_proof_failure_penalizes_reward() {
+        let mut ctx = LoopContext::new(PathBuf::from("/tmp"), PathBuf::from("/tmp/tlog"));
+        let verified = base_verified();
+        let base = evaluate_reward_semantics(&ctx, &verified).reward;
+        ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
+            "graph_proof_failed",
+            "semantic graph proof failed",
+            Vec::new(),
+            false,
+        ));
+        assert!(evaluate_reward_semantics(&ctx, &verified).reward < base);
     }
 }

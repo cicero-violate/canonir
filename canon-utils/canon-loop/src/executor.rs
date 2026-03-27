@@ -14,7 +14,7 @@ use crate::{
 use canon_event::{AgentRegistered, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, GoalEdgeDefined, RuntimeEvent, Tick};
 use canon_invariant::decision_trace_payload;
 use canon_proc_macros::must_emit;
-use canon_semantic_state::{classify_planned_action_intents, execution_results_for_action};
+use canon_semantic_state::{classify_planned_action_intents, execution_results_for_action, SemanticExecutionResultRecord};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -303,6 +303,46 @@ impl EventConsumer for LoopStageExecutor {
             }
             RuntimeEvent::Debug(debug) if debug.kind == "goal_objective_drift" => {
                 self.ctx.objective_trend_state.record_goal_objective_drift();
+            }
+            RuntimeEvent::Debug(debug) if debug.kind == "semantic_graph_proof_verified" => {
+                let artifact_id = debug
+                    .payload
+                    .get("payload")
+                    .and_then(|v| v.get("artifact_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let result = SemanticExecutionResultRecord::new(
+                    "graph_proof_verified",
+                    format!("semantic graph proof verified against artifact {artifact_id}"),
+                    Vec::new(),
+                    true,
+                );
+                self.ctx.objective_trend_state.record_execution_results(std::slice::from_ref(&result));
+                self.ctx.recent_execution_results.push(result);
+                if self.ctx.recent_execution_results.len() > 16 {
+                    let drop_n = self.ctx.recent_execution_results.len() - 16;
+                    self.ctx.recent_execution_results.drain(0..drop_n);
+                }
+            }
+            RuntimeEvent::Debug(debug) if debug.kind == "semantic_graph_proof_failed" => {
+                let artifact_id = debug
+                    .payload
+                    .get("payload")
+                    .and_then(|v| v.get("artifact_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let result = SemanticExecutionResultRecord::new(
+                    "graph_proof_failed",
+                    format!("semantic graph proof failed against artifact {artifact_id}"),
+                    Vec::new(),
+                    false,
+                );
+                self.ctx.objective_trend_state.record_execution_results(std::slice::from_ref(&result));
+                self.ctx.recent_execution_results.push(result);
+                if self.ctx.recent_execution_results.len() > 16 {
+                    let drop_n = self.ctx.recent_execution_results.len() - 16;
+                    self.ctx.recent_execution_results.drain(0..drop_n);
+                }
             }
             RuntimeEvent::RouteSelected(rs) => {
                 self.ctx.last_route_rationale = Some(rs.rationale.clone());
