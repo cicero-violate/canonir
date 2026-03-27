@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use canon_analysis::load_latest_workspace_graph_artifact;
+use canon_analysis::{graph_import_bindings, load_latest_workspace_graph_artifact};
 use canon_ir::CanonNodeKind;
 use canon_types::{ReportLayout, SpanRange};
 use std::collections::{HashMap, HashSet};
@@ -12,6 +12,7 @@ pub struct SymbolIndex {
     span_index: HashMap<String, HashMap<PathBuf, Vec<SpanRange>>>,
     symbol_kinds: HashMap<String, String>,
     symbol_catalog: Vec<(String, String)>,
+    alias_targets: HashMap<String, String>,
     pub normalized_sources: HashMap<PathBuf, String>,
     tlog_offset: u64,
     module_files: HashMap<String, PathBuf>,
@@ -57,7 +58,18 @@ impl SymbolIndex {
         dedup_spans(&mut span_index);
         let uses_crate_prefix = module_files.keys().any(|k| k.starts_with("crate::"));
 
-        Ok(Self { span_index, symbol_kinds, symbol_catalog, normalized_sources: HashMap::new(), tlog_offset, module_files, file_modules, files, uses_crate_prefix })
+        Ok(Self {
+            span_index,
+            symbol_kinds,
+            symbol_catalog,
+            alias_targets: HashMap::new(),
+            normalized_sources: HashMap::new(),
+            tlog_offset,
+            module_files,
+            file_modules,
+            files,
+            uses_crate_prefix,
+        })
     }
 
     pub fn build(project_root: &Path) -> Result<Self> {
@@ -117,7 +129,8 @@ impl SymbolIndex {
     }
 
     pub fn spans_for(&self, symbol_id: &str) -> Option<&HashMap<PathBuf, Vec<SpanRange>>> {
-        self.span_index.get(symbol_id)
+        let canonical = self.resolve_symbol_id(symbol_id);
+        self.span_index.get(canonical.as_str())
     }
 
     pub fn normalized_source(&self, path: &PathBuf) -> Option<&String> {
@@ -137,7 +150,18 @@ impl SymbolIndex {
     }
 
     pub fn contains(&self, symbol_id: &str) -> bool {
-        self.symbol_kinds.contains_key(symbol_id)
+        self.symbol_kinds.contains_key(symbol_id) || self.alias_targets.contains_key(symbol_id)
+    }
+
+    pub fn resolve_symbol_id(&self, symbol_id: &str) -> String {
+        self.alias_targets
+            .get(symbol_id)
+            .cloned()
+            .unwrap_or_else(|| symbol_id.to_string())
+    }
+
+    pub fn alias_targets(&self) -> &HashMap<String, String> {
+        &self.alias_targets
     }
 
     pub fn module_files(&self) -> &HashMap<String, PathBuf> {
@@ -178,6 +202,11 @@ impl SymbolIndex {
                 return Err(anyhow!("index invariant: reachable symbol missing reference coverage: {symbol_id}"));
             }
         }
+        for (alias, target) in &self.alias_targets {
+            if !self.symbol_kinds.contains_key(target) {
+                return Err(anyhow!("index invariant: alias target missing from catalog: {alias} -> {target}"));
+            }
+        }
         Ok(())
     }
 }
@@ -188,6 +217,7 @@ impl SymbolIndex {
         let mut span_index: HashMap<String, HashMap<PathBuf, Vec<SpanRange>>> = HashMap::new();
         let mut symbol_kinds = HashMap::new();
         let mut symbol_catalog = Vec::new();
+        let mut alias_targets = HashMap::new();
         let mut module_files = HashMap::new();
         let mut file_modules: HashMap<PathBuf, Vec<String>> = HashMap::new();
         let mut files = HashSet::new();
@@ -230,12 +260,18 @@ impl SymbolIndex {
         }
         symbol_catalog.sort_by(|a, b| a.0.cmp(&b.0));
         build_source_spans(&symbol_catalog, &normalized_sources, &mut span_index);
+        for binding in graph_import_bindings(project_root)? {
+            if symbol_kinds.contains_key(&binding.target_path) {
+                alias_targets.insert(binding.visible_path, binding.target_path);
+            }
+        }
         dedup_spans(&mut span_index);
 
         Ok(Self {
             span_index,
             symbol_kinds,
             symbol_catalog,
+            alias_targets,
             normalized_sources,
             tlog_offset: 0,
             module_files,

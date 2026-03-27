@@ -18,10 +18,11 @@ pub mod workspace;
 pub use invariants::invariant_validator::run_invariant_pipeline;
 pub use graph_artifacts::{
     duplicate_definition_rename_candidates, graph_backed_module_hotspots,
-    graph_backed_module_moves, graph_backed_rename_candidates, latest_graph_artifact_path,
-    load_graph_artifact, load_latest_workspace_graph_artifact, module_cohesion_hotspots,
-    verify_graph_expectations, GraphArtifactIndex, GraphArtifactSummary,
-    GraphModuleMoveCandidate, GraphProofExpectation, GraphProofReport, GraphRenameCandidate,
+    graph_backed_module_moves, graph_backed_rename_candidates, graph_import_bindings,
+    latest_graph_artifact_path, load_graph_artifact, load_latest_workspace_graph_artifact,
+    module_cohesion_hotspots, resolve_graph_symbol_path, verify_graph_expectations,
+    GraphArtifactIndex, GraphArtifactSummary, GraphImportBinding, GraphModuleMoveCandidate,
+    GraphProofExpectation, GraphProofReport, GraphRenameCandidate, GraphResolvedSymbol,
     ModuleCohesionHotspot,
 };
 pub use panic_types::PanicRecord;

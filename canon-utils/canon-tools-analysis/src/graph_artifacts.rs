@@ -51,6 +51,24 @@ pub struct GraphModuleMoveCandidate {
     pub external_reference_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphImportBinding {
+    pub module_path: String,
+    pub visible_path: String,
+    pub target_path: String,
+    pub alias: Option<String>,
+    pub is_reexport: bool,
+    pub file_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphResolvedSymbol {
+    pub requested_path: String,
+    pub canonical_path: String,
+    pub file_path: Option<String>,
+    pub via_binding: Option<GraphImportBinding>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GraphProofExpectation {
     Rename {
@@ -267,6 +285,81 @@ pub fn graph_backed_module_moves(workspace_root: &Path, limit: usize) -> Result<
     Ok(out)
 }
 
+pub fn graph_import_bindings(workspace_root: &Path) -> Result<Vec<GraphImportBinding>> {
+    let (_, ir) = load_latest_workspace_graph_artifact(workspace_root)?;
+    let module_files = graph_module_files(workspace_root, &ir);
+    let mut out = Vec::new();
+    for (module_path, file_path) in module_files {
+        let source = match fs::read_to_string(workspace_root.join(&file_path)) {
+            Ok(source) => source,
+            Err(_) => continue,
+        };
+        let ast = match syn::parse_file(&source) {
+            Ok(ast) => ast,
+            Err(_) => continue,
+        };
+        for item in ast.items {
+            let syn::Item::Use(item_use) = item else {
+                continue;
+            };
+            collect_use_bindings(
+                workspace_root,
+                &module_path,
+                &file_path,
+                item_use.vis,
+                &item_use.tree,
+                &mut out,
+            );
+        }
+    }
+    out.sort_by(|a, b| a.visible_path.cmp(&b.visible_path).then_with(|| a.target_path.cmp(&b.target_path)));
+    out.dedup_by(|a, b| a.visible_path == b.visible_path && a.target_path == b.target_path);
+    Ok(out)
+}
+
+pub fn resolve_graph_symbol_path(workspace_root: &Path, symbol_path: &str) -> Result<Option<GraphResolvedSymbol>> {
+    let (_, ir) = load_latest_workspace_graph_artifact(workspace_root)?;
+    let module_map = module_membership_map(&ir);
+    let symbols = graph_symbol_paths(&ir, &module_map);
+    if symbols.contains_key(symbol_path) {
+        return Ok(Some(GraphResolvedSymbol {
+            requested_path: symbol_path.to_string(),
+            canonical_path: symbol_path.to_string(),
+            file_path: split_symbol_path(symbol_path)
+                .and_then(|(module_path, _)| workspace_relative_path_for_module(workspace_root, module_path)),
+            via_binding: None,
+        }));
+    }
+
+    let bindings = graph_import_bindings(workspace_root)?;
+    let binding_map: HashMap<String, GraphImportBinding> = bindings
+        .into_iter()
+        .map(|binding| (binding.visible_path.clone(), binding))
+        .collect();
+    let mut current = symbol_path.to_string();
+    let mut via_binding = None;
+    let mut seen = std::collections::HashSet::new();
+    while seen.insert(current.clone()) {
+        let Some(binding) = binding_map.get(&current).cloned() else {
+            return Ok(None);
+        };
+        if via_binding.is_none() {
+            via_binding = Some(binding.clone());
+        }
+        current = binding.target_path.clone();
+        if symbols.contains_key(&current) {
+            return Ok(Some(GraphResolvedSymbol {
+                requested_path: symbol_path.to_string(),
+                canonical_path: current.clone(),
+                file_path: split_symbol_path(&current)
+                    .and_then(|(module_path, _)| workspace_relative_path_for_module(workspace_root, module_path)),
+                via_binding,
+            }));
+        }
+    }
+    Ok(None)
+}
+
 fn module_membership_map(ir: &CanonIR) -> HashMap<u32, String> {
     let mut membership = HashMap::new();
     for node in &ir.nodes {
@@ -279,6 +372,20 @@ fn module_membership_map(ir: &CanonIR) -> HashMap<u32, String> {
         }
     }
     membership
+}
+
+fn graph_module_files(workspace_root: &Path, ir: &CanonIR) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for node in &ir.nodes {
+        let CanonNodeKind::Module { path_id, .. } = &node.kind else {
+            continue;
+        };
+        let module_path = ir.lookup_path(*path_id).to_string();
+        if let Some(file_path) = workspace_relative_path_for_module(workspace_root, &module_path) {
+            out.insert(module_path, file_path);
+        }
+    }
+    out
 }
 
 fn graph_symbol_paths(ir: &CanonIR, module_map: &HashMap<u32, String>) -> HashMap<String, &'static str> {
@@ -394,6 +501,109 @@ fn qualify_symbol_path(module_path: Option<&str>, name: &str) -> String {
     }
 }
 
+fn collect_use_bindings(
+    workspace_root: &Path,
+    current_module_path: &str,
+    file_path: &str,
+    visibility: syn::Visibility,
+    tree: &syn::UseTree,
+    out: &mut Vec<GraphImportBinding>,
+) {
+    for binding in flatten_use_tree(current_module_path, Vec::new(), tree) {
+        let target_path = resolve_use_segments(current_module_path, &binding.target_segments);
+        let visible_path = qualify_symbol_path(Some(current_module_path), &binding.visible_name);
+        out.push(GraphImportBinding {
+            module_path: current_module_path.to_string(),
+            visible_path,
+            target_path,
+            alias: binding.alias,
+            is_reexport: matches!(visibility, syn::Visibility::Public(_)),
+            file_path: Some(workspace_root.join(file_path).strip_prefix(workspace_root).unwrap_or_else(|_| Path::new(file_path)).to_string_lossy().replace('\\', "/")),
+        });
+    }
+}
+
+#[derive(Clone)]
+struct FlatUseBinding {
+    target_segments: Vec<String>,
+    visible_name: String,
+    alias: Option<String>,
+}
+
+fn flatten_use_tree(
+    current_module_path: &str,
+    prefix: Vec<String>,
+    tree: &syn::UseTree,
+) -> Vec<FlatUseBinding> {
+    let _ = current_module_path;
+    match tree {
+        syn::UseTree::Path(path) => {
+            let mut next_prefix = prefix;
+            next_prefix.push(path.ident.to_string());
+            flatten_use_tree(current_module_path, next_prefix, &path.tree)
+        }
+        syn::UseTree::Name(name) => vec![FlatUseBinding {
+            visible_name: name.ident.to_string(),
+            target_segments: prefix.into_iter().chain(std::iter::once(name.ident.to_string())).collect(),
+            alias: None,
+        }],
+        syn::UseTree::Rename(rename) => vec![FlatUseBinding {
+            visible_name: rename.rename.to_string(),
+            target_segments: prefix.into_iter().chain(std::iter::once(rename.ident.to_string())).collect(),
+            alias: Some(rename.rename.to_string()),
+        }],
+        syn::UseTree::Group(group) => group
+            .items
+            .iter()
+            .flat_map(|item| flatten_use_tree(current_module_path, prefix.clone(), item))
+            .collect(),
+        syn::UseTree::Glob(_) => Vec::new(),
+    }
+}
+
+fn resolve_use_segments(current_module_path: &str, segments: &[String]) -> String {
+    if segments.is_empty() {
+        return current_module_path.to_string();
+    }
+    match segments[0].as_str() {
+        "crate" | "self" | "super" => resolve_relative_module_path(current_module_path, segments),
+        "std" | "core" | "alloc" => segments.join("::"),
+        _ => {
+            let mut resolved = vec!["crate".to_string()];
+            resolved.extend(segments.iter().cloned());
+            resolved.join("::")
+        }
+    }
+}
+
+fn resolve_relative_module_path(current_module_path: &str, segments: &[String]) -> String {
+    let mut base = current_module_path
+        .split("::")
+        .filter(|segment| !segment.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if base.is_empty() {
+        base.push("crate".to_string());
+    }
+    let mut iter = segments.iter();
+    while let Some(segment) = iter.next() {
+        match segment.as_str() {
+            "crate" => {
+                base.clear();
+                base.push("crate".to_string());
+            }
+            "self" => {}
+            "super" => {
+                if base.len() > 1 {
+                    base.pop();
+                }
+            }
+            other => base.push(other.to_string()),
+        }
+    }
+    base.join("::")
+}
+
 fn suggested_rename(name: &str, module_path: Option<&str>, ordinal: usize) -> String {
     let module_suffix = module_path
         .and_then(|path| path.rsplit("::").next())
@@ -507,8 +717,12 @@ pub fn latest_graph_artifact_path(workspace_root: &Path) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{duplicate_definition_rename_candidates, module_cohesion_hotspots, module_move_candidates};
+    use super::{
+        duplicate_definition_rename_candidates, graph_import_bindings, module_cohesion_hotspots,
+        module_move_candidates, resolve_graph_symbol_path, GraphArtifactIndex, GraphArtifactSummary,
+    };
     use canon_ir::{csr_graph::CsrGraph, CanonIR, CanonNodeKind};
+    use std::fs;
 
     fn sample_ir() -> CanonIR {
         let mut ir = CanonIR::new();
@@ -562,6 +776,53 @@ mod tests {
         ir
     }
 
+    fn write_sample_workspace(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::create_dir_all(dir.path().join("state/graph/index/by_crate")).unwrap();
+        fs::create_dir_all(dir.path().join("state/graph/index/by_hash")).unwrap();
+        for (path, content) in files {
+            let full = dir.path().join(path);
+            if let Some(parent) = full.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(full, content).unwrap();
+        }
+        let ir = sample_ir();
+        let artifact_path = dir.path().join("state/graph/sample.json");
+        fs::write(&artifact_path, serde_json::to_vec(&ir).unwrap()).unwrap();
+        let summary = GraphArtifactSummary {
+            artifact_id: "sample".into(),
+            artifact_path: artifact_path.clone(),
+            crate_name: "fixture".into(),
+            node_count: ir.nodes.len(),
+            edge_count: ir.module_graph.edge_count(),
+            file_count: 2,
+            call_edge_count: ir.call_graph.edge_count(),
+            module_edge_count: ir.module_graph.edge_count(),
+            cfg_edge_count: 0,
+        };
+        let index = GraphArtifactIndex {
+            latest_workspace: summary.clone(),
+        };
+        fs::write(
+            dir.path().join("state/graph/index/latest_workspace.json"),
+            serde_json::to_vec(&index).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("state/graph/index/by_crate/fixture.json"),
+            serde_json::to_vec(&summary).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("state/graph/index/by_hash/sample.json"),
+            serde_json::to_vec(&summary).unwrap(),
+        )
+        .unwrap();
+        dir
+    }
+
     #[test]
     fn duplicate_definition_candidates_are_graph_backed() {
         let ir = sample_ir();
@@ -578,5 +839,40 @@ mod tests {
         let moves = module_move_candidates(&ir, 4);
         assert!(moves.len() <= 4);
         assert!(moves.iter().all(|candidate| !candidate.to_module_path.is_empty()));
+    }
+
+    #[test]
+    fn graph_import_bindings_capture_alias_and_reexport() {
+        let dir = write_sample_workspace(&[
+            ("src/alpha.rs", "pub struct Foo;\npub fn Bar() {}\n"),
+            (
+                "src/beta.rs",
+                "pub use crate::alpha::Foo as PublicFoo;\nuse crate::alpha::Bar as LocalBar;\n",
+            ),
+        ]);
+        let bindings = graph_import_bindings(dir.path()).unwrap();
+        assert!(bindings.iter().any(|binding| {
+            binding.visible_path == "crate::beta::PublicFoo"
+                && binding.target_path == "crate::alpha::Foo"
+                && binding.is_reexport
+        }));
+        assert!(bindings.iter().any(|binding| {
+            binding.visible_path == "crate::beta::LocalBar"
+                && binding.target_path == "crate::alpha::Bar"
+                && !binding.is_reexport
+        }));
+    }
+
+    #[test]
+    fn resolve_graph_symbol_path_follows_alias_binding() {
+        let dir = write_sample_workspace(&[
+            ("src/alpha.rs", "pub struct Foo;\npub fn Bar() {}\n"),
+            ("src/beta.rs", "use crate::alpha::Foo as PublicFoo;\n"),
+        ]);
+        let resolved = resolve_graph_symbol_path(dir.path(), "crate::beta::PublicFoo")
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.canonical_path, "crate::alpha::Foo");
+        assert!(resolved.via_binding.is_some());
     }
 }

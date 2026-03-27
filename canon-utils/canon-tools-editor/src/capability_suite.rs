@@ -122,6 +122,13 @@ fn write_graph_artifact_from_source(project: &Path) {
     let symbols = collect_source_symbols(project);
     let mut modules: BTreeSet<String> = BTreeSet::new();
     modules.insert("crate".to_string());
+    for entry in walkdir::WalkDir::new(project.join("src")).into_iter().filter_map(Result::ok) {
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+            continue;
+        }
+        modules.insert(derive_module_path(project, path));
+    }
     for symbol in &symbols {
         modules.insert(symbol.module_path.clone());
     }
@@ -323,6 +330,35 @@ fn rename_symbol_cross_module_references() {
 }
 
 #[test]
+fn rename_symbol_updates_reexport_target() {
+    let dir = temp_project();
+    write_project_files(
+        dir.path(),
+        &[
+            ("src/lib.rs", "pub mod alpha;\npub mod beta;\n"),
+            ("src/alpha.rs", "pub struct Foo;\n"),
+            (
+                "src/beta.rs",
+                "pub use crate::alpha::Foo as PublicFoo;\n\npub fn make() -> PublicFoo { PublicFoo }\n",
+            ),
+        ],
+    );
+    write_graph_artifact_from_source(dir.path());
+    let report = rename_symbol_pairs(
+        dir.path(),
+        &[("crate::alpha::Foo".into(), "crate::alpha::Bar".into())],
+    );
+    assert!(report.error.is_none(), "{:?}", report.error);
+    let beta = fs::read_to_string(dir.path().join("src/beta.rs")).unwrap();
+    assert!(beta.contains("pub use crate::alpha::Bar as PublicFoo;"));
+    assert_graph_and_invariants(
+        dir.path(),
+        &["crate::alpha::Bar", "crate::beta::make"],
+        &["crate::alpha::Foo"],
+    );
+}
+
+#[test]
 fn rename_symbol_duplicate_symbol_is_rejected() {
     let dir = temp_project();
     write_project_files(
@@ -391,6 +427,30 @@ fn rename_symbol_invalid_missing_symbol() {
         &[("crate::missing::Nope".into(), "crate::missing::Nope2".into())],
     );
     assert!(report.error.is_some());
+}
+
+#[test]
+fn rename_symbol_accepts_alias_path_via_graph_binding() {
+    let dir = temp_project();
+    write_project_files(
+        dir.path(),
+        &[
+            ("src/lib.rs", "pub mod alpha;\npub mod beta;\n"),
+            ("src/alpha.rs", "pub struct Foo;\n"),
+            ("src/beta.rs", "pub use crate::alpha::Foo as PublicFoo;\n"),
+        ],
+    );
+    write_graph_artifact_from_source(dir.path());
+    let report = rename_symbol_pairs(
+        dir.path(),
+        &[("crate::beta::PublicFoo".into(), "crate::alpha::Bar".into())],
+    );
+    assert!(report.error.is_none(), "{:?}", report.error);
+    let alpha = fs::read_to_string(dir.path().join("src/alpha.rs")).unwrap();
+    let beta = fs::read_to_string(dir.path().join("src/beta.rs")).unwrap();
+    assert!(alpha.contains("pub struct Bar;"));
+    assert!(beta.contains("pub use crate::alpha::Bar as PublicFoo;"));
+    assert_graph_and_invariants(dir.path(), &["crate::alpha::Bar"], &["crate::alpha::Foo"]);
 }
 
 #[test]
@@ -492,6 +552,7 @@ fn import_resolution_simple_case() {
             ("src/beta.rs", "pub fn make() -> Foo { Foo }\n"),
         ],
     );
+    write_graph_artifact_from_source(dir.path());
     let report = add_import_paths(dir.path(), &[("src/beta.rs".into(), "crate::alpha::Foo".into())]);
     assert!(report.error.is_none(), "{:?}", report.error);
     let beta = fs::read_to_string(dir.path().join("src/beta.rs")).unwrap();
@@ -513,6 +574,7 @@ fn import_resolution_cross_module_alias_case() {
             ),
         ],
     );
+    write_graph_artifact_from_source(dir.path());
     let report = add_import_paths(
         dir.path(),
         &[("src/beta.rs".into(), "crate::alpha::Foo as AlphaFoo".into())],
@@ -540,6 +602,7 @@ fn import_resolution_trait_interaction() {
             ),
         ],
     );
+    write_graph_artifact_from_source(dir.path());
     let report = add_import_paths(dir.path(), &[("src/beta.rs".into(), "crate::alpha::Greeter".into())]);
     assert!(report.error.is_none(), "{:?}", report.error);
     let beta = fs::read_to_string(dir.path().join("src/beta.rs")).unwrap();
@@ -564,6 +627,28 @@ fn import_resolution_invalid_non_canonical_path() {
         &[("src/lib.rs".into(), "foo::Bar".into())],
     );
     assert!(report.error.is_some());
+}
+
+#[test]
+fn import_resolution_canonicalizes_relative_alias_path() {
+    let dir = temp_project();
+    write_project_files(
+        dir.path(),
+        &[
+            ("src/lib.rs", "pub mod alpha;\npub mod beta;\n"),
+            ("src/alpha.rs", "pub struct Foo;\n"),
+            ("src/beta.rs", "pub fn use_it(_: LocalFoo) {}\n"),
+        ],
+    );
+    write_graph_artifact_from_source(dir.path());
+    let report = add_import_paths(
+        dir.path(),
+        &[("src/beta.rs".into(), "super::alpha::Foo as LocalFoo".into())],
+    );
+    assert!(report.error.is_none(), "{:?}", report.error);
+    let beta = fs::read_to_string(dir.path().join("src/beta.rs")).unwrap();
+    assert!(beta.contains("use crate::alpha::Foo as LocalFoo;"));
+    assert_graph_and_invariants(dir.path(), &["crate::beta::use_it"], &[]);
 }
 
 #[test]

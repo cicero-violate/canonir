@@ -104,6 +104,11 @@ pub fn move_symbol_pairs(project: &Path, moves: &[(String, String)]) -> RenameRu
     };
 
     for (symbol_id, new_module_path) in moves {
+        let canonical_symbol_id = editor
+            .session
+            .as_ref()
+            .map(|index| index.resolve_symbol_id(symbol_id))
+            .unwrap_or_else(|| symbol_id.clone());
         if !editor
             .session
             .as_ref()
@@ -130,7 +135,7 @@ pub fn move_symbol_pairs(project: &Path, moves: &[(String, String)]) -> RenameRu
             report.error = Some(message);
             return report;
         }
-        let handle = match editor.synthetic_handle_from_symbol_id(symbol_id) {
+        let handle = match editor.synthetic_handle_from_symbol_id(&canonical_symbol_id) {
             Ok(handle) => handle,
             Err(err) => {
                 report.error = Some(format!("{err:?}"));
@@ -139,11 +144,11 @@ pub fn move_symbol_pairs(project: &Path, moves: &[(String, String)]) -> RenameRu
         };
         let op = EditOp::MoveSymbol {
             handle,
-            symbol_id: symbol_id.clone(),
+            symbol_id: canonical_symbol_id.clone(),
             new_module_path: new_module_path.clone(),
             new_crate: None,
         };
-        if let Err(err) = editor.queue(symbol_id, op) {
+        if let Err(err) = editor.queue(&canonical_symbol_id, op) {
             report.error = Some(format!("{err:?}"));
             return report;
         }
@@ -164,17 +169,22 @@ pub fn move_symbol_pairs(project: &Path, moves: &[(String, String)]) -> RenameRu
     }
 
     for (symbol_id, new_module_path) in moves {
-        let name = symbol_id.rsplit("::").next().unwrap_or(symbol_id.as_str());
+        let canonical_symbol_id = editor
+            .session
+            .as_ref()
+            .map(|index| index.resolve_symbol_id(symbol_id))
+            .unwrap_or_else(|| symbol_id.clone());
+        let name = canonical_symbol_id.rsplit("::").next().unwrap_or(canonical_symbol_id.as_str());
         let moved_symbol = format!("{new_module_path}::{name}");
-        if source_symbol_exists_in_sources(&editor.registry.sources, symbol_id)
+        if source_symbol_exists_in_sources(&editor.registry.sources, &canonical_symbol_id)
             || !source_symbol_exists_in_sources(&editor.registry.sources, &moved_symbol)
         {
-            let message = format!("post invariant: move verification failed for {symbol_id} -> {moved_symbol}");
+            let message = format!("post invariant: move verification failed for {canonical_symbol_id} -> {moved_symbol}");
             publish_invariant_error(
                 project,
                 "move_symbol_post",
                 &message,
-                serde_json::json!({ "symbol_id": symbol_id, "moved_symbol": moved_symbol }),
+                serde_json::json!({ "symbol_id": canonical_symbol_id, "moved_symbol": moved_symbol }),
             );
             report.error = Some(message);
             return report;
@@ -224,31 +234,34 @@ pub fn add_import_paths(project: &Path, imports: &[(String, String)]) -> RenameR
             report.error = Some(message);
             return report;
         }
-        if !is_canonical_import_path(import_path) {
-            let message = format!("preflight invariant: import path is not canonical: {import_path}");
-            publish_invariant_error(
-                project,
-                "add_import_preflight",
-                &message,
-                serde_json::json!({ "path": path, "import": import_path }),
-            );
-            report.error = Some(message);
-            return report;
-        }
-        if let Err(err) = add_import_path(&full_path, import_path) {
+        let canonical_import_path = match canonicalize_import_path(project, path, import_path) {
+            Ok(path) => path,
+            Err(err) => {
+                let message = format!("preflight invariant: import path is not canonical: {import_path}: {err}");
+                publish_invariant_error(
+                    project,
+                    "add_import_preflight",
+                    &message,
+                    serde_json::json!({ "path": path, "import": import_path }),
+                );
+                report.error = Some(message);
+                return report;
+            }
+        };
+        if let Err(err) = add_import_path(&full_path, &canonical_import_path) {
             report.error = Some(format!("{err:?}"));
             return report;
         }
-        let import_line = format!("use {import_path};");
+        let import_line = format!("use {canonical_import_path};");
         match stdfs::read_to_string(&full_path) {
             Ok(content) if content.lines().any(|line| line.trim() == import_line) => {}
             _ => {
-                let message = format!("post invariant: import not present after apply: {import_path}");
+                let message = format!("post invariant: import not present after apply: {canonical_import_path}");
                 publish_invariant_error(
                     project,
                     "add_import_post",
                     &message,
-                    serde_json::json!({ "path": path, "import": import_path }),
+                    serde_json::json!({ "path": path, "import": canonical_import_path }),
                 );
                 report.error = Some(message);
                 return report;
@@ -257,6 +270,115 @@ pub fn add_import_paths(project: &Path, imports: &[(String, String)]) -> RenameR
         report.def_paths.push(path.clone());
     }
     report
+}
+
+fn canonicalize_import_path(project: &Path, importer_path: &str, import_path: &str) -> anyhow::Result<String> {
+    let trimmed = import_path.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("empty import path"));
+    }
+    let (target, alias_suffix) = if let Some((target, alias)) = trimmed.split_once(" as ") {
+        (target.trim(), Some(alias.trim()))
+    } else {
+        (trimmed, None)
+    };
+    let target = if target.starts_with("crate::")
+        || target.starts_with("self::")
+        || target.starts_with("super::")
+        || target.starts_with("std::")
+        || target.starts_with("core::")
+        || target.starts_with("alloc::")
+    {
+        target.to_string()
+    } else {
+        return Err(anyhow!("non-canonical import root"));
+    };
+    let canonical_target = if target.starts_with("crate::") || target.starts_with("std::") || target.starts_with("core::") || target.starts_with("alloc::") {
+        target
+    } else {
+        resolve_relative_import_target(importer_path, &target)?
+    };
+    match canon_analysis::resolve_graph_symbol_path(project, &canonical_target)? {
+        Some(resolved) => {
+            if let Some(alias) = alias_suffix {
+                Ok(format!("{} as {}", resolved.canonical_path, alias))
+            } else {
+                Ok(resolved.canonical_path)
+            }
+        }
+        None if canonical_target.starts_with("std::") || canonical_target.starts_with("core::") || canonical_target.starts_with("alloc::") => {
+            if let Some(alias) = alias_suffix {
+                Ok(format!("{canonical_target} as {alias}"))
+            } else {
+                Ok(canonical_target)
+            }
+        }
+        None => Err(anyhow!("import target not found in graph: {canonical_target}")),
+    }
+}
+
+fn resolve_relative_import_target(importer_path: &str, target: &str) -> anyhow::Result<String> {
+    let importer_module = module_path_from_relative_path(importer_path)?;
+    let mut segments = importer_module
+        .split("::")
+        .filter(|segment| !segment.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let mut target_segments = target.split("::");
+    match target_segments.next() {
+        Some("self") => {}
+        Some("super") => {
+            if segments.len() > 1 {
+                segments.pop();
+            }
+            for segment in target_segments {
+                if segment == "super" {
+                    if segments.len() > 1 {
+                        segments.pop();
+                    }
+                } else {
+                    segments.push(segment.to_string());
+                }
+            }
+            return Ok(segments.join("::"));
+        }
+        _ => return Err(anyhow!("unsupported relative import root")),
+    }
+    for segment in target_segments {
+        if segment == "super" {
+            if segments.len() > 1 {
+                segments.pop();
+            }
+        } else if segment != "self" {
+            segments.push(segment.to_string());
+        }
+    }
+    Ok(segments.join("::"))
+}
+
+fn module_path_from_relative_path(path: &str) -> anyhow::Result<String> {
+    let path = Path::new(path);
+    let rel = path.strip_prefix("src").ok().unwrap_or(path);
+    let mut segments = rel
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    let Some(filename) = segments.pop() else {
+        return Err(anyhow!("cannot derive module path from {path:?}"));
+    };
+    let mut module_segments = vec!["crate".to_string()];
+    for segment in segments {
+        if !segment.is_empty() {
+            module_segments.push(segment.to_string());
+        }
+    }
+    let Some(stem) = filename.strip_suffix(".rs") else {
+        return Err(anyhow!("expected rust source path"));
+    };
+    if stem != "lib" && stem != "main" && stem != "mod" {
+        module_segments.push(stem.to_string());
+    }
+    Ok(module_segments.join("::"))
 }
 
 pub fn define_symbol_stubs(
@@ -334,6 +456,11 @@ pub fn rename_symbol_pairs_with_session(project: &Path, session: Arc<SymbolIndex
     };
 
     for (old_symbol, new_symbol) in renames {
+        let canonical_old_symbol = editor
+            .session
+            .as_ref()
+            .map(|index| index.resolve_symbol_id(old_symbol))
+            .unwrap_or_else(|| old_symbol.clone());
         if !editor
             .session
             .as_ref()
@@ -353,7 +480,7 @@ pub fn rename_symbol_pairs_with_session(project: &Path, session: Arc<SymbolIndex
             && editor
                 .session
                 .as_ref()
-                .is_some_and(|index| index.contains(new_symbol))
+                .is_some_and(|index| index.contains(new_symbol) || index.contains(&index.resolve_symbol_id(new_symbol)))
         {
             let message = format!("preflight invariant: target symbol already exists: {new_symbol}");
             publish_invariant_error(
@@ -365,7 +492,7 @@ pub fn rename_symbol_pairs_with_session(project: &Path, session: Arc<SymbolIndex
             report.error = Some(message);
             return report;
         }
-        let Some(handle) = editor.registry.handles.get(old_symbol).cloned() else {
+        let Some(handle) = editor.registry.handles.get(&canonical_old_symbol).cloned() else {
             let message = format!("preflight invariant: symbol not found in registry: {old_symbol}");
             publish_invariant_error(
                 project,
@@ -377,8 +504,8 @@ pub fn rename_symbol_pairs_with_session(project: &Path, session: Arc<SymbolIndex
             return report;
         };
         let new_ident = new_symbol.rsplit("::").next().unwrap_or(new_symbol.as_str());
-        let op = EditOp::MutateField { handle, symbol_id: old_symbol.to_string(), mutation: FieldMutation::RenameIdent(new_ident.to_string()) };
-        if let Err(err) = editor.queue(old_symbol, op) {
+        let op = EditOp::MutateField { handle, symbol_id: canonical_old_symbol.clone(), mutation: FieldMutation::RenameIdent(new_ident.to_string()) };
+        if let Err(err) = editor.queue(&canonical_old_symbol, op) {
             report.error = Some(format!("{err:?}"));
             return report;
         }
@@ -450,17 +577,6 @@ fn add_import_path(file_path: &Path, import_path: &str) -> anyhow::Result<()> {
     content.insert_str(insert_at, &(rendered + "\n"));
     stdfs::write(file_path, content)?;
     Ok(())
-}
-
-fn is_canonical_import_path(import_path: &str) -> bool {
-    let trimmed = import_path.trim();
-    !trimmed.is_empty()
-        && (trimmed.starts_with("crate::")
-            || trimmed.starts_with("self::")
-            || trimmed.starts_with("super::")
-            || trimmed.starts_with("std::")
-            || trimmed.starts_with("core::")
-            || trimmed.starts_with("alloc::"))
 }
 
 fn source_symbol_exists_in_sources(

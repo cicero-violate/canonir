@@ -188,8 +188,13 @@ impl ProjectEditor {
         let mut per_file: std::collections::HashMap<PathBuf, Vec<SpanReplacement>> = std::collections::HashMap::new();
         let mut per_file_attr_pairs: std::collections::HashMap<PathBuf, Vec<(String, String)>> = std::collections::HashMap::new();
         for (symbol_id, new_name) in renames {
-            let old_ident = symbol_id.rsplit_once("::").map(|(_, s)| s).unwrap_or(symbol_id.as_str()).to_string();
-            let norm = crate::edit::symbol_id::normalize_symbol_id(symbol_id);
+            let canonical_symbol_id = session.resolve_symbol_id(symbol_id);
+            let old_ident = canonical_symbol_id
+                .rsplit_once("::")
+                .map(|(_, s)| s)
+                .unwrap_or(canonical_symbol_id.as_str())
+                .to_string();
+            let norm = crate::edit::symbol_id::normalize_symbol_id(&canonical_symbol_id);
             let Some(occurrences) = session.spans_for(&norm) else {
                 crate::tlog::publish_invariant_error(
                     &self.project_root,
