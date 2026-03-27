@@ -438,10 +438,7 @@ fn validate_action_batch(
 
 fn planning_semantic_summary(observed: Option<&LoopObserved>) -> Result<SemanticStateSummary, String> {
     let observed = observed.ok_or_else(|| "last_observed is missing".to_string())?;
-    let summary = observed
-        .semantic_summary
-        .clone()
-        .ok_or_else(|| "semantic summary is missing".to_string())?;
+    let summary = observed.semantic_summary.clone();
     if !summary.complete {
         return Err("semantic summary is incomplete".to_string());
     }

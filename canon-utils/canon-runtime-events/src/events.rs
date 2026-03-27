@@ -287,8 +287,7 @@ canon_event_struct!(
         #[output] warning_count: usize,
         #[delta] compiler_errors: Vec<serde_json::Value>,
         #[input] goal_text: Option<String>,
-        #[serde(default)]
-        semantic_summary: Option<canon_semantic_state::SemanticStateSummary>,
+        semantic_summary: canon_semantic_state::SemanticStateSummary,
         #[serde(default)]
         observe_diagnostics: Vec<String>,
     }

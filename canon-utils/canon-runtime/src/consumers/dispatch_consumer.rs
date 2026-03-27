@@ -169,7 +169,7 @@ fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_
             error_count: 0,
             warning_count: 0,
             compiler_errors: vec![],
-            semantic_summary: None,
+            semantic_summary: canon_semantic_state::SemanticStateSummary::default(),
             observe_diagnostics: vec![],
         }));
 

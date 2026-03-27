@@ -169,12 +169,9 @@ impl RouteContext {
                     .as_ref()
                     .map(|v| !Self::goal_is_placeholder(v))
                     .unwrap_or(false);
-                let semantic = semantic_summary
-                    .clone()
-                    .unwrap_or_default();
                 self.context_ready = goal_present || *error_count > 0;
                 self.bootstrap_refresh_required = false;
-                self.semantic_summary = semantic;
+                self.semantic_summary = semantic_summary.clone();
                 if let Some(goal_text) = goal_text {
                     if !Self::goal_is_placeholder(goal_text) {
                         self.mission_raw = goal_text.clone();
@@ -438,7 +435,7 @@ mod tests {
                 warning_count: 0,
                 compiler_errors: Vec::new(),
                 goal_text: Some("goal".into()),
-                semantic_summary: Some(SemanticStateSummary::default()),
+                semantic_summary: SemanticStateSummary::default(),
                 observe_diagnostics: Vec::new(),
             }),
             workspace,
@@ -572,7 +569,7 @@ mod tests {
                 warning_count: 0,
                 compiler_errors: Vec::new(),
                 goal_text: Some("goal".into()),
-                semantic_summary: Some(SemanticStateSummary {
+                semantic_summary: SemanticStateSummary {
                     version: SemanticStateSummary::VERSION,
                     complete: true,
                     planning_preconditions: vec![
@@ -582,7 +579,7 @@ mod tests {
                     validation_blocked_by_preconditions: true,
                     compiler_repair_required: true,
                     ..SemanticStateSummary::default()
-                }),
+                },
                 observe_diagnostics: Vec::new(),
             }),
             workspace,
@@ -604,7 +601,7 @@ mod tests {
                 warning_count: 0,
                 compiler_errors: Vec::new(),
                 goal_text: Some("goal".into()),
-                semantic_summary: Some(SemanticStateSummary {
+                semantic_summary: SemanticStateSummary {
                     version: SemanticStateSummary::VERSION,
                     complete: true,
                     target_root: Some("/tmp/example".into()),
@@ -615,7 +612,7 @@ mod tests {
                     validation_blocked_by_preconditions: true,
                     compiler_repair_required: false,
                     ..SemanticStateSummary::default()
-                }),
+                },
                 observe_diagnostics: Vec::new(),
             }),
             workspace,

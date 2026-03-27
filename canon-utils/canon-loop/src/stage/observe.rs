@@ -74,7 +74,7 @@ fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStage
         warning_count: ctx.warning_count,
         compiler_errors: ctx.recent_compiler_errors.clone(),
         goal_text: ctx.goal_text.clone(),
-        semantic_summary: Some(semantic_summary),
+        semantic_summary,
         observe_diagnostics,
     };
     let mut out = observe_events;
@@ -183,7 +183,6 @@ fn build_observation_payload(
     for kw in keywords.into_iter().take(3) {
         if let Ok(results) = search_files(&kw, &target_root, 3) {
             for r in results {
-                facts.push(format!("search_match kw={} path={}", kw, r.path.display()));
                 search_hits.push(serde_json::json!({
                     "keyword": kw,
                     "path": r.path.display().to_string(),

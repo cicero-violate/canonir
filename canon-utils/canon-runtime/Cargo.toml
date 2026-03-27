@@ -42,6 +42,7 @@ canon_invariant = { package = "canon-invariant", path = "../canon-invariant" }
 canon-meta = { path = "../canon-meta" }
 canon-check = { path = "../canon-check" }
 canon-goodness = { path = "../canon-goodness" }
+canon-semantic-state = { path = "../canon-semantic-state" }
 serde_json = { workspace = true }
 serde = { workspace = true }
 toml = "0.8"
