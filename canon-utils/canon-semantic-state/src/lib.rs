@@ -197,6 +197,21 @@ impl SemanticStateSummary {
         self.graph_cfg_edge_count = Some(cfg_edge_count);
     }
 
+    pub fn apply_rustc_capture_failure(&mut self, message: &str) {
+        self.compiler_repair_required = true;
+        if !self.compiler_hints.iter().any(|hint| {
+            hint.kind_enum() == Some(CompilerHintKind::GenericCompilerFailure)
+                && hint.summary == format!("rustc capture failed: {message}")
+        }) {
+            self.compiler_hints.push(CompilerHintRecord::new(
+                CompilerHintKind::GenericCompilerFailure,
+                format!("rustc capture failed: {message}"),
+                "refresh compiler context or stabilize rustc capture before structural analysis",
+                Vec::new(),
+            ));
+        }
+    }
+
     pub fn from_workspace_facts(facts: &[String]) -> Self {
         let mut summary = Self { version: Self::VERSION, ..Self::default() };
         for fact in facts {
@@ -447,6 +462,7 @@ pub struct DevelopmentObjective {
 pub enum DevelopmentStrategyKind {
     FixConfigLintPolicy,
     ApplyTargetedCompilerRepair,
+    PlanSymbolAwareRename,
     DiscoverTestSurface,
     AddRegressionTest,
     SimplifyPlanBatch,
@@ -461,6 +477,7 @@ impl DevelopmentStrategyKind {
         match self {
             Self::FixConfigLintPolicy => "fix_config_lint_policy",
             Self::ApplyTargetedCompilerRepair => "apply_targeted_compiler_repair",
+            Self::PlanSymbolAwareRename => "plan_symbol_aware_rename",
             Self::DiscoverTestSurface => "discover_test_surface",
             Self::AddRegressionTest => "add_regression_test",
             Self::SimplifyPlanBatch => "simplify_plan_batch",
@@ -475,6 +492,7 @@ impl DevelopmentStrategyKind {
         match self {
             Self::FixConfigLintPolicy => "edit workspace/toolchain config before changing source",
             Self::ApplyTargetedCompilerRepair => "make the smallest source repair that directly addresses the compiler blocker",
+            Self::PlanSymbolAwareRename => "use graph-backed symbol relationships to plan a safe rename before editing",
             Self::DiscoverTestSurface => "inspect the current test surface before adding tests",
             Self::AddRegressionTest => "add a targeted regression test for the active behavior gap",
             Self::SimplifyPlanBatch => "reduce batch complexity and constrain the next plan",
@@ -724,6 +742,14 @@ pub fn primary_development_strategy_kind(
     {
         return DevelopmentStrategyKind::RefreshContextBeforeRetry;
     }
+    if semantic_summary.graph_artifact_id.is_some()
+        && semantic_summary
+            .compiler_hints
+            .iter()
+            .any(|hint| hint.kind_enum() == Some(CompilerHintKind::DuplicateDefinition))
+    {
+        return DevelopmentStrategyKind::PlanSymbolAwareRename;
+    }
 
     match primary_objective {
         DevelopmentObjectiveKind::ReduceCompilerFailures => {
@@ -752,8 +778,16 @@ pub fn primary_development_strategy_kind(
             DevelopmentStrategyKind::RefreshContextBeforeRetry
         }
         DevelopmentObjectiveKind::ImproveModuleCohesion => {
+            let has_dense_module_graph = semantic_summary
+                .graph_module_edge_count
+                .zip(semantic_summary.graph_call_edge_count)
+                .is_some_and(|(module_edges, call_edges)| {
+                    module_edges > call_edges.saturating_mul(4) && module_edges > 32
+                });
             if !semantic_summary.module_gaps.is_empty() {
                 DevelopmentStrategyKind::CreateMissingModules
+            } else if has_dense_module_graph && semantic_summary.graph_artifact_id.is_some() {
+                DevelopmentStrategyKind::RestructureModules
             } else {
                 DevelopmentStrategyKind::RestructureModules
             }
@@ -1716,6 +1750,29 @@ mod tests {
         assert_eq!(
             primary_development_strategy_kind(&objective_state, &trend, &summary),
             DevelopmentStrategyKind::FixConfigLintPolicy
+        );
+    }
+
+    #[test]
+    fn development_strategy_prefers_graph_backed_rename_for_duplicate_definition() {
+        let summary = SemanticStateSummary {
+            complete: true,
+            path_exists: true,
+            cargo_project: true,
+            graph_artifact_id: Some("artifact".into()),
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::DuplicateDefinition,
+                "compiler reports duplicate definition",
+                "rename the duplicate definition",
+                vec!["src/lib.rs".into()],
+            )],
+            ..SemanticStateSummary::default()
+        };
+        let trend = ObjectiveTrendState::default();
+        let objective_state = derive_self_development_objective_state(&summary, 0, &[], &trend);
+        assert_eq!(
+            primary_development_strategy_kind(&objective_state, &trend, &summary),
+            DevelopmentStrategyKind::PlanSymbolAwareRename
         );
     }
 }

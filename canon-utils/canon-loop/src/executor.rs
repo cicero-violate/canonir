@@ -338,7 +338,27 @@ impl EventConsumer for LoopStageExecutor {
                 }
             }
             RuntimeEvent::RustcCaptureCompleted(_) => {}
-            RuntimeEvent::RustcCaptureFailed(_) => {}
+            RuntimeEvent::RustcCaptureFailed(failed) => {
+                if let Some(observed) = self.ctx.last_observed.as_mut() {
+                    observed.semantic_summary.apply_rustc_capture_failure(&failed.message);
+                    self.ctx
+                        .objective_trend_state
+                        .record_observation(observed.error_count, &observed.semantic_summary);
+                }
+                self.ctx.error_count = self.ctx.error_count.saturating_add(1);
+                self.ctx.recent_compiler_errors.push(serde_json::json!({
+                    "reason": "rustc_capture_failed",
+                    "message": {
+                        "level": "error",
+                        "message": failed.message,
+                    }
+                }));
+                if self.ctx.recent_compiler_errors.len() > 16 {
+                    let drop_n = self.ctx.recent_compiler_errors.len() - 16;
+                    self.ctx.recent_compiler_errors.drain(0..drop_n);
+                }
+                trigger_observe = true;
+            }
             RuntimeEvent::LoopObserved(o) => {
                 self.ctx.last_observed = Some(o.clone());
                 self.ctx.last_observed_tick = Some(o.tick);
@@ -621,8 +641,7 @@ impl EventConsumer for LoopStageExecutor {
             | RuntimeEvent::CapabilityInvoked(_)
             | RuntimeEvent::CapabilityResolved(_)
             | RuntimeEvent::InvariantDiscovered(_)
-            | RuntimeEvent::RustcCaptureStarted(_)
-             => {}
+            | RuntimeEvent::RustcCaptureStarted(_) => {}
         }
         self.record_control_state(event, &trigger_id);
 

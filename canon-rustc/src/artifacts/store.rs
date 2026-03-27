@@ -7,8 +7,10 @@ use canon_event::{
 use canon_ir::ir::CanonIR;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureMode {
@@ -208,7 +210,8 @@ fn unique_file_count(span_bundle: Option<&SymbolSpanBundle>) -> usize {
 }
 
 fn update_graph_artifact_index(workspace_root: &Path, summary: &GraphArtifactSummary) -> Result<()> {
-    let index_dir = workspace_root.join("state").join("graph").join("index");
+    let graph_dir = workspace_root.join("state").join("graph");
+    let index_dir = graph_dir.join("index");
     fs::create_dir_all(index_dir.join("by_crate"))?;
     fs::create_dir_all(index_dir.join("by_hash"))?;
 
@@ -227,5 +230,97 @@ fn update_graph_artifact_index(workspace_root: &Path, summary: &GraphArtifactSum
         index_dir.join("by_hash").join(format!("{}.json", summary.artifact_id)),
         serde_json::to_vec_pretty(summary)?,
     )?;
+    prune_graph_artifacts(&graph_dir, &index_dir)?;
     Ok(())
+}
+
+fn prune_graph_artifacts(graph_dir: &Path, index_dir: &Path) -> Result<()> {
+    let retain_limit = retained_graph_artifact_limit();
+    if retain_limit == 0 {
+        return Ok(());
+    }
+
+    let mut retained_ids = referenced_artifact_ids(index_dir)?;
+    let mut artifacts = list_graph_artifacts(graph_dir)?;
+    artifacts.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
+    for (artifact_id, _) in artifacts.iter().take(retain_limit) {
+        retained_ids.insert(artifact_id.clone());
+    }
+
+    for (artifact_id, _) in &artifacts {
+        if retained_ids.contains(artifact_id) {
+            continue;
+        }
+        let artifact_path = graph_dir.join(format!("{artifact_id}.json"));
+        if artifact_path.exists() {
+            let _ = fs::remove_file(&artifact_path);
+        }
+        let by_hash_path = index_dir.join("by_hash").join(format!("{artifact_id}.json"));
+        if by_hash_path.exists() {
+            let _ = fs::remove_file(&by_hash_path);
+        }
+    }
+
+    for entry in fs::read_dir(index_dir.join("by_hash"))? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if !graph_dir.join(format!("{stem}.json")).exists() {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    Ok(())
+}
+
+fn retained_graph_artifact_limit() -> usize {
+    std::env::var("CANON_GRAPH_RETAIN_ARTIFACTS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(32)
+}
+
+fn referenced_artifact_ids(index_dir: &Path) -> Result<BTreeSet<String>> {
+    let mut ids = BTreeSet::new();
+    let latest_workspace_path = index_dir.join("latest_workspace.json");
+    if latest_workspace_path.exists() {
+        let index = serde_json::from_slice::<GraphArtifactIndex>(&fs::read(&latest_workspace_path)?)?;
+        ids.insert(index.latest_workspace.artifact_id);
+    }
+
+    let by_crate_dir = index_dir.join("by_crate");
+    if by_crate_dir.exists() {
+        for entry in fs::read_dir(by_crate_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let summary = serde_json::from_slice::<GraphArtifactSummary>(&fs::read(path)?)?;
+            ids.insert(summary.artifact_id);
+        }
+    }
+    Ok(ids)
+}
+
+fn list_graph_artifacts(graph_dir: &Path) -> Result<Vec<(String, SystemTime)>> {
+    let mut artifacts = Vec::new();
+    for entry in fs::read_dir(graph_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let modified = entry
+            .metadata()?
+            .modified()
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        artifacts.push((stem.to_string(), modified));
+    }
+    Ok(artifacts)
 }

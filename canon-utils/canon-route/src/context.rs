@@ -264,6 +264,11 @@ impl RouteContext {
                 );
             }
             RuntimeEvent::RustcCaptureFailed(failed) => {
+                self.context_ready = true;
+                self.semantic_summary
+                    .apply_rustc_capture_failure(&failed.message);
+                self.last_verify_diagnostics
+                    .push(format!("rustc capture failed: {}", failed.message));
                 self.push_journal(
                     "observe",
                     format!("rustc_capture_failed crate={} message={}", failed.crate_name, failed.message),

@@ -409,6 +409,7 @@ pub fn validate_development_strategy_alignment(
                 );
             }
         }
+        DevelopmentStrategyKind::PlanSymbolAwareRename => {}
         DevelopmentStrategyKind::ApplyTargetedCompilerRepair
         | DevelopmentStrategyKind::RealignObjectiveFlow
         | DevelopmentStrategyKind::RestructureModules => {}
