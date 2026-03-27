@@ -20,7 +20,9 @@ use canon_route::{
         RunCommandOutcomeClass, SuccessorConsumptionRule, VerifyOutcomeClass,
     },
 };
-use canon_semantic_state::{CompilerHintKind, CompilerHintRecord, SemanticStateSummary};
+use canon_semantic_state::{
+    CompilerHintKind, CompilerHintRecord, SemanticExecutionResultRecord, SemanticStateSummary,
+};
 
 #[derive(Clone, Debug)]
 pub enum TransitionRow {
@@ -49,6 +51,8 @@ pub enum TransitionRow {
 pub enum RouteScenarioFamily {
     BootstrapRefreshObserve,
     DoneVerify,
+    SemanticProgressVerify,
+    NoSemanticProgressPlan,
     ContinueAct,
     PlannedToAct,
     MissingObservedContextObserve,
@@ -78,9 +82,11 @@ pub enum RouteScenarioFamily {
 }
 
 impl RouteScenarioFamily {
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 30] = [
         Self::BootstrapRefreshObserve,
         Self::DoneVerify,
+        Self::SemanticProgressVerify,
+        Self::NoSemanticProgressPlan,
         Self::ContinueAct,
         Self::PlannedToAct,
         Self::MissingObservedContextObserve,
@@ -484,6 +490,8 @@ pub struct RouteRowContext {
     pub verify_outcome: Option<VerifyOutcomeClass>,
     pub run_command_outcome: Option<RunCommandOutcomeClass>,
     pub apply_patch_outcome: Option<ApplyPatchOutcomeClass>,
+    pub semantic_progress: bool,
+    pub no_semantic_progress: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -834,6 +842,34 @@ pub fn route_transition_rows() -> Vec<RouteTransitionRow> {
             event: Some(RouteRowEvent::LoopActed { action_kind: "done" }),
             decision: None,
             expected_deterministic: Some(DeterministicRouteRule::DoneVerify),
+            expected_rules: vec![],
+        },
+        RouteTransitionRow {
+            name: "semantic_progress_verify",
+            family: RouteScenarioFamily::SemanticProgressVerify,
+            context: RouteRowContext {
+                pending_tool_results_empty: true,
+                semantic_progress: true,
+                ..RouteRowContext::default()
+            },
+            state: RouteRowState::default(),
+            event: Some(RouteRowEvent::LoopActed { action_kind: "apply_patch" }),
+            decision: None,
+            expected_deterministic: Some(DeterministicRouteRule::SemanticProgressVerify),
+            expected_rules: vec![],
+        },
+        RouteTransitionRow {
+            name: "no_semantic_progress_plan",
+            family: RouteScenarioFamily::NoSemanticProgressPlan,
+            context: RouteRowContext {
+                pending_tool_results_empty: true,
+                no_semantic_progress: true,
+                ..RouteRowContext::default()
+            },
+            state: RouteRowState::default(),
+            event: Some(RouteRowEvent::LoopActed { action_kind: "apply_patch" }),
+            decision: None,
+            expected_deterministic: Some(DeterministicRouteRule::NoSemanticProgressPlan),
             expected_rules: vec![],
         },
         RouteTransitionRow {
@@ -2249,6 +2285,22 @@ fn apply_route_outcome_context(ctx: &mut RouteContext, row: &RouteRowContext) {
     }
     if let Some(outcome) = row.apply_patch_outcome {
         ctx.recent_tool_results.push(apply_patch_result_value(outcome));
+    }
+    if row.semantic_progress {
+        ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
+            "module_created",
+            "module file created",
+            vec!["/tmp/example/src/index.rs".into()],
+            true,
+        ));
+    }
+    if row.no_semantic_progress {
+        ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
+            "no_semantic_progress",
+            "action failed",
+            Vec::new(),
+            false,
+        ));
     }
 }
 
