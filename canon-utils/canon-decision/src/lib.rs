@@ -38,6 +38,7 @@ pub struct JournalLine {
 pub struct RoutingInput {
     pub mission: String,
     pub snapshot: String,
+    pub semantic_context: String,
     #[serde(default)]
     pub recent_tool_results: Vec<Value>,
     #[serde(default)]
@@ -94,6 +95,7 @@ pub fn compose_routing_prompt(input: &RoutingInput) -> String {
     format!(
         "Mission: {mission}\n\n\
 Snapshot:\n{snapshot}\n\n\
+Semantic Context:\n{semantic_context}\n\n\
 Recent Actions:\n{recent_tool_results_text}\n\n\
 Routes: {routes}\n\
 RULE: finish_ready=true → conclude. planned_pending=0 → do not select act.\n\n\
@@ -102,6 +104,7 @@ Respond with one fenced ```json block:\n\
 {{\n  \"route\": \"{routes}\",\n  \"rationale\": \"...\",\n  \"confidence\": 0.0\n}}",
         mission = mission_summary,
         snapshot = input.snapshot,
+        semantic_context = input.semantic_context,
         routes = routes,
         route_descriptions = route_descriptions,
     )

@@ -1,6 +1,7 @@
 use canon_event::{new_error_occurred, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, LlmCall, RuntimeEvent};
 use canon_prompt_events::goal_prompt_loaded_event;
 use canon_proc_macros::must_emit;
+use canon_semantic_state::{LlmSemanticContext, SemanticStateSummary};
 use canon_skills::global_registry;
 use uuid::Uuid;
 
@@ -19,6 +20,7 @@ pub struct GoalGenConsumer {
     state: State,
     retries: u32,
     emitter: Option<EventEmitterHandle>,
+    semantic_summary: SemanticStateSummary,
 }
 
 impl GoalGenConsumer {
@@ -33,7 +35,7 @@ impl GoalGenConsumer {
         } else {
             State::Waiting
         };
-        Self { state: initial_state, retries: 0, emitter: None }
+        Self { state: initial_state, retries: 0, emitter: None, semantic_summary: SemanticStateSummary::default() }
     }
 }
 
@@ -68,7 +70,35 @@ impl EventConsumer for GoalGenConsumer {
                         return EventOutcome::NoOp("goal_gen_skill_load_failed");
                     }
                 };
-                EventOutcome::emit(RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt, role: Some("goal_gen".to_string()), agent_id: Some("goal_gen_chatgpt".to_string()), dispatched: true, system: None, system_prompt_id: None, context_base: None, context_base_id: None, prompt_base_id: None, prev_prompt_id: None }), file!(), line!())
+                let semantic_context = LlmSemanticContext {
+                    mission_summary: None,
+                    semantic_summary: self.semantic_summary.clone(),
+                    target_workspace: Some(GOALGEN_PROJECTS_DIR.to_string()),
+                    workspace_loc: None,
+                    error_count: None,
+                    warning_count: None,
+                    route_rationale: None,
+                    route_confidence: None,
+                    invalid_plan_reason: None,
+                    invalid_plan_planned_count: None,
+                    consecutive_invalid_plan_batches: 0,
+                    low_level_diagnostics: vec![format!("goalgen_projects_dir={GOALGEN_PROJECTS_DIR}")],
+                    recent_actions: Vec::new(),
+                    recent_tool_results: Vec::new(),
+                };
+                EventOutcome::emit(RuntimeEvent::Llm(LlmCall {
+                    request_id: request_id.clone(),
+                    prompt: format!("{prompt}\n\n{}", semantic_context.render_goal_gen_block()),
+                    role: Some("goal_gen".to_string()),
+                    agent_id: Some("goal_gen_chatgpt".to_string()),
+                    dispatched: true,
+                    system: None,
+                    system_prompt_id: None,
+                    context_base: None,
+                    context_base_id: None,
+                    prompt_base_id: None,
+                    prev_prompt_id: None,
+                }), file!(), line!())
             }
             (State::Pending { request_id: expected_id, .. }, RuntimeEvent::CapabilityCompleted(done)) => {
                 if done.request_id != *expected_id || done.capability != "llm.call" {
@@ -161,6 +191,10 @@ impl EventConsumer for GoalGenConsumer {
                 }
                 EventOutcome::NoOp("goal_gen_failure_retry")
             }
+            (_, RuntimeEvent::LoopObserved(observed)) => {
+                self.semantic_summary = observed.semantic_summary.clone();
+                EventOutcome::NoOp("goal_gen_observed_update")
+            }
             (State::Waiting, RuntimeEvent::CapabilityCompleted(_)) | (State::Waiting, RuntimeEvent::CapabilityFailed(_)) => EventOutcome::NoOp("goal_gen_waiting_unrelated"),
             (State::Done, _) => EventOutcome::NoOp("goal_gen_noop"),
             (_, RuntimeEvent::Tick(_))
@@ -168,7 +202,6 @@ impl EventConsumer for GoalGenConsumer {
             | (_, RuntimeEvent::Debug(_))
             | (_, RuntimeEvent::Edit(_))
             | (_, RuntimeEvent::ErrorOccurred(_))
-            | (_, RuntimeEvent::LoopObserved(_))
             | (_, RuntimeEvent::LoopPlanned(_))
             | (_, RuntimeEvent::PlanningCompleted(_))
             | (_, RuntimeEvent::LoopActed(_))

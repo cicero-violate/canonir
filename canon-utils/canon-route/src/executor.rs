@@ -111,7 +111,14 @@ impl RouteExecutor {
             self.emit_decision(&json, deterministic.prompt_tag.to_string());
             return;
         }
-        let prompt = self.controller.build_prompt(&self.ctx.mission_summary, &self.ctx.snapshot_text(), &self.ctx.recent_tool_results, &self.ctx.journal);
+        let llm_semantic_context = self.ctx.llm_semantic_context();
+        let prompt = self.controller.build_prompt(
+            &self.ctx.mission_summary,
+            &self.ctx.snapshot_text(),
+            &llm_semantic_context.render_router_block(),
+            &self.ctx.recent_tool_results,
+            &self.ctx.journal,
+        );
         let prompt_hash = hash_str(&prompt);
         let mut should_force_fresh_now = false;
         let emit_eval = evaluate_route_emit(RouteEmitState {
@@ -250,10 +257,9 @@ impl RouteExecutor {
         self.force_fresh_route_once = false;
         if let Some(emitter) = self.emitter.as_ref() {
             let tid = self.current_trigger.clone().expect("try_dispatch_route called without current_trigger");
-            let semantic_summary_block = self.ctx.semantic_summary.render_route_block();
             emitter.emit_with_parents(canon_event::RuntimeEvent::Llm(LlmCall {
                 request_id,
-                prompt: format!("{prompt}\n\n{semantic_summary_block}"),
+                prompt,
                 role: Some("router".to_string()),
                 agent_id: Some("router_chatgpt_group".to_string()),
                 dispatched: true,

@@ -1,7 +1,7 @@
 use canon_decision::JournalLine;
 use canon_event::{RuntimeEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult, SubTaskResult};
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
-use canon_semantic_state::SemanticStateSummary;
+use canon_semantic_state::{LlmSemanticContext, SemanticStateSummary};
 use crate::causal::update_causal_graph;
 use canon_judgment::{LlmSignals, RuntimeSignals};
 use serde_json::json;
@@ -152,6 +152,29 @@ impl RouteContext {
             halted = self.halted,
             halt_reason = self.last_halt_reason.as_deref().unwrap_or("NA"),
         )
+    }
+
+    pub fn llm_semantic_context(&self) -> LlmSemanticContext {
+        LlmSemanticContext {
+            mission_summary: if self.mission_summary.is_empty() {
+                None
+            } else {
+                Some(self.mission_summary.clone())
+            },
+            semantic_summary: self.semantic_summary.clone(),
+            target_workspace: self.semantic_summary.target_root.clone(),
+            workspace_loc: None,
+            error_count: None,
+            warning_count: None,
+            route_rationale: None,
+            route_confidence: None,
+            invalid_plan_reason: self.last_invalid_plan_reason.clone(),
+            invalid_plan_planned_count: self.last_invalid_plan_planned_count,
+            consecutive_invalid_plan_batches: self.consecutive_invalid_plan_batches,
+            low_level_diagnostics: self.last_verify_diagnostics.clone(),
+            recent_actions: Vec::new(),
+            recent_tool_results: Vec::new(),
+        }
     }
 
     pub fn push_journal(&mut self, lane: impl Into<String>, summary: impl Into<String>) {
