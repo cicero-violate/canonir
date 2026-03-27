@@ -1,21 +1,21 @@
-# Interactive SQL Query Planner and Cost-Based Optimizer Simulator
+# Time-Travel Debugger for Deterministic Program Execution with Event Logging and Replay
 
-This project implements a simplified SQL query planner and cost-based optimizer in Rust that parses SQL queries, generates logical and physical execution plans, and selects optimal strategies based on cost estimation. It simulates core database internals such as join ordering, index selection, and predicate pushdown. The system allows experimentation with different optimization strategies and provides explain plans for educational and debugging purposes. This project is interesting because it combines parsing, relational algebra, cost modeling, and optimization algorithms into a system resembling the core of modern relational databases.
+This project implements a time-travel debugging engine in Rust that records program execution as a sequence of deterministic events and allows replaying, stepping backward, and inspecting past states. It simulates execution of a simple interpreted language or instruction set while capturing state transitions, enabling reverse debugging and inspection of historical program states. This project is interesting because it combines execution tracing, deterministic replay, state snapshots, and debugging abstractions into a powerful tool for understanding program behavior.
 
 ## Target
-- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/sql_optimizer_sim`
+- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/time_travel_debugger`
 
 ## Requirements
 
-1. Implement a Rust binary crate structured into modules such as `lexer`, `parser`, `token`, `ast`, `logical_plan`, `physical_plan`, `expression`, `schema`, `catalog`, `statistics`, `cost`, `optimizer`, `rules`, `join`, `scan`, `filter`, `projection`, `engine`, `cli`, and `errors`.
-2. Design a SQL parser (using `nom` or `pest`) supporting a subset of SQL including SELECT, FROM, WHERE, JOIN, and GROUP BY.
-3. Convert parsed queries into a logical plan using relational algebra operators (scan, filter, projection, join, aggregation).
-4. Implement transformation rules such as predicate pushdown, projection pruning, and join reordering.
-5. Build a cost model that estimates execution cost based on table statistics (row count, selectivity, cardinality).
-6. Implement a cost-based optimizer that explores multiple execution plans and selects the lowest-cost plan.
-7. Design physical operators such as nested loop join, hash join, and index scan.
-8. Support simple table statistics and catalog metadata stored in-memory or serialized via `serde`.
-9. Implement an execution engine that can simulate running the physical plan on in-memory data.
-10. Provide an EXPLAIN feature that outputs logical and physical plans with cost estimates.
-11. Provide a CLI using `clap` with commands like `query`, `explain`, `load-data`, and `stats`.
-12. Integrate structured logging with `tracing` to trace parsing, plan generation, optimization decisions, cost evaluation, and execution steps, and ensure the implementation spans at least 800 lines of real Rust code across modules and compiles successfully with `cargo check` without requiring external services.
+1. Implement a Rust binary crate structured into modules such as `instruction`, `program`, `vm`, `state`, `memory`, `stack`, `event`, `log`, `recorder`, `replay`, `snapshot`, `checkpoint`, `debugger`, `breakpoint`, `engine`, `cli`, and `errors`.
+2. Design a simple instruction set (e.g., arithmetic, memory load/store, jumps, function calls) for a deterministic virtual machine.
+3. Implement a virtual machine that executes instructions step-by-step while producing execution events.
+4. Build an event logging system that records all state transitions (register changes, memory writes, control flow).
+5. Implement deterministic replay that reconstructs execution from the event log without re-running original logic.
+6. Design snapshot/checkpoint mechanisms to store periodic full state for faster rewind operations.
+7. Implement reverse execution (step backward) by replaying from nearest checkpoint and reconstructing prior states.
+8. Support breakpoints and watchpoints that trigger during forward or reverse execution.
+9. Provide state inspection tools for registers, memory, and stack at any execution point.
+10. Implement persistence using file-based serialization with `serde` for event logs and snapshots.
+11. Provide a CLI using `clap` with commands like `run`, `record`, `replay`, `step`, `back`, `break`, and `inspect`.
+12. Integrate structured logging with `tracing` to trace instruction execution, event recording, replay steps, checkpointing, and debugging operations, and ensure the implementation spans at least 800 lines of real Rust code across modules and compiles successfully with `cargo check` without requiring external services.
