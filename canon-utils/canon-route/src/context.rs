@@ -232,6 +232,43 @@ impl RouteContext {
 
     pub fn update_from_event(&mut self, event: &RuntimeEvent, workspace: &Path) {
         match event {
+            RuntimeEvent::RustcGraphArtifactWritten(written) => {
+                self.semantic_summary.apply_graph_artifact_summary(
+                    written.artifact_id.clone(),
+                    written.node_count as usize,
+                    written.edge_count as usize,
+                    written.file_count as usize,
+                    written.call_edge_count as usize,
+                    written.module_edge_count as usize,
+                    written.cfg_edge_count as usize,
+                );
+                self.push_journal(
+                    "observe",
+                    format!(
+                        "rustc_graph_artifact_written crate={} artifact_id={} files={} nodes={} edges={}",
+                        written.crate_name,
+                        written.artifact_id,
+                        written.file_count,
+                        written.node_count,
+                        written.edge_count
+                    ),
+                );
+            }
+            RuntimeEvent::RustcCaptureCompleted(completed) => {
+                self.push_journal(
+                    "observe",
+                    format!(
+                        "rustc_capture_completed crate={} artifact_id={}",
+                        completed.crate_name, completed.artifact_id
+                    ),
+                );
+            }
+            RuntimeEvent::RustcCaptureFailed(failed) => {
+                self.push_journal(
+                    "observe",
+                    format!("rustc_capture_failed crate={} message={}", failed.crate_name, failed.message),
+                );
+            }
             RuntimeEvent::LoopObserved(LoopObserved { goal_text, error_count, semantic_summary, .. }) => {
                 let goal_present = goal_text
                     .as_ref()

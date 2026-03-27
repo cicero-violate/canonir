@@ -553,9 +553,11 @@ canon_event_struct!(
         #[input] artifact_id: String,
         #[input] artifact_path: String,
         #[delta]
+        #[output] artifact_written: bool,
+        #[output] artifact_id_out: String,
+        #[output] file_count: u64,
         #[output] node_count: u64,
         #[output] edge_count: u64,
-        #[output] file_count: u64,
         #[output] call_edge_count: u64,
         #[output] module_edge_count: u64,
         #[output] cfg_edge_count: u64,
@@ -579,6 +581,7 @@ canon_event_struct!(
     RustcCaptureFailed {
         #[input] crate_name: String,
         #[delta]
+        #[output] failed: bool,
         #[output] message: String,
     }
 );

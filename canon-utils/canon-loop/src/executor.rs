@@ -321,6 +321,24 @@ impl EventConsumer for LoopStageExecutor {
                     self.ctx.scheduler.agent_capacity.insert(id.to_string(), cap);
                 }
             }
+            RuntimeEvent::RustcGraphArtifactWritten(written) => {
+                if let Some(observed) = self.ctx.last_observed.as_mut() {
+                    observed.semantic_summary.apply_graph_artifact_summary(
+                        written.artifact_id.clone(),
+                        written.node_count as usize,
+                        written.edge_count as usize,
+                        written.file_count as usize,
+                        written.call_edge_count as usize,
+                        written.module_edge_count as usize,
+                        written.cfg_edge_count as usize,
+                    );
+                    self.ctx
+                        .objective_trend_state
+                        .record_observation(observed.error_count, &observed.semantic_summary);
+                }
+            }
+            RuntimeEvent::RustcCaptureCompleted(_) => {}
+            RuntimeEvent::RustcCaptureFailed(_) => {}
             RuntimeEvent::LoopObserved(o) => {
                 self.ctx.last_observed = Some(o.clone());
                 self.ctx.last_observed_tick = Some(o.tick);
@@ -604,9 +622,7 @@ impl EventConsumer for LoopStageExecutor {
             | RuntimeEvent::CapabilityResolved(_)
             | RuntimeEvent::InvariantDiscovered(_)
             | RuntimeEvent::RustcCaptureStarted(_)
-            | RuntimeEvent::RustcGraphArtifactWritten(_)
-            | RuntimeEvent::RustcCaptureCompleted(_)
-            | RuntimeEvent::RustcCaptureFailed(_) => {}
+             => {}
         }
         self.record_control_state(event, &trigger_id);
 

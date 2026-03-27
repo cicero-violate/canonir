@@ -12,6 +12,7 @@ use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::interface::Compiler;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::FileName;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 pub struct RustcCaptureCallbacks {
@@ -77,7 +78,10 @@ impl Callbacks for RustcCaptureCallbacks {
                         spans_by_symbol: collect_symbol_spans(tcx),
                         kinds: std::collections::HashMap::new(),
                     });
-                    if let Ok(summary) = write_graph_artifact(&workspace_root, crate_name, &ir, Some(&bundle)) {
+                    let file_count = workspace_file_count(tcx, &workspace_root);
+                    if let Ok(summary) =
+                        write_graph_artifact(&workspace_root, crate_name, &ir, Some(&bundle), Some(file_count))
+                    {
                         let artifact_event_id = emit_graph_artifact_summary_with_parents(
                             &tlog_path,
                             &summary,
@@ -150,4 +154,24 @@ fn is_workspace_crate(tcx: TyCtxt<'_>, workspace_root: &PathBuf) -> bool {
             let abs = path.canonicalize().unwrap_or(path);
             abs.starts_with(&workspace_root)
         })
+}
+
+fn workspace_file_count(tcx: TyCtxt<'_>, workspace_root: &PathBuf) -> usize {
+    let workspace_root = workspace_root.canonicalize().unwrap_or_else(|_| workspace_root.clone());
+    let target_root = workspace_root.join("target");
+    let source_map = tcx.sess.source_map();
+    let mut files = BTreeSet::new();
+    for path in source_map.files().iter().filter_map(|f| match &f.name {
+        FileName::Real(real_name) => real_name.local_path().map(|p| p.to_path_buf()),
+        _ => None,
+    }) {
+        if is_cargo_registry_path(&path) {
+            continue;
+        }
+        let abs = path.canonicalize().unwrap_or(path);
+        if abs.starts_with(&workspace_root) && !abs.starts_with(&target_root) {
+            files.insert(abs);
+        }
+    }
+    files.len()
 }

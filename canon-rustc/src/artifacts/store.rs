@@ -59,6 +59,7 @@ pub fn write_graph_artifact(
     crate_name: &str,
     ir: &CanonIR,
     span_bundle: Option<&SymbolSpanBundle>,
+    file_count_override: Option<usize>,
 ) -> Result<GraphArtifactSummary> {
     let serialized = serde_json::to_vec(ir)?;
     let artifact_id = format!("{:x}", Sha256::digest(&serialized));
@@ -74,7 +75,7 @@ pub fn write_graph_artifact(
         crate_name: crate_name.to_string(),
         node_count: ir.nodes.len(),
         edge_count: total_edge_count(ir),
-        file_count: unique_file_count(span_bundle),
+        file_count: file_count_override.unwrap_or_else(|| unique_file_count(span_bundle)),
         call_edge_count: ir.call_graph.edge_count(),
         module_edge_count: ir.module_graph.edge_count(),
         cfg_edge_count: ir.cfg_graph.edge_count(),
@@ -123,9 +124,11 @@ pub fn emit_graph_artifact_summary_with_parents(
             crate_name: summary.crate_name.clone(),
             artifact_id: summary.artifact_id.clone(),
             artifact_path: summary.artifact_path.display().to_string(),
+            artifact_written: true,
+            artifact_id_out: summary.artifact_id.clone(),
+            file_count: summary.file_count as u64,
             node_count: summary.node_count as u64,
             edge_count: summary.edge_count as u64,
-            file_count: summary.file_count as u64,
             call_edge_count: summary.call_edge_count as u64,
             module_edge_count: summary.module_edge_count as u64,
             cfg_edge_count: summary.cfg_edge_count as u64,
@@ -169,6 +172,7 @@ pub fn emit_capture_failed(
         EventKind::RustcCaptureFailed,
         &RustcCaptureFailed {
             crate_name: crate_name.to_string(),
+            failed: true,
             message: message.to_string(),
         },
         parent_ids.clone(),

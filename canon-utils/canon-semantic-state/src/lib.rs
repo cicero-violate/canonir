@@ -178,6 +178,25 @@ impl SemanticStateSummary {
         facts
     }
 
+    pub fn apply_graph_artifact_summary(
+        &mut self,
+        artifact_id: String,
+        node_count: usize,
+        edge_count: usize,
+        file_count: usize,
+        call_edge_count: usize,
+        module_edge_count: usize,
+        cfg_edge_count: usize,
+    ) {
+        self.graph_artifact_id = Some(artifact_id);
+        self.graph_node_count = Some(node_count);
+        self.graph_edge_count = Some(edge_count);
+        self.graph_file_count = Some(file_count);
+        self.graph_call_edge_count = Some(call_edge_count);
+        self.graph_module_edge_count = Some(module_edge_count);
+        self.graph_cfg_edge_count = Some(cfg_edge_count);
+    }
+
     pub fn from_workspace_facts(facts: &[String]) -> Self {
         let mut summary = Self { version: Self::VERSION, ..Self::default() };
         for fact in facts {
