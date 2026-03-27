@@ -1,7 +1,7 @@
 use crate::{context::RouteContext, decision::RouteDecision};
 use canon_decision::RouteKind;
 use canon_event::RuntimeEvent;
-use canon_semantic_state::SemanticStateSummary;
+use canon_semantic_state::{latest_no_semantic_progress, latest_semantic_progress, SemanticStateSummary};
 use serde_json::Value;
 
 #[cfg(test)]
@@ -584,7 +584,7 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
         RuntimeEvent::LoopActed(_)
             if ctx.planned_pending == 0
                 && ctx.pending_tool_result_ids.is_empty()
-                && latest_semantic_progress(ctx)
+                && latest_semantic_progress(&ctx.recent_execution_results)
                 && !ctx.last_action_failed
                 && !ctx.validation_blocked_state() =>
         {
@@ -600,7 +600,7 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
         RuntimeEvent::LoopActed(_)
             if ctx.planned_pending == 0
                 && ctx.pending_tool_result_ids.is_empty()
-                && latest_no_semantic_progress(ctx)
+                && latest_no_semantic_progress(&ctx.recent_execution_results)
                 && !ctx.finish_ready =>
         {
             Some(DeterministicRouteDecision {
@@ -692,7 +692,7 @@ pub fn cycle_cap_fallback_lane(ctx: &RouteContext, decision: &RouteDecision) -> 
 }
 
 pub fn has_actionable_failure(ctx: &RouteContext) -> bool {
-    if latest_no_semantic_progress(ctx) {
+    if latest_no_semantic_progress(&ctx.recent_execution_results) {
         return true;
     }
     if semantic_repair_state_is_actionable(&ctx.semantic_summary)
@@ -724,22 +724,6 @@ pub fn has_actionable_failure(ctx: &RouteContext) -> bool {
             r.get("action").and_then(|v| v.as_str()) != Some("run_command")
                 && r.get("success").and_then(|v| v.as_bool()) == Some(false)
         })
-}
-
-fn latest_semantic_progress(ctx: &RouteContext) -> bool {
-    ctx.recent_execution_results
-        .iter()
-        .rev()
-        .find(|result| result.semantic_progress)
-        .is_some()
-}
-
-fn latest_no_semantic_progress(ctx: &RouteContext) -> bool {
-    ctx.recent_execution_results
-        .iter()
-        .rev()
-        .next()
-        .is_some_and(|result| !result.semantic_progress)
 }
 
 pub fn semantic_repair_state_is_actionable(summary: &SemanticStateSummary) -> bool {

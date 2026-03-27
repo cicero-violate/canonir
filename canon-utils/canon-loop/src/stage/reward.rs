@@ -1,4 +1,5 @@
 use canon_event::{RuntimeEvent, LoopRewarded, LoopVerified, RouteSelected};
+use canon_semantic_state::{latest_no_semantic_progress, latest_semantic_progress};
 
 use crate::{context::LoopContext, result::LoopStageResult};
 
@@ -24,7 +25,7 @@ pub fn execute(v: LoopVerified, ctx: &mut LoopContext) -> anyhow::Result<LoopSta
     ctx.last_reward_trace_id = v.trace_id.clone();
     ctx.last_reward_execution_id = v.execution_id.clone();
     let reward = compute_reward(ctx, &v);
-    let semantic_progress = latest_semantic_progress(ctx);
+    let semantic_progress = latest_semantic_progress(&ctx.recent_execution_results);
     // Verify/reward is evaluative, not terminal: ordinary compiler failures should replan,
     // not halt the loop. Terminal halts only come from explicit conclude routing.
     let halt = false;
@@ -60,28 +61,12 @@ fn compute_reward(ctx: &LoopContext, v: &LoopVerified) -> f32 {
     if ctx.last_action_kind == "done" {
         reward += 0.5;
     }
-    if latest_semantic_progress(ctx) {
+    if latest_semantic_progress(&ctx.recent_execution_results) {
         reward += 0.4;
-    } else if latest_no_semantic_progress(ctx) {
+    } else if latest_no_semantic_progress(&ctx.recent_execution_results) {
         reward -= 0.4;
     }
     reward
-}
-
-fn latest_semantic_progress(ctx: &LoopContext) -> bool {
-    ctx.recent_execution_results
-        .iter()
-        .rev()
-        .next()
-        .is_some_and(|result| result.semantic_progress)
-}
-
-fn latest_no_semantic_progress(ctx: &LoopContext) -> bool {
-    ctx.recent_execution_results
-        .iter()
-        .rev()
-        .next()
-        .is_some_and(|result| !result.semantic_progress)
 }
 
 #[cfg(test)]

@@ -678,6 +678,22 @@ pub fn execution_results_for_action(
         .collect()
 }
 
+pub fn latest_semantic_progress(results: &[SemanticExecutionResultRecord]) -> bool {
+    results
+        .iter()
+        .rev()
+        .next()
+        .is_some_and(|result| result.semantic_progress)
+}
+
+pub fn latest_no_semantic_progress(results: &[SemanticExecutionResultRecord]) -> bool {
+    results
+        .iter()
+        .rev()
+        .next()
+        .is_some_and(|result| !result.semantic_progress)
+}
+
 fn render_bullets(lines: &[String]) -> String {
     if lines.is_empty() {
         "- none".to_string()

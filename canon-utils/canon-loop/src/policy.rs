@@ -490,14 +490,6 @@ pub fn planner_hint_lines(
     out
 }
 
-fn latest_no_semantic_progress(recent_execution_results: &[SemanticExecutionResultRecord]) -> bool {
-    recent_execution_results
-        .iter()
-        .rev()
-        .next()
-        .is_some_and(|result| !result.semantic_progress)
-}
-
 fn is_bootstrap_command_output(stdout: &str, stderr: &str) -> bool {
     let text = if !stdout.is_empty() { stdout } else { stderr };
     text.contains("Creating binary (application) package")
@@ -656,4 +648,4 @@ mod tests {
         }
     }
 }
-use canon_semantic_state::SemanticExecutionResultRecord;
+use canon_semantic_state::{latest_no_semantic_progress, SemanticExecutionResultRecord};
