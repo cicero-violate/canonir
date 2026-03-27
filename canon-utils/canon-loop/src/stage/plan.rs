@@ -390,6 +390,11 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     ) {
         ctx.last_planned_observed_tick = None;
         return Ok(LoopStageResult::EmitMany(vec![
+            RuntimeEvent::InvariantDiscovered(canon_event::InvariantDiscovered {
+                feature: "invalid_plan_batch".to_string(),
+                confidence: 1.0,
+                support: 1,
+            }),
             RuntimeEvent::Debug(canon_event::DebugEvent {
                 source: "plan_stage".to_string(),
                 kind: "invalid_plan_batch".to_string(),

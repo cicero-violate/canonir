@@ -1,16 +1,18 @@
-use canon_semantic_state::{CompilerHintKind, CompilerHintRecord};
+use canon_semantic_state::{CompilerHintKind, CompilerHintRecord, FailureScopeKind};
 
 pub fn extract_compiler_hints(errors: &[serde_json::Value]) -> Vec<CompilerHintRecord> {
     let mut hints = Vec::new();
     for text in extract_error_texts(errors) {
         let target_files = extract_target_files(&text);
+        let scope = classify_failure_scope(&text, &target_files);
         if let Some(module_name) = extract_missing_module_name(&text) {
             hints.push(CompilerHintRecord::new(
                 CompilerHintKind::MissingModule,
                 format!("compiler reports missing module `{module_name}`"),
                 format!("use semantic module creation to add `{module_name}` before cargo check"),
                 target_files,
-            ));
+            )
+            .with_failure_scope(scope));
             continue;
         }
         if text.contains("allow(dead_code) incompatible with previous forbid") {
@@ -19,7 +21,8 @@ pub fn extract_compiler_hints(errors: &[serde_json::Value]) -> Vec<CompilerHintR
                 "compiler forbids dead_code while source adds allow(dead_code)",
                 "remove allow(dead_code) or make the code used; do not suppress this lint",
                 target_files,
-            ));
+            )
+            .with_failure_scope(FailureScopeKind::Workspace));
             continue;
         }
         if text.contains("main function not found") || text.contains("`main` function not found") {
@@ -28,7 +31,8 @@ pub fn extract_compiler_hints(errors: &[serde_json::Value]) -> Vec<CompilerHintR
                 "compiler reports missing main entrypoint",
                 "create src/main.rs with a valid main function or convert the crate to a library",
                 target_files,
-            ));
+            )
+            .with_failure_scope(scope));
             continue;
         }
         if let Some(symbol) = extract_unresolved_import_symbol(&text) {
@@ -37,7 +41,8 @@ pub fn extract_compiler_hints(errors: &[serde_json::Value]) -> Vec<CompilerHintR
                 format!("compiler reports unresolved import `{symbol}`"),
                 "use semantic import repair to add or correct the import before cargo check",
                 target_files,
-            ));
+            )
+            .with_failure_scope(scope));
             continue;
         }
         if let Some(symbol) = extract_missing_symbol(&text) {
@@ -46,7 +51,8 @@ pub fn extract_compiler_hints(errors: &[serde_json::Value]) -> Vec<CompilerHintR
                 format!("compiler cannot find `{symbol}` in scope"),
                 "use semantic symbol definition or import repair before cargo check",
                 target_files,
-            ));
+            )
+            .with_failure_scope(scope));
             continue;
         }
         if let Some(symbol) = extract_duplicate_definition_symbol(&text) {
@@ -55,7 +61,8 @@ pub fn extract_compiler_hints(errors: &[serde_json::Value]) -> Vec<CompilerHintR
                 format!("compiler reports duplicate definition for `{symbol}`"),
                 "use semantic rename to resolve the duplicate definition before cargo check",
                 target_files,
-            ));
+            )
+            .with_failure_scope(scope));
             continue;
         }
         if let Some(bound) = extract_trait_bound_summary(&text) {
@@ -64,7 +71,8 @@ pub fn extract_compiler_hints(errors: &[serde_json::Value]) -> Vec<CompilerHintR
                 format!("compiler reports unsatisfied trait bound `{bound}`"),
                 "edit the local type, impl, or call site to satisfy the required trait bound",
                 target_files,
-            ));
+            )
+            .with_failure_scope(scope));
             continue;
         }
         if text.contains("error[E") || text.contains("could not compile") {
@@ -73,10 +81,28 @@ pub fn extract_compiler_hints(errors: &[serde_json::Value]) -> Vec<CompilerHintR
                 truncate(&text, 140),
                 "address the cited compiler error directly before adding more edits",
                 target_files,
-            ));
+            )
+            .with_failure_scope(scope));
         }
     }
     dedup_hints(hints)
+}
+
+fn classify_failure_scope(text: &str, target_files: &[String]) -> FailureScopeKind {
+    if text.contains("rustc capture failed") {
+        return FailureScopeKind::Tooling;
+    }
+    if target_files.iter().any(|target| !target.trim().is_empty() && target != "none") {
+        return FailureScopeKind::Localized;
+    }
+    if text.contains(".cargo/config.toml")
+        || text.contains("Cargo.toml")
+        || text.contains("workspace")
+        || text.contains("forbid")
+    {
+        return FailureScopeKind::Workspace;
+    }
+    FailureScopeKind::None
 }
 
 pub fn planner_lines(errors: &[serde_json::Value]) -> Vec<CompilerHintRecord> {
@@ -193,7 +219,7 @@ fn truncate(text: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{extract_compiler_hints, planner_lines};
-    use canon_semantic_state::CompilerHintKind;
+    use canon_semantic_state::{CompilerHintKind, FailureScopeKind};
 
     #[test]
     fn extracts_missing_module_hint() {
@@ -209,6 +235,9 @@ mod tests {
         let errors = vec![serde_json::json!("error[E0453]: allow(dead_code) incompatible with previous forbid")];
         let lines = planner_lines(&errors);
         assert!(lines.iter().any(|line| line.suggested_repair.contains("remove allow(dead_code)")));
+        assert!(lines
+            .iter()
+            .any(|line| line.failure_scope_enum() == Some(FailureScopeKind::Workspace)));
     }
 
     #[test]
@@ -216,6 +245,9 @@ mod tests {
         let errors = vec![serde_json::json!("error[E0432]: unresolved import `crate::foo`\n --> src/lib.rs:1:5")];
         let hints = extract_compiler_hints(&errors);
         assert!(hints.iter().any(|h| h.kind_enum() == Some(CompilerHintKind::UnresolvedImport)));
+        assert!(hints
+            .iter()
+            .any(|h| h.failure_scope_enum() == Some(FailureScopeKind::Localized)));
     }
 
     #[test]

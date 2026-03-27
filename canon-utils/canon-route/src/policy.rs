@@ -1,4 +1,5 @@
 use crate::{context::RouteContext, decision::RouteDecision};
+use canon_invariant::semantic_summary_has_actionable_failure;
 use canon_decision::RouteKind;
 use canon_event::RuntimeEvent;
 use canon_semantic_state::{latest_no_semantic_progress, latest_semantic_progress, SemanticStateSummary};
@@ -135,6 +136,7 @@ pub enum DeterministicRouteRule {
     DoneVerify,
     SemanticProgressVerify,
     NoSemanticProgressPlan,
+    NoActionableFailureObserve,
     ContinueAct,
     PlannedToAct,
     MissingObservedContextObserve,
@@ -628,6 +630,7 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
             if ctx.planned_pending == 0
                 && ctx.pending_tool_result_ids.is_empty()
                 && latest_no_semantic_progress(&ctx.recent_execution_results)
+                && has_actionable_failure(ctx)
                 && !ctx.finish_ready =>
         {
             Some(DeterministicRouteDecision {
@@ -637,6 +640,22 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
                 prompt_tag: "deterministic:no_semantic_progress_plan",
                 noop_reason: "route_executor_no_semantic_progress_plan",
                 rule: DeterministicRouteRule::NoSemanticProgressPlan,
+            })
+        }
+        RuntimeEvent::LoopActed(_)
+            if ctx.planned_pending == 0
+                && ctx.pending_tool_result_ids.is_empty()
+                && latest_no_semantic_progress(&ctx.recent_execution_results)
+                && !has_actionable_failure(ctx)
+                && !ctx.finish_ready =>
+        {
+            Some(DeterministicRouteDecision {
+                route: RouteKind::Observe,
+                rationale: "recent action produced no semantic progress but no actionable failure is scoped; refresh observation instead of repair replanning".to_string(),
+                confidence: 0.9,
+                prompt_tag: "deterministic:no_actionable_failure_observe",
+                noop_reason: "route_executor_no_actionable_failure_observe",
+                rule: DeterministicRouteRule::NoActionableFailureObserve,
             })
         }
         RuntimeEvent::LoopActed(_) if ctx.planned_pending > 0 && ctx.pending_tool_result_ids.is_empty() => Some(DeterministicRouteDecision {
@@ -720,22 +739,17 @@ pub fn cycle_cap_fallback_lane(ctx: &RouteContext, decision: &RouteDecision) -> 
 }
 
 pub fn has_actionable_failure(ctx: &RouteContext) -> bool {
-    if latest_no_semantic_progress(&ctx.recent_execution_results) {
-        return true;
-    }
     if ctx.objective_state().misalignment_pressure_score > 0 {
         return true;
     }
-    if ctx.objective_state().is_stalled() {
-        return true;
-    }
-    if ctx.objective_trend_state.repeated_stall_count > 0 && ctx.objective_trend_state.current_no_progress_streak > 0 {
-        return true;
-    }
     if semantic_repair_state_is_actionable(&ctx.semantic_summary)
-        || ctx.validation_blocked_state()
-        || ctx.compiler_repair_required_state()
-        || !ctx.planning_preconditions_state().is_empty()
+        || semantic_summary_has_actionable_failure(
+            ctx.semantic_summary.validation_blocked_by_preconditions,
+            ctx.semantic_summary.compiler_repair_required,
+            ctx.semantic_summary.planning_preconditions.len(),
+            ctx.semantic_summary.compiler_hints.len(),
+            ctx.semantic_summary.module_gaps.len(),
+        )
     {
         return true;
     }
@@ -919,6 +933,8 @@ mod tests {
     #[test]
     fn cycle_cap_with_actionable_failure_falls_back_to_plan() {
         let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.compiler_repair_required = true;
         ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
             "no_semantic_progress",
             "action failed",
@@ -1382,6 +1398,9 @@ mod tests {
     #[test]
     fn apply_route_policy_cycle_cap_rewrites_conclude() {
         let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.path_exists = true;
+        ctx.semantic_summary.compiler_repair_required = true;
         ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
             "no_semantic_progress",
             "action failed",
@@ -1476,6 +1495,8 @@ mod tests {
     #[test]
     fn deterministic_route_for_event_replans_after_no_semantic_progress() {
         let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.compiler_repair_required = true;
         ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
             "no_semantic_progress",
             "action failed",
@@ -1504,6 +1525,40 @@ mod tests {
         let decision = deterministic_route_for_event(&ctx, &RuntimeEvent::LoopActed(acted)).unwrap();
         assert_eq!(decision.route, RouteKind::Plan);
         assert_eq!(decision.rule, DeterministicRouteRule::NoSemanticProgressPlan);
+    }
+
+    #[test]
+    fn deterministic_route_for_event_observes_when_no_progress_has_no_actionable_failure() {
+        let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = true;
+        ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
+            "no_semantic_progress",
+            "read_file produced no semantic delta",
+            Vec::new(),
+            false,
+        ));
+        let acted = canon_event::LoopActed {
+            tick: 0,
+            action_id: None,
+            action_kind: "read_file".into(),
+            capability_request_id: String::new(),
+            tool_call_id: None,
+            tool_result_id: None,
+            success: true,
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: 0,
+            trace_id: None,
+            execution_id: None,
+            parent_span_id: None,
+            span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+        };
+        let decision = deterministic_route_for_event(&ctx, &RuntimeEvent::LoopActed(acted)).unwrap();
+        assert_eq!(decision.route, RouteKind::Observe);
+        assert_eq!(decision.rule, DeterministicRouteRule::NoActionableFailureObserve);
     }
 
     #[test]

@@ -1,5 +1,13 @@
 use crate::compiler_hints::extract_compiler_hints;
 use crate::env_model::{EntrypointKind, WorkspaceModel};
+use canon_invariant::{
+    classify_planned_action_class as classify_plan_action_class,
+    failure_scope_is_sufficient,
+    high_invalid_plan_pressure_requires_single_action,
+    PlannedActionClass,
+    semantic_summary_has_actionable_failure,
+    stalled_loop_forbids_action_class,
+};
 use canon_semantic_state::{
     primary_development_strategy_kind, CompilerHintKind, DevelopmentStrategyKind, ObjectiveTrendState,
     SelfDevelopmentObjectiveState, SemanticStateSummary,
@@ -281,6 +289,8 @@ pub fn validate_preconditions(
     if let Some(highest_priority) = intents.first() {
         validate_highest_priority_intent(actions, target_root, highest_priority, semantic_summary)?;
     }
+    validate_no_actionable_failure(actions, &action_intents, semantic_summary)?;
+    validate_failure_scope(actions, &action_intents, semantic_summary)?;
     Ok(())
 }
 
@@ -497,6 +507,46 @@ pub fn validate_trend_intent_alignment(
     recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
     objective_trend_state: &canon_semantic_state::ObjectiveTrendState,
 ) -> Result<(), String> {
+    if high_invalid_plan_pressure_requires_single_action(
+        objective_trend_state.invalid_plan_rate(),
+        objective_trend_state.planning_attempts,
+    ) && actions.len() > 1
+    {
+        return Err(
+            "high invalid-plan pressure requires a single-action first batch; simplify the next plan"
+                .to_string(),
+        );
+    }
+
+    if objective_trend_state.current_no_progress_streak >= 2 {
+        if let Some(first_class) = first_action_class(actions) {
+            if stalled_loop_forbids_action_class(
+                objective_trend_state.current_no_progress_streak,
+                first_class,
+            ) {
+                return Err(
+                    "stalled loop requires a state-changing first batch; passive discovery or validation cannot lead"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    if objective_trend_state.current_no_progress_streak > 0 {
+        if let (Some(previous_class), Some(next_class)) =
+            (last_attempted_action_class(recent_execution_results), first_action_class(actions))
+        {
+            if previous_class == next_class
+                && matches!(next_class, PlannedActionClass::PassiveDiscovery | PlannedActionClass::Verification)
+            {
+                return Err(
+                    "first planned batch repeats the same zero-progress passive action class; choose a state-changing action"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
     if objective_trend_state.current_no_progress_streak == 0
         || objective_trend_state.repeated_stall_count == 0
     {
@@ -610,6 +660,67 @@ fn contains_bootstrap_action(actions: &[canon_event::LoopPlanned]) -> bool {
                 .and_then(|v| v.as_str())
                 .is_some_and(|cmd| cmd.contains("cargo init") || cmd.contains("cargo new"))
     })
+}
+
+fn validate_no_actionable_failure(
+    _actions: &[canon_event::LoopPlanned],
+    action_intents: &[ActionIntent],
+    semantic_summary: &SemanticStateSummary,
+) -> Result<(), String> {
+    let has_repair_intent = action_intents.iter().any(|intent| {
+        matches!(
+            intent,
+            ActionIntent::FixDeadCodeConflict(_)
+                | ActionIntent::FixUnresolvedImport(_)
+                | ActionIntent::DefineMissingSymbol(_)
+                | ActionIntent::ResolveDuplicateDefinition(_)
+                | ActionIntent::FixTraitBoundFailure(_)
+        )
+    });
+    let actionable_failure = semantic_summary_has_actionable_failure(
+        semantic_summary.validation_blocked_by_preconditions,
+        semantic_summary.compiler_repair_required,
+        semantic_summary.planning_preconditions.len(),
+        semantic_summary.compiler_hints.len(),
+        semantic_summary.module_gaps.len(),
+    );
+    if has_repair_intent && !actionable_failure {
+        return Err(
+            "repair-oriented planning is forbidden because there is no actionable failure in the current semantic context"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_failure_scope(
+    _actions: &[canon_event::LoopPlanned],
+    action_intents: &[ActionIntent],
+    semantic_summary: &SemanticStateSummary,
+) -> Result<(), String> {
+    let has_localized_repair = action_intents.iter().any(|intent| {
+        matches!(
+            intent,
+            ActionIntent::FixDeadCodeConflict(_)
+                | ActionIntent::FixUnresolvedImport(_)
+                | ActionIntent::DefineMissingSymbol(_)
+                | ActionIntent::ResolveDuplicateDefinition(_)
+                | ActionIntent::FixTraitBoundFailure(_)
+        )
+    });
+    if has_localized_repair
+        && !failure_scope_is_sufficient(
+            semantic_summary.compiler_repair_required,
+            semantic_summary.compiler_hints.len(),
+            semantic_summary.failure_scope.as_deref(),
+        )
+    {
+        return Err(
+            "compiler failure lacks scoped target information; refresh context or classify failure scope before targeted repair"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn contains_cargo_init(actions: &[canon_event::LoopPlanned]) -> bool {
@@ -760,6 +871,44 @@ fn classify_action_intents(
             out.push(ActionIntent::FixTraitBoundFailure(path.clone()));
         }
     }
+}
+
+fn first_action_class(actions: &[canon_event::LoopPlanned]) -> Option<PlannedActionClass> {
+    actions.first().map(classify_planned_action_class)
+}
+
+fn last_attempted_action_class(
+    recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
+) -> Option<PlannedActionClass> {
+    recent_execution_results
+        .iter()
+        .rev()
+        .find_map(|result| result.attempted_kind.as_deref())
+        .map(classify_attempted_kind_class)
+}
+
+fn classify_attempted_kind_class(attempted_kind: &str) -> PlannedActionClass {
+    match attempted_kind {
+        "validate_cargo_check" => PlannedActionClass::Verification,
+        "bootstrap_workspace"
+        | "init_cargo_project"
+        | "create_entrypoint"
+        | "create_module_file"
+        | "restructure_modules"
+        | "fix_dead_code_conflict"
+        | "fix_unresolved_import"
+        | "define_missing_symbol"
+        | "resolve_duplicate_definition"
+        | "fix_trait_bound_failure" => PlannedActionClass::Mutation,
+        "read_file" | "list_dir" | "search_files" | "observe_workspace" => {
+            PlannedActionClass::PassiveDiscovery
+        }
+        _ => PlannedActionClass::Unknown,
+    }
+}
+
+fn classify_planned_action_class(action: &canon_event::LoopPlanned) -> PlannedActionClass {
+    classify_plan_action_class(action.action_kind.as_str(), &action.action_payload)
 }
 
 fn match_action_intent(intent: &ActionIntent, hint_kind: &str, expected: &[PathBuf]) -> bool {
@@ -1513,6 +1662,114 @@ mod tests {
             &summary,
         );
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn rejects_repair_plan_without_actionable_failure() {
+        let actions = vec![planned_add_import("src/lib.rs")];
+        let summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some("/tmp/example".into()),
+            ..SemanticStateSummary::default()
+        };
+        let result = validate_preconditions(&actions, Path::new("/tmp/example"), &[], &summary);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no actionable failure"));
+    }
+
+    #[test]
+    fn rejects_localized_repair_when_failure_scope_is_missing() {
+        let actions = vec![planned_add_import("src/lib.rs")];
+        let summary = SemanticStateSummary {
+            complete: true,
+            target_root: Some("/tmp/example".into()),
+            compiler_repair_required: true,
+            compiler_hints: vec![CompilerHintRecord::new(
+                CompilerHintKind::GenericCompilerFailure,
+                "compiler failed without scoped file target",
+                "refresh diagnostics before repair",
+                vec!["none".into()],
+            )],
+            ..SemanticStateSummary::default()
+        };
+        let result = validate_preconditions(&actions, Path::new("/tmp/example"), &[], &summary);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("lacks scoped target"));
+    }
+
+    #[test]
+    fn rejects_passive_first_batch_after_stall() {
+        let actions = vec![canon_event::LoopPlanned {
+            tick: 0,
+            action_kind: "read_file".to_string(),
+            action_payload: serde_json::json!({"path":"src/lib.rs"}),
+            reason: String::new(),
+            llm_request_id: None,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            signals: None,
+            depends_on: Vec::new(),
+        }];
+        let trend = canon_semantic_state::ObjectiveTrendState {
+            current_no_progress_streak: 2,
+            ..Default::default()
+        };
+        let results = vec![canon_semantic_state::SemanticExecutionResultRecord::new(
+            "no_semantic_progress",
+            "read_file did not expand semantic state",
+            vec!["src/lib.rs".into()],
+            false,
+        )
+        .with_attempted_kind("read_file")];
+        let result = super::validate_trend_intent_alignment(
+            &actions,
+            Path::new("/tmp/example"),
+            &results,
+            &trend,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("state-changing first batch"));
+    }
+
+    #[test]
+    fn rejects_multi_action_batch_when_invalid_plan_pressure_is_high() {
+        let actions = vec![
+            planned_add_import("src/lib.rs"),
+            canon_event::LoopPlanned {
+                tick: 0,
+                action_kind: "run_command".to_string(),
+                action_payload: serde_json::json!({"cmd":"cargo check","cwd":"/tmp/example"}),
+                reason: String::new(),
+                llm_request_id: None,
+                trace_id: None,
+                execution_id: None,
+                span_id: None,
+                parent_span_id: None,
+                plan_id: None,
+                plan_step_id: None,
+                action_id: None,
+                signals: None,
+                depends_on: Vec::new(),
+            },
+        ];
+        let trend = canon_semantic_state::ObjectiveTrendState {
+            planning_attempts: 4,
+            invalid_plan_events: 3,
+            ..Default::default()
+        };
+        let result = super::validate_trend_intent_alignment(
+            &actions,
+            Path::new("/tmp/example"),
+            &[],
+            &trend,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("single-action first batch"));
     }
 
 }

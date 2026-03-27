@@ -573,6 +573,7 @@ pub struct RouteRowContext {
     pub apply_patch_outcome: Option<ApplyPatchOutcomeClass>,
     pub semantic_progress: bool,
     pub no_semantic_progress: bool,
+    pub compiler_repair_required: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1015,6 +1016,7 @@ pub fn route_transition_rows() -> Vec<RouteTransitionRow> {
             context: RouteRowContext {
                 pending_tool_results_empty: true,
                 no_semantic_progress: true,
+                compiler_repair_required: true,
                 ..RouteRowContext::default()
             },
             state: RouteRowState::default(),
@@ -1461,7 +1463,7 @@ pub fn route_trend_actionability_rows() -> Vec<RouteSemanticActionabilityRow> {
                 current_no_progress_streak: 1,
                 ..canon_semantic_state::ObjectiveTrendState::default()
             },
-            expected_actionable: true,
+            expected_actionable: false,
         },
         RouteSemanticActionabilityRow {
             name: "route_misalignment_actionability",
@@ -2732,6 +2734,10 @@ fn assert_invalid_plan_retry_row(row: &InvalidPlanRetryRow) {
 }
 
 fn apply_route_outcome_context(ctx: &mut RouteContext, row: &RouteRowContext) {
+    if row.compiler_repair_required {
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.compiler_repair_required = true;
+    }
     if let Some(outcome) = row.verify_outcome {
         apply_verify_outcome(ctx, outcome);
     }

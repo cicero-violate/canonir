@@ -42,12 +42,42 @@ impl CompilerHintKind {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FailureScopeKind {
+    None,
+    Localized,
+    Workspace,
+    Tooling,
+}
+
+impl FailureScopeKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Localized => "localized",
+            Self::Workspace => "workspace",
+            Self::Tooling => "tooling",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(Self::None),
+            "localized" => Some(Self::Localized),
+            "workspace" => Some(Self::Workspace),
+            "tooling" => Some(Self::Tooling),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CompilerHintRecord {
     pub kind: String,
     pub summary: String,
     pub suggested_repair: String,
     pub target_files: Vec<String>,
+    pub failure_scope: String,
 }
 
 impl CompilerHintRecord {
@@ -62,11 +92,21 @@ impl CompilerHintRecord {
             summary: summary.into(),
             suggested_repair: suggested_repair.into(),
             target_files,
+            failure_scope: FailureScopeKind::None.as_str().to_string(),
         }
+    }
+
+    pub fn with_failure_scope(mut self, scope: FailureScopeKind) -> Self {
+        self.failure_scope = scope.as_str().to_string();
+        self
     }
 
     pub fn kind_enum(&self) -> Option<CompilerHintKind> {
         CompilerHintKind::from_str(&self.kind)
+    }
+
+    pub fn failure_scope_enum(&self) -> Option<FailureScopeKind> {
+        FailureScopeKind::from_str(&self.failure_scope)
     }
 
     pub fn render_line(&self) -> String {
@@ -76,8 +116,8 @@ impl CompilerHintRecord {
             self.target_files.join("|")
         };
         format!(
-            "kind={} targets={} summary={} repair={}",
-            self.kind, targets, self.summary, self.suggested_repair
+            "kind={} scope={} targets={} summary={} repair={}",
+            self.kind, self.failure_scope, targets, self.summary, self.suggested_repair
         )
     }
 }
@@ -100,6 +140,7 @@ pub struct SemanticStateSummary {
     pub compiler_hints: Vec<CompilerHintRecord>,
     pub validation_blocked_by_preconditions: bool,
     pub compiler_repair_required: bool,
+    pub failure_scope: Option<String>,
     pub graph_artifact_id: Option<String>,
     pub graph_node_count: Option<usize>,
     pub graph_edge_count: Option<usize>,
@@ -154,6 +195,9 @@ impl SemanticStateSummary {
             "semantic.compiler_repair_required={}",
             self.compiler_repair_required
         ));
+        if let Some(value) = &self.failure_scope {
+            facts.push(format!("semantic.failure_scope={value}"));
+        }
         if let Some(value) = &self.graph_artifact_id {
             facts.push(format!("semantic.graph_artifact_id={value}"));
         }
@@ -208,8 +252,10 @@ impl SemanticStateSummary {
                 format!("rustc capture failed: {message}"),
                 "refresh compiler context or stabilize rustc capture before structural analysis",
                 Vec::new(),
-            ));
+            )
+            .with_failure_scope(FailureScopeKind::Tooling));
         }
+        self.failure_scope = Some(FailureScopeKind::Tooling.as_str().to_string());
     }
 
     pub fn from_workspace_facts(facts: &[String]) -> Self {
@@ -251,6 +297,8 @@ impl SemanticStateSummary {
                 summary.validation_blocked_by_preconditions = value == "true";
             } else if let Some(value) = fact.strip_prefix("semantic.compiler_repair_required=") {
                 summary.compiler_repair_required = value == "true";
+            } else if let Some(value) = fact.strip_prefix("semantic.failure_scope=") {
+                summary.failure_scope = Some(value.to_string());
             } else if let Some(value) = fact.strip_prefix("semantic.graph_artifact_id=") {
                 summary.graph_artifact_id = Some(value.to_string());
             } else if let Some(value) = fact.strip_prefix("semantic.graph_node_count=") {
@@ -280,6 +328,9 @@ impl SemanticStateSummary {
         lines.push(format!("path_exists={}", self.path_exists));
         lines.push(format!("repo_initialized={}", self.repo_initialized));
         lines.push(format!("cargo_project={}", self.cargo_project));
+        if let Some(failure_scope) = &self.failure_scope {
+            lines.push(format!("failure_scope={failure_scope}"));
+        }
         if let Some(crate_name) = &self.crate_name {
             lines.push(format!("crate_name={crate_name}"));
         }
@@ -342,6 +393,9 @@ impl SemanticStateSummary {
             ),
             format!("compiler_repair_required={}", self.compiler_repair_required),
         ];
+        if let Some(failure_scope) = &self.failure_scope {
+            parts.push(format!("failure_scope={failure_scope}"));
+        }
         if !self.planning_preconditions.is_empty() {
             parts.push(format!("preconditions={}", self.planning_preconditions.join("|")));
         }
@@ -1618,6 +1672,7 @@ fn is_trait_bound_edit(patch: &str) -> bool {
 
 fn parse_compiler_hint_record(line: &str) -> Option<CompilerHintRecord> {
     let kind = parse_field(line, "kind=")?;
+    let scope = parse_field(line, "scope=").unwrap_or_else(|| "none".to_string());
     let targets = parse_field(line, "targets=").unwrap_or_else(|| "none".to_string());
     let summary = parse_field(line, "summary=").unwrap_or_default();
     let repair = parse_field(line, "repair=").unwrap_or_default();
@@ -1631,6 +1686,7 @@ fn parse_compiler_hint_record(line: &str) -> Option<CompilerHintRecord> {
         summary,
         suggested_repair: repair,
         target_files,
+        failure_scope: scope,
     })
 }
 
@@ -1648,7 +1704,8 @@ fn parse_field(line: &str, marker: &str) -> Option<String> {
 
 fn next_field_delimiter(marker: &str) -> &'static str {
     match marker {
-        "kind=" => " targets=",
+        "kind=" => " scope=",
+        "scope=" => " targets=",
         "targets=" => " summary=",
         "summary=" => " repair=",
         _ => "",
@@ -1659,7 +1716,7 @@ fn next_field_delimiter(marker: &str) -> &'static str {
 mod tests {
     use super::{
         derive_development_objectives, derive_self_development_objective_state,
-        primary_development_strategy_kind, CompilerHintKind, CompilerHintRecord,
+        primary_development_strategy_kind, CompilerHintKind, CompilerHintRecord, FailureScopeKind,
         DevelopmentObjectiveKind, DevelopmentStrategyKind, ObjectiveTrendState,
         SemanticStateSummary,
     };
@@ -1685,9 +1742,11 @@ mod tests {
                 "compiler reports missing module `index`",
                 "create the missing module file",
                 vec!["src/lib.rs".into()],
-            )],
+            )
+            .with_failure_scope(FailureScopeKind::Localized)],
             validation_blocked_by_preconditions: true,
             compiler_repair_required: true,
+            failure_scope: Some(FailureScopeKind::Localized.as_str().into()),
             ..SemanticStateSummary::default()
         };
         let restored = SemanticStateSummary::from_workspace_facts(&summary.to_workspace_facts());

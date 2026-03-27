@@ -12,7 +12,10 @@ use crate::{
     stage::LoopStageEvent,
 };
 use canon_event::{AgentRegistered, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, GoalEdgeDefined, RuntimeEvent, Tick};
-use canon_invariant::decision_trace_payload;
+use canon_invariant::{
+    classify_planned_action_class, decision_trace_payload, is_localized_repair_action,
+    semantic_summary_has_actionable_failure, stalled_loop_forbids_action_class,
+};
 use canon_proc_macros::must_emit;
 use canon_semantic_state::{classify_planned_action_intents, execution_results_for_action, SemanticExecutionResultRecord};
 use std::path::PathBuf;
@@ -93,6 +96,79 @@ impl LoopStageExecutor {
                 line!(),
             );
         }
+    }
+
+    fn emit_invariant_violation(&self, trigger_id: &EventId, feature: &str, reason: &str, context: serde_json::Value) {
+        if let Some(emitter) = self.ctx.emitter.as_ref() {
+            emitter.emit_child(
+                RuntimeEvent::InvariantDiscovered(canon_event::InvariantDiscovered {
+                    feature: feature.to_string(),
+                    confidence: 1.0,
+                    support: 1,
+                }),
+                vec![trigger_id.clone()],
+                file!(),
+                line!(),
+            );
+        }
+        self.emit_error(
+            trigger_id,
+            "plan_invariant_violation",
+            format!("plan invariant violated: {reason}"),
+            "warning",
+            serde_json::json!({
+                "feature": feature,
+                "reason": reason,
+                "context": context,
+            }),
+        );
+    }
+
+    fn should_reject_planned_action(&self, planned: &canon_event::LoopPlanned) -> Option<(&'static str, String, serde_json::Value)> {
+        let semantic_summary = self
+            .ctx
+            .last_observed
+            .as_ref()
+            .map(|observed| &observed.semantic_summary)
+            .cloned()
+            .unwrap_or_default();
+        let action_class = classify_planned_action_class(planned.action_kind.as_str(), &planned.action_payload);
+        if stalled_loop_forbids_action_class(
+            self.ctx.objective_trend_state.current_no_progress_streak,
+            action_class,
+        )
+        {
+            return Some((
+                "stall_requires_state_change",
+                "stalled loop forbids passive discovery or verification as the next first action".to_string(),
+                serde_json::json!({
+                    "action_kind": planned.action_kind,
+                    "action_class": action_class.as_str(),
+                    "no_progress_streak": self.ctx.objective_trend_state.current_no_progress_streak,
+                }),
+            ));
+        }
+        let actionable_failure = semantic_summary_has_actionable_failure(
+            semantic_summary.validation_blocked_by_preconditions,
+            semantic_summary.compiler_repair_required,
+            semantic_summary.planning_preconditions.len(),
+            semantic_summary.compiler_hints.len(),
+            semantic_summary.module_gaps.len(),
+        );
+        if is_localized_repair_action(planned.action_kind.as_str()) && !actionable_failure {
+            return Some((
+                "no_actionable_failure_for_repair",
+                "localized repair action is forbidden because there is no actionable failure in the current semantic context"
+                    .to_string(),
+                serde_json::json!({
+                    "action_kind": planned.action_kind,
+                    "compiler_repair_required": semantic_summary.compiler_repair_required,
+                    "compiler_hints": semantic_summary.compiler_hints.len(),
+                    "planning_preconditions": semantic_summary.planning_preconditions.len(),
+                }),
+            ));
+        }
+        None
     }
 
     fn emit_stage_result(&self, trigger_id: &EventId, result: LoopStageResult) {
@@ -498,6 +574,10 @@ impl EventConsumer for LoopStageExecutor {
                 self.ctx.context_merger.absorb(r, &r.agent_id);
             }
             RuntimeEvent::LoopPlanned(p) => {
+                if let Some((feature, reason, context)) = self.should_reject_planned_action(p) {
+                    self.emit_invariant_violation(&trigger_id, feature, &reason, context);
+                    return EventOutcome::NoOp("plan_invariant_violation");
+                }
                 if let Some(action_id) = p.action_id.as_ref() {
                     let target_root = self
                         .ctx
