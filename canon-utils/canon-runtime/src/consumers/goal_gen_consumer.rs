@@ -75,14 +75,6 @@ impl EventConsumer for GoalGenConsumer {
                 }
                 let request_id = Uuid::new_v4().to_string();
                 self.state = State::Pending { request_id: request_id.clone() };
-                let prompt = match global_registry().load("goal_gen/generate_goal") {
-                    Ok(skill) => skill.prompt.clone(),
-                    Err(e) => {
-                        eprintln!("[goal_gen] failed to load skill: {e}");
-                        self.state = State::Done;
-                        return EventOutcome::NoOp("goal_gen_skill_load_failed");
-                    }
-                };
                 let semantic_context = LlmSemanticContext {
                     mission_summary: None,
                     semantic_summary: self.semantic_summary.clone(),
@@ -127,6 +119,14 @@ impl EventConsumer for GoalGenConsumer {
                     &self.semantic_summary,
                     &self.objective_trend_state,
                 );
+                let prompt = match goal_gen_prompt(selected_goal_objective, selected_goal_strategy) {
+                    Ok(prompt) => prompt,
+                    Err(e) => {
+                        eprintln!("[goal_gen] failed to load skill: {e}");
+                        self.state = State::Done;
+                        return EventOutcome::NoOp("goal_gen_skill_load_failed");
+                    }
+                };
                 if !objective_override.is_empty() {
                     if let Some(emitter) = &self.emitter {
                         emitter.emit_with_parents(
@@ -408,6 +408,22 @@ fn extract_goal_text(raw: &str) -> String {
     }
 
     trimmed.to_string()
+}
+
+fn goal_gen_prompt(
+    objective: DevelopmentObjectiveKind,
+    strategy: DevelopmentStrategyKind,
+) -> anyhow::Result<String> {
+    let registry = global_registry();
+    let selected = registry.select_for_scope("goal_gen", objective, strategy)?;
+    if !selected.is_empty() {
+        return Ok(selected
+            .into_iter()
+            .map(|skill| skill.prompt.trim().to_string())
+            .collect::<Vec<_>>()
+            .join("\n\n"));
+    }
+    Ok(registry.load("goal_gen/generate_goal")?.prompt.clone())
 }
 
 fn validate_goal(content: &str) -> bool {

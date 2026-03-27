@@ -3,7 +3,12 @@ use std::path::Path;
 use canon_event::{new_error_occurred, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, LlmCall, LoopActed, LoopObserved, LoopPlanned, PlanningCompleted, RouteSelected, RuntimeEvent, ToolCall, ToolResult};
 use canon_goal::parse_agent_goal_markdown;
 use canon_invariant::decision_trace_payload;
-use canon_semantic_state::{derive_self_development_objective_state, LlmSemanticContext, ObjectiveTrendState, SemanticStateSummary};
+use canon_semantic_state::{
+    derive_self_development_objective_state, primary_development_objective_kind,
+    primary_development_strategy_kind, LlmSemanticContext, ObjectiveTrendState,
+    SemanticStateSummary,
+};
+use canon_skills::global_registry;
 use canon_tools_search::search_files;
 use canon_tools_patch::parse_patch;
 use std::collections::hash_map::DefaultHasher;
@@ -876,6 +881,7 @@ fn build_context_base(
         .or_else(|| llm_semantic_context.semantic_summary.target_root.clone())
         .unwrap_or_else(|| workspace.display().to_string());
     let semantic_planner_block = llm_semantic_context.render_planner_base_block();
+    let planner_skill_block = build_planner_skill_block(llm_semantic_context);
 
     let search_hints = build_search_hints(&goal_text, workspace);
     let workspace_tree = build_workspace_tree(std::path::Path::new(&target_workspace), 3, 0);
@@ -889,6 +895,8 @@ fn build_context_base(
 
 {semantic_planner_block}
 
+{planner_skill_block}
+
 ━━━ CONTEXT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Relevant files:{search_hints}
@@ -896,10 +904,37 @@ Relevant files:{search_hints}
 {sub_agent_section}"#,
         goal_text = goal_text,
         semantic_planner_block = semantic_planner_block,
+        planner_skill_block = planner_skill_block,
         workspace_tree = workspace_tree,
         search_hints = search_hints,
         sub_agent_section = sub_agent_section,
     )
+}
+
+fn build_planner_skill_block(llm_semantic_context: &LlmSemanticContext) -> String {
+    let objective = primary_development_objective_kind(
+        &llm_semantic_context.objective_state,
+        &llm_semantic_context.objective_trend_state,
+        &llm_semantic_context.semantic_summary,
+    );
+    let strategy = primary_development_strategy_kind(
+        &llm_semantic_context.objective_state,
+        &llm_semantic_context.objective_trend_state,
+        &llm_semantic_context.semantic_summary,
+    );
+    let registry = global_registry();
+    let Ok(skills) = registry.select_for_scope("planner", objective, strategy) else {
+        return "Planner skills:\n- none".to_string();
+    };
+    if skills.is_empty() {
+        return "Planner skills:\n- none".to_string();
+    }
+    let rendered = skills
+        .into_iter()
+        .map(|skill| format!("### Skill: {}\n{}", skill.name, skill.prompt.trim()))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    format!("Planner skills:\n{rendered}")
 }
 
 /// Tier-3 context: fast-changing delta sent on every planning call.

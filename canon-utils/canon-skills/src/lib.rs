@@ -189,23 +189,63 @@ impl SkillRegistry {
         objective: DevelopmentObjectiveKind,
         strategy: DevelopmentStrategyKind,
     ) -> Result<Vec<Arc<Skill>>> {
+        self.select_for_scope("", objective, strategy)
+    }
+
+    pub fn select_for_scope(
+        &self,
+        scope: &str,
+        objective: DevelopmentObjectiveKind,
+        strategy: DevelopmentStrategyKind,
+    ) -> Result<Vec<Arc<Skill>>> {
         let mut out = Vec::new();
-        for entry in fs::read_dir(&self.skills_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
-                continue;
-            }
-            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
-                continue;
-            };
-            let skill = self.load(stem)?;
+        for skill_path in collect_skill_paths(&self.skills_dir, scope)? {
+            let skill = self.load(&skill_path)?;
             if skill.supports(Some(objective), Some(strategy)) {
                 out.push(skill);
             }
         }
         Ok(out)
     }
+}
+
+fn collect_skill_paths(root: &PathBuf, scope: &str) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    let normalized_scope = scope.trim_matches('/');
+    collect_skill_paths_inner(root, root, normalized_scope, &mut out)?;
+    out.sort();
+    Ok(out)
+}
+
+fn collect_skill_paths_inner(
+    root: &PathBuf,
+    current: &PathBuf,
+    scope: &str,
+    out: &mut Vec<String>,
+) -> Result<()> {
+    for entry in fs::read_dir(current)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_skill_paths_inner(root, &path, scope, out)?;
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(root) else {
+            continue;
+        };
+        let mut skill_path = relative.to_string_lossy().replace('\\', "/");
+        if let Some(stripped) = skill_path.strip_suffix(".md") {
+            skill_path = stripped.to_string();
+        }
+        if !scope.is_empty() && !skill_path.starts_with(&format!("{scope}/")) {
+            continue;
+        }
+        out.push(skill_path);
+    }
+    Ok(())
 }
 
 fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
