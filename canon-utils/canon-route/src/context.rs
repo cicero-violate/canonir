@@ -1,6 +1,7 @@
 use canon_decision::JournalLine;
 use canon_event::{RuntimeEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, ToolCall, ToolResult, SubTaskResult};
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
+use canon_semantic_state::SemanticStateSummary;
 use crate::causal::update_causal_graph;
 use canon_judgment::{LlmSignals, RuntimeSignals};
 use serde_json::json;
@@ -63,9 +64,8 @@ pub struct RouteContext {
     pub last_invalid_plan_reason: Option<String>,
     pub last_invalid_plan_planned_count: Option<usize>,
     pub consecutive_invalid_plan_batches: u32,
-    pub target_workspace_missing: bool,
-    pub target_workspace_path: Option<String>,
     pub bootstrap_refresh_required: bool,
+    pub semantic_summary: SemanticStateSummary,
     pub last_halt_reason: Option<String>,
     /// Maps action_id → (action_kind, llm_request_id) for enriching ToolResult metadata.
     action_meta: HashMap<String, (String, Option<String>)>,
@@ -97,9 +97,29 @@ impl RouteContext {
         }
     }
 
+    pub fn target_workspace_missing_state(&self) -> bool {
+        semantic_has_target_state(&self.semantic_summary) && !self.semantic_summary.path_exists
+    }
+
+    pub fn target_workspace_path_state(&self) -> Option<&str> {
+        self.semantic_summary.target_root.as_deref()
+    }
+
+    pub fn planning_preconditions_state(&self) -> &[String] {
+        &self.semantic_summary.planning_preconditions
+    }
+
+    pub fn validation_blocked_state(&self) -> bool {
+        self.semantic_summary.validation_blocked_by_preconditions
+    }
+
+    pub fn compiler_repair_required_state(&self) -> bool {
+        self.semantic_summary.compiler_repair_required
+    }
+
     pub fn snapshot_text(&self) -> String {
         format!(
-            "tick={tick}\ncontext_ready={context}\nworkspace_dirty={dirty}\nplanned_pending={pending}\nacted_unverified={unverified}\nfinish_ready={finish}\nlast_action_kind={action}\ngoodness={goodness}\ndelta_g={delta_g}\nconsecutive_invalid_plan_batches={invalid_count}\nlast_invalid_plan_planned_count={invalid_planned}\nlast_invalid_plan_reason={invalid_reason}\ntarget_workspace_missing={target_missing}\ntarget_workspace_path={target_path}\nhalted={halted}\nlast_halt_reason={halt_reason}",
+            "tick={tick}\ncontext_ready={context}\nworkspace_dirty={dirty}\nplanned_pending={pending}\nacted_unverified={unverified}\nfinish_ready={finish}\nlast_action_kind={action}\ngoodness={goodness}\ndelta_g={delta_g}\nconsecutive_invalid_plan_batches={invalid_count}\nlast_invalid_plan_planned_count={invalid_planned}\nlast_invalid_plan_reason={invalid_reason}\ntarget_workspace_missing={target_missing}\ntarget_workspace_path={target_path}\nplanning_preconditions={planning_preconditions}\nvalidation_blocked_by_preconditions={validation_blocked}\ncompiler_repair_required={compiler_repair}\nsemantic_summary_version={semantic_version}\nsemantic_summary_complete={semantic_complete}\nhalted={halted}\nlast_halt_reason={halt_reason}",
             tick = self.scheduler_tick,
             context = self.context_ready,
             dirty = self.workspace_dirty_tracker.any_dirty(),
@@ -118,8 +138,17 @@ impl RouteContext {
                 .last_invalid_plan_reason
                 .as_deref()
                 .unwrap_or("NA"),
-            target_missing = self.target_workspace_missing,
-            target_path = self.target_workspace_path.as_deref().unwrap_or("NA"),
+            target_missing = self.target_workspace_missing_state(),
+            target_path = self.target_workspace_path_state().unwrap_or("NA"),
+            planning_preconditions = if self.planning_preconditions_state().is_empty() {
+                "NA".to_string()
+            } else {
+                self.planning_preconditions_state().join("|")
+            },
+            validation_blocked = self.validation_blocked_state(),
+            compiler_repair = self.compiler_repair_required_state(),
+            semantic_version = self.semantic_summary.version,
+            semantic_complete = self.semantic_summary.complete,
             halted = self.halted,
             halt_reason = self.last_halt_reason.as_deref().unwrap_or("NA"),
         )
@@ -135,21 +164,17 @@ impl RouteContext {
 
     pub fn update_from_event(&mut self, event: &RuntimeEvent, workspace: &Path) {
         match event {
-            RuntimeEvent::LoopObserved(LoopObserved { goal_text, error_count, workspace_facts, .. }) => {
+            RuntimeEvent::LoopObserved(LoopObserved { goal_text, error_count, workspace_facts, semantic_summary, .. }) => {
                 let goal_present = goal_text
                     .as_ref()
                     .map(|v| !Self::goal_is_placeholder(v))
                     .unwrap_or(false);
+                let semantic = semantic_summary
+                    .clone()
+                    .unwrap_or_else(|| SemanticStateSummary::from_workspace_facts(workspace_facts));
                 self.context_ready = goal_present || *error_count > 0;
-                self.target_workspace_missing = false;
-                self.target_workspace_path = None;
                 self.bootstrap_refresh_required = false;
-                for fact in workspace_facts {
-                    if let Some(rest) = fact.strip_prefix("target_path_exists=false path=") {
-                        self.target_workspace_missing = true;
-                        self.target_workspace_path = Some(rest.to_string());
-                    }
-                }
+                self.semantic_summary = semantic;
                 if let Some(goal_text) = goal_text {
                     if !Self::goal_is_placeholder(goal_text) {
                         self.mission_raw = goal_text.clone();
@@ -206,9 +231,14 @@ impl RouteContext {
                     }
                 }
                 if is_successful_bootstrap(action_kind, *success, stderr) {
-                    self.target_workspace_missing = false;
                     self.bootstrap_refresh_required = true;
                     self.planned_pending = 0;
+                    self.semantic_summary.path_exists = true;
+                    self.semantic_summary.planning_preconditions.clear();
+                    self.semantic_summary.validation_blocked_by_preconditions = false;
+                    self.semantic_summary.compiler_repair_required = false;
+                    self.semantic_summary.repair_intents.clear();
+                    self.semantic_summary.compiler_hints.clear();
                 }
                 self.last_action_kind = action_kind.clone();
                 let mut summary = format!("executed action={} success={} capability_request_id={}", self.last_action_kind, success, capability_request_id);
@@ -226,6 +256,10 @@ impl RouteContext {
                 self.last_verify_passed = *passed;
                 self.last_verify_compiler_clean = *compiler_clean;
                 self.last_verify_diagnostics = diagnostics.clone();
+                self.semantic_summary.compiler_repair_required = diagnostics.iter().any(|d| {
+                    d.contains("allow(dead_code) incompatible with previous forbid")
+                        || d.contains("file not found for module `")
+                });
                 self.workspace_dirty_tracker.mark_verified("orchestrator");
                 let done_action = self.last_action_kind == "done";
                 let system_satisfied = done_action && *passed
@@ -276,25 +310,10 @@ impl RouteContext {
                 self.last_invalid_plan_reason = None;
                 self.last_invalid_plan_planned_count = None;
             }
-            RuntimeEvent::ErrorOccurred(err) if err.kind == "target_workspace_missing" => {
-                self.target_workspace_missing = true;
-                self.target_workspace_path = err
-                    .context
-                    .get("target_root")
-                    .and_then(|v| v.as_str())
-                    .map(|v| v.to_string());
-                self.push_journal(
-                    "observe",
-                    format!(
-                        "target_workspace_missing path={}",
-                        self.target_workspace_path.as_deref().unwrap_or("unknown")
-                    ),
-                );
-            }
             RuntimeEvent::Debug(debug) if debug.kind == "bootstrap_refresh_required" => {
                 self.bootstrap_refresh_required = true;
-                self.target_workspace_missing = false;
                 self.planned_pending = 0;
+                self.semantic_summary.path_exists = true;
                 self.push_journal("observe", "bootstrap_refresh_required");
             }
             RuntimeEvent::ToolCall(ToolCall { tool_call_id, kind, .. }) => {
@@ -380,6 +399,10 @@ impl RouteContext {
     }
 }
 
+fn semantic_has_target_state(summary: &SemanticStateSummary) -> bool {
+    summary.complete || summary.target_root.is_some()
+}
+
 fn is_successful_bootstrap(action_kind: &str, success: bool, stderr: &str) -> bool {
     success
         && action_kind == "run_command"
@@ -415,6 +438,8 @@ mod tests {
                 warning_count: 0,
                 compiler_errors: Vec::new(),
                 goal_text: Some("goal".into()),
+                semantic_summary: None,
+                observe_diagnostics: Vec::new(),
                 workspace_facts: Vec::new(),
             }),
             workspace,
@@ -505,8 +530,8 @@ mod tests {
     fn bootstrap_action_clears_missing_target_and_requests_refresh() {
         let mut ctx = RouteContext::default();
         let workspace = Path::new("/tmp");
-        ctx.target_workspace_missing = true;
-        ctx.target_workspace_path = Some("/tmp/example".into());
+        ctx.semantic_summary.target_root = Some("/tmp/example".into());
+        ctx.semantic_summary.path_exists = false;
         ctx.planned_pending = 2;
 
         ctx.update_from_event(
@@ -532,8 +557,84 @@ mod tests {
             workspace,
         );
 
-        assert!(!ctx.target_workspace_missing);
+        assert!(!ctx.target_workspace_missing_state());
         assert!(ctx.bootstrap_refresh_required);
         assert_eq!(ctx.planned_pending, 0);
+    }
+
+    #[test]
+    fn observe_facts_capture_planning_preconditions() {
+        let mut ctx = RouteContext::default();
+        let workspace = Path::new("/tmp");
+        ctx.update_from_event(
+            &RuntimeEvent::LoopObserved(LoopObserved {
+                tick: 1,
+                error_count: 0,
+                warning_count: 0,
+                compiler_errors: Vec::new(),
+                goal_text: Some("goal".into()),
+                semantic_summary: None,
+                observe_diagnostics: Vec::new(),
+                workspace_facts: vec![
+                    "semantic.complete=true".into(),
+                    "semantic.planning_precondition=must_create_entrypoint=true repair=create_src_main_or_lib_before_cargo_check".into(),
+                    "semantic.planning_precondition=must_fix_dead_code_forbid_conflict=true repair=remove_allow_dead_code_or_make_code_used".into(),
+                    "semantic.validation_blocked_by_preconditions=true".into(),
+                    "semantic.compiler_repair_required=true".into(),
+                ],
+            }),
+            workspace,
+        );
+
+        assert!(ctx.validation_blocked_state());
+        assert!(ctx.compiler_repair_required_state());
+        assert_eq!(ctx.planning_preconditions_state().len(), 2);
+    }
+
+    #[test]
+    fn semantic_workspace_facts_are_consumed() {
+        let mut ctx = RouteContext::default();
+        let workspace = Path::new("/tmp");
+        ctx.update_from_event(
+            &RuntimeEvent::LoopObserved(LoopObserved {
+                tick: 1,
+                error_count: 0,
+                warning_count: 0,
+                compiler_errors: Vec::new(),
+                goal_text: Some("goal".into()),
+                semantic_summary: None,
+                observe_diagnostics: Vec::new(),
+                workspace_facts: vec![
+                    "semantic.target_root=/tmp/example".into(),
+                    "semantic.path_exists=false".into(),
+                    "semantic.planning_precondition=must_bootstrap_workspace=true repair=cargo_init_or_create_workspace".into(),
+                    "semantic.validation_blocked_by_preconditions=true".into(),
+                    "semantic.compiler_repair_required=false".into(),
+                ],
+            }),
+            workspace,
+        );
+        assert!(ctx.target_workspace_missing_state());
+        assert_eq!(ctx.target_workspace_path_state(), Some("/tmp/example"));
+        assert!(ctx.validation_blocked_state());
+        assert_eq!(ctx.planning_preconditions_state().len(), 1);
+    }
+
+    #[test]
+    fn semantic_state_helpers_prefer_summary_when_complete() {
+        let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.path_exists = false;
+        ctx.semantic_summary.target_root = Some("/tmp/semantic".into());
+        ctx.semantic_summary.planning_preconditions =
+            vec!["must_create_missing_modules=true".into()];
+        ctx.semantic_summary.validation_blocked_by_preconditions = true;
+        ctx.semantic_summary.compiler_repair_required = true;
+
+        assert!(ctx.target_workspace_missing_state());
+        assert_eq!(ctx.target_workspace_path_state(), Some("/tmp/semantic"));
+        assert!(ctx.validation_blocked_state());
+        assert!(ctx.compiler_repair_required_state());
+        assert_eq!(ctx.planning_preconditions_state().len(), 1);
     }
 }

@@ -1,6 +1,6 @@
-use canon_event::{new_error_occurred, CanonEvent, EventKind, LoopObserved, RuntimeEvent, ToolCall, ToolResult};
-use canon_invariant::decision_trace_payload;
+use canon_event::{CanonEvent, EventKind, LoopObserved, RuntimeEvent, ToolCall, ToolResult};
 use canon_goal::parse_agent_goal_markdown;
+use canon_semantic_state::SemanticStateSummary;
 use canon_tools_search::search_files;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -8,7 +8,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use crate::{context::LoopContext, result::LoopStageResult};
+use crate::planning_preconditions;
+use crate::{context::LoopContext, env_model::WorkspaceModel, result::LoopStageResult};
 
 /// Emit a LoopObserved if state has changed since the last observation.
 /// Called directly from the executor on state-changing events, not on every tick.
@@ -38,10 +39,12 @@ fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStage
         ctx.goal_text.hash(&mut h);
         h.finish()
     };
-    let (workspace_facts, observe_events) = build_workspace_facts(&ctx.goal_text);
+    let (semantic_summary, observe_diagnostics, workspace_facts, observe_events) =
+        build_workspace_facts(&ctx.goal_text, &ctx.workspace, &ctx.recent_compiler_errors);
     let facts_hash = {
         let mut h = DefaultHasher::new();
-        workspace_facts.hash(&mut h);
+        semantic_summary.hash(&mut h);
+        observe_diagnostics.hash(&mut h);
         h.finish()
     };
     let state_changed = (ctx.error_count as u64) != ctx.last_observed_error_count || goal_hash != ctx.last_observed_goal_hash || facts_hash != ctx.last_observed_facts_hash;
@@ -71,6 +74,8 @@ fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStage
         warning_count: ctx.warning_count,
         compiler_errors: ctx.recent_compiler_errors.clone(),
         goal_text: ctx.goal_text.clone(),
+        semantic_summary: Some(semantic_summary),
+        observe_diagnostics,
         workspace_facts,
     };
     let mut out = observe_events;
@@ -115,60 +120,64 @@ fn scan_tlog_for_goal(tlog_path: &Path) -> Option<String> {
     found
 }
 
-fn build_workspace_facts(goal_text: &Option<String>) -> (Vec<String>, Vec<RuntimeEvent>) {
+fn build_workspace_facts(
+    goal_text: &Option<String>,
+    workspace: &Path,
+    compiler_errors: &[serde_json::Value],
+) -> (SemanticStateSummary, Vec<String>, Vec<String>, Vec<RuntimeEvent>) {
     let Some(goal) = goal_text else {
-        return (Vec::new(), Vec::new());
+        return (SemanticStateSummary::default(), Vec::new(), Vec::new(), Vec::new());
     };
-    let mut facts = Vec::new();
     let mut search_hits = Vec::new();
-    let Some(target_root) = resolve_target_root(goal) else {
-        return (facts, Vec::new());
+    let Some(model) = WorkspaceModel::inspect(goal, workspace) else {
+        return (SemanticStateSummary::default(), Vec::new(), Vec::new(), Vec::new());
     };
-
-    let exists = target_root.exists();
-    facts.push(format!("target_path_exists={} path={}", exists, target_root.display()));
-    if !exists {
-        return (
-            facts,
-            vec![
-                RuntimeEvent::Debug(canon_event::DebugEvent {
-                    source: "observe_stage".to_string(),
-                    kind: "target_workspace_missing".to_string(),
-                    payload: decision_trace_payload(
-                        "target workspace does not exist",
-                        serde_json::json!({
-                            "target_root": target_root.display().to_string(),
-                        }),
-                    ),
-                }),
-                RuntimeEvent::ErrorOccurred(new_error_occurred(
-                    "target_workspace_missing",
-                    "observe_stage",
-                    format!("target workspace does not exist: {}", target_root.display()),
-                    "warning",
-                    serde_json::json!({
-                        "target_root": target_root.display().to_string(),
-                        "recoverable": true,
-                    }),
-                    None,
-                )),
-            ],
-        );
-    }
-
+    let planning_preconditions =
+        planning_preconditions::derive_preconditions(Some(&model), compiler_errors);
+    let repair_intents = planning_preconditions::derive_repair_intents(&planning_preconditions);
+    let compiler_hints = crate::compiler_hints::planner_lines(compiler_errors);
+    let target_root = model.target_root.clone();
+    let summary = SemanticStateSummary {
+        version: SemanticStateSummary::VERSION,
+        complete: true,
+        target_root: Some(target_root.display().to_string()),
+        path_exists: model.path_exists,
+        repo_initialized: model.repo_initialized,
+        cargo_project: model.cargo_toml_exists,
+        crate_name: model.crate_name.clone(),
+        entrypoint_kind: Some(model.entrypoint_kind.as_str().to_string()),
+        rust_file_count: Some(model.rust_file_count),
+        source_files: model
+            .source_files
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect(),
+        module_gaps: model
+            .module_gaps
+            .iter()
+            .map(|gap| {
+                format!(
+                    "{} -> {}",
+                    gap.module_name,
+                    gap.expected_paths
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(" or ")
+                )
+            })
+            .collect(),
+        planning_preconditions: planning_preconditions::planner_lines(&planning_preconditions),
+        repair_intents: planning_preconditions::repair_intent_lines(&repair_intents),
+        compiler_hints,
+        validation_blocked_by_preconditions: !planning_preconditions.is_empty(),
+        compiler_repair_required: planning_preconditions
+            .contains(&planning_preconditions::PlanningPrecondition::MustFixDeadCodeForbidConflict),
+    };
     let cargo_toml = target_root.join("Cargo.toml");
     let entrypoint = preferred_entrypoint(&target_root);
-    facts.push(format!("cargo_toml_exists={} path={}", cargo_toml.exists(), cargo_toml.display()));
-    if let Some(entry) = &entrypoint {
-        facts.push(format!("entrypoint_exists=true path={}", entry.display()));
-    } else {
-        facts.push("entrypoint_exists=false path=NA".to_string());
-    }
 
     let listing = list_dir_entries(&target_root, 32);
-    if !listing.is_empty() {
-        facts.push(format!("dir_entries={}", listing.join(",")));
-    }
 
     let spec = parse_agent_goal_markdown(goal);
     let keywords = extract_goal_keywords(&spec);
@@ -183,6 +192,14 @@ fn build_workspace_facts(goal_text: &Option<String>) -> (Vec<String>, Vec<Runtim
                 }));
             }
         }
+    }
+
+    let observe_diagnostics = build_observe_diagnostics(&model, &listing, &search_hits);
+    let mut facts = summary.to_workspace_facts();
+    facts.extend(observe_diagnostics.clone());
+
+    if !model.path_exists {
+        return (summary, observe_diagnostics, facts, Vec::new());
     }
 
     let node_id = "observe_consumer".to_string();
@@ -236,13 +253,35 @@ fn build_workspace_facts(goal_text: &Option<String>) -> (Vec<String>, Vec<Runtim
         serde_json::json!({
             "op": "workspace_scan",
             "target_root": target_root.display().to_string(),
-            "cargo_toml_exists": cargo_toml.exists(),
+            "cargo_toml_exists": model.cargo_toml_exists,
             "entrypoint": entrypoint.as_ref().map(|p| p.display().to_string()),
+            "repo_initialized": model.repo_initialized,
+            "entrypoint_kind": model.entrypoint_kind.as_str(),
+            "module_gap_count": model.module_gaps.len(),
             "search_hits": search_hits,
         }),
     ));
 
-    (facts, events)
+    (summary, observe_diagnostics, facts, events)
+}
+
+fn build_observe_diagnostics(
+    model: &WorkspaceModel,
+    listing: &[String],
+    search_hits: &[serde_json::Value],
+) -> Vec<String> {
+    let mut diagnostics = Vec::new();
+    if !listing.is_empty() {
+        diagnostics.push(format!("dir_entries={}", listing.join(",")));
+    }
+    diagnostics.push(format!("cargo_toml_exists={}", model.cargo_toml_exists));
+    diagnostics.push(format!("repo_initialized={}", model.repo_initialized));
+    diagnostics.push(format!("entrypoint_kind={}", model.entrypoint_kind.as_str()));
+    diagnostics.push(format!("module_gap_count={}", model.module_gaps.len()));
+    if !search_hits.is_empty() {
+        diagnostics.push(format!("search_hit_count={}", search_hits.len()));
+    }
+    diagnostics
 }
 
 fn synthetic_observe_event(
@@ -313,43 +352,6 @@ fn read_file_preview(path: &Path, max_len: usize) -> String {
     } else {
         contents
     }
-}
-
-fn resolve_target_root(goal: &str) -> Option<PathBuf> {
-    let raw = extract_target_path(goal)?;
-    let path = PathBuf::from(raw);
-    if path.is_absolute() {
-        Some(path)
-    } else {
-        std::env::current_dir().ok().map(|cwd| cwd.join(path))
-    }
-}
-
-fn extract_target_path(goal: &str) -> Option<String> {
-    goal.lines()
-        .find_map(|line| {
-            let trimmed = line.trim();
-            // "Target: /path" or "target: /path"
-            for prefix in &["Target:", "target:"] {
-                if let Some(rest) = trimmed.strip_prefix(prefix) {
-                    let v = rest.trim().to_string();
-                    if !v.is_empty() {
-                        return Some(v);
-                    }
-                }
-            }
-            // "- Project path: /path" (markdown list under ## Target)
-            for prefix in &["- Project path:", "- project path:", "Project path:"] {
-                if let Some(rest) = trimmed.strip_prefix(prefix) {
-                    let v = rest.trim().trim_matches('`').to_string();
-                    if !v.is_empty() {
-                        return Some(v);
-                    }
-                }
-            }
-            None
-        })
-        .filter(|s| !s.is_empty())
 }
 
 fn extract_goal_keywords(spec: &canon_goal::GoalSpec) -> Vec<String> {

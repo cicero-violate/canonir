@@ -1,8 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use canon_event::{new_error_occurred, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, LlmCall, LoopActed, LoopObserved, LoopPlanned, PlanningCompleted, RouteSelected, RuntimeEvent, ToolCall, ToolResult};
 use canon_goal::parse_agent_goal_markdown;
 use canon_invariant::decision_trace_payload;
+use canon_semantic_state::SemanticStateSummary;
 use canon_tools_search::search_files;
 use canon_tools_patch::parse_patch;
 use std::collections::hash_map::DefaultHasher;
@@ -11,6 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     context::{LoopContext, PendingPlan},
+    planning_preconditions,
     policy::{planner_hint_lines, retry_policy_for_invalid_plan, RetryPolicy},
     result::LoopStageResult,
 };
@@ -252,7 +254,47 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
         return Ok(LoopStageResult::Noop);
     }
     let retry_policy = retry_policy_for_invalid_plan(ctx.last_invalid_plan_reason.as_deref(), ctx.consecutive_invalid_plan_batches);
-    if let Err(message) = validate_action_batch(&out, retry_policy, pending.goal_text.as_deref()) {
+    let semantic_summary = match planning_semantic_summary(ctx.last_observed.as_ref()) {
+        Ok(summary) => summary,
+        Err(message) => {
+            ctx.last_planned_observed_tick = None;
+            return Ok(LoopStageResult::EmitMany(vec![
+                RuntimeEvent::Debug(canon_event::DebugEvent {
+                    source: "plan_stage".to_string(),
+                    kind: "plan_suppressed".to_string(),
+                    payload: decision_trace_payload(
+                        "planning rejected because semantic observation is unavailable",
+                        serde_json::json!({
+                            "reason": message,
+                            "recoverable": true,
+                        }),
+                    ),
+                }),
+                RuntimeEvent::ErrorOccurred(new_error_occurred(
+                    "plan_stall",
+                    "plan_stage",
+                    format!("planning requires complete semantic observation: {message}"),
+                    "warning",
+                    serde_json::json!({
+                        "reason": message,
+                        "recoverable": true,
+                    }),
+                    None,
+                )),
+                RuntimeEvent::PlanningCompleted(PlanningCompleted {
+                    tick: pending.tick,
+                    llm_request_id: Some(req_id),
+                    planned_count: 0,
+                    status: "missing_semantic_context".to_string(),
+                }),
+            ]));
+        }
+    };
+    if let Err(message) = validate_action_batch(
+        &out,
+        retry_policy,
+        &semantic_summary,
+    ) {
         ctx.last_planned_observed_tick = None;
         return Ok(LoopStageResult::EmitMany(vec![
             RuntimeEvent::Debug(canon_event::DebugEvent {
@@ -312,10 +354,21 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     Ok(LoopStageResult::EmitMany(events))
 }
 
-fn validate_action_batch(actions: &[LoopPlanned], retry_policy: RetryPolicy, goal_text: Option<&str>) -> Result<(), String> {
-    let target_root = goal_text
-        .and_then(|goal| parse_agent_goal_markdown(goal).target_path)
-        .unwrap_or_else(|| PathBuf::from("."));
+fn validate_action_batch(
+    actions: &[LoopPlanned],
+    retry_policy: RetryPolicy,
+    semantic_summary: &SemanticStateSummary,
+) -> Result<(), String> {
+    if !semantic_summary.complete {
+        return Err("semantic summary is incomplete".to_string());
+    }
+    let target_root = semantic_summary
+        .target_root
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| "semantic summary is missing target_root".to_string())?;
+    let preconditions =
+        planning_preconditions::derive_preconditions_from_lines(&semantic_summary.planning_preconditions);
     let has_discovery = actions.iter().any(|a| matches!(a.action_kind.as_str(), "list_dir" | "read_file"));
     let has_execution = actions.iter().any(|a| {
         matches!(
@@ -378,7 +431,24 @@ fn validate_action_batch(actions: &[LoopPlanned], retry_policy: RetryPolicy, goa
         }
     }
 
+    planning_preconditions::validate_preconditions(actions, &target_root, &preconditions)?;
+
     Ok(())
+}
+
+fn planning_semantic_summary(observed: Option<&LoopObserved>) -> Result<SemanticStateSummary, String> {
+    let observed = observed.ok_or_else(|| "last_observed is missing".to_string())?;
+    let summary = observed
+        .semantic_summary
+        .clone()
+        .unwrap_or_else(|| SemanticStateSummary::from_workspace_facts(&observed.workspace_facts));
+    if !summary.complete {
+        return Err("semantic summary is incomplete".to_string());
+    }
+    if summary.target_root.is_none() {
+        return Err("semantic summary is missing target_root".to_string());
+    }
+    Ok(summary)
 }
 
 fn validate_workspace_relative_path(path: &str, _target_root: &Path) -> Result<(), String> {
@@ -419,7 +489,44 @@ fn handle_observed(
     if ctx.pending_plan.is_some() || ctx.last_planned_observed_tick == Some(observed.tick) {
         return Ok(LoopStageResult::Noop);
     }
-    let observed_hash = hash_observed(observed);
+    let semantic_summary = match planning_semantic_summary(Some(observed)) {
+        Ok(summary) => summary,
+        Err(message) => {
+            return Ok(LoopStageResult::EmitMany(vec![
+                RuntimeEvent::Debug(canon_event::DebugEvent {
+                    source: "plan_stage".to_string(),
+                    kind: "plan_suppressed".to_string(),
+                    payload: decision_trace_payload(
+                        "planning rejected because semantic observation is unavailable",
+                        serde_json::json!({
+                            "reason": message,
+                            "recoverable": true,
+                            "tick": observed.tick,
+                        }),
+                    ),
+                }),
+                RuntimeEvent::ErrorOccurred(new_error_occurred(
+                    "plan_stall",
+                    "plan_stage",
+                    format!("planning requires complete semantic observation: {message}"),
+                    "warning",
+                    serde_json::json!({
+                        "reason": message,
+                        "recoverable": true,
+                        "tick": observed.tick,
+                    }),
+                    None,
+                )),
+                RuntimeEvent::PlanningCompleted(PlanningCompleted {
+                    tick: observed.tick,
+                    llm_request_id: None,
+                    planned_count: 0,
+                    status: "missing_semantic_context".to_string(),
+                }),
+            ]));
+        }
+    };
+    let observed_hash = hash_observed(observed, &semantic_summary);
     if ctx.last_handled_observed_hash == Some(observed_hash) {
         return Ok(LoopStageResult::Noop);
     }
@@ -449,12 +556,13 @@ fn handle_observed(
     // Tier 3 (prompt / delta): LOC, errors, recent actions/results — sent every call.
     let sub_agent_section = ctx.context_merger.prompt_section();
     let workspace_clone = ctx.workspace.clone();
-    let context_base = build_context_base(observed, &workspace_clone, &sub_agent_section);
+    let context_base = build_context_base(observed, &workspace_clone, &sub_agent_section, &semantic_summary);
     let context_base_hash = hash_str(&context_base);
 
-    let goal_text = observed.goal_text.clone().unwrap_or_else(|| "<no goal provided>".to_string());
-    let spec = parse_agent_goal_markdown(&goal_text);
-    let target_workspace = spec.target_path.map(|p| p.display().to_string()).unwrap_or_else(|| workspace_clone.display().to_string());
+    let target_workspace = semantic_summary
+        .target_root
+        .clone()
+        .unwrap_or_else(|| workspace_clone.display().to_string());
     const HEURISTIC_RATIONALE: &str = "heuristic proposal from runtime state";
     let (rationale_for_prompt, confidence_for_prompt) = match (route_rationale.as_deref(), route_confidence) {
         (Some(r), c) if !r.is_empty() && r != HEURISTIC_RATIONALE => (Some(r), c.map(|v| v as f64)),
@@ -462,7 +570,9 @@ fn handle_observed(
     };
 
     let context_delta = build_context_delta(
-        observed,
+        &semantic_summary,
+        observed.error_count,
+        observed.warning_count,
         &ctx.batch_acted,
         &ctx.batch_tool_results,
         &target_workspace,
@@ -544,14 +654,14 @@ fn handle_observed(
     Ok(LoopStageResult::Deferred)
 }
 
-fn hash_observed(observed: &LoopObserved) -> u64 {
+fn hash_observed(observed: &LoopObserved, semantic_summary: &SemanticStateSummary) -> u64 {
     let mut h = DefaultHasher::new();
     observed.error_count.hash(&mut h);
     // warning_count excluded: watchdog stall warnings fire every tick and would change
     // the hash on every cycle, triggering a new plan LLM call after each completion even
     // when goal, errors, and workspace state are identical.
     observed.goal_text.hash(&mut h);
-    observed.workspace_facts.hash(&mut h);
+    semantic_summary.hash(&mut h);
     h.finish()
 }
 
@@ -704,19 +814,23 @@ static PLANNER_SYSTEM_PROMPT_ID: std::sync::LazyLock<u64> =
 /// Sent only when its hash differs from `ctx.last_context_base_id`. For stateful
 /// endpoints the LLM already has this in session history; for stateless endpoints
 /// the executor worker reconstructs it from its cache before each API call.
-fn build_context_base(observed: &LoopObserved, workspace: &Path, sub_agent_section: &str) -> String {
+fn build_context_base(
+    observed: &LoopObserved,
+    workspace: &Path,
+    sub_agent_section: &str,
+    semantic_summary: &SemanticStateSummary,
+) -> String {
     let goal_text = observed.goal_text.clone().unwrap_or_else(|| "<no goal provided>".to_string());
-
-    let spec = parse_agent_goal_markdown(&goal_text);
-    let target_workspace = spec.target_path.map(|p| p.display().to_string()).unwrap_or_else(|| workspace.display().to_string());
+    let target_workspace = semantic_summary
+        .target_root
+        .clone()
+        .unwrap_or_else(|| workspace.display().to_string());
+    let semantic_planner_block = semantic_summary.render_planner_block();
 
     let search_hints = build_search_hints(&goal_text, workspace);
     let workspace_tree = build_workspace_tree(std::path::Path::new(&target_workspace), 3, 0);
-    let workspace_facts = if observed.workspace_facts.is_empty() {
-        " (none)".to_string()
-    } else {
-        observed.workspace_facts.iter().map(|f| format!("- {f}")).collect::<Vec<_>>().join("\n")
-    };
+    let low_level_workspace_facts =
+        render_low_level_workspace_facts(&observed.observe_diagnostics, &observed.workspace_facts);
 
     format!(
         r#"GOAL:
@@ -725,12 +839,8 @@ fn build_context_base(observed: &LoopObserved, workspace: &Path, sub_agent_secti
 ## Workspace State
 {workspace_tree}
 
-Workspace facts:
-{workspace_facts}
-
-Bootstrap rule:
-- If workspace facts say `target_path_exists=false`, your first plan must create/init the target workspace.
-- In that case, do not emit `list_dir` or `read_file` inside the missing target directory before creating it.
+{semantic_planner_block}
+{low_level_workspace_facts}
 
 ━━━ CONTEXT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -738,8 +848,9 @@ Relevant files:{search_hints}
 
 {sub_agent_section}"#,
         goal_text = goal_text,
+        semantic_planner_block = semantic_planner_block,
         workspace_tree = workspace_tree,
-        workspace_facts = workspace_facts,
+        low_level_workspace_facts = low_level_workspace_facts,
         search_hints = search_hints,
         sub_agent_section = sub_agent_section,
     )
@@ -749,7 +860,9 @@ Relevant files:{search_hints}
 /// Contains only the fields that change after each action: LOC, error counts,
 /// recent actions and tool results. Does NOT include GOAL or workspace tree.
 fn build_context_delta(
-    observed: &LoopObserved,
+    semantic_summary: &SemanticStateSummary,
+    error_count: usize,
+    warning_count: usize,
     batch_acted: &[LoopActed],
     batch_tool_results: &[ToolResult],
     target_workspace: &str,
@@ -761,6 +874,7 @@ fn build_context_delta(
 ) -> String {
     // Count LOC only for the target project directory (Rust files only, excluding target/).
     let workspace_loc = count_loc_in_workspace(std::path::Path::new(target_workspace));
+    let semantic_block = semantic_summary.compact_block();
 
     let recent_actions = batch_acted
         .iter()
@@ -839,6 +953,14 @@ fn build_context_delta(
         last_invalid_plan_reason,
         consecutive_invalid_plan_batches,
     );
+    let compiler_repair_hints = {
+        let lines = semantic_summary.compiler_hints.clone();
+        if lines.is_empty() {
+            "none".to_string()
+        } else {
+            lines.into_iter().map(|line| format!("- {line}")).collect::<Vec<_>>().join("\n")
+        }
+    };
 
     format!(
         r#"TARGET WORKSPACE: {target_workspace}
@@ -846,6 +968,12 @@ All relative paths resolve against TARGET WORKSPACE (not its parent).
 LOC: {loc}  |  Errors: {errors}  |  Warnings: {warnings}
 {route_section}
 {invalid_plan_section}
+Compiler repair hints:
+{compiler_repair_hints}
+
+Semantic summary:
+{semantic_block}
+
 Planner hint:
 {planner_hint}
 
@@ -858,14 +986,43 @@ Recent tool results:
 "#,
         target_workspace = target_workspace,
         loc = workspace_loc,
-        errors = observed.error_count,
-        warnings = observed.warning_count,
+        errors = error_count,
+        warnings = warning_count,
         destructive_note = destructive_note,
         invalid_plan_section = invalid_plan_section,
+        compiler_repair_hints = compiler_repair_hints,
+        semantic_block = semantic_block,
         planner_hint = planner_hint,
         recent_actions = if recent_actions.is_empty() { "(none)".to_string() } else { recent_actions },
         recent_results = if recent_results.is_empty() { "(none)".to_string() } else { recent_results },
     )
+}
+
+fn low_level_workspace_facts(observe_diagnostics: &[String], facts: &[String]) -> Vec<String> {
+    if !observe_diagnostics.is_empty() {
+        return observe_diagnostics.to_vec();
+    }
+    facts
+        .iter()
+        .filter(|fact| !fact.starts_with("semantic."))
+        .cloned()
+        .collect()
+}
+
+fn render_low_level_workspace_facts(observe_diagnostics: &[String], facts: &[String]) -> String {
+    let facts = low_level_workspace_facts(observe_diagnostics, facts);
+    if facts.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Low-level diagnostics:\n{}\n",
+            facts
+                .iter()
+                .map(|fact| format!("- {fact}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    }
 }
 
 fn build_planner_hint(
