@@ -86,6 +86,7 @@ pub struct RuntimeSignals {
     pub workspace_dirty: bool,
     pub performed_recently: bool,
     pub repair_stalled: bool,
+    pub repair_pressure_score: u32,
     pub finish_ready: bool,
     #[serde(default)]
     pub last_action_kind: String,
@@ -356,6 +357,15 @@ impl Gatekeeper {
             notes.push("repair loop stalled requires plan for replan");
         }
 
+        if signals.repair_pressure_score > 0
+            && !signals.has_queued_plan
+            && matches!(lane, RouteKind::Verify | RouteKind::Conclude)
+        {
+            lane = RouteKind::Plan;
+            changed = true;
+            notes.push("repair pressure requires plan");
+        }
+
         if signals.has_queued_plan && lane != RouteKind::Act {
             lane = RouteKind::Act;
             changed = true;
@@ -372,10 +382,12 @@ impl Gatekeeper {
             notes.push("act requires context_ready or queued plan");
         }
 
-        if lane == RouteKind::Verify && !(signals.performed_recently || signals.workspace_dirty || signals.last_action_kind == "done") {
+        if lane == RouteKind::Verify
+            && !(signals.performed_recently || signals.last_action_kind == "done" || signals.finish_ready)
+        {
             lane = RouteKind::Plan;
             changed = true;
-            notes.push("verify requires performed_recently or workspace_dirty");
+            notes.push("verify requires recent execution, done action, or finish_ready");
         }
 
         if lane == RouteKind::Conclude && !signals.finish_ready {
@@ -399,5 +411,86 @@ impl Gatekeeper {
         let note = if notes.is_empty() { "accepted".to_string() } else { notes.join("; ") };
 
         GateResult { lane, changed, note, should_stop: lane == RouteKind::Conclude }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Gatekeeper, GuardConfig, LlmSignals, RouteKind, RouteSelection, RuntimeSignals};
+    use serde_json::Value;
+
+    fn pick(route: RouteKind) -> RouteSelection {
+        RouteSelection {
+            route,
+            rationale: String::new(),
+            confidence: Some(0.9),
+            signals: Value::Null,
+        }
+    }
+
+    #[test]
+    fn repair_pressure_blocks_verify() {
+        let mut gate = Gatekeeper::new(GuardConfig::default());
+        let signals = RuntimeSignals {
+            context_ready: true,
+            has_queued_plan: false,
+            workspace_dirty: false,
+            performed_recently: false,
+            repair_stalled: false,
+            repair_pressure_score: 1,
+            finish_ready: false,
+            last_action_kind: String::new(),
+            llm_signals: None,
+            goodness: None,
+            delta_g: None,
+        };
+        let result = gate.review(&pick(RouteKind::Verify), &signals);
+        assert_eq!(result.lane, RouteKind::Plan);
+        assert!(result.note.contains("repair pressure"));
+    }
+
+    #[test]
+    fn finish_ready_allows_verify_without_workspace_dirty() {
+        let mut gate = Gatekeeper::new(GuardConfig::default());
+        let signals = RuntimeSignals {
+            context_ready: true,
+            has_queued_plan: false,
+            workspace_dirty: false,
+            performed_recently: false,
+            repair_stalled: false,
+            repair_pressure_score: 0,
+            finish_ready: true,
+            last_action_kind: String::new(),
+            llm_signals: Some(LlmSignals {
+                goal_alignment_score: 0.9,
+                confidence: 0.9,
+                task_completion_likelihood: 0.9,
+                error_likelihood: 0.1,
+                plan_validity: 0.9,
+                state_consistency: 0.9,
+                action_effectiveness: 0.9,
+                progress_score: 0.9,
+                ambiguity_level: 0.1,
+                context_completeness: 0.9,
+                plan_optimality: 0.9,
+                redundancy_level: 0.1,
+                tool_reliability: 0.9,
+                execution_risk: 0.1,
+                blocking_severity: 0.1,
+                novelty_score: 0.8,
+                verification_coverage: 0.4,
+                change_impact: 0.1,
+                stability_score: 0.9,
+                iteration_efficiency: 0.9,
+                dependency_health: 0.9,
+                resource_efficiency: 0.9,
+                termination_readiness: 0.2,
+                recovery_difficulty: 0.1,
+            }),
+            goodness: None,
+            delta_g: None,
+        };
+        let result = gate.review(&pick(RouteKind::Verify), &signals);
+        assert_eq!(result.lane, RouteKind::Conclude);
     }
 }
