@@ -40,6 +40,15 @@ pub struct ModuleCohesionHotspot {
     pub pressure_score: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphModuleMoveCandidate {
+    pub symbol_path: String,
+    pub from_module_path: String,
+    pub to_module_path: String,
+    pub kind: String,
+    pub external_reference_count: usize,
+}
+
 pub fn load_graph_artifact(path: &Path) -> Result<CanonIR> {
     let mut ir = serde_json::from_slice::<CanonIR>(&fs::read(path)?)?;
     ir.restore();
@@ -143,6 +152,11 @@ pub fn graph_backed_module_hotspots(workspace_root: &Path, limit: usize) -> Resu
     Ok(module_cohesion_hotspots(&ir, limit))
 }
 
+pub fn graph_backed_module_moves(workspace_root: &Path, limit: usize) -> Result<Vec<GraphModuleMoveCandidate>> {
+    let (_, ir) = load_latest_workspace_graph_artifact(workspace_root)?;
+    Ok(module_move_candidates(&ir, limit))
+}
+
 fn module_membership_map(ir: &CanonIR) -> HashMap<u32, String> {
     let mut membership = HashMap::new();
     for node in &ir.nodes {
@@ -155,6 +169,87 @@ fn module_membership_map(ir: &CanonIR) -> HashMap<u32, String> {
         }
     }
     membership
+}
+
+fn module_move_candidates(ir: &CanonIR, limit: usize) -> Vec<GraphModuleMoveCandidate> {
+    let module_map = module_membership_map(ir);
+    let hotspots = module_cohesion_hotspots(ir, limit.saturating_mul(2).max(4));
+    let mut out = Vec::new();
+    for hotspot in hotspots {
+        let Some((symbol_path, kind, to_module_path, external_reference_count)) =
+            best_move_candidate_for_module(ir, &module_map, &hotspot.module_path)
+        else {
+            continue;
+        };
+        out.push(GraphModuleMoveCandidate {
+            symbol_path,
+            from_module_path: hotspot.module_path,
+            to_module_path,
+            kind,
+            external_reference_count,
+        });
+        if out.len() >= limit {
+            break;
+        }
+    }
+    out
+}
+
+fn best_move_candidate_for_module(
+    ir: &CanonIR,
+    module_map: &HashMap<u32, String>,
+    module_path: &str,
+) -> Option<(String, String, String, usize)> {
+    let mut best: Option<(String, String, String, usize)> = None;
+    for node in &ir.nodes {
+        let Some(symbol_module) = module_map.get(&node.id.0) else {
+            continue;
+        };
+        if symbol_module != module_path {
+            continue;
+        }
+        let Some((name, kind)) = symbol_identity(ir, &node.kind) else {
+            continue;
+        };
+        let external_target = dominant_external_target_module(ir, module_map, node.id.0, module_path)?;
+        let symbol_path = qualify_symbol_path(Some(module_path), &name);
+        match &best {
+            Some((_, _, _, best_count)) if *best_count >= external_target.1 => {}
+            _ => {
+                best = Some((
+                    symbol_path,
+                    kind.to_string(),
+                    external_target.0,
+                    external_target.1,
+                ));
+            }
+        }
+    }
+    best
+}
+
+fn dominant_external_target_module(
+    ir: &CanonIR,
+    module_map: &HashMap<u32, String>,
+    node_id: u32,
+    current_module: &str,
+) -> Option<(String, usize)> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for source in &ir.nodes {
+        for (dst, _) in ir.call_graph.neighbours(NodeId(source.id.0)) {
+            if dst.0 != node_id {
+                continue;
+            }
+            let Some(module_path) = module_map.get(&source.id.0) else {
+                continue;
+            };
+            if module_path == current_module {
+                continue;
+            }
+            *counts.entry(module_path.clone()).or_insert(0) += 1;
+        }
+    }
+    counts.into_iter().max_by_key(|(_, count)| *count)
 }
 
 fn symbol_identity(ir: &CanonIR, kind: &CanonNodeKind) -> Option<(String, &'static str)> {

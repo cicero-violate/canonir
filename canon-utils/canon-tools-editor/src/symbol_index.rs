@@ -1,9 +1,12 @@
 use anyhow::{anyhow, Result};
+use canon_analysis::load_latest_workspace_graph_artifact;
+use canon_ir::CanonNodeKind;
 use canon_types::{ReportLayout, SpanRange};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 //
 pub struct SymbolIndex {
     span_index: HashMap<String, HashMap<PathBuf, Vec<SpanRange>>>,
@@ -58,6 +61,11 @@ impl SymbolIndex {
     }
 
     pub fn build(project_root: &Path) -> Result<Self> {
+        if let Ok(mut index) = Self::from_graph_artifact(project_root) {
+            let out_dir = reports_out_dir(project_root)?;
+            let _ = index.merge_report_spans(&out_dir);
+            return Ok(index);
+        }
         let out_dir = reports_out_dir(project_root)?;
         Self::from_reports(&out_dir)
     }
@@ -144,6 +152,137 @@ impl SymbolIndex {
 
     pub fn uses_crate_prefix(&self) -> bool {
         self.uses_crate_prefix
+    }
+}
+
+impl SymbolIndex {
+    fn from_graph_artifact(project_root: &Path) -> Result<Self> {
+        let (_summary, ir) = load_latest_workspace_graph_artifact(project_root)?;
+        let mut symbol_kinds = HashMap::new();
+        let mut symbol_catalog = Vec::new();
+        let mut module_files = HashMap::new();
+        let mut file_modules: HashMap<PathBuf, Vec<String>> = HashMap::new();
+        let mut files = HashSet::new();
+        let source_root = project_root.join("src");
+
+        for entry in WalkDir::new(project_root).into_iter().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                continue;
+            }
+            if path.components().any(|component| component.as_os_str() == "target") {
+                continue;
+            }
+            let path_buf = path.to_path_buf();
+            files.insert(path_buf.clone());
+            let module_path = module_path_from_file_guess(project_root, &source_root, &path_buf)?;
+            module_files.insert(module_path.clone(), path_buf.clone());
+            file_modules.entry(path_buf).or_default().push(module_path);
+        }
+
+        let module_membership = graph_module_membership(&ir);
+        for node in &ir.nodes {
+            let Some((name, kind)) = graph_symbol_identity(&ir, &node.kind) else {
+                continue;
+            };
+            let module_path = module_membership
+                .get(&node.id.0)
+                .cloned()
+                .unwrap_or_else(|| "crate".to_string());
+            let symbol_id = format!("{module_path}::{name}");
+            symbol_kinds.insert(symbol_id.clone(), kind.clone());
+            symbol_catalog.push((symbol_id, kind));
+        }
+        symbol_catalog.sort_by(|a, b| a.0.cmp(&b.0));
+
+        Ok(Self {
+            span_index: HashMap::new(),
+            symbol_kinds,
+            symbol_catalog,
+            normalized_sources: HashMap::new(),
+            tlog_offset: 0,
+            module_files,
+            file_modules,
+            files,
+            uses_crate_prefix: true,
+        })
+    }
+
+    fn merge_report_spans(&mut self, out_dir: &Path) -> Result<()> {
+        let graph_dir = if out_dir.file_name().and_then(|s| s.to_str()) == Some("graph") {
+            out_dir.to_path_buf()
+        } else {
+            ReportLayout::from_crate_root(out_dir.to_path_buf()).graph_dir()
+        };
+        let spans_path = graph_dir.join("symbol_spans.jsonl");
+        if !spans_path.exists() {
+            return Ok(());
+        }
+        let reader = BufReader::new(File::open(&spans_path)?);
+        self.span_index.clear();
+        for line in reader.lines() {
+            let line = line?;
+            apply_span_line(&line, &mut self.span_index, &mut self.files)?;
+        }
+        dedup_spans(&mut self.span_index);
+        Ok(())
+    }
+}
+
+fn module_path_from_file_guess(project_root: &Path, source_root: &Path, file: &Path) -> Result<String> {
+    let root = if file.starts_with(source_root) { source_root } else { project_root };
+    let rel = file.strip_prefix(root).unwrap_or(file);
+    let mut components: Vec<String> = rel
+        .components()
+        .filter_map(|c| c.as_os_str().to_str().map(|s| s.to_string()))
+        .collect();
+    if components.is_empty() {
+        return Err(anyhow!("cannot derive module path for {}", file.display()));
+    }
+    let filename = components.pop().unwrap();
+    let module_segments = if filename == "lib.rs" || filename == "main.rs" || filename == "mod.rs" {
+        components
+    } else {
+        let stem = filename.trim_end_matches(".rs").to_string();
+        let mut segs = components;
+        segs.push(stem);
+        segs
+    };
+    let mut path = String::from("crate");
+    for segment in module_segments {
+        if !segment.is_empty() {
+            path.push_str("::");
+            path.push_str(&segment);
+        }
+    }
+    Ok(path)
+}
+
+fn graph_module_membership(ir: &canon_ir::CanonIR) -> HashMap<u32, String> {
+    use canon_ir::NodeId;
+    let mut membership = HashMap::new();
+    for node in &ir.nodes {
+        let CanonNodeKind::Module { path_id, .. } = &node.kind else {
+            continue;
+        };
+        let module_path = ir.lookup_path(*path_id).to_string();
+        for (dst, _) in ir.module_graph.neighbours(NodeId(node.id.0)) {
+            membership.entry(dst.0).or_insert_with(|| module_path.clone());
+        }
+    }
+    membership
+}
+
+fn graph_symbol_identity(ir: &canon_ir::CanonIR, kind: &CanonNodeKind) -> Option<(String, String)> {
+    match kind {
+        CanonNodeKind::Struct { name_id, .. } => Some((ir.lookup_name(*name_id).to_string(), "struct".to_string())),
+        CanonNodeKind::Enum { name_id, .. } => Some((ir.lookup_name(*name_id).to_string(), "enum".to_string())),
+        CanonNodeKind::Trait { name_id, .. } => Some((ir.lookup_name(*name_id).to_string(), "trait".to_string())),
+        CanonNodeKind::AssocType { name_id, .. } => Some((ir.lookup_name(*name_id).to_string(), "type".to_string())),
+        CanonNodeKind::AssocConst { name_id, .. } => Some((ir.lookup_name(*name_id).to_string(), "const".to_string())),
+        CanonNodeKind::Fn { name_id, .. } => Some((ir.lookup_name(*name_id).to_string(), "fn".to_string())),
+        CanonNodeKind::Module { path_id, .. } => Some((ir.lookup_path(*path_id).to_string(), "module".to_string())),
+        _ => None,
     }
 }
 

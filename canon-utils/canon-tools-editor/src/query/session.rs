@@ -1,6 +1,7 @@
 use crate::symbol_index::SymbolIndex;
 use anyhow::{anyhow, Result};
-use canon_types::ReportLayout;
+use canon_analysis::load_latest_workspace_graph_artifact;
+use canon_ir::{CanonNodeKind, NodeId};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -23,11 +24,21 @@ impl AnalysisSession {
     pub fn load(project_root: &Path) -> Result<Self> {
         let index = SymbolIndex::build(project_root)?;
         if index.module_files().is_empty() {
-            return Err(anyhow!("reports has no module mapping for {}", project_root.display()));
+            return Err(anyhow!("analysis has no module mapping for {}", project_root.display()));
         }
-        let reports_dir = reports_out_dir(project_root)?;
-        let (edges, files) = load_edges(&reports_dir)?;
-        Ok(Self { module_files: index.module_files().clone(), file_modules: index.file_modules().clone(), files: files, uses_crate_prefix: index.uses_crate_prefix(), edges })
+        let (_summary, ir) = load_latest_workspace_graph_artifact(project_root)?;
+        let node_symbols = graph_symbol_paths(&ir);
+        let mut edges = Vec::new();
+        edges.extend(graph_edges_from_csr(&ir.call_graph, "CALL", &node_symbols));
+        edges.extend(graph_edges_from_csr(&ir.module_graph, "MODULE", &node_symbols));
+        edges.extend(graph_edges_from_csr(&ir.cfg_graph, "CFG", &node_symbols));
+        Ok(Self {
+            module_files: index.module_files().clone(),
+            file_modules: index.file_modules().clone(),
+            files: index.files().clone(),
+            uses_crate_prefix: index.uses_crate_prefix(),
+            edges,
+        })
     }
 
     pub fn edges_by_kind(&self, edge_kind: &str) -> Result<Vec<GraphEdgeRecord>> {
@@ -39,81 +50,65 @@ impl AnalysisSession {
     }
 }
 
-fn reports_out_dir(project_root: &Path) -> Result<PathBuf> {
-    if let Ok(out) = std::env::var("CANON_REPORTS_OUT") {
-        return Ok(PathBuf::from(out));
+fn graph_symbol_paths(ir: &canon_ir::CanonIR) -> HashMap<u32, String> {
+    let module_membership = module_membership(ir);
+    let mut out = HashMap::new();
+    for node in &ir.nodes {
+        let path = match &node.kind {
+            CanonNodeKind::Module { path_id, .. } => ir.lookup_path(*path_id).to_string(),
+            CanonNodeKind::Struct { name_id, .. }
+            | CanonNodeKind::Enum { name_id, .. }
+            | CanonNodeKind::Trait { name_id, .. }
+            | CanonNodeKind::AssocType { name_id, .. }
+            | CanonNodeKind::AssocConst { name_id, .. }
+            | CanonNodeKind::Fn { name_id, .. } => {
+                let module_path = module_membership
+                    .get(&node.id.0)
+                    .cloned()
+                    .unwrap_or_else(|| "crate".to_string());
+                format!("{}::{}", module_path, ir.lookup_name(*name_id))
+            }
+            _ => continue,
+        };
+        out.insert(node.id.0, path);
     }
-    Ok(project_root.join("state/reports_out/crates/unknown"))
+    out
 }
 
-fn load_edges(reports_dir: &Path) -> Result<(Vec<GraphEdgeRecord>, HashSet<PathBuf>)> {
-    let graph_dir = if reports_dir.file_name().and_then(|s| s.to_str()) == Some("graph") { reports_dir.to_path_buf() } else { ReportLayout::from_crate_root(reports_dir.to_path_buf()).graph_dir() };
-    let nodes_path = graph_dir.join("nodes.csv");
-    let edges_path = graph_dir.join("edges.csv");
-    let files_path = graph_dir.join("files.txt");
-    if !nodes_path.exists() || !edges_path.exists() || !files_path.exists() {
-        return Err(anyhow!("reports artifacts not found in {}; run reports generation first", reports_dir.display()));
-    }
-
-    let files = read_files_txt(&files_path)?;
-    let nodes = read_nodes_csv(&nodes_path)?;
-    let id_to_symbol: HashMap<u32, String> = nodes.into_iter().map(|n| (n.id, n.symbol)).collect();
-    let edges = read_edges_csv(&edges_path, &id_to_symbol)?;
-    Ok((edges, files))
-}
-
-#[derive(Debug)]
-struct NodeRow {
-    id: u32,
-    symbol: String,
-}
-
-fn read_nodes_csv(path: &Path) -> Result<Vec<NodeRow>> {
-    let mut rdr = csv::ReaderBuilder::new().from_path(path)?;
-    let headers = rdr.headers().map(|h| h.iter().map(|s| s.to_string()).collect::<Vec<_>>())?;
-    let id_idx = headers.iter().position(|h| h == "id").unwrap_or(0);
-    let symbol_idx = headers.iter().position(|h| h == "symbol").unwrap_or(2);
-    let mut out = Vec::new();
-    for rec in rdr.records() {
-        let rec = rec?;
-        let id = rec.get(id_idx).unwrap_or("0").parse::<u32>().unwrap_or(0);
-        let symbol = rec.get(symbol_idx).unwrap_or("").to_string();
-        if symbol.is_empty() {
+fn module_membership(ir: &canon_ir::CanonIR) -> HashMap<u32, String> {
+    let mut membership = HashMap::new();
+    for node in &ir.nodes {
+        let CanonNodeKind::Module { path_id, .. } = &node.kind else {
             continue;
+        };
+        let module_path = ir.lookup_path(*path_id).to_string();
+        for (dst, _) in ir.module_graph.neighbours(NodeId(node.id.0)) {
+            membership.entry(dst.0).or_insert_with(|| module_path.clone());
         }
-        out.push(NodeRow { id, symbol });
     }
-    Ok(out)
+    membership
 }
 
-fn read_edges_csv(path: &Path, id_to_symbol: &HashMap<u32, String>) -> Result<Vec<GraphEdgeRecord>> {
-    let mut rdr = csv::ReaderBuilder::new().from_path(path)?;
-    let headers = rdr.headers().map(|h| h.iter().map(|s| s.to_string()).collect::<Vec<_>>())?;
-    let src_idx = headers.iter().position(|h| h == "src").unwrap_or(0);
-    let dst_idx = headers.iter().position(|h| h == "dst").unwrap_or(1);
-    let kind_idx = headers.iter().position(|h| h == "kind").unwrap_or(2);
-    let mut out = Vec::new();
-    for rec in rdr.records() {
-        let rec = rec?;
-        let src_id = rec.get(src_idx).unwrap_or("0").parse::<u32>().unwrap_or(0);
-        let dst_id = rec.get(dst_idx).unwrap_or("0").parse::<u32>().unwrap_or(0);
-        let kind = rec.get(kind_idx).unwrap_or("").to_string();
-        let Some(src) = id_to_symbol.get(&src_id) else { continue };
-        let Some(dst) = id_to_symbol.get(&dst_id) else { continue };
-        out.push(GraphEdgeRecord { src: src.clone(), dst: dst.clone(), kind });
-    }
-    Ok(out)
-}
-
-fn read_files_txt(path: &Path) -> Result<HashSet<PathBuf>> {
-    let content = std::fs::read_to_string(path)?;
-    let mut out = HashSet::new();
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
+fn graph_edges_from_csr(
+    graph: &canon_ir::csr_graph::CsrGraph<canon_ir::CanonId, canon_ir::EdgeKind>,
+    kind: &str,
+    node_symbols: &HashMap<u32, String>,
+) -> Vec<GraphEdgeRecord> {
+    let mut edges = Vec::new();
+    for src in 0..graph.vertex_count() {
+        for (dst, _) in graph.neighbours(NodeId(src as u32)) {
+            let Some(src_symbol) = node_symbols.get(&(src as u32)) else {
+                continue;
+            };
+            let Some(dst_symbol) = node_symbols.get(&dst.0) else {
+                continue;
+            };
+            edges.push(GraphEdgeRecord {
+                src: src_symbol.clone(),
+                dst: dst_symbol.clone(),
+                kind: kind.to_string(),
+            });
         }
-        out.insert(PathBuf::from(trimmed));
     }
-    Ok(out)
+    edges
 }

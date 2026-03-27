@@ -1236,6 +1236,7 @@ pub enum SemanticActionIntent {
     ValidateCargoCheck,
     CreateEntrypoint(PathBuf),
     CreateModuleFile(PathBuf),
+    RestructureModules(PathBuf),
     FixDeadCodeConflict(PathBuf),
     FixUnresolvedImport(PathBuf),
     DefineMissingSymbol(PathBuf),
@@ -1314,6 +1315,16 @@ pub fn classify_planned_action_intents(
                 .map(|path| normalize_path(&path, target_root))
             {
                 out.push(SemanticActionIntent::ResolveDuplicateDefinition(path));
+            }
+        }
+        "edit.move_symbol" => {
+            if let Some(path) = action_payload
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from)
+                .map(|path| normalize_path(&path, target_root))
+            {
+                out.push(SemanticActionIntent::RestructureModules(path));
             }
         }
         "apply_patch" => {
@@ -1432,6 +1443,13 @@ pub fn execution_results_for_action(
                 true,
             )
             .with_attempted_kind("create_module_file"),
+            SemanticActionIntent::RestructureModules(path) => SemanticExecutionResultRecord::new(
+                "module_restructured",
+                "module restructure edit applied",
+                vec![path.to_string_lossy().to_string()],
+                true,
+            )
+            .with_attempted_kind("restructure_modules"),
             SemanticActionIntent::FixDeadCodeConflict(path) => SemanticExecutionResultRecord::new(
                 "dead_code_conflict_addressed",
                 "dead_code conflict edit applied",
@@ -1528,6 +1546,9 @@ fn intent_kind_and_targets(intent: &SemanticActionIntent) -> (&'static str, Vec<
         }
         SemanticActionIntent::CreateModuleFile(path) => {
             ("create_module_file", vec![path.to_string_lossy().to_string()])
+        }
+        SemanticActionIntent::RestructureModules(path) => {
+            ("restructure_modules", vec![path.to_string_lossy().to_string()])
         }
         SemanticActionIntent::FixDeadCodeConflict(path) => {
             ("fix_dead_code_conflict", vec![path.to_string_lossy().to_string()])

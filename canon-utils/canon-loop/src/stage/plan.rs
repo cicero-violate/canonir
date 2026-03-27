@@ -387,7 +387,7 @@ fn validate_action_batch(
     let has_execution = actions.iter().any(|a| {
         matches!(
             a.action_kind.as_str(),
-            "patch_file" | "apply_patch" | "write_file" | "run_command" | "done" | "edit.rename_symbol"
+            "patch_file" | "apply_patch" | "write_file" | "run_command" | "done" | "edit.rename_symbol" | "edit.move_symbol"
         )
     });
     if retry_policy == RetryPolicy::DiscoveryOnly && has_execution {
@@ -446,6 +446,22 @@ fn validate_action_batch(
                 }
                 validate_workspace_relative_path(path, &target_root)
                     .map_err(|e| format!("edit.rename_symbol path is invalid: {e}"))?;
+            }
+            "edit.move_symbol" => {
+                let Some(symbol_id) = action.action_payload.get("symbol_id").and_then(|v| v.as_str()) else {
+                    return Err("edit.move_symbol missing symbol_id payload".to_string());
+                };
+                let Some(new_module_path) = action.action_payload.get("new_module_path").and_then(|v| v.as_str()) else {
+                    return Err("edit.move_symbol missing new_module_path payload".to_string());
+                };
+                let Some(path) = action.action_payload.get("path").and_then(|v| v.as_str()) else {
+                    return Err("edit.move_symbol missing path payload".to_string());
+                };
+                if symbol_id.trim().is_empty() || new_module_path.trim().is_empty() {
+                    return Err("edit.move_symbol requires non-empty symbol_id and new_module_path".to_string());
+                }
+                validate_workspace_relative_path(path, &target_root)
+                    .map_err(|e| format!("edit.move_symbol path is invalid: {e}"))?;
             }
             "read_file" | "list_dir" | "write_file" | "patch_file" => {
                 let Some(path) = action.action_payload.get("path").and_then(|v| v.as_str()) else {
@@ -841,11 +857,15 @@ const PLANNER_SYSTEM_INSTRUCTIONS: &str = r#"You are a code-editing agent. Produ
    {"action":"edit.rename_symbol","old":"crate::module::OldName","new":"crate::module::NewName","path":"src/module.rs"}
    Use this for duplicate-definition / rename flows when you have graph-backed symbol context.
 
-5. run_command — run a shell command
+5. edit.move_symbol — move a symbol to a different module using the semantic editor stack
+   {"action":"edit.move_symbol","symbol_id":"crate::old_mod::Thing","new_module_path":"crate::new_mod","path":"src/old_mod.rs"}
+   Use this for module-restructure / cohesion strategies driven by graph hotspots.
+
+6. run_command — run a shell command
    {"action":"run_command","cmd":"cargo build","cwd":"<TARGET_WORKSPACE>"}
    cwd must be absolute. Use TARGET WORKSPACE (provided in context) or a subdir.
 
-6. done — declare goal complete
+7. done — declare goal complete
    {"action":"done","reason":"..."}
 
 ━━━ WORKFLOW ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -857,6 +877,7 @@ Step 1 — Discover (only when unsure of project state or missing file contents)
 Step 2 — Create/Edit (after seeing discovery results):
   Use apply_patch (*** Add File for new, *** Update File for existing).
   Use edit.rename_symbol for semantic duplicate-resolution renames when graph context supports it.
+  Use edit.move_symbol for semantic module restructuring when graph hotspots indicate a better module boundary.
   Use run_command for cargo/shell operations.
   The "done" action must be the ONLY action in a batch, and only after verification has shown the goal is met.
 

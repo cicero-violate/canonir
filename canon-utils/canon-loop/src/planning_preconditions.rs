@@ -40,6 +40,7 @@ enum ActionIntent {
     ValidateCargoCheck,
     CreateEntrypoint(PathBuf),
     CreateModuleFile(PathBuf),
+    RestructureModules(PathBuf),
     FixDeadCodeConflict(PathBuf),
     FixUnresolvedImport(PathBuf),
     DefineMissingSymbol(PathBuf),
@@ -418,9 +419,17 @@ pub fn validate_development_strategy_alignment(
                 );
             }
         }
+        DevelopmentStrategyKind::RestructureModules => {
+            let has_move = actions.iter().any(|action| action.action_kind == "edit.move_symbol");
+            if !has_move {
+                return Err(
+                    "active development strategy requires a semantic module-restructure action driven by graph hotspots"
+                        .to_string(),
+                );
+            }
+        }
         DevelopmentStrategyKind::ApplyTargetedCompilerRepair
-        | DevelopmentStrategyKind::RealignObjectiveFlow
-        | DevelopmentStrategyKind::RestructureModules => {}
+        | DevelopmentStrategyKind::RealignObjectiveFlow => {}
     }
     Ok(())
 }
@@ -473,6 +482,7 @@ fn action_intent_key(intent: &ActionIntent) -> &'static str {
         ActionIntent::ValidateCargoCheck => "validate_cargo_check",
         ActionIntent::CreateEntrypoint(_) => "create_entrypoint",
         ActionIntent::CreateModuleFile(_) => "create_module_file",
+        ActionIntent::RestructureModules(_) => "restructure_modules",
         ActionIntent::FixDeadCodeConflict(_) => "fix_dead_code_conflict",
         ActionIntent::FixUnresolvedImport(_) => "fix_unresolved_import",
         ActionIntent::DefineMissingSymbol(_) => "define_missing_symbol",
@@ -668,6 +678,19 @@ fn classify_action_intents(
         {
             let normalized = if path.is_absolute() { path } else { target_root.join(path) };
             out.push(ActionIntent::ResolveDuplicateDefinition(normalized));
+        }
+        return;
+    }
+
+    if action.action_kind == "edit.move_symbol" {
+        if let Some(path) = action
+            .action_payload
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+        {
+            let normalized = if path.is_absolute() { path } else { target_root.join(path) };
+            out.push(ActionIntent::RestructureModules(normalized));
         }
         return;
     }

@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use canon_editor::rename_symbol_pairs;
+use canon_editor::{move_symbol_pairs, rename_symbol_pairs};
 use canon_event::{
     new_error_occurred, BashInvoke, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, FileEvent, FilePatch, FileWrite, LoopActed, LoopPlanned, ProcessResult, RouteSelected, RuntimeEvent, ToolCall, ToolResult,
 };
@@ -572,6 +572,78 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                     tick: planned.tick,
                     action_kind: planned.action_kind.clone(),
                     tool_kind: "edit.rename_symbol".to_string(),
+                    request_id: String::new(),
+                    tool_call_id: String::new(),
+                    node_id: node_id.clone(),
+                    started_at: started,
+                    trace_id: planned.trace_id.clone(),
+                    execution_id: planned.execution_id.clone(),
+                    parent_span_id: planned.span_id.clone(),
+                    plan_id: planned.plan_id.clone(),
+                    plan_step_id: planned.plan_step_id.clone(),
+                    action_id: planned.action_id.clone(),
+                    artifact_n: 0,
+                    llm_request_id: planned.llm_request_id.clone(),
+                },
+                stdout,
+                stderr,
+                None,
+                duration_ms,
+                success,
+                None,
+            );
+            Ok(LoopStageResult::EmitMany(vec![tool_result, acted]))
+        }
+        "edit.move_symbol" => {
+            let symbol_id = planned.action_payload.get("symbol_id").and_then(|v| v.as_str());
+            let new_module_path = planned
+                .action_payload
+                .get("new_module_path")
+                .and_then(|v| v.as_str());
+            let (Some(symbol_id), Some(new_module_path)) = (symbol_id, new_module_path) else {
+                ctx.mark_batch_inline_completion(planned, false);
+                return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_move_symbol_args")));
+            };
+            let project = planned
+                .action_payload
+                .get("project")
+                .and_then(|v| v.as_str())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| ctx.workspace.clone());
+            let node_id = tool_node_id(planned);
+            let started = Instant::now();
+            let report = move_symbol_pairs(&project, &[(symbol_id.to_string(), new_module_path.to_string())]);
+            let duration_ms = started.elapsed().as_millis() as u64;
+            let success = report.error.is_none();
+            let stdout = if success {
+                if report.def_paths.is_empty() {
+                    format!("move_symbol ok: {symbol_id} -> {new_module_path}")
+                } else {
+                    format!("move_symbol ok: {symbol_id} -> {new_module_path}\n{}", report.def_paths.join("\n"))
+                }
+            } else {
+                String::new()
+            };
+            let stderr = report.error.unwrap_or_default();
+            ctx.mark_batch_inline_completion(planned, success);
+            let tool_result = inline_tool_result(
+                "edit.move_symbol",
+                &node_id,
+                serde_json::json!({
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "duration_ms": duration_ms,
+                    "success": success,
+                    "symbol_id": symbol_id,
+                    "new_module_path": new_module_path,
+                }),
+                success,
+            );
+            let acted = emit_acted(
+                PendingAct {
+                    tick: planned.tick,
+                    action_kind: planned.action_kind.clone(),
+                    tool_kind: "edit.move_symbol".to_string(),
                     request_id: String::new(),
                     tool_call_id: String::new(),
                     node_id: node_id.clone(),
