@@ -368,6 +368,8 @@ pub struct ObjectiveTrendState {
     pub no_semantic_progress_events: u32,
     pub current_no_progress_streak: u32,
     pub repeated_stall_count: u32,
+    pub route_objective_contradiction_events: u32,
+    pub goal_objective_drift_events: u32,
     pub last_goodness: Option<f32>,
     pub last_delta_g: Option<f32>,
 }
@@ -405,6 +407,15 @@ impl ObjectiveTrendState {
         self.last_delta_g = Some(delta_g);
     }
 
+    pub fn record_route_objective_contradiction(&mut self) {
+        self.route_objective_contradiction_events =
+            self.route_objective_contradiction_events.saturating_add(1);
+    }
+
+    pub fn record_goal_objective_drift(&mut self) {
+        self.goal_objective_drift_events = self.goal_objective_drift_events.saturating_add(1);
+    }
+
     pub fn repair_resolution_rate(&self) -> f32 {
         if self.total_execution_results == 0 {
             0.0
@@ -431,6 +442,14 @@ impl ObjectiveTrendState {
             format!("invalid_plan_rate={:.2}", self.invalid_plan_rate()),
             format!("semantic_progress_trend={:.2}", self.semantic_progress_trend()),
             format!("repeated_stall_count={}", self.repeated_stall_count),
+            format!(
+                "route_objective_contradiction_events={}",
+                self.route_objective_contradiction_events
+            ),
+            format!(
+                "goal_objective_drift_events={}",
+                self.goal_objective_drift_events
+            ),
             format!("total_execution_results={}", self.total_execution_results),
             format!("planning_attempts={}", self.planning_attempts),
             format!(

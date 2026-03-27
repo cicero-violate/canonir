@@ -264,12 +264,20 @@ impl EventConsumer for GoalGenConsumer {
                 self.objective_trend_state.record_invalid_plan_event();
                 EventOutcome::NoOp("goal_gen_invalid_plan_update")
             }
+            (_, RuntimeEvent::Debug(debug)) if debug.kind == "route_objective_contradiction" => {
+                self.objective_trend_state.record_route_objective_contradiction();
+                EventOutcome::NoOp("goal_gen_route_objective_contradiction")
+            }
+            (_, RuntimeEvent::Debug(debug)) if debug.kind == "goal_objective_drift" => {
+                self.objective_trend_state.record_goal_objective_drift();
+                EventOutcome::NoOp("goal_gen_goal_objective_drift")
+            }
+            (_, RuntimeEvent::Debug(_)) => EventOutcome::NoOp("goal_gen_debug_ignored"),
             (_, RuntimeEvent::ErrorOccurred(_)) => EventOutcome::NoOp("goal_gen_error_ignored"),
             (State::Waiting, RuntimeEvent::CapabilityCompleted(_)) | (State::Waiting, RuntimeEvent::CapabilityFailed(_)) => EventOutcome::NoOp("goal_gen_waiting_unrelated"),
             (State::Done, _) => EventOutcome::NoOp("goal_gen_noop"),
             (_, RuntimeEvent::Tick(_))
             | (_, RuntimeEvent::Code(_))
-            | (_, RuntimeEvent::Debug(_))
             | (_, RuntimeEvent::Edit(_))
             | (_, RuntimeEvent::LoopPlanned(_))
             | (_, RuntimeEvent::LoopActed(_))

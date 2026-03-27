@@ -55,6 +55,7 @@ pub enum TransitionRow {
     PlannerObjectiveAlignment(PlannerObjectiveAlignmentRow),
     RouteObjectiveAlignment(RouteObjectiveAlignmentRow),
     GoalRouteObjectiveDrift(GoalRouteObjectiveDriftRow),
+    ContradictionEventTrend(ContradictionEventTrendRow),
     RouteSemanticActionability(RouteSemanticActionabilityRow),
 }
 
@@ -269,10 +270,12 @@ pub enum JudgmentScenarioFamily {
     RouteTrendStallActionable,
     RouteObjectiveContradiction,
     GoalRouteObjectiveDrift,
+    RouteObjectiveContradictionEvent,
+    GoalObjectiveDriftEvent,
 }
 
 impl JudgmentScenarioFamily {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 25] = [
         Self::PlannerBootstrapWorkspace,
         Self::PlannerInitCargoProject,
         Self::PlannerCreateEntrypoint,
@@ -296,6 +299,8 @@ impl JudgmentScenarioFamily {
         Self::RouteTrendStallActionable,
         Self::RouteObjectiveContradiction,
         Self::GoalRouteObjectiveDrift,
+        Self::RouteObjectiveContradictionEvent,
+        Self::GoalObjectiveDriftEvent,
     ];
 }
 
@@ -329,6 +334,15 @@ pub struct GoalRouteObjectiveDriftRow {
     pub goal_objective: &'static str,
     pub route_objective: &'static str,
     pub expected_drift: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ContradictionEventTrendRow {
+    pub name: &'static str,
+    pub family: JudgmentScenarioFamily,
+    pub debug_kind: &'static str,
+    pub expected_route_contradictions: u32,
+    pub expected_goal_drifts: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -824,6 +838,9 @@ pub fn assert_transition_rows(rows: &[TransitionRow]) {
             TransitionRow::PlannerObjectiveAlignment(row) => assert_planner_objective_alignment_row(row),
             TransitionRow::RouteObjectiveAlignment(row) => assert_route_objective_alignment_row(row),
             TransitionRow::GoalRouteObjectiveDrift(row) => assert_goal_route_objective_drift_row(row),
+            TransitionRow::ContradictionEventTrend(row) => {
+                assert_contradiction_event_trend_row(row)
+            }
             TransitionRow::RouteSemanticActionability(row) => {
                 assert_route_semantic_actionability_row(row)
             }
@@ -863,6 +880,9 @@ pub fn coverage_report(rows: &[TransitionRow]) -> CoverageReport {
                 push_unique(&mut report.judgment_covered, row.family)
             }
             TransitionRow::GoalRouteObjectiveDrift(row) => {
+                push_unique(&mut report.judgment_covered, row.family)
+            }
+            TransitionRow::ContradictionEventTrend(row) => {
                 push_unique(&mut report.judgment_covered, row.family)
             }
             TransitionRow::RouteSemanticActionability(row) => {
@@ -923,6 +943,11 @@ pub fn baseline_transition_rows() -> Vec<TransitionRow> {
         goal_route_objective_drift_rows()
             .into_iter()
             .map(TransitionRow::GoalRouteObjectiveDrift),
+    );
+    rows.extend(
+        contradiction_event_trend_rows()
+            .into_iter()
+            .map(TransitionRow::ContradictionEventTrend),
     );
     rows.extend(
         route_semantic_actionability_rows()
@@ -1516,6 +1541,25 @@ pub fn goal_route_objective_drift_rows() -> Vec<GoalRouteObjectiveDriftRow> {
         route_objective: "sustain semantic progress while reducing repair pressure",
         expected_drift: true,
     }]
+}
+
+pub fn contradiction_event_trend_rows() -> Vec<ContradictionEventTrendRow> {
+    vec![
+        ContradictionEventTrendRow {
+            name: "route_objective_contradiction_event_updates_trend",
+            family: JudgmentScenarioFamily::RouteObjectiveContradictionEvent,
+            debug_kind: "route_objective_contradiction",
+            expected_route_contradictions: 1,
+            expected_goal_drifts: 0,
+        },
+        ContradictionEventTrendRow {
+            name: "goal_objective_drift_event_updates_trend",
+            family: JudgmentScenarioFamily::GoalObjectiveDriftEvent,
+            debug_kind: "goal_objective_drift",
+            expected_route_contradictions: 0,
+            expected_goal_drifts: 1,
+        },
+    ]
 }
 
 pub fn route_objective_alignment_rows() -> Vec<RouteObjectiveAlignmentRow> {
@@ -2582,6 +2626,28 @@ fn assert_goal_route_objective_drift_row(row: &GoalRouteObjectiveDriftRow) {
         goal_route_objective_drift(row.goal_objective, row.route_objective),
         row.expected_drift,
         "goal/route objective drift row {} mismatch",
+        row.name
+    );
+}
+
+fn assert_contradiction_event_trend_row(row: &ContradictionEventTrendRow) {
+    let mut ctx = RouteContext::default();
+    let event = RuntimeEvent::Debug(canon_event::DebugEvent {
+        source: "matrix".to_string(),
+        kind: row.debug_kind.to_string(),
+        payload: serde_json::json!({}),
+    });
+    ctx.update_from_event(&event, std::path::Path::new("/tmp"));
+    assert_eq!(
+        ctx.objective_trend_state.route_objective_contradiction_events,
+        row.expected_route_contradictions,
+        "contradiction event row {} route counter mismatch",
+        row.name
+    );
+    assert_eq!(
+        ctx.objective_trend_state.goal_objective_drift_events,
+        row.expected_goal_drifts,
+        "contradiction event row {} goal counter mismatch",
         row.name
     );
 }

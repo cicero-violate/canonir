@@ -298,6 +298,12 @@ impl EventConsumer for LoopStageExecutor {
             .is_some_and(|(_, eval)| eval.force_observe_recovery);
         match event {
             RuntimeEvent::Debug(debug) if debug.kind == "recovery_event" => {}
+            RuntimeEvent::Debug(debug) if debug.kind == "route_objective_contradiction" => {
+                self.ctx.objective_trend_state.record_route_objective_contradiction();
+            }
+            RuntimeEvent::Debug(debug) if debug.kind == "goal_objective_drift" => {
+                self.ctx.objective_trend_state.record_goal_objective_drift();
+            }
             RuntimeEvent::RouteSelected(rs) => {
                 self.ctx.last_route_rationale = Some(rs.rationale.clone());
                 self.ctx.last_route_confidence = rs.confidence.map(|c| c as f64);

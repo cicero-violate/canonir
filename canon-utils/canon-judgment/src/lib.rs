@@ -83,7 +83,6 @@ impl Default for GuardConfig {
 pub struct RuntimeSignals {
     pub context_ready: bool,
     pub has_queued_plan: bool,
-    pub workspace_dirty: bool,
     pub performed_recently: bool,
     pub repair_stalled: bool,
     pub repair_pressure_score: u32,
@@ -434,7 +433,6 @@ mod tests {
         let signals = RuntimeSignals {
             context_ready: true,
             has_queued_plan: false,
-            workspace_dirty: false,
             performed_recently: false,
             repair_stalled: false,
             repair_pressure_score: 1,
@@ -455,7 +453,6 @@ mod tests {
         let signals = RuntimeSignals {
             context_ready: true,
             has_queued_plan: false,
-            workspace_dirty: false,
             performed_recently: false,
             repair_stalled: false,
             repair_pressure_score: 0,
@@ -500,7 +497,6 @@ mod tests {
         let signals = RuntimeSignals {
             context_ready: true,
             has_queued_plan: false,
-            workspace_dirty: false,
             performed_recently: false,
             repair_stalled: false,
             repair_pressure_score: 2,

@@ -92,7 +92,6 @@ impl RouteContext {
         RuntimeSignals {
             context_ready: self.context_ready,
             has_queued_plan: self.planned_pending > 0,
-            workspace_dirty: self.workspace_dirty_tracker.any_dirty(),
             performed_recently: self.acted_unverified,
             repair_stalled: semantic_no_progress_streak(&self.recent_execution_results) > 0,
             repair_pressure_score: self.objective_state().repair_pressure_score(),
@@ -391,6 +390,14 @@ impl RouteContext {
                 self.planned_pending = 0;
                 self.semantic_summary.path_exists = true;
                 self.push_journal("observe", "bootstrap_refresh_required");
+            }
+            RuntimeEvent::Debug(debug) if debug.kind == "route_objective_contradiction" => {
+                self.objective_trend_state.record_route_objective_contradiction();
+                self.push_journal("route", "route_objective_contradiction");
+            }
+            RuntimeEvent::Debug(debug) if debug.kind == "goal_objective_drift" => {
+                self.objective_trend_state.record_goal_objective_drift();
+                self.push_journal("goal", "goal_objective_drift");
             }
             RuntimeEvent::ToolCall(ToolCall { tool_call_id, kind, .. }) => {
                 // Opening a new call: if set was empty this starts a new batch.
@@ -719,5 +726,31 @@ mod tests {
         assert!(ctx.validation_blocked_state());
         assert!(ctx.compiler_repair_required_state());
         assert_eq!(ctx.planning_preconditions_state().len(), 1);
+    }
+
+    #[test]
+    fn contradiction_debug_events_update_objective_trends() {
+        let mut ctx = RouteContext::default();
+        let workspace = Path::new("/tmp");
+
+        ctx.update_from_event(
+            &RuntimeEvent::Debug(canon_event::DebugEvent {
+                source: "route_executor".into(),
+                kind: "route_objective_contradiction".into(),
+                payload: serde_json::json!({}),
+            }),
+            workspace,
+        );
+        ctx.update_from_event(
+            &RuntimeEvent::Debug(canon_event::DebugEvent {
+                source: "goal_gen_consumer".into(),
+                kind: "goal_objective_drift".into(),
+                payload: serde_json::json!({}),
+            }),
+            workspace,
+        );
+
+        assert_eq!(ctx.objective_trend_state.route_objective_contradiction_events, 1);
+        assert_eq!(ctx.objective_trend_state.goal_objective_drift_events, 1);
     }
 }
