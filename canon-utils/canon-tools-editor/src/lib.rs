@@ -368,3 +368,6 @@ mod tests {
         assert!(created.contains("module: merge"));
     }
 }
+
+#[cfg(test)]
+mod capability_suite;
