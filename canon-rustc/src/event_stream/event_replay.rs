@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::event_stream::delta::EventDelta;
 use crate::event_stream::event_engine::apply_delta;
 use crate::event_stream::event::RustcEvent;
-use canon_event::{CanonEvent, CanonPayload};
+use canon_event::{CanonEvent, EventKind};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -60,9 +60,10 @@ fn read_tlog_deltas(path: &Path) -> Result<Vec<EventDelta>> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let event = match canon.payload {
-            CanonPayload::RustcEvent(v) => serde_json::from_value::<RustcEvent>(v).ok(),
-            _ => None,
+        let event = if canon.kind == EventKind::Code {
+            serde_json::from_value::<RustcEvent>(canon.payload.data).ok()
+        } else {
+            None
         };
         let Some(event) = event else { continue; };
         if matches!(event, RustcEvent::SessionStart(_)) {

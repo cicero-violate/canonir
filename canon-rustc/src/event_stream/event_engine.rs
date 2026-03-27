@@ -27,21 +27,21 @@ pub fn apply_delta(state: &mut RustcState, delta: &EventDelta) -> Result<()> {
                 .insert(symbol.clone(), kind.clone());
             state.removed_symbols.remove(symbol);
         }
-        RustcEvent::NodeRemoved(canon_types::NodeRemoved { symbol }) => {
+        RustcEvent::NodeRemoved(canon_types::NodeRemoved { symbol, .. }) => {
             state.known_symbols.remove(symbol);
             state.removed_symbols.insert(symbol.clone());
         }
-        RustcEvent::EdgeDefined(canon_types::EdgeDefined { src, dst, kind }) => {
+        RustcEvent::EdgeDefined(canon_types::EdgeDefined { src, dst, kind, .. }) => {
             state
                 .known_edges
                 .push((src.clone(), dst.clone(), kind.clone()));
             state.removed_edges.retain(|e| e != &(src.clone(), dst.clone(), kind.clone()));
         }
-        RustcEvent::EdgeRemoved(canon_types::EdgeRemoved { src, dst, kind }) => {
+        RustcEvent::EdgeRemoved(canon_types::EdgeRemoved { src, dst, kind, .. }) => {
             state.known_edges.retain(|e| e != &(src.clone(), dst.clone(), kind.clone()));
             state.removed_edges.push((src.clone(), dst.clone(), kind.clone()));
         }
-        RustcEvent::FileSeen(canon_types::FileSeen { path }) => {
+        RustcEvent::FileSeen(canon_types::FileSeen { path, .. }) => {
             state.known_files.insert(path.clone());
         }
         RustcEvent::CallsiteObserved(_) => {}

@@ -59,7 +59,7 @@ impl TlogWriter {
 
     pub fn write_edge(&mut self, src: &str, dst: &str, kind: &str) -> Result<()> {
         canon_emit!(root; "rustc", "rustc_event", serde_json::to_value(RustcEvent::EdgeDefined(canon_event::EdgeDefined {
-            src: src.to_string(), dst: dst.to_string(), kind: kind.to_string(),
+            src: src.to_string(), dst: dst.to_string(), kind: kind.to_string(), defined: true,
         }))?, &self.tlog_path)?;
         canon_emit!(root; "rustc", "dependency_edge", json!({
             "src": src, "dst": dst, "kind": kind
@@ -74,14 +74,14 @@ impl TlogWriter {
 
     pub fn write_file(&mut self, path: &str) -> Result<()> {
         canon_emit!(root; "rustc", "rustc_event", serde_json::to_value(RustcEvent::FileSeen(canon_event::FileSeen {
-            path: path.to_string(),
+            path: path.to_string(), seen: true,
         }))?, &self.tlog_path)?;
         canon_emit!(root; "rustc", "file_processed", json!({ "path": path }), &self.tlog_path)
     }
 
     pub fn write_symbol(&mut self, sym: &str, kind: &str) -> Result<()> {
         canon_emit!(root; "rustc", "rustc_event", serde_json::to_value(RustcEvent::SymbolDefined(canon_event::SymbolDefined {
-            symbol: sym.to_string(), kind: kind.to_string(),
+            symbol: sym.to_string(), kind: kind.to_string(), defined: true,
         }))?, &self.tlog_path)
     }
 
@@ -94,25 +94,25 @@ impl TlogWriter {
 
     pub fn write_warning(&mut self, msg: &str) -> Result<()> {
         canon_emit!(root; "rustc", "rustc_event", serde_json::to_value(RustcEvent::WarningCaptured(canon_event::WarningCaptured {
-            message: msg.to_string(),
+            message: msg.to_string(), captured: true,
         }))?, &self.tlog_path)
     }
 
     pub fn write_node_remove(&mut self, sym: &str) -> Result<()> {
         canon_emit!(root; "rustc", "rustc_event", serde_json::to_value(RustcEvent::NodeRemoved(canon_event::NodeRemoved {
-            symbol: sym.to_string(),
+            symbol: sym.to_string(), removed: true,
         }))?, &self.tlog_path)
     }
 
     pub fn write_edge_remove(&mut self, src: &str, dst: &str, kind: &str) -> Result<()> {
         canon_emit!(root; "rustc", "rustc_event", serde_json::to_value(RustcEvent::EdgeRemoved(canon_event::EdgeRemoved {
-            src: src.to_string(), dst: dst.to_string(), kind: kind.to_string(),
+            src: src.to_string(), dst: dst.to_string(), kind: kind.to_string(), removed: true,
         }))?, &self.tlog_path)
     }
 
     pub fn write_compilation_unit_finished(&mut self, crate_name: &str) -> Result<()> {
         canon_emit!(root; "rustc", "rustc_event", serde_json::to_value(RustcEvent::CompilationUnitFinished(canon_event::CompilationUnitFinished {
-            crate_name: crate_name.to_string(),
+            crate_name: crate_name.to_string(), finished: true,
         }))?, &self.tlog_path)?;
         canon_emit!(root; "rustc", "crate_compiled", json!({ "crate": crate_name }), &self.tlog_path)
     }
