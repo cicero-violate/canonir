@@ -590,13 +590,15 @@ fn touches_any_path(action: &canon_event::LoopPlanned, target_root: &Path, expec
 
 fn has_definition_edit(patch: &str) -> bool {
     patch.lines().any(|line| {
-        (line.starts_with('+') || line.starts_with('-'))
-            && (line.contains("fn ")
-                || line.contains("struct ")
-                || line.contains("enum ")
-                || line.contains("type ")
-                || line.contains("const ")
-                || line.contains("impl "))
+        if !(line.starts_with('+') || line.starts_with('-')) {
+            return false;
+        }
+        let content = line[1..].trim_start();
+        content.starts_with("fn ")
+            || content.starts_with("struct ")
+            || content.starts_with("enum ")
+            || content.starts_with("type ")
+            || content.starts_with("const ")
     })
 }
 
