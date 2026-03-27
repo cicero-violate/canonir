@@ -312,7 +312,7 @@ fn contains_expected_entrypoint_target(
     } else {
         actions
             .iter()
-            .any(|action| touches_any_owned_paths(action, target_root, &expected))
+            .any(|action| creates_any_owned_paths(action, target_root, &expected))
     }
 }
 
@@ -327,7 +327,7 @@ fn contains_expected_module_target(
     } else {
         actions
             .iter()
-            .any(|action| touches_any_owned_paths(action, target_root, &expected))
+            .any(|action| creates_any_owned_paths(action, target_root, &expected))
     }
 }
 
@@ -516,8 +516,20 @@ fn touches_any_owned_paths(action: &canon_event::LoopPlanned, target_root: &Path
     expected.iter().any(|path| touched.iter().any(|candidate| candidate == path))
 }
 
+fn creates_any_owned_paths(action: &canon_event::LoopPlanned, target_root: &Path, expected: &[PathBuf]) -> bool {
+    let created = normalized_created_paths(action, target_root);
+    expected.iter().any(|path| created.iter().any(|candidate| candidate == path))
+}
+
 fn normalized_touched_paths(action: &canon_event::LoopPlanned, target_root: &Path) -> Vec<PathBuf> {
     touched_paths(action)
+        .into_iter()
+        .map(|path| if path.is_absolute() { path } else { target_root.join(path) })
+        .collect()
+}
+
+fn normalized_created_paths(action: &canon_event::LoopPlanned, target_root: &Path) -> Vec<PathBuf> {
+    created_paths(action)
         .into_iter()
         .map(|path| if path.is_absolute() { path } else { target_root.join(path) })
         .collect()
@@ -544,6 +556,34 @@ fn touched_paths(action: &canon_event::LoopPlanned) -> Vec<PathBuf> {
                         canon_tools_patch::Hunk::AddFile { path, .. }
                         | canon_tools_patch::Hunk::DeleteFile { path }
                         | canon_tools_patch::Hunk::UpdateFile { path, .. } => path,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+fn created_paths(action: &canon_event::LoopPlanned) -> Vec<PathBuf> {
+    match action.action_kind.as_str() {
+        "write_file" => action
+            .action_payload
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+            .into_iter()
+            .collect(),
+        "apply_patch" => action
+            .action_payload
+            .get("patch")
+            .and_then(|v| v.as_str())
+            .and_then(|patch| parse_patch(patch).ok())
+            .map(|args| {
+                args.hunks
+                    .into_iter()
+                    .filter_map(|hunk| match hunk {
+                        canon_tools_patch::Hunk::AddFile { path, .. } => Some(path),
+                        _ => None,
                     })
                     .collect()
             })
