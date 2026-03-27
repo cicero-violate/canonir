@@ -1,8 +1,11 @@
 use crate::{context::RouteContext, decision::RouteDecision};
 use canon_decision::RouteKind;
 use canon_event::RuntimeEvent;
-use canon_semantic_state::{CompilerHintKind, CompilerHintRecord, SemanticStateSummary};
+use canon_semantic_state::SemanticStateSummary;
 use serde_json::Value;
+
+#[cfg(test)]
+use canon_semantic_state::{CompilerHintKind, CompilerHintRecord};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunCommandOutcomeClass {
@@ -1032,6 +1035,163 @@ mod tests {
             vec!["src/main.rs".into()],
         )];
         assert!(has_actionable_failure(&ctx));
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum SummaryCompleteness {
+        Incomplete,
+        Complete,
+    }
+
+    impl SummaryCompleteness {
+        const ALL: [Self; 2] = [Self::Incomplete, Self::Complete];
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum PreconditionAxis {
+        None,
+        Present,
+    }
+
+    impl PreconditionAxis {
+        const ALL: [Self; 2] = [Self::None, Self::Present];
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum RepairIntentAxis {
+        None,
+        Present,
+    }
+
+    impl RepairIntentAxis {
+        const ALL: [Self; 2] = [Self::None, Self::Present];
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum SemanticHintAxis {
+        None,
+        UnresolvedImport,
+        DuplicateDefinition,
+        TraitBound,
+    }
+
+    impl SemanticHintAxis {
+        const ALL: [Self; 4] = [
+            Self::None,
+            Self::UnresolvedImport,
+            Self::DuplicateDefinition,
+            Self::TraitBound,
+        ];
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum ValidationBlockedAxis {
+        No,
+        Yes,
+    }
+
+    impl ValidationBlockedAxis {
+        const ALL: [Self; 2] = [Self::No, Self::Yes];
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct SemanticActionabilityState {
+        completeness: SummaryCompleteness,
+        preconditions: PreconditionAxis,
+        repair_intents: RepairIntentAxis,
+        hint: SemanticHintAxis,
+        validation_blocked: ValidationBlockedAxis,
+    }
+
+    fn semantic_ctx_for_state(state: SemanticActionabilityState) -> RouteContext {
+        let mut ctx = RouteContext::default();
+        ctx.semantic_summary.complete = state.completeness == SummaryCompleteness::Complete;
+        ctx.semantic_summary.validation_blocked_by_preconditions =
+            state.validation_blocked == ValidationBlockedAxis::Yes;
+        if state.preconditions == PreconditionAxis::Present {
+            ctx.semantic_summary.planning_preconditions =
+                vec!["must_create_missing_modules=true repair=create_declared_module_files_before_cargo_check".into()];
+        }
+        if state.repair_intents == RepairIntentAxis::Present {
+            ctx.semantic_summary.repair_intents =
+                vec!["repair_intent=create_missing_modules priority=4 first_batch=create_declared_module_files".into()];
+        }
+        ctx.semantic_summary.compiler_hints = match state.hint {
+            SemanticHintAxis::None => Vec::new(),
+            SemanticHintAxis::UnresolvedImport => vec![CompilerHintRecord::new(
+                CompilerHintKind::UnresolvedImport,
+                "compiler reports unresolved import `crate::foo`",
+                "add the missing import target or correct the import path before cargo check",
+                vec!["src/lib.rs".into()],
+            )],
+            SemanticHintAxis::DuplicateDefinition => vec![CompilerHintRecord::new(
+                CompilerHintKind::DuplicateDefinition,
+                "compiler reports duplicate definition for `Engine`",
+                "remove or rename the duplicate definition before cargo check",
+                vec!["src/lib.rs".into()],
+            )],
+            SemanticHintAxis::TraitBound => vec![CompilerHintRecord::new(
+                CompilerHintKind::TraitBoundFailure,
+                "compiler reports unsatisfied trait bound `Foo: Clone`",
+                "edit the local type, impl, or call site to satisfy the required trait bound",
+                vec!["src/lib.rs".into()],
+            )],
+        };
+        ctx
+    }
+
+    fn semantic_state_is_valid(state: SemanticActionabilityState) -> bool {
+        if state.completeness == SummaryCompleteness::Incomplete {
+            return state.preconditions == PreconditionAxis::None
+                && state.repair_intents == RepairIntentAxis::None
+                && state.hint == SemanticHintAxis::None
+                && state.validation_blocked == ValidationBlockedAxis::No;
+        }
+        true
+    }
+
+    fn expected_semantic_actionability(state: SemanticActionabilityState) -> bool {
+        state.completeness == SummaryCompleteness::Complete
+            && (state.validation_blocked == ValidationBlockedAxis::Yes
+                || state.preconditions == PreconditionAxis::Present
+                || state.repair_intents == RepairIntentAxis::Present
+                || state.hint != SemanticHintAxis::None)
+    }
+
+    #[test]
+    fn semantic_actionability_state_space_is_exhaustively_covered() {
+        let mut total = 0usize;
+        let mut valid = 0usize;
+        for completeness in SummaryCompleteness::ALL {
+            for preconditions in PreconditionAxis::ALL {
+                for repair_intents in RepairIntentAxis::ALL {
+                    for hint in SemanticHintAxis::ALL {
+                        for validation_blocked in ValidationBlockedAxis::ALL {
+                            total += 1;
+                            let state = SemanticActionabilityState {
+                                completeness,
+                                preconditions,
+                                repair_intents,
+                                hint,
+                                validation_blocked,
+                            };
+                            if !semantic_state_is_valid(state) {
+                                continue;
+                            }
+                            valid += 1;
+                            let ctx = semantic_ctx_for_state(state);
+                            assert_eq!(
+                                has_actionable_failure(&ctx),
+                                expected_semantic_actionability(state),
+                                "unexpected actionability for state {state:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert!(valid > 0);
+        assert!(total > valid);
     }
 
     #[test]
