@@ -431,7 +431,12 @@ fn validate_action_batch(
         }
     }
 
-    planning_preconditions::validate_preconditions(actions, &target_root, &preconditions)?;
+    planning_preconditions::validate_preconditions(
+        actions,
+        &target_root,
+        &preconditions,
+        semantic_summary,
+    )?;
 
     Ok(())
 }
