@@ -45,7 +45,6 @@ pub struct RouteContext {
     pub workspace_dirty_tracker: WorkspaceDirtyTracker,
     pub planned_pending: usize,
     pub acted_unverified: bool,
-    pub last_action_failed: bool,
     pub pending_tool_result_ids: HashSet<String>,
     pub recent_tool_results: Vec<serde_json::Value>,
     pub finish_ready: bool,
@@ -95,7 +94,7 @@ impl RouteContext {
             has_queued_plan: self.planned_pending > 0,
             workspace_dirty: self.workspace_dirty_tracker.any_dirty(),
             performed_recently: self.acted_unverified,
-            last_action_failed: self.last_action_failed,
+            last_action_failed: semantic_no_progress_streak(&self.recent_execution_results) > 0,
             finish_ready: self.finish_ready && self.workspace_dirty_tracker.all_clean(),
             last_action_kind: self.last_action_kind.clone(),
             llm_signals: self.last_llm_signals.as_ref().map(LlmSignals::from_value),
@@ -284,9 +283,6 @@ impl RouteContext {
                 if !READ_ONLY_ACTIONS.contains(&action_kind.as_str()) {
                     self.acted_unverified = true;
                     self.workspace_dirty_tracker.mark_dirty("orchestrator", action_id.as_deref());
-                }
-                if stderr != "skipped:batch_aborted" {
-                    self.last_action_failed = !success;
                 }
                 if let Some(tool_call_id) = tool_call_id {
                     if tool_result_id.is_some() {

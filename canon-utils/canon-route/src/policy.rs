@@ -1082,7 +1082,6 @@ mod tests {
     #[test]
     fn execution_semantics_disable_generic_failure_fallbacks() {
         let mut ctx = RouteContext::default();
-        ctx.last_action_failed = true;
         ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
             "module_created",
             "module file created",

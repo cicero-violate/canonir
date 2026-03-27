@@ -1,21 +1,21 @@
-# Time-Travel Debugger for Deterministic Program Execution with Event Logging and Replay
+# Finite Element Method (FEM) Solver for 2D Structural Analysis with Mesh Generation and Numerical Integration
 
-This project implements a time-travel debugging engine in Rust that records program execution as a sequence of deterministic events and allows replaying, stepping backward, and inspecting past states. It simulates execution of a simple interpreted language or instruction set while capturing state transitions, enabling reverse debugging and inspection of historical program states. This project is interesting because it combines execution tracing, deterministic replay, state snapshots, and debugging abstractions into a powerful tool for understanding program behavior.
+This project implements a 2D Finite Element Method (FEM) solver in Rust for structural analysis problems such as stress and displacement in elastic materials. It supports mesh generation, element assembly, boundary conditions, and solving linear systems derived from physical models. The system includes numerical integration and matrix assembly, enabling simulation of real-world engineering problems. This project is interesting because it combines numerical methods, linear algebra, geometry, and simulation into a scientific computing system.
 
 ## Target
-- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/time_travel_debugger`
+- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/fem_solver`
 
 ## Requirements
 
-1. Implement a Rust binary crate structured into modules such as `instruction`, `program`, `vm`, `state`, `memory`, `stack`, `event`, `log`, `recorder`, `replay`, `snapshot`, `checkpoint`, `debugger`, `breakpoint`, `engine`, `cli`, and `errors`.
-2. Design a simple instruction set (e.g., arithmetic, memory load/store, jumps, function calls) for a deterministic virtual machine.
-3. Implement a virtual machine that executes instructions step-by-step while producing execution events.
-4. Build an event logging system that records all state transitions (register changes, memory writes, control flow).
-5. Implement deterministic replay that reconstructs execution from the event log without re-running original logic.
-6. Design snapshot/checkpoint mechanisms to store periodic full state for faster rewind operations.
-7. Implement reverse execution (step backward) by replaying from nearest checkpoint and reconstructing prior states.
-8. Support breakpoints and watchpoints that trigger during forward or reverse execution.
-9. Provide state inspection tools for registers, memory, and stack at any execution point.
-10. Implement persistence using file-based serialization with `serde` for event logs and snapshots.
-11. Provide a CLI using `clap` with commands like `run`, `record`, `replay`, `step`, `back`, `break`, and `inspect`.
-12. Integrate structured logging with `tracing` to trace instruction execution, event recording, replay steps, checkpointing, and debugging operations, and ensure the implementation spans at least 800 lines of real Rust code across modules and compiles successfully with `cargo check` without requiring external services.
+1. Implement a Rust binary crate structured into modules such as `mesh`, `node`, `element`, `geometry`, `shape_function`, `integration`, `quadrature`, `material`, `stiffness`, `assembly`, `matrix`, `solver`, `boundary`, `load`, `engine`, `cli`, and `errors`.
+2. Design a mesh representation supporting nodes and elements (e.g., triangular or quadrilateral elements) with connectivity information.
+3. Implement mesh generation utilities for simple geometries (rectangular grids, triangular meshes).
+4. Define shape functions for supported element types and compute their derivatives.
+5. Implement numerical integration (Gaussian quadrature) for computing element matrices.
+6. Build element stiffness matrix computation based on material properties and geometry.
+7. Assemble a global stiffness matrix from element contributions using sparse matrix structures.
+8. Implement boundary condition handling (Dirichlet and Neumann conditions) and load application.
+9. Solve the resulting linear system using a basic solver (e.g., Gaussian elimination or iterative methods like Conjugate Gradient).
+10. Compute derived quantities such as displacement fields and stress distribution.
+11. Provide a CLI using `clap` with commands like `generate-mesh`, `solve`, `inspect`, and `export`.
+12. Integrate structured logging with `tracing` to trace mesh generation, matrix assembly, integration steps, solver iterations, and result computation, and ensure the implementation spans at least 800 lines of real Rust code across modules and compiles successfully with `cargo check` without requiring external services.

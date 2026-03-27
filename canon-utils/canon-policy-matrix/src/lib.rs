@@ -1,6 +1,8 @@
 use canon_decision::RouteKind;
 use canon_event::{LoopActed, PlanningCompleted, RuntimeEvent};
-use canon_loop::planning_preconditions::{validate_preconditions, PlanningPrecondition};
+use canon_loop::planning_preconditions::{
+    validate_objective_route_plan_alignment, validate_preconditions, PlanningPrecondition,
+};
 use canon_loop::policy::{
     classify_invalid_plan_reason, evaluate_loop_runtime, evaluate_loop_transition, evaluate_recovery_event,
     evaluate_recovery_execution, evaluate_bootstrap_effects, retry_policy_for_invalid_plan,
@@ -48,6 +50,7 @@ pub enum TransitionRow {
     RouteRecovery(RouteRecoveryRow),
     SuccessorConsumption(SuccessorConsumptionRow),
     PlannerJudgment(PlannerJudgmentRow),
+    PlannerObjectiveAlignment(PlannerObjectiveAlignmentRow),
     RouteSemanticActionability(RouteSemanticActionabilityRow),
 }
 
@@ -248,6 +251,8 @@ pub enum JudgmentScenarioFamily {
     PlannerDefineMissingSymbol,
     PlannerResolveDuplicateDefinition,
     PlannerFixTraitBoundFailure,
+    PlannerObjectiveAligned,
+    PlannerObjectiveContradiction,
     PlannerRetryNoSemanticProgress,
     PlannerRetryTrendStalled,
     RouteSemanticPreconditionActionable,
@@ -260,7 +265,7 @@ pub enum JudgmentScenarioFamily {
 }
 
 impl JudgmentScenarioFamily {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::PlannerBootstrapWorkspace,
         Self::PlannerInitCargoProject,
         Self::PlannerCreateEntrypoint,
@@ -270,6 +275,8 @@ impl JudgmentScenarioFamily {
         Self::PlannerDefineMissingSymbol,
         Self::PlannerResolveDuplicateDefinition,
         Self::PlannerFixTraitBoundFailure,
+        Self::PlannerObjectiveAligned,
+        Self::PlannerObjectiveContradiction,
         Self::PlannerRetryNoSemanticProgress,
         Self::PlannerRetryTrendStalled,
         Self::RouteSemanticPreconditionActionable,
@@ -289,6 +296,17 @@ pub struct PlannerJudgmentRow {
     pub actions: Vec<canon_event::LoopPlanned>,
     pub preconditions: Vec<PlanningPrecondition>,
     pub summary: SemanticStateSummary,
+    pub expected_ok: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct PlannerObjectiveAlignmentRow {
+    pub name: &'static str,
+    pub family: JudgmentScenarioFamily,
+    pub actions: Vec<canon_event::LoopPlanned>,
+    pub summary: SemanticStateSummary,
+    pub primary_objective: &'static str,
+    pub route_choice: &'static str,
     pub expected_ok: bool,
 }
 
@@ -501,7 +519,6 @@ pub struct RouteRowContext {
     pub bootstrap_refresh_required: bool,
     pub target_workspace_missing: bool,
     pub finish_ready: bool,
-    pub last_action_failed: bool,
     pub verify_outcome: Option<VerifyOutcomeClass>,
     pub run_command_outcome: Option<RunCommandOutcomeClass>,
     pub apply_patch_outcome: Option<ApplyPatchOutcomeClass>,
@@ -654,7 +671,6 @@ pub struct RewardSemanticsRow {
     pub name: &'static str,
     pub family: LoopScenarioFamily,
     pub compiler_clean: bool,
-    pub last_action_success: bool,
     pub last_action_kind: &'static str,
     pub recent_execution_results: Vec<SemanticExecutionResultRecord>,
     pub expected: RewardSemantics,
@@ -774,6 +790,7 @@ pub fn assert_transition_rows(rows: &[TransitionRow]) {
             TransitionRow::RouteRecovery(row) => assert_route_recovery_row(row),
             TransitionRow::SuccessorConsumption(row) => assert_successor_consumption_row(row),
             TransitionRow::PlannerJudgment(row) => assert_planner_judgment_row(row),
+            TransitionRow::PlannerObjectiveAlignment(row) => assert_planner_objective_alignment_row(row),
             TransitionRow::RouteSemanticActionability(row) => {
                 assert_route_semantic_actionability_row(row)
             }
@@ -806,6 +823,9 @@ pub fn coverage_report(rows: &[TransitionRow]) -> CoverageReport {
             TransitionRow::RouteRecovery(row) => push_unique(&mut report.route_covered, row.family),
             TransitionRow::SuccessorConsumption(row) => push_unique(&mut report.route_covered, row.family),
             TransitionRow::PlannerJudgment(row) => push_unique(&mut report.judgment_covered, row.family),
+            TransitionRow::PlannerObjectiveAlignment(row) => {
+                push_unique(&mut report.judgment_covered, row.family)
+            }
             TransitionRow::RouteSemanticActionability(row) => {
                 push_unique(&mut report.judgment_covered, row.family)
             }
@@ -850,6 +870,11 @@ pub fn baseline_transition_rows() -> Vec<TransitionRow> {
     rows.extend(route_recovery_rows().into_iter().map(TransitionRow::RouteRecovery));
     rows.extend(successor_consumption_rows().into_iter().map(TransitionRow::SuccessorConsumption));
     rows.extend(planner_judgment_rows().into_iter().map(TransitionRow::PlannerJudgment));
+    rows.extend(
+        planner_objective_alignment_rows()
+            .into_iter()
+            .map(TransitionRow::PlannerObjectiveAlignment),
+    );
     rows.extend(
         route_semantic_actionability_rows()
             .into_iter()
@@ -1359,6 +1384,45 @@ pub fn route_trend_actionability_rows() -> Vec<RouteSemanticActionabilityRow> {
         },
         expected_actionable: true,
     }]
+}
+
+pub fn planner_objective_alignment_rows() -> Vec<PlannerObjectiveAlignmentRow> {
+    vec![
+        PlannerObjectiveAlignmentRow {
+            name: "planner_objective_aligned_repair_edit",
+            family: JudgmentScenarioFamily::PlannerObjectiveAligned,
+            actions: vec![planned_update_file("src/lib.rs", "+use crate::foo;\n")],
+            summary: SemanticStateSummary {
+                complete: true,
+                path_exists: true,
+                cargo_project: true,
+                target_root: Some("/tmp/example".into()),
+                planning_preconditions: vec!["must_fix_unresolved_import=true".into()],
+                compiler_repair_required: true,
+                ..SemanticStateSummary::default()
+            },
+            primary_objective: "reduce compiler repair pressure",
+            route_choice: "plan",
+            expected_ok: true,
+        },
+        PlannerObjectiveAlignmentRow {
+            name: "planner_objective_contradiction_validate_only",
+            family: JudgmentScenarioFamily::PlannerObjectiveContradiction,
+            actions: vec![planned_run_command("cargo check", "/tmp/example")],
+            summary: SemanticStateSummary {
+                complete: true,
+                path_exists: true,
+                cargo_project: true,
+                target_root: Some("/tmp/example".into()),
+                planning_preconditions: vec!["must_fix_unresolved_import=true".into()],
+                compiler_repair_required: true,
+                ..SemanticStateSummary::default()
+            },
+            primary_objective: "reduce compiler repair pressure",
+            route_choice: "plan",
+            expected_ok: false,
+        },
+    ]
 }
 
 fn valid_planner_judgment_state(state: PlannerJudgmentState) -> bool {
@@ -2018,7 +2082,6 @@ pub fn reward_semantics_rows() -> Vec<RewardSemanticsRow> {
             name: "reward_semantic_progress",
             family: LoopScenarioFamily::RewardSemanticProgress,
             compiler_clean: false,
-            last_action_success: true,
             last_action_kind: "apply_patch",
             recent_execution_results: vec![SemanticExecutionResultRecord::new(
                 "module_created",
@@ -2035,7 +2098,6 @@ pub fn reward_semantics_rows() -> Vec<RewardSemanticsRow> {
             name: "reward_no_semantic_progress",
             family: LoopScenarioFamily::RewardNoSemanticProgress,
             compiler_clean: false,
-            last_action_success: false,
             last_action_kind: "apply_patch",
             recent_execution_results: vec![SemanticExecutionResultRecord::new(
                 "no_semantic_progress",
@@ -2229,7 +2291,6 @@ fn assert_route_row(row: &RouteTransitionRow) {
         ctx.semantic_summary.target_root = Some("/tmp/matrix-target".to_string());
     }
     ctx.finish_ready = row.context.finish_ready;
-    ctx.last_action_failed = row.context.last_action_failed;
     if row.context.pending_tool_results_empty {
         ctx.pending_tool_result_ids.clear();
     } else {
@@ -2366,6 +2427,23 @@ fn assert_planner_judgment_row(row: &PlannerJudgmentRow) {
         result.is_ok(),
         row.expected_ok,
         "planner judgment row {} mismatch: {:?}",
+        row.name,
+        result
+    );
+}
+
+fn assert_planner_objective_alignment_row(row: &PlannerObjectiveAlignmentRow) {
+    let result = validate_objective_route_plan_alignment(
+        &row.actions,
+        std::path::Path::new("/tmp/example"),
+        row.route_choice,
+        row.primary_objective,
+        &row.summary,
+    );
+    assert_eq!(
+        result.is_ok(),
+        row.expected_ok,
+        "planner objective alignment row {} mismatch: {:?}",
         row.name,
         result
     );
@@ -2576,7 +2654,6 @@ fn assert_planner_recovery_row(row: &PlannerRecoveryRow) {
 
 fn assert_reward_semantics_row(row: &RewardSemanticsRow) {
     let mut ctx = canon_loop::LoopContext::new("/tmp/example".into(), "/tmp/tlog".into());
-    ctx.last_action_success = row.last_action_success;
     ctx.last_action_kind = row.last_action_kind.to_string();
     ctx.recent_execution_results = row.recent_execution_results.clone();
     let verified = canon_event::LoopVerified {

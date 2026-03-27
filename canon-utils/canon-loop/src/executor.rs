@@ -325,7 +325,6 @@ impl EventConsumer for LoopStageExecutor {
                 let bootstrap_eval = evaluate_bootstrap_effects(action_outcome);
                 self.ctx.last_acted = Some(a.clone());
                 self.ctx.last_action_kind = a.action_kind.clone();
-                self.ctx.last_action_success = a.success;
                 self.ctx.batch_acted.push(a.clone());
                 self.ctx.last_planned_observed_tick = None;
                 self.ctx.last_handled_observed_hash = None;

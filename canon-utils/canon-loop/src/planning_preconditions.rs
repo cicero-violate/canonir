@@ -280,6 +280,50 @@ pub fn validate_preconditions(
     Ok(())
 }
 
+pub fn validate_objective_route_plan_alignment(
+    actions: &[canon_event::LoopPlanned],
+    target_root: &Path,
+    route_choice: &str,
+    primary_objective: &str,
+    semantic_summary: &SemanticStateSummary,
+) -> Result<(), String> {
+    let action_intents = collect_action_intents(actions, target_root);
+    let has_validation_intent = action_intents
+        .iter()
+        .any(|intent| matches!(intent, ActionIntent::ValidateCargoCheck));
+    let has_repair_intent = action_intents.iter().any(|intent| {
+        !matches!(
+            intent,
+            ActionIntent::ValidateCargoCheck
+                | ActionIntent::BootstrapWorkspace
+                | ActionIntent::InitCargoProject
+        )
+    });
+
+    let objective_requires_repair =
+        semantic_summary.validation_blocked_by_preconditions
+            || semantic_summary.compiler_repair_required
+            || !semantic_summary.planning_preconditions.is_empty()
+            || primary_objective.contains("remove validation blockers")
+            || primary_objective.contains("reduce compiler repair pressure")
+            || primary_objective.contains("break the stalled repair loop")
+            || primary_objective.contains("lower invalid-plan rate")
+            || primary_objective.contains("increase repair resolution rate");
+
+    if route_choice == "verify" && objective_requires_repair {
+        return Err("route choice contradicts the active repair objective; verification is premature".to_string());
+    }
+
+    if route_choice == "plan" && objective_requires_repair && has_validation_intent && !has_repair_intent {
+        return Err(
+            "first planned batch contradicts the active repair objective; it validates without addressing the repair target"
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
 fn validate_highest_priority_intent(
     actions: &[canon_event::LoopPlanned],
     target_root: &Path,
