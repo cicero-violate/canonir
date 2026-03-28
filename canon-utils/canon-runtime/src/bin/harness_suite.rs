@@ -45,6 +45,11 @@ fn main() -> Result<()> {
             return Ok(());
         }
 
+        eprintln!(
+            "[canon-harness-suite] cargo test -p {} failed in round {}",
+            crate_name, round
+        );
+
         let Some(failing_test) = first_failing_test(&suite.output) else {
             bail!(
                 "cargo test -p {} failed, but no failing test name could be parsed\n{}",
@@ -66,6 +71,10 @@ fn main() -> Result<()> {
         )?;
     }
 
+    eprintln!(
+        "[canon-harness-suite] failed after {} round(s) for crate {}",
+        max_rounds, crate_name
+    );
     bail!(
         "harness suite stopped after {} round(s) without passing cargo test -p {}",
         max_rounds,

@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use canon_event::{CapabilityFailed, CapabilityResult, EventEmitter, EventEmitterHandle, EventId, LlmCall, RuntimeEvent};
 use canon_exec::{ExecutableEvent, ExecutionContext};
 use canon_loop::{HarnessRepairTarget, LoopStageExecutor};
-use canon_tools_patch::apply_patch;
+use canon_tools_patch::{apply_patch, parse_patch, Hunk};
 use serde_json::Value;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -38,6 +38,16 @@ const PLANNER_SYSTEM_INSTRUCTIONS: &str = r#"You are a code-editing agent. Produ
    - do not emit prose inside the patch
    - do not omit unchanged context around edits
 
+   Correct example:
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: canon-utils/canon-route/src/policy.rs\n@@\n fn apply_rule(decision: &mut RouteDecision, rule: RoutePolicyRule) {\n     match rule {\n         RoutePolicyRule::ForcePlanOnMissingTarget => {\n+            decision.suggested_route = RouteKind::Plan;\n         }\n         _ => {}\n     }\n }\n*** End Patch"}
+
+   Wrong example (do NOT do this):
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: canon-utils/canon-route/src/policy.rs\n@@\n fn some_function_that_was_not_read(...) {\n+    // guessed edit\n*** End Patch"}
+
+   If a patch fails because expected lines were not found:
+   - use the failure feedback to correct the patch anchors
+   - emit `read_file` only if you need more file context
+
 4. run_command — run a shell command
    {"action":"run_command","cmd":"cargo check -p canon-route","cwd":"<TARGET_WORKSPACE>"}
 
@@ -57,6 +67,10 @@ SAFETY RULES:
 - Never touch `/workspace/ai_sandbox/canon/test_projects/goalgen`.
 - Never emit destructive commands (`rm -rf`, `git reset --hard`, `git clean -f`, `dd if=`, `mkfs`, `shred`).
 - Prefer the smallest step that advances the failing test.
+- Never describe a fix in prose. Emit only a valid JSON action array.
+- Never propose pseudo-code or textual edit instructions like “change X to Y”.
+- If you identify a code fix, express it as an `apply_patch` action with a complete valid patch.
+- If you are not ready to patch safely, emit `read_file` for the cited file or `list_dir`; do not narrate the intended fix.
 
 OUTPUT FORMAT:
 - Return ONLY a JSON array of action objects.
@@ -142,6 +156,15 @@ fn run_harness_loop(
 ) -> Result<()> {
     let mut recent_steps = Vec::new();
     let mut executor = LoopStageExecutor::new(workspace.to_path_buf(), workspace.join("state/event_log/event.tlog.d"));
+    if let Some((cited_file, _)) = extract_primary_file_line(failure_output) {
+        if let Ok(output) = run_read_file(workspace, &cited_file) {
+            recent_steps.push(StepRecord {
+                kind: "read_file".to_string(),
+                success: true,
+                summary: format!("{cited_file}\n{}", truncate(&output, MAX_TOOL_SNIPPET)),
+            });
+        }
+    }
 
     for step in 0..max_steps {
         let directive = executor.evaluate_harness_repair_for_target(target, failure_output);
@@ -157,6 +180,7 @@ fn run_harness_loop(
         match action_kind.as_str() {
             "done" => {
                 let verify = verify_full_crate(workspace, crate_name, test_name)?;
+                print_verify_status(crate_name, test_name, &verify);
                 if verify.success {
                     println!("harness repair complete: crate test suite passed");
                     return Ok(());
@@ -183,13 +207,31 @@ fn run_harness_loop(
                 recent_steps.push(StepRecord {
                     kind: "read_file".to_string(),
                     success: true,
-                    summary: truncate(&output, MAX_TOOL_SNIPPET),
+                    summary: format!("{path}\n{}", truncate(&output, MAX_TOOL_SNIPPET)),
                 });
             }
             "apply_patch" => {
                 let patch = action.patch()?;
+                if let Err(message) = validate_patch_attempt(workspace, patch) {
+                    eprintln!(
+                        "[canon-harness-repair] patch rejected for {}::{}",
+                        crate_name, test_name
+                    );
+                    eprintln!("[canon-harness-repair] patch rejection reason:\n{}", message);
+                    *failure_output = message.clone();
+                    recent_steps.push(StepRecord {
+                        kind: "apply_patch".to_string(),
+                        success: false,
+                        summary: truncate(&message, MAX_TOOL_SNIPPET),
+                    });
+                    continue;
+                }
                 match apply_patch(patch, workspace) {
                     Ok(_) => {
+                        eprintln!(
+                            "[canon-harness-repair] patch applied successfully for {}::{}",
+                            crate_name, test_name
+                        );
                         recent_steps.push(StepRecord {
                             kind: "apply_patch".to_string(),
                             success: true,
@@ -207,6 +249,11 @@ fn run_harness_loop(
                             patch_dump.display(),
                             truncate(patch, MAX_TOOL_SNIPPET),
                         );
+                        eprintln!(
+                            "[canon-harness-repair] patch apply failed for {}::{}",
+                            crate_name, test_name
+                        );
+                        eprintln!("[canon-harness-repair] patch failure reason:\n{}", message);
                         *failure_output = message.clone();
                         recent_steps.push(StepRecord {
                             kind: "apply_patch".to_string(),
@@ -217,6 +264,7 @@ fn run_harness_loop(
                     }
                 }
                 let verify = verify_after_mutation(workspace, crate_name, test_name)?;
+                print_verify_status(crate_name, test_name, &verify);
                 if verify.success {
                     println!("harness repair complete: crate test suite passed");
                     return Ok(());
@@ -238,10 +286,15 @@ fn run_harness_loop(
                     summary: truncate(&result.output, MAX_TOOL_SNIPPET),
                 });
                 if !result.success {
+                    eprintln!(
+                        "[canon-harness-repair] command failed for {}::{}",
+                        crate_name, test_name
+                    );
                     *failure_output = result.output;
                     continue;
                 }
                 let verify = verify_after_mutation(workspace, crate_name, test_name)?;
+                print_verify_status(crate_name, test_name, &verify);
                 if verify.success {
                     println!("harness repair complete: crate test suite passed");
                     return Ok(());
@@ -257,6 +310,10 @@ fn run_harness_loop(
         }
     }
 
+    eprintln!(
+        "[canon-harness-repair] failed after {} steps for {}::{}",
+        max_steps, crate_name, test_name
+    );
     bail!("harness repair stopped after {max_steps} steps without passing the target test")
 }
 
@@ -268,6 +325,7 @@ fn build_planner_prompt(
     directive_reason: &str,
     recent_steps: &[StepRecord],
 ) -> String {
+    let failure_focus = build_failure_focus(failure_output);
     let recent = if recent_steps.is_empty() {
         "none".to_string()
     } else {
@@ -295,6 +353,19 @@ Repair directive:\n\
 - {directive_reason}\n\
 - Emit exactly one action.\n\
 \n\
+Localization rules:\n\
+- Prefer editing the file and function named in the failure output before proposing architectural rewrites.\n\
+- If a panic or assertion gives a file/line, treat that as the primary repair site.\n\
+- If a previous patch failed, use the failed patch diagnostics to correct the next patch.\n\
+- Do not generalize to other routes/modules unless the cited failure location proves it is necessary.\n\
+- Do not answer with prose, explanation, or “single repair action” text.\n\
+- Your response must be a JSON action array only.\n\
+- If you want to modify code, emit a concrete `apply_patch` action; do not describe the patch in English.\n\
+- If the failure is localized but the exact edit is still uncertain, emit `read_file` for the cited source file first.\n\
+- If a previous patch failed with “expected lines not found”, correct the patch anchors; use `read_file` only when the failure output is not enough.\n\
+\n\
+Failure focus:\n{failure_focus}\n\
+\n\
 Current failure output:\n{failure_output}\n\
 \n\
 Recent actions:\n{recent}\n\
@@ -305,9 +376,149 @@ Preferred verifier after mutation:\n- `cargo check -p {crate_name}`\n\
         crate_name = crate_name,
         test_name = test_name,
         directive_reason = directive_reason,
+        failure_focus = failure_focus,
         failure_output = truncate(failure_output, 12000),
         recent = recent,
     )
+}
+
+fn build_failure_focus(failure_output: &str) -> String {
+    let mut lines = Vec::new();
+
+    if let Some((file, line)) = extract_primary_file_line(failure_output) {
+        lines.push(format!("- primary_file: {file}:{line}"));
+        if let Some(snippet) = read_failure_focus_snippet(&file, line.parse::<usize>().ok()) {
+            lines.push("- source_excerpt:".to_string());
+            lines.push(snippet);
+        }
+    }
+    if let Some(test_name) = extract_first_failed_test_name(failure_output) {
+        lines.push(format!("- failing_test_from_output: {test_name}"));
+    }
+    if let Some(assertion) = extract_assertion_summary(failure_output) {
+        lines.push(format!("- assertion: {assertion}"));
+    }
+    if let Some(patch_file) = extract_tagged_line_value(failure_output, "failed_patch_file=") {
+        lines.push(format!("- previous_failed_patch: {patch_file}"));
+    }
+    if let Some(reason) = extract_apply_patch_error(failure_output) {
+        lines.push(format!("- previous_patch_error: {reason}"));
+    }
+
+    if lines.is_empty() {
+        "none".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn read_failure_focus_snippet(file: &str, line: Option<usize>) -> Option<String> {
+    let root = Path::new(DEFAULT_WORKSPACE);
+    let path = root.join(file);
+    let content = std::fs::read_to_string(path).ok()?;
+    let lines = content.lines().collect::<Vec<_>>();
+    let center = line.unwrap_or(1).saturating_sub(1);
+    let start = center.saturating_sub(6);
+    let end = usize::min(lines.len(), center.saturating_add(7));
+    let excerpt = lines[start..end]
+        .iter()
+        .enumerate()
+        .map(|(idx, text)| format!("  {:>4}: {}", start + idx + 1, text))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(excerpt)
+}
+
+fn extract_primary_file_line(text: &str) -> Option<(String, String)> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(idx) = trimmed.find(".rs:") {
+            let suffix = &trimmed[idx + 4..];
+            let line_no: String = suffix.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if !line_no.is_empty() {
+                let start = trimmed[..idx].rfind(' ').map(|v| v + 1).unwrap_or(0);
+                let file = trimmed[start..idx + 3].to_string();
+                return Some((file, line_no));
+            }
+        }
+    }
+    None
+}
+
+fn extract_first_failed_test_name(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("test ") && trimmed.ends_with(" ... FAILED") {
+            return Some(
+                trimmed
+                    .trim_start_matches("test ")
+                    .trim_end_matches(" ... FAILED")
+                    .trim()
+                    .to_string(),
+            );
+        }
+    }
+    None
+}
+
+fn extract_assertion_summary(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.contains("assertion `left == right` failed") {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
+fn extract_tagged_line_value<'a>(text: &'a str, prefix: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix(prefix) {
+            return Some(value.trim().to_string());
+        }
+    }
+    None
+}
+
+fn extract_apply_patch_error(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("apply_patch failed:") {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
+fn validate_patch_attempt(workspace: &Path, patch: &str) -> Result<(), String> {
+    let parsed = parse_patch(patch).map_err(|err| format!("patch rejected before apply: {err}"))?;
+    let patch_paths = parsed
+        .hunks
+        .iter()
+        .map(hunk_path_string)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for path in &patch_paths {
+        if Path::new(path).is_absolute() || path.starts_with("/workspace/") {
+            return Err(format!("patch rejected: patch path must be workspace-relative: {path}"));
+        }
+        if workspace.ends_with("canon") && !path.starts_with("canon-utils/") && !path.starts_with("scripts/") {
+            return Err(format!("patch rejected: unexpected patch path for repo-root harness: {path}"));
+        }
+    }
+
+    Ok(())
+}
+
+fn hunk_path_string(hunk: &Hunk) -> Result<String, String> {
+    match hunk {
+        Hunk::AddFile { path, .. } | Hunk::DeleteFile { path } | Hunk::UpdateFile { path, .. } => {
+            path.to_str()
+                .map(|s| s.to_string())
+                .ok_or_else(|| "patch rejected: non-utf8 path".to_string())
+        }
+    }
 }
 
 fn call_planner(workspace: &Path, prompt: &str) -> Result<Vec<PlannerAction>> {
@@ -497,6 +708,12 @@ fn run_crate_test_command(workspace: &Path, crate_name: &str) -> Result<CommandR
 
 fn run_target_test_capture(workspace: &Path, crate_name: &str, test_name: &str, always_dispatch: bool) -> Result<String> {
     let result = run_test_command(workspace, crate_name, test_name)?;
+    eprintln!(
+        "[canon-harness-repair] initial target test {} for {}::{}",
+        if result.success { "passed" } else { "failed" },
+        crate_name,
+        test_name
+    );
     if result.success && !always_dispatch {
         bail!("target test passed; no harness repair requested");
     }
@@ -546,5 +763,18 @@ fn truncate(text: &str, limit: usize) -> String {
         text.to_string()
     } else {
         format!("{}...", &text[..limit])
+    }
+}
+
+fn print_verify_status(crate_name: &str, test_name: &str, verify: &CommandResult) {
+    eprintln!(
+        "[canon-harness-repair] verifier {} for {}::{}",
+        if verify.success { "passed" } else { "failed" },
+        crate_name,
+        test_name
+    );
+    if !verify.success {
+        let snippet = truncate(&verify.output, 1200);
+        eprintln!("[canon-harness-repair] verifier output:\n{}", snippet);
     }
 }
