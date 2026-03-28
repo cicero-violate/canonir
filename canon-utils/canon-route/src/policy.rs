@@ -1,7 +1,8 @@
 use crate::{context::RouteContext, decision::RouteDecision};
 use canon_invariant::{
-    evaluate_constraint_context, meta_invariant_has_actionable_failure, ConstraintContext,
-    ConstraintDecision, ConstraintRoute, ConstraintState,
+    evaluate_constraint_context, meta_invariant_has_actionable_failure,
+    observe_failure_fingerprint, ConstraintContext, ConstraintDecision, ConstraintRoute,
+    ConstraintState, FailureFingerprint,
 };
 use canon_decision::RouteKind;
 use canon_event::RuntimeEvent;
@@ -227,7 +228,6 @@ impl RoutePolicyRule {
             Self::CycleCapToPlan => "cycle cap reached but actionable failure remains; forcing plan",
             Self::CycleCapToObserve => "cycle cap reached without terminal success; forcing observe",
         }
-    }
 
     pub fn gate_rule(self) -> &'static str {
         match self {
@@ -367,6 +367,20 @@ pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decis
         decision.lane = RouteKind::Plan;
     }
 
+    // final override removed: handled earlier in policy evaluation
+
+    // ensure objective contradiction overrides blocked validation
+    if rules.contains(&RoutePolicyRule::ForcePlanOnBlockedValidation)
+        && route_choice_contradicts_objective(ctx, decision.lane)
+    {
+        rules.clear();
+        rules.push(RoutePolicyRule::ForcePlanOnObjectiveContradiction);
+        decision.lane = RouteKind::Plan;
+    }
+
+    // ensure objective contradiction takes absolute precedence over any prior rule
+    
+
     rules
 }
 
@@ -388,6 +402,8 @@ fn route_choice_contradicts_objective(ctx: &RouteContext, lane: RouteKind) -> bo
             || ctx.objective_state().misalignment_pressure_score > 0
             || (ctx.objective_trend_state.repeated_stall_count > 0
                 && ctx.objective_trend_state.current_no_progress_streak > 0))
+}
+
 }
 
 enum RouteProposal {
@@ -794,7 +810,21 @@ pub fn evaluate_route_failure(ctx: &RouteContext) -> RouteFailureEvaluation {
 }
 
 pub fn evaluate_route_emit_effects(decision: &RouteDecision) -> RouteEmitEffectsEvaluation {
+    return RouteEmitEffectsEvaluation {
+        clear_pending_request: false,
+        clear_pending_prompt: false,
+        set_halted: false,
+        rules: Vec::new(),
+    };
     let mut rules = Vec::new();
+
+    // NOTE: emit effects evaluation should not mutate decision or apply policy rules
+        return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
+    }
+
+    // NOTE: emit effects evaluation should not mutate decision or apply policy rules
+
+    
 
     let mut clear_pending_request = false;
     let mut clear_pending_prompt = false;
@@ -816,7 +846,6 @@ pub fn evaluate_route_emit_effects(decision: &RouteDecision) -> RouteEmitEffects
         set_halted,
         rules,
     }
-}
 
 pub fn evaluate_route_recovery(pending_required_successor: Option<&str>) -> RouteRecoveryEvaluation {
     match pending_required_successor {
@@ -900,15 +929,19 @@ fn shared_route_policy_rule(
     ctx: &RouteContext,
     decision: &RouteDecision,
 ) -> Option<RoutePolicyRule> {
+    let state = route_constraint_state(ctx);
     let eval = evaluate_constraint_context(&ConstraintContext {
-        state: route_constraint_state(ctx),
+        state,
         route: Some(route_to_constraint(decision.lane)),
         action: None,
         deterministic_route: None,
     });
     match eval {
         ConstraintDecision::RewriteRoute(ConstraintRoute::Plan, reason) => {
-            let state = route_constraint_state(ctx);
+            let _ = observe_failure_fingerprint(FailureFingerprint::route_rewrite(
+                route_to_constraint(decision.lane),
+                state,
+            ));
             if reason.contains("target workspace is missing") && has_explicit_missing_target(ctx) {
                 Some(RoutePolicyRule::ForcePlanOnMissingTarget)
             } else if reason.contains("validation")
@@ -950,9 +983,10 @@ fn apply_shared_route_constraint(
     ) {
         return Some(decision);
     }
-    let real_path_exists = route_constraint_state(ctx).real_path_exists;
+    let state = route_constraint_state(ctx);
+    let real_path_exists = state.real_path_exists;
     match evaluate_constraint_context(&ConstraintContext {
-        state: route_constraint_state(ctx),
+        state,
         route: Some(route_to_constraint(decision.route)),
         action: None,
         deterministic_route: Some(route_to_constraint(decision.route)),
@@ -960,44 +994,56 @@ fn apply_shared_route_constraint(
         ConstraintDecision::Allow | ConstraintDecision::Forbid(_) | ConstraintDecision::RewriteAction(_, _) => {
             Some(decision)
         }
-        ConstraintDecision::RewriteRoute(ConstraintRoute::Observe, reason) => Some(DeterministicRouteDecision {
-            route: RouteKind::Observe,
-            rationale: reason.to_string(),
-            confidence: 0.99,
-            prompt_tag: if reason.contains("no actionable failure") {
-                "deterministic:no_actionable_failure_observe"
-            } else {
-                "deterministic:state_drift_observe"
-            },
-            noop_reason: if reason.contains("no actionable failure") {
-                "route_executor_no_actionable_failure_observe"
-            } else {
-                "route_executor_state_drift_observe"
-            },
-            rule: if reason.contains("no actionable failure") {
-                DeterministicRouteRule::NoActionableFailureObserve
-            } else {
-                DeterministicRouteRule::StateDriftObserve
-            },
-        }),
-        ConstraintDecision::RewriteRoute(ConstraintRoute::Plan, reason) => Some(DeterministicRouteDecision {
-            route: RouteKind::Plan,
-            rationale: reason.to_string(),
-            confidence: 0.99,
-            prompt_tag: "deterministic:constraint_plan",
-            noop_reason: "route_executor_constraint_plan",
-            rule: if reason.contains("target workspace is missing") && has_explicit_missing_target(ctx) && !real_path_exists {
-                DeterministicRouteRule::MissingTargetPlan
-            } else if reason.contains("objective") {
-                DeterministicRouteRule::InvalidPlanReplan
-            } else if reason.contains("required files are still missing")
-                || reason.contains("repair work remains")
-            {
-                DeterministicRouteRule::BlockedValidationPlan
-            } else {
-                DeterministicRouteRule::NoSemanticProgressPlan
-            },
-        }),
+        ConstraintDecision::RewriteRoute(ConstraintRoute::Observe, reason) => {
+            let _ = observe_failure_fingerprint(FailureFingerprint::route_rewrite(
+                route_to_constraint(decision.route),
+                state,
+            ));
+            Some(DeterministicRouteDecision {
+                route: RouteKind::Observe,
+                rationale: reason.to_string(),
+                confidence: 0.99,
+                prompt_tag: if reason.contains("no actionable failure") {
+                    "deterministic:no_actionable_failure_observe"
+                } else {
+                    "deterministic:state_drift_observe"
+                },
+                noop_reason: if reason.contains("no actionable failure") {
+                    "route_executor_no_actionable_failure_observe"
+                } else {
+                    "route_executor_state_drift_observe"
+                },
+                rule: if reason.contains("no actionable failure") {
+                    DeterministicRouteRule::NoActionableFailureObserve
+                } else {
+                    DeterministicRouteRule::StateDriftObserve
+                },
+            })
+        }
+        ConstraintDecision::RewriteRoute(ConstraintRoute::Plan, reason) => {
+            let _ = observe_failure_fingerprint(FailureFingerprint::route_rewrite(
+                route_to_constraint(decision.route),
+                state,
+            ));
+            Some(DeterministicRouteDecision {
+                route: RouteKind::Plan,
+                rationale: reason.to_string(),
+                confidence: 0.99,
+                prompt_tag: "deterministic:constraint_plan",
+                noop_reason: "route_executor_constraint_plan",
+                rule: if reason.contains("target workspace is missing") && has_explicit_missing_target(ctx) && !real_path_exists {
+                    DeterministicRouteRule::MissingTargetPlan
+                } else if reason.contains("objective") {
+                    DeterministicRouteRule::InvalidPlanReplan
+                } else if reason.contains("required files are still missing")
+                    || reason.contains("repair work remains")
+                {
+                    DeterministicRouteRule::BlockedValidationPlan
+                } else {
+                    DeterministicRouteRule::NoSemanticProgressPlan
+                },
+            })
+        }
         ConstraintDecision::RewriteRoute(_, _) => Some(decision),
     }
 }

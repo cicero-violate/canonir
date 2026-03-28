@@ -62,13 +62,18 @@ fn main() -> Result<()> {
             "[canon-harness-suite] round {} repairing {}::{}",
             round, crate_name, failing_test
         );
-        run_harness_repair(
+        if let Err(err) = run_harness_repair(
             &workspace,
             &crate_name,
             &failing_test,
             &suite.output,
             max_steps_per_test,
-        )?;
+        ) {
+            eprintln!(
+                "[canon-harness-suite] harness repair failed for {}::{}: {}",
+                crate_name, failing_test, err
+            );
+        }
     }
 
     eprintln!(
@@ -144,15 +149,16 @@ fn run_harness_repair(
         .status()
         .with_context(|| format!("failed to run {}", bin.display()))?;
 
-    if !status.success() {
+    if status.success() {
+        Ok(())
+    } else {
         bail!(
-            "canon-harness-repair failed for {}::{} with status {}",
+            "canon-harness-repair exited non-zero for {}::{} with status {}",
             crate_name,
             test_name,
             status
-        );
+        )
     }
-    Ok(())
 }
 
 fn first_failing_test(output: &str) -> Option<String> {

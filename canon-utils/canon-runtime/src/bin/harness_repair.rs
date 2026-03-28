@@ -13,7 +13,8 @@ use uuid::Uuid;
 
 const DEFAULT_WORKSPACE: &str = "/workspace/ai_sandbox/canon";
 const DEFAULT_MAX_STEPS: usize = 5;
-const LLM_TIMEOUT: Duration = Duration::from_secs(120);
+const LLM_TIMEOUT: Duration = Duration::from_secs(60);
+const LLM_MAX_RETRIES: usize = 3;
 const MAX_READ_BYTES: usize = 16 * 1024;
 const MAX_TOOL_SNIPPET: usize = 4 * 1024;
 
@@ -141,9 +142,23 @@ fn main() -> Result<()> {
     };
 
     canon_exec::init_llm_worker();
-    let result = run_harness_loop(&workspace, &crate_name, &test_name, &target, &mut failure_output, max_steps);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_harness_loop(&workspace, &crate_name, &test_name, &target, &mut failure_output, max_steps)
+    }));
     canon_exec::shutdown_llm_worker();
-    result
+    match result {
+        Ok(inner) => inner,
+        Err(payload) => {
+            let panic_msg = if let Some(msg) = payload.downcast_ref::<&str>() {
+                (*msg).to_string()
+            } else if let Some(msg) = payload.downcast_ref::<String>() {
+                msg.clone()
+            } else {
+                "unknown panic payload".to_string()
+            };
+            Err(anyhow!("harness repair panicked: {panic_msg}"))
+        }
+    }
 }
 
 fn run_harness_loop(
@@ -169,144 +184,219 @@ fn run_harness_loop(
     for step in 0..max_steps {
         let directive = executor.evaluate_harness_repair_for_target(target, failure_output);
         let prompt = build_planner_prompt(workspace, crate_name, test_name, failure_output, &directive.decision.reason, &recent_steps);
-        let actions = call_planner(workspace, &prompt)?;
+        let actions = match call_planner(workspace, &prompt) {
+            Ok(actions) => actions,
+            Err(err) => {
+                let message = format!("planner call failed: {err}");
+                eprintln!(
+                    "[canon-harness-repair] planner failure for {}::{}",
+                    crate_name, test_name
+                );
+                eprintln!("[canon-harness-repair] planner failure reason:\n{}", message);
+                *failure_output = message.clone();
+                recent_steps.push(StepRecord {
+                    kind: "planner_failure".to_string(),
+                    success: false,
+                    summary: truncate(&message, MAX_TOOL_SNIPPET),
+                });
+                continue;
+            }
+        };
         if actions.len() != 1 {
-            bail!("planner returned {} actions; minimum harness requires exactly one", actions.len());
+            let message = format!(
+                "planner returned {} actions; minimum harness requires exactly one",
+                actions.len()
+            );
+            eprintln!("[canon-harness-repair] {}", message);
+            *failure_output = message.clone();
+            recent_steps.push(StepRecord {
+                kind: "planner_failure".to_string(),
+                success: false,
+                summary: truncate(&message, MAX_TOOL_SNIPPET),
+            });
+            continue;
         }
         let action = &actions[0];
-        let action_kind = action.kind()?.to_string();
-        eprintln!("[canon-harness-repair] step {} action={}", step + 1, action_kind);
-
-        match action_kind.as_str() {
-            "done" => {
-                let verify = verify_full_crate(workspace, crate_name, test_name)?;
-                print_verify_status(crate_name, test_name, &verify);
-                if verify.success {
-                    println!("harness repair complete: crate test suite passed");
-                    return Ok(());
-                }
-                *failure_output = verify.output.clone();
+        let action_kind = match action.kind() {
+            Ok(kind) => kind.to_string(),
+            Err(err) => {
+                let message = format!("planner action parse failed: {err}");
+                eprintln!(
+                    "[canon-harness-repair] malformed planner action for {}::{}",
+                    crate_name, test_name
+                );
+                eprintln!("[canon-harness-repair] malformed action payload:\n{}", action.raw);
+                *failure_output = message.clone();
                 recent_steps.push(StepRecord {
-                    kind: "done_verify".to_string(),
+                    kind: "planner_failure".to_string(),
                     success: false,
-                    summary: truncate(&verify.output, MAX_TOOL_SNIPPET),
+                    summary: truncate(&message, MAX_TOOL_SNIPPET),
                 });
+                continue;
             }
-            "list_dir" => {
-                let path = action.path()?;
-                let output = run_list_dir(workspace, path)?;
-                recent_steps.push(StepRecord {
-                    kind: "list_dir".to_string(),
-                    success: true,
-                    summary: truncate(&output, MAX_TOOL_SNIPPET),
-                });
-            }
-            "read_file" => {
-                let path = action.path()?;
-                let output = run_read_file(workspace, path)?;
-                recent_steps.push(StepRecord {
-                    kind: "read_file".to_string(),
-                    success: true,
-                    summary: format!("{path}\n{}", truncate(&output, MAX_TOOL_SNIPPET)),
-                });
-            }
-            "apply_patch" => {
-                let patch = action.patch()?;
-                if let Err(message) = validate_patch_attempt(workspace, patch) {
-                    eprintln!(
-                        "[canon-harness-repair] patch rejected for {}::{}",
-                        crate_name, test_name
-                    );
-                    eprintln!("[canon-harness-repair] patch rejection reason:\n{}", message);
-                    *failure_output = message.clone();
-                    recent_steps.push(StepRecord {
-                        kind: "apply_patch".to_string(),
-                        success: false,
-                        summary: truncate(&message, MAX_TOOL_SNIPPET),
-                    });
-                    continue;
-                }
-                match apply_patch(patch, workspace) {
-                    Ok(_) => {
-                        eprintln!(
-                            "[canon-harness-repair] patch applied successfully for {}::{}",
-                            crate_name, test_name
-                        );
-                        recent_steps.push(StepRecord {
-                            kind: "apply_patch".to_string(),
-                            success: true,
-                            summary: "patch applied".to_string(),
-                        });
+        };
+        eprintln!("[canon-harness-repair] step {} action={}", step + 1, action_kind);
+        let step_result = (|| -> Result<bool> {
+            match action_kind.as_str() {
+                "done" => {
+                    let verify = verify_full_crate(workspace, crate_name, test_name)?;
+                    print_verify_status(crate_name, test_name, &verify);
+                    if verify.success {
+                        println!("harness repair complete: crate test suite passed");
+                        return Ok(true);
                     }
-                    Err(err) => {
-                        let patch_dump = workspace.join("state/harness_last_failed.patch");
-                        let _ = std::fs::create_dir_all(
-                            patch_dump.parent().ok_or_else(|| anyhow!("invalid patch dump path"))?,
-                        );
-                        let _ = std::fs::write(&patch_dump, patch);
-                        let message = format!(
-                            "apply_patch failed: {err}\nfailed_patch_file={}\npatch_preview=\n{}",
-                            patch_dump.display(),
-                            truncate(patch, MAX_TOOL_SNIPPET),
-                        );
+                    *failure_output = verify.output.clone();
+                    recent_steps.push(StepRecord {
+                        kind: "done_verify".to_string(),
+                        success: false,
+                        summary: truncate(&verify.output, MAX_TOOL_SNIPPET),
+                    });
+                }
+                "list_dir" => {
+                    let path = action.path()?;
+                    let output = run_list_dir(workspace, path)?;
+                    recent_steps.push(StepRecord {
+                        kind: "list_dir".to_string(),
+                        success: true,
+                        summary: truncate(&output, MAX_TOOL_SNIPPET),
+                    });
+                }
+                "read_file" => {
+                    let path = action.path()?;
+                    let output = run_read_file(workspace, path)?;
+                    recent_steps.push(StepRecord {
+                        kind: "read_file".to_string(),
+                        success: true,
+                        summary: format!("{path}\n{}", truncate(&output, MAX_TOOL_SNIPPET)),
+                    });
+                }
+                "apply_patch" => {
+                    let patch = action.patch()?;
+                    if let Err(message) = validate_patch_attempt(workspace, patch) {
                         eprintln!(
-                            "[canon-harness-repair] patch apply failed for {}::{}",
+                            "[canon-harness-repair] patch rejected for {}::{}",
                             crate_name, test_name
                         );
-                        eprintln!("[canon-harness-repair] patch failure reason:\n{}", message);
+                        eprintln!("[canon-harness-repair] patch rejection reason:\n{}", message);
                         *failure_output = message.clone();
                         recent_steps.push(StepRecord {
                             kind: "apply_patch".to_string(),
                             success: false,
                             summary: truncate(&message, MAX_TOOL_SNIPPET),
                         });
-                        continue;
+                        return Ok(false);
                     }
+                    match apply_patch(patch, workspace) {
+                        Ok(_) => {
+                            eprintln!(
+                                "[canon-harness-repair] patch applied successfully for {}::{}",
+                                crate_name, test_name
+                            );
+                            recent_steps.push(StepRecord {
+                                kind: "apply_patch".to_string(),
+                                success: true,
+                                summary: "patch applied".to_string(),
+                            });
+                        }
+                        Err(err) => {
+                            let patch_dump = workspace.join("state/harness_last_failed.patch");
+                            let _ = std::fs::create_dir_all(
+                                patch_dump.parent().ok_or_else(|| anyhow!("invalid patch dump path"))?,
+                            );
+                            let _ = std::fs::write(&patch_dump, patch);
+                            let message = format!(
+                                "apply_patch failed: {err}\nfailed_patch_file={}\npatch_preview=\n{}",
+                                patch_dump.display(),
+                                truncate(patch, MAX_TOOL_SNIPPET),
+                            );
+                            eprintln!(
+                                "[canon-harness-repair] patch apply failed for {}::{}",
+                                crate_name, test_name
+                            );
+                            eprintln!("[canon-harness-repair] patch failure reason:\n{}", message);
+                            *failure_output = message.clone();
+                            recent_steps.push(StepRecord {
+                                kind: "apply_patch".to_string(),
+                                success: false,
+                                summary: truncate(&message, MAX_TOOL_SNIPPET),
+                            });
+                            return Ok(false);
+                        }
+                    }
+                    let verify = verify_after_mutation(workspace, crate_name, test_name)?;
+                    print_verify_status(crate_name, test_name, &verify);
+                    if verify.success {
+                        println!("harness repair complete: crate test suite passed");
+                        return Ok(true);
+                    }
+                    *failure_output = verify.output.clone();
+                    recent_steps.push(StepRecord {
+                        kind: "verify".to_string(),
+                        success: false,
+                        summary: truncate(&verify.output, MAX_TOOL_SNIPPET),
+                    });
                 }
-                let verify = verify_after_mutation(workspace, crate_name, test_name)?;
-                print_verify_status(crate_name, test_name, &verify);
-                if verify.success {
-                    println!("harness repair complete: crate test suite passed");
-                    return Ok(());
+                "run_command" => {
+                    let cmd = action.command()?;
+                    let cwd = action.cwd()?;
+                    let result = run_shell_command(workspace, cmd, cwd)?;
+                    recent_steps.push(StepRecord {
+                        kind: "run_command".to_string(),
+                        success: result.success,
+                        summary: truncate(&result.output, MAX_TOOL_SNIPPET),
+                    });
+                    if !result.success {
+                        eprintln!(
+                            "[canon-harness-repair] command failed for {}::{}",
+                            crate_name, test_name
+                        );
+                        *failure_output = result.output;
+                        return Ok(false);
+                    }
+                    let verify = verify_after_mutation(workspace, crate_name, test_name)?;
+                    print_verify_status(crate_name, test_name, &verify);
+                    if verify.success {
+                        println!("harness repair complete: crate test suite passed");
+                        return Ok(true);
+                    }
+                    *failure_output = verify.output.clone();
+                    recent_steps.push(StepRecord {
+                        kind: "verify".to_string(),
+                        success: false,
+                        summary: truncate(&verify.output, MAX_TOOL_SNIPPET),
+                    });
                 }
-                *failure_output = verify.output.clone();
+                other => {
+                    let message = format!("unsupported planner action in minimum harness: {other}");
+                    *failure_output = message.clone();
+                    recent_steps.push(StepRecord {
+                        kind: "planner_failure".to_string(),
+                        success: false,
+                        summary: truncate(&message, MAX_TOOL_SNIPPET),
+                    });
+                    eprintln!("[canon-harness-repair] {}", message);
+                    return Ok(false);
+                }
+            }
+            Ok(false)
+        })();
+        match step_result {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(err) => {
+                let message = format!("action execution failed: {err}");
+                eprintln!(
+                    "[canon-harness-repair] action failure for {}::{}",
+                    crate_name, test_name
+                );
+                eprintln!("[canon-harness-repair] action failure reason:\n{}", message);
+                *failure_output = message.clone();
                 recent_steps.push(StepRecord {
-                    kind: "verify".to_string(),
+                    kind: "action_failure".to_string(),
                     success: false,
-                    summary: truncate(&verify.output, MAX_TOOL_SNIPPET),
+                    summary: truncate(&message, MAX_TOOL_SNIPPET),
                 });
             }
-            "run_command" => {
-                let cmd = action.command()?;
-                let cwd = action.cwd()?;
-                let result = run_shell_command(workspace, cmd, cwd)?;
-                recent_steps.push(StepRecord {
-                    kind: "run_command".to_string(),
-                    success: result.success,
-                    summary: truncate(&result.output, MAX_TOOL_SNIPPET),
-                });
-                if !result.success {
-                    eprintln!(
-                        "[canon-harness-repair] command failed for {}::{}",
-                        crate_name, test_name
-                    );
-                    *failure_output = result.output;
-                    continue;
-                }
-                let verify = verify_after_mutation(workspace, crate_name, test_name)?;
-                print_verify_status(crate_name, test_name, &verify);
-                if verify.success {
-                    println!("harness repair complete: crate test suite passed");
-                    return Ok(());
-                }
-                *failure_output = verify.output.clone();
-                recent_steps.push(StepRecord {
-                    kind: "verify".to_string(),
-                    success: false,
-                    summary: truncate(&verify.output, MAX_TOOL_SNIPPET),
-                });
-            }
-            other => bail!("unsupported planner action in minimum harness: {other}"),
         }
     }
 
@@ -524,27 +614,44 @@ fn hunk_path_string(hunk: &Hunk) -> Result<String, String> {
 fn call_planner(workspace: &Path, prompt: &str) -> Result<Vec<PlannerAction>> {
     let (tx, rx) = mpsc::channel();
     let emitter: EventEmitterHandle = Arc::new(CapturingEmitter { tx: Mutex::new(tx) });
-    let request_id = Uuid::new_v4().to_string();
-    let event = RuntimeEvent::Llm(LlmCall {
-        request_id: request_id.clone(),
-        prompt: prompt.to_string(),
-        role: Some("planner".to_string()),
-        agent_id: Some("planner_chatgpt_group".to_string()),
-        dispatched: true,
-        system: Some(PLANNER_SYSTEM_INSTRUCTIONS.to_string()),
-        system_prompt_id: None,
-        context_base: None,
-        context_base_id: None,
-        prompt_base_id: None,
-        prev_prompt_id: None,
-    });
-    let exec = ExecutableEvent::try_from(event).expect("llm event should be executable");
-    exec.execute(ExecutionContext {
-        workspace: workspace.to_path_buf(),
-        emitter,
-        trigger_id: EventId::new("min-harness-root"),
-    })?;
-    wait_for_llm_response(&rx, &request_id)
+
+    for attempt in 1..=LLM_MAX_RETRIES {
+        let request_id = Uuid::new_v4().to_string();
+        let event = RuntimeEvent::Llm(LlmCall {
+            request_id: request_id.clone(),
+            prompt: prompt.to_string(),
+            role: Some("planner".to_string()),
+            agent_id: Some("planner_chatgpt_group".to_string()),
+            dispatched: true,
+            system: Some(PLANNER_SYSTEM_INSTRUCTIONS.to_string()),
+            system_prompt_id: None,
+            context_base: None,
+            context_base_id: None,
+            prompt_base_id: None,
+            prev_prompt_id: None,
+        });
+        let exec = ExecutableEvent::try_from(event).expect("llm event should be executable");
+        exec.execute(ExecutionContext {
+            workspace: workspace.to_path_buf(),
+            emitter: emitter.clone(),
+            trigger_id: EventId::new("min-harness-root"),
+        })?;
+        match wait_for_llm_response(&rx, &request_id) {
+            Ok(actions) => return Ok(actions),
+            Err(err) if err.to_string().contains("timed out waiting for planner result") && attempt < LLM_MAX_RETRIES => {
+                eprintln!(
+                    "[canon-harness-repair] planner timeout after {}s, retrying ({}/{})",
+                    LLM_TIMEOUT.as_secs(),
+                    attempt,
+                    LLM_MAX_RETRIES
+                );
+                continue;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    bail!("planner retries exhausted without a response")
 }
 
 fn wait_for_llm_response(rx: &Receiver<RuntimeEvent>, request_id: &str) -> Result<Vec<PlannerAction>> {
@@ -587,8 +694,9 @@ impl PlannerAction {
     fn kind(&self) -> Result<&str> {
         self.raw
             .get("action")
+            .or_else(|| self.raw.get("kind"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("planner action is missing `action`: {}", self.raw))
+            .ok_or_else(|| anyhow!("planner action is missing `action`/`kind`: {}", self.raw))
     }
 
     fn path(&self) -> Result<&str> {

@@ -6,7 +6,9 @@ use canon_goal::parse_agent_goal_markdown;
 use canon_invariant::{
     decision_trace_payload, meta_invariant_action_must_declare_verifier,
     meta_invariant_all_failures_typed, meta_invariant_any_action_cites_failure,
-    meta_invariant_expected_verifier, meta_invariant_is_mutating_action,
+    meta_invariant_expected_verifier, meta_invariant_has_actionable_failure,
+    meta_invariant_is_mutating_action, observe_failure_fingerprint, ConstraintRoute,
+    ConstraintState, FailureFingerprint,
 };
 use canon_semantic_state::{
     derive_self_development_objective_state, primary_development_objective_kind,
@@ -437,13 +439,24 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
         ctx.forced_primary_objective,
         ctx.forced_primary_strategy,
     ) {
+        let promoted_invariant = observe_failure_fingerprint(FailureFingerprint::invalid_plan_batch(
+            Some(ConstraintRoute::Plan),
+            planning_constraint_state(&semantic_summary),
+        ));
         ctx.last_planned_observed_tick = None;
-        return Ok(LoopStageResult::EmitMany(vec![
-            RuntimeEvent::InvariantDiscovered(canon_event::InvariantDiscovered {
+        let mut events = vec![RuntimeEvent::InvariantDiscovered(canon_event::InvariantDiscovered {
                 feature: "invalid_plan_batch".to_string(),
                 confidence: 1.0,
                 support: 1,
-            }),
+            })];
+        if let Some(promotion) = promoted_invariant {
+            events.push(RuntimeEvent::InvariantDiscovered(canon_event::InvariantDiscovered {
+                feature: promotion.invariant.feature_name().to_string(),
+                confidence: 1.0,
+                support: promotion.support as u64,
+            }));
+        }
+        events.extend([
             RuntimeEvent::Debug(canon_event::DebugEvent {
                 source: "plan_stage".to_string(),
                 kind: "invalid_plan_batch".to_string(),
@@ -474,7 +487,8 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
                 planned_count: 0,
                 status: "invalid_plan".to_string(),
             }),
-        ]));
+        ]);
+        return Ok(LoopStageResult::EmitMany(events));
     }
     // Action-batch dedup: if LLM returned identical actions to the previous plan, skip.
     let action_batch_hash = {
@@ -747,6 +761,42 @@ fn validate_action_batch(
     )?;
 
     Ok(())
+}
+
+fn planning_constraint_state(semantic_summary: &SemanticStateSummary) -> ConstraintState {
+    let target_root = semantic_summary
+        .target_root
+        .as_deref()
+        .map(Path::new);
+    let real_path_exists = target_root.is_some_and(|path| path.exists());
+    let real_cargo_project = target_root.is_some_and(|path| path.join("Cargo.toml").exists());
+    let failure_scope_localized = semantic_summary.failure_scope.as_deref() == Some("localized");
+    let failure_scope_workspace = semantic_summary.failure_scope.as_deref() == Some("workspace");
+    let failure_scope_tooling = semantic_summary.failure_scope.as_deref() == Some("tooling");
+    ConstraintState {
+        semantic_path_exists: semantic_summary.path_exists,
+        semantic_cargo_project: semantic_summary.cargo_project,
+        real_path_exists,
+        real_cargo_project,
+        actionable_failure: meta_invariant_has_actionable_failure(
+            semantic_summary.validation_blocked_by_preconditions,
+            semantic_summary.compiler_repair_required,
+            semantic_summary.planning_preconditions.len(),
+            semantic_summary.compiler_hints.len(),
+            semantic_summary.module_gaps.len(),
+        ),
+        validation_blocked: semantic_summary.validation_blocked_by_preconditions,
+        entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
+            && semantic_summary.cargo_project,
+        module_gaps_present: !semantic_summary.module_gaps.is_empty(),
+        recent_no_semantic_progress: semantic_summary.semantic_no_progress_streak > 0,
+        failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref()
+            == Some("no_actionable_failure"),
+        failure_scope_localized,
+        failure_scope_workspace,
+        failure_scope_tooling,
+        route_objective_contradiction: semantic_summary.route_objective_contradiction_events > 0,
+    }
 }
 
 fn planning_semantic_summary(observed: Option<&LoopObserved>) -> Result<SemanticStateSummary, String> {

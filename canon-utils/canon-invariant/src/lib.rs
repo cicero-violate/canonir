@@ -1,5 +1,7 @@
 use canon_types::{EventDelta, InvariantViolation, RustcEvent, RustcState};
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 pub fn invariant_violation_delta(message: impl Into<String>) -> EventDelta {
     EventDelta {
@@ -35,7 +37,7 @@ pub enum PlannedActionClass {
 }
 
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ConstraintRoute {
     Observe,
     Plan,
@@ -56,7 +58,7 @@ impl ConstraintRoute {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ConstraintAction {
     CargoInit,
     CargoNew,
@@ -66,7 +68,7 @@ pub enum ConstraintAction {
     Other,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
 pub struct ConstraintState {
     pub semantic_path_exists: bool,
     pub semantic_cargo_project: bool,
@@ -105,6 +107,215 @@ pub enum ConstraintDecision {
     Forbid(&'static str),
     RewriteRoute(ConstraintRoute, &'static str),
     RewriteAction(ConstraintAction, &'static str),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FailureKind {
+    InvalidPlanBatch,
+    RouteRewrite,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FailureFingerprint {
+    pub kind: FailureKind,
+    pub route: Option<ConstraintRoute>,
+    pub state: ConstraintState,
+}
+
+impl FailureFingerprint {
+    pub fn invalid_plan_batch(route: Option<ConstraintRoute>, state: ConstraintState) -> Self {
+        Self {
+            kind: FailureKind::InvalidPlanBatch,
+            route,
+            state,
+        }
+    }
+
+    pub fn route_rewrite(route: ConstraintRoute, state: ConstraintState) -> Self {
+        Self {
+            kind: FailureKind::RouteRewrite,
+            route: Some(route),
+            state,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DiscoveredInvariant {
+    ForcePlanWhenMissingTarget,
+    ForcePlanWhenValidationBlocked,
+    ForcePlanWhenObjectiveContradiction,
+    ForceObserveWhenNoActionableFailure,
+}
+
+impl DiscoveredInvariant {
+    pub fn feature_name(self) -> &'static str {
+        match self {
+            Self::ForcePlanWhenMissingTarget => "discovered:force_plan_missing_target",
+            Self::ForcePlanWhenValidationBlocked => "discovered:force_plan_validation_blocked",
+            Self::ForcePlanWhenObjectiveContradiction => {
+                "discovered:force_plan_objective_contradiction"
+            }
+            Self::ForceObserveWhenNoActionableFailure => {
+                "discovered:force_observe_no_actionable_failure"
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvariantPromotion {
+    pub invariant: DiscoveredInvariant,
+    pub support: u32,
+    pub fingerprint: FailureFingerprint,
+}
+
+#[derive(Default)]
+struct InvariantDiscoveryState {
+    threshold: u32,
+    supports: HashMap<FailureFingerprint, u32>,
+    promoted: HashMap<DiscoveredInvariant, u32>,
+}
+
+impl InvariantDiscoveryState {
+    fn with_threshold() -> Self {
+        let threshold = std::env::var("CANON_DISCOVERED_INVARIANT_SUPPORT")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(3);
+        Self {
+            threshold,
+            ..Self::default()
+        }
+    }
+}
+
+fn invariant_discovery_state() -> &'static Mutex<InvariantDiscoveryState> {
+    static STATE: OnceLock<Mutex<InvariantDiscoveryState>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(InvariantDiscoveryState::with_threshold()))
+}
+
+fn fingerprint_pattern(fingerprint: FailureFingerprint) -> Option<DiscoveredInvariant> {
+    match fingerprint.route {
+        Some(ConstraintRoute::Observe) if !fingerprint.state.real_path_exists => {
+            Some(DiscoveredInvariant::ForcePlanWhenMissingTarget)
+        }
+        Some(ConstraintRoute::Verify | ConstraintRoute::Conclude)
+            if fingerprint.state.validation_blocked
+                || fingerprint.state.entrypoint_missing
+                || fingerprint.state.module_gaps_present =>
+        {
+            Some(DiscoveredInvariant::ForcePlanWhenValidationBlocked)
+        }
+        Some(ConstraintRoute::Verify | ConstraintRoute::Conclude)
+            if fingerprint.state.route_objective_contradiction =>
+        {
+            Some(DiscoveredInvariant::ForcePlanWhenObjectiveContradiction)
+        }
+        Some(ConstraintRoute::Plan)
+            if fingerprint.state.failure_class_no_actionable
+                || (fingerprint.state.recent_no_semantic_progress
+                    && !fingerprint.state.actionable_failure
+                    && !fingerprint.state.validation_blocked
+                    && !fingerprint.state.entrypoint_missing
+                    && !fingerprint.state.module_gaps_present
+                    && fingerprint.state.real_path_exists) =>
+        {
+            Some(DiscoveredInvariant::ForceObserveWhenNoActionableFailure)
+        }
+        _ => None,
+    }
+}
+
+pub fn observe_failure_fingerprint(
+    fingerprint: FailureFingerprint,
+) -> Option<InvariantPromotion> {
+    let invariant = fingerprint_pattern(fingerprint)?;
+    let mut state = invariant_discovery_state().lock().ok()?;
+    let support = {
+        let entry = state.supports.entry(fingerprint).or_insert(0);
+        *entry = entry.saturating_add(1);
+        *entry
+    };
+    if support < state.threshold || state.promoted.contains_key(&invariant) {
+        return None;
+    }
+    state.promoted.insert(invariant, support);
+    Some(InvariantPromotion {
+        invariant,
+        support,
+        fingerprint,
+    })
+}
+
+pub fn discovered_invariants() -> Vec<DiscoveredInvariant> {
+    invariant_discovery_state()
+        .lock()
+        .map(|state| state.promoted.keys().copied().collect())
+        .unwrap_or_default()
+}
+
+pub fn reset_discovered_invariants_for_tests() {
+    if let Ok(mut state) = invariant_discovery_state().lock() {
+        *state = InvariantDiscoveryState::with_threshold();
+    }
+}
+
+fn evaluate_discovered_invariants(ctx: &ConstraintContext) -> Option<ConstraintDecision> {
+    for invariant in discovered_invariants() {
+        match invariant {
+            DiscoveredInvariant::ForcePlanWhenMissingTarget => {
+                if matches!(ctx.route, Some(route) if route != ConstraintRoute::Plan)
+                    && !ctx.state.real_path_exists
+                {
+                    return Some(ConstraintDecision::RewriteRoute(
+                        ConstraintRoute::Plan,
+                        "discovered_invariant_missing_target: repeated missing-target failures require planning before other routes",
+                    ));
+                }
+            }
+            DiscoveredInvariant::ForcePlanWhenValidationBlocked => {
+                if matches!(ctx.route, Some(ConstraintRoute::Verify | ConstraintRoute::Conclude))
+                    && (ctx.state.validation_blocked
+                        || ctx.state.entrypoint_missing
+                        || ctx.state.module_gaps_present)
+                {
+                    return Some(ConstraintDecision::RewriteRoute(
+                        ConstraintRoute::Plan,
+                        "discovered_invariant_validation_blocked: repeated premature verification failures require replanning first",
+                    ));
+                }
+            }
+            DiscoveredInvariant::ForcePlanWhenObjectiveContradiction => {
+                if matches!(ctx.route, Some(ConstraintRoute::Verify | ConstraintRoute::Conclude))
+                    && ctx.state.route_objective_contradiction
+                {
+                    return Some(ConstraintDecision::RewriteRoute(
+                        ConstraintRoute::Plan,
+                        "discovered_invariant_objective_contradiction: repeated objective contradictions require planning instead of verification",
+                    ));
+                }
+            }
+            DiscoveredInvariant::ForceObserveWhenNoActionableFailure => {
+                if ctx.route == Some(ConstraintRoute::Plan)
+                    && (ctx.state.failure_class_no_actionable
+                        || (ctx.state.recent_no_semantic_progress
+                            && !ctx.state.actionable_failure))
+                    && !ctx.state.validation_blocked
+                    && !ctx.state.entrypoint_missing
+                    && !ctx.state.module_gaps_present
+                    && ctx.state.real_path_exists
+                {
+                    return Some(ConstraintDecision::RewriteRoute(
+                        ConstraintRoute::Observe,
+                        "discovered_invariant_no_actionable_failure: repeated no-actionable-failure plans require observation refresh instead",
+                    ));
+                }
+            }
+        }
+    }
+    None
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -409,6 +620,10 @@ pub fn evaluate_constraint_context(ctx: &ConstraintContext) -> ConstraintDecisio
                 "meta_invariant_deterministic_route_authority: deterministic routes cannot be overridden",
             );
         }
+    }
+
+    if let Some(decision) = evaluate_discovered_invariants(ctx) {
+        return decision;
     }
 
     if let Some(route) = ctx.route {
