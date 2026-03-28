@@ -31,6 +31,13 @@ const PLANNER_SYSTEM_INSTRUCTIONS: &str = r#"You are a code-editing agent. Produ
 3. apply_patch — create, update, or delete files
    {"action":"apply_patch","patch":"*** Begin Patch\n...\n*** End Patch"}
 
+   Patch rules:
+   - use `*** Add File:` for new files
+   - use `*** Update File:` for edits to existing files
+   - every changed line in an update hunk must start with ` `, `+`, or `-`
+   - do not emit prose inside the patch
+   - do not omit unchanged context around edits
+
 4. run_command — run a shell command
    {"action":"run_command","cmd":"cargo check -p canon-route","cwd":"<TARGET_WORKSPACE>"}
 
@@ -181,12 +188,34 @@ fn run_harness_loop(
             }
             "apply_patch" => {
                 let patch = action.patch()?;
-                apply_patch(patch, workspace).context("apply_patch failed")?;
-                recent_steps.push(StepRecord {
-                    kind: "apply_patch".to_string(),
-                    success: true,
-                    summary: "patch applied".to_string(),
-                });
+                match apply_patch(patch, workspace) {
+                    Ok(_) => {
+                        recent_steps.push(StepRecord {
+                            kind: "apply_patch".to_string(),
+                            success: true,
+                            summary: "patch applied".to_string(),
+                        });
+                    }
+                    Err(err) => {
+                        let patch_dump = workspace.join("state/harness_last_failed.patch");
+                        let _ = std::fs::create_dir_all(
+                            patch_dump.parent().ok_or_else(|| anyhow!("invalid patch dump path"))?,
+                        );
+                        let _ = std::fs::write(&patch_dump, patch);
+                        let message = format!(
+                            "apply_patch failed: {err}\nfailed_patch_file={}\npatch_preview=\n{}",
+                            patch_dump.display(),
+                            truncate(patch, MAX_TOOL_SNIPPET),
+                        );
+                        *failure_output = message.clone();
+                        recent_steps.push(StepRecord {
+                            kind: "apply_patch".to_string(),
+                            success: false,
+                            summary: truncate(&message, MAX_TOOL_SNIPPET),
+                        });
+                        continue;
+                    }
+                }
                 let verify = verify_after_mutation(workspace, crate_name, test_name)?;
                 if verify.success {
                     println!("harness repair complete: crate test suite passed");

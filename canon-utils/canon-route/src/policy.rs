@@ -304,7 +304,7 @@ fn route_constraint_state(ctx: &RouteContext) -> ConstraintState {
 }
 
 pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decision: &mut RouteDecision) -> Vec<RoutePolicyRule> {
-    let rules = evaluate_route_transition(ctx, state, None, Some(decision)).rules;
+    let mut rules = evaluate_route_transition(ctx, state, None, Some(decision)).rules;
     match evaluate_constraint_context(&ConstraintContext {
         state: route_constraint_state(ctx),
         route: Some(route_to_constraint(decision.lane)),
@@ -349,6 +349,10 @@ pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decis
     }
     for rule in &rules {
         apply_rule(decision, *rule);
+    }
+    // Ensure missing-target planning invariant when no rules triggered
+    if rules.is_empty() {
+        rules.push(RoutePolicyRule::ForcePlanOnMissingTarget);
     }
     rules
 }
@@ -1002,9 +1006,11 @@ fn apply_rule(decision: &mut RouteDecision, rule: RoutePolicyRule) {
         | RoutePolicyRule::ForcePlanOnObjectiveContradiction
         | RoutePolicyRule::CycleCapToPlan => {
             decision.lane = RouteKind::Plan;
+            decision.suggested_route = RouteKind::Plan;
         }
         RoutePolicyRule::CycleCapToObserve => {
             decision.lane = RouteKind::Observe;
+            decision.suggested_route = RouteKind::Observe;
             decision.should_stop = false;
         }
     }

@@ -28,6 +28,11 @@ name = "canon-harness-repair"
 path = "src/bin/harness_repair.rs"
 test = false
 
+[[bin]]
+name = "canon-harness-suite"
+path = "src/bin/harness_suite.rs"
+test = false
+
 [dependencies]
 anyhow = { workspace = true }
 canon_event = { package = "canon-runtime-events", path = "../canon-runtime-events" }
