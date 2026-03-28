@@ -8,7 +8,7 @@ SUPERVISOR_LOG="$ROOT/state/harness_repair_supervisor.log"
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/run_harness_repair.sh <crate> <test-name> [stderr-file|-] [--no-supervisor] [--always-dispatch]
+  scripts/run_harness_repair.sh <crate> <test-name> [stderr-file|-] [--always-dispatch] [--max-steps N]
 
 Examples:
   scripts/run_harness_repair.sh canon-route \
@@ -19,8 +19,8 @@ Examples:
     scripts/run_harness_repair.sh canon-route policy::tests::foo -
 
 Behavior:
-  - starts canon-runtime-supervisor if it is not already running
-  - emits a direct RequestDispatch into the tlog using canon-harness-repair
+  - builds and runs the standalone canon-harness-repair binary
+  - does not start the supervisor or use the shared runtime dispatch path
   - if no stderr source is provided, the harness binary runs the target test itself
 EOF
 }
@@ -40,15 +40,16 @@ if [[ $# -gt 0 && "$1" != --* ]]; then
   shift
 fi
 
-USE_SUPERVISOR=1
 ALWAYS_DISPATCH=0
+MAX_STEPS=5
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --no-supervisor)
-      USE_SUPERVISOR=0
-      ;;
     --always-dispatch)
       ALWAYS_DISPATCH=1
+      ;;
+    --max-steps)
+      shift
+      MAX_STEPS="$1"
       ;;
     -h|--help)
       usage
@@ -74,16 +75,9 @@ if [[ -n "$STDERR_INPUT" ]]; then
 fi
 
 cd "$ROOT"
-cargo build --bin canon-runtime --bin canon-runtime-supervisor --bin canon-harness-repair
+cargo build --bin canon-harness-repair
 
-if [[ "$USE_SUPERVISOR" -eq 1 ]]; then
-  if ! pgrep -f "$ROOT/target/debug/canon-runtime-supervisor" >/dev/null 2>&1; then
-    nohup "$ROOT/target/debug/canon-runtime-supervisor" >"$SUPERVISOR_LOG" 2>&1 &
-    sleep 1
-  fi
-fi
-
-HARNESS_ARGS=("$CRATE_NAME" "$TEST_NAME" "--workspace" "$ROOT" "--tlog" "$ROOT/state/event_log/event.tlog.d")
+HARNESS_ARGS=("$CRATE_NAME" "$TEST_NAME" "--workspace" "$ROOT" "--max-steps" "$MAX_STEPS")
 if [[ "$ALWAYS_DISPATCH" -eq 1 ]]; then
   HARNESS_ARGS+=("--always-dispatch")
 fi

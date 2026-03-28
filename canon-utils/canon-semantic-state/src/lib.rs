@@ -496,6 +496,8 @@ pub struct LlmSemanticContext {
     pub semantic_summary: SemanticStateSummary,
     pub objective_state: SelfDevelopmentObjectiveState,
     pub objective_trend_state: ObjectiveTrendState,
+    pub forced_primary_objective: Option<DevelopmentObjectiveKind>,
+    pub forced_primary_strategy: Option<DevelopmentStrategyKind>,
     pub target_workspace: Option<String>,
     pub workspace_loc: Option<usize>,
     pub error_count: Option<usize>,
@@ -1024,18 +1026,30 @@ fn development_objective_lines(
 }
 
 impl LlmSemanticContext {
+    fn primary_objective_kind(&self) -> DevelopmentObjectiveKind {
+        self.forced_primary_objective.unwrap_or_else(|| {
+            primary_development_objective_kind(
+                &self.objective_state,
+                &self.objective_trend_state,
+                &self.semantic_summary,
+            )
+        })
+    }
+
+    fn primary_strategy_kind(&self) -> DevelopmentStrategyKind {
+        self.forced_primary_strategy.unwrap_or_else(|| {
+            primary_development_strategy_kind(
+                &self.objective_state,
+                &self.objective_trend_state,
+                &self.semantic_summary,
+            )
+        })
+    }
+
     pub fn render_goal_gen_block(&self) -> String {
         let mut lines = Vec::new();
-        let primary_objective = primary_development_objective_kind(
-            &self.objective_state,
-            &self.objective_trend_state,
-            &self.semantic_summary,
-        );
-        let primary_strategy = primary_development_strategy_kind(
-            &self.objective_state,
-            &self.objective_trend_state,
-            &self.semantic_summary,
-        );
+        let primary_objective = self.primary_objective_kind();
+        let primary_strategy = self.primary_strategy_kind();
         if let Some(mission) = &self.mission_summary {
             lines.push(format!("mission_summary={mission}"));
         }
@@ -1070,16 +1084,8 @@ impl LlmSemanticContext {
     }
 
     pub fn render_router_block(&self) -> String {
-        let primary_objective = primary_development_objective_kind(
-            &self.objective_state,
-            &self.objective_trend_state,
-            &self.semantic_summary,
-        );
-        let primary_strategy = primary_development_strategy_kind(
-            &self.objective_state,
-            &self.objective_trend_state,
-            &self.semantic_summary,
-        );
+        let primary_objective = self.primary_objective_kind();
+        let primary_strategy = self.primary_strategy_kind();
         let mut lines = vec![
             format!("semantic_complete={}", self.semantic_summary.complete),
             format!("validation_blocked={}", self.semantic_summary.validation_blocked_by_preconditions),
@@ -1121,16 +1127,8 @@ impl LlmSemanticContext {
     }
 
     pub fn render_planner_base_block(&self) -> String {
-        let primary_objective = primary_development_objective_kind(
-            &self.objective_state,
-            &self.objective_trend_state,
-            &self.semantic_summary,
-        );
-        let primary_strategy = primary_development_strategy_kind(
-            &self.objective_state,
-            &self.objective_trend_state,
-            &self.semantic_summary,
-        );
+        let primary_objective = self.primary_objective_kind();
+        let primary_strategy = self.primary_strategy_kind();
         let mut sections = vec![
             self.semantic_summary.render_planner_block(),
             format!(
@@ -1186,16 +1184,8 @@ impl LlmSemanticContext {
     }
 
     pub fn render_planner_delta_block(&self) -> String {
-        let primary_objective = primary_development_objective_kind(
-            &self.objective_state,
-            &self.objective_trend_state,
-            &self.semantic_summary,
-        );
-        let primary_strategy = primary_development_strategy_kind(
-            &self.objective_state,
-            &self.objective_trend_state,
-            &self.semantic_summary,
-        );
+        let primary_objective = self.primary_objective_kind();
+        let primary_strategy = self.primary_strategy_kind();
         let route_section = match &self.route_rationale {
             Some(rationale) if !rationale.is_empty() => {
                 let conf = self

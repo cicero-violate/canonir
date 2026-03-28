@@ -568,10 +568,12 @@ pub fn validate_development_strategy_alignment(
     semantic_summary: &SemanticStateSummary,
     objective_state: &SelfDevelopmentObjectiveState,
     objective_trend_state: &ObjectiveTrendState,
+    forced_strategy: Option<DevelopmentStrategyKind>,
 ) -> Result<(), String> {
     let action_intents = collect_action_intents(actions, target_root);
-    let strategy =
-        primary_development_strategy_kind(objective_state, objective_trend_state, semantic_summary);
+    let strategy = forced_strategy.unwrap_or_else(|| {
+        primary_development_strategy_kind(objective_state, objective_trend_state, semantic_summary)
+    });
     match strategy {
         DevelopmentStrategyKind::FixConfigLintPolicy => {
             let targets_config = actions.iter().any(|action| {
@@ -2027,6 +2029,7 @@ mod tests {
             &summary,
             &objective_state,
             &Default::default(),
+            None,
         );
         assert!(result.is_ok());
     }

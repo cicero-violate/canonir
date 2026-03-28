@@ -2,7 +2,10 @@ use crate::merge::{ContextMerger, FileWriteTracker, WorkspaceDirtyTracker};
 use crate::harness_repair::{HarnessRepairState, HarnessRepairTarget};
 use crate::scheduler::{DependencyTracker, Scheduler};
 use canon_event::{EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, LoopVerified, ToolResult};
-use canon_semantic_state::{ObjectiveTrendState, SemanticActionIntent, SemanticExecutionResultRecord};
+use canon_semantic_state::{
+    DevelopmentObjectiveKind, DevelopmentStrategyKind, ObjectiveTrendState, SemanticActionIntent,
+    SemanticExecutionResultRecord,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -165,6 +168,8 @@ pub struct LoopContext {
     pub last_observed_goal_hash: u64,
     pub last_observed_facts_hash: u64,
     pub current_tick: u64,
+    pub forced_primary_objective: Option<DevelopmentObjectiveKind>,
+    pub forced_primary_strategy: Option<DevelopmentStrategyKind>,
 }
 
 impl LoopContext {
@@ -241,6 +246,8 @@ impl LoopContext {
             last_observed_goal_hash: 0,
             last_observed_facts_hash: 0,
             current_tick: 0,
+            forced_primary_objective: None,
+            forced_primary_strategy: None,
         }
     }
 
@@ -274,6 +281,8 @@ impl LoopContext {
             observed.semantic_summary.failure_class = Some(failure_class.as_str().to_string());
             observed.semantic_summary.failure_scope = Some(failure_scope.as_str().to_string());
         }
+        self.forced_primary_objective = Some(DevelopmentObjectiveKind::ReduceCompilerFailures);
+        self.forced_primary_strategy = Some(DevelopmentStrategyKind::SimplifyPlanBatch);
     }
 }
 

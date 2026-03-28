@@ -189,6 +189,8 @@ impl RouteContext {
             semantic_summary: self.semantic_summary.clone(),
             objective_state,
             objective_trend_state: self.objective_trend_state.clone(),
+            forced_primary_objective: None,
+            forced_primary_strategy: None,
             target_workspace: self.semantic_summary.target_root.clone(),
             workspace_loc: None,
             error_count: None,

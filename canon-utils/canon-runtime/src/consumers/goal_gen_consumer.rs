@@ -89,6 +89,8 @@ impl EventConsumer for GoalGenConsumer {
                         &self.objective_trend_state,
                     ),
                     objective_trend_state: self.objective_trend_state.clone(),
+                    forced_primary_objective: None,
+                    forced_primary_strategy: None,
                     target_workspace: Some(GOALGEN_PROJECTS_DIR.to_string()),
                     workspace_loc: None,
                     error_count: None,

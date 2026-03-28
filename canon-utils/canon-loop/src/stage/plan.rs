@@ -10,8 +10,8 @@ use canon_invariant::{
 };
 use canon_semantic_state::{
     derive_self_development_objective_state, primary_development_objective_kind,
-    primary_development_strategy_kind, LlmSemanticContext, ObjectiveTrendState,
-    SemanticStateSummary,
+    primary_development_strategy_kind, DevelopmentObjectiveKind, DevelopmentStrategyKind,
+    LlmSemanticContext, ObjectiveTrendState, SemanticStateSummary,
 };
 use canon_skills::global_registry;
 use canon_tools_search::search_files;
@@ -434,6 +434,8 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
         &semantic_summary,
         &ctx.objective_trend_state,
         &ctx.recent_execution_results,
+        ctx.forced_primary_objective,
+        ctx.forced_primary_strategy,
     ) {
         ctx.last_planned_observed_tick = None;
         return Ok(LoopStageResult::EmitMany(vec![
@@ -505,6 +507,8 @@ fn validate_action_batch(
     semantic_summary: &SemanticStateSummary,
     objective_trend_state: &ObjectiveTrendState,
     recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
+    forced_primary_objective: Option<DevelopmentObjectiveKind>,
+    forced_primary_strategy: Option<DevelopmentStrategyKind>,
 ) -> Result<(), String> {
     if !semantic_summary.complete {
         return Err("semantic summary is incomplete".to_string());
@@ -704,18 +708,27 @@ fn validate_action_batch(
         &preconditions,
         semantic_summary,
     )?;
+    let objective_state = derive_self_development_objective_state(
+        semantic_summary,
+        0,
+        recent_execution_results,
+        objective_trend_state,
+    );
+    let effective_primary_objective = forced_primary_objective
+        .unwrap_or_else(|| {
+            primary_development_objective_kind(&objective_state, objective_trend_state, semantic_summary)
+        })
+        .focus_text();
+    let effective_primary_strategy = forced_primary_strategy
+        .unwrap_or_else(|| {
+            primary_development_strategy_kind(&objective_state, objective_trend_state, semantic_summary)
+        });
+
     planning_preconditions::validate_objective_route_plan_alignment(
         actions,
         &target_root,
         "plan",
-        objective_trend_state.primary_objective(
-            &canon_semantic_state::derive_self_development_objective_state(
-                semantic_summary,
-                0,
-                &[],
-                objective_trend_state,
-            ),
-        ),
+        effective_primary_objective,
         semantic_summary,
     )?;
     planning_preconditions::validate_trend_intent_alignment(
@@ -728,13 +741,9 @@ fn validate_action_batch(
         actions,
         &target_root,
         semantic_summary,
-        &canon_semantic_state::derive_self_development_objective_state(
-            semantic_summary,
-            0,
-            recent_execution_results,
-            objective_trend_state,
-        ),
+        &objective_state,
         objective_trend_state,
+        Some(effective_primary_strategy),
     )?;
 
     Ok(())
@@ -879,6 +888,8 @@ fn handle_observed(
         ctx.last_invalid_plan_planned_count,
         ctx.consecutive_invalid_plan_batches,
         &ctx.objective_trend_state,
+        ctx.forced_primary_objective,
+        ctx.forced_primary_strategy,
     );
     let context_base = build_context_base(observed, &workspace_clone, &sub_agent_section, &llm_semantic_context);
     let context_base_hash = hash_str(&context_base);
@@ -1439,6 +1450,8 @@ fn build_llm_semantic_context(
     last_invalid_plan_planned_count: Option<usize>,
     consecutive_invalid_plan_batches: u32,
     objective_trend_state: &ObjectiveTrendState,
+    forced_primary_objective: Option<DevelopmentObjectiveKind>,
+    forced_primary_strategy: Option<DevelopmentStrategyKind>,
 ) -> LlmSemanticContext {
     let recent_actions = batch_acted
         .iter()
@@ -1485,6 +1498,8 @@ fn build_llm_semantic_context(
             objective_trend_state,
         ),
         objective_trend_state: objective_trend_state.clone(),
+        forced_primary_objective,
+        forced_primary_strategy,
         target_workspace: Some(target_workspace.to_string()),
         workspace_loc: Some(count_loc_in_workspace(std::path::Path::new(target_workspace))),
         error_count: Some(observed.error_count),
@@ -2066,6 +2081,8 @@ mod tests {
             semantic_summary,
             objective_state,
             objective_trend_state: trend,
+            forced_primary_objective: None,
+            forced_primary_strategy: None,
             target_workspace: Some(workspace.display().to_string()),
             workspace_loc: None,
             error_count: None,
@@ -2190,6 +2207,8 @@ mod tests {
             &semantic_summary,
             &ObjectiveTrendState::default(),
             &[],
+            None,
+            None,
         )
         .is_ok());
         let _ = fs::remove_dir_all(workspace);
@@ -2245,6 +2264,8 @@ mod tests {
             &semantic_summary,
             &trend,
             &[],
+            None,
+            None,
         )
         .is_ok());
         let _ = fs::remove_dir_all(workspace);
@@ -2289,6 +2310,8 @@ mod tests {
             &semantic_summary,
             &ObjectiveTrendState::default(),
             &[],
+            None,
+            None,
         );
         assert!(result
             .unwrap_err()
