@@ -789,13 +789,13 @@ fn planning_constraint_state(semantic_summary: &SemanticStateSummary) -> Constra
         entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
             && semantic_summary.cargo_project,
         module_gaps_present: !semantic_summary.module_gaps.is_empty(),
-        recent_no_semantic_progress: semantic_summary.semantic_no_progress_streak > 0,
+        recent_no_semantic_progress: false,
         failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref()
             == Some("no_actionable_failure"),
         failure_scope_localized,
         failure_scope_workspace,
         failure_scope_tooling,
-        route_objective_contradiction: semantic_summary.route_objective_contradiction_events > 0,
+        route_objective_contradiction: false,
     }
 }
 

@@ -9,4 +9,5 @@ name = "canon_invariant"
 
 [dependencies]
 canon_types = { path = "../canon-types" }
+serde.workspace = true
 serde_json.workspace = true

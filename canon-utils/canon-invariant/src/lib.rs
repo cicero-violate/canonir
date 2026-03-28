@@ -1,6 +1,9 @@
 use canon_types::{EventDelta, InvariantViolation, RustcEvent, RustcState};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 pub fn invariant_violation_delta(message: impl Into<String>) -> EventDelta {
@@ -37,7 +40,7 @@ pub enum PlannedActionClass {
 }
 
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ConstraintRoute {
     Observe,
     Plan,
@@ -58,7 +61,7 @@ impl ConstraintRoute {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ConstraintAction {
     CargoInit,
     CargoNew,
@@ -68,7 +71,7 @@ pub enum ConstraintAction {
     Other,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
 pub struct ConstraintState {
     pub semantic_path_exists: bool,
     pub semantic_cargo_project: bool,
@@ -109,13 +112,13 @@ pub enum ConstraintDecision {
     RewriteAction(ConstraintAction, &'static str),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FailureKind {
     InvalidPlanBatch,
     RouteRewrite,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FailureFingerprint {
     pub kind: FailureKind,
     pub route: Option<ConstraintRoute>,
@@ -140,7 +143,7 @@ impl FailureFingerprint {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DiscoveredInvariant {
     ForcePlanWhenMissingTarget,
     ForcePlanWhenValidationBlocked,
@@ -177,6 +180,12 @@ struct InvariantDiscoveryState {
     promoted: HashMap<DiscoveredInvariant, u32>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct PersistedInvariantDiscoveryState {
+    supports: Vec<(FailureFingerprint, u32)>,
+    promoted: Vec<(DiscoveredInvariant, u32)>,
+}
+
 impl InvariantDiscoveryState {
     fn with_threshold() -> Self {
         let threshold = std::env::var("CANON_DISCOVERED_INVARIANT_SUPPORT")
@@ -184,10 +193,80 @@ impl InvariantDiscoveryState {
             .and_then(|value| value.parse::<u32>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(3);
-        Self {
+        let mut state = Self {
             threshold,
             ..Self::default()
+        };
+        state.load_from_disk();
+        state
+    }
+
+    fn load_from_disk(&mut self) {
+        let Some(path) = invariant_store_path() else {
+            return;
+        };
+        let Ok(raw) = fs::read_to_string(path) else {
+            return;
+        };
+        let Ok(persisted) = serde_json::from_str::<PersistedInvariantDiscoveryState>(&raw) else {
+            return;
+        };
+        self.supports = persisted.supports.into_iter().collect();
+        self.promoted = persisted.promoted.into_iter().collect();
+    }
+
+    fn save_to_disk(&self) {
+        let Some(path) = invariant_store_path() else {
+            return;
+        };
+        let Some(parent) = path.parent() else {
+            return;
+        };
+        if fs::create_dir_all(parent).is_err() {
+            return;
         }
+        let persisted = PersistedInvariantDiscoveryState {
+            supports: self.supports.iter().map(|(k, v)| (*k, *v)).collect(),
+            promoted: self.promoted.iter().map(|(k, v)| (*k, *v)).collect(),
+        };
+        let Ok(json) = serde_json::to_string_pretty(&persisted) else {
+            return;
+        };
+        let _ = fs::write(path, json);
+    }
+}
+
+fn invariant_store_path() -> Option<PathBuf> {
+    if cfg!(test) {
+        return None;
+    }
+    Some(
+        std::env::var("CANON_DISCOVERED_INVARIANTS_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                PathBuf::from("/workspace/ai_sandbox/canon/state/discovered_invariants.json")
+            }),
+    )
+}
+
+pub fn discovered_invariant_store_path() -> Option<PathBuf> {
+    invariant_store_path()
+}
+
+pub fn reload_discovered_invariants_from_disk() {
+    if let Ok(mut state) = invariant_discovery_state().lock() {
+        let threshold = state.threshold;
+        *state = InvariantDiscoveryState {
+            threshold,
+            ..InvariantDiscoveryState::default()
+        };
+        state.load_from_disk();
+    }
+}
+
+pub fn clear_discovered_invariants_store() {
+    if let Some(path) = invariant_store_path() {
+        let _ = fs::remove_file(path);
     }
 }
 
@@ -238,10 +317,12 @@ pub fn observe_failure_fingerprint(
         *entry = entry.saturating_add(1);
         *entry
     };
+    state.save_to_disk();
     if support < state.threshold || state.promoted.contains_key(&invariant) {
         return None;
     }
     state.promoted.insert(invariant, support);
+    state.save_to_disk();
     Some(InvariantPromotion {
         invariant,
         support,
@@ -925,11 +1006,12 @@ pub fn meta_invariant_verifier_sequence_contract(
 #[cfg(test)]
 mod tests {
     use super::{
-        evaluate_constraint_context, meta_invariant_all_results_update_policy,
+        discovered_invariants, evaluate_constraint_context, meta_invariant_all_results_update_policy,
         meta_invariant_classify_verifier_outcome, meta_invariant_tool_selection_correctness,
-        meta_invariant_verifier_sequence_contract, ConstraintAction, ConstraintContext,
-        ConstraintDecision, ConstraintRoute, ConstraintState, MetaInvariantVerifierOutcome,
-        MetaInvariantVerifierSequenceStep,
+        meta_invariant_verifier_sequence_contract, observe_failure_fingerprint,
+        reset_discovered_invariants_for_tests, ConstraintAction, ConstraintContext,
+        ConstraintDecision, ConstraintRoute, ConstraintState, DiscoveredInvariant,
+        FailureFingerprint, MetaInvariantVerifierOutcome, MetaInvariantVerifierSequenceStep,
     };
     use crate::{
         meta_invariant_harness_self_repair_missing_capabilities,
@@ -1930,6 +2012,84 @@ mod tests {
         assert!(
             metrics.terminal_via_workspace_repair > 0,
             "synthetic loop should exercise workspace-repair convergence"
+        );
+    }
+
+    #[test]
+    fn repeated_missing_target_failures_promote_force_plan_invariant() {
+        reset_discovered_invariants_for_tests();
+        let fingerprint = FailureFingerprint::route_rewrite(
+            ConstraintRoute::Observe,
+            ConstraintState {
+                real_path_exists: false,
+                ..ConstraintState::default()
+            },
+        );
+        assert!(observe_failure_fingerprint(fingerprint).is_none());
+        assert!(observe_failure_fingerprint(fingerprint).is_none());
+        let promotion = observe_failure_fingerprint(fingerprint).expect("promotion expected");
+        assert_eq!(
+            promotion.invariant,
+            DiscoveredInvariant::ForcePlanWhenMissingTarget
+        );
+        assert!(
+            discovered_invariants().contains(&DiscoveredInvariant::ForcePlanWhenMissingTarget)
+        );
+    }
+
+    #[test]
+    fn promoted_missing_target_invariant_rewrites_observe_to_plan() {
+        reset_discovered_invariants_for_tests();
+        let fingerprint = FailureFingerprint::route_rewrite(
+            ConstraintRoute::Observe,
+            ConstraintState {
+                real_path_exists: false,
+                ..ConstraintState::default()
+            },
+        );
+        for _ in 0..3 {
+            let _ = observe_failure_fingerprint(fingerprint);
+        }
+        let decision = evaluate_constraint_context(&ConstraintContext {
+            state: ConstraintState {
+                real_path_exists: false,
+                ..ConstraintState::default()
+            },
+            route: Some(ConstraintRoute::Observe),
+            action: None,
+            deterministic_route: None,
+        });
+        assert_eq!(
+            decision,
+            ConstraintDecision::RewriteRoute(
+                ConstraintRoute::Plan,
+                "discovered_invariant_missing_target: repeated missing-target failures require planning before other routes",
+            )
+        );
+    }
+
+    #[test]
+    fn repeated_no_actionable_plan_failures_promote_observe_refresh_invariant() {
+        reset_discovered_invariants_for_tests();
+        let fingerprint = FailureFingerprint::invalid_plan_batch(
+            Some(ConstraintRoute::Plan),
+            ConstraintState {
+                semantic_path_exists: true,
+                semantic_cargo_project: true,
+                real_path_exists: true,
+                real_cargo_project: true,
+                actionable_failure: false,
+                recent_no_semantic_progress: true,
+                failure_class_no_actionable: true,
+                ..ConstraintState::default()
+            },
+        );
+        assert!(observe_failure_fingerprint(fingerprint).is_none());
+        assert!(observe_failure_fingerprint(fingerprint).is_none());
+        let promotion = observe_failure_fingerprint(fingerprint).expect("promotion expected");
+        assert_eq!(
+            promotion.invariant,
+            DiscoveredInvariant::ForceObserveWhenNoActionableFailure
         );
     }
 

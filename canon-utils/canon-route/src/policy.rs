@@ -228,6 +228,7 @@ impl RoutePolicyRule {
             Self::CycleCapToPlan => "cycle cap reached but actionable failure remains; forcing plan",
             Self::CycleCapToObserve => "cycle cap reached without terminal success; forcing observe",
         }
+    }
 
     pub fn gate_rule(self) -> &'static str {
         match self {
@@ -402,8 +403,6 @@ fn route_choice_contradicts_objective(ctx: &RouteContext, lane: RouteKind) -> bo
             || ctx.objective_state().misalignment_pressure_score > 0
             || (ctx.objective_trend_state.repeated_stall_count > 0
                 && ctx.objective_trend_state.current_no_progress_streak > 0))
-}
-
 }
 
 enum RouteProposal {
@@ -810,22 +809,9 @@ pub fn evaluate_route_failure(ctx: &RouteContext) -> RouteFailureEvaluation {
 }
 
 pub fn evaluate_route_emit_effects(decision: &RouteDecision) -> RouteEmitEffectsEvaluation {
-    return RouteEmitEffectsEvaluation {
-        clear_pending_request: false,
-        clear_pending_prompt: false,
-        set_halted: false,
-        rules: Vec::new(),
-    };
     let mut rules = Vec::new();
 
     // NOTE: emit effects evaluation should not mutate decision or apply policy rules
-        return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
-    }
-
-    // NOTE: emit effects evaluation should not mutate decision or apply policy rules
-
-    
-
     let mut clear_pending_request = false;
     let mut clear_pending_prompt = false;
     let mut set_halted = false;
@@ -846,6 +832,7 @@ pub fn evaluate_route_emit_effects(decision: &RouteDecision) -> RouteEmitEffects
         set_halted,
         rules,
     }
+}
 
 pub fn evaluate_route_recovery(pending_required_successor: Option<&str>) -> RouteRecoveryEvaluation {
     match pending_required_successor {
