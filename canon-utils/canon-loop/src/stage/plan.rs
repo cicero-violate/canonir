@@ -7,8 +7,8 @@ use canon_invariant::{
     decision_trace_payload, meta_invariant_action_must_declare_verifier,
     meta_invariant_all_failures_typed, meta_invariant_any_action_cites_failure,
     meta_invariant_expected_verifier, meta_invariant_has_actionable_failure,
-    meta_invariant_is_mutating_action, observe_failure_fingerprint, ConstraintRoute,
-    ConstraintState, FailureFingerprint,
+    meta_invariant_is_mutating_action, observe_failure_fingerprint, drain_persisted_store_events,
+    ConstraintRoute, ConstraintState, FailureFingerprint, PersistedInvariantStoreEventKind,
 };
 use canon_semantic_state::{
     derive_self_development_objective_state, primary_development_objective_kind,
@@ -454,6 +454,25 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
                 feature: promotion.invariant.feature_name().to_string(),
                 confidence: 1.0,
                 support: promotion.support as u64,
+            }));
+        }
+        for persisted in drain_persisted_store_events() {
+            events.push(RuntimeEvent::Debug(canon_event::DebugEvent {
+                source: "invariant_store".to_string(),
+                kind: match persisted.kind {
+                    PersistedInvariantStoreEventKind::Loaded => {
+                        "persisted_invariants_loaded".to_string()
+                    }
+                    PersistedInvariantStoreEventKind::Updated => {
+                        "persisted_invariants_updated".to_string()
+                    }
+                },
+                payload: serde_json::json!({
+                    "path": persisted.path,
+                    "support_entries": persisted.support_entries,
+                    "promoted_entries": persisted.promoted_entries,
+                    "reason": persisted.reason,
+                }),
             }));
         }
         events.extend([

@@ -1,8 +1,9 @@
 use canon_decision::RouteKind;
 use canon_event::{new_error_occurred, CapabilityResult, Code, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, LlmCall, RouteSelected, RuntimeEvent, ToolBatchSettled};
 use canon_invariant::{
-    decision_trace_payload, invariant_violation_delta, invariant_violation_state,
-    meta_invariant_verifier_sequence_contract, MetaInvariantVerifierSequenceStep,
+    decision_trace_payload, drain_persisted_store_events, invariant_violation_delta,
+    invariant_violation_state, meta_invariant_verifier_sequence_contract,
+    MetaInvariantVerifierSequenceStep, PersistedInvariantStoreEventKind,
 };
 use canon_judgment::GuardConfig;
 use canon_proc_macros::must_emit;
@@ -274,6 +275,37 @@ impl RouteExecutor {
                 prompt_base_id: None,
                 prev_prompt_id: None,
             }), vec![tid], file!(), line!());
+        }
+    }
+
+    fn emit_persisted_invariant_store_events(&self) {
+        let Some(emitter) = self.emitter.as_ref() else {
+            return;
+        };
+        let parents: Vec<_> = self.current_trigger.iter().cloned().collect();
+        for event in drain_persisted_store_events() {
+            emitter.emit_child(
+                RuntimeEvent::Debug(canon_event::DebugEvent {
+                    source: "invariant_store".to_string(),
+                    kind: match event.kind {
+                        PersistedInvariantStoreEventKind::Loaded => {
+                            "persisted_invariants_loaded".to_string()
+                        }
+                        PersistedInvariantStoreEventKind::Updated => {
+                            "persisted_invariants_updated".to_string()
+                        }
+                    },
+                    payload: serde_json::json!({
+                        "path": event.path,
+                        "support_entries": event.support_entries,
+                        "promoted_entries": event.promoted_entries,
+                        "reason": event.reason,
+                    }),
+                }),
+                parents.clone(),
+                file!(),
+                line!(),
+            );
         }
     }
 
@@ -915,6 +947,7 @@ impl RouteExecutor {
             },
             &mut decision,
         );
+        self.emit_persisted_invariant_store_events();
         if rules.contains(&RoutePolicyRule::ForcePlanOnObjectiveContradiction) {
             let tid = self.current_trigger.clone().expect("emit_decision called without current_trigger set");
             emitter.emit_child(

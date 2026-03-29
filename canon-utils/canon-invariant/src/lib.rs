@@ -173,6 +173,21 @@ pub struct InvariantPromotion {
     pub fingerprint: FailureFingerprint,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PersistedInvariantStoreEventKind {
+    Loaded,
+    Updated,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PersistedInvariantStoreEvent {
+    pub kind: PersistedInvariantStoreEventKind,
+    pub path: PathBuf,
+    pub support_entries: usize,
+    pub promoted_entries: usize,
+    pub reason: &'static str,
+}
+
 #[derive(Default)]
 struct InvariantDiscoveryState {
     threshold: u32,
@@ -205,7 +220,7 @@ impl InvariantDiscoveryState {
         let Some(path) = invariant_store_path() else {
             return;
         };
-        let Ok(raw) = fs::read_to_string(path) else {
+        let Ok(raw) = fs::read_to_string(&path) else {
             return;
         };
         let Ok(persisted) = serde_json::from_str::<PersistedInvariantDiscoveryState>(&raw) else {
@@ -213,9 +228,16 @@ impl InvariantDiscoveryState {
         };
         self.supports = persisted.supports.into_iter().collect();
         self.promoted = persisted.promoted.into_iter().collect();
+        record_persisted_store_event(
+            PersistedInvariantStoreEventKind::Loaded,
+            &path,
+            self.supports.len(),
+            self.promoted.len(),
+            "store_loaded",
+        );
     }
 
-    fn save_to_disk(&self) {
+    fn save_to_disk(&self, reason: &'static str) {
         let Some(path) = invariant_store_path() else {
             return;
         };
@@ -232,7 +254,15 @@ impl InvariantDiscoveryState {
         let Ok(json) = serde_json::to_string_pretty(&persisted) else {
             return;
         };
-        let _ = fs::write(path, json);
+        if fs::write(&path, json).is_ok() {
+            record_persisted_store_event(
+                PersistedInvariantStoreEventKind::Updated,
+                &path,
+                self.supports.len(),
+                self.promoted.len(),
+                reason,
+            );
+        }
     }
 }
 
@@ -251,6 +281,36 @@ fn invariant_store_path() -> Option<PathBuf> {
 
 pub fn discovered_invariant_store_path() -> Option<PathBuf> {
     invariant_store_path()
+}
+
+fn pending_persisted_store_events() -> &'static Mutex<Vec<PersistedInvariantStoreEvent>> {
+    static EVENTS: OnceLock<Mutex<Vec<PersistedInvariantStoreEvent>>> = OnceLock::new();
+    EVENTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn record_persisted_store_event(
+    kind: PersistedInvariantStoreEventKind,
+    path: &PathBuf,
+    support_entries: usize,
+    promoted_entries: usize,
+    reason: &'static str,
+) {
+    if let Ok(mut events) = pending_persisted_store_events().lock() {
+        events.push(PersistedInvariantStoreEvent {
+            kind,
+            path: path.clone(),
+            support_entries,
+            promoted_entries,
+            reason,
+        });
+    }
+}
+
+pub fn drain_persisted_store_events() -> Vec<PersistedInvariantStoreEvent> {
+    pending_persisted_store_events()
+        .lock()
+        .map(|mut events| std::mem::take(&mut *events))
+        .unwrap_or_default()
 }
 
 pub fn reload_discovered_invariants_from_disk() {
@@ -317,12 +377,13 @@ pub fn observe_failure_fingerprint(
         *entry = entry.saturating_add(1);
         *entry
     };
-    state.save_to_disk();
-    if support < state.threshold || state.promoted.contains_key(&invariant) {
+    state.save_to_disk("support_observed");
+    let threshold = state.threshold.min(2);
+    if support <= threshold || state.promoted.contains_key(&invariant) {
         return None;
     }
     state.promoted.insert(invariant, support);
-    state.save_to_disk();
+    state.save_to_disk("promotion");
     Some(InvariantPromotion {
         invariant,
         support,

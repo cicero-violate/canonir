@@ -45,7 +45,8 @@ pub fn shutdown_llm_worker() {
 fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
     let (work_tx, work_rx) = std::sync::mpsc::channel::<LlmWork>();
 
-    let ws_emitter: Arc<OnceLock<EventEmitterHandle>> = Arc::new(OnceLock::new());
+    let ws_emitter: Arc<OnceLock<EventEmitterHandle>> =
+        Arc::new(OnceLock::new());
     let ws_emitter_thread = Arc::clone(&ws_emitter);
 
     std::thread::Builder::new()

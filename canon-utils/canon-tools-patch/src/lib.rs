@@ -94,9 +94,9 @@ fn affected_paths_from_hunks(hunks: &[Hunk]) -> Result<AffectedPaths, ApplyPatch
 }
 
 fn run_external_apply_patch(patch: &str, cwd: &Path) -> Result<(), ApplyPatchError> {
-    let mut child = Command::new(APPLY_PATCH_BIN)
+    let child = Command::new(APPLY_PATCH_BIN)
+        .arg(patch)
         .current_dir(cwd)
-        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -104,17 +104,6 @@ fn run_external_apply_patch(patch: &str, cwd: &Path) -> Result<(), ApplyPatchErr
             context: format!("failed to spawn {}", APPLY_PATCH_BIN),
             source,
         }))?;
-
-    {
-        use std::io::Write;
-        let stdin = child.stdin.as_mut().ok_or_else(|| {
-            ApplyPatchError::ComputeReplacements(format!("failed to open stdin for {}", APPLY_PATCH_BIN))
-        })?;
-        stdin
-            .write_all(patch.as_bytes())
-            .with_context(|| format!("write patch to {}", APPLY_PATCH_BIN))
-            .map_err(to_io)?;
-    }
 
     let output = child
         .wait_with_output()

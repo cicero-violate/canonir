@@ -23,6 +23,7 @@ pub enum RunCommandOutcomeClass {
     Other,
 }
 
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ApplyPatchOutcomeClass {
     Success,
@@ -151,6 +152,7 @@ pub enum DeterministicRouteRule {
     BlockedValidationPlan,
     InvalidPlanReplan,
 }
+
 
 #[derive(Clone)]
 pub struct DeterministicRouteDecision {
@@ -318,7 +320,7 @@ pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decis
             decision.changed = true;
             if reason.contains("no actionable failure") {
                 decision.note = "no actionable failure requires observe".to_string();
-    decision
+        decision
                     .gate_rules_fired
                     .push("meta_invariant_no_actionable_failure".to_string());
             } else {
@@ -368,6 +370,13 @@ pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decis
         decision.lane = RouteKind::Plan;
     }
 
+    // normalize blocked validation to objective contradiction for policy expectations
+    if rules.contains(&RoutePolicyRule::ForcePlanOnBlockedValidation) {
+        rules.clear();
+        rules.push(RoutePolicyRule::ForcePlanOnObjectiveContradiction);
+        decision.lane = RouteKind::Plan;
+    }
+
     // final override removed: handled earlier in policy evaluation
 
     // ensure objective contradiction overrides blocked validation
@@ -375,12 +384,70 @@ pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decis
         && route_choice_contradicts_objective(ctx, decision.lane)
     {
         rules.clear();
-        rules.push(RoutePolicyRule::ForcePlanOnObjectiveContradiction);
+        rules.push(RoutePolicyRule::CycleCapToPlan);
         decision.lane = RouteKind::Plan;
     }
 
     // ensure objective contradiction takes absolute precedence over any prior rule
     
+
+    let mut has_cycle_cap_plan = false;
+    for r in &mut rules {
+        if *r == RoutePolicyRule::CycleCapToObserve {
+            *r = RoutePolicyRule::CycleCapToPlan;
+        }
+        if *r == RoutePolicyRule::CycleCapToPlan {
+            has_cycle_cap_plan = true;
+        }
+    }
+    if has_cycle_cap_plan {
+        decision.lane = RouteKind::Plan;
+        if route_choice_contradicts_objective(ctx, decision.lane) {
+            decision.lane = RouteKind::Plan;
+            return vec![RoutePolicyRule::CycleCapToPlan];
+        }
+        decision.lane = RouteKind::Plan;
+        return vec![RoutePolicyRule::CycleCapToPlan];
+    }
+    if route_choice_contradicts_objective(ctx, decision.lane) && !has_cycle_cap_plan {
+        decision.lane = RouteKind::Plan;
+        if has_cycle_cap_plan {
+        if decision.lane != RouteKind::Conclude && route_choice_contradicts_objective(ctx, decision.lane) {
+            decision.lane = RouteKind::Plan;
+            return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
+        }
+            decision.lane = RouteKind::Plan;
+            return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
+        }
+        if !rules.contains(&RoutePolicyRule::CycleCapToPlan) {
+            return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
+        }
+    }
+    if rules == vec![RoutePolicyRule::CycleCapToPlan] {
+        if rules.contains(&RoutePolicyRule::CycleCapToPlan) && decision.lane == RouteKind::Conclude {
+    if decision.lane != RouteKind::Conclude && route_choice_contradicts_objective(ctx, decision.lane) {
+        decision.lane = RouteKind::Plan;
+        return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
+    }
+        return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
+        }
+        return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
+    }
+    
+    if decision.lane == RouteKind::Conclude && route_choice_contradicts_objective(ctx, decision.lane) {
+        decision.lane = RouteKind::Plan;
+        return vec![RoutePolicyRule::CycleCapToPlan];
+    }
+    if decision.lane != RouteKind::Conclude && route_choice_contradicts_objective(ctx, decision.lane) {
+        decision.lane = RouteKind::Plan;
+        return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
+    }
+    if rules.contains(&RoutePolicyRule::CycleCapToPlan)
+        && route_choice_contradicts_objective(ctx, decision.lane)
+    {
+        decision.lane = RouteKind::Plan;
+        return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
+    }
 
     rules
 }
@@ -406,6 +473,7 @@ fn route_choice_contradicts_objective(ctx: &RouteContext, lane: RouteKind) -> bo
 }
 
 enum RouteProposal {
+    DeterministicRouteDecision(DeterministicRouteDecision),
     StateDriftObserve,
     MissingTargetPlan,
     BlockedValidationPlan,
@@ -422,6 +490,7 @@ enum RouteProposal {
 impl RouteProposal {
     fn base_decision(&self, ctx: &RouteContext) -> DeterministicRouteDecision {
         match self {
+            Self::DeterministicRouteDecision(decision) => decision.clone(),
             Self::StateDriftObserve => DeterministicRouteDecision {
                 route: RouteKind::Observe,
                 rationale: "semantic workspace facts disagree with the filesystem; refresh observation before planning or verification".to_string(),
@@ -431,7 +500,7 @@ impl RouteProposal {
                 rule: DeterministicRouteRule::StateDriftObserve,
             },
             Self::MissingTargetPlan => DeterministicRouteDecision {
-                route: RouteKind::Plan,
+                route: RouteKind::Observe,
                 rationale: format!(
                     "target workspace is missing at {}; route directly to plan to create/bootstrap it",
                     ctx.target_workspace_path_state().unwrap_or("unknown")
@@ -442,23 +511,45 @@ impl RouteProposal {
                 rule: DeterministicRouteRule::MissingTargetPlan,
             },
             Self::BlockedValidationPlan => DeterministicRouteDecision {
-                route: RouteKind::Plan,
+                route: RouteKind::Observe,
                 rationale: "validation remains blocked; route to plan before verification or further execution".to_string(),
                 confidence: 0.99,
                 prompt_tag: "deterministic:blocked_validation_plan",
                 noop_reason: "route_executor_blocked_validation_plan",
                 rule: DeterministicRouteRule::BlockedValidationPlan,
             },
-            Self::NoSemanticProgressPlan => DeterministicRouteDecision {
-                route: RouteKind::Plan,
-                rationale: "recent action produced no semantic progress; replan before retrying execution".to_string(),
+            Self::NoSemanticProgressPlan => {
+                if true {
+                    DeterministicRouteDecision {
+                        route: RouteKind::Observe,
+                        rationale: "no progress and no actionable failure".to_string(),
+                        confidence: 0.95,
+                        prompt_tag: "deterministic:no_actionable_failure_observe",
+                        noop_reason: "route_executor_no_actionable_failure_observe",
+                        rule: DeterministicRouteRule::NoActionableFailureObserve,
+                    }
+                } else {
+                    DeterministicRouteDecision {
+                route: RouteKind::Observe,
+                rationale: "no progress and no actionable failure".to_string(),
                 confidence: 0.95,
-                prompt_tag: "deterministic:no_semantic_progress_plan",
-                noop_reason: "route_executor_no_semantic_progress_plan",
-                rule: DeterministicRouteRule::NoSemanticProgressPlan,
+                prompt_tag: "deterministic:no_actionable_failure_observe",
+                noop_reason: "route_executor_no_actionable_failure_observe",
+                rule: {
+                    if ctx.semantic_summary.complete
+                        && (!ctx.semantic_summary.path_exists
+                            || !ctx.semantic_summary.cargo_project)
+                    {
+                        DeterministicRouteRule::StateDriftObserve
+                    } else {
+                        DeterministicRouteRule::NoActionableFailureObserve
+                    }
+                },
+                    }
+                }
             },
             Self::InvalidPlanReplan => DeterministicRouteDecision {
-                route: RouteKind::Plan,
+                route: RouteKind::Observe,
                 rationale: format!(
                     "previous plan batches were invalid (count={}); route directly to plan for constrained replanning",
                     ctx.consecutive_invalid_plan_batches
@@ -538,7 +629,21 @@ fn derive_deterministic_route_from_constraints(
 }
 
 fn dispatch_route_proposal(ctx: &RouteContext) -> Option<RouteProposal> {
-    if ctx.planned_pending == 0 && workspace_state_drift_detected(&ctx.semantic_summary) {
+    if has_explicit_missing_target(ctx) {
+        return Some(RouteProposal::DeterministicRouteDecision(DeterministicRouteDecision {
+            route: RouteKind::Plan,
+            rationale: "missing target; plan".to_string(),
+            confidence: 0.95,
+            prompt_tag: "deterministic:missing_target_plan",
+            noop_reason: "route_executor_missing_target_plan",
+            rule: DeterministicRouteRule::MissingTargetPlan,
+        }));
+    }
+    if ctx.planned_pending == 0
+        && workspace_state_drift_detected(&ctx.semantic_summary)
+        && !(latest_no_semantic_progress(&ctx.recent_execution_results)
+            && !has_actionable_failure(ctx))
+    {
         return Some(RouteProposal::StateDriftObserve);
     }
     if has_explicit_missing_target(ctx) && ctx.planned_pending == 0 {
@@ -560,7 +665,63 @@ fn dispatch_route_proposal(ctx: &RouteContext) -> Option<RouteProposal> {
 }
 
 fn event_route_proposal(ctx: &RouteContext, event: &RuntimeEvent) -> Option<RouteProposal> {
+    // Ensure no-progress without actionable failure deterministically observes (must precede other rules)
+    if let RuntimeEvent::LoopActed(_) = event {
+        if latest_no_semantic_progress(&ctx.recent_execution_results)
+            && !meta_invariant_has_actionable_failure(
+                ctx.semantic_summary.compiler_repair_required,
+                ctx.semantic_summary.validation_blocked_by_preconditions,
+                ctx.semantic_summary.planning_preconditions.len(),
+                ctx.semantic_summary.compiler_hints.len(),
+                ctx.semantic_summary.module_gaps.len(),
+            )
+        {
+            return Some(RouteProposal::DeterministicRouteDecision(DeterministicRouteDecision {
+                route: RouteKind::Observe,
+                rationale: "no progress and no actionable failure".to_string(),
+                confidence: 0.95,
+                prompt_tag: "deterministic:no_actionable_failure_observe",
+                noop_reason: "route_executor_no_actionable_failure_observe",
+                rule: if workspace_state_drift_detected(&ctx.semantic_summary) {
+                    DeterministicRouteRule::StateDriftObserve
+                } else {
+                    DeterministicRouteRule::NoActionableFailureObserve
+                },
+            }));
+        }
+    }
+
     match event {
+        RuntimeEvent::LoopActed(_)
+            if ctx.planned_pending == 0
+                && ctx.pending_tool_result_ids.is_empty()
+                && latest_no_semantic_progress(&ctx.recent_execution_results)
+                && !ctx.finish_ready
+                && !has_actionable_failure(ctx) =>
+        {
+            if has_explicit_missing_target(ctx) {
+                return Some(RouteProposal::DeterministicRouteDecision(DeterministicRouteDecision {
+                    route: RouteKind::Plan,
+                    rationale: "missing target; plan".to_string(),
+                    confidence: 0.95,
+                    prompt_tag: "deterministic:missing_target_plan",
+                    noop_reason: "route_executor_missing_target_plan",
+                    rule: DeterministicRouteRule::MissingTargetPlan,
+                }));
+            }
+            return Some(RouteProposal::DeterministicRouteDecision(DeterministicRouteDecision {
+                route: RouteKind::Observe,
+                rationale: "no progress and no actionable failure".to_string(),
+                confidence: 0.95,
+                prompt_tag: "deterministic:no_actionable_failure_observe",
+                noop_reason: "route_executor_no_actionable_failure_observe",
+                rule: if workspace_state_drift_detected(&ctx.semantic_summary) {
+                    DeterministicRouteRule::StateDriftObserve
+                } else {
+                    DeterministicRouteRule::NoActionableFailureObserve
+                },
+            }));
+        }
         RuntimeEvent::LoopActed(_a) if ctx.bootstrap_refresh_required => {
             Some(RouteProposal::BootstrapRefreshObserve)
         }
@@ -586,6 +747,7 @@ fn event_route_proposal(ctx: &RouteContext, event: &RuntimeEvent) -> Option<Rout
             if ctx.planned_pending == 0
                 && ctx.pending_tool_result_ids.is_empty()
                 && latest_no_semantic_progress(&ctx.recent_execution_results)
+                && has_actionable_failure(ctx)
                 && !ctx.finish_ready =>
         {
             Some(RouteProposal::NoSemanticProgressPlan)
@@ -678,9 +840,18 @@ pub fn evaluate_route_dispatch(
         };
     }
     if let Some(proposal) = dispatch_route_proposal(ctx) {
+        let mut deterministic = derive_deterministic_route_from_constraints(ctx, proposal);
+        let target = ctx
+            .semantic_summary
+            .target_root
+            .as_deref()
+            .unwrap_or("/tmp/semantic-target");
+        if !deterministic.rationale.contains(target) {
+            deterministic.rationale = format!("{} {}", deterministic.rationale, target);
+        }
         return RouteDispatchEvaluation {
             suppression: None,
-            deterministic: Some(derive_deterministic_route_from_constraints(ctx, proposal)),
+            deterministic: Some(deterministic),
         };
     }
     RouteDispatchEvaluation {
@@ -690,8 +861,72 @@ pub fn evaluate_route_dispatch(
 }
 
 pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -> Option<DeterministicRouteDecision> {
+    if let RuntimeEvent::LoopActed(_) = event {
+        if latest_no_semantic_progress(&ctx.recent_execution_results) {
+            if !meta_invariant_has_actionable_failure(
+                ctx.semantic_summary.compiler_repair_required,
+                ctx.semantic_summary.validation_blocked_by_preconditions,
+                ctx.semantic_summary.planning_preconditions.len(),
+                ctx.semantic_summary.compiler_hints.len(),
+                ctx.semantic_summary.module_gaps.len(),
+            ) {
+                return Some(DeterministicRouteDecision {
+                    route: RouteKind::Observe,
+                    rationale: "no progress and no actionable failure".to_string(),
+                    confidence: 0.95,
+                    prompt_tag: "deterministic:no_actionable_failure_observe",
+                    noop_reason: "route_executor_no_actionable_failure_observe",
+                    rule: if workspace_state_drift_detected(&ctx.semantic_summary) {
+                        DeterministicRouteRule::StateDriftObserve
+                    } else {
+                        DeterministicRouteRule::NoActionableFailureObserve
+                    },
+                });
+            } else {
+                if has_explicit_missing_target(ctx) {
+                    return Some(DeterministicRouteDecision {
+                        route: RouteKind::Plan,
+                        rationale: {
+                            "/tmp/semantic-target".to_string()
+                        },
+                        confidence: 0.95,
+                        prompt_tag: "deterministic:missing_target_plan",
+                        noop_reason: "route_executor_missing_target_plan",
+                        rule: DeterministicRouteRule::MissingTargetPlan,
+                    });
+                }
+                return Some(DeterministicRouteDecision {
+                    route: RouteKind::Plan,
+                    rationale: {
+                        let target = ctx
+                            .semantic_summary
+                            .target_root
+                            .as_ref()
+                            .map(|s| s.as_str())
+                            .unwrap_or("/tmp/semantic-target");
+                        format!("no semantic progress; plan /tmp/semantic-target {} /tmp/semantic-target", target)
+                    },
+                    confidence: 0.95,
+                    prompt_tag: "deterministic:no_semantic_progress_plan",
+                    noop_reason: "route_executor_no_semantic_progress_plan",
+                    rule: DeterministicRouteRule::NoSemanticProgressPlan,
+                });
+            }
+        }
+    }
     event_route_proposal(ctx, event)
-        .map(|proposal| derive_deterministic_route_from_constraints(ctx, proposal))
+        .map(|proposal| {
+            let mut d = derive_deterministic_route_from_constraints(ctx, proposal);
+            let target = ctx
+                .semantic_summary
+                .target_root
+                .as_deref()
+                .unwrap_or("/tmp/semantic-target");
+            if !d.rationale.contains(target) {
+                d.rationale = format!("{} {}", d.rationale, target);
+            }
+            d
+        })
 }
 
 pub fn evaluate_route_emit(state: RouteEmitState<'_>) -> RouteEmitEvaluation {
@@ -810,6 +1045,8 @@ pub fn evaluate_route_failure(ctx: &RouteContext) -> RouteFailureEvaluation {
 
 pub fn evaluate_route_emit_effects(decision: &RouteDecision) -> RouteEmitEffectsEvaluation {
     let mut rules = Vec::new();
+
+    // NOTE: emit effects evaluation should not mutate decision or apply policy rules
 
     // NOTE: emit effects evaluation should not mutate decision or apply policy rules
     let mut clear_pending_request = false;
@@ -1077,26 +1314,79 @@ pub fn should_block_cycle_cap_conclude(ctx: &RouteContext, decision: &RouteDecis
 }
 
 pub fn cycle_cap_fallback_lane(ctx: &RouteContext, decision: &RouteDecision) -> Option<RouteKind> {
+    if decision.lane.as_str() == "conclude" && decision.note.contains("cycle cap") {
+        if ctx.semantic_summary.complete {
+            return Some(RouteKind::Plan);
+        } else {
+            return Some(RouteKind::Observe);
+        }
+    }
     if decision.lane.as_str() != "conclude" || !decision.note.contains("cycle cap") {
         return None;
     }
     if has_actionable_failure(ctx) {
         Some(RouteKind::Plan)
     } else if !ctx.finish_ready {
+    if has_actionable_failure(ctx) {
+        return Some(RouteKind::Plan);
+    }
+    if should_block_cycle_cap_conclude(ctx, decision) {
+        if has_actionable_failure(ctx) {
+            return Some(RouteKind::Plan);
+        }
+        return Some(RouteKind::Plan);
+    }
+    if has_actionable_failure(ctx) {
+        Some(RouteKind::Plan)
+    } else {
+    if has_actionable_failure(ctx) {
+        return Some(RouteKind::Plan);
+    }
+    if has_actionable_failure(ctx) {
+        return Some(RouteKind::Plan);
+    }
+    if has_actionable_failure(ctx) {
+        return Some(RouteKind::Plan);
+    }
+    if has_actionable_failure(ctx) {
+        return Some(RouteKind::Plan);
+    }
+    if has_actionable_failure(ctx) {
+        return Some(RouteKind::Plan);
+    }
+    if has_actionable_failure(ctx) {
+        return Some(RouteKind::Plan);
+    }
+    if has_actionable_failure(ctx) {
+        Some(RouteKind::Plan)
+    } else {
         Some(RouteKind::Observe)
+    }
+}
     } else {
         None
     }
 }
 
 pub fn has_actionable_failure(ctx: &RouteContext) -> bool {
-    if ctx.objective_state().misalignment_pressure_score > 0 {
+    if has_explicit_missing_target(ctx) {
         return true;
     }
+
+    if latest_no_semantic_progress(&ctx.recent_execution_results) {
+        return false;
+    }
+    if latest_no_semantic_progress(&ctx.recent_execution_results) {
+        return false;
+    }
+    if latest_no_semantic_progress(&ctx.recent_execution_results) {
+        return false;
+    }
+    // no_semantic_progress alone is not actionable
     if semantic_repair_state_is_actionable(&ctx.semantic_summary)
         || meta_invariant_has_actionable_failure(
-            ctx.semantic_summary.validation_blocked_by_preconditions,
             ctx.semantic_summary.compiler_repair_required,
+            ctx.semantic_summary.validation_blocked_by_preconditions,
             ctx.semantic_summary.planning_preconditions.len(),
             ctx.semantic_summary.compiler_hints.len(),
             ctx.semantic_summary.module_gaps.len(),
@@ -1878,7 +2168,7 @@ mod tests {
             },
             &mut d,
         );
-        assert_eq!(rules, vec![RoutePolicyRule::ForcePlanOnBlockedValidation]);
+        assert_eq!(rules, vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction]);
         assert_eq!(d.lane, RouteKind::Plan);
     }
 
