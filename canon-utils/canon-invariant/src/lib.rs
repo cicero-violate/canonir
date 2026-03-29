@@ -385,10 +385,11 @@ pub fn observe_failure_fingerprint(
     };
     state.save_to_disk("support_observed");
     let threshold = match invariant {
-        DiscoveredInvariant::ForcePlanWhenMissingTarget => 2,
+        DiscoveredInvariant::ForcePlanWhenMissingTarget => 3,
+        DiscoveredInvariant::ForceObserveWhenNoActionableFailure => 3,
         _ => state.threshold,
     };
-    if support < threshold || state.promoted.contains_key(&invariant) {
+    if support < threshold {
         return None;
     }
     state.promoted.insert(invariant, support);
@@ -413,16 +414,17 @@ pub fn reset_discovered_invariants_for_tests() {
     }
 }
 
+#[allow(dead_code)]
 fn evaluate_discovered_invariants(ctx: &ConstraintContext) -> Option<ConstraintDecision> {
-    // Do not apply discovered invariants during action validation (no route context)
-    if ctx.route.is_none() {
+    // Only apply discovered invariants when actionable failure is present
+    if !ctx.state.actionable_failure {
         return None;
     }
     for invariant in discovered_invariants() {
         match invariant {
             DiscoveredInvariant::ForcePlanWhenMissingTarget => {
-                if ctx.route == Some(ConstraintRoute::Observe)
-                    && !ctx.state.real_path_exists
+                if !ctx.state.real_path_exists
+                    && ctx.route != Some(ConstraintRoute::Plan)
                 {
                     return Some(ConstraintDecision::RewriteRoute(
                         ConstraintRoute::Plan,
@@ -771,10 +773,7 @@ pub fn meta_invariant_tool_selection_correctness(
 }
 
 pub fn evaluate_constraint_context(ctx: &ConstraintContext) -> ConstraintDecision {
-    // Apply discovered invariants first so they take precedence over meta invariants.
-    if let Some(decision) = evaluate_discovered_invariants(ctx) {
-        return decision;
-    }
+    // Apply meta invariants first; discovered invariants should not override bootstrap requirement
     if let (Some(expected), Some(actual)) = (ctx.deterministic_route, ctx.route) {
         if expected != actual {
             return ConstraintDecision::Forbid(
@@ -790,14 +789,18 @@ pub fn evaluate_constraint_context(ctx: &ConstraintContext) -> ConstraintDecisio
                 "meta_invariant_state_reality_authority: semantic state disagrees with reality; refresh observation first",
             );
         }
-        if !ctx.state.real_path_exists
-            && route != ConstraintRoute::Plan
-            && !discovered_invariants().contains(&DiscoveredInvariant::ForcePlanWhenMissingTarget)
-        {
-            return ConstraintDecision::RewriteRoute(
-                ConstraintRoute::Plan,
-                "meta_invariant_bootstrap_required: target workspace is missing; route must plan bootstrap first",
-            );
+        if !ctx.state.real_path_exists && route != ConstraintRoute::Plan {
+            if !discovered_invariants().contains(&DiscoveredInvariant::ForcePlanWhenMissingTarget) {
+                return ConstraintDecision::RewriteRoute(
+                    ConstraintRoute::Plan,
+                    "meta_invariant_bootstrap_required: target workspace is missing; route must plan bootstrap first",
+                );
+            } else {
+                return ConstraintDecision::RewriteRoute(
+                    ConstraintRoute::Plan,
+                    "discovered_invariant_missing_target: repeated missing-target failures require planning before other routes",
+                );
+            }
         }
         if route == ConstraintRoute::Plan
             && (ctx.state.failure_class_no_actionable

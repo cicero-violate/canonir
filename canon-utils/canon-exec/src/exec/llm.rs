@@ -8,7 +8,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::env;
 use std::sync::{Arc, OnceLock};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub(crate) struct LlmWork {
     request_id: String,
@@ -31,6 +31,7 @@ pub(crate) struct LlmWork {
 }
 
 static LLM_WORKER_TX: std::sync::RwLock<Option<std::sync::mpsc::Sender<LlmWork>>> = std::sync::RwLock::new(None);
+const HARNESS_FAILFAST_TIMEOUT_SECS: u64 = 12;
 
 pub fn init_llm_worker() {
     let tx = spawn_llm_worker();
@@ -205,21 +206,43 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                         "started_ms": now_ms(),
                     });
                     let _ = std::fs::write(&res_path, serde_json::to_string_pretty(&pending_obj).unwrap_or_default());
-                    let result = runtime.block_on(async {
-                        let call = async {
+                    let (result_tx, result_rx) = std::sync::mpsc::channel();
+                    let bridge_cloned = bridge.clone();
+                    let endpoint_id = endpoint.id.clone();
+                    let endpoint_url = endpoint.url.clone();
+                    let endpoint_stateful = endpoint.stateful;
+                    let endpoint_max_tabs = endpoint.max_tabs;
+                    let tab_cooldown_ms = config.tab_cooldown_ms;
+                    let role_content_cloned = role_content.clone();
+                    let prompt_with_request_id_cloned = prompt_with_request_id.clone();
+                    let tabs_cloned = tabs.clone();
+                    std::thread::spawn(move || {
+                        let thread_runtime = match tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                        {
+                            Ok(rt) => rt,
+                            Err(err) => {
+                                let _ = result_tx.send(Err(anyhow::anyhow!(
+                                    "llm worker request runtime init failed: {err}"
+                                )));
+                                return;
+                            }
+                        };
+                        let result = thread_runtime.block_on(async {
                             if raw {
                                 llm::llm_client_call_agent_raw_with_retry_allow_mismatch(
-                                    &bridge,
-                                    &endpoint.id,
-                                    &endpoint.url,
-                                    endpoint.stateful,
-                                    &prompt_with_request_id,
-                                    &role_content,
+                                    &bridge_cloned,
+                                    &endpoint_id,
+                                    &endpoint_url,
+                                    endpoint_stateful,
+                                    &prompt_with_request_id_cloned,
+                                    &role_content_cloned,
                                     "llm_executor",
                                     None,
-                                    &tabs,
-                                    endpoint.max_tabs,
-                                    config.tab_cooldown_ms,
+                                    &tabs_cloned,
+                                    endpoint_max_tabs,
+                                    tab_cooldown_ms,
                                     retries,
                                     delay,
                                     bust_cache,
@@ -227,29 +250,36 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                 .await
                             } else {
                                 llm::llm_client_call_agent_json_with_retry_allow_mismatch(
-                                    &bridge,
-                                    &endpoint.id,
-                                    &endpoint.url,
-                                    endpoint.stateful,
-                                    &prompt_with_request_id,
-                                    &role_content,
+                                    &bridge_cloned,
+                                    &endpoint_id,
+                                    &endpoint_url,
+                                    endpoint_stateful,
+                                    &prompt_with_request_id_cloned,
+                                    &role_content_cloned,
                                     "llm_executor",
                                     None,
-                                    &tabs,
-                                    endpoint.max_tabs,
-                                    config.tab_cooldown_ms,
+                                    &tabs_cloned,
+                                    endpoint_max_tabs,
+                                    tab_cooldown_ms,
                                     retries,
                                     delay,
                                     bust_cache,
                                 )
                                 .await
                             }
-                        };
-                        match tokio::time::timeout(std::time::Duration::from_secs(config.response_timeout_secs), call).await {
-                            Ok(result) => result,
-                            Err(_) => Err(anyhow::anyhow!("llm call timed out")),
-                        }
+                        });
+                        let _ = result_tx.send(result);
                     });
+                    let worker_timeout = if is_planner_role {
+                        Duration::from_secs(config.response_timeout_secs.min(HARNESS_FAILFAST_TIMEOUT_SECS))
+                    } else {
+                        Duration::from_secs(config.response_timeout_secs)
+                    };
+                    let result = match result_rx.recv_timeout(worker_timeout) {
+                        Ok(result) => result,
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(anyhow::anyhow!("llm call timed out")),
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(anyhow::anyhow!("llm worker request thread disconnected")),
+                    };
 
                     match result {
                         Ok(payload) => {
@@ -293,6 +323,8 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                 "n": call_n,
                                 "request_id": request_id,
                                 "endpoint": endpoint.id,
+                                "status": "failed",
+                                "finalized_ms": finalized_ms,
                                 "error": err.to_string(),
                             });
                             let _ = std::fs::write(&res_path, serde_json::to_string_pretty(&res_obj).unwrap_or_default());

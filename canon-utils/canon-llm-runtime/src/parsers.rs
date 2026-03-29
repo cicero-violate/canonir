@@ -324,6 +324,24 @@ fn classify_calpico_array(arr: &[Value]) -> FrameResult {
             Some(p) => p,
             None => continue,
         };
+        if payload.get("type").and_then(|t| t.as_str()) == Some("calpico-message-update") {
+            let msg = match payload.get("payload").and_then(|p| p.get("message")) {
+                Some(m) => m,
+                None => continue,
+            };
+            let assistant_reaction = msg
+                .get("reactions")
+                .and_then(|r| r.get("assistant"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !assistant_reaction.is_empty() {
+                return FrameResult::Snapshot(format!(
+                    "assistant reaction-only terminal frame: {}",
+                    assistant_reaction
+                ));
+            }
+            continue;
+        }
         if payload.get("type").and_then(|t| t.as_str()) != Some("calpico-message-add") {
             continue;
         }

@@ -56,6 +56,7 @@ const MAX_READ_BYTES: usize = 16 * 1024;
 const MAX_TOOL_SNIPPET: usize = 4 * 1024;
 const AUTO_READ_CONTEXT_BEFORE: usize = 20;
 const AUTO_READ_CONTEXT_AFTER: usize = 40;
+const LOG_PROMPT_PREVIEW_BYTES: usize = 240;
 
 const PLANNER_SYSTEM_INSTRUCTIONS: &str = r#"You are the canon harness repair agent.
 
@@ -315,6 +316,9 @@ fn run_harness_loop(
             }
             Err(err) => {
                 let err_str = err.to_string();
+                if let Some(req_id) = extract_last_request_id(&err_str) {
+                    last_request_id = Some(req_id);
+                }
                 if err_str.starts_with(BAD_RESPONSE_PREFIX) {
                     // LLM responded with emoji/prose instead of JSON.
                     // Inject an explicit correction so the next turn demands valid JSON.
@@ -329,8 +333,8 @@ fn run_harness_loop(
                 } else {
                     let message = format!("planner call failed: {err_str}");
                     logger.log(&format!("step={} planner_failure reason={}", step + 1, message));
-                    last_action_result = Some(message.clone());
-                    *failure_output = message;
+                    *failure_output = message.clone();
+                    last_action_result = None;
                 }
                 continue;
             }
@@ -436,14 +440,17 @@ fn run_harness_loop(
                         *failure_output = result.output.clone();
                         return Ok((false, format!("run_command failed:\n{}", truncate(&result.output, 2000))));
                     }
-                    let verify = verify_after_mutation(workspace, crate_name, test_name)?;
-                    print_verify_status(crate_name, test_name, &verify, logger);
-                    if verify.success {
-                        logger.log("harness repair complete: crate test suite passed");
-                        return Ok((true, String::new()));
+                    if command_requires_verify(cmd) {
+                        let verify = verify_after_mutation(workspace, crate_name, test_name)?;
+                        print_verify_status(crate_name, test_name, &verify, logger);
+                        if verify.success {
+                            logger.log("harness repair complete: crate test suite passed");
+                            return Ok((true, String::new()));
+                        }
+                        *failure_output = verify.output.clone();
+                        return Ok((false, format!("run_command ok; verify failed:\n{}", truncate(&verify.output, 2000))));
                     }
-                    *failure_output = verify.output.clone();
-                    return Ok((false, format!("run_command ok; verify failed:\n{}", truncate(&verify.output, 2000))));
+                    return Ok((false, format!("run_command ok:\n{}", truncate(&result.output, 2000))));
                 }
                 other => {
                     let message = format!("unsupported planner action in minimum harness: {other}");
@@ -640,10 +647,6 @@ fn build_turn_delta(
     last_action_result: Option<&str>,
 ) -> String {
     if let Some(result) = last_action_result {
-        // FIX: suppress planner timeout noise from poisoning next prompt
-        if result.contains("planner call failed") {
-            return "Retry previous step. Emit exactly one action.".to_string();
-        }
         let guidance = build_action_guidance(result);
 
         format!(
@@ -805,7 +808,32 @@ fn hunk_path_string(hunk: &Hunk) -> Result<String, String> {
     }
 }
 
-fn call_planner(
+fn preview_for_log(s: &str, max_bytes: usize) -> String {
+    let mut end = s.len().min(max_bytes);
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = s[..end].replace('\n', "\\n");
+    if s.len() > end {
+        out.push_str("...");
+    }
+    out
+}
+
+fn extract_last_request_id(text: &str) -> Option<String> {
+    let marker = "[last_request_id=";
+    let start = text.find(marker)? + marker.len();
+    let rest = &text[start..];
+    let end = rest.find(']')?;
+    let value = rest[..end].trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn dispatch_planner_request(
     workspace: &Path,
     delta: &str,
     system: Option<&str>,
@@ -814,9 +842,14 @@ fn call_planner(
     context_base_id: &str,
     prev_prompt_id: Option<&str>,
     emitter: &EventEmitterHandle,
-    rx: &Receiver<RuntimeEvent>,
-) -> Result<(Vec<PlannerAction>, String)> {
+) -> Result<String> {
     let request_id = Uuid::new_v4().to_string();
+    eprintln!(
+        "[canon-harness-repair] planner_dispatch request_id={} prev_prompt_id={} delta_preview=\"{}\"",
+        request_id,
+        prev_prompt_id.unwrap_or("<none>"),
+        preview_for_log(delta, LOG_PROMPT_PREVIEW_BYTES),
+    );
     let event = RuntimeEvent::Llm(LlmCall {
         request_id: request_id.clone(),
         prompt: delta.to_string(),
@@ -836,10 +869,44 @@ fn call_planner(
         emitter: emitter.clone(),
         trigger_id: EventId::new("min-harness-root"),
     })?;
+    Ok(request_id)
+}
+
+fn call_planner(
+    workspace: &Path,
+    delta: &str,
+    system: Option<&str>,
+    system_prompt_id: &str,
+    context_base: Option<&str>,
+    context_base_id: &str,
+    prev_prompt_id: Option<&str>,
+    emitter: &EventEmitterHandle,
+    rx: &Receiver<RuntimeEvent>,
+) -> Result<(Vec<PlannerAction>, String)> {
+    let mut chained_prev_prompt_id = prev_prompt_id.map(str::to_string);
+    let mut last_dispatched_request_id: Option<String> = None;
 
     for wait_round in 1..=LLM_MAX_RETRIES {
+        let request_id = dispatch_planner_request(
+            workspace,
+            delta,
+            system,
+            system_prompt_id,
+            context_base,
+            context_base_id,
+            chained_prev_prompt_id.as_deref(),
+            emitter,
+        )?;
+        last_dispatched_request_id = Some(request_id.clone());
+        eprintln!(
+            "[canon-harness-repair] planner_wait request_id={} round={}/{}",
+            request_id,
+            wait_round,
+            LLM_MAX_RETRIES
+        );
+
         match wait_for_llm_response(rx, &request_id) {
-            Ok(actions) => return Ok((actions, request_id)),
+            Ok((actions, completed_request_id)) => return Ok((actions, completed_request_id)),
             Err(err) if err.to_string().starts_with(BAD_RESPONSE_PREFIX) => {
                 return Err(err);
             }
@@ -848,21 +915,34 @@ fn call_planner(
                     && wait_round < LLM_MAX_RETRIES =>
             {
                 eprintln!(
-                    "[canon-harness-repair] planner still waiting after {}s (window {}/{}), not re-dispatching",
+                    "[canon-harness-repair] planner timed out after {}s (window {}/{}), re-dispatching",
                     LLM_TIMEOUT.as_secs(),
                     wait_round,
                     LLM_MAX_RETRIES
                 );
+                chained_prev_prompt_id = Some(request_id);
                 continue;
             }
-            Err(err) => return Err(err),
+            Err(err) => {
+                if let Some(req_id) = last_dispatched_request_id.as_deref() {
+                    return Err(anyhow!("{err} [last_request_id={req_id}]"));
+                }
+                return Err(err);
+            }
         }
     }
 
-    bail!("planner wait windows exhausted without a response")
+    if let Some(req_id) = last_dispatched_request_id.as_deref() {
+        bail!("planner wait windows exhausted without a response [last_request_id={req_id}]")
+    } else {
+        bail!("planner wait windows exhausted without a response")
+    }
 }
 
-fn wait_for_llm_response(rx: &Receiver<RuntimeEvent>, request_id: &str) -> Result<Vec<PlannerAction>> {
+fn wait_for_llm_response(
+    rx: &Receiver<RuntimeEvent>,
+    request_id: &str,
+) -> Result<(Vec<PlannerAction>, String)> {
     loop {
         let event = rx.recv_timeout(LLM_TIMEOUT).context("timed out waiting for planner result")?;
         match event {
@@ -872,12 +952,61 @@ fn wait_for_llm_response(rx: &Receiver<RuntimeEvent>, request_id: &str) -> Resul
                 let CapabilityResult::Llm(result) = done.result else {
                     bail!("planner returned non-LLM capability result")
                 };
-                return parse_planner_actions(&result.response);
+                let actions = parse_planner_actions(&result.response)?;
+                return Ok((actions, done.request_id));
+            }
+            RuntimeEvent::CapabilityCompleted(done) if done.capability == "llm.call" => {
+                let actual_request_id = done.request_id.clone();
+                let CapabilityResult::Llm(result) = done.result else {
+                    eprintln!(
+                        "[canon-harness-repair] planner_unmatched_non_llm expected_request_id={} actual_request_id={}",
+                        request_id,
+                        actual_request_id
+                    );
+                    continue;
+                };
+                match parse_planner_actions(&result.response) {
+                    Ok(actions) => {
+                        eprintln!(
+                            "[canon-harness-repair] planner_salvaged_completed expected_request_id={} actual_request_id={}",
+                            request_id,
+                            actual_request_id
+                        );
+                        return Ok((actions, actual_request_id));
+                    }
+                    Err(err)
+                        if err.to_string() == "bad_response: response only contained request metadata" =>
+                    {
+                        eprintln!(
+                            "[canon-harness-repair] planner_unmatched_metadata expected_request_id={} actual_request_id={}",
+                            request_id,
+                            actual_request_id
+                        );
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "[canon-harness-repair] planner_unmatched_completed_bad_response expected_request_id={} actual_request_id={} error={}",
+                            request_id,
+                            actual_request_id,
+                            err
+                        );
+                    }
+                }
             }
             RuntimeEvent::CapabilityFailed(CapabilityFailed { request_id: failed_request_id, capability, error, .. })
                 if failed_request_id == request_id && capability == "llm.call" =>
             {
                 bail!("planner call failed: {error}");
+            }
+            RuntimeEvent::CapabilityFailed(CapabilityFailed { request_id: failed_request_id, capability, error, .. })
+                if capability == "llm.call" =>
+            {
+                eprintln!(
+                    "[canon-harness-repair] planner_unmatched_failed expected_request_id={} actual_request_id={} error={}",
+                    request_id,
+                    failed_request_id,
+                    error
+                );
             }
             _ => {}
         }
@@ -969,6 +1098,42 @@ fn parse_planner_actions_from_text(text: &str) -> anyhow::Result<Vec<serde_json:
 
     let preview = text.chars().take(120).collect::<String>();
     anyhow::bail!("bad_response: response was not a JSON array. Got: {preview:?}");
+}
+
+fn command_requires_verify(cmd: &str) -> bool {
+    let trimmed = cmd.trim();
+
+    let exploratory_prefixes = [
+        "rg ", "sed ", "awk ", "perl ", "cat ", "head ", "tail ", "ls ", "find ",
+        "bat ", "git diff", "git status", "cargo test ", "cargo check ", "cargo build ",
+        "cargo run ", "pwd", "tree ", "stat ", "wc ", "echo ",
+    ];
+    if exploratory_prefixes.iter().any(|p| trimmed.starts_with(p)) {
+        return false;
+    }
+
+    let mutating_markers = [
+        "apply_patch",
+        "sed -i",
+        "perl -pi",
+        "tee ",
+        ">",
+        ">>",
+        "mv ",
+        "cp ",
+        "touch ",
+        "mkdir ",
+        "rmdir ",
+        "chmod ",
+        "chown ",
+        "truncate ",
+        "xargs rm",
+    ];
+    if mutating_markers.iter().any(|m| trimmed.contains(m)) {
+        return true;
+    }
+
+    false
 }
 
 /// Marker prefix on errors that mean "response arrived but was not a JSON action array".

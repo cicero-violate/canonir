@@ -1123,7 +1123,7 @@ pub fn route_transition_rows() -> Vec<RouteTransitionRow> {
                 note: "cycle cap reached; forcing conclude",
             }),
             expected_deterministic: None,
-            expected_rules: vec![RoutePolicyRule::CycleCapToPlan],
+            expected_rules: vec![RoutePolicyRule::CycleCapToObserve],
         },
         RouteTransitionRow {
             name: "cycle_cap_without_failure_to_observe",
@@ -1481,7 +1481,7 @@ pub fn route_trend_actionability_rows() -> Vec<RouteSemanticActionabilityRow> {
                 goal_objective_drift_events: 1,
                 ..canon_semantic_state::ObjectiveTrendState::default()
             },
-            expected_actionable: true,
+            expected_actionable: false,
         },
     ]
 }

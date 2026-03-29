@@ -861,8 +861,30 @@ pub fn evaluate_route_dispatch(
 }
 
 pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -> Option<DeterministicRouteDecision> {
+    // Module gaps must always force planning regardless of event type
+    if !ctx.semantic_summary.module_gaps.is_empty() {
+        return Some(DeterministicRouteDecision {
+            route: RouteKind::Plan,
+            rationale: "module gaps remain; must plan before verify".to_string(),
+            confidence: 0.95,
+            prompt_tag: "deterministic:module_gaps_plan",
+            noop_reason: "route_executor_module_gaps_require_plan",
+            rule: DeterministicRouteRule::NoSemanticProgressPlan,
+        });
+    }
     if let RuntimeEvent::LoopActed(_) = event {
         if latest_no_semantic_progress(&ctx.recent_execution_results) {
+            // module gaps must force planning even before other branches
+            if !ctx.semantic_summary.module_gaps.is_empty() {
+                return Some(DeterministicRouteDecision {
+                    route: RouteKind::Plan,
+                    rationale: "module gaps remain; must plan before verify".to_string(),
+                    confidence: 0.95,
+                    prompt_tag: "deterministic:module_gaps_plan",
+                    noop_reason: "route_executor_module_gaps_require_plan",
+                    rule: DeterministicRouteRule::NoActionableFailureObserve,
+                });
+            }
             if !meta_invariant_has_actionable_failure(
                 ctx.semantic_summary.compiler_repair_required,
                 ctx.semantic_summary.validation_blocked_by_preconditions,
@@ -1121,7 +1143,7 @@ pub fn evaluate_route_transition(
     let mut rules = Vec::new();
     if deterministic.is_none() {
         if let Some(decision) = decision {
-            let mut has_primary_transition_rule = false;
+            let mut _has_primary_transition_rule = false;
             let cycle_cap_rule = cycle_cap_fallback_lane(ctx, decision).map(|fallback_lane| {
                 if fallback_lane == RouteKind::Plan {
                     RoutePolicyRule::CycleCapToPlan
@@ -1134,15 +1156,19 @@ pub fn evaluate_route_transition(
                 && state.last_control_kind == Some("loop_observed")
             {
                 rules.push(RoutePolicyRule::ForcePlanOnRepeatedObserve);
-                has_primary_transition_rule = true;
+                _has_primary_transition_rule = true;
             }
-            if !has_primary_transition_rule && cycle_cap_rule.is_none() {
-                if let Some(rule) = shared_route_policy_rule(ctx, decision) {
-                    rules.push(rule);
-                }
+            if ctx.semantic_summary.compiler_repair_required && cycle_cap_rule.is_none() {
+                rules.push(RoutePolicyRule::ForcePlanOnObjectiveContradiction);
+                _has_primary_transition_rule = true;
+            }
+            if let Some(rule) = shared_route_policy_rule(ctx, decision) {
+                rules.push(rule);
             }
             if let Some(rule) = cycle_cap_rule {
                 rules.push(rule);
+                // cycle cap must dominate: remove other conflicting rules
+                rules.retain(|r| matches!(r, RoutePolicyRule::CycleCapToPlan | RoutePolicyRule::CycleCapToObserve));
             }
         }
     }
