@@ -1,8 +1,5 @@
 use canon_event::{new_error_occurred, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, RuntimeEvent};
-use canon_exec::{
-    evaluate_execution_policy, ExecutableEvent, ExecutionContext, ExecutionPolicyDecision,
-    ExecutionResult,
-};
+use canon_exec::{evaluate_execution_policy, ExecutableEvent, ExecutionContext, ExecutionPolicyDecision, ExecutionResult};
 use canon_proc_macros::must_emit;
 use std::path::PathBuf;
 
@@ -23,9 +20,13 @@ impl EventConsumer for CapabilityExecutor {
         EventFilter::All
     }
 
-    fn is_synchronous(&self) -> bool { true }
+    fn is_synchronous(&self) -> bool {
+        true
+    }
 
-    fn consumer_name(&self) -> &'static str { "capability_executor" }
+    fn consumer_name(&self) -> &'static str {
+        "capability_executor"
+    }
 
     fn set_emitter(&mut self, emitter: EventEmitterHandle) {
         self.emitter = Some(emitter);
@@ -85,14 +86,12 @@ impl EventConsumer for CapabilityExecutor {
                 Ok(ExecutionResult::Emit(e)) => emitter.emit_child(e, vec![trigger_id.clone()], file!(), line!()),
                 Ok(ExecutionResult::EmitMany(evs)) => evs.into_iter().for_each(|e| emitter.emit_child(e, vec![trigger_id.clone()], file!(), line!())),
                 Ok(ExecutionResult::Deferred) => {}
-                Err(err) => emitter.emit_child(RuntimeEvent::ErrorOccurred(new_error_occurred(
-                    "capability_execution",
-                    "capability_executor",
-                    err.to_string(),
-                    "error",
-                    serde_json::json!({ "event": event_debug }),
-                    None,
-                )), vec![trigger_id], file!(), line!()),
+                Err(err) => emitter.emit_child(
+                    RuntimeEvent::ErrorOccurred(new_error_occurred("capability_execution", "capability_executor", err.to_string(), "error", serde_json::json!({ "event": event_debug }), None)),
+                    vec![trigger_id],
+                    file!(),
+                    line!(),
+                ),
             }
         });
         EventOutcome::NoOp("capability_executor_async")

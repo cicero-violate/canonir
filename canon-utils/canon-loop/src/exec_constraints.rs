@@ -1,6 +1,7 @@
 use canon_invariant::{
     evaluate_constraint_context, meta_invariant_classify_bootstrap_tool, ConstraintAction,
-    ConstraintContext, ConstraintDecision, ConstraintState, MetaInvariantBootstrapToolChoice,
+    ConstraintContext, ConstraintDecision, ConstraintState,
+    MetaInvariantBootstrapToolChoice,
 };
 use canon_semantic_state::SemanticStateSummary;
 use std::path::{Path, PathBuf};

@@ -16,8 +16,6 @@ use canon_runtime::consumers::dispatch_consumer::DispatchConsumer;
 use canon_runtime::consumers::error_logger::ErrorLogger;
 use canon_runtime::consumers::goal_gen_consumer::GoalGenConsumer;
 use canon_runtime::consumers::goal_graph_consumer::GoalGraphConsumer;
-use canon_runtime::consumers::harness_repair_consumer::HarnessRepairConsumer;
-use canon_runtime::consumers::harness_repair_mode::harness_repair_mode_enabled;
 use canon_runtime::consumers::watchdog_consumer::WatchdogConsumer;
 use canon_runtime::hooks::{AuditLogHook, CapabilityRateLimitHook, CostCapHook, HookChain};
 use canon_runtime::{spawn_kernel_processor, EventRuntime, KernelMsg};
@@ -255,7 +253,7 @@ fn main() -> Result<()> {
     }
 
     let agent_registry = AgentRegistryHandle::default();
-    let harness_mode = harness_repair_mode_enabled();
+    let harness_mode = false;
     let mut consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
         Box::new(AnalystConsumer::new(tlog_path.clone())),
         Box::new(LoopStageExecutor::new(workspace.clone(), tlog_path.clone()).with_agent_id("planner_chatgpt_group".to_string())),
@@ -266,7 +264,6 @@ fn main() -> Result<()> {
         Box::new(AgentRegistryConsumer::new(agent_registry.clone())),
         Box::new(DispatchConsumer::new()),
         Box::new(GoalGraphConsumer::new()),
-        Box::new(HarnessRepairConsumer::new(workspace.clone(), tlog_path.clone())),
         Box::new(WatchdogConsumer::new()),
     ];
     if !harness_mode {

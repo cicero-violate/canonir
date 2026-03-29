@@ -24,9 +24,13 @@ impl EventConsumer for WatchdogConsumer {
         EventFilter::All
     }
 
-    fn is_synchronous(&self) -> bool { true }
+    fn is_synchronous(&self) -> bool {
+        true
+    }
 
-    fn consumer_name(&self) -> &'static str { "watchdog_consumer" }
+    fn consumer_name(&self) -> &'static str {
+        "watchdog_consumer"
+    }
 
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {

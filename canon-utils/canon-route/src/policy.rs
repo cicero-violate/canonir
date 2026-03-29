@@ -1146,6 +1146,10 @@ pub fn evaluate_route_transition(
             }
         }
     }
+    // Ensure missing target invariant is reflected in transition evaluation (not just apply phase)
+    if rules.is_empty() && has_explicit_missing_target(ctx) {
+        rules.push(RoutePolicyRule::ForcePlanOnMissingTarget);
+    }
     RouteTransitionEvaluation { deterministic, rules }
 }
 

@@ -39,9 +39,13 @@ impl EventConsumer for FailureStoreConsumer {
         EventFilter::ErrorOnly
     }
 
-    fn is_synchronous(&self) -> bool { true }
+    fn is_synchronous(&self) -> bool {
+        true
+    }
 
-    fn consumer_name(&self) -> &'static str { "failure_store" }
+    fn consumer_name(&self) -> &'static str {
+        "failure_store"
+    }
 
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
@@ -93,10 +97,7 @@ impl FailureStore {
                 self.record_message("loop_acted_failed", &payload.stderr);
             }
             RuntimeEvent::VerifierPolicyUpdated(payload) if payload.actionable_failure => {
-                let msg = format!(
-                    "verifier_outcome={} retry_policy={} reward_bias={}",
-                    payload.verifier_outcome, payload.retry_policy, payload.reward_bias
-                );
+                let msg = format!("verifier_outcome={} retry_policy={} reward_bias={}", payload.verifier_outcome, payload.retry_policy, payload.reward_bias);
                 self.record_message("verifier_policy_updated_failure", &msg);
             }
             RuntimeEvent::LoopRewarded(payload) if payload.halt => {

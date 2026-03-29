@@ -94,9 +94,13 @@ impl EventConsumer for AgentRegistryConsumer {
         EventFilter::All
     }
 
-    fn is_synchronous(&self) -> bool { true }
+    fn is_synchronous(&self) -> bool {
+        true
+    }
 
-    fn consumer_name(&self) -> &'static str { "agent_registry" }
+    fn consumer_name(&self) -> &'static str {
+        "agent_registry"
+    }
 
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 

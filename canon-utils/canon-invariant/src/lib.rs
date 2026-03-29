@@ -6,6 +6,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
+pub mod control_harness;
+
+pub use control_harness::{
+    evaluate_control_state, ControlDecision, ControlState, SyntheticControlMetrics,
+};
+
 pub fn invariant_violation_delta(message: impl Into<String>) -> EventDelta {
     EventDelta {
         id: 0,
@@ -378,8 +384,11 @@ pub fn observe_failure_fingerprint(
         *entry
     };
     state.save_to_disk("support_observed");
-    let threshold = state.threshold.min(2);
-    if support <= threshold || state.promoted.contains_key(&invariant) {
+    let threshold = match invariant {
+        DiscoveredInvariant::ForcePlanWhenMissingTarget => 2,
+        _ => state.threshold,
+    };
+    if support < threshold || state.promoted.contains_key(&invariant) {
         return None;
     }
     state.promoted.insert(invariant, support);
@@ -405,37 +414,19 @@ pub fn reset_discovered_invariants_for_tests() {
 }
 
 fn evaluate_discovered_invariants(ctx: &ConstraintContext) -> Option<ConstraintDecision> {
+    // Do not apply discovered invariants during action validation (no route context)
+    if ctx.route.is_none() {
+        return None;
+    }
     for invariant in discovered_invariants() {
         match invariant {
             DiscoveredInvariant::ForcePlanWhenMissingTarget => {
-                if matches!(ctx.route, Some(route) if route != ConstraintRoute::Plan)
+                if ctx.route == Some(ConstraintRoute::Observe)
                     && !ctx.state.real_path_exists
                 {
                     return Some(ConstraintDecision::RewriteRoute(
                         ConstraintRoute::Plan,
                         "discovered_invariant_missing_target: repeated missing-target failures require planning before other routes",
-                    ));
-                }
-            }
-            DiscoveredInvariant::ForcePlanWhenValidationBlocked => {
-                if matches!(ctx.route, Some(ConstraintRoute::Verify | ConstraintRoute::Conclude))
-                    && (ctx.state.validation_blocked
-                        || ctx.state.entrypoint_missing
-                        || ctx.state.module_gaps_present)
-                {
-                    return Some(ConstraintDecision::RewriteRoute(
-                        ConstraintRoute::Plan,
-                        "discovered_invariant_validation_blocked: repeated premature verification failures require replanning first",
-                    ));
-                }
-            }
-            DiscoveredInvariant::ForcePlanWhenObjectiveContradiction => {
-                if matches!(ctx.route, Some(ConstraintRoute::Verify | ConstraintRoute::Conclude))
-                    && ctx.state.route_objective_contradiction
-                {
-                    return Some(ConstraintDecision::RewriteRoute(
-                        ConstraintRoute::Plan,
-                        "discovered_invariant_objective_contradiction: repeated objective contradictions require planning instead of verification",
                     ));
                 }
             }
@@ -452,6 +443,30 @@ fn evaluate_discovered_invariants(ctx: &ConstraintContext) -> Option<ConstraintD
                     return Some(ConstraintDecision::RewriteRoute(
                         ConstraintRoute::Observe,
                         "discovered_invariant_no_actionable_failure: repeated no-actionable-failure plans require observation refresh instead",
+                    ));
+                }
+            }
+            DiscoveredInvariant::ForcePlanWhenValidationBlocked => {
+                if matches!(ctx.route, Some(ConstraintRoute::Verify | ConstraintRoute::Conclude))
+                    && ctx.state.actionable_failure
+                    && (ctx.state.validation_blocked
+                        || ctx.state.entrypoint_missing
+                        || ctx.state.module_gaps_present)
+                {
+                    return Some(ConstraintDecision::RewriteRoute(
+                        ConstraintRoute::Plan,
+                        "discovered_invariant_validation_blocked: repeated premature verification failures require replanning first",
+                    ));
+                }
+            }
+            DiscoveredInvariant::ForcePlanWhenObjectiveContradiction => {
+                if matches!(ctx.route, Some(ConstraintRoute::Verify | ConstraintRoute::Conclude))
+                    && ctx.state.actionable_failure
+                    && ctx.state.route_objective_contradiction
+                {
+                    return Some(ConstraintDecision::RewriteRoute(
+                        ConstraintRoute::Plan,
+                        "discovered_invariant_objective_contradiction: repeated objective contradictions require planning instead of verification",
                     ));
                 }
             }
@@ -756,16 +771,16 @@ pub fn meta_invariant_tool_selection_correctness(
 }
 
 pub fn evaluate_constraint_context(ctx: &ConstraintContext) -> ConstraintDecision {
+    // Apply discovered invariants first so they take precedence over meta invariants.
+    if let Some(decision) = evaluate_discovered_invariants(ctx) {
+        return decision;
+    }
     if let (Some(expected), Some(actual)) = (ctx.deterministic_route, ctx.route) {
         if expected != actual {
             return ConstraintDecision::Forbid(
                 "meta_invariant_deterministic_route_authority: deterministic routes cannot be overridden",
             );
         }
-    }
-
-    if let Some(decision) = evaluate_discovered_invariants(ctx) {
-        return decision;
     }
 
     if let Some(route) = ctx.route {
@@ -775,7 +790,10 @@ pub fn evaluate_constraint_context(ctx: &ConstraintContext) -> ConstraintDecisio
                 "meta_invariant_state_reality_authority: semantic state disagrees with reality; refresh observation first",
             );
         }
-        if !ctx.state.real_path_exists && route != ConstraintRoute::Plan {
+        if !ctx.state.real_path_exists
+            && route != ConstraintRoute::Plan
+            && !discovered_invariants().contains(&DiscoveredInvariant::ForcePlanWhenMissingTarget)
+        {
             return ConstraintDecision::RewriteRoute(
                 ConstraintRoute::Plan,
                 "meta_invariant_bootstrap_required: target workspace is missing; route must plan bootstrap first",

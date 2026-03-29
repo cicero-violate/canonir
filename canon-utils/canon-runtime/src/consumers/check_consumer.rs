@@ -23,9 +23,13 @@ impl EventConsumer for CheckConsumer {
         EventFilter::All
     }
 
-    fn is_synchronous(&self) -> bool { true }
+    fn is_synchronous(&self) -> bool {
+        true
+    }
 
-    fn consumer_name(&self) -> &'static str { "check_consumer" }
+    fn consumer_name(&self) -> &'static str {
+        "check_consumer"
+    }
 
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 

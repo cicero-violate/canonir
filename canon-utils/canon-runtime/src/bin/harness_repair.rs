@@ -54,6 +54,8 @@ const LLM_TIMEOUT: Duration = Duration::from_secs(20);
 const LLM_MAX_RETRIES: usize = 3;
 const MAX_READ_BYTES: usize = 16 * 1024;
 const MAX_TOOL_SNIPPET: usize = 4 * 1024;
+const AUTO_READ_CONTEXT_BEFORE: usize = 20;
+const AUTO_READ_CONTEXT_AFTER: usize = 40;
 
 const PLANNER_SYSTEM_INSTRUCTIONS: &str = r#"You are the canon harness repair agent.
 
@@ -75,7 +77,7 @@ You are operating inside a self-repair loop. The harness will call you repeatedl
 test passes or the step budget is exhausted. Every action you emit is executed immediately and
 its result is returned to you in the next turn.
 
-Produce a plan as a JSON array of actions.
+Return exactly one action in a JSON array wrapped in a `json` code block.
 
 ━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -141,7 +143,7 @@ SAFETY RULES:
 OUTPUT FORMAT:
 - Return ONLY a JSON array of action objects.
  - No prose outside the JSON array.
- - Wrap the JSON array in a markdown code block (STRICT REQUIRED):
+ - Wrap the JSON array in a markdown code block with language `json` (STRICT REQUIRED):
    ```json
    [ ... ]
    ```
@@ -319,8 +321,8 @@ fn run_harness_loop(
                     let correction = format!(
                         "INVALID RESPONSE — your last reply was not a JSON action array.\n\
                         {err_str}\n\n\
-                        You MUST respond with ONLY a JSON array. No emoji. No prose. No markdown.\n\
-                        Emit exactly one action now."
+                        Return exactly one action in a JSON array wrapped in a `json` code block.\n\
+                        No emoji. No prose outside the code block."
                     );
                     logger.log(&format!("step={} bad_response injecting_correction", step + 1));
                     last_action_result = Some(correction);
@@ -405,10 +407,10 @@ fn run_harness_loop(
                             // Auto-read the file whose anchors were not found so the
                             // next turn sees the actual content.
                             if let Some(anchor_path) = extract_anchor_fail_path(&err.to_string()) {
-                                if let Ok(content) = run_read_file(workspace, &anchor_path, None) {
+                                if let Ok(content) = run_read_file_for_patch_anchor(workspace, &anchor_path, &err.to_string()) {
                                     logger.log(&format!("step={} auto_read anchor_fail_path={anchor_path}", step + 1));
                                     delta_msg = format!(
-                                        "apply_patch failed: {err}\n\nCurrent content of {anchor_path}:\n{content}"
+                                        "apply_patch failed: {err}\n\n{content}"
                                     );
                                 }
                             }
@@ -594,7 +596,6 @@ fn build_context_base(
         _ => String::new(),
     };
     let cleaned = clean_failure_output(initial_failure);
-    let failure_focus = build_failure_focus(initial_failure);
     format!(
         "TARGET WORKSPACE: {workspace}\n\
 All relative paths resolve against TARGET WORKSPACE.\n\
@@ -616,20 +617,17 @@ Context rules:\n\
 - A file/line in the failure output identifies where the test asserts — the implementation to fix may be in a different function.\n\
 - Your response must be a JSON action array only. No prose.\n\
 \n\
-Failure focus:\n{failure_focus}\n\
-\n\
 Initial failure output:\n{cleaned}\n\
 \n\
-Preferred verifier after mutation:\n\
-- `cargo check -p {crate_name}`\n\
-- then `cargo test -p {crate_name} {test_name} -- --nocapture`",
+Response contract:\n\
+- Return exactly one action in a JSON array.\n\
+- Do not return prose outside the JSON array.",
         workspace = workspace.display(),
         crate_name = crate_name,
         test_name = test_name,
         cleaned = truncate(&cleaned, 4000),
         guidance_section = guidance_section,
         fn_index_section = fn_index_section,
-        failure_focus = failure_focus,
     )
 }
 
@@ -818,41 +816,41 @@ fn call_planner(
     emitter: &EventEmitterHandle,
     rx: &Receiver<RuntimeEvent>,
 ) -> Result<(Vec<PlannerAction>, String)> {
+    let request_id = Uuid::new_v4().to_string();
+    let event = RuntimeEvent::Llm(LlmCall {
+        request_id: request_id.clone(),
+        prompt: delta.to_string(),
+        role: Some("planner".to_string()),
+        agent_id: Some("planner_chatgpt_group".to_string()),
+        dispatched: true,
+        system: system.map(str::to_string),
+        system_prompt_id: Some(system_prompt_id.to_string()),
+        context_base: context_base.map(str::to_string),
+        context_base_id: Some(context_base_id.to_string()),
+        prompt_base_id: Some(system_prompt_id.to_string()),
+        prev_prompt_id: prev_prompt_id.map(str::to_string),
+    });
+    let exec = ExecutableEvent::try_from(event).expect("llm event should be executable");
+    exec.execute(ExecutionContext {
+        workspace: workspace.to_path_buf(),
+        emitter: emitter.clone(),
+        trigger_id: EventId::new("min-harness-root"),
+    })?;
 
-    for attempt in 1..=LLM_MAX_RETRIES {
-        let request_id = Uuid::new_v4().to_string();
-        let event = RuntimeEvent::Llm(LlmCall {
-            request_id: request_id.clone(),
-            prompt: delta.to_string(),
-            role: Some("planner".to_string()),
-            agent_id: Some("planner_chatgpt_group".to_string()),
-            dispatched: true,
-            system: system.map(str::to_string),
-            system_prompt_id: Some(system_prompt_id.to_string()),
-            context_base: context_base.map(str::to_string),
-            context_base_id: Some(context_base_id.to_string()),
-            prompt_base_id: Some(system_prompt_id.to_string()),
-            prev_prompt_id: prev_prompt_id.map(str::to_string),
-        });
-        let exec = ExecutableEvent::try_from(event).expect("llm event should be executable");
-        exec.execute(ExecutionContext {
-            workspace: workspace.to_path_buf(),
-            emitter: emitter.clone(),
-            trigger_id: EventId::new("min-harness-root"),
-        })?;
-        match wait_for_llm_response(&rx, &request_id) {
+    for wait_round in 1..=LLM_MAX_RETRIES {
+        match wait_for_llm_response(rx, &request_id) {
             Ok(actions) => return Ok((actions, request_id)),
-            // Bad response (emoji/prose/empty): arrived fast but wasn't valid JSON.
-            // Do NOT retry — return immediately so the outer loop sends a correction turn.
             Err(err) if err.to_string().starts_with(BAD_RESPONSE_PREFIX) => {
                 return Err(err);
             }
-            // True timeout: LLM API hung. Retry up to LLM_MAX_RETRIES times.
-            Err(err) if err.to_string().contains("timed out waiting for planner result") && attempt < LLM_MAX_RETRIES => {
+            Err(err)
+                if err.to_string().contains("timed out waiting for planner result")
+                    && wait_round < LLM_MAX_RETRIES =>
+            {
                 eprintln!(
-                    "[canon-harness-repair] planner timeout after {}s, retrying ({}/{})",
+                    "[canon-harness-repair] planner still waiting after {}s (window {}/{}), not re-dispatching",
                     LLM_TIMEOUT.as_secs(),
-                    attempt,
+                    wait_round,
                     LLM_MAX_RETRIES
                 );
                 continue;
@@ -861,7 +859,7 @@ fn call_planner(
         }
     }
 
-    bail!("planner retries exhausted without a response")
+    bail!("planner wait windows exhausted without a response")
 }
 
 fn wait_for_llm_response(rx: &Receiver<RuntimeEvent>, request_id: &str) -> Result<Vec<PlannerAction>> {
@@ -892,8 +890,17 @@ fn parse_planner_actions(value: &serde_json::Value) -> anyhow::Result<Vec<Planne
     } else if value.is_object() {
         if value.get("action").is_some() || value.get("kind").is_some() {
             vec![value.clone()]
+        } else if value.get("request_id").is_some() && value.as_object().map(|o| o.len()) == Some(1) {
+            anyhow::bail!("bad_response: response only contained request metadata");
         } else if let Some(text) = value.get("text").and_then(|v| v.as_str()) {
             parse_planner_actions_from_text(text)?
+        } else if let Some(text) = value
+            .get("response")
+            .and_then(extract_response_text)
+            .or_else(|| value.get("message").and_then(extract_response_text))
+            .or_else(|| value.get("content").and_then(extract_response_text))
+        {
+            parse_planner_actions_from_text(&text)?
         } else {
             let preview = value.to_string().chars().take(120).collect::<String>();
             anyhow::bail!("bad_response: response was not a JSON action payload. Got: {preview:?}");
@@ -910,6 +917,35 @@ fn parse_planner_actions(value: &serde_json::Value) -> anyhow::Result<Vec<Planne
     }
 
     Ok(array.into_iter().map(|raw| PlannerAction { raw }).collect())
+}
+
+fn extract_response_text(value: &serde_json::Value) -> Option<String> {
+    if let Some(text) = value.as_str() {
+        let trimmed = text.trim();
+        if !trimmed.is_empty()
+            && !(trimmed.starts_with("{\"request_id\":") && trimmed.ends_with('}'))
+        {
+            return Some(text.to_string());
+        }
+    }
+    if let Some(obj) = value.as_object() {
+        if obj.len() == 1 && obj.get("request_id").and_then(|v| v.as_str()).is_some() {
+            return None;
+        }
+        for key in ["text", "response", "message", "content"] {
+            if let Some(inner) = obj.get(key).and_then(extract_response_text) {
+                return Some(inner);
+            }
+        }
+    }
+    if let Some(arr) = value.as_array() {
+        for item in arr {
+            if let Some(inner) = extract_response_text(item) {
+                return Some(inner);
+            }
+        }
+    }
+    None
 }
 
 fn parse_planner_actions_from_text(text: &str) -> anyhow::Result<Vec<serde_json::Value>> {
@@ -965,6 +1001,89 @@ fn run_read_file(workspace: &Path, relative: &str, start_line: Option<usize>) ->
         String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_READ_BYTES)]).into_owned()
     };
     Ok(text)
+}
+
+fn run_read_file_for_patch_anchor(workspace: &Path, relative: &str, err_msg: &str) -> Result<String> {
+    let path = resolve_workspace_path(workspace, relative)?;
+    let full = std::fs::read_to_string(&path)
+        .with_context(|| format!("read_file failed for {}", path.display()))?;
+
+    if let Some((start, end, excerpt)) = extract_anchor_context_excerpt(&full, err_msg) {
+        return Ok(format!(
+            "Current content near likely match of failed anchor in {relative} (lines {start}-{end}):\n{excerpt}"
+        ));
+    }
+
+    let fallback = run_read_file(workspace, relative, None)?;
+    Ok(format!("Current content of {relative}:\n{fallback}"))
+}
+
+fn extract_anchor_context_excerpt(full: &str, err_msg: &str) -> Option<(usize, usize, String)> {
+    let anchor_lines = extract_expected_anchor_lines(err_msg);
+    if anchor_lines.is_empty() {
+        return None;
+    }
+
+    let file_lines: Vec<&str> = full.lines().collect();
+    let mut best_idx: Option<usize> = None;
+
+    for anchor in anchor_lines.iter().rev() {
+        let needle = anchor.trim();
+        if needle.len() < 8 {
+            continue;
+        }
+        if let Some(idx) = file_lines.iter().position(|line| line.contains(needle)) {
+            best_idx = Some(idx);
+            break;
+        }
+    }
+
+    let idx = best_idx?;
+    let start_idx = idx.saturating_sub(AUTO_READ_CONTEXT_BEFORE);
+    let end_idx = (idx + AUTO_READ_CONTEXT_AFTER + 1).min(file_lines.len());
+    let start_line = start_idx + 1;
+    let end_line = end_idx;
+    let excerpt = file_lines[start_idx..end_idx]
+        .iter()
+        .enumerate()
+        .map(|(offset, line)| format!("{}: {}", start_line + offset, line))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Some((start_line, end_line, excerpt))
+}
+
+fn extract_expected_anchor_lines(err_msg: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut capture = false;
+
+    for line in err_msg.lines() {
+        if line.starts_with("Failed to find expected lines in ") {
+            capture = true;
+            continue;
+        }
+        if !capture {
+            continue;
+        }
+
+        if line.trim().is_empty() {
+            if !lines.is_empty() {
+                break;
+            }
+            continue;
+        }
+
+        if line.starts_with("    ") || line.starts_with('\t') {
+            lines.push(line.trim().to_string());
+            continue;
+        }
+
+        if !lines.is_empty() {
+            break;
+        }
+    }
+
+    lines
 }
 
 /// Extract the file path from an apply_patch anchor-miss error.

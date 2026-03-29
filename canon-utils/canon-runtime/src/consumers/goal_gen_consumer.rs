@@ -1,14 +1,12 @@
 use canon_event::{new_error_occurred, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, LlmCall, RuntimeEvent};
-use canon_prompt_events::goal_prompt_loaded_event;
 use canon_proc_macros::must_emit;
+use canon_prompt_events::goal_prompt_loaded_event;
 use canon_semantic_state::{
-    derive_self_development_objective_state, primary_development_objective_kind,
-    primary_development_strategy_kind, DevelopmentObjectiveKind, DevelopmentStrategyKind,
-    LlmSemanticContext, ObjectiveTrendState, SemanticStateSummary,
+    derive_self_development_objective_state, primary_development_objective_kind, primary_development_strategy_kind, DevelopmentObjectiveKind, DevelopmentStrategyKind, LlmSemanticContext,
+    ObjectiveTrendState, SemanticStateSummary,
 };
 use canon_skills::global_registry;
 use uuid::Uuid;
-use crate::consumers::harness_repair_mode::harness_repair_mode_enabled;
 
 const AGENT_GOAL_PATH: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts/AGENT_GOAL.md";
 const GOALGEN_PROJECTS_DIR: &str = "/workspace/ai_sandbox/canon/test_projects/goalgen";
@@ -42,14 +40,7 @@ impl GoalGenConsumer {
         } else {
             State::Waiting
         };
-        Self {
-            state: initial_state,
-            retries: 0,
-            emitter: None,
-            semantic_summary: SemanticStateSummary::default(),
-            objective_trend_state: ObjectiveTrendState::default(),
-            last_route_objective: None,
-        }
+        Self { state: initial_state, retries: 0, emitter: None, semantic_summary: SemanticStateSummary::default(), objective_trend_state: ObjectiveTrendState::default(), last_route_objective: None }
     }
 }
 
@@ -58,9 +49,13 @@ impl EventConsumer for GoalGenConsumer {
         EventFilter::All
     }
 
-    fn is_synchronous(&self) -> bool { true }
+    fn is_synchronous(&self) -> bool {
+        true
+    }
 
-    fn consumer_name(&self) -> &'static str { "goal_gen_consumer" }
+    fn consumer_name(&self) -> &'static str {
+        "goal_gen_consumer"
+    }
 
     fn set_emitter(&mut self, emitter: EventEmitterHandle) {
         self.emitter = Some(emitter);
@@ -68,9 +63,6 @@ impl EventConsumer for GoalGenConsumer {
 
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
-        if harness_repair_mode_enabled() {
-            return EventOutcome::NoOp("goal_gen_suppressed_for_harness_repair");
-        }
         match (&self.state, event) {
             (State::Waiting, RuntimeEvent::PromptLoaded(p)) => {
                 let content = p.payload.get("content").and_then(|v| v.as_str()).unwrap_or("");
@@ -82,12 +74,7 @@ impl EventConsumer for GoalGenConsumer {
                 let semantic_context = LlmSemanticContext {
                     mission_summary: None,
                     semantic_summary: self.semantic_summary.clone(),
-                    objective_state: derive_self_development_objective_state(
-                        &self.semantic_summary,
-                        0,
-                        &[],
-                        &self.objective_trend_state,
-                    ),
+                    objective_state: derive_self_development_objective_state(&self.semantic_summary, 0, &[], &self.objective_trend_state),
                     objective_trend_state: self.objective_trend_state.clone(),
                     forced_primary_objective: None,
                     forced_primary_strategy: None,
@@ -117,14 +104,8 @@ impl EventConsumer for GoalGenConsumer {
                         )
                     })
                     .unwrap_or_default();
-                let selected_goal_objective = current_primary_objective(
-                    &self.semantic_summary,
-                    &self.objective_trend_state,
-                );
-                let selected_goal_strategy = current_primary_strategy(
-                    &self.semantic_summary,
-                    &self.objective_trend_state,
-                );
+                let selected_goal_objective = current_primary_objective(&self.semantic_summary, &self.objective_trend_state);
+                let selected_goal_strategy = current_primary_strategy(&self.semantic_summary, &self.objective_trend_state);
                 let prompt = match goal_gen_prompt(selected_goal_objective, selected_goal_strategy) {
                     Ok(prompt) => prompt,
                     Err(e) => {
@@ -150,27 +131,31 @@ impl EventConsumer for GoalGenConsumer {
                         );
                     }
                 }
-                EventOutcome::emit(RuntimeEvent::Llm(LlmCall {
-                    request_id: request_id.clone(),
-                    prompt: format!(
-                        "{prompt}\n\n{}\n\nGoal generation target objective:\n- {}\n- {}\nGoal generation target strategy:\n- {}\n- {}\n{}",
-                        semantic_context.render_goal_gen_block(),
-                        selected_goal_objective.as_str(),
-                        selected_goal_objective.focus_text(),
-                        selected_goal_strategy.as_str(),
-                        selected_goal_strategy.focus_text(),
-                        objective_override
-                    ),
-                    role: Some("goal_gen".to_string()),
-                    agent_id: Some("goal_gen_chatgpt".to_string()),
-                    dispatched: true,
-                    system: None,
-                    system_prompt_id: None,
-                    context_base: None,
-                    context_base_id: None,
-                    prompt_base_id: None,
-                    prev_prompt_id: None,
-                }), file!(), line!())
+                EventOutcome::emit(
+                    RuntimeEvent::Llm(LlmCall {
+                        request_id: request_id.clone(),
+                        prompt: format!(
+                            "{prompt}\n\n{}\n\nGoal generation target objective:\n- {}\n- {}\nGoal generation target strategy:\n- {}\n- {}\n{}",
+                            semantic_context.render_goal_gen_block(),
+                            selected_goal_objective.as_str(),
+                            selected_goal_objective.focus_text(),
+                            selected_goal_strategy.as_str(),
+                            selected_goal_strategy.focus_text(),
+                            objective_override
+                        ),
+                        role: Some("goal_gen".to_string()),
+                        agent_id: Some("goal_gen_chatgpt".to_string()),
+                        dispatched: true,
+                        system: None,
+                        system_prompt_id: None,
+                        context_base: None,
+                        context_base_id: None,
+                        prompt_base_id: None,
+                        prev_prompt_id: None,
+                    }),
+                    file!(),
+                    line!(),
+                )
             }
             (State::Pending { request_id: expected_id, .. }, RuntimeEvent::CapabilityCompleted(done)) => {
                 if done.request_id != *expected_id || done.capability != "llm.call" {
@@ -221,14 +206,18 @@ impl EventConsumer for GoalGenConsumer {
                         let msg = format!("goal_gen gave up after {MAX_RETRIES} retries — last content was {} bytes: {}", content.len(), &content[..content.len().min(200)]);
                         eprintln!("[goal_gen] {msg}");
                         self.state = State::Done;
-                        return EventOutcome::error(RuntimeEvent::ErrorOccurred(new_error_occurred(
-                            "goal_gen_exhausted",
-                            "goal_gen_consumer",
-                            &msg,
-                            "error",
-                            serde_json::json!({ "retries": MAX_RETRIES, "content_bytes": content.len() }),
-                            None,
-                        )), file!(), line!());
+                        return EventOutcome::error(
+                            RuntimeEvent::ErrorOccurred(new_error_occurred(
+                                "goal_gen_exhausted",
+                                "goal_gen_consumer",
+                                &msg,
+                                "error",
+                                serde_json::json!({ "retries": MAX_RETRIES, "content_bytes": content.len() }),
+                                None,
+                            )),
+                            file!(),
+                            line!(),
+                        );
                     } else {
                         eprintln!("[goal_gen] retry {}/{}", self.retries, MAX_RETRIES);
                         self.state = State::Waiting;
@@ -250,14 +239,18 @@ impl EventConsumer for GoalGenConsumer {
                 if self.retries >= MAX_RETRIES {
                     eprintln!("[goal_gen] gave up after {MAX_RETRIES} retries due to capability failures");
                     self.state = State::Done;
-                    return EventOutcome::error(RuntimeEvent::ErrorOccurred(new_error_occurred(
-                        "goal_gen_exhausted",
-                        "goal_gen_consumer",
-                        &msg,
-                        "error",
-                        serde_json::json!({ "retries": MAX_RETRIES, "last_error": fail.error }),
-                        None,
-                    )), file!(), line!());
+                    return EventOutcome::error(
+                        RuntimeEvent::ErrorOccurred(new_error_occurred(
+                            "goal_gen_exhausted",
+                            "goal_gen_consumer",
+                            &msg,
+                            "error",
+                            serde_json::json!({ "retries": MAX_RETRIES, "last_error": fail.error }),
+                            None,
+                        )),
+                        file!(),
+                        line!(),
+                    );
                 } else {
                     self.state = State::Waiting;
                 }
@@ -265,15 +258,11 @@ impl EventConsumer for GoalGenConsumer {
             }
             (_, RuntimeEvent::LoopObserved(observed)) => {
                 self.semantic_summary = observed.semantic_summary.clone();
-                self.objective_trend_state
-                    .record_observation(observed.error_count, &self.semantic_summary);
+                self.objective_trend_state.record_observation(observed.error_count, &self.semantic_summary);
                 EventOutcome::NoOp("goal_gen_observed_update")
             }
             (_, RuntimeEvent::RouteSelected(_)) => {
-                self.last_route_objective = Some(current_primary_objective(
-                    &self.semantic_summary,
-                    &self.objective_trend_state,
-                ));
+                self.last_route_objective = Some(current_primary_objective(&self.semantic_summary, &self.objective_trend_state));
                 EventOutcome::NoOp("goal_gen_route_objective_update")
             }
             (_, RuntimeEvent::PlanningCompleted(pc)) => {
@@ -345,18 +334,12 @@ impl EventConsumer for GoalGenConsumer {
     }
 }
 
-fn current_primary_objective(
-    semantic_summary: &SemanticStateSummary,
-    objective_trend_state: &ObjectiveTrendState,
-) -> DevelopmentObjectiveKind {
+fn current_primary_objective(semantic_summary: &SemanticStateSummary, objective_trend_state: &ObjectiveTrendState) -> DevelopmentObjectiveKind {
     let objective_state = derive_self_development_objective_state(semantic_summary, 0, &[], objective_trend_state);
     primary_development_objective_kind(&objective_state, objective_trend_state, semantic_summary)
 }
 
-fn current_primary_strategy(
-    semantic_summary: &SemanticStateSummary,
-    objective_trend_state: &ObjectiveTrendState,
-) -> DevelopmentStrategyKind {
+fn current_primary_strategy(semantic_summary: &SemanticStateSummary, objective_trend_state: &ObjectiveTrendState) -> DevelopmentStrategyKind {
     let objective_state = derive_self_development_objective_state(semantic_summary, 0, &[], objective_trend_state);
     primary_development_strategy_kind(&objective_state, objective_trend_state, semantic_summary)
 }
@@ -373,22 +356,14 @@ fn infer_goal_objective(goal_text: &str) -> Option<DevelopmentObjectiveKind> {
         Some(DevelopmentObjectiveKind::ReduceContradictionRate)
     } else if lower.contains("stall") || lower.contains("progress") {
         Some(DevelopmentObjectiveKind::ReduceStalledLoopFrequency)
-    } else if lower.contains("fix")
-        || lower.contains("repair")
-        || lower.contains("resolve")
-        || lower.contains("compile")
-        || lower.contains("error")
-    {
+    } else if lower.contains("fix") || lower.contains("repair") || lower.contains("resolve") || lower.contains("compile") || lower.contains("error") {
         Some(DevelopmentObjectiveKind::ReduceCompilerFailures)
     } else {
         None
     }
 }
 
-fn goal_objective_drift(
-    goal_objective: Option<DevelopmentObjectiveKind>,
-    route_objective: DevelopmentObjectiveKind,
-) -> bool {
+fn goal_objective_drift(goal_objective: Option<DevelopmentObjectiveKind>, route_objective: DevelopmentObjectiveKind) -> bool {
     goal_objective.is_some_and(|goal| goal != route_objective)
 }
 
@@ -421,18 +396,11 @@ fn extract_goal_text(raw: &str) -> String {
     trimmed.to_string()
 }
 
-fn goal_gen_prompt(
-    objective: DevelopmentObjectiveKind,
-    strategy: DevelopmentStrategyKind,
-) -> anyhow::Result<String> {
+fn goal_gen_prompt(objective: DevelopmentObjectiveKind, strategy: DevelopmentStrategyKind) -> anyhow::Result<String> {
     let registry = global_registry();
     let selected = registry.select_for_scope("goal_gen", objective, strategy)?;
     if !selected.is_empty() {
-        return Ok(selected
-            .into_iter()
-            .map(|skill| skill.prompt.trim().to_string())
-            .collect::<Vec<_>>()
-            .join("\n\n"));
+        return Ok(selected.into_iter().map(|skill| skill.prompt.trim().to_string()).collect::<Vec<_>>().join("\n\n"));
     }
     Ok(registry.load("goal_gen/generate_goal")?.prompt.clone())
 }
@@ -452,7 +420,6 @@ fn validate_goal(content: &str) -> bool {
     }
     ok
 }
-
 
 fn emit_prompt_loaded(emitter: &Option<EventEmitterHandle>, content: &str, trigger_id: &EventId) {
     if let Some(em) = emitter {

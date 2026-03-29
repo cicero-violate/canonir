@@ -79,9 +79,13 @@ impl EventConsumer for GoalGraphConsumer {
         EventFilter::All
     }
 
-    fn is_synchronous(&self) -> bool { true }
+    fn is_synchronous(&self) -> bool {
+        true
+    }
 
-    fn consumer_name(&self) -> &'static str { "goal_graph_consumer" }
+    fn consumer_name(&self) -> &'static str {
+        "goal_graph_consumer"
+    }
 
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
