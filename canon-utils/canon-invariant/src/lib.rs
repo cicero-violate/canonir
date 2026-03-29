@@ -7,9 +7,14 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 pub mod control_harness;
+pub mod request_lifecycle_harness;
 
 pub use control_harness::{
     evaluate_control_state, ControlDecision, ControlState, SyntheticControlMetrics,
+};
+pub use request_lifecycle_harness::{
+    evaluate_request_lifecycle_state, RequestLifecycleDecision, RequestLifecycleState,
+    SyntheticRequestLifecycleMetrics,
 };
 
 pub fn invariant_violation_delta(message: impl Into<String>) -> EventDelta {
@@ -116,6 +121,40 @@ pub enum ConstraintDecision {
     Forbid(&'static str),
     RewriteRoute(ConstraintRoute, &'static str),
     RewriteAction(ConstraintAction, &'static str),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConstraintDecisionSource {
+    MetaInvariant,
+    DiscoveredInvariant,
+    Deterministic,
+}
+
+impl ConstraintDecisionSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MetaInvariant => "meta_invariant",
+            Self::DiscoveredInvariant => "discovered_invariant",
+            Self::Deterministic => "deterministic",
+        }
+    }
+}
+
+pub fn resolve_constraint_decision_precedence(
+    meta: Option<ConstraintDecision>,
+    discovered: Option<ConstraintDecision>,
+    deterministic: Option<ConstraintDecision>,
+) -> Option<(ConstraintDecisionSource, ConstraintDecision)> {
+    if let Some(decision) = meta {
+        return Some((ConstraintDecisionSource::MetaInvariant, decision));
+    }
+    if let Some(decision) = discovered {
+        return Some((ConstraintDecisionSource::DiscoveredInvariant, decision));
+    }
+    if let Some(decision) = deterministic {
+        return Some((ConstraintDecisionSource::Deterministic, decision));
+    }
+    None
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1337,6 +1376,85 @@ mod tests {
             ConstraintDecision::Forbid(
                 "meta_invariant_deterministic_route_authority: deterministic routes cannot be overridden",
             )
+        );
+    }
+
+    #[test]
+    fn precedence_matrix_prefers_meta_over_discovered_and_deterministic() {
+        let chosen = resolve_constraint_decision_precedence(
+            Some(ConstraintDecision::Forbid(
+                "meta_invariant_state_reality_authority",
+            )),
+            Some(ConstraintDecision::RewriteRoute(
+                ConstraintRoute::Plan,
+                "discovered_invariant_missing_target",
+            )),
+            Some(ConstraintDecision::RewriteRoute(
+                ConstraintRoute::Observe,
+                "deterministic_observe_refresh",
+            )),
+        );
+        assert_eq!(
+            chosen,
+            Some((
+                ConstraintDecisionSource::MetaInvariant,
+                ConstraintDecision::Forbid("meta_invariant_state_reality_authority"),
+            ))
+        );
+    }
+
+    #[test]
+    fn precedence_matrix_prefers_discovered_over_deterministic() {
+        let chosen = resolve_constraint_decision_precedence(
+            None,
+            Some(ConstraintDecision::RewriteRoute(
+                ConstraintRoute::Plan,
+                "discovered_invariant_missing_target",
+            )),
+            Some(ConstraintDecision::RewriteRoute(
+                ConstraintRoute::Observe,
+                "deterministic_observe_refresh",
+            )),
+        );
+        assert_eq!(
+            chosen,
+            Some((
+                ConstraintDecisionSource::DiscoveredInvariant,
+                ConstraintDecision::RewriteRoute(
+                    ConstraintRoute::Plan,
+                    "discovered_invariant_missing_target",
+                ),
+            ))
+        );
+    }
+
+    #[test]
+    fn precedence_matrix_uses_deterministic_when_higher_layers_absent() {
+        let chosen = resolve_constraint_decision_precedence(
+            None,
+            None,
+            Some(ConstraintDecision::RewriteRoute(
+                ConstraintRoute::Observe,
+                "deterministic_observe_refresh",
+            )),
+        );
+        assert_eq!(
+            chosen,
+            Some((
+                ConstraintDecisionSource::Deterministic,
+                ConstraintDecision::RewriteRoute(
+                    ConstraintRoute::Observe,
+                    "deterministic_observe_refresh",
+                ),
+            ))
+        );
+    }
+
+    #[test]
+    fn precedence_matrix_returns_none_when_no_layers_fire() {
+        assert_eq!(
+            resolve_constraint_decision_precedence(None, None, None),
+            None
         );
     }
 
