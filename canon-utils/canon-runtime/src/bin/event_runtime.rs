@@ -202,21 +202,29 @@ impl EventConsumer for EventRepairTriggerConsumer {
         match event {
             RuntimeEvent::ErrorOccurred(e) => {
                 let src = e.source.as_str();
+                let kind = e.kind.as_str();
                 let msg = e.message.to_ascii_lowercase();
                 if msg.contains("llm call timed out")
                     || msg.contains("invariant violation")
                     || msg.contains("noop_spam")
                     || msg.contains("missing_target")
+                    || kind == "act_stall"
+                    || kind == "control_desync"
+                    || kind == "plan_invariant_violation"
+                    || msg.contains("scheduler is empty")
+                    || msg.contains("missing required successor")
                     || src.contains("invariant")
                     || src.contains("constraint")
                 {
                     let failure_output = format!(
-                        "AUTO-TRIGGERED WORKSPACE REPAIR\nreason=error_occurred\nsource={}\nmessage={}",
+                        "AUTO-TRIGGERED WORKSPACE REPAIR\nreason=error_occurred\nkind={}\nsource={}\nmessage={}",
+                        e.kind,
                         e.source,
                         e.message
                     );
                     let incident_context = format!(
-                        "incident_kind=auto_error_trigger\nsource={}\nmessage={}\nworkspace={}",
+                        "incident_kind=auto_error_trigger\nkind={}\nsource={}\nmessage={}\nworkspace={}",
+                        e.kind,
                         e.source,
                         e.message,
                         self.workspace.display()

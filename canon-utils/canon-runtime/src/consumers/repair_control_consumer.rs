@@ -78,6 +78,8 @@ pub enum SemanticSignal {
     CompilerClean,
     StagnantLoop,
     EscapeDetected,
+    ActStall,
+    ControlDesync,
 }
 
 impl SemanticSignal {
@@ -92,6 +94,8 @@ impl SemanticSignal {
             Self::CompilerClean => "compiler_clean",
             Self::StagnantLoop => "stagnant_loop",
             Self::EscapeDetected => "escape_detected",
+            Self::ActStall => "act_stall",
+            Self::ControlDesync => "control_desync",
         }
     }
 }
@@ -298,6 +302,17 @@ impl RepairControlConsumer {
 
             RuntimeEvent::ErrorOccurred(e) => {
                 let src = e.source.as_str();
+                let kind = e.kind.as_str();
+                let msg = e.message.to_ascii_lowercase();
+                if kind == "act_stall" || msg.contains("scheduler is empty") {
+                    return Some(SemanticSignal::ActStall);
+                }
+                if kind == "control_desync"
+                    || msg.contains("missing required successor")
+                    || msg.contains("expected=loop_acted; got=planning_completed")
+                {
+                    return Some(SemanticSignal::ControlDesync);
+                }
                 if src.contains("invariant") || src.contains("constraint") {
                     return Some(SemanticSignal::InvariantViolation);
                 }
@@ -336,6 +351,8 @@ impl RepairControlConsumer {
             // ── Observing ─────────────────────────────────────────────────────
             (Observing, MissingTarget) => (Classifying, "missing_target_enter_classifying"),
             (Observing, InvariantViolation) => (Classifying, "invariant_violation_enter_classifying"),
+            (Observing, ActStall) => (Classifying, "act_stall_enter_classifying"),
+            (Observing, ControlDesync) => (Classifying, "control_desync_enter_classifying"),
             (Observing, StagnantLoop) => (Classifying, "stagnant_loop_enter_classifying"),
             (Observing, CompilerClean) => (Observing, "compiler_clean_stay_observing"),
             (Observing, _) => return None,
@@ -345,6 +362,8 @@ impl RepairControlConsumer {
             (Classifying, NoopSpam) => (Stuck, "noop_spam_enter_stuck"),
             (Classifying, InvalidToolSelection) => (Classifying, "invalid_tool_replan"),
             (Classifying, ReplanRequired) => (Classifying, "replan_stay_classifying"),
+            (Classifying, ActStall) => (Classifying, "act_stall_force_replan"),
+            (Classifying, ControlDesync) => (Classifying, "control_desync_force_replan"),
             (Classifying, CompilerClean) => (Observing, "compiler_clean_recovered"),
             (Classifying, InvariantViolation) => (Classifying, "invariant_violation_classifying"),
             (Classifying, _) => return None,
@@ -355,6 +374,8 @@ impl RepairControlConsumer {
             }
             (Transitioning, PlannedToAct) => (Verifying, "transition_acted_now_verifying"),
             (Transitioning, EscapeDetected) => (Stuck, "escape_detected_in_transition"),
+            (Transitioning, ActStall) => (Classifying, "act_stall_recover_to_classifying"),
+            (Transitioning, ControlDesync) => (Classifying, "control_desync_recover_to_classifying"),
             (Transitioning, CompilerClean) => (Observing, "compiler_clean_in_transition"),
             (Transitioning, ReplanRequired) => (Classifying, "replan_during_transition"),
             (Transitioning, NoopSpam) => (Stuck, "noop_spam_in_transition"),
@@ -364,12 +385,16 @@ impl RepairControlConsumer {
             (Verifying, CompilerClean) => (Observing, "verify_passed_success"),
             (Verifying, ReplanRequired) => (Classifying, "verify_failed_retry"),
             (Verifying, InvariantViolation) => (Classifying, "invariant_violation_in_verifying"),
+            (Verifying, ActStall) => (Classifying, "act_stall_from_verifying"),
+            (Verifying, ControlDesync) => (Classifying, "control_desync_from_verifying"),
             (Verifying, _) => return None,
 
             // ── Stuck ─────────────────────────────────────────────────────────
             (Stuck, EscapeDetected) => (Stuck, "escape_blocked_still_stuck"),
             (Stuck, ReplanRequired) => (Classifying, "stuck_fresh_replan"),
             (Stuck, CompilerClean) => (Observing, "stuck_then_clean_recovered"),
+            (Stuck, ActStall) => (Stuck, "act_stall_stuck"),
+            (Stuck, ControlDesync) => (Stuck, "control_desync_stuck"),
             (Stuck, _) => return None,
         };
 

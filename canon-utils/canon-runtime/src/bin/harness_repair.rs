@@ -298,6 +298,7 @@ const MAX_READ_BYTES: usize = 16 * 1024;
 const MAX_TOOL_SNIPPET: usize = 4 * 1024;
 const AUTO_READ_CONTEXT_BEFORE: usize = 20;
 const AUTO_READ_CONTEXT_AFTER: usize = 40;
+const MAX_CONSECUTIVE_PLANNER_TRANSPORT_FAILURES: usize = 3;
 const PLANNER_SYSTEM_INSTRUCTIONS: &str = r#"You are the canon harness repair agent.
 
 Your sole responsibility is to make a single failing Rust test pass inside the canon workspace.
@@ -395,6 +396,13 @@ OUTPUT FORMAT:
 
 static PLANNER_SYSTEM_PROMPT_ID: std::sync::LazyLock<u64> =
     std::sync::LazyLock::new(|| hash_str(PLANNER_SYSTEM_INSTRUCTIONS));
+
+fn is_planner_transport_failure(message: &str) -> bool {
+    message.contains("relay call to ")
+        || message.contains("connection refused")
+        || message.contains("tcp connect error")
+        || message.contains("error trying to connect")
+}
 
 #[derive(Clone, Debug)]
 struct PlannerAction {
@@ -558,6 +566,9 @@ fn run_harness_loop(
     // Per-step tracking.
     let mut last_action_result: Option<String> = None;
     let mut last_request_id: Option<String> = None;
+    let mut last_local_fallback_action: Option<String> = None;
+    let mut repeated_local_fallbacks: usize = 0;
+    let mut consecutive_planner_transport_failures: usize = 0;
 
     for step in 0..max_steps {
         let directive = executor.evaluate_harness_repair_for_target(target, failure_output);
@@ -582,6 +593,33 @@ fn run_harness_loop(
             &rx,
         ) {
             Ok((actions, req_id)) => {
+                if req_id.starts_with("local-fallback-") {
+                    let fingerprint = actions
+                        .iter()
+                        .map(|a| a.raw.to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if last_local_fallback_action.as_deref() == Some(fingerprint.as_str()) {
+                        repeated_local_fallbacks += 1;
+                    } else {
+                        repeated_local_fallbacks = 1;
+                        last_local_fallback_action = Some(fingerprint);
+                    }
+                    if repeated_local_fallbacks >= 3 {
+                        let message = format!(
+                            "planner transport unavailable: repeated identical local fallback action {} times; relay={}",
+                            repeated_local_fallbacks,
+                            std::env::var("CANON_LLM_RELAY_ADDR")
+                                .unwrap_or_else(|_| RELAY_ADDR.to_string())
+                        );
+                        logger.log(&format!("step={} planner_failure reason={}", step + 1, message));
+                        bail!("{message}");
+                    }
+                } else {
+                    repeated_local_fallbacks = 0;
+                    last_local_fallback_action = None;
+                }
+                consecutive_planner_transport_failures = 0;
                 last_request_id = Some(req_id);
                 actions
             }
@@ -604,8 +642,24 @@ fn run_harness_loop(
                 } else {
                     let message = format!("planner call failed: {err_str}");
                     logger.log(&format!("step={} planner_failure reason={}", step + 1, message));
+                    if is_planner_transport_failure(&err_str) {
+                        consecutive_planner_transport_failures += 1;
+                        if consecutive_planner_transport_failures
+                            >= MAX_CONSECUTIVE_PLANNER_TRANSPORT_FAILURES
+                        {
+                            bail!(
+                                "planner transport unavailable after {} consecutive failures; relay={}; last_error={}",
+                                consecutive_planner_transport_failures,
+                                std::env::var("CANON_LLM_RELAY_ADDR")
+                                    .unwrap_or_else(|_| RELAY_ADDR.to_string()),
+                                err_str
+                            );
+                        }
+                    } else {
+                        consecutive_planner_transport_failures = 0;
+                    }
                     *failure_output = message.clone();
-                    last_action_result = None;
+                    last_action_result = Some(message);
                 }
                 continue;
             }
@@ -1358,19 +1412,51 @@ fn call_planner(
     let req = RelayRequest {
         role: "harness_repair".to_string(),
         endpoint_id: None,
-        prompt,
+        prompt: prompt.clone(),
         role_schema,
         request_tag: Some(request_id.clone()),
     };
 
-    let resp = relay_client_call(&relay_addr, &req)
-        .with_context(|| format!("relay call to {relay_addr} failed"))?;
+    let resp = match relay_client_call(&relay_addr, &req)
+        .with_context(|| format!("relay call to {relay_addr} failed"))
+    {
+        Ok(resp) => resp,
+        Err(err) => {
+            if let Some(fallback) =
+                derive_next_action_hint(delta).or_else(|| derive_next_action_hint(&prompt))
+            {
+                eprintln!(
+                    "[canon-harness-repair] relay_failure request_id={} fallback_action={}",
+                    request_id,
+                    fallback
+                );
+                let fallback_json = format!("[{}]", fallback);
+                let actions = parse_planner_actions(&serde_json::Value::String(fallback_json))?;
+                return Ok((actions, format!("local-fallback-{request_id}")));
+            }
+            return Err(err);
+        }
+    };
 
     if !resp.ok {
+        let relay_error = resp.error.unwrap_or_default();
+        if let Some(fallback) =
+            derive_next_action_hint(delta).or_else(|| derive_next_action_hint(&prompt))
+        {
+            eprintln!(
+                "[canon-harness-repair] relay_error request_id={} fallback_action={} error={}",
+                request_id,
+                fallback,
+                relay_error
+            );
+            let fallback_json = format!("[{}]", fallback);
+            let actions = parse_planner_actions(&serde_json::Value::String(fallback_json))?;
+            return Ok((actions, format!("local-fallback-{request_id}")));
+        }
         bail!(
             "relay returned error for request_id={}: {}",
             request_id,
-            resp.error.unwrap_or_default()
+            relay_error
         );
     }
 

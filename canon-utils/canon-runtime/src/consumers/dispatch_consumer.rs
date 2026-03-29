@@ -94,7 +94,13 @@ impl EventConsumer for ForwardConsumer {
                 }
                 forward(&self.parent, event.clone());
             }
-            RuntimeEvent::PlanningCompleted(_) | RuntimeEvent::LoopVerified(_) | RuntimeEvent::ToolCall(_) | RuntimeEvent::ToolResult(_) | RuntimeEvent::ToolBatchSettled(_) => {
+            RuntimeEvent::PlanningCompleted(_) => {
+                // Do not forward sub-agent PlanningCompleted into the parent bus.
+                // The parent control FSM can already have advanced to route_selected(act)
+                // based on previously forwarded planned work, and a late forwarded
+                // planning_completed would violate the required successor (loop_acted).
+            }
+            RuntimeEvent::LoopVerified(_) | RuntimeEvent::ToolCall(_) | RuntimeEvent::ToolResult(_) | RuntimeEvent::ToolBatchSettled(_) => {
                 forward(&self.parent, event.clone());
             }
             RuntimeEvent::LoopRewarded(r) => {

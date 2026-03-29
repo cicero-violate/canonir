@@ -463,6 +463,62 @@ mod tests {
     }
 
     #[test]
+    fn control_harness_repeated_route_selected_before_planning_completed_is_suppressed() {
+        // Synthetic regression for:
+        // route_selected(plan) -> route_selected(plan) before planning_completed.
+        //
+        // Once the route for the current control edge has already been emitted,
+        // the next evaluation must suppress any second emission attempt.
+        assert_eq!(
+            evaluate_control_state(ControlState {
+                route_emitted_for_current_control: true,
+                can_emit_route_selected: true,
+                ..ControlState::default()
+            }),
+            ControlDecision::Suppress("duplicate_route_for_current_control")
+        );
+    }
+
+    #[test]
+    fn control_harness_plan_route_obligation_blocks_cached_replay_after_emit() {
+        // Synthetic regression for:
+        // route_selected(plan) was already emitted for this control edge and
+        // planning_completed is still the required successor.
+        //
+        // Even if a cached route and route capacity exist, the control layer
+        // must not replay another route_selected for the same control event.
+        assert_eq!(
+            evaluate_control_state(ControlState {
+                route_emitted_for_current_control: true,
+                pending_required_successor_route_selected: false,
+                has_cached_route: true,
+                cached_route_is_observe: false,
+                can_emit_route_selected: true,
+                ..ControlState::default()
+            }),
+            ControlDecision::Suppress("duplicate_route_for_current_control")
+        );
+    }
+
+    #[test]
+    fn control_harness_plan_failure_with_stale_observe_cache_requests_fresh_route() {
+        // Synthetic regression for:
+        // planning_completed(llm_failed) -> pending route_selected obligation
+        // with a stale cached observe route.
+        assert_eq!(
+            evaluate_control_state(ControlState {
+                pending_required_successor_route_selected: true,
+                has_cached_route: true,
+                cached_route_is_observe: true,
+                can_emit_route_selected: true,
+                route_emitted_for_current_control: false,
+                ..ControlState::default()
+            }),
+            ControlDecision::RequestFreshRoute
+        );
+    }
+
+    #[test]
     fn control_harness_pending_request_round_trip() {
         let state = step_control_state(
             ControlState::default(),

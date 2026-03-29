@@ -353,12 +353,16 @@ pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decis
     for rule in &rules {
         apply_rule(decision, *rule);
     }
-    // Ensure missing-target planning invariant when no rules triggered
-    if rules.is_empty() {
+    // Only force missing-target planning when the missing-target fact is true.
+    if has_explicit_missing_target(ctx)
+        && !rules.contains(&RoutePolicyRule::ForcePlanOnMissingTarget)
+    {
         rules.push(RoutePolicyRule::ForcePlanOnMissingTarget);
     }
-    // Ensure missing target always forces Plan (test expectation)
-    if rules.contains(&RoutePolicyRule::ForcePlanOnMissingTarget) {
+    // Ensure missing target always forces Plan when present.
+    if has_explicit_missing_target(ctx)
+        && rules.contains(&RoutePolicyRule::ForcePlanOnMissingTarget)
+    {
         decision.suggested_route = RouteKind::Plan;
         decision.changed = true;
     }
@@ -629,6 +633,9 @@ fn derive_deterministic_route_from_constraints(
 }
 
 fn dispatch_route_proposal(ctx: &RouteContext) -> Option<RouteProposal> {
+    if ctx.bootstrap_refresh_required {
+        return Some(RouteProposal::BootstrapRefreshObserve);
+    }
     if has_explicit_missing_target(ctx) {
         return Some(RouteProposal::DeterministicRouteDecision(DeterministicRouteDecision {
             route: RouteKind::Plan,
@@ -873,6 +880,16 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
         });
     }
     if let RuntimeEvent::LoopActed(_) = event {
+        if ctx.bootstrap_refresh_required {
+            return Some(DeterministicRouteDecision {
+                route: RouteKind::Observe,
+                rationale: "bootstrap command failed or workspace state may have changed; force fresh observe".to_string(),
+                confidence: 0.99,
+                prompt_tag: "deterministic:bootstrap_refresh_observe",
+                noop_reason: "route_executor_bootstrap_refresh_observe",
+                rule: DeterministicRouteRule::BootstrapRefreshObserve,
+            });
+        }
         if latest_no_semantic_progress(&ctx.recent_execution_results) {
             // module gaps must force planning even before other branches
             if !ctx.semantic_summary.module_gaps.is_empty() {

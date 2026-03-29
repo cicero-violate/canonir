@@ -149,6 +149,50 @@ impl RouteExecutor {
                 match cache_eval.rule {
                     RouteCacheRule::ReplayCachedRoute => {
                         if let Some(route) = self.last_route_selected.clone() {
+                            let emit_eval = evaluate_route_emit(RouteEmitState {
+                                awaiting_control_successor: self.awaiting_control_successor.as_deref(),
+                                last_control_kind: self.last_control_kind.as_deref(),
+                                pending_required_successor: self.pending_required_successor.as_deref(),
+                            });
+                            if !emit_eval.allowed {
+                                let reason = emit_eval
+                                    .reason
+                                    .unwrap_or_else(|| "illegal control emit".to_string());
+                                let kind = if matches!(
+                                    emit_eval.rule,
+                                    RouteEmitRule::DuplicateEmitBeforeSuccessor
+                                        | RouteEmitRule::IllegalControlReentry
+                                ) {
+                                    "duplicate_route_emit_before_successor"
+                                } else {
+                                    "illegal_control_reentry"
+                                };
+                                let tid = self
+                                    .current_trigger
+                                    .clone()
+                                    .expect("cached route emit without current_trigger");
+                                emitter.emit_child(
+                                    RuntimeEvent::Debug(canon_event::DebugEvent {
+                                        source: "route_executor".to_string(),
+                                        kind: kind.to_string(),
+                                        payload: self.suppression_payload(
+                                            &reason,
+                                            "recoverable",
+                                            "attempt_expected_successor_recovery",
+                                            serde_json::json!({
+                                                "attempted_kind": "route_selected",
+                                                "attempted_route": route.approved_route,
+                                                "replay_source": "cached_route",
+                                            }),
+                                        ),
+                                    }),
+                                    vec![tid.clone()],
+                                    file!(),
+                                    line!(),
+                                );
+                                self.emit_recovery_for_expected_successor(emitter, tid);
+                                return;
+                            }
                             let tid = self.current_trigger.clone().expect("cached route emit without current_trigger");
                             emitter.emit_with_parents(RuntimeEvent::RouteSelected(route), vec![tid], file!(), line!());
                             self.last_route_emitted_for_control_id = self.last_control_event_id.clone();
@@ -827,6 +871,54 @@ impl RouteExecutor {
         deterministic: &DeterministicRouteDecision,
         model_json: &str,
     ) {
+        let Some(emitter) = self.emitter.as_ref() else {
+            return;
+        };
+        let emit_eval = evaluate_route_emit(RouteEmitState {
+            awaiting_control_successor: self.awaiting_control_successor.as_deref(),
+            last_control_kind: self.last_control_kind.as_deref(),
+            pending_required_successor: self.pending_required_successor.as_deref(),
+        });
+        if !emit_eval.allowed {
+            let reason = emit_eval
+                .reason
+                .unwrap_or_else(|| "illegal control emit".to_string());
+            let kind = if matches!(
+                emit_eval.rule,
+                RouteEmitRule::DuplicateEmitBeforeSuccessor
+                    | RouteEmitRule::IllegalControlReentry
+            ) {
+                "duplicate_route_emit_before_successor"
+            } else {
+                "illegal_control_reentry"
+            };
+            let payload = self.suppression_payload(
+                &reason,
+                "recoverable",
+                "attempt_expected_successor_recovery",
+                serde_json::json!({
+                    "attempted_kind": "route_selected",
+                    "attempted_route": deterministic.route.as_str(),
+                    "deterministic_rule": deterministic.prompt_tag,
+                }),
+            );
+            let tid = self
+                .current_trigger
+                .clone()
+                .expect("emit_deterministic_decision called without current_trigger set");
+            emitter.emit_child(
+                RuntimeEvent::Debug(canon_event::DebugEvent {
+                    source: "route_executor".to_string(),
+                    kind: kind.to_string(),
+                    payload,
+                }),
+                vec![tid.clone()],
+                file!(),
+                line!(),
+            );
+            self.emit_recovery_for_expected_successor(emitter, tid);
+            return;
+        }
         let decision = Self::decision_from_deterministic(deterministic);
         self.emit_route_selected_from_decision(&decision, model_json.to_string());
     }

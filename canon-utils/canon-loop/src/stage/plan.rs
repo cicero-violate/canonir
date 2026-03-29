@@ -166,7 +166,24 @@ fn deterministic_bootstrap_plan(
     let planned = LoopPlanned {
         tick: rs.tick,
         action_kind: "run_command".to_string(),
-        action_payload: action_payload_with_cwd(cmd, Some(cwd)),
+        action_payload: {
+            let mut payload = action_payload_with_cwd(cmd, Some(cwd));
+            payload["verifier"] = serde_json::Value::String("cargo_check".to_string());
+            payload["failure_class"] = serde_json::Value::String(
+                observed
+                    .semantic_summary
+                    .primary_failure_class()
+                    .unwrap_or_else(|| "missing_target".to_string()),
+            );
+            payload["failure_scope"] = serde_json::Value::String(
+                observed
+                    .semantic_summary
+                    .failure_scope
+                    .clone()
+                    .unwrap_or_else(|| "workspace".to_string()),
+            );
+            payload
+        },
         reason: reason.to_string(),
         llm_request_id: None,
         trace_id: None,

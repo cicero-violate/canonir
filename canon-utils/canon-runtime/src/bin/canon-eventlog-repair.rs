@@ -40,6 +40,7 @@ enum IncidentKind {
     LlmTimeoutPlanLoop,
     ObserveSuppressedByPendingSuccessor,
     RepeatedDeterministicPlanWithoutRecovery,
+    RepeatedRouteSelectedBeforePlanningCompleted,
     GenericEventLogFailure,
 }
 
@@ -52,6 +53,9 @@ impl IncidentKind {
             }
             Self::RepeatedDeterministicPlanWithoutRecovery => {
                 "repeated_deterministic_plan_without_recovery"
+            }
+            Self::RepeatedRouteSelectedBeforePlanningCompleted => {
+                "repeated_route_selected_before_planning_completed"
             }
             Self::GenericEventLogFailure => "generic_event_log_failure",
         }
@@ -128,6 +132,9 @@ fn synthetic_test_name(incident: IncidentKind) -> &'static str {
         }
         IncidentKind::RepeatedDeterministicPlanWithoutRecovery => {
             "synthetic_repeated_deterministic_plan_without_recovery_incident"
+        }
+        IncidentKind::RepeatedRouteSelectedBeforePlanningCompleted => {
+            "synthetic_repeated_route_selected_before_planning_completed_incident"
         }
         IncidentKind::GenericEventLogFailure => {
             "synthetic_generic_event_trigger_incident"
@@ -368,11 +375,13 @@ impl EventRecord {
             String::new()
         };
 
-        let message = if lowered.contains("llm call timed out") {
-            Some("llm call timed out".to_string())
-        } else {
-            None
-        };
+        let message = extract_debug_string(&text, "message: \"").or_else(|| {
+            if lowered.contains("llm call timed out") {
+                Some("llm call timed out".to_string())
+            } else {
+                None
+            }
+        });
 
         let status = if lowered.contains("status: \"llm_failed\"") || lowered.contains("status:\"llm_failed\"") {
             Some("llm_failed".to_string())
@@ -431,6 +440,13 @@ fn extract_meta_u64(text: &str, key: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
+fn extract_debug_string(text: &str, key: &str) -> Option<String> {
+    let start = text.find(key)? + key.len();
+    let rest = &text[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
 fn classify_incident(records: &[EventRecord]) -> IncidentReport {
     let llm_timeout = records.iter().any(|record| {
         record.kind == "capability_failed"
@@ -452,9 +468,17 @@ fn classify_incident(records: &[EventRecord]) -> IncidentReport {
                 .iter()
                 .any(|rule| rule.contains("missing_target_plan"))
     });
+    let repeated_route_selected_before_planning_completed = records.iter().any(|record| {
+        record.kind == "error_occurred"
+            && record.message.as_deref().is_some_and(|message| {
+                message.contains("expected=planning_completed; got=route_selected")
+            })
+    });
 
     let incident = if llm_timeout && planning_failed && observe_suppressed && deterministic_plan {
         IncidentKind::LlmTimeoutPlanLoop
+    } else if repeated_route_selected_before_planning_completed {
+        IncidentKind::RepeatedRouteSelectedBeforePlanningCompleted
     } else if observe_suppressed {
         IncidentKind::ObserveSuppressedByPendingSuccessor
     } else if deterministic_plan && planning_failed {
@@ -504,6 +528,15 @@ fn classify_incident(records: &[EventRecord]) -> IncidentReport {
                 "Inspect route executor for repeated deterministic plan replay.",
                 "Verify plan failure transitions allow observe or a fresh recovery route before re-planning.",
                 "Add a synthetic harness case for repeated deterministic plan without recovery.",
+            ]
+            .join("\n"),
+        ),
+        IncidentKind::RepeatedRouteSelectedBeforePlanningCompleted => (
+            "Control routing is re-emitting route_selected(plan) before the required planning_completed successor is recorded.".to_string(),
+            [
+                "Inspect route executor / dispatch handoff for duplicate plan-route emission while a planning_completed successor is still pending.",
+                "Verify awaiting_control_successor or pending_required_successor suppresses repeated route_selected(plan).",
+                "Add a synthetic harness case that reproduces: route_selected(plan) -> route_selected(plan) before planning_completed.",
             ]
             .join("\n"),
         ),
@@ -874,6 +907,46 @@ mod tests {
         );
         assert!(report.summary.contains("Deterministic plan routing repeats"));
         assert!(report.guidance.contains("fresh recovery route"));
+    }
+
+    #[test]
+    fn synthetic_repeated_route_selected_before_planning_completed_incident() {
+        let records = vec![
+            record(
+                "route_selected",
+                "supervisor",
+                None,
+                None,
+                None,
+                Some("plan"),
+                &["deterministic:missing_target_plan"],
+                Some("canon-utils/canon-route/src/executor.rs"),
+                Some(809),
+            ),
+            record(
+                "error_occurred",
+                "event-runtime",
+                Some("invariant violation: missing required successor after route_selected id=abc; expected=planning_completed; got=route_selected; note=approved_route=plan"),
+                None,
+                None,
+                None,
+                &[],
+                Some("canon-utils/canon-runtime-events/src/tlog/binary.rs"),
+                Some(383),
+            ),
+        ];
+
+        let report = classify_incident(&records);
+        assert_eq!(
+            report.incident,
+            IncidentKind::RepeatedRouteSelectedBeforePlanningCompleted
+        );
+        assert_eq!(
+            synthetic_test_name(report.incident),
+            "synthetic_repeated_route_selected_before_planning_completed_incident"
+        );
+        assert!(report.summary.contains("route_selected(plan)"));
+        assert!(report.guidance.contains("planning_completed"));
     }
 
     #[test]
