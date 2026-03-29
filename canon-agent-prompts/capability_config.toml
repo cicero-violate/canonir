@@ -58,7 +58,7 @@ tab_cooldown_ms = 4000
 
 [llm.endpoints.planner]
 id = "planner_chatgpt_group"
-url = "https://chatgpt.com/gg/69bb5d85449481959470422b599305bb"
+url = "https://chatgpt.com/gg/69c897e5a6448198a36a18b58f83de07"
 role_markdown = "builtin:planner"
 role = "planner"
 stateful = true
@@ -187,7 +187,7 @@ burst = 6
 # ---------------------------------------------------------------------------
 
 [[agents.cards]]
-agent_url = "https://chatgpt.com/gg/69bb5d85449481959470422b599305bb"
+agent_url = "https://chatgpt.com/gg/69c897e5a6448198a36a18b58f83de07"
 agent_id = "planner"
 role = "builtin:planner"
 goal = "AGENT_GOAL.md"
