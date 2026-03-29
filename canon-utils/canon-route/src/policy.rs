@@ -500,7 +500,7 @@ impl RouteProposal {
                 rule: DeterministicRouteRule::StateDriftObserve,
             },
             Self::MissingTargetPlan => DeterministicRouteDecision {
-                route: RouteKind::Observe,
+                route: RouteKind::Plan,
                 rationale: format!(
                     "target workspace is missing at {}; route directly to plan to create/bootstrap it",
                     ctx.target_workspace_path_state().unwrap_or("unknown")
@@ -511,7 +511,7 @@ impl RouteProposal {
                 rule: DeterministicRouteRule::MissingTargetPlan,
             },
             Self::BlockedValidationPlan => DeterministicRouteDecision {
-                route: RouteKind::Observe,
+                route: RouteKind::Plan,
                 rationale: "validation remains blocked; route to plan before verification or further execution".to_string(),
                 confidence: 0.99,
                 prompt_tag: "deterministic:blocked_validation_plan",
@@ -549,7 +549,7 @@ impl RouteProposal {
                 }
             },
             Self::InvalidPlanReplan => DeterministicRouteDecision {
-                route: RouteKind::Observe,
+                route: RouteKind::Plan,
                 rationale: format!(
                     "previous plan batches were invalid (count={}); route directly to plan for constrained replanning",
                     ctx.consecutive_invalid_plan_batches

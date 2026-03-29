@@ -20,10 +20,12 @@ use canon_tools_search::search_files;
 use canon_tools_patch::parse_patch;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::{
     context::{LoopContext, PendingPlan},
+    env_model::{select_bootstrap_command, BootstrapCommandChoice},
     planning_preconditions,
     policy::{planner_hint_lines, retry_policy_for_planning_context, RetryPolicy},
     result::LoopStageResult,
@@ -74,12 +76,119 @@ pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: Eve
             }),
         ]));
     };
+    if let Some(result) = deterministic_bootstrap_plan(&rs, ctx, &observed)? {
+        return Ok(result);
+    }
     handle_observed(ctx, &observed, trigger_id, Some(rs.rationale.clone()), rs.confidence)
 }
 
 fn is_placeholder_goal(goal: &str) -> bool {
     let trimmed = goal.trim();
     trimmed.is_empty() || trimmed.contains(PLACEHOLDER_GOAL)
+}
+
+fn deterministic_bootstrap_plan(
+    rs: &RouteSelected,
+    ctx: &mut LoopContext,
+    observed: &LoopObserved,
+) -> anyhow::Result<Option<LoopStageResult>> {
+    use planning_preconditions::PlanningPrecondition;
+
+    let preconditions = planning_preconditions::derive_preconditions_from_lines(
+        &observed.semantic_summary.planning_preconditions,
+    );
+    let needs_bootstrap = preconditions.contains(&PlanningPrecondition::MustBootstrapWorkspace);
+    let needs_init = preconditions.contains(&PlanningPrecondition::MustInitCargoProject);
+    if !needs_bootstrap && !needs_init {
+        return Ok(None);
+    }
+
+    let target_root = observed
+        .semantic_summary
+        .target_root
+        .as_deref()
+        .map(PathBuf::from)
+        .or_else(|| {
+            observed
+                .goal_text
+                .as_deref()
+                .and_then(|text| parse_agent_goal_markdown(text).target_path)
+        })
+        .or_else(|| {
+            ctx.goal_text
+                .as_deref()
+                .and_then(|text| parse_agent_goal_markdown(text).target_path)
+        });
+    let Some(target_root) = target_root else {
+        return Ok(None);
+    };
+
+    let bootstrap_choice = if needs_bootstrap {
+        select_bootstrap_command(&target_root)
+    } else {
+        BootstrapCommandChoice::CargoInit
+    };
+
+    let target_root_display = target_root.display().to_string();
+    let target_name = target_root
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("app");
+    let parent_cwd = target_root
+        .parent()
+        .unwrap_or_else(|| Path::new("/"))
+        .display()
+        .to_string();
+
+    let (cmd, cwd, reason, status) = match bootstrap_choice {
+        BootstrapCommandChoice::CargoNew => (
+            format!("cargo new --bin {target_name}"),
+            parent_cwd,
+            "deterministic_bootstrap_workspace",
+            "deterministic_bootstrap_workspace",
+        ),
+        BootstrapCommandChoice::CargoInit => (
+            "cargo init --bin .".to_string(),
+            target_root_display.clone(),
+            "deterministic_init_cargo_project",
+            "deterministic_init_cargo_project",
+        ),
+        BootstrapCommandChoice::NoBootstrapNeeded => {
+            return Ok(None);
+        }
+    };
+
+    ctx.last_planned_observed_tick = Some(observed.tick);
+    let planned_span_id = Uuid::new_v4().to_string();
+    let plan_step_id = Uuid::new_v4().to_string();
+    let action_id = plan_step_id.clone();
+    let planned = LoopPlanned {
+        tick: rs.tick,
+        action_kind: "run_command".to_string(),
+        action_payload: action_payload_with_cwd(cmd, Some(cwd)),
+        reason: reason.to_string(),
+        llm_request_id: None,
+        trace_id: None,
+        execution_id: None,
+        span_id: Some(planned_span_id),
+        parent_span_id: None,
+        plan_id: None,
+        plan_step_id: Some(plan_step_id),
+        action_id: Some(action_id),
+        signals: None,
+        depends_on: Vec::new(),
+    };
+
+    Ok(Some(LoopStageResult::EmitMany(vec![
+        RuntimeEvent::LoopPlanned(planned),
+        RuntimeEvent::PlanningCompleted(PlanningCompleted {
+            tick: rs.tick,
+            llm_request_id: None,
+            planned_count: 1,
+            status: status.to_string(),
+        }),
+    ])))
 }
 
 pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
@@ -1191,6 +1300,18 @@ const PLANNER_SYSTEM_INSTRUCTIONS: &str = r#"You are a code-editing agent. Produ
 Step 1 — Discover (only when unsure of project state or missing file contents):
   Emit ONLY list_dir and/or read_file. Do NOT mix with edits.
   → Results appear in "Recent actions" on your next call.
+  Bootstrap exception:
+  - If the semantic summary says `path_exists=false`,
+    `validation_blocked=true`, or planning preconditions include
+    `must_bootstrap_workspace=true`, do NOT emit discovery first.
+  - In that case, the first valid batch is a bootstrap batch that creates
+    the target workspace directly with exactly one `run_command`.
+  - Prefer:
+    `mkdir -p <TARGET_WORKSPACE> && cargo init --name <crate_name> --bin <TARGET_WORKSPACE>`
+    when the directory path already exists or may already exist.
+  - Use:
+    `cargo new --bin <TARGET_WORKSPACE> --name <crate_name>`
+    only when creating a brand-new directory path.
 
 Step 2 — Create/Edit (after seeing discovery results):
   Use semantic editor actions first for covered compiler repairs.
@@ -1205,6 +1326,8 @@ Step 2 — Create/Edit (after seeing discovery results):
 
 NEVER use "write" or "patch_file" — they are removed. Use apply_patch.
 NEVER assume a directory/project exists without checking with list_dir first.
+EXCEPTION: when bootstrap is explicitly required for a missing target workspace,
+create the workspace first with `run_command`; discovery comes after bootstrap succeeds.
 WORKSPACE RULE: If the target project directory already exists in the workspace tree, use `cargo init --name <name>` instead of `cargo new`. `cargo new` fails when the directory exists.
 SAFETY RULE: The following commands are BLOCKED and will always fail. Do NOT plan them: rm -rf, git reset --hard, git clean -f, dd if=, mkfs, shred, >/dev/sd.
 

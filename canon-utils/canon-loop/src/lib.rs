@@ -20,6 +20,9 @@ pub use harness_repair::{
     build_harness_repair_directive, evaluate_harness_repair_loop, HarnessRepairAction,
     HarnessRepairDecision, HarnessRepairDirective, HarnessRepairPhase, HarnessRepairState,
     HarnessRepairTarget,
+    
+    // ensure full state space visibility for exhaustive mapping tests
+    *
 };
 pub use result::LoopStageResult;
 pub use stage::LoopStageEvent;

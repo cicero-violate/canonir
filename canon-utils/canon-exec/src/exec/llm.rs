@@ -371,7 +371,6 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                 capability: name,
                                 result: CapabilityResult::Llm(LlmResult { success: true, duration_ms: elapsed_ms, response: payload.clone() }),
                             }), vec![trigger_id.clone()], file!(), line!());
-                            // no additional follow-up event
                         }
                         Err(err) => {
                             let finalized_ms = now_ms();

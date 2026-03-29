@@ -173,6 +173,10 @@ fn synthetic_control_seed_space() -> Vec<ControlState> {
     states
 }
 
+pub fn synthetic_control_seed_states() -> Vec<ControlState> {
+    synthetic_control_seed_space()
+}
+
 pub fn synthetic_control_metrics() -> SyntheticControlMetrics {
     let mut metrics = SyntheticControlMetrics::default();
     for state in synthetic_control_seed_space() {
@@ -214,6 +218,10 @@ const SYNTHETIC_TRACE_EVENTS: [ControlEvent; 10] = [
 
 fn synthetic_trace_step_space() -> &'static [ControlEvent] {
     &SYNTHETIC_TRACE_EVENTS
+}
+
+pub fn synthetic_control_events() -> &'static [ControlEvent] {
+    synthetic_trace_step_space()
 }
 
 pub fn synthetic_control_trace_metrics(depth: usize) -> SyntheticControlTraceMetrics {

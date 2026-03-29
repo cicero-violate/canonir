@@ -247,6 +247,77 @@ pub fn format_missing_capabilities(missing: &[HarnessPrimitiveCapability]) -> St
         .join(", ")
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SyntheticHarnessRepairMetrics {
+    pub total_states: usize,
+    pub observe: usize,
+    pub decide: usize,
+    pub repair: usize,
+    pub verify: usize,
+    pub update: usize,
+    pub stop: usize,
+}
+
+fn synthetic_ready_capabilities() -> HarnessCapabilityState {
+    HarnessCapabilityState {
+        read_search: true,
+        structured_edit: true,
+        apply_patch: true,
+        run_verifier: true,
+        observe_diagnostics: true,
+    }
+}
+
+fn synthetic_bool_at(bits: u16, shift: u8) -> bool {
+    bits & (1 << shift) != 0
+}
+
+fn synthetic_state_from_bits(bits: u16) -> HarnessRepairState {
+    HarnessRepairState {
+        capabilities: synthetic_ready_capabilities(),
+        drift_detected: synthetic_bool_at(bits, 0),
+        actionable_failure: synthetic_bool_at(bits, 1),
+        failure_class_no_actionable: synthetic_bool_at(bits, 2),
+        failure_scope_localized: synthetic_bool_at(bits, 3),
+        failure_scope_workspace: synthetic_bool_at(bits, 4),
+        failure_scope_tooling: synthetic_bool_at(bits, 5),
+        verifier_ready: synthetic_bool_at(bits, 6),
+        cargo_check_passed: synthetic_bool_at(bits, 7),
+        stronger_verification_requested: synthetic_bool_at(bits, 8),
+        last_action_was_mutation: synthetic_bool_at(bits, 9),
+        single_action_batch_required: true,
+        needs_replan: synthetic_bool_at(bits, 10),
+        progress_stalled: synthetic_bool_at(bits, 11),
+    }
+}
+
+pub fn synthetic_harness_repair_states() -> Vec<HarnessRepairState> {
+    let mut states = Vec::new();
+    for bits in 0u16..(1u16 << 12) {
+        states.push(synthetic_state_from_bits(bits));
+    }
+    states
+}
+
+pub fn synthetic_harness_repair_metrics() -> SyntheticHarnessRepairMetrics {
+    let mut metrics = SyntheticHarnessRepairMetrics::default();
+
+    for state in synthetic_harness_repair_states() {
+        let decision = evaluate_harness_repair_loop(&state);
+        metrics.total_states += 1;
+        match decision.phase {
+            HarnessRepairPhase::Observe => metrics.observe += 1,
+            HarnessRepairPhase::Decide => metrics.decide += 1,
+            HarnessRepairPhase::Repair => metrics.repair += 1,
+            HarnessRepairPhase::Verify => metrics.verify += 1,
+            HarnessRepairPhase::Update => metrics.update += 1,
+            HarnessRepairPhase::Stop => metrics.stop += 1,
+        }
+    }
+
+    metrics
+}
+
 fn cargo_check_command(target: &HarnessRepairTarget) -> String {
     target
         .crate_name
@@ -270,7 +341,10 @@ mod tests {
         build_harness_repair_directive, evaluate_harness_repair_loop, HarnessRepairAction,
         HarnessRepairPhase, HarnessRepairState, HarnessRepairTarget,
     };
-    use canon_invariant::HarnessCapabilityState;
+    use canon_invariant::{
+        meta_invariant_harness_self_repair_missing_capabilities,
+        meta_invariant_harness_self_repair_ready, HarnessCapabilityState,
+    };
 
     fn ready_caps() -> HarnessCapabilityState {
         HarnessCapabilityState {
@@ -325,5 +399,156 @@ mod tests {
             directive.verifier_command.as_deref(),
             Some("cargo test -p canon-route policy::tests::foo -- --nocapture")
         );
+    }
+
+    fn bool_at(bits: u16, shift: u8) -> bool {
+        bits & (1 << shift) != 0
+    }
+
+    fn state_from_bits(bits: u16) -> HarnessRepairState {
+        HarnessRepairState {
+            capabilities: ready_caps(),
+            drift_detected: bool_at(bits, 0),
+            actionable_failure: bool_at(bits, 1),
+            failure_class_no_actionable: bool_at(bits, 2),
+            failure_scope_localized: bool_at(bits, 3),
+            failure_scope_workspace: bool_at(bits, 4),
+            failure_scope_tooling: bool_at(bits, 5),
+            verifier_ready: bool_at(bits, 6),
+            cargo_check_passed: bool_at(bits, 7),
+            stronger_verification_requested: bool_at(bits, 8),
+            last_action_was_mutation: bool_at(bits, 9),
+            single_action_batch_required: true,
+            needs_replan: bool_at(bits, 10),
+            progress_stalled: bool_at(bits, 11),
+        }
+    }
+
+    fn assert_decision_matches_precedence(state: &HarnessRepairState) {
+        let decision = evaluate_harness_repair_loop(state);
+        let missing = meta_invariant_harness_self_repair_missing_capabilities(state.capabilities);
+
+        if !missing.is_empty() {
+            assert_eq!(decision.phase, HarnessRepairPhase::Stop);
+            assert_eq!(decision.action, HarnessRepairAction::StopBlocked);
+            return;
+        }
+
+        if state.drift_detected {
+            assert_eq!(decision.phase, HarnessRepairPhase::Observe);
+            assert_eq!(decision.action, HarnessRepairAction::ObserveWorkspace);
+            return;
+        }
+
+        if state.failure_class_no_actionable && !state.actionable_failure {
+            assert_eq!(decision.phase, HarnessRepairPhase::Observe);
+            assert_eq!(decision.action, HarnessRepairAction::CollectDiagnostics);
+            return;
+        }
+
+        if state.needs_replan || state.progress_stalled {
+            assert_eq!(decision.phase, HarnessRepairPhase::Decide);
+            assert_eq!(decision.action, HarnessRepairAction::ReplanSingleAction);
+            return;
+        }
+
+        if state.actionable_failure {
+            assert_eq!(decision.phase, HarnessRepairPhase::Repair);
+            if state.failure_scope_localized {
+                assert_eq!(decision.action, HarnessRepairAction::ApplyLocalizedRepair);
+            } else {
+                assert_eq!(decision.action, HarnessRepairAction::ApplyWorkspaceRepair);
+            }
+            return;
+        }
+
+        if state.verifier_ready && !state.cargo_check_passed {
+            assert_eq!(decision.phase, HarnessRepairPhase::Verify);
+            assert_eq!(decision.action, HarnessRepairAction::RunCargoCheck);
+            return;
+        }
+
+        if state.cargo_check_passed && state.stronger_verification_requested {
+            assert_eq!(decision.phase, HarnessRepairPhase::Verify);
+            assert_eq!(decision.action, HarnessRepairAction::RunCargoTest);
+            return;
+        }
+
+        if meta_invariant_harness_self_repair_ready(state.capabilities) {
+            assert_eq!(decision.phase, HarnessRepairPhase::Update);
+            assert_eq!(decision.action, HarnessRepairAction::UpdateState);
+            return;
+        }
+
+        assert_eq!(decision.phase, HarnessRepairPhase::Stop);
+        assert_eq!(decision.action, HarnessRepairAction::StopReady);
+    }
+
+    #[test]
+    fn harness_loop_full_state_space_is_exhaustively_mapped() {
+        let mut total = 0usize;
+        let mut observe = 0usize;
+        let mut decide = 0usize;
+        let mut repair = 0usize;
+        let mut verify = 0usize;
+        let mut update = 0usize;
+        let mut stop = 0usize;
+
+        for bits in 0u16..(1u16 << 12) {
+            let state = state_from_bits(bits);
+            let decision = evaluate_harness_repair_loop(&state);
+            assert_decision_matches_precedence(&state);
+
+            match decision.phase {
+                HarnessRepairPhase::Observe => observe += 1,
+                HarnessRepairPhase::Decide => decide += 1,
+                HarnessRepairPhase::Repair => repair += 1,
+                HarnessRepairPhase::Verify => verify += 1,
+                HarnessRepairPhase::Update => update += 1,
+                HarnessRepairPhase::Stop => stop += 1,
+            }
+
+            total += 1;
+        }
+
+        assert_eq!(total, 1 << 12);
+        assert_eq!(total, observe + decide + repair + verify + update + stop);
+        assert!(observe > 0);
+        assert!(decide > 0);
+        assert!(repair > 0);
+        assert!(verify > 0);
+        assert!(update > 0);
+        let _ = stop;
+    }
+
+    #[test]
+    fn harness_directive_command_mapping_is_exhaustive_for_full_state_space() {
+        let target = HarnessRepairTarget::new(
+            Some("canon-route".into()),
+            Some("policy::tests::foo".into()),
+        );
+
+        for bits in 0u16..(1u16 << 12) {
+            let state = state_from_bits(bits);
+            let directive = build_harness_repair_directive(&state, &target);
+
+            match directive.decision.action {
+                HarnessRepairAction::RunCargoCheck => {
+                    assert_eq!(
+                        directive.verifier_command.as_deref(),
+                        Some("cargo check -p canon-route")
+                    );
+                }
+                HarnessRepairAction::RunCargoTest => {
+                    assert_eq!(
+                        directive.verifier_command.as_deref(),
+                        Some("cargo test -p canon-route policy::tests::foo -- --nocapture")
+                    );
+                }
+                _ => {
+                    assert!(directive.verifier_command.is_none());
+                }
+            }
+        }
     }
 }

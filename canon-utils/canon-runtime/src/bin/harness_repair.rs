@@ -1,11 +1,12 @@
 use anyhow::{anyhow, bail, Context, Result};
 use canon_event::{EventConsumer, EventEmitter, EventEmitterHandle, EventId, RuntimeEvent};
 use canon_invariant::control_harness::{
-    synthetic_control_metrics,
-    synthetic_control_trace_metrics,
+    evaluate_control_state, step_control_state, synthetic_control_events,
+    synthetic_control_metrics, synthetic_control_seed_states, synthetic_control_trace_metrics,
+    ControlDecision,
 };
 use canon_llm::relay::{relay_client_call, RelayRequest, RELAY_ADDR};
-use canon_loop::{HarnessRepairTarget, LoopStageExecutor};
+use canon_loop::{evaluate_harness_repair_loop, HarnessRepairTarget, HarnessRepairPhase, LoopStageExecutor};
 use canon_runtime::consumers::repair_control_consumer::RepairControlConsumer;
 use canon_tools_patch::{apply_patch, parse_patch, Hunk};
 use serde_json::Value;
@@ -87,6 +88,208 @@ fn log_control_harness_summary(logger: &HarnessLogger) {
         depth_two.emit_terminal,
         depth_two.invariant_terminal,
     ));
+}
+
+fn log_repair_harness_summary(logger: &HarnessLogger) -> Result<()> {
+    let metrics = canon_loop::harness_repair::synthetic_harness_repair_metrics();
+    let classified =
+        metrics.observe + metrics.decide + metrics.repair + metrics.verify + metrics.update + metrics.stop;
+
+    if metrics.total_states == 0 {
+        bail!("repair_harness state mapping explored zero states");
+    }
+    if metrics.total_states != classified {
+        bail!(
+            "repair_harness state mapping mismatch: total={} classified={}",
+            metrics.total_states,
+            classified
+        );
+    }
+    if metrics.observe == 0
+        || metrics.decide == 0
+        || metrics.repair == 0
+        || metrics.verify == 0
+        || metrics.update == 0
+    {
+        bail!(
+            "repair_harness missing required phase coverage: observe={} decide={} repair={} verify={} update={} stop={}",
+            metrics.observe,
+            metrics.decide,
+            metrics.repair,
+            metrics.verify,
+            metrics.update,
+            metrics.stop
+        );
+    }
+
+    logger.log(&format!(
+        "repair_harness states={} observe={} decide={} repair={} verify={} update={} stop={}",
+        metrics.total_states,
+        metrics.observe,
+        metrics.decide,
+        metrics.repair,
+        metrics.verify,
+        metrics.update,
+        metrics.stop,
+    ));
+
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SyntheticRuntimeProductMetrics {
+    control_seed_states: usize,
+    repair_seed_states: usize,
+    total_pairs: usize,
+    total_transitions: usize,
+    suppressed_pairs: usize,
+    replay_pairs: usize,
+    fresh_pairs: usize,
+    emit_pairs: usize,
+    invariant_pairs: usize,
+    observe_pairs: usize,
+    decide_pairs: usize,
+    repair_pairs: usize,
+    verify_pairs: usize,
+    update_pairs: usize,
+    stop_pairs: usize,
+    blocked_pairs: usize,
+    productive_pairs: usize,
+}
+
+fn synthetic_runtime_product_metrics() -> SyntheticRuntimeProductMetrics {
+    let control_states = synthetic_control_seed_states();
+    let repair_states = canon_loop::harness_repair::synthetic_harness_repair_states();
+    let control_events = synthetic_control_events();
+    let mut metrics = SyntheticRuntimeProductMetrics {
+        control_seed_states: control_states.len(),
+        repair_seed_states: repair_states.len(),
+        ..SyntheticRuntimeProductMetrics::default()
+    };
+
+    for control in &control_states {
+        for repair in &repair_states {
+            metrics.total_pairs += 1;
+
+            match evaluate_control_state(*control) {
+                ControlDecision::Suppress(_) => metrics.suppressed_pairs += 1,
+                ControlDecision::ReplayCachedRoute => metrics.replay_pairs += 1,
+                ControlDecision::RequestFreshRoute => metrics.fresh_pairs += 1,
+                ControlDecision::EmitRoute => metrics.emit_pairs += 1,
+                ControlDecision::InvariantViolation(_) => metrics.invariant_pairs += 1,
+            }
+
+            match evaluate_harness_repair_loop(repair).phase {
+                HarnessRepairPhase::Observe => metrics.observe_pairs += 1,
+                HarnessRepairPhase::Decide => metrics.decide_pairs += 1,
+                HarnessRepairPhase::Repair => metrics.repair_pairs += 1,
+                HarnessRepairPhase::Verify => metrics.verify_pairs += 1,
+                HarnessRepairPhase::Update => metrics.update_pairs += 1,
+                HarnessRepairPhase::Stop => metrics.stop_pairs += 1,
+            }
+
+            let mut pair_blocked = true;
+            for event in control_events {
+                metrics.total_transitions += 1;
+                let next_control = step_control_state(*control, *event);
+                let next_decision = evaluate_control_state(next_control);
+                if !matches!(next_decision, ControlDecision::Suppress(_) | ControlDecision::InvariantViolation(_)) {
+                    pair_blocked = false;
+                }
+            }
+
+            if pair_blocked {
+                metrics.blocked_pairs += 1;
+            } else {
+                metrics.productive_pairs += 1;
+            }
+        }
+    }
+
+    metrics
+}
+
+fn log_runtime_product_summary(logger: &HarnessLogger) -> Result<()> {
+    let metrics = synthetic_runtime_product_metrics();
+    let control_classified = metrics.suppressed_pairs
+        + metrics.replay_pairs
+        + metrics.fresh_pairs
+        + metrics.emit_pairs
+        + metrics.invariant_pairs;
+    let repair_classified = metrics.observe_pairs
+        + metrics.decide_pairs
+        + metrics.repair_pairs
+        + metrics.verify_pairs
+        + metrics.update_pairs
+        + metrics.stop_pairs;
+
+    if metrics.total_pairs == 0 || metrics.total_transitions == 0 {
+        bail!("runtime_product explored zero composed states or transitions");
+    }
+    if control_classified != metrics.total_pairs {
+        bail!(
+            "runtime_product control classification mismatch: total_pairs={} classified={}",
+            metrics.total_pairs,
+            control_classified
+        );
+    }
+    if repair_classified != metrics.total_pairs {
+        bail!(
+            "runtime_product repair classification mismatch: total_pairs={} classified={}",
+            metrics.total_pairs,
+            repair_classified
+        );
+    }
+    if metrics.blocked_pairs == metrics.total_pairs {
+        bail!("runtime_product all composed states are blocked");
+    }
+    if metrics.replay_pairs == 0
+        || metrics.fresh_pairs == 0
+        || metrics.emit_pairs == 0
+        || metrics.invariant_pairs == 0
+        || metrics.observe_pairs == 0
+        || metrics.decide_pairs == 0
+        || metrics.repair_pairs == 0
+        || metrics.verify_pairs == 0
+        || metrics.update_pairs == 0
+    {
+        bail!(
+            "runtime_product missing required coverage: replay={} fresh={} emit={} invariant={} observe={} decide={} repair={} verify={} update={} stop={}",
+            metrics.replay_pairs,
+            metrics.fresh_pairs,
+            metrics.emit_pairs,
+            metrics.invariant_pairs,
+            metrics.observe_pairs,
+            metrics.decide_pairs,
+            metrics.repair_pairs,
+            metrics.verify_pairs,
+            metrics.update_pairs,
+            metrics.stop_pairs,
+        );
+    }
+
+    logger.log(&format!(
+        "runtime_product control_states={} repair_states={} pairs={} transitions={} productive={} blocked={} suppress={} replay={} fresh={} emit={} invariant={} observe={} decide={} repair={} verify={} update={} stop={}",
+        metrics.control_seed_states,
+        metrics.repair_seed_states,
+        metrics.total_pairs,
+        metrics.total_transitions,
+        metrics.productive_pairs,
+        metrics.blocked_pairs,
+        metrics.suppressed_pairs,
+        metrics.replay_pairs,
+        metrics.fresh_pairs,
+        metrics.emit_pairs,
+        metrics.invariant_pairs,
+        metrics.observe_pairs,
+        metrics.decide_pairs,
+        metrics.repair_pairs,
+        metrics.verify_pairs,
+        metrics.update_pairs,
+        metrics.stop_pairs,
+    ));
+
+    Ok(())
 }
 
 const DEFAULT_WORKSPACE: &str = "/workspace/ai_sandbox/canon";
@@ -260,6 +463,8 @@ fn main() -> Result<()> {
     let log_path = workspace.join("state/harness_repair.log");
     let logger = Arc::new(HarnessLogger::open(&log_path)?);
     log_control_harness_summary(&logger);
+    log_repair_harness_summary(&logger)?;
+    log_runtime_product_summary(&logger)?;
 
     let target = HarnessRepairTarget::new(Some(crate_name.clone()), Some(test_name.clone()));
     let mut failure_output = if let Some(path) = stderr_file {
@@ -1022,6 +1227,99 @@ fn extract_last_request_id(text: &str) -> Option<String> {
         None
     } else {
         Some(value.to_string())
+    }
+}
+
+#[cfg(test)]
+mod planner_contract_tests {
+    use super::{
+        extract_last_request_id, parse_planner_actions, validate_patch_attempt,
+    };
+    use std::path::Path;
+
+    #[test]
+    fn planner_parses_single_action_object() {
+        let actions = parse_planner_actions(&serde_json::json!({
+            "action": "done",
+            "reason": "green"
+        }))
+        .expect("single action object should parse");
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0]
+                .raw
+                .get("action")
+                .and_then(|value| value.as_str()),
+            Some("done")
+        );
+    }
+
+    #[test]
+    fn planner_parses_json_code_fence_from_nested_message_field() {
+        let actions = parse_planner_actions(&serde_json::json!({
+            "message": {
+                "content": "```json\n[{\"action\":\"read_file\",\"path\":\"canon-utils/canon-route/src/policy.rs\"}]\n```"
+            }
+        }))
+        .expect("nested fenced JSON should parse");
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0]
+                .raw
+                .get("action")
+                .and_then(|value| value.as_str()),
+            Some("read_file")
+        );
+    }
+
+    #[test]
+    fn planner_rejects_request_metadata_only_payload() {
+        let err = parse_planner_actions(&serde_json::json!({
+            "request_id": "abc-123"
+        }))
+        .expect_err("metadata-only payload must be rejected");
+        assert!(err.to_string().contains("response only contained request metadata"));
+    }
+
+    #[test]
+    fn planner_rejects_empty_action_array() {
+        let err = parse_planner_actions(&serde_json::json!([]))
+            .expect_err("empty action arrays must be rejected");
+        assert!(err.to_string().contains("empty JSON array"));
+    }
+
+    #[test]
+    fn patch_validation_rejects_absolute_paths() {
+        let patch = "\
+*** Begin Patch
+*** Update File: /workspace/ai_sandbox/canon/canon-utils/canon-route/src/policy.rs
+@@
+-old
++new
+*** End Patch";
+        let err = validate_patch_attempt(Path::new("/workspace/ai_sandbox/canon"), patch)
+            .expect_err("absolute patch paths must be rejected");
+        assert!(err.contains("workspace-relative"));
+    }
+
+    #[test]
+    fn patch_validation_rejects_unexpected_repo_root_targets() {
+        let patch = "\
+*** Begin Patch
+*** Update File: Cargo.toml
+@@
+-old
++new
+*** End Patch";
+        let err = validate_patch_attempt(Path::new("/workspace/ai_sandbox/canon"), patch)
+            .expect_err("repo-root harness should reject non canon-utils targets");
+        assert!(err.contains("unexpected patch path"));
+    }
+
+    #[test]
+    fn extract_last_request_id_reads_bracketed_tag() {
+        let text = "planner failed [last_request_id=req-42]";
+        assert_eq!(extract_last_request_id(text).as_deref(), Some("req-42"));
     }
 }
 

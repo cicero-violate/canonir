@@ -1,4 +1,4 @@
 AUTO-TRIGGERED WORKSPACE REPAIR
 reason=route_selected_bad_class
 route_prompt=deterministic:missing_target_plan
-route_rationale=missing target; plan /workspace/ai_sandbox/canon/test_projects/goalgen/lsm-storage-coverage
+route_rationale=missing target; plan /workspace/ai_sandbox/canon/test_projects/goalgen/graph-query-engine-coverage

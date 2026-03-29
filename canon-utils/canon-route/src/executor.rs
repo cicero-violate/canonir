@@ -1,5 +1,5 @@
 use canon_decision::RouteKind;
-use canon_event::{new_error_occurred, CapabilityResult, Code, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, LlmCall, RouteSelected, RuntimeEvent, ToolBatchSettled};
+use canon_event::{new_error_occurred, CapabilityResult, Code, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, RouteSelected, RuntimeEvent, ToolBatchSettled};
 use canon_invariant::{
     decision_trace_payload, drain_persisted_store_events, invariant_violation_delta,
     invariant_violation_state, meta_invariant_verifier_sequence_contract,
@@ -11,8 +11,6 @@ use canon_runtime_supervisor::judgment_loop::RouteController;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use uuid::Uuid;
-
 use crate::{
     context::RouteContext,
     decision::{decide_from_json, RouteDecision},
@@ -255,27 +253,42 @@ impl RouteExecutor {
                 return;
             }
         }
-        let request_id = format!("route-{}", Uuid::new_v4());
-        self.pending_request_id = Some(request_id.clone());
-        self.pending_prompt = Some(prompt.clone());
         self.last_prompt_hash = Some(prompt_hash);
         self.force_fresh_route_once = false;
-        if let Some(emitter) = self.emitter.as_ref() {
-            let tid = self.current_trigger.clone().expect("try_dispatch_route called without current_trigger");
-            emitter.emit_with_parents(canon_event::RuntimeEvent::Llm(LlmCall {
-                request_id,
-                prompt,
-                role: Some("router".to_string()),
-                agent_id: Some("router_chatgpt_group".to_string()),
-                dispatched: true,
-                system: None,
-                system_prompt_id: None,
-                context_base: None,
-                context_base_id: None,
-                prompt_base_id: None,
-                prev_prompt_id: None,
-            }), vec![tid], file!(), line!());
-        }
+        self.pending_request_id = None;
+        self.pending_prompt = None;
+
+        let fallback = DeterministicRouteDecision {
+            route: RouteKind::Plan,
+            rationale: format!(
+                "router_llm_disabled; route deterministically to plan for action synthesis (prompt_hash={prompt_hash:016x})"
+            ),
+            confidence: 0.90,
+            prompt_tag: "deterministic:router_llm_disabled_plan",
+            noop_reason: "route_executor_router_llm_disabled_plan",
+            rule: if self.ctx.last_invalid_plan_reason.is_some() {
+                crate::policy::DeterministicRouteRule::InvalidPlanReplan
+            } else if self.ctx.semantic_summary.validation_blocked_by_preconditions {
+                crate::policy::DeterministicRouteRule::BlockedValidationPlan
+            } else if self
+                .ctx
+                .semantic_summary
+                .planning_preconditions
+                .iter()
+                .any(|line| line.contains("must_bootstrap_workspace=true"))
+            {
+                crate::policy::DeterministicRouteRule::MissingTargetPlan
+            } else {
+                crate::policy::DeterministicRouteRule::NoSemanticProgressPlan
+            },
+        };
+        let json = serde_json::json!({
+            "route": fallback.route.as_str(),
+            "rationale": fallback.rationale,
+            "confidence": fallback.confidence,
+        })
+        .to_string();
+        self.emit_deterministic_decision(&fallback, &json);
     }
 
     fn emit_persisted_invariant_store_events(&self) {

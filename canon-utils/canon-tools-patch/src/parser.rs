@@ -266,3 +266,70 @@ fn parse_update_chunk(lines: &[&str], starting_line_number: usize) -> Result<(Up
         consumed,
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        parse_patch, Hunk, ParseError,
+    };
+
+    #[test]
+    fn parse_patch_accepts_add_file_hunk() {
+        let patch = "\
+*** Begin Patch
+*** Add File: canon-utils/tmp/example.rs
++fn main() {}
+*** End Patch";
+        let parsed = parse_patch(patch).expect("add-file patch should parse");
+        assert_eq!(parsed.hunks.len(), 1);
+        match &parsed.hunks[0] {
+            Hunk::AddFile { path, contents } => {
+                assert_eq!(path.to_string_lossy(), "canon-utils/tmp/example.rs");
+                assert_eq!(contents, "fn main() {}\n");
+            }
+            other => panic!("expected add-file hunk, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_patch_accepts_update_hunk_with_move() {
+        let patch = "\
+*** Begin Patch
+*** Update File: canon-utils/old.rs
+*** Move to: canon-utils/new.rs
+@@ rename
+-old_line
++new_line
+*** End Patch";
+        let parsed = parse_patch(patch).expect("update patch with move should parse");
+        assert_eq!(parsed.hunks.len(), 1);
+        match &parsed.hunks[0] {
+            Hunk::UpdateFile { path, move_path, chunks } => {
+                assert_eq!(path.to_string_lossy(), "canon-utils/old.rs");
+                assert_eq!(
+                    move_path.as_ref().map(|value| value.to_string_lossy().to_string()),
+                    Some("canon-utils/new.rs".to_string())
+                );
+                assert_eq!(chunks.len(), 1);
+            }
+            other => panic!("expected update-file hunk, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_patch_rejects_missing_boundary_markers() {
+        let err = parse_patch("*** Update File: canon-utils/foo.rs")
+            .expect_err("patch without begin/end markers must fail");
+        assert!(matches!(err, ParseError::InvalidPatchError(_)));
+    }
+
+    #[test]
+    fn parse_patch_rejects_add_file_without_added_lines() {
+        let patch = "\
+*** Begin Patch
+*** Add File: canon-utils/tmp/empty.rs
+*** End Patch";
+        let err = parse_patch(patch).expect_err("add-file hunk needs + lines");
+        assert!(matches!(err, ParseError::InvalidHunkError { .. }));
+    }
+}

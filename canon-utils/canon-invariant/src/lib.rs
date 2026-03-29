@@ -205,7 +205,7 @@ impl DiscoveredInvariant {
                 "discovered:force_plan_objective_contradiction"
             }
             Self::ForceObserveWhenNoActionableFailure => {
-                "discovered:force_observe_no_actionable_failure"
+                "discovered:force_observe_refresh_on_repeated_noop"
             }
         }
     }
