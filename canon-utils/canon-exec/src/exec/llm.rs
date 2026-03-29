@@ -79,6 +79,61 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                 });
                 let tabs = endpoint_worker::llm_worker_new_tabs();
                 runtime.block_on(endpoint_worker::llm_worker_init_workers(&bridge, &config, &tabs));
+
+                // Start relay server so standalone harness binaries can route LLM calls
+                // through this worker's WsBridge without binding port 9100 themselves.
+                {
+                    let bridge_r = bridge.clone();
+                    let config_r = config.clone();
+                    let tabs_r = tabs.clone();
+                    let relay_addr = env::var("CANON_LLM_RELAY_ADDR")
+                        .unwrap_or_else(|_| "127.0.0.1:9101".to_string());
+                    runtime.spawn(async move {
+                        match canon_llm::relay::relay_server_start(&relay_addr, move |req| {
+                            let bridge = bridge_r.clone();
+                            let config = config_r.clone();
+                            let tabs = tabs_r.clone();
+                            Box::pin(async move {
+                                let endpoint = config
+                                    .llm_endpoints
+                                    .iter()
+                                    .find(|e| {
+                                        req.endpoint_id.as_deref().map_or(false, |id| e.id == id)
+                                            || e.role.as_deref() == Some(req.role.as_str())
+                                    })
+                                    .cloned()
+                                    .ok_or_else(|| anyhow::anyhow!("relay: no endpoint for role={}", req.role))?;
+                                endpoint_worker::llm_worker_send_request(
+                                    &bridge,
+                                    &endpoint.id,
+                                    &endpoint.url,
+                                    endpoint.stateful,
+                                    &req.prompt,
+                                    &req.role_schema,
+                                    None,
+                                    None,
+                                    false,
+                                    true,
+                                    "relay",
+                                    &tabs,
+                                    endpoint.max_tabs,
+                                    0,
+                                )
+                                .await
+                            })
+                        })
+                        .await
+                        {
+                            Ok(handle) => {
+                                eprintln!("[llm-worker] relay server listening on {}", handle.local_addr());
+                                std::future::pending::<()>().await;
+                                drop(handle);
+                            }
+                            Err(e) => eprintln!("[llm-worker] relay server failed to start: {e}"),
+                        }
+                    });
+                }
+
                 let llm_log_dir = env::var("CANON_LLM_LOG_DIR").unwrap_or_else(|_| "/workspace/ai_sandbox/canon/canon-utils/state/reports_out/llm".to_string());
                 let _ = std::fs::create_dir_all(&llm_log_dir);
                 let mut llm_call_counter: u32 = next_llm_call_counter(&llm_log_dir);
@@ -316,6 +371,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                 capability: name,
                                 result: CapabilityResult::Llm(LlmResult { success: true, duration_ms: elapsed_ms, response: payload.clone() }),
                             }), vec![trigger_id.clone()], file!(), line!());
+                            // no additional follow-up event
                         }
                         Err(err) => {
                             let finalized_ms = now_ms();
@@ -353,6 +409,8 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                 Some(request_id.clone()),
                             )), vec![trigger_id.clone()], file!(), line!());
                             emitter.emit_child(canon_event::RuntimeEvent::CapabilityFailed(canon_event::CapabilityFailed { request_id: request_id.clone(), capability: name, error: err.to_string() }), vec![trigger_id.clone()], file!(), line!());
+                            // Failure is already surfaced via ErrorOccurred + CapabilityFailed.
+                            // Do not emit a fake follow-up event here.
                         }
                     }
                 }

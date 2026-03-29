@@ -10,4 +10,5 @@ pub mod goal_gen_consumer;
 pub mod goal_graph_consumer;
 // pub mod harness_repair_consumer;
 // pub mod harness_repair_mode;
+pub mod repair_control_consumer;
 pub mod watchdog_consumer;

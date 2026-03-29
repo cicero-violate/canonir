@@ -1387,9 +1387,10 @@ pub fn planner_judgment_rows() -> Vec<PlannerJudgmentRow> {
                                 continue;
                             }
                             let preconditions = planner_preconditions_for_state(state);
-                            let Some(primary) = preconditions.first() else {
+                            if preconditions.is_empty() {
                                 continue;
-                            };
+                            }
+                            let primary = &preconditions[0];
                             let family = planner_family_for_precondition(primary);
                             let actions = planner_actions_for_state(state);
                             rows.push(PlannerJudgmentRow {
@@ -3209,6 +3210,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     #[test]
     fn unified_transition_matrix_rows_match_policy_evaluators() {
@@ -3247,5 +3249,167 @@ mod tests {
         let route_rows = route_semantic_actionability_rows();
         assert_eq!(planner_rows.len(), 154);
         assert_eq!(route_rows.len(), 31);
+    }
+
+
+    #[test]
+    fn baseline_transition_matrix_row_names_are_unique() {
+        let rows = baseline_transition_rows();
+        let mut seen = BTreeSet::new();
+
+        for row in &rows {
+            let name = match row {
+                TransitionRow::Route(row) => row.name,
+                TransitionRow::Loop(row) => row.name,
+                TransitionRow::RunCommandOutcome(row) => row.name,
+                TransitionRow::ApplyPatchOutcome(row) => row.name,
+                TransitionRow::VerifyOutcome(row) => row.name,
+                TransitionRow::InvalidPlanRetry(row) => row.name,
+                TransitionRow::RouteDispatch(row) => row.name,
+                TransitionRow::RouteEmit(row) => row.name,
+                TransitionRow::RouteCache(row) => row.name,
+                TransitionRow::LoopRuntime(row) => row.name,
+                TransitionRow::RecoveryEvent(row) => row.name,
+                TransitionRow::RecoveryExecution(row) => row.name,
+                TransitionRow::BootstrapEffect(row) => row.name,
+                TransitionRow::PlannerRecovery(row) => row.name,
+                TransitionRow::RewardSemantics(row) => row.name,
+                TransitionRow::RouteFailure(row) => row.name,
+                TransitionRow::RouteEmitEffect(row) => row.name,
+                TransitionRow::RouteRecovery(row) => row.name,
+                TransitionRow::SuccessorConsumption(row) => row.name,
+                TransitionRow::PlannerJudgment(row) => row.name,
+                TransitionRow::PlannerObjectiveAlignment(row) => row.name,
+                TransitionRow::RouteObjectiveAlignment(row) => row.name,
+                TransitionRow::GoalRouteObjectiveDrift(row) => row.name,
+                TransitionRow::ContradictionEventTrend(row) => row.name,
+                TransitionRow::RouteSemanticActionability(row) => row.name,
+            };
+            assert!(seen.insert(name), "duplicate transition row name: {name}");
+        }
+    }
+
+    #[test]
+    fn coverage_report_markdown_mentions_all_sections() {
+        let rows = baseline_transition_rows();
+        let markdown = coverage_report_markdown(&rows);
+
+        assert!(markdown.contains("# Policy Matrix Coverage"));
+        assert!(markdown.contains("## Judgment generation"));
+        assert!(markdown.contains("## Route transitions"));
+        assert!(markdown.contains("## Loop transitions"));
+        assert!(markdown.contains("## Run command outcomes"));
+        assert!(markdown.contains("## Apply patch outcomes"));
+        assert!(markdown.contains("## Verify outcomes"));
+        assert!(markdown.contains("## Invalid-plan retry mappings"));
+        assert!(markdown.contains("## Judgment coverage"));
+    }
+
+    #[test]
+    fn planner_judgment_rows_exhaustively_cover_valid_generated_state_space() {
+        let rows = planner_judgment_rows();
+        let mut expected = BTreeSet::new();
+
+        for path in PlannerPathState::ALL {
+            for cargo in PlannerCargoState::ALL {
+                for entrypoint in PlannerEntrypointState::ALL {
+                    for module_gap in PlannerModuleGapState::ALL {
+                        for hint in PlannerHintState::ALL {
+                            for action in PlannerActionCase::ALL {
+                                let state = PlannerJudgmentState {
+                                    path,
+                                    cargo,
+                                    entrypoint,
+                                    module_gap,
+                                    hint,
+                                    action,
+                                };
+                                if !valid_planner_judgment_state(state) {
+                                    continue;
+                                }
+                                let preconditions = planner_preconditions_for_state(state);
+                                if preconditions.is_empty() {
+                                    continue;
+                                }
+                                expected.insert(format!("planner_judgment_{state:?}"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let actual: BTreeSet<String> = rows.iter().map(|row| row.name.to_string()).collect();
+        assert_eq!(actual.len(), rows.len(), "duplicate planner judgment row names exist");
+        assert_eq!(actual, expected, "planner judgment rows drifted from valid generated state space");
+        assert_eq!(rows.len(), planner_judgment_state_count(true));
+    }
+
+    #[test]
+    fn route_semantic_actionability_rows_exhaustively_cover_valid_generated_state_space() {
+        let rows = route_semantic_actionability_rows();
+        let mut expected = BTreeSet::new();
+
+        for completeness in RouteSummaryCompleteness::ALL {
+            for preconditions in RoutePreconditionState::ALL {
+                for repair_intents in RouteRepairIntentState::ALL {
+                    for hint in RouteHintState::ALL {
+                        for validation_blocked in RouteValidationBlockedState::ALL {
+                            let state = RouteSemanticState {
+                                completeness,
+                                preconditions,
+                                repair_intents,
+                                hint,
+                                validation_blocked,
+                            };
+                            if !valid_route_semantic_state(state) {
+                                continue;
+                            }
+                            if route_family_for_state(state).is_none() {
+                                continue;
+                            }
+                            expected.insert(format!("route_semantic_actionability_{state:?}"));
+                        }
+                    }
+                }
+            }
+        }
+
+        let actual: BTreeSet<String> = rows.iter().map(|row| row.name.to_string()).collect();
+        assert_eq!(actual.len(), rows.len(), "duplicate route semantic row names exist");
+        assert_eq!(actual, expected, "route semantic actionability rows drifted from valid generated state space");
+        assert_eq!(rows.len(), route_semantic_state_count(true) - route_trend_actionability_rows().len());
+    }
+
+    #[test]
+    fn route_semantic_generation_partition_is_complete() {
+        let semantic_rows = route_semantic_actionability_rows();
+        let trend_rows = route_trend_actionability_rows();
+        let generated_valid = route_semantic_state_count(true);
+
+        assert_eq!(
+            semantic_rows.len() + trend_rows.len(),
+            generated_valid,
+            "route semantic generated state space is not fully partitioned by semantic + trend rows",
+        );
+    }
+
+    #[test]
+    fn baseline_transition_matrix_route_and_loop_rows_are_nonempty() {
+        assert!(!route_transition_rows().is_empty());
+        assert!(!route_dispatch_rows().is_empty());
+        assert!(!route_emit_rows().is_empty());
+        assert!(!route_cache_rows().is_empty());
+        assert!(!route_failure_rows().is_empty());
+        assert!(!route_emit_effect_rows().is_empty());
+        assert!(!route_recovery_rows().is_empty());
+        assert!(!successor_consumption_rows().is_empty());
+
+        assert!(!loop_transition_rows().is_empty());
+        assert!(!loop_runtime_rows().is_empty());
+        assert!(!recovery_event_rows().is_empty());
+        assert!(!recovery_execution_rows().is_empty());
+        assert!(!bootstrap_effect_rows().is_empty());
+        assert!(!reward_semantics_rows().is_empty());
     }
 }

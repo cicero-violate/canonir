@@ -1,0 +1,4 @@
+incident_kind=auto_route_trigger
+route_prompt=deterministic:no_actionable_failure_observe
+route_rationale=no progress and no actionable failure /workspace/ai_sandbox/canon/test_projects/goalgen/bytecode-vm-coverage
+workspace=/workspace/ai_sandbox/canon

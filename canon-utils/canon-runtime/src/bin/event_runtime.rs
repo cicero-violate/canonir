@@ -1,8 +1,12 @@
 use anyhow::{anyhow, Result};
-use canon_event::EVENT_SCHEMA_VERSION;
+use canon_event::{
+    EVENT_SCHEMA_VERSION, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome,
+    RuntimeEvent,
+};
 use canon_event_store::replay_graph_from_tlog;
 use canon_event_store::AnyEvent;
 use canon_event_store::{extract_rustc_event, read_any_events_from_path, read_any_events_from_path_with_start_seq};
+use canon_llm::repair_server::{repair_client_submit, RepairJobRequest, REPAIR_SERVER_ADDR};
 use canon_loop::LoopStageExecutor;
 use canon_route::RouteExecutor;
 use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry, prompts_dir, reload_prompt_file};
@@ -16,6 +20,7 @@ use canon_runtime::consumers::dispatch_consumer::DispatchConsumer;
 use canon_runtime::consumers::error_logger::ErrorLogger;
 use canon_runtime::consumers::goal_gen_consumer::GoalGenConsumer;
 use canon_runtime::consumers::goal_graph_consumer::GoalGraphConsumer;
+use canon_runtime::consumers::repair_control_consumer::RepairControlConsumer;
 use canon_runtime::consumers::watchdog_consumer::WatchdogConsumer;
 use canon_runtime::hooks::{AuditLogHook, CapabilityRateLimitHook, CostCapHook, HookChain};
 use canon_runtime::{spawn_kernel_processor, EventRuntime, KernelMsg};
@@ -131,6 +136,133 @@ enum EventMsg {
     /// W must reset its state and replay the provided events from scratch
     /// to maintain deterministic order (Rule 10).
     Reset(Vec<AnyEvent>),
+}
+
+const WORKSPACE_REPAIR_SENTINEL: &str = "__workspace__";
+
+struct EventRepairTriggerConsumer {
+    workspace: PathBuf,
+    server_addr: String,
+    last_submit: Option<Instant>,
+}
+
+impl EventRepairTriggerConsumer {
+    fn new(workspace: PathBuf) -> Self {
+        let server_addr =
+            env::var("CANON_REPAIR_SERVER_ADDR").unwrap_or_else(|_| REPAIR_SERVER_ADDR.to_string());
+        Self { workspace, server_addr, last_submit: None }
+    }
+
+    fn cooldown_active(&self) -> bool {
+        self.last_submit
+            .map(|t| t.elapsed() < Duration::from_secs(30))
+            .unwrap_or(false)
+    }
+
+    fn submit_repair_job(&mut self, failure_output: String, incident_context: String) {
+        if self.cooldown_active() {
+            eprintln!("[event_repair_trigger] cooldown active; skipping submit");
+            return;
+        }
+        self.last_submit = Some(Instant::now());
+        let server_addr = self.server_addr.clone();
+        let req = RepairJobRequest {
+            crate_name: WORKSPACE_REPAIR_SENTINEL.to_string(),
+            test_name: WORKSPACE_REPAIR_SENTINEL.to_string(),
+            failure_output,
+            incident_context: Some(incident_context),
+            max_steps: 30,
+            workspace: self.workspace.display().to_string(),
+        };
+        eprintln!(
+            "[event_repair_trigger] submitting workspace repair job to {}",
+            server_addr
+        );
+        std::thread::spawn(move || {
+            match repair_client_submit(&server_addr, &req) {
+                Ok(result) => eprintln!(
+                    "[event_repair_trigger] result success={} steps_taken={} error={}",
+                    result.success,
+                    result.steps_taken,
+                    result.error.as_deref().unwrap_or("none")
+                ),
+                Err(err) => eprintln!("[event_repair_trigger] submit failed: {}", err),
+            }
+        });
+    }
+}
+
+impl EventConsumer for EventRepairTriggerConsumer {
+    fn filter(&self) -> EventFilter { EventFilter::All }
+    fn is_synchronous(&self) -> bool { true }
+    fn consumer_name(&self) -> &'static str { "event_repair_trigger_consumer" }
+    fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
+
+    fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
+        match event {
+            RuntimeEvent::ErrorOccurred(e) => {
+                let src = e.source.as_str();
+                let msg = e.message.to_ascii_lowercase();
+                if msg.contains("llm call timed out")
+                    || msg.contains("invariant violation")
+                    || msg.contains("noop_spam")
+                    || msg.contains("missing_target")
+                    || src.contains("invariant")
+                    || src.contains("constraint")
+                {
+                    let failure_output = format!(
+                        "AUTO-TRIGGERED WORKSPACE REPAIR\nreason=error_occurred\nsource={}\nmessage={}",
+                        e.source,
+                        e.message
+                    );
+                    let incident_context = format!(
+                        "incident_kind=auto_error_trigger\nsource={}\nmessage={}\nworkspace={}",
+                        e.source,
+                        e.message,
+                        self.workspace.display()
+                    );
+                    self.submit_repair_job(failure_output, incident_context);
+                }
+            }
+            RuntimeEvent::PlanningCompleted(e) => {
+                if e.status == "llm_failed" {
+                    let failure_output = format!(
+                        "AUTO-TRIGGERED WORKSPACE REPAIR\nreason=planning_completed_llm_failed\ntick={}",
+                        e.tick
+                    );
+                    let incident_context = format!(
+                        "incident_kind=auto_planning_failed_trigger\nstatus={}\nworkspace={}",
+                        e.status,
+                        self.workspace.display()
+                    );
+                    self.submit_repair_job(failure_output, incident_context);
+                }
+            }
+            RuntimeEvent::RouteSelected(e) => {
+                let prompt = e.prompt.to_ascii_lowercase();
+                let rationale = e.rationale.to_ascii_lowercase();
+                if prompt.contains("missing_target")
+                    || prompt.contains("deterministic:")
+                    || rationale.contains("missing target")
+                {
+                    let failure_output = format!(
+                        "AUTO-TRIGGERED WORKSPACE REPAIR\nreason=route_selected_bad_class\nroute_prompt={}\nroute_rationale={}",
+                        e.prompt,
+                        e.rationale
+                    );
+                    let incident_context = format!(
+                        "incident_kind=auto_route_trigger\nroute_prompt={}\nroute_rationale={}\nworkspace={}",
+                        e.prompt,
+                        e.rationale,
+                        self.workspace.display()
+                    );
+                    self.submit_repair_job(failure_output, incident_context);
+                }
+            }
+            _ => {}
+        }
+        EventOutcome::NoOp("event_repair_trigger_noop")
+    }
 }
 
 
@@ -257,6 +389,7 @@ fn main() -> Result<()> {
     let mut consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
         Box::new(AnalystConsumer::new(tlog_path.clone())),
         Box::new(LoopStageExecutor::new(workspace.clone(), tlog_path.clone()).with_agent_id("planner_chatgpt_group".to_string())),
+        Box::new(RepairControlConsumer::new()),
         Box::new(RouteExecutor::new(workspace.clone())),
         Box::new(ErrorLogger::new(None)),
         Box::new(CheckConsumer::new()),
@@ -266,6 +399,7 @@ fn main() -> Result<()> {
         Box::new(GoalGraphConsumer::new()),
         Box::new(WatchdogConsumer::new()),
     ];
+    consumers.push(Box::new(EventRepairTriggerConsumer::new(workspace.clone())));
     if !harness_mode {
         consumers.insert(0, Box::new(GoalGenConsumer::new(tlog_path.clone())));
     }

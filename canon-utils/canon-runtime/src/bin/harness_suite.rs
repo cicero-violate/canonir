@@ -1,10 +1,13 @@
 use anyhow::{anyhow, bail, Context, Result};
+use canon_llm::repair_server::{
+    repair_client_submit, RepairJobRequest, REPAIR_SERVER_ADDR,
+};
 use std::path::PathBuf;
 use std::process::Command;
 
 const DEFAULT_WORKSPACE: &str = "/workspace/ai_sandbox/canon";
-const DEFAULT_MAX_ROUNDS: usize = 10;
-const DEFAULT_MAX_STEPS_PER_TEST: usize = 8;
+const DEFAULT_MAX_ROUNDS: usize = 0;
+const DEFAULT_MAX_STEPS_PER_TEST: usize = 1000;
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -13,6 +16,7 @@ fn main() -> Result<()> {
     let mut workspace = PathBuf::from(DEFAULT_WORKSPACE);
     let mut max_rounds = DEFAULT_MAX_ROUNDS;
     let mut max_steps_per_test = DEFAULT_MAX_STEPS_PER_TEST;
+    let mut forever = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -34,6 +38,9 @@ fn main() -> Result<()> {
                 max_steps_per_test =
                     value.parse().context("--max-steps-per-test must be an integer")?;
             }
+            "--forever" => {
+                forever = true;
+            }
             other if other.starts_with("--") => bail!("unknown argument: {other}"),
             other => {
                 if crate_name.is_none() {
@@ -45,7 +52,8 @@ fn main() -> Result<()> {
         }
     }
 
-    for round in 1..=max_rounds {
+    let mut round = 1usize;
+    loop {
         let suite = run_suite_tests(&workspace, crate_name.as_deref())?;
         if suite.success {
             match crate_name.as_deref() {
@@ -103,6 +111,11 @@ fn main() -> Result<()> {
                 repair_crate, failing_test, err
             );
         }
+
+        round += 1;
+        if !forever && max_rounds != 0 && round > max_rounds {
+            break;
+        }
     }
 
     match crate_name.as_deref() {
@@ -127,6 +140,82 @@ fn main() -> Result<()> {
                 max_rounds
             )
         }
+    }
+}
+
+/// Parses the crate name from a cargo compile-error line such as:
+///   error: could not compile `canon-llm-runtime` (lib test) due to …
+///   error: could not compile `canon-llm-runtime` due to …
+fn crate_from_compile_error(text: &str) -> Option<String> {
+    let marker = "could not compile `";
+    for line in text.lines() {
+        let Some(idx) = line.find(marker) else { continue };
+        let rest = &line[idx + marker.len()..];
+        let end = rest.find('`')?;
+        let name = rest[..end].trim();
+        if !name.is_empty() {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+/// Returns the first `error[…]` or `error:` line from cargo output
+fn compile_error_first_line(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with("error[") || t.starts_with("error: ") {
+            return Some(t.to_string());
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_crate_from_compile_error_standard() {
+        let output = concat!(
+            "error[E0599]: no function found\n",
+            "   --> src/relay.rs:10:5\n",
+            "error: could not compile `canon-llm-runtime` (lib test) ",
+            "due to 1 previous error\n",
+        );
+        assert_eq!(
+            crate_from_compile_error(output),
+            Some("canon-llm-runtime".to_string())
+        );
+    }
+
+    #[test]
+    fn test_crate_from_compile_error_short_form() {
+        let output = "error: could not compile `my-crate` due to 3 previous errors\n";
+        assert_eq!(
+            crate_from_compile_error(output),
+            Some("my-crate".to_string())
+        );
+    }
+
+    #[test]
+    fn test_crate_from_compile_error_none_when_no_compile_error() {
+        let output = "test foo ... FAILED\nfailures:\nfoo\n";
+        assert_eq!(crate_from_compile_error(output), None);
+    }
+
+    #[test]
+    fn test_compile_error_first_line_bracket_form() {
+        let output = "warning: unused\nerror[E0599]: foo not found\n";
+        let result = compile_error_first_line(output);
+        assert!(result.as_deref().unwrap_or("").starts_with("error[E0599]"));
+    }
+
+    #[test]
+    fn test_compile_error_first_line_plain_form() {
+        let output = "warning: x\nerror: could not compile `foo`\n";
+        let result = compile_error_first_line(output);
+        assert!(result.as_deref().unwrap_or("").starts_with("error:"));
     }
 }
 
@@ -169,29 +258,60 @@ fn run_harness_repair(
     suite_output: &str,
     max_steps_per_test: usize,
 ) -> Result<()> {
-    let build_status = Command::new("cargo")
-        .arg("build")
-        .arg("-p")
-        .arg("canon-runtime")
-        .arg("--bin")
-        .arg("canon-harness-repair")
-        .current_dir(workspace)
-        .status()
-        .context("failed to rebuild canon-harness-repair")?;
-    if !build_status.success() {
-        bail!("rebuilding canon-harness-repair failed with status {}", build_status);
-    }
+    let server_addr = std::env::var("CANON_REPAIR_SERVER_ADDR")
+        .unwrap_or_else(|_| REPAIR_SERVER_ADDR.to_string());
+    let req = RepairJobRequest {
+        crate_name: crate_name.to_string(),
+        test_name: test_name.to_string(),
+        failure_output: suite_output.to_string(),
+        incident_context: None,
+        max_steps: max_steps_per_test,
+        workspace: workspace.display().to_string(),
+    };
 
-    let stderr_path = workspace.join("state/harness_suite_failure.txt");
-    std::fs::create_dir_all(
-        stderr_path
-            .parent()
-            .ok_or_else(|| anyhow!("invalid stderr cache path"))?,
-    )?;
+    let result = match repair_client_submit(&server_addr, &req) {
+        Ok(result) => result,
+        Err(err) => {
+            eprintln!(
+                "[canon-harness-suite] daemon submit failed at {}: {}; falling back to local canon-harness-repair",
+                server_addr, err
+            );
+            return run_harness_repair_local(
+                workspace,
+                crate_name,
+                test_name,
+                suite_output,
+                max_steps_per_test,
+            );
+        }
+    };
+
+    if result.success {
+        Ok(())
+    } else {
+        bail!(
+            "repair daemon reported failure for {}::{} after {} step(s): {}",
+            crate_name,
+            test_name,
+            result.steps_taken,
+            result.error.unwrap_or_else(|| "unknown repair failure".to_string())
+        )
+    }
+}
+
+fn run_harness_repair_local(
+    workspace: &PathBuf,
+    crate_name: &str,
+    test_name: &str,
+    suite_output: &str,
+    max_steps_per_test: usize,
+) -> Result<()> {
+    let state_dir = workspace.join("state");
+    std::fs::create_dir_all(&state_dir)?;
+    let stderr_path = state_dir.join("harness_suite_failure.txt");
     std::fs::write(&stderr_path, suite_output)?;
 
-    let bin = workspace.join("target/debug/canon-harness-repair");
-    let status = Command::new(&bin)
+    let status = Command::new(workspace.join("target/debug/canon-harness-repair"))
         .arg(crate_name)
         .arg(test_name)
         .arg("--workspace")
@@ -201,13 +321,13 @@ fn run_harness_repair(
         .arg("--max-steps")
         .arg(max_steps_per_test.to_string())
         .status()
-        .with_context(|| format!("failed to run {}", bin.display()))?;
+        .with_context(|| "failed to run local canon-harness-repair fallback")?;
 
     if status.success() {
         Ok(())
     } else {
         bail!(
-            "canon-harness-repair exited non-zero for {}::{} with status {}",
+            "local canon-harness-repair failed for {}::{} with status {}",
             crate_name,
             test_name,
             status
@@ -231,6 +351,15 @@ fn first_failing_case(result: &CommandResult, default_crate: Option<&str>) -> Op
             infer_crate_from_failure_output(&result.stderr, &result.stdout, default_crate)
         {
             return Some((crate_name, test_name));
+        }
+    }
+    // Fall back to compile-error detection: if cargo reported a build failure,
+    // extract the crate name and use the first error line as the synthetic test name.
+    if let Some(crate_name) = crate_from_compile_error(&result.output)
+        .or_else(|| default_crate.map(str::to_string))
+    {
+        if let Some(error_summary) = compile_error_first_line(&result.output) {
+            return Some((crate_name, error_summary));
         }
     }
     None

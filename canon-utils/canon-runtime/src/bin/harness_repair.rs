@@ -1,7 +1,12 @@
 use anyhow::{anyhow, bail, Context, Result};
-use canon_event::{CapabilityFailed, CapabilityResult, EventEmitter, EventEmitterHandle, EventId, LlmCall, RuntimeEvent};
-use canon_exec::{ExecutableEvent, ExecutionContext};
+use canon_event::{EventConsumer, EventEmitter, EventEmitterHandle, EventId, RuntimeEvent};
+use canon_invariant::control_harness::{
+    synthetic_control_metrics,
+    synthetic_control_trace_metrics,
+};
+use canon_llm::relay::{relay_client_call, RelayRequest, RELAY_ADDR};
 use canon_loop::{HarnessRepairTarget, LoopStageExecutor};
+use canon_runtime::consumers::repair_control_consumer::RepairControlConsumer;
 use canon_tools_patch::{apply_patch, parse_patch, Hunk};
 use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
@@ -12,7 +17,6 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use uuid::Uuid;
 
 fn hash_str(s: &str) -> u64 {
@@ -48,16 +52,49 @@ impl HarnessLogger {
     }
 }
 
+fn log_control_harness_summary(logger: &HarnessLogger) {
+    let seed_metrics = synthetic_control_metrics();
+    logger.log(&format!(
+        "control_harness seeds={} suppressed={} replay={} fresh={} emit={} invariant={}",
+        seed_metrics.states_explored,
+        seed_metrics.suppressed,
+        seed_metrics.replayed_cached_route,
+        seed_metrics.requested_fresh_route,
+        seed_metrics.emitted_route,
+        seed_metrics.invariant_violations,
+    ));
+
+    let depth_one = synthetic_control_trace_metrics(1);
+    logger.log(&format!(
+        "control_harness trace_depth=1 start_states={} traces={} suppressed={} replay={} fresh={} emit={} invariant={}",
+        depth_one.start_states,
+        depth_one.traces_explored,
+        depth_one.suppressed_terminal,
+        depth_one.replay_terminal,
+        depth_one.fresh_route_terminal,
+        depth_one.emit_terminal,
+        depth_one.invariant_terminal,
+    ));
+
+    let depth_two = synthetic_control_trace_metrics(2);
+    logger.log(&format!(
+        "control_harness trace_depth=2 start_states={} traces={} suppressed={} replay={} fresh={} emit={} invariant={}",
+        depth_two.start_states,
+        depth_two.traces_explored,
+        depth_two.suppressed_terminal,
+        depth_two.replay_terminal,
+        depth_two.fresh_route_terminal,
+        depth_two.emit_terminal,
+        depth_two.invariant_terminal,
+    ));
+}
+
 const DEFAULT_WORKSPACE: &str = "/workspace/ai_sandbox/canon";
-const DEFAULT_MAX_STEPS: usize = 5;
-const LLM_TIMEOUT: Duration = Duration::from_secs(20);
-const LLM_MAX_RETRIES: usize = 3;
+const DEFAULT_MAX_STEPS: usize = 30;
 const MAX_READ_BYTES: usize = 16 * 1024;
 const MAX_TOOL_SNIPPET: usize = 4 * 1024;
 const AUTO_READ_CONTEXT_BEFORE: usize = 20;
 const AUTO_READ_CONTEXT_AFTER: usize = 40;
-const LOG_PROMPT_PREVIEW_BYTES: usize = 240;
-
 const PLANNER_SYSTEM_INSTRUCTIONS: &str = r#"You are the canon harness repair agent.
 
 Your sole responsibility is to make a single failing Rust test pass inside the canon workspace.
@@ -77,6 +114,9 @@ You respond with exactly one action per turn. You work step-by-step:
 You are operating inside a self-repair loop. The harness will call you repeatedly until the
 test passes or the step budget is exhausted. Every action you emit is executed immediately and
 its result is returned to you in the next turn.
+
+If the prompt contains a section named `FORCED PLANNER CONSTRAINT`, you must obey it exactly.
+When a forced constraint is present, do not choose a different action class.
 
 Return exactly one action in a JSON array wrapped in a `json` code block.
 
@@ -167,11 +207,18 @@ struct CommandResult {
 
 struct CapturingEmitter {
     tx: Mutex<Sender<RuntimeEvent>>,
+    repair_control: Mutex<RepairControlConsumer>,
 }
 
 impl EventEmitter for CapturingEmitter {
     fn emit_with_parents(&self, event: RuntimeEvent, _parents: Vec<EventId>, _file: &'static str, _line: u32) {
-        let _ = self.tx.lock().unwrap().send(event);
+        let _ = self.tx.lock().unwrap().send(event.clone());
+        let trigger_id = EventId::new("harness-repair-local");
+        let _ = self
+            .repair_control
+            .lock()
+            .unwrap()
+            .on_event(&event, trigger_id);
     }
 }
 
@@ -182,6 +229,7 @@ fn main() -> Result<()> {
 
     let mut always_dispatch = false;
     let mut stderr_file: Option<PathBuf> = None;
+    let mut incident_file: Option<PathBuf> = None;
     let mut workspace = PathBuf::from(DEFAULT_WORKSPACE);
     let mut max_steps = DEFAULT_MAX_STEPS;
 
@@ -191,6 +239,11 @@ fn main() -> Result<()> {
             "--stderr-file" => {
                 let value = args.next().ok_or_else(|| anyhow!("missing value for --stderr-file"))?;
                 stderr_file = Some(PathBuf::from(value));
+            }
+            "--incident-file" => {
+                let value =
+                    args.next().ok_or_else(|| anyhow!("missing value for --incident-file"))?;
+                incident_file = Some(PathBuf::from(value));
             }
             "--workspace" => {
                 let value = args.next().ok_or_else(|| anyhow!("missing value for --workspace"))?;
@@ -206,6 +259,7 @@ fn main() -> Result<()> {
 
     let log_path = workspace.join("state/harness_repair.log");
     let logger = Arc::new(HarnessLogger::open(&log_path)?);
+    log_control_harness_summary(&logger);
 
     let target = HarnessRepairTarget::new(Some(crate_name.clone()), Some(test_name.clone()));
     let mut failure_output = if let Some(path) = stderr_file {
@@ -213,6 +267,11 @@ fn main() -> Result<()> {
     } else {
         run_target_test_capture(&workspace, &crate_name, &test_name, always_dispatch)?
     };
+    let incident_context = incident_file
+        .as_ref()
+        .map(|path| std::fs::read_to_string(path))
+        .transpose()
+        .with_context(|| "failed to read incident context file")?;
 
     logger.log(&format!("start crate={crate_name} test={test_name} max_steps={max_steps}"));
 
@@ -221,7 +280,10 @@ fn main() -> Result<()> {
     // FIX: create persistent emitter BEFORE any LLM calls
     let (tx, rx) = std::sync::mpsc::channel();
     let emitter: canon_event::EventEmitterHandle =
-        std::sync::Arc::new(CapturingEmitter { tx: std::sync::Mutex::new(tx) });
+        std::sync::Arc::new(CapturingEmitter {
+            tx: std::sync::Mutex::new(tx),
+            repair_control: std::sync::Mutex::new(RepairControlConsumer::new()),
+        });
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run_harness_loop(
             &workspace,
@@ -229,6 +291,7 @@ fn main() -> Result<()> {
             &test_name,
             &target,
             &mut failure_output,
+            incident_context.as_deref(),
             max_steps,
             &logger,
             &emitter,
@@ -258,6 +321,7 @@ fn run_harness_loop(
     test_name: &str,
     target: &HarnessRepairTarget,
     failure_output: &mut String,
+    incident_context: Option<&str>,
     max_steps: usize,
     logger: &HarnessLogger,
     emitter: &EventEmitterHandle,
@@ -281,6 +345,7 @@ fn run_harness_loop(
         workspace, crate_name, test_name, failure_output,
         plan_hint.as_deref(),
         fn_index_text.as_deref(),
+        incident_context,
     );
     let context_base_id = hash_str(&context_base).to_string();
     let system_prompt_id = PLANNER_SYSTEM_PROMPT_ID.to_string();
@@ -295,6 +360,7 @@ fn run_harness_loop(
             crate_name, test_name, failure_output,
             &directive.decision.reason,
             last_action_result.as_deref(),
+            incident_context,
         );
         // Tier 1 + 2 sent only on the first call; stateful endpoints skip them on subsequent turns.
         let send_system = step == 0;
@@ -492,6 +558,15 @@ fn run_harness_loop(
 
 // deterministic result → action mapping
 fn derive_next_action_hint(result: &str) -> Option<String> {
+    if should_force_control_path_read(result, None) {
+        if let Some((file, line)) = extract_primary_file_line(result) {
+            return Some(format!(
+                r#"{{"action":"read_file","path":"{}","line":{}}}"#,
+                file, line
+            ));
+        }
+    }
+
     // patch failure / anchor mismatch
     if result.contains("expected lines not found") || result.contains("apply_patch failed") {
         if let Some(path) = extract_anchor_fail_path(result) {
@@ -524,6 +599,59 @@ fn derive_next_action_hint(result: &str) -> Option<String> {
     }
 
     None
+}
+
+fn should_force_control_path_read(result: &str, incident_context: Option<&str>) -> bool {
+    let result_lower = result.to_ascii_lowercase();
+    let incident_lower = incident_context.unwrap_or("").to_ascii_lowercase();
+
+    result_lower.contains("noop_spam")
+        || result_lower.contains("missing_target_plan")
+        || result_lower.contains("invariant_violation")
+        || result_lower.contains("route_executor_missing_target_plan")
+        || result_lower.contains("llm call timed out")
+        || result_lower.contains("capability_failed")
+        || result_lower.contains("status\":\"llm_failed")
+        || result_lower.contains("status=llm_failed")
+        || result_lower.contains("planning_completed")
+            && result_lower.contains("llm_failed")
+        || incident_lower.contains("noop_spam")
+        || incident_lower.contains("missing_target_plan")
+        || incident_lower.contains("invariant_violation")
+        || incident_lower.contains("route_executor_missing_target_plan")
+        || incident_lower.contains("llm call timed out")
+        || incident_lower.contains("capability_failed")
+        || incident_lower.contains("status\":\"llm_failed")
+        || incident_lower.contains("status=llm_failed")
+        || incident_lower.contains("planning_completed")
+            && incident_lower.contains("llm_failed")
+}
+
+fn build_forced_planner_constraint(result: &str, incident_context: Option<&str>) -> String {
+    if !should_force_control_path_read(result, incident_context) {
+        return "none".to_string();
+    }
+
+    let mut lines = vec![
+        "- You are in a repeated control-path failure region.".to_string(),
+        "- Your next action MUST be `read_file`.".to_string(),
+        "- Do NOT emit `run_command`, `apply_patch`, or `done` on this turn.".to_string(),
+        "- Read the control-path file/function cited by the current failure or incident context.".to_string(),
+        "- After reading, repair the route/invariant logic that caused the repeated plan/noop loop.".to_string(),
+    ];
+
+    if let Some((file, line)) = extract_primary_file_line(result) {
+        lines.push(format!(
+            "- Required target: read_file path=`{}` line={}",
+            file, line
+        ));
+    } else if let Some(incident) = incident_context {
+        for anchor in extract_incident_anchors(incident).into_iter().take(2) {
+            lines.push(format!("- Incident anchor: {}", anchor));
+        }
+    }
+
+    lines.join("\n")
 }
 
 
@@ -591,6 +719,7 @@ fn build_context_base(
     initial_failure: &str,
     plan_hint: Option<&str>,
     fn_index: Option<&str>,
+    incident_context: Option<&str>,
 ) -> String {
     let guidance_section = match plan_hint {
         Some(hint) => format!(
@@ -600,6 +729,13 @@ fn build_context_base(
     };
     let fn_index_section = match fn_index {
         Some(idx) if !idx.is_empty() => format!("\nFunction index:\n{idx}\n"),
+        _ => String::new(),
+    };
+    let incident_section = match incident_context {
+        Some(text) if !text.trim().is_empty() => format!(
+            "\nEvent-log incident context:\n{}\n",
+            truncate(&clean_failure_output(text), 4000)
+        ),
         _ => String::new(),
     };
     let cleaned = clean_failure_output(initial_failure);
@@ -622,8 +758,10 @@ Context rules:\n\
 - Before patching any function, emit `read_file` for the file. Do not patch from memory.\n\
 - If a patch failed with \"expected lines not found\", re-read the file and retry with anchors from the fresh content.\n\
 - A file/line in the failure output identifies where the test asserts — the implementation to fix may be in a different function.\n\
+- If event-log incident context is present, prioritize repairing the cited control-path and adding a regression for that exact incident shape.\n\
 - Your response must be a JSON action array only. No prose.\n\
 \n\
+{incident_section}\
 Initial failure output:\n{cleaned}\n\
 \n\
 Response contract:\n\
@@ -635,6 +773,7 @@ Response contract:\n\
         cleaned = truncate(&cleaned, 4000),
         guidance_section = guidance_section,
         fn_index_section = fn_index_section,
+        incident_section = incident_section,
     )
 }
 
@@ -645,19 +784,27 @@ fn build_turn_delta(
     failure_output: &str,
     directive_reason: &str,
     last_action_result: Option<&str>,
+    incident_context: Option<&str>,
 ) -> String {
     if let Some(result) = last_action_result {
         let guidance = build_action_guidance(result);
+        let incident_guidance = build_incident_action_guidance(incident_context);
+        let forced_constraint = build_forced_planner_constraint(result, incident_context);
 
         format!(
             "Action result:\n{result}\n\n\
+Incident guidance:\n{incident_guidance}\n\n\
+FORCED PLANNER CONSTRAINT:\n{forced_constraint}\n\n\
 Next action guidance:\n{guidance}\n\n\
 Emit exactly one action.",
             result = truncate(result, 2000),
+            incident_guidance = incident_guidance,
+            forced_constraint = forced_constraint,
             guidance = guidance,
         )
     } else {
-        let failure_focus = build_failure_focus(failure_output);
+        let failure_focus = build_failure_focus(failure_output, incident_context);
+        let forced_constraint = build_forced_planner_constraint(failure_output, incident_context);
         format!(
             "Repair directive:\n\
 - {directive_reason}\n\
@@ -665,18 +812,22 @@ Emit exactly one action.",
 \n\
 Failure focus:\n{failure_focus}\n\
 \n\
+FORCED PLANNER CONSTRAINT:\n\
+{forced_constraint}\n\
+\n\
 Preferred verifier after mutation:\n\
 - `cargo check -p {crate_name}`\n\
 - then `cargo test -p {crate_name} {test_name} -- --nocapture`",
             directive_reason = directive_reason,
             failure_focus = failure_focus,
+            forced_constraint = forced_constraint,
             crate_name = crate_name,
             test_name = test_name,
         )
     }
 }
 
-fn build_failure_focus(failure_output: &str) -> String {
+fn build_failure_focus(failure_output: &str, incident_context: Option<&str>) -> String {
     let mut lines = Vec::new();
 
     if let Some((file, line)) = extract_primary_file_line(failure_output) {
@@ -697,12 +848,65 @@ fn build_failure_focus(failure_output: &str) -> String {
     if let Some(rejection) = extract_patch_rejection(failure_output) {
         lines.push(format!("- patch_rejection: {rejection}"));
     }
+    if let Some(incident) = incident_context {
+        if let Some(kind) = extract_tagged_line_value(incident, "incident_kind=") {
+            lines.push(format!("- incident_kind: {kind}"));
+        }
+        for anchor in extract_incident_anchors(incident).into_iter().take(6) {
+            lines.push(format!("- incident_anchor: {anchor}"));
+        }
+    }
 
     if lines.is_empty() {
         "none".to_string()
     } else {
         lines.join("\n")
     }
+}
+
+fn build_incident_action_guidance(incident_context: Option<&str>) -> String {
+    let Some(incident) = incident_context else {
+        return "none".to_string();
+    };
+    let anchors = extract_incident_anchors(incident);
+    let mut lines = Vec::new();
+    if let Some(kind) = extract_tagged_line_value(incident, "incident_kind=") {
+        lines.push(format!(
+            "- prioritize the event-log incident kind `{kind}` before unrelated cleanup"
+        ));
+    }
+    if !anchors.is_empty() {
+        lines.push(format!(
+            "- read these cited files/functions first: {}",
+            anchors.into_iter().take(4).collect::<Vec<_>>().join(", ")
+        ));
+    }
+    lines.push(
+        "- after mutation, verify both the target test and the synthetic regression for the incident shape"
+            .to_string(),
+    );
+    lines.join("\n")
+}
+
+fn extract_incident_anchors(text: &str) -> Vec<String> {
+    let mut anchors = Vec::new();
+    let mut in_anchor_section = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed == "Likely file:line anchors:" {
+            in_anchor_section = true;
+            continue;
+        }
+        if in_anchor_section {
+            if trimmed.is_empty() {
+                break;
+            }
+            if trimmed.ends_with(".rs") || trimmed.contains(".rs:") {
+                anchors.push(trimmed.to_string());
+            }
+        }
+    }
+    anchors
 }
 
 
@@ -808,18 +1012,6 @@ fn hunk_path_string(hunk: &Hunk) -> Result<String, String> {
     }
 }
 
-fn preview_for_log(s: &str, max_bytes: usize) -> String {
-    let mut end = s.len().min(max_bytes);
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    let mut out = s[..end].replace('\n', "\\n");
-    if s.len() > end {
-        out.push_str("...");
-    }
-    out
-}
-
 fn extract_last_request_id(text: &str) -> Option<String> {
     let marker = "[last_request_id=";
     let start = text.find(marker)? + marker.len();
@@ -833,184 +1025,66 @@ fn extract_last_request_id(text: &str) -> Option<String> {
     }
 }
 
-fn dispatch_planner_request(
-    workspace: &Path,
+fn call_planner(
+    _workspace: &Path,
     delta: &str,
     system: Option<&str>,
-    system_prompt_id: &str,
+    _system_prompt_id: &str,
     context_base: Option<&str>,
-    context_base_id: &str,
-    prev_prompt_id: Option<&str>,
-    emitter: &EventEmitterHandle,
-) -> Result<String> {
+    _context_base_id: &str,
+    _prev_prompt_id: Option<&str>,
+    _emitter: &EventEmitterHandle,
+    _rx: &Receiver<RuntimeEvent>,
+) -> Result<(Vec<PlannerAction>, String)> {
+    let relay_addr = std::env::var("CANON_LLM_RELAY_ADDR")
+        .unwrap_or_else(|_| RELAY_ADDR.to_string());
+
+    // Tier-1 (system instructions) go in role_schema — the relay endpoint is
+    // stateful so the LlmWorker sends this only on the first TURN per tab.
+    let role_schema = system.unwrap_or("").to_string();
+
+    // Tier-2 (context_base) + Tier-3 (delta) are assembled into the prompt.
+    let prompt = match context_base {
+        Some(base) if !base.is_empty() => format!("{base}\n\n{delta}"),
+        _ => delta.to_string(),
+    };
+
     let request_id = Uuid::new_v4().to_string();
     eprintln!(
-        "[canon-harness-repair] planner_dispatch request_id={} prev_prompt_id={} delta_preview=\"{}\"",
+        "[canon-harness-repair] relay_dispatch request_id={} relay={} prompt_bytes={}",
         request_id,
-        prev_prompt_id.unwrap_or("<none>"),
-        preview_for_log(delta, LOG_PROMPT_PREVIEW_BYTES),
+        relay_addr,
+        prompt.len(),
     );
-    let event = RuntimeEvent::Llm(LlmCall {
-        request_id: request_id.clone(),
-        prompt: delta.to_string(),
-        role: Some("planner".to_string()),
-        agent_id: Some("planner_chatgpt_group".to_string()),
-        dispatched: true,
-        system: system.map(str::to_string),
-        system_prompt_id: Some(system_prompt_id.to_string()),
-        context_base: context_base.map(str::to_string),
-        context_base_id: Some(context_base_id.to_string()),
-        prompt_base_id: Some(system_prompt_id.to_string()),
-        prev_prompt_id: prev_prompt_id.map(str::to_string),
-    });
-    let exec = ExecutableEvent::try_from(event).expect("llm event should be executable");
-    exec.execute(ExecutionContext {
-        workspace: workspace.to_path_buf(),
-        emitter: emitter.clone(),
-        trigger_id: EventId::new("min-harness-root"),
-    })?;
-    Ok(request_id)
-}
 
-fn call_planner(
-    workspace: &Path,
-    delta: &str,
-    system: Option<&str>,
-    system_prompt_id: &str,
-    context_base: Option<&str>,
-    context_base_id: &str,
-    prev_prompt_id: Option<&str>,
-    emitter: &EventEmitterHandle,
-    rx: &Receiver<RuntimeEvent>,
-) -> Result<(Vec<PlannerAction>, String)> {
-    let mut chained_prev_prompt_id = prev_prompt_id.map(str::to_string);
-    let mut last_dispatched_request_id: Option<String> = None;
+    let req = RelayRequest {
+        role: "harness_repair".to_string(),
+        endpoint_id: None,
+        prompt,
+        role_schema,
+        request_tag: Some(request_id.clone()),
+    };
 
-    for wait_round in 1..=LLM_MAX_RETRIES {
-        let request_id = dispatch_planner_request(
-            workspace,
-            delta,
-            system,
-            system_prompt_id,
-            context_base,
-            context_base_id,
-            chained_prev_prompt_id.as_deref(),
-            emitter,
-        )?;
-        last_dispatched_request_id = Some(request_id.clone());
-        eprintln!(
-            "[canon-harness-repair] planner_wait request_id={} round={}/{}",
+    let resp = relay_client_call(&relay_addr, &req)
+        .with_context(|| format!("relay call to {relay_addr} failed"))?;
+
+    if !resp.ok {
+        bail!(
+            "relay returned error for request_id={}: {}",
             request_id,
-            wait_round,
-            LLM_MAX_RETRIES
+            resp.error.unwrap_or_default()
         );
-
-        match wait_for_llm_response(rx, &request_id) {
-            Ok((actions, completed_request_id)) => return Ok((actions, completed_request_id)),
-            Err(err) if err.to_string().starts_with(BAD_RESPONSE_PREFIX) => {
-                return Err(err);
-            }
-            Err(err)
-                if err.to_string().contains("timed out waiting for planner result")
-                    && wait_round < LLM_MAX_RETRIES =>
-            {
-                eprintln!(
-                    "[canon-harness-repair] planner timed out after {}s (window {}/{}), re-dispatching",
-                    LLM_TIMEOUT.as_secs(),
-                    wait_round,
-                    LLM_MAX_RETRIES
-                );
-                chained_prev_prompt_id = Some(request_id);
-                continue;
-            }
-            Err(err) => {
-                if let Some(req_id) = last_dispatched_request_id.as_deref() {
-                    return Err(anyhow!("{err} [last_request_id={req_id}]"));
-                }
-                return Err(err);
-            }
-        }
     }
 
-    if let Some(req_id) = last_dispatched_request_id.as_deref() {
-        bail!("planner wait windows exhausted without a response [last_request_id={req_id}]")
-    } else {
-        bail!("planner wait windows exhausted without a response")
-    }
-}
+    let raw = resp.response.unwrap_or_default();
+    eprintln!(
+        "[canon-harness-repair] relay_response request_id={} response_bytes={}",
+        request_id,
+        raw.len(),
+    );
 
-fn wait_for_llm_response(
-    rx: &Receiver<RuntimeEvent>,
-    request_id: &str,
-) -> Result<(Vec<PlannerAction>, String)> {
-    loop {
-        let event = rx.recv_timeout(LLM_TIMEOUT).context("timed out waiting for planner result")?;
-        match event {
-            RuntimeEvent::CapabilityCompleted(done)
-                if done.request_id == request_id && done.capability == "llm.call" =>
-            {
-                let CapabilityResult::Llm(result) = done.result else {
-                    bail!("planner returned non-LLM capability result")
-                };
-                let actions = parse_planner_actions(&result.response)?;
-                return Ok((actions, done.request_id));
-            }
-            RuntimeEvent::CapabilityCompleted(done) if done.capability == "llm.call" => {
-                let actual_request_id = done.request_id.clone();
-                let CapabilityResult::Llm(result) = done.result else {
-                    eprintln!(
-                        "[canon-harness-repair] planner_unmatched_non_llm expected_request_id={} actual_request_id={}",
-                        request_id,
-                        actual_request_id
-                    );
-                    continue;
-                };
-                match parse_planner_actions(&result.response) {
-                    Ok(actions) => {
-                        eprintln!(
-                            "[canon-harness-repair] planner_salvaged_completed expected_request_id={} actual_request_id={}",
-                            request_id,
-                            actual_request_id
-                        );
-                        return Ok((actions, actual_request_id));
-                    }
-                    Err(err)
-                        if err.to_string() == "bad_response: response only contained request metadata" =>
-                    {
-                        eprintln!(
-                            "[canon-harness-repair] planner_unmatched_metadata expected_request_id={} actual_request_id={}",
-                            request_id,
-                            actual_request_id
-                        );
-                    }
-                    Err(err) => {
-                        eprintln!(
-                            "[canon-harness-repair] planner_unmatched_completed_bad_response expected_request_id={} actual_request_id={} error={}",
-                            request_id,
-                            actual_request_id,
-                            err
-                        );
-                    }
-                }
-            }
-            RuntimeEvent::CapabilityFailed(CapabilityFailed { request_id: failed_request_id, capability, error, .. })
-                if failed_request_id == request_id && capability == "llm.call" =>
-            {
-                bail!("planner call failed: {error}");
-            }
-            RuntimeEvent::CapabilityFailed(CapabilityFailed { request_id: failed_request_id, capability, error, .. })
-                if capability == "llm.call" =>
-            {
-                eprintln!(
-                    "[canon-harness-repair] planner_unmatched_failed expected_request_id={} actual_request_id={} error={}",
-                    request_id,
-                    failed_request_id,
-                    error
-                );
-            }
-            _ => {}
-        }
-    }
+    let actions = parse_planner_actions(&serde_json::Value::String(raw))?;
+    Ok((actions, request_id))
 }
 
 fn parse_planner_actions(value: &serde_json::Value) -> anyhow::Result<Vec<PlannerAction>> {

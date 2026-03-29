@@ -1,79 +1,79 @@
 
 running 72 tests
 test constraints::unification::tests::cpu_unification_merges_connected_components ... ok
+test data_structures::union_find::tests::union_find_merges_components ... ok
 test constraints::unification::tests::cpu_unification_rejects_invalid_constraint ... ok
 test data_structures::union_find::tests::redundant_union_is_noop ... ok
-test data_structures::union_find::tests::union_find_merges_components ... ok
 test gpu_tests::gpu_tests::bellman_ford_single_edge ... ok
-test gpu_tests::gpu_tests::bfs_diamond_levels ... ok
 test gpu_tests::gpu_tests::ac3_neq_prunes_nothing_when_domains_disjoint_not_needed ... ok
 test gpu_tests::gpu_tests::bellman_ford_disconnected_node_is_max ... ok
 test gpu_tests::gpu_tests::bellman_ford_source_is_last_node ... ok
+test gpu_tests::gpu_tests::bellman_ford_known_shortest_paths ... ok
+test gpu_tests::gpu_tests::bfs_diamond_levels ... ok
+test gpu_tests::gpu_tests::bfs_source_unreachable_marked_minus_one ... ok
+test gpu_tests::gpu_tests::bfs_linear_chain ... ok
 test gpu_tests::gpu_tests::ac3_forces_pruning_when_single_value_conflicts ... ok
 test gpu_tests::gpu_tests::bellman_ford_linear_chain ... ok
-test gpu_tests::gpu_tests::bellman_ford_known_shortest_paths ... ok
-test gpu_tests::gpu_tests::bfs_linear_chain ... ok
-test gpu_tests::gpu_tests::bitonic_sort_non_power_of_two_length ... ok
-test gpu_tests::gpu_tests::bfs_source_unreachable_marked_minus_one ... ok
-test gpu_tests::gpu_tests::depth_gpu_diamond ... ok
-test gpu_tests::gpu_tests::bitonic_sort_ascending_order ... ok
 test gpu_tests::gpu_tests::bitonic_sort_already_sorted ... ok
-test gpu_tests::gpu_tests::csr_unified_row_ptr_matches_adj ... ok
-test gpu_tests::gpu_tests::forward_check_assignment_prunes_conflicting_values ... ok
-test gpu_tests::gpu_tests::forward_check_no_assignment_leaves_domains_intact ... ok
-test gpu_tests::gpu_tests::dominators_diamond_cfg ... ok
+test gpu_tests::gpu_tests::bitonic_sort_non_power_of_two_length ... ok
 test gpu_tests::gpu_tests::dominators_entry_dominates_all ... ok
-test gpu_tests::gpu_tests::linear_search_first_element ... ok
-test gpu_tests::gpu_tests::linear_search_last_element ... ok
 test gpu_tests::gpu_tests::depth_gpu_longest_path_chain ... ok
-test gpu_tests::gpu_tests::dominators_linear_chain ... ok
-test gpu_tests::gpu_tests::feature_gpu_counts_roots_leaves ... ok
-test gpu_tests::gpu_tests::linear_search_target_not_present ... ok
-test gpu_tests::gpu_tests::matmul_identity_times_identity ... ok
-test gpu_tests::gpu_tests::linear_search_returns_first_occurrence ... ok
-test gpu_tests::gpu_tests::matmul_known_result ... ok
-test gpu_tests::gpu_tests::linear_search_found_at_correct_index ... ok
+test gpu_tests::gpu_tests::csr_unified_row_ptr_matches_adj ... ok
+test gpu_tests::gpu_tests::depth_gpu_diamond ... ok
 test gpu_tests::gpu_tests::csr_unified_bfs_agrees_with_csr_bfs ... ok
+test gpu_tests::gpu_tests::dominators_diamond_cfg ... ok
+test gpu_tests::gpu_tests::feature_gpu_counts_roots_leaves ... ok
+test gpu_tests::gpu_tests::bitonic_sort_ascending_order ... ok
+test gpu_tests::gpu_tests::linear_search_found_at_correct_index ... ok
+test gpu_tests::gpu_tests::linear_search_last_element ... ok
+test gpu_tests::gpu_tests::linear_search_returns_first_occurrence ... ok
+test gpu_tests::gpu_tests::linear_search_target_not_present ... ok
+test gpu_tests::gpu_tests::forward_check_no_assignment_leaves_domains_intact ... ok
+test gpu_tests::gpu_tests::matmul_known_result ... ok
+test gpu_tests::gpu_tests::matmul_identity_times_identity ... ok
+test gpu_tests::gpu_tests::linear_search_first_element ... ok
 test gpu_tests::gpu_tests::matmul_zero_matrix ... ok
-test gpu_tests::gpu_tests::merkle_root_length_is_32 ... ok
+test gpu_tests::gpu_tests::dominators_linear_chain ... ok
+test gpu_tests::gpu_tests::forward_check_assignment_prunes_conflicting_values ... ok
+test gpu_tests::gpu_tests::max_flow_parallel_paths ... ok
 test gpu_tests::gpu_tests::merkle_different_pages_produce_different_roots ... ok
-test gpu_tests::gpu_tests::max_flow_bottleneck ... ok
+test gpu_tests::gpu_tests::merkle_tree_buffer_size_correct ... ok
+test gpu_tests::gpu_tests::merkle_root_length_is_32 ... ok
+test gpu_tests::gpu_tests::max_flow_single_edge ... ok
 test gpu_tests::gpu_tests::merkle_root_is_nonzero_for_nonzero_pages ... ok
 test gpu_tests::gpu_tests::max_flow_diamond_network ... ok
-test gpu_tests::gpu_tests::max_flow_single_edge ... ok
-test gpu_tests::gpu_tests::merkle_tree_buffer_size_correct ... ok
-test gpu_tests::gpu_tests::model_check_empty_reachable_set_passes ... ok
-test gpu_tests::gpu_tests::rabin_karp_finds_two_occurrences ... ok
+test gpu_tests::gpu_tests::max_flow_bottleneck ... ok
 test gpu_tests::gpu_tests::merkle_same_pages_produce_same_root ... ok
-test gpu_tests::gpu_tests::max_flow_parallel_paths ... ok
-test gpu_tests::gpu_tests::model_check_unreachable_violation_passes ... ok
-test gpu_tests::gpu_tests::model_check_all_reachable_states_satisfy_invariant ... ok
-test gpu_tests::gpu_tests::rabin_karp_overlapping_pattern ... ok
+test gpu_tests::gpu_tests::model_check_empty_reachable_set_passes ... ok
 test gpu_tests::gpu_tests::rabin_karp_full_string_match ... ok
-test gpu_tests::gpu_tests::reachability_isolated_node_not_reached ... ok
-test gpu_tests::gpu_tests::reaching_defs_kill_blocks_propagation ... ok
+test gpu_tests::gpu_tests::rabin_karp_finds_two_occurrences ... ok
+test gpu_tests::gpu_tests::model_check_all_reachable_states_satisfy_invariant ... ok
 test gpu_tests::gpu_tests::model_check_reachable_violation_fails ... ok
 test gpu_tests::gpu_tests::rabin_karp_no_match ... ok
-test gpu_tests::gpu_tests::reachability_multi_root ... ok
+test gpu_tests::gpu_tests::rabin_karp_overlapping_pattern ... ok
+test gpu_tests::gpu_tests::model_check_unreachable_violation_passes ... ok
+test gpu_tests::gpu_tests::reachability_isolated_node_not_reached ... ok
+test gpu_tests::gpu_tests::bitonic_sort_reverse_sorted ... ok
+test gpu_tests::gpu_tests::reaching_defs_kill_blocks_propagation ... ok
 test gpu_tests::gpu_tests::reachability_diamond_from_zero ... ok
-test gpu_tests::gpu_tests::reaching_defs_linear_chain_propagates ... ok
 test gpu_tests::gpu_tests::scheduler_deadlock_cycle ... ok
+test gpu_tests::gpu_tests::reaching_defs_linear_chain_propagates ... ok
+test gpu_tests::gpu_tests::reachability_multi_root ... ok
+test gpu_tests::gpu_tests::scheduler_ready_mask_simple_chain ... ok
 test gpu_tests::gpu_tests::scheduler_priority_sort_orders_highest_first ... ok
 test gpu_tests::gpu_tests::sieve_no_composites_in_output ... ok
-test gpu_tests::gpu_tests::scheduler_ready_mask_simple_chain ... ok
 test gpu_tests::gpu_tests::sieve_prime_count_up_to_100 ... ok
-test gpu_tests::gpu_tests::sieve_primes_up_to_50 ... ok
 test gpu_tests::gpu_tests::scc_gpu_detects_cycle ... ok
 test parsing_compilation::type_unification::tests::type_unification_cpu_connects_equalities ... ok
-test gpu_tests::gpu_tests::type_unification_gpu_solves_equalities ... ok
-test gpu_tests::gpu_tests::sieve_prime_count_up_to_1000 ... ok
 test gpu_tests::gpu_tests::union_find_gpu_merges_constraint_components ... ok
+test gpu_tests::gpu_tests::type_unification_gpu_solves_equalities ... ok
+test gpu_tests::gpu_tests::sieve_primes_up_to_50 ... ok
 test parsing_compilation::type_unification::tests::type_unification_auto_matches_cpu_shape ... ok
-test gpu_tests::gpu_tests::bitonic_sort_reverse_sorted ... ok
+test gpu_tests::gpu_tests::sieve_prime_count_up_to_1000 ... ok
 test gpu_tests::gpu_tests::topo_sort_gpu_respects_edges ... ok
 test gpu_tests::gpu_tests::reachability_linear_chain_full ... ok
 
-test result: ok. 72 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+test result: ok. 72 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
 
 
 running 0 tests
@@ -113,28 +113,59 @@ running 0 tests
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 
-running 40 tests
-test control_harness::tests::control_harness_awaiting_successor_round_trip ... ok
+running 81 tests
 test control_harness::tests::control_harness_awaiting_successor_is_suppressed ... ok
 test control_harness::tests::control_harness_cached_non_observe_route_store_round_trip ... ok
 test control_harness::tests::control_harness_cached_observe_route_store_and_clear_round_trip ... ok
+test control_harness::tests::control_harness_awaiting_successor_round_trip ... ok
 test control_harness::tests::control_harness_conclude_emitted_halts_state ... ok
-test control_harness::tests::control_harness_duplicate_emit_for_current_control_is_suppressed ... ok
 test control_harness::tests::control_harness_emits_route_when_clear ... ok
-test control_harness::tests::control_harness_force_fresh_route_takes_precedence ... ok
+test control_harness::tests::control_harness_duplicate_emit_for_current_control_is_suppressed ... ok
 test control_harness::tests::control_harness_force_fresh_event_sets_flag ... ok
+test control_harness::tests::control_harness_force_fresh_route_takes_precedence ... ok
+test control_harness::tests::control_harness_generic_event_trigger_recovery ... ok
 test control_harness::tests::control_harness_halted_state_is_suppressed ... ok
 test control_harness::tests::control_harness_force_fresh_takes_precedence_over_cached_route ... ok
-test control_harness::tests::control_harness_missing_required_successor_is_invariant_violation ... ok
 test control_harness::tests::control_harness_invalidates_cached_observe_route ... ok
+test control_harness::tests::control_harness_llm_failed_plan_timeout_requests_fresh_route ... ok
+test control_harness::tests::control_harness_llm_timeout_plan_loop_recovery ... ok
+test control_harness::tests::control_harness_missing_required_successor_is_invariant_violation ... ok
+test control_harness::tests::control_harness_observe_suppressed_pending_successor_recovery ... ok
 test control_harness::tests::control_harness_pending_request_round_trip ... ok
+test control_harness::tests::control_harness_pending_request_is_suppressed ... ok
+test control_harness::tests::control_harness_llm_failed_plan_timeout_without_route_capacity_is_violation ... ok
+test control_harness::tests::control_harness_repeated_deterministic_plan_without_recovery ... ok
 test control_harness::tests::control_harness_prompt_dispatch_round_trip ... ok
 test control_harness::tests::control_harness_replays_cached_observe_without_successor_obligation ... ok
-test control_harness::tests::control_harness_pending_request_is_suppressed ... ok
 test control_harness::tests::control_harness_replays_safe_cached_route ... ok
+test control_harness::tests::control_harness_recovery_events_never_make_state_better_than_force_fresh ... ok
 test control_harness::tests::control_harness_route_selected_clears_required_successor ... ok
-test tests::constraint_engine_bootstrap_state_map_is_exhaustive ... ok
 test control_harness::tests::control_harness_seed_space_is_exhaustively_classified ... ok
+test request_lifecycle_harness::tests::request_lifecycle_accepts_finalized_failure ... ok
+test request_lifecycle_harness::tests::request_lifecycle_accepts_matched_completed_actions ... ok
+test request_lifecycle_harness::tests::request_lifecycle_accepts_salvaged_unmatched_completed_actions ... ok
+test request_lifecycle_harness::tests::request_lifecycle_duplicate_terminal_event_is_violation ... ok
+test control_harness::tests::control_harness_trace_depth_one_is_exhaustively_classified ... ok
+test request_lifecycle_harness::tests::request_lifecycle_failure_requires_finalized_artifact ... ok
+test request_lifecycle_harness::tests::request_lifecycle_idle_is_suppressed ... ok
+test request_lifecycle_harness::tests::request_lifecycle_ignores_metadata_only_completion ... ok
+test request_lifecycle_harness::tests::request_lifecycle_pending_request_awaits ... ok
+test request_lifecycle_harness::tests::request_lifecycle_projection_accepts_finalized_failed_runtime_case ... ok
+test request_lifecycle_harness::tests::request_lifecycle_projection_accepts_matched_completed_runtime_case ... ok
+test request_lifecycle_harness::tests::request_lifecycle_projection_accepts_salvaged_unmatched_completion ... ok
+test request_lifecycle_harness::tests::request_lifecycle_projection_ignores_metadata_only_runtime_case ... ok
+test request_lifecycle_harness::tests::request_lifecycle_projection_rejects_duplicate_terminal_runtime_case ... ok
+test request_lifecycle_harness::tests::request_lifecycle_projection_rejects_timeout_left_pending ... ok
+test request_lifecycle_harness::tests::request_lifecycle_timeout_without_terminal_close_is_violation ... ok
+test request_lifecycle_harness::tests::request_lifecycle_seed_space_is_exhaustively_classified ... ok
+test request_lifecycle_harness::tests::retry_sequence_accepts_current_attempt_when_valid ... ok
+test request_lifecycle_harness::tests::retry_sequence_accepts_current_failed_attempt ... ok
+test request_lifecycle_harness::tests::retry_sequence_accepts_prior_salvaged_attempt ... ok
+test request_lifecycle_harness::tests::retry_sequence_ignores_prior_metadata_while_waiting_current_attempt ... ok
+test request_lifecycle_harness::tests::retry_sequence_rejects_duplicate_terminal_event ... ok
+test request_lifecycle_harness::tests::retry_sequence_rejects_multiple_valid_completions ... ok
+test request_lifecycle_harness::tests::retry_sequence_rejects_timeout_on_pending_current_attempt ... ok
+test tests::constraint_engine_bootstrap_state_map_is_exhaustive ... ok
 test tests::constraint_engine_forbids_deterministic_route_override ... ok
 test tests::constraint_engine_forbids_repair_without_actionable_failure ... ok
 test tests::constraint_engine_forbids_validation_when_entrypoint_is_missing ... ok
@@ -143,30 +174,165 @@ test tests::constraint_engine_rewrites_route_on_state_drift ... ok
 test tests::constraint_engine_rewrites_route_to_plan_when_target_is_missing ... ok
 test tests::constraint_engine_rewrites_verify_when_module_gaps_are_present ... ok
 test tests::harness_self_repair_requires_minimal_capability_basis ... ok
+test tests::invariant_demotes_after_negative_evidence ... ok
 test tests::meta_invariant_all_results_update_policy_compiler_failure_is_corrective ... ok
-test tests::meta_invariant_all_results_update_policy_passed_is_positive ... ok
-test tests::meta_invariant_verifier_sequence_contract_accepts_verify_path ... ok
 test tests::constraint_engine_long_loop_harness_converges_without_dead_end ... ok
+test tests::constraint_engine_state_action_decision_map_is_exhaustive ... ok
+test tests::meta_invariant_all_results_update_policy_passed_is_positive ... ok
 test tests::meta_invariant_tool_selection_correctness_matches_expected_bootstrap_tool ... ok
+test tests::meta_invariant_verifier_sequence_contract_accepts_verify_path ... ok
 test tests::meta_invariant_verifier_sequence_contract_rejects_skipped_loop_verified ... ok
 test tests::meta_invariant_verifier_sequence_contract_rejects_skipped_policy_update ... ok
-test tests::constraint_engine_state_action_decision_map_is_exhaustive ... ok
+test tests::precedence_matrix_prefers_discovered_over_deterministic ... ok
+test tests::precedence_matrix_prefers_meta_over_discovered_and_deterministic ... ok
+test control_harness::tests::control_harness_trace_depth_two_is_exhaustively_classified ... ok
+test tests::precedence_matrix_returns_none_when_no_layers_fire ... ok
+test tests::precedence_matrix_uses_deterministic_when_higher_layers_absent ... ok
+test tests::promoted_missing_target_invariant_rewrites_observe_to_plan ... ok
 test tests::repeated_missing_target_failures_promote_force_plan_invariant ... ok
 test tests::repeated_no_actionable_plan_failures_promote_observe_refresh_invariant ... ok
-test tests::promoted_missing_target_invariant_rewrites_observe_to_plan ... FAILED
+test tests::trajectory_scoring_balances_progress_and_penalty ... ok
+test tests::trajectory_scoring_penalizes_invalid_actions_more ... ok
+test tests::trajectory_scoring_penalizes_no_progress ... ok
+test tests::trajectory_scoring_rewards_progress ... ok
+
+test result: ok. 81 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+test tests::finish_ready_allows_verify_without_workspace_dirty ... ok
+test tests::repair_pressure_blocks_conclude ... ok
+test tests::repair_pressure_blocks_verify ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 19 tests
+test relay::tests::test_relay_request_serde_roundtrip ... ok
+test relay::tests::test_relay_response_serde_roundtrip ... ok
+test relay::tests::test_relay_server_binds_on_configured_addr ... ok
+test relay::tests::test_relay_client_call_propagates_dispatch_error ... ok
+test repair_server::tests::test_repair_client_submit_failure_result ... ok
+test repair_server::tests::test_repair_client_submit_success ... ok
+test repair_server::tests::test_repair_job_request_serde_roundtrip ... ok
+test repair_server::tests::test_repair_job_result_serde_roundtrip ... ok
+test repair_server::tests::test_repair_server_binds_and_accepts ... ok
+test relay::tests::test_concurrent_relay_calls_are_isolated ... ok
+test relay::tests::test_relay_client_call_returns_mock_response ... ok
+test repair_server::tests::test_repair_server_receives_incident_context ... ok
+test repair_server::tests::test_repair_server_processes_jobs_sequentially ... ok
+test relay::tests::test_resolve_unknown_role_returns_error ... ok
+test relay::tests::test_harness_roles_resolve_to_distinct_endpoints ... ok
+test relay::tests::test_resolve_harness_repair_role ... ok
+test relay::tests::test_resolve_harness_eventlog_role ... ok
+test relay::tests::test_relay_server_shuts_down_on_handle_drop ... ok
+test repair_server::tests::test_repair_server_shuts_down_on_handle_drop ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+
+running 66 tests
+test compiler_hints::tests::extracts_trait_bound_hint ... ok
+test compiler_hints::tests::extracts_duplicate_definition_hint ... ok
+test compiler_hints::tests::extracts_missing_symbol_hint ... ok
+test compiler_hints::tests::extracts_missing_module_hint ... ok
+test compiler_hints::tests::extracts_dead_code_forbid_hint ... ok
+test env_model::tests::select_bootstrap_command_uses_cargo_new_for_missing_dir ... ok
+test env_model::tests::select_bootstrap_command_uses_cargo_init_for_existing_non_cargo_dir ... ok
+test env_model::tests::select_bootstrap_command_rejects_bootstrap_for_existing_cargo_project ... ok
+test compiler_hints::tests::extracts_unresolved_import_hint ... ok
+test exec_constraints::tests::validation_is_forbidden_when_semantic_state_requires_entrypoint_or_modules ... ok
+test env_model::tests::semantic_state_matches_workspace_model_detects_state_vs_reality_mismatch ... ok
+test harness_repair::tests::harness_directive_builds_targeted_verifier_command ... ok
+test harness_repair::tests::harness_loop_observes_when_failure_is_not_actionable ... ok
+test harness_repair::tests::harness_loop_prefers_localized_repair ... ok
+test planning_preconditions::tests::accepts_missing_module_semantic_create_module_file ... ok
+test planning_preconditions::tests::accepts_duplicate_definition_semantic_rename ... ok
+test planning_preconditions::tests::accepts_missing_symbol_semantic_stub ... ok
+test planning_preconditions::tests::accepts_trait_bound_repair_that_targets_expected_file ... ok
+test planning_preconditions::tests::accepts_unresolved_import_semantic_add_import ... ok
+test planning_preconditions::tests::action_intent_consistency_bootstrap_cannot_emit_verify_batch ... ok
+test exec_constraints::tests::bootstrap_constraint_state_map_is_exhaustive ... ok
+test planning_preconditions::tests::action_intent_consistency_repair_cannot_emit_noop_validation_route ... ok
+test planning_preconditions::tests::bootstrap_precondition_detects_state_vs_reality_mismatch ... ok
+test planning_preconditions::tests::derive_preconditions_from_lines_round_trips ... ok
+test planning_preconditions::tests::bootstrap_precondition_requires_cargo_init_for_existing_non_cargo_target ... ok
+test planning_preconditions::tests::bootstrap_precondition_requires_cargo_new_for_missing_target ... ok
+test planning_preconditions::tests::derives_workspace_preconditions ... ok
+test planning_preconditions::tests::rejects_cargo_check_before_bootstrapping_missing_workspace ... ok
+test planning_preconditions::tests::rejects_cargo_check_before_entrypoint_creation ... ok
+test planning_preconditions::tests::rejects_missing_module_repair_that_targets_the_wrong_file ... ok
+test planning_preconditions::tests::rejects_missing_symbol_patch_inference_now_that_semantic_action_exists ... ok
+test planning_preconditions::tests::rejects_duplicate_definition_repair_that_targets_wrong_file ... ok
+test planning_preconditions::tests::rejects_localized_repair_when_failure_scope_is_missing ... ok
+test planning_preconditions::tests::rejects_missing_module_patch_inference_now_that_semantic_action_exists ... ok
+test planning_preconditions::tests::rejects_multi_action_batch_when_invalid_plan_pressure_is_high ... ok
+test planning_preconditions::tests::rejects_passive_first_batch_after_stall ... ok
+test planning_preconditions::tests::repair_intents_preserve_priority_order ... ok
+test planning_preconditions::tests::rejects_unresolved_import_patch_inference_now_that_semantic_action_exists ... ok
+test policy::tests::graph_proof_failure_forces_corrective_retry_context ... ok
+test planning_preconditions::tests::rejects_repair_plan_without_actionable_failure ... ok
+test planning_preconditions::tests::restructure_strategy_requires_move_symbol_action ... ok
+test policy::tests::action_outcomes_are_classified_explicitly ... ok
+test policy::tests::no_semantic_progress_forces_corrective_retry_context ... ok
+test policy::tests::loop_transition_rows_cover_recovery_and_successor_state ... ok
+test policy::tests::planner_hints_include_failure_output ... ok
+test policy::tests::read_only_actions_do_not_count_as_mutating ... ok
+test policy::tests::recovery_rules_are_explicitly_classified ... ok
+test policy::tests::retry_policy_is_reason_specific ... ok
+test policy::tests::run_command_is_classified_by_outcome_shape ... ok
+test policy::tests::verifier_policy_update_forces_corrective_retry_context ... ok
+test stage::plan::tests::graph_rename_strategy_is_selected_for_duplicate_definition_context ... ok
+test stage::plan::tests::graph_strategy_block_emits_move_symbol_payloads ... ok
+test stage::plan::tests::graph_strategy_block_prefers_semantic_rename_payloads ... ok
+test stage::plan::tests::semantic_repair_block_prefers_editor_actions_for_local_repairs ... ok
+test stage::plan::tests::validate_action_batch_accepts_move_symbol_action ... ok
+test stage::plan::tests::validate_action_batch_rejects_missing_verifier_for_mutation ... ok
+test stage::plan::tests::validate_action_batch_accepts_semantic_rename_action ... ok
+test tests_env_model::tests::inspect_missing_workspace_reports_bootstrap_precondition ... ok
+test tests_env_model::tests::parse_module_gap_from_lib_rs ... ok
+test executor::tests::rejects_loop_rewarded_before_verifier_policy_update ... ok
+test executor::tests::rejects_verifier_policy_updated_before_loop_verified ... ok
+test executor::tests::accepts_loop_rewarded_for_direct_conclude_route ... ok
+test stage::reward::tests::graph_proof_failure_penalizes_reward ... ok
+test stage::reward::tests::semantic_progress_improves_reward ... ok
+test stage::reward::tests::semantic_progress_resets_stagnation_on_failed_verify ... ok
+test stage::verify::tests::verify_emits_verifier_policy_updated_event ... ok
+
+test result: ok. 66 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 9 tests
+test tests::baseline_transition_matrix_route_and_loop_rows_are_nonempty ... ok
+test tests::generated_judgment_rows_are_consistent_with_expected_counts ... ok
+test tests::coverage_report_markdown_mentions_all_sections ... ok
+test tests::baseline_transition_matrix_has_full_family_coverage ... ok
+test tests::baseline_transition_matrix_row_names_are_unique ... ok
+test tests::route_semantic_generation_partition_is_complete ... ok
+test tests::route_semantic_actionability_rows_exhaustively_cover_valid_generated_state_space ... ok
+test tests::unified_transition_matrix_rows_match_policy_evaluators ... ok
+test tests::planner_judgment_rows_exhaustively_cover_valid_generated_state_space ... FAILED
 
 failures:
 
 failures:
-    tests::promoted_missing_target_invariant_rewrites_observe_to_plan
+    tests::planner_judgment_rows_exhaustively_cover_valid_generated_state_space
 
-test result: FAILED. 39 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
 
 
-   Compiling canon-route v0.1.0 (/workspace/ai_sandbox/canon/canon-utils/canon-route)
    Compiling canon-runtime v0.1.0 (/workspace/ai_sandbox/canon/canon-utils/canon-runtime)
-   Compiling canon-policy-matrix v0.1.0 (/workspace/ai_sandbox/canon/canon-utils/canon-policy-matrix)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.21s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.10s
      Running unittests src/lib.rs (target/debug/deps/algorithms-6ee5d8c463a2f004)
      Running unittests src/lib.rs (target/debug/deps/canon_analyst-b5dd5c6272d414ec)
      Running unittests src/lib.rs (target/debug/deps/canon_builder-cdc037079f0e5401)
@@ -176,94 +342,120 @@ test result: FAILED. 39 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;
      Running unittests src/lib.rs (target/debug/deps/canon_goal-e70ce003cb29dede)
      Running unittests src/lib.rs (target/debug/deps/canon_goodness-ab2c57b7b0881694)
      Running unittests src/lib.rs (target/debug/deps/canon_invariant-ec8ed4d43b4e6b69)
+     Running unittests src/lib.rs (target/debug/deps/canon_ir-8172657a18f64345)
+     Running unittests src/lib.rs (target/debug/deps/canon_judgment-38281b973afe6063)
+     Running unittests src/lib.rs (target/debug/deps/canon_llm-3ddbec70645b0f80)
+[repair_server] connection accepted peer=127.0.0.1:44568
+[repair_server] request bytes=227 peer=127.0.0.1:44568
+[repair_server] decoded job crate=canon-loop test=synthetic_timeout_recovery max_steps=8 workspace=/workspace/ai_sandbox/canon
+[repair_server] result success=false steps_taken=8 error=repair exhausted 8 steps for synthetic_timeout_recovery
+[repair_server] connection accepted peer=127.0.0.1:57236
+[repair_server] request bytes=227 peer=127.0.0.1:57236
+[repair_server] decoded job crate=canon-loop test=synthetic_timeout_recovery max_steps=8 workspace=/workspace/ai_sandbox/canon
+[repair_server] result success=true steps_taken=2 error=none
+[repair_server] connection accepted peer=127.0.0.1:36670
+[repair_server] request bytes=260 peer=127.0.0.1:36670
+[repair_server] decoded job crate=canon-loop test=synthetic_timeout_recovery max_steps=8 workspace=/workspace/ai_sandbox/canon
+[repair_server] result success=true steps_taken=0 error=none
+[repair_server] connection accepted peer=127.0.0.1:49246
+[repair_server] request bytes=227 peer=127.0.0.1:49246
+[repair_server] decoded job crate=canon-loop test=synthetic_timeout_recovery max_steps=8 workspace=/workspace/ai_sandbox/canon
+[repair_server] result success=true steps_taken=1 error=none
+[repair_server] connection accepted peer=127.0.0.1:49254
+[repair_server] request bytes=227 peer=127.0.0.1:49254
+[repair_server] decoded job crate=canon-loop test=synthetic_timeout_recovery max_steps=8 workspace=/workspace/ai_sandbox/canon
+[repair_server] result success=true steps_taken=2 error=none
+     Running unittests src/lib.rs (target/debug/deps/canon_loop-fcc4399d70ce07e9)
+     Running unittests src/lib.rs (target/debug/deps/canon_meta-e515ad893d90e66a)
+     Running unittests src/lib.rs (target/debug/deps/canon_policy_matrix-0c634c8d00862172)
 
-thread 'tests::promoted_missing_target_invariant_rewrites_observe_to_plan' (3942177) panicked at canon-utils/canon-invariant/src/lib.rs:2144:9:
+thread 'tests::planner_judgment_rows_exhaustively_cover_valid_generated_state_space' (317504) panicked at canon-utils/canon-policy-matrix/src/lib.rs:3344:9:
 assertion `left == right` failed
-  left: RewriteRoute(Plan, "meta_invariant_bootstrap_required: target workspace is missing; route must plan bootstrap first")
- right: RewriteRoute(Plan, "discovered_invariant_missing_target: repeated missing-target failures require planning before other routes")
+  left: 154
+ right: 165
 stack backtrace:
-   0:     0x5d9e43d02b1a - std[51bd67ac9af55117]::backtrace_rs::backtrace::libunwind::trace
+   0:     0x5ca4db443d3a - std[51bd67ac9af55117]::backtrace_rs::backtrace::libunwind::trace
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/../../backtrace/src/backtrace/libunwind.rs:117:9
-   1:     0x5d9e43d02b1a - std[51bd67ac9af55117]::backtrace_rs::backtrace::trace_unsynchronized::<std[51bd67ac9af55117]::sys::backtrace::_print_fmt::{closure#1}>
+   1:     0x5ca4db443d3a - std[51bd67ac9af55117]::backtrace_rs::backtrace::trace_unsynchronized::<std[51bd67ac9af55117]::sys::backtrace::_print_fmt::{closure#1}>
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/../../backtrace/src/backtrace/mod.rs:66:14
-   2:     0x5d9e43d02b1a - std[51bd67ac9af55117]::sys::backtrace::_print_fmt
+   2:     0x5ca4db443d3a - std[51bd67ac9af55117]::sys::backtrace::_print_fmt
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/sys/backtrace.rs:74:9
-   3:     0x5d9e43d02b1a - <<std[51bd67ac9af55117]::sys::backtrace::BacktraceLock>::print::DisplayBacktrace as core[28bfa958bd7f7b14]::fmt::Display>::fmt
+   3:     0x5ca4db443d3a - <<std[51bd67ac9af55117]::sys::backtrace::BacktraceLock>::print::DisplayBacktrace as core[28bfa958bd7f7b14]::fmt::Display>::fmt
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/sys/backtrace.rs:44:26
-   4:     0x5d9e43d1707a - <core[28bfa958bd7f7b14]::fmt::rt::Argument>::fmt
+   4:     0x5ca4db4592aa - <core[28bfa958bd7f7b14]::fmt::rt::Argument>::fmt
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/core/src/fmt/rt.rs:152:76
-   5:     0x5d9e43d1707a - core[28bfa958bd7f7b14]::fmt::write
-   6:     0x5d9e43d07ef2 - std[51bd67ac9af55117]::io::default_write_fmt::<std[51bd67ac9af55117]::sys::stdio::unix::Stderr>
+   5:     0x5ca4db4592aa - core[28bfa958bd7f7b14]::fmt::write
+   6:     0x5ca4db449382 - std[51bd67ac9af55117]::io::default_write_fmt::<std[51bd67ac9af55117]::sys::stdio::unix::Stderr>
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/io/mod.rs:639:11
-   7:     0x5d9e43d07ef2 - <std[51bd67ac9af55117]::sys::stdio::unix::Stderr as std[51bd67ac9af55117]::io::Write>::write_fmt
+   7:     0x5ca4db449382 - <std[51bd67ac9af55117]::sys::stdio::unix::Stderr as std[51bd67ac9af55117]::io::Write>::write_fmt
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/io/mod.rs:1994:13
-   8:     0x5d9e43ce0cbf - <std[51bd67ac9af55117]::sys::backtrace::BacktraceLock>::print
+   8:     0x5ca4db4214af - <std[51bd67ac9af55117]::sys::backtrace::BacktraceLock>::print
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/sys/backtrace.rs:47:9
-   9:     0x5d9e43ce0cbf - std[51bd67ac9af55117]::panicking::default_hook::{closure#0}
+   9:     0x5ca4db4214af - std[51bd67ac9af55117]::panicking::default_hook::{closure#0}
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/panicking.rs:292:27
-  10:     0x5d9e43cfab31 - std[51bd67ac9af55117]::panicking::default_hook
+  10:     0x5ca4db43bb71 - std[51bd67ac9af55117]::panicking::default_hook
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/panicking.rs:319:9
-  11:     0x5d9e43cfaceb - std[51bd67ac9af55117]::panicking::panic_with_hook
+  11:     0x5ca4db43bd2b - std[51bd67ac9af55117]::panicking::panic_with_hook
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/panicking.rs:825:13
-  12:     0x5d9e43ce0d78 - std[51bd67ac9af55117]::panicking::panic_handler::{closure#0}
+  12:     0x5ca4db421568 - std[51bd67ac9af55117]::panicking::panic_handler::{closure#0}
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/panicking.rs:698:13
-  13:     0x5d9e43cd5d59 - std[51bd67ac9af55117]::sys::backtrace::__rust_end_short_backtrace::<std[51bd67ac9af55117]::panicking::panic_handler::{closure#0}, !>
+  13:     0x5ca4db4164b9 - std[51bd67ac9af55117]::sys::backtrace::__rust_end_short_backtrace::<std[51bd67ac9af55117]::panicking::panic_handler::{closure#0}, !>
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/sys/backtrace.rs:182:18
-  14:     0x5d9e43ce1a8d - __rustc[7555343a6f564530]::rust_begin_unwind
+  14:     0x5ca4db42227d - __rustc[7555343a6f564530]::rust_begin_unwind
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/panicking.rs:689:5
-  15:     0x5d9e43d1792c - core[28bfa958bd7f7b14]::panicking::panic_fmt
+  15:     0x5ca4db459b5c - core[28bfa958bd7f7b14]::panicking::panic_fmt
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/core/src/panicking.rs:80:14
-  16:     0x5d9e43d177e3 - core[28bfa958bd7f7b14]::panicking::assert_failed_inner
+  16:     0x5ca4db459a13 - core[28bfa958bd7f7b14]::panicking::assert_failed_inner
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/core/src/panicking.rs:439:17
-  17:     0x5d9e43c46dae - core[28bfa958bd7f7b14]::panicking::assert_failed::<canon_invariant[cddf3b28b9a3f46d]::ConstraintDecision, canon_invariant[cddf3b28b9a3f46d]::ConstraintDecision>
-                               at /home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panicking.rs:394:5
-  18:     0x5d9e43c3917c - canon_invariant[cddf3b28b9a3f46d]::tests::promoted_missing_target_invariant_rewrites_observe_to_plan
-                               at /workspace/ai_sandbox/canon/canon-utils/canon-invariant/src/lib.rs:2144:9
-  19:     0x5d9e43c56d57 - canon_invariant[cddf3b28b9a3f46d]::tests::promoted_missing_target_invariant_rewrites_observe_to_plan::{closure#0}
-                               at /workspace/ai_sandbox/canon/canon-utils/canon-invariant/src/lib.rs:2123:68
-  20:     0x5d9e43c549b6 - <canon_invariant[cddf3b28b9a3f46d]::tests::promoted_missing_target_invariant_rewrites_observe_to_plan::{closure#0} as core[28bfa958bd7f7b14]::ops::function::FnOnce<()>>::call_once
+  17:     0x5ca4db45521d - core[28bfa958bd7f7b14]::panicking::assert_failed::<usize, usize>
+                               at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/core/src/panicking.rs:394:5
+  18:     0x5ca4db2726df - canon_policy_matrix[587d22b7ec9d03a3]::tests::planner_judgment_rows_exhaustively_cover_valid_generated_state_space
+                               at /workspace/ai_sandbox/canon/canon-utils/canon-policy-matrix/src/lib.rs:3344:9
+  19:     0x5ca4db27a4f7 - canon_policy_matrix[587d22b7ec9d03a3]::tests::planner_judgment_rows_exhaustively_cover_valid_generated_state_space::{closure#0}
+                               at /workspace/ai_sandbox/canon/canon-utils/canon-policy-matrix/src/lib.rs:3308:78
+  20:     0x5ca4db279a26 - <canon_policy_matrix[587d22b7ec9d03a3]::tests::planner_judgment_rows_exhaustively_cover_valid_generated_state_space::{closure#0} as core[28bfa958bd7f7b14]::ops::function::FnOnce<()>>::call_once
                                at /home/cicero-arch-omen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
-  21:     0x5d9e43c599eb - <fn() -> core[28bfa958bd7f7b14]::result::Result<(), alloc[b08763a22059f7d9]::string::String> as core[28bfa958bd7f7b14]::ops::function::FnOnce<()>>::call_once
+  21:     0x5ca4db2ba16b - <fn() -> core[28bfa958bd7f7b14]::result::Result<(), alloc[b08763a22059f7d9]::string::String> as core[28bfa958bd7f7b14]::ops::function::FnOnce<()>>::call_once
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/core/src/ops/function.rs:250:5
-  22:     0x5d9e43c599eb - test[8ded36e3bd795680]::__rust_begin_short_backtrace::<core[28bfa958bd7f7b14]::result::Result<(), alloc[b08763a22059f7d9]::string::String>, fn() -> core[28bfa958bd7f7b14]::result::Result<(), alloc[b08763a22059f7d9]::string::String>>
+  22:     0x5ca4db2ba16b - test[8ded36e3bd795680]::__rust_begin_short_backtrace::<core[28bfa958bd7f7b14]::result::Result<(), alloc[b08763a22059f7d9]::string::String>, fn() -> core[28bfa958bd7f7b14]::result::Result<(), alloc[b08763a22059f7d9]::string::String>>
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/test/src/lib.rs:663:18
-  23:     0x5d9e43c663db - test[8ded36e3bd795680]::run_test_in_process::{closure#0}
+  23:     0x5ca4db2c6b5b - test[8ded36e3bd795680]::run_test_in_process::{closure#0}
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/test/src/lib.rs:686:74
-  24:     0x5d9e43c663db - <core[28bfa958bd7f7b14]::panic::unwind_safe::AssertUnwindSafe<test[8ded36e3bd795680]::run_test_in_process::{closure#0}> as core[28bfa958bd7f7b14]::ops::function::FnOnce<()>>::call_once
+  24:     0x5ca4db2c6b5b - <core[28bfa958bd7f7b14]::panic::unwind_safe::AssertUnwindSafe<test[8ded36e3bd795680]::run_test_in_process::{closure#0}> as core[28bfa958bd7f7b14]::ops::function::FnOnce<()>>::call_once
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/core/src/panic/unwind_safe.rs:274:9
-  25:     0x5d9e43c663db - std[51bd67ac9af55117]::panicking::catch_unwind::do_call::<core[28bfa958bd7f7b14]::panic::unwind_safe::AssertUnwindSafe<test[8ded36e3bd795680]::run_test_in_process::{closure#0}>, core[28bfa958bd7f7b14]::result::Result<(), alloc[b08763a22059f7d9]::string::String>>
+  25:     0x5ca4db2c6b5b - std[51bd67ac9af55117]::panicking::catch_unwind::do_call::<core[28bfa958bd7f7b14]::panic::unwind_safe::AssertUnwindSafe<test[8ded36e3bd795680]::run_test_in_process::{closure#0}>, core[28bfa958bd7f7b14]::result::Result<(), alloc[b08763a22059f7d9]::string::String>>
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/panicking.rs:581:40
-  26:     0x5d9e43c663db - std[51bd67ac9af55117]::panicking::catch_unwind::<core[28bfa958bd7f7b14]::result::Result<(), alloc[b08763a22059f7d9]::string::String>, core[28bfa958bd7f7b14]::panic::unwind_safe::AssertUnwindSafe<test[8ded36e3bd795680]::run_test_in_process::{closure#0}>>
+  26:     0x5ca4db2c6b5b - std[51bd67ac9af55117]::panicking::catch_unwind::<core[28bfa958bd7f7b14]::result::Result<(), alloc[b08763a22059f7d9]::string::String>, core[28bfa958bd7f7b14]::panic::unwind_safe::AssertUnwindSafe<test[8ded36e3bd795680]::run_test_in_process::{closure#0}>>
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/panicking.rs:544:19
-  27:     0x5d9e43c663db - std[51bd67ac9af55117]::panic::catch_unwind::<core[28bfa958bd7f7b14]::panic::unwind_safe::AssertUnwindSafe<test[8ded36e3bd795680]::run_test_in_process::{closure#0}>, core[28bfa958bd7f7b14]::result::Result<(), alloc[b08763a22059f7d9]::string::String>>
+  27:     0x5ca4db2c6b5b - std[51bd67ac9af55117]::panic::catch_unwind::<core[28bfa958bd7f7b14]::panic::unwind_safe::AssertUnwindSafe<test[8ded36e3bd795680]::run_test_in_process::{closure#0}>, core[28bfa958bd7f7b14]::result::Result<(), alloc[b08763a22059f7d9]::string::String>>
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/panic.rs:359:14
-  28:     0x5d9e43c663db - test[8ded36e3bd795680]::run_test_in_process
+  28:     0x5ca4db2c6b5b - test[8ded36e3bd795680]::run_test_in_process
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/test/src/lib.rs:686:27
-  29:     0x5d9e43c663db - test[8ded36e3bd795680]::run_test::{closure#0}
+  29:     0x5ca4db2c6b5b - test[8ded36e3bd795680]::run_test::{closure#0}
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/test/src/lib.rs:607:43
-  30:     0x5d9e43c61af4 - test[8ded36e3bd795680]::run_test::{closure#1}
+  30:     0x5ca4db2c2274 - test[8ded36e3bd795680]::run_test::{closure#1}
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/test/src/lib.rs:637:41
-  31:     0x5d9e43c61af4 - std[51bd67ac9af55117]::sys::backtrace::__rust_begin_short_backtrace::<test[8ded36e3bd795680]::run_test::{closure#1}, ()>
+  31:     0x5ca4db2c2274 - std[51bd67ac9af55117]::sys::backtrace::__rust_begin_short_backtrace::<test[8ded36e3bd795680]::run_test::{closure#1}, ()>
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/sys/backtrace.rs:166:18
-  32:     0x5d9e43c68fe2 - std[51bd67ac9af55117]::thread::lifecycle::spawn_unchecked::<test[8ded36e3bd795680]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}
+  32:     0x5ca4db2c9762 - std[51bd67ac9af55117]::thread::lifecycle::spawn_unchecked::<test[8ded36e3bd795680]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/thread/lifecycle.rs:91:13
-  33:     0x5d9e43c68fe2 - <core[28bfa958bd7f7b14]::panic::unwind_safe::AssertUnwindSafe<std[51bd67ac9af55117]::thread::lifecycle::spawn_unchecked<test[8ded36e3bd795680]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}> as core[28bfa958bd7f7b14]::ops::function::FnOnce<()>>::call_once
+  33:     0x5ca4db2c9762 - <core[28bfa958bd7f7b14]::panic::unwind_safe::AssertUnwindSafe<std[51bd67ac9af55117]::thread::lifecycle::spawn_unchecked<test[8ded36e3bd795680]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}> as core[28bfa958bd7f7b14]::ops::function::FnOnce<()>>::call_once
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/core/src/panic/unwind_safe.rs:274:9
-  34:     0x5d9e43c68fe2 - std[51bd67ac9af55117]::panicking::catch_unwind::do_call::<core[28bfa958bd7f7b14]::panic::unwind_safe::AssertUnwindSafe<std[51bd67ac9af55117]::thread::lifecycle::spawn_unchecked<test[8ded36e3bd795680]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()>
+  34:     0x5ca4db2c9762 - std[51bd67ac9af55117]::panicking::catch_unwind::do_call::<core[28bfa958bd7f7b14]::panic::unwind_safe::AssertUnwindSafe<std[51bd67ac9af55117]::thread::lifecycle::spawn_unchecked<test[8ded36e3bd795680]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()>
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/panicking.rs:581:40
-  35:     0x5d9e43c68fe2 - std[51bd67ac9af55117]::panicking::catch_unwind::<(), core[28bfa958bd7f7b14]::panic::unwind_safe::AssertUnwindSafe<std[51bd67ac9af55117]::thread::lifecycle::spawn_unchecked<test[8ded36e3bd795680]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>>
+  35:     0x5ca4db2c9762 - std[51bd67ac9af55117]::panicking::catch_unwind::<(), core[28bfa958bd7f7b14]::panic::unwind_safe::AssertUnwindSafe<std[51bd67ac9af55117]::thread::lifecycle::spawn_unchecked<test[8ded36e3bd795680]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>>
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/panicking.rs:544:19
-  36:     0x5d9e43c68fe2 - std[51bd67ac9af55117]::panic::catch_unwind::<core[28bfa958bd7f7b14]::panic::unwind_safe::AssertUnwindSafe<std[51bd67ac9af55117]::thread::lifecycle::spawn_unchecked<test[8ded36e3bd795680]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()>
+  36:     0x5ca4db2c9762 - std[51bd67ac9af55117]::panic::catch_unwind::<core[28bfa958bd7f7b14]::panic::unwind_safe::AssertUnwindSafe<std[51bd67ac9af55117]::thread::lifecycle::spawn_unchecked<test[8ded36e3bd795680]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()>
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/panic.rs:359:14
-  37:     0x5d9e43c68fe2 - std[51bd67ac9af55117]::thread::lifecycle::spawn_unchecked::<test[8ded36e3bd795680]::run_test::{closure#1}, ()>::{closure#1}
+  37:     0x5ca4db2c9762 - std[51bd67ac9af55117]::thread::lifecycle::spawn_unchecked::<test[8ded36e3bd795680]::run_test::{closure#1}, ()>::{closure#1}
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/thread/lifecycle.rs:89:26
-  38:     0x5d9e43c68fe2 - <std[51bd67ac9af55117]::thread::lifecycle::spawn_unchecked<test[8ded36e3bd795680]::run_test::{closure#1}, ()>::{closure#1} as core[28bfa958bd7f7b14]::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+  38:     0x5ca4db2c9762 - <std[51bd67ac9af55117]::thread::lifecycle::spawn_unchecked<test[8ded36e3bd795680]::run_test::{closure#1}, ()>::{closure#1} as core[28bfa958bd7f7b14]::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/core/src/ops/function.rs:250:5
-  39:     0x5d9e43d01f0f - <alloc[b08763a22059f7d9]::boxed::Box<dyn core[28bfa958bd7f7b14]::ops::function::FnOnce<(), Output = ()> + core[28bfa958bd7f7b14]::marker::Send> as core[28bfa958bd7f7b14]::ops::function::FnOnce<()>>::call_once
+  39:     0x5ca4db44312f - <alloc[b08763a22059f7d9]::boxed::Box<dyn core[28bfa958bd7f7b14]::ops::function::FnOnce<(), Output = ()> + core[28bfa958bd7f7b14]::marker::Send> as core[28bfa958bd7f7b14]::ops::function::FnOnce<()>>::call_once
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/alloc/src/boxed.rs:2240:9
-  40:     0x5d9e43d01f0f - <std[51bd67ac9af55117]::sys::thread::unix::Thread>::new::thread_start
+  40:     0x5ca4db44312f - <std[51bd67ac9af55117]::sys::thread::unix::Thread>::new::thread_start
                                at /rustc/2d76d9bc76f27b03b4899e72ce561c7ac2c5cf6b/library/std/src/sys/thread/unix.rs:118:17
-  41:     0x71c96262097a - <unknown>
-  42:     0x71c9626a42bc - <unknown>
+  41:     0x74585e6a597a - <unknown>
+  42:     0x74585e7292bc - <unknown>
   43:                0x0 - <unknown>
-error: test failed, to rerun pass `-p canon-invariant --lib`
+error: test failed, to rerun pass `-p canon-policy-matrix --lib`

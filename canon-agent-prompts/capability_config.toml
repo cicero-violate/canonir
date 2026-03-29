@@ -88,6 +88,22 @@ role = "analyst"
 stateful = true
 max_tabs = 1
 
+[llm.endpoints.harness_repair]
+id = "harness_repair_chatgpt"
+url = "https://chatgpt.com/gg/69c8f84bb6848194a9b9ca6eaf5819c6"
+role_markdown = "builtin:planner"
+role = "harness_repair"
+stateful = true
+max_tabs = 1
+
+[llm.endpoints.harness_eventlog]
+id = "harness_eventlog_chatgpt"
+url = "https://chatgpt.com/gg/69c8f86cf14c81a0a1a9b4487bccd784"
+role_markdown = "builtin:planner"
+role = "harness_eventlog"
+stateful = true
+max_tabs = 1
+
 [llm.roles.analyst.weights]
 analyst_chatgpt = 100
 
@@ -169,6 +185,18 @@ burst = 4
 goal_gen_chatgpt = 100
 
 [llm.roles.goal_gen]
+burst = 1
+
+[llm.roles.harness_repair.weights]
+harness_repair_chatgpt = 100
+
+[llm.roles.harness_repair]
+burst = 1
+
+[llm.roles.harness_eventlog.weights]
+harness_eventlog_chatgpt = 100
+
+[llm.roles.harness_eventlog]
 burst = 1
 
 [llm.roles.exec.weights]
@@ -255,3 +283,17 @@ agent_id = "analyst_chatgpt"
 role = "builtin:planner"
 goal = "AGENT_GOAL.md"
 tool_capabilities = []
+
+[[agents.cards]]
+agent_url = "https://chatgpt.com/gg/69c8f84bb6848194a9b9ca6eaf5819c6"
+agent_id = "harness_repair"
+role = "builtin:planner"
+goal = "AGENT_GOAL.md"
+tool_capabilities = ["apply_patch", "bash"]
+
+[[agents.cards]]
+agent_url = "https://chatgpt.com/gg/69c8f86cf14c81a0a1a9b4487bccd784"
+agent_id = "harness_eventlog"
+role = "builtin:planner"
+goal = "AGENT_GOAL.md"
+tool_capabilities = ["apply_patch", "bash"]

@@ -238,6 +238,7 @@ struct InvariantDiscoveryState {
     threshold: u32,
     supports: HashMap<FailureFingerprint, u32>,
     promoted: HashMap<DiscoveredInvariant, u32>,
+    negative_evidence: HashMap<DiscoveredInvariant, u32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -432,6 +433,7 @@ pub fn observe_failure_fingerprint(
         return None;
     }
     state.promoted.insert(invariant, support);
+    state.negative_evidence.remove(&invariant);
     state.save_to_disk("promotion");
     Some(InvariantPromotion {
         invariant,
@@ -447,10 +449,26 @@ pub fn discovered_invariants() -> Vec<DiscoveredInvariant> {
         .unwrap_or_default()
 }
 
+pub fn record_negative_evidence(invariant: DiscoveredInvariant) {
+    if let Ok(mut state) = invariant_discovery_state().lock() {
+        let entry = state.negative_evidence.entry(invariant).or_insert(0);
+        *entry = entry.saturating_add(1);
+
+        let demotion_threshold = 3;
+        if *entry >= demotion_threshold {
+            state.promoted.remove(&invariant);
+            state.negative_evidence.remove(&invariant);
+            state.save_to_disk("demotion");
+        }
+    }
+}
+
 pub fn reset_discovered_invariants_for_tests() {
     if let Ok(mut state) = invariant_discovery_state().lock() {
         *state = InvariantDiscoveryState::with_threshold();
     }
+    // Ensure persisted state does not leak between tests
+    clear_discovered_invariants_store();
 }
 
 #[allow(dead_code)]
@@ -829,17 +847,10 @@ pub fn evaluate_constraint_context(ctx: &ConstraintContext) -> ConstraintDecisio
             );
         }
         if !ctx.state.real_path_exists && route != ConstraintRoute::Plan {
-            if !discovered_invariants().contains(&DiscoveredInvariant::ForcePlanWhenMissingTarget) {
-                return ConstraintDecision::RewriteRoute(
-                    ConstraintRoute::Plan,
-                    "meta_invariant_bootstrap_required: target workspace is missing; route must plan bootstrap first",
-                );
-            } else {
-                return ConstraintDecision::RewriteRoute(
-                    ConstraintRoute::Plan,
-                    "discovered_invariant_missing_target: repeated missing-target failures require planning before other routes",
-                );
-            }
+            return ConstraintDecision::RewriteRoute(
+                ConstraintRoute::Plan,
+                "discovered_invariant_missing_target: repeated missing-target failures require planning before other routes",
+            );
         }
         if route == ConstraintRoute::Plan
             && (ctx.state.failure_class_no_actionable
@@ -1084,6 +1095,45 @@ pub fn meta_invariant_all_results_update_policy(
 
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TrajectoryStep {
+    pub semantic_progress: i32,
+    pub no_progress: bool,
+    pub invalid_action: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrajectoryScore {
+    pub total: i32,
+    pub progress: i32,
+    pub penalties: i32,
+}
+
+pub fn score_trajectory(steps: &[TrajectoryStep]) -> TrajectoryScore {
+    let mut progress = 0;
+    let mut penalties = 0;
+
+    for step in steps {
+        progress += step.semantic_progress;
+
+        if step.no_progress {
+            penalties += 1;
+        }
+
+        if step.invalid_action {
+            penalties += 2;
+        }
+    }
+
+    let total = progress - penalties;
+
+    TrajectoryScore {
+        total,
+        progress,
+        penalties,
+    }
+}
+
 pub fn meta_invariant_verifier_sequence_contract(
     step: MetaInvariantVerifierSequenceStep,
     last_control_kind: Option<&str>,
@@ -1137,7 +1187,9 @@ mod tests {
     use crate::{
         meta_invariant_harness_self_repair_missing_capabilities,
         meta_invariant_harness_self_repair_ready, HarnessCapabilityState,
-        HarnessPrimitiveCapability,
+        HarnessPrimitiveCapability, resolve_constraint_decision_precedence,
+        ConstraintDecisionSource, record_negative_evidence,
+        invariant_discovery_state, score_trajectory, TrajectoryStep,
     };
 
     #[test]
@@ -1458,6 +1510,90 @@ mod tests {
         );
     }
 
+
+    #[test]
+    fn invariant_demotes_after_negative_evidence() {
+        reset_discovered_invariants_for_tests();
+
+        let inv = DiscoveredInvariant::ForcePlanWhenMissingTarget;
+
+        // simulate promotion
+        {
+            let mut state = invariant_discovery_state().lock().unwrap();
+            state.promoted.insert(inv, 5);
+        }
+
+        // add negative evidence
+        record_negative_evidence(inv);
+        record_negative_evidence(inv);
+        record_negative_evidence(inv);
+
+        let active = discovered_invariants();
+        assert!(!active.contains(&inv));
+    }
+
+    #[test]
+    fn trajectory_scoring_rewards_progress() {
+        let steps = vec![
+            TrajectoryStep {
+                semantic_progress: 2,
+                no_progress: false,
+                invalid_action: false,
+            },
+            TrajectoryStep {
+                semantic_progress: 1,
+                no_progress: false,
+                invalid_action: false,
+            },
+        ];
+
+        let score = score_trajectory(&steps);
+        assert_eq!(score.total, 3);
+    }
+
+    #[test]
+    fn trajectory_scoring_penalizes_no_progress() {
+        let steps = vec![TrajectoryStep {
+            semantic_progress: 0,
+            no_progress: true,
+            invalid_action: false,
+        }];
+
+        let score = score_trajectory(&steps);
+        assert_eq!(score.total, -1);
+    }
+
+    #[test]
+    fn trajectory_scoring_penalizes_invalid_actions_more() {
+        let steps = vec![TrajectoryStep {
+            semantic_progress: 0,
+            no_progress: false,
+            invalid_action: true,
+        }];
+
+        let score = score_trajectory(&steps);
+        assert_eq!(score.total, -2);
+    }
+
+    #[test]
+    fn trajectory_scoring_balances_progress_and_penalty() {
+        let steps = vec![
+            TrajectoryStep {
+                semantic_progress: 2,
+                no_progress: false,
+                invalid_action: false,
+            },
+            TrajectoryStep {
+                semantic_progress: 0,
+                no_progress: true,
+                invalid_action: false,
+            },
+        ];
+
+        let score = score_trajectory(&steps);
+        assert_eq!(score.total, 1);
+    }
+
     #[test]
     fn constraint_engine_forbids_validation_when_entrypoint_is_missing() {
         let decision = evaluate_constraint_context(&ConstraintContext {
@@ -1499,7 +1635,7 @@ mod tests {
             decision,
             ConstraintDecision::RewriteRoute(
                 ConstraintRoute::Plan,
-                "meta_invariant_bootstrap_required: target workspace is missing; route must plan bootstrap first",
+                "discovered_invariant_missing_target: repeated missing-target failures require planning before other routes",
             )
         );
     }
@@ -2225,7 +2361,9 @@ mod tests {
                 ..ConstraintState::default()
             },
         );
-        assert!(observe_failure_fingerprint(fingerprint).is_none());
+        // First observation should NOT immediately promote an invariant
+        // (only repeated failures should trigger promotion)
+        assert!(observe_failure_fingerprint(fingerprint.clone()).is_none());
         assert!(observe_failure_fingerprint(fingerprint).is_none());
         let promotion = observe_failure_fingerprint(fingerprint).expect("promotion expected");
         assert_eq!(

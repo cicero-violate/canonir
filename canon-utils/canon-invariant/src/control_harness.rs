@@ -188,12 +188,83 @@ pub fn synthetic_control_metrics() -> SyntheticControlMetrics {
     metrics
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct SyntheticControlTraceMetrics {
+    pub start_states: usize,
+    pub traces_explored: usize,
+    pub suppressed_terminal: usize,
+    pub replay_terminal: usize,
+    pub fresh_route_terminal: usize,
+    pub emit_terminal: usize,
+    pub invariant_terminal: usize,
+}
+
+const SYNTHETIC_TRACE_EVENTS: [ControlEvent; 10] = [
+    ControlEvent::RouteSelectedEmitted,
+    ControlEvent::PendingRequestStarted,
+    ControlEvent::PendingRequestCleared,
+    ControlEvent::AwaitingControlSuccessorSet,
+    ControlEvent::AwaitingControlSuccessorCleared,
+    ControlEvent::ForceFreshRouteOnce,
+    ControlEvent::CachedObserveRouteStored,
+    ControlEvent::CachedNonObserveRouteStored,
+    ControlEvent::CachedRouteCleared,
+    ControlEvent::ConcludeEmitted,
+];
+
+fn synthetic_trace_step_space() -> &'static [ControlEvent] {
+    &SYNTHETIC_TRACE_EVENTS
+}
+
+pub fn synthetic_control_trace_metrics(depth: usize) -> SyntheticControlTraceMetrics {
+    fn walk(
+        state: ControlState,
+        depth: usize,
+        metrics: &mut SyntheticControlTraceMetrics,
+    ) {
+        if depth == 0 {
+            metrics.traces_explored += 1;
+            match evaluate_control_state(state) {
+                ControlDecision::Suppress(_) => metrics.suppressed_terminal += 1,
+                ControlDecision::ReplayCachedRoute => metrics.replay_terminal += 1,
+                ControlDecision::RequestFreshRoute => metrics.fresh_route_terminal += 1,
+                ControlDecision::EmitRoute => metrics.emit_terminal += 1,
+                ControlDecision::InvariantViolation(_) => metrics.invariant_terminal += 1,
+            }
+            return;
+        }
+
+        for event in synthetic_trace_step_space() {
+            walk(step_control_state(state, *event), depth - 1, metrics);
+        }
+    }
+
+    let mut metrics = SyntheticControlTraceMetrics::default();
+    let seeds = synthetic_control_seed_space();
+    metrics.start_states = seeds.len();
+    for seed in seeds {
+        walk(seed, depth, &mut metrics);
+    }
+    metrics
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        evaluate_control_state, step_control_state, synthetic_control_metrics, ControlDecision,
-        ControlEvent, ControlState,
+        evaluate_control_state, step_control_state,
+        synthetic_control_metrics, synthetic_control_trace_metrics, ControlDecision, ControlEvent,
+        ControlState,
     };
+
+    fn control_decision_rank(decision: ControlDecision) -> u8 {
+        match decision {
+            ControlDecision::Suppress(_) => 0,
+            ControlDecision::ReplayCachedRoute => 1,
+            ControlDecision::RequestFreshRoute => 2,
+            ControlDecision::EmitRoute => 3,
+            ControlDecision::InvariantViolation(_) => 4,
+        }
+    }
 
     #[test]
     fn control_harness_halted_state_is_suppressed() {
@@ -277,6 +348,45 @@ mod tests {
                 ..ControlState::default()
             }),
             ControlDecision::RequestFreshRoute
+        );
+    }
+
+    #[test]
+    fn control_harness_llm_failed_plan_timeout_requests_fresh_route() {
+        // Synthetic regression for:
+        // llm timeout -> planning_completed(llm_failed) -> observe suppressed
+        // -> repeated deterministic plan.
+        //
+        // At the control layer this means:
+        // - a required route-selected successor is still pending
+        // - an old cached observe route is no longer safe to replay
+        // - the system must request a fresh route instead of replaying stale state
+        assert_eq!(
+            evaluate_control_state(ControlState {
+                pending_required_successor_route_selected: true,
+                has_cached_route: true,
+                cached_route_is_observe: true,
+                can_emit_route_selected: true,
+                ..ControlState::default()
+            }),
+            ControlDecision::RequestFreshRoute
+        );
+    }
+
+    #[test]
+    fn control_harness_llm_failed_plan_timeout_without_route_capacity_is_violation() {
+        // Synthetic regression for the blocked control case:
+        // the runtime still owes a route-selected successor after plan failure,
+        // but cannot emit one, so the harness must surface an invariant violation.
+        assert_eq!(
+            evaluate_control_state(ControlState {
+                pending_required_successor_route_selected: true,
+                can_emit_route_selected: false,
+                has_cached_route: false,
+                force_fresh_route_once: false,
+                ..ControlState::default()
+            }),
+            ControlDecision::InvariantViolation("missing_required_route_selected_successor")
         );
     }
 
@@ -439,6 +549,164 @@ mod tests {
         assert_eq!(
             evaluate_control_state(state),
             ControlDecision::RequestFreshRoute
+        );
+    }
+
+    #[test]
+    fn control_harness_llm_timeout_plan_loop_recovery() {
+        let state = ControlState {
+            pending_required_successor_route_selected: true,
+            has_cached_route: true,
+            cached_route_is_observe: true,
+            can_emit_route_selected: true,
+            ..ControlState::default()
+        };
+        assert_eq!(
+            evaluate_control_state(state),
+            ControlDecision::RequestFreshRoute
+        );
+
+        let recovered = step_control_state(
+            step_control_state(state, ControlEvent::CachedRouteCleared),
+            ControlEvent::ForceFreshRouteOnce,
+        );
+        assert_eq!(
+            evaluate_control_state(recovered),
+            ControlDecision::RequestFreshRoute
+        );
+    }
+
+    #[test]
+    fn control_harness_observe_suppressed_pending_successor_recovery() {
+        let blocked = ControlState {
+            awaiting_control_successor: true,
+            can_emit_route_selected: true,
+            ..ControlState::default()
+        };
+        assert_eq!(
+            evaluate_control_state(blocked),
+            ControlDecision::Suppress("awaiting_control_successor")
+        );
+
+        let recovered =
+            step_control_state(blocked, ControlEvent::AwaitingControlSuccessorCleared);
+        assert_eq!(
+            evaluate_control_state(recovered),
+            ControlDecision::EmitRoute
+        );
+    }
+
+    #[test]
+    fn control_harness_repeated_deterministic_plan_without_recovery() {
+        let blocked = ControlState {
+            pending_required_successor_route_selected: true,
+            can_emit_route_selected: false,
+            ..ControlState::default()
+        };
+        assert_eq!(
+            evaluate_control_state(blocked),
+            ControlDecision::InvariantViolation("missing_required_route_selected_successor")
+        );
+
+        let recovered = step_control_state(
+            ControlState {
+                pending_required_successor_route_selected: true,
+                can_emit_route_selected: true,
+                ..ControlState::default()
+            },
+            ControlEvent::ForceFreshRouteOnce,
+        );
+        assert_eq!(
+            evaluate_control_state(recovered),
+            ControlDecision::RequestFreshRoute
+        );
+    }
+
+    #[test]
+    fn control_harness_generic_event_trigger_recovery() {
+        let blocked = step_control_state(
+            step_control_state(
+                ControlState {
+                    can_emit_route_selected: true,
+                    ..ControlState::default()
+                },
+                ControlEvent::PendingRequestStarted,
+            ),
+            ControlEvent::CachedObserveRouteStored,
+        );
+        assert_eq!(
+            evaluate_control_state(blocked),
+            ControlDecision::Suppress("pending_request")
+        );
+
+        let recovered = step_control_state(
+            step_control_state(blocked, ControlEvent::PendingRequestCleared),
+            ControlEvent::CachedRouteCleared,
+        );
+        assert_eq!(
+            evaluate_control_state(recovered),
+            ControlDecision::EmitRoute
+        );
+    }
+
+    #[test]
+    fn control_harness_trace_depth_one_is_exhaustively_classified() {
+        let metrics = synthetic_control_trace_metrics(1);
+        let expected = metrics.start_states * 10;
+        assert_eq!(metrics.traces_explored, expected);
+        assert_eq!(
+            metrics.traces_explored,
+            metrics.suppressed_terminal
+                + metrics.replay_terminal
+                + metrics.fresh_route_terminal
+                + metrics.emit_terminal
+                + metrics.invariant_terminal
+        );
+        assert!(metrics.invariant_terminal > 0);
+        assert!(metrics.emit_terminal > 0);
+    }
+
+    #[test]
+    fn control_harness_trace_depth_two_is_exhaustively_classified() {
+        let metrics = synthetic_control_trace_metrics(2);
+        let expected = metrics.start_states * 10 * 10;
+        assert_eq!(metrics.traces_explored, expected);
+        assert_eq!(
+            metrics.traces_explored,
+            metrics.suppressed_terminal
+                + metrics.replay_terminal
+                + metrics.fresh_route_terminal
+                + metrics.emit_terminal
+                + metrics.invariant_terminal
+        );
+        assert!(metrics.fresh_route_terminal > 0);
+        assert!(metrics.replay_terminal > 0);
+    }
+
+    #[test]
+    fn control_harness_recovery_events_never_make_state_better_than_force_fresh() {
+        let seed = ControlState {
+            pending_required_successor_route_selected: true,
+            has_cached_route: true,
+            cached_route_is_observe: true,
+            can_emit_route_selected: true,
+            ..ControlState::default()
+        };
+        let baseline = evaluate_control_state(seed);
+        let forced = evaluate_control_state(step_control_state(
+            seed,
+            ControlEvent::ForceFreshRouteOnce,
+        ));
+        assert_eq!(baseline, ControlDecision::RequestFreshRoute);
+        assert_eq!(forced, ControlDecision::RequestFreshRoute);
+
+        let cleared = evaluate_control_state(step_control_state(
+            step_control_state(seed, ControlEvent::CachedRouteCleared),
+            ControlEvent::ForceFreshRouteOnce,
+        ));
+        assert!(
+            control_decision_rank(cleared) >= control_decision_rank(forced),
+            "clearing cached stale route before forcing fresh route must not regress recovery"
         );
     }
 }
