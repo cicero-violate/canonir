@@ -1,277 +1,331 @@
-# Plan: Fix Agent Loop Stuck on LLM Planner Timeout
+# Plan: Cross-Product Invariant Discovery Suite
 
 ## Problem Summary
 
-The agent loop enters an infinite cycle when the LLM planner times out:
+The current invariant infrastructure is split across two disconnected layers:
 
-```
-route_selected(plan)
-  → llm.plan dispatched
-  → llm call timed out (capability_failed)
-  → planning_completed(status=llm_failed, planned_count=0)
-  → route_selected(plan)   ← deterministic fallback fires again
-  → [repeat forever]
-```
+- **Structural layer** (`canon-tools-analysis/src/invariants/`): mines `CodeGraph` edges for node-ownership rules (CONTAINS, CALL_SITE, EXPORT). Promotes candidates only when `support >= 0.99 && violation_rate <= 0.01`. No demotion. No convergence test. No cross-product of ControlState×ControlEvent.
 
-**Why it loops:** `router_disabled_fallback()` in `canon-utils/canon-route/src/executor.rs` always returns `RouteKind::Plan` unconditionally. There is no counter for consecutive LLM planning failures. Each `planning_completed(llm_failed)` triggers a new `route_selected`, which re-enters the plan stage, which times out again.
+- **Control layer** (`canon-invariant/src/control_harness.rs`): exhaustively seeds `ControlState` and walks traces at fixed depth but never feeds discovered patterns back into any promotion/demotion lifecycle. The two layers do not talk.
 
-**Why observe is blocked:** Once `route_selected(plan)` fires, the `pending_required_successor` is set to `planning_completed`. The loop stage executor then emits `observe_suppressed_due_to_pending_successor` for any incoming events until `planning_completed` arrives. This means even if observe were triggered in parallel, it would be suppressed.
+**What's missing (gap map):**
 
-**Secondary symptom:** The `event_repair_trigger` is trying to connect to a workspace repair job at `127.0.0.1:9102` and gets "Connection refused" on every cycle. This adds noise and cooldown delays but is not the primary cause.
-
----
-
-## Files to Change
-
-### 1. `canon-utils/canon-route/src/context.rs`
-**What:** Add a `consecutive_llm_plan_failures: u32` field to `RouteContext`.
-
-**How:**
-- Initialize to `0` in `RouteContext::new()`.
-- Increment it whenever the context processes a `planning_completed` event with `status == "llm_failed"` or `status == "llm_timeout"`.
-- Reset it to `0` whenever `planning_completed` arrives with `status == "ok"` or `planned_count > 0`.
-- Expose it via a method or as a public field so the route executor can read it.
+| Layer                         | Current                                                              | Missing                                                                                |
+|-------------------------------+----------------------------------------------------------------------+----------------------------------------------------------------------------------------|
+| T_S — seed classification     | `synthetic_control_seed_states()` enumerates all valid seeds         | Cross-dimension seeds: ConstraintState × ConstraintRoute seeds not enumerated          |
+| T_SE — transition closure     | `synthetic_control_trace_metrics(depth)` walks tree, discards result | Full reachability table: (S, E) → S' not materialized; no coverage matrix              |
+| T_C — constraint precedence   | None                                                                 | meta > discovered > deterministic priority ordering; conflict resolution rules         |
+| T_I — invariant lifecycle     | `mine_candidates()` promote-only (no demote)                         | State machine: candidate → promoted → demoted → hard-banned; negative evidence path    |
+| T_P — persistence round-trip  | History file written by `update_history()`, never read back          | Serde round-trip verification; idempotency under re-run                                |
+| T_R — projection bisimilarity | None                                                                 | Control trace ≅ Constraint trace when projected onto shared events; bisimulation check |
 
 ---
 
-### 2. `canon-utils/canon-route/src/executor.rs`
-**What:** Change `router_disabled_fallback_rule()` and `router_disabled_fallback()` to route to `observe` (not `plan`) when consecutive LLM plan failures exceed a threshold.
+## Mathematical Basis
+
+Harness H = (S, E, D, I, P) where:
+
+- **S** = seed set; cross-product of all boolean fields of `ControlState` ∪ `ConstraintState`, filtered by structural feasibility constraints
+- **E** = event alphabet; `ControlEvent` (12 variants) ∪ `ConstraintRoute` (5) ∪ `ConstraintAction` (6)
+- **D** = decision set; `ControlDecision` (5 variants) ∪ `ConstraintDecision` (to be defined)
+- **I** = invariant candidate store; keyed by `(src_kind, edge_kind, dst_kind)` or `(state_bits, decision)` fingerprint
+- **P** = persistence store; content-addressed by invariant fingerprint hash
+
+Failure fingerprint **F** = set of (state, event, observed_decision) triples where observed ≠ expected.
+
+Support threshold **θ** = configured per invariant tier (meta: 1.0, discovered: 0.98, deterministic: computed).
+
+---
+
+## Existing Infrastructure to Build On
+
+### canon-invariant/src/control_harness.rs
+- `ControlState` — 8 boolean fields, `Default`
+- `ControlEvent` — 12 variants
+- `step_control_state(state, event) -> ControlState` — pure transition function
+- `evaluate_control_state(state) -> ControlDecision` — pure evaluator
+- `synthetic_control_seed_states() -> Vec<ControlState>` — 512 seeds, filters infeasible
+- `synthetic_control_trace_metrics(depth)` — tree walk, classifies terminal decisions
+
+### canon-invariant/src/lib.rs
+- `ConstraintState` — boolean fields (semantic_path_exists, actionable_failure, etc.)
+- `ConstraintRoute` — Observe, Plan, Act, Verify, Conclude
+- `ConstraintAction` — CargoInit, RepairLocalized, etc.
+
+### canon-tools-analysis/src/invariants/
+- `InvariantRule` trait — `name()`, `description()`, `evaluate(&graph, &features) -> InvariantResult`
+- `discover_invariants()` — applies rules, returns `Vec<InvariantResult>`
+- `mine_candidates()` — filters by coverage/violation thresholds
+- `generate_candidates(patterns)` — filters `PatternRule` by support+confidence
+- `run_invariant_pipeline()` — end-to-end orchestration
+
+---
+
+## Files to Change / Create
+
+### 1. `canon-invariant/src/control_harness.rs`
+**What:** Add `reachability_table()` — materializes the full (S×E → S') transition closure.
+
+**How:**
+- Return `HashMap<(ControlState, ControlEvent), ControlState>`
+- Iterate `synthetic_control_seed_states()` × `synthetic_control_events()`
+- For each (s, e): call `step_control_state(s, e)`, insert result
+- Also return `HashMap<(ControlState, ControlEvent), ControlDecision>` for the post-step decision
+
+This gives T_SE: the complete coverage matrix. Every reachable state is now enumerable.
+
+---
+
+### 2. `canon-invariant/src/constraint_harness.rs` (new file)
+**What:** Mirror of `control_harness.rs` for `ConstraintState × ConstraintRoute`.
+
+**How:**
+- `ConstraintSeed` = `(ConstraintState, ConstraintRoute)` — all combinations, feasibility-filtered
+- `step_constraint_state(state: ConstraintState, route: ConstraintRoute, action: ConstraintAction) -> ConstraintState`
+  - Mirrors `evaluate_control_decision()` logic from `lib.rs` — extracts the implicit state machine into an explicit stepper
+- `evaluate_constraint_state(state: ConstraintState, route: ConstraintRoute) -> ConstraintDecision`
+  - New enum: `ConstraintDecision { Allow, Block(reason), Repair, Escalate }`
+- `constraint_seed_states() -> Vec<ConstraintSeed>` — cross-product, filter invalid combos
+- `constraint_reachability_table() -> HashMap<(ConstraintSeed, ConstraintAction), ConstraintSeed>`
+
+This fills T_S for the constraint dimension and gives T_SE for constraint traces.
+
+---
+
+### 3. `canon-invariant/src/cross_product_harness.rs` (new file)
+**What:** T_SE combined — joint transition closure over (ControlState, ConstraintState) × (ControlEvent ∪ ConstraintAction).
 
 **How:**
 
-In `router_disabled_fallback_rule()`, add a new branch **before** the existing ones:
 ```
-if self.ctx.consecutive_llm_plan_failures >= 2 {
-    return DeterministicRouteRule::LlmPlanTimeoutObserve;
+JointState = (ControlState, ConstraintState)
+JointEvent = ControlEvent(ControlEvent) | ConstraintEvent(ConstraintAction)
+
+step_joint(js: JointState, je: JointEvent) -> JointState:
+  match je:
+    ControlEvent(e) => (step_control_state(js.0, e), js.1)
+    ConstraintEvent(a) => (js.0, step_constraint_state(js.1, derive_route(js.0), a))
+
+where derive_route(cs: ControlState) -> ConstraintRoute maps control decisions to routes:
+  EmitRoute => Plan, ReplayCachedRoute => Observe, RequestFreshRoute => Plan,
+  Suppress => Observe, InvariantViolation => Observe (safe fallback)
+```
+
+- `joint_seed_states() -> Vec<JointState>` — cross-product of control seeds × constraint seeds
+- `joint_reachability_table()` — full closure; bounded by BFS to max depth (e.g., 6)
+- `joint_projection(table, project_fn)` — collapses joint traces to single dimension for bisimulation
+
+---
+
+### 4. `canon-tools-analysis/src/invariants/invariant_lifecycle.rs` (new file)
+**What:** T_I — invariant state machine with promotion and demotion.
+
+**How:**
+
+```
+InvariantStatus: Candidate | Promoted | Demoted | HardBanned
+InvariantEntry {
+    fingerprint: u64,          // hash of (predicate, scope)
+    description: String,
+    status: InvariantStatus,
+    support_samples: usize,
+    violation_samples: usize,
+    last_updated_epoch: u64,
 }
+
+Transitions:
+  Candidate → Promoted:    support_samples / total >= θ_promote (0.98) AND violations == 0
+  Promoted → Demoted:      any new violation observed (violation_samples >= 1)
+  Demoted → Candidate:     support_samples reset after demotion cooldown (min_age = 5 cycles)
+  Demoted → HardBanned:    violation_samples >= θ_hard_ban (6)
+  HardBanned: terminal, never re-promoted
 ```
 
- In `router_disabled_fallback()`, read the rule from `router_disabled_fallback_rule()` and map `NoActionableFailureObserve` to `RouteKind::Observe` instead of `RouteKind::Plan`. Currently the method ignores the rule when constructing the decision and always hardcodes `RouteKind::Plan`. Fix that by matching on the rule:  ✓ done
-- Add explicit match arm for LlmPlanTimeoutObserve => RouteKind::Observe
-- Ensure NoActionableFailureObserve is not used for timeout handling
-- Update rationale to include failure count and timeout wording
-- Update prompt_tag to distinguish timeout observe vs plan fallback
-- Update noop_reason to reflect timeout-driven observe routing
-- `MissingTargetPlan` | `InvalidPlanReplan` | `BlockedValidationPlan` → `RouteKind::Plan`
-- `NoActionableFailureObserve` → `RouteKind::Observe`
+Methods:
+- `record_support(fingerprint)` — increment support_samples
+- `record_violation(fingerprint, context)` — increment violation_samples, trigger demotion
+- `tick(epoch)` — apply transition rules, return list of status changes
+- `promoted_invariants() -> Vec<&InvariantEntry>` — currently active constraints
 
-Update the `rationale` string to include the failure count when routing to observe, e.g.:
-`"router_llm_disabled; consecutive_llm_plan_failures={N}; routing to observe to break timeout loop"`
-
-Also update the `prompt_tag` and `noop_reason` to distinguish the observe fallback from the plan fallback for observability.
+This is the missing demote path. `mine_candidates()` currently has no demotion — it only promotes. `InvariantLifecycle` replaces the bare threshold filter.
 
 ---
 
-### 3. `canon-utils/canon-route/src/executor.rs` — `handle_planning_completed` (or wherever the executor updates context from events)
-**What:** Ensure the `consecutive_llm_plan_failures` counter in `RouteContext` is updated when a `planning_completed` event arrives at the executor.
-
-**How:** Find the place in `executor.rs` where `RouteContext` is updated from incoming `PlanningCompleted` events (look for `self.ctx` updates near `PlanningCompleted` handling). Call the new counter update method there. If there is no such update path in the executor (context may be updated only via a dedicated method), add a call:
-```rust
-self.ctx.record_planning_completion(&pc.status);
-```
-
----
-
-### 4. `canon-utils/canon-route/src/policy.rs`
-**What:** Add a new `DeterministicRouteRule` variant for the LLM timeout fallback path, to keep observability clean.
+### 5. `canon-tools-analysis/src/invariants/constraint_precedence.rs` (new file)
+**What:** T_C — constraint priority ordering: meta > discovered > deterministic.
 
 **How:**
-- [x] Add `LlmPlanTimeoutObserve` to the `DeterministicRouteRule` enum ✓ done
-- [ ] Use this variant (not the general `NoActionableFailureObserve`) when routing to observe due to consecutive LLM failures
- - [x] Use this variant (not the general `NoActionableFailureObserve`) when routing to observe due to consecutive LLM failures  ✓ done
-  1. Search in `canon-utils/canon-route/src/executor.rs` for all usages of `NoActionableFailureObserve`
-  2. Identify the branch triggered by `consecutive_llm_plan_failures >= 2` in `router_disabled_fallback_rule()`
-  3. Ensure that branch returns `DeterministicRouteRule::LlmPlanTimeoutObserve`
-  4. Update `router_disabled_fallback()` match arms to explicitly handle `LlmPlanTimeoutObserve => RouteKind::Observe`
-  5. Remove or avoid any fallback path where LLM timeout uses `NoActionableFailureObserve`
-  6. Run `cargo check` to verify exhaustive enum matching and no warnings
+
+Define three tiers:
+
+```
+ConstraintTier: Meta | Discovered | Deterministic
+
+Meta:        kernel invariants from kernel_invariants.rs (structural: no orphan nodes, etc.)
+             θ = 1.0, never demoted, hardcoded
+Discovered:  from InvariantLifecycle (mine_candidates output that reached Promoted)
+             θ = 0.98
+Deterministic: from canon-invariant evaluate_control_state / evaluate_constraint_state
+             θ = computed from reachability table coverage
+
+PrecedenceMatrix: for any two constraints C1 (tier T1) and C2 (tier T2)
+  if T1 > T2: C1 wins on conflict
+  if T1 == T2: use support_samples as tiebreak
+  if C1 and C2 conflict (C1 allows, C2 blocks same action): emit ConflictRecord
+```
+
+- `ConflictRecord { c1: InvariantFingerprint, c2: InvariantFingerprint, action: String, resolution: String }`
+- `resolve_conflict(c1, c2, action) -> Resolution` — returns winning constraint + rationale
+- Write conflict log to `state/invariants/conflicts.jsonl`
 
 ---
 
-## Threshold
+### 6. `canon-tools-analysis/src/invariants/persistence.rs` (new file)
+**What:** T_P — persistence round-trip and idempotency verification.
 
-Use `consecutive_llm_plan_failures >= 2` as the threshold. This allows one retry (in case the first timeout is transient) but breaks the loop on the second consecutive failure. Do not use 1 — a single timeout can be a transient network hiccup to the LLM relay.
+**How:**
+- `InvariantStore` wraps `HashMap<u64, InvariantEntry>` (keyed by fingerprint)
+- `load(path: &Path) -> InvariantStore` — deserialize from `state/invariants/store.json`
+- `save(path: &Path)` — serialize, atomic write (write to `.tmp`, rename)
+- `round_trip_check(store: &InvariantStore) -> bool` — serialize to string, deserialize, compare; assert equality
+- `idempotency_check(store: &InvariantStore) -> bool` — run `tick()` twice with same epoch; assert no state changes on second tick
+
+Called from `run_invariant_pipeline()` after each cycle to verify persistence integrity.
+
+---
+
+### 7. `canon-tools-analysis/src/invariants/bisimulation.rs` (new file)
+**What:** T_R — projection bisimilarity between control traces and constraint traces.
+
+**How:**
+
+Two LTS (Labelled Transition Systems):
+- LTS_C: control layer, states = ControlState, labels = ControlEvent ∪ ControlDecision
+- LTS_K: constraint layer, states = ConstraintState, labels = ConstraintRoute ∪ ConstraintDecision
+
+Shared alphabet Σ = {route_selected, plan_completed, observe_completed} — the events both layers observe.
+
+Bisimulation relation R ⊆ LTS_C × LTS_K:
+- (s_C, s_K) ∈ R iff for all a ∈ Σ:
+  - if s_C →a s_C' then ∃ s_K' such that s_K →a s_K' and (s_C', s_K') ∈ R
+  - symmetric
+
+**Implementation:**
+- `project_control_trace(trace: &[(ControlState, ControlEvent)]) -> Vec<SharedEvent>`
+  - maps ControlEvent to SharedEvent or filters (skips non-shared events)
+- `project_constraint_trace(trace: &[(ConstraintSeed, ConstraintAction)]) -> Vec<SharedEvent>`
+- `bisim_check(c_traces, k_traces) -> BisimResult`
+  - For each shared-projected trace pair, check they produce the same decision sequence
+  - If divergence found, emit `BisimViolation { control_state, constraint_state, shared_event, c_decision, k_decision }`
+- `BisimResult { ok: bool, violations: Vec<BisimViolation> }`
+
+Write results to `state/invariants/bisim_report.json`.
+
+---
+
+### 8. `canon-tools-analysis/src/invariants/invariant_validator.rs` — extend `run_invariant_pipeline()`
+**What:** Wire all new modules into the existing pipeline.
+
+**How:** Extend the pipeline in order:
+
+```
+1. load_code_graph()
+2. T_S: joint_seed_states() — validate count and feasibility filter
+3. T_SE: joint_reachability_table() — materialize, write coverage to state/invariants/coverage.json
+4. run_kernel_invariants() [existing]
+5. discover_invariants() [existing]
+6. T_C: resolve_conflicts() — pass discovered + kernel invariants through precedence matrix
+7. T_I: lifecycle.tick(epoch) — promote/demote based on current graph evidence
+8. T_P: store.save() + round_trip_check() + idempotency_check()
+9. T_R: bisim_check() — assert control and constraint traces agree on shared alphabet
+10. write_report() [existing, extend with lifecycle + bisim sections]
+```
+
+---
+
+## Persistence Layout
+
+```
+state/invariants/
+  store.json             ← InvariantStore (all entries with status)
+  coverage.json          ← T_SE reachability coverage matrix summary
+  conflicts.jsonl        ← ConflictRecord log (append-only)
+  bisim_report.json      ← BisimResult from most recent run
+  history.jsonl          ← existing InvariantHistoryEntry (unchanged)
+  violations.json        ← existing (unchanged)
+  report.json            ← existing (extend with lifecycle + bisim)
+```
+
+---
+
+## Threshold Configuration
+
+Add to `capability_config.toml` under `[system]`:
+
+```toml
+invariant_promote_threshold = 0.98
+invariant_hard_ban_threshold = 6
+invariant_min_age_cycles = 5
+bisim_shared_events = ["route_selected", "planning_completed", "observe_completed"]
+```
+
+---
+
+## Verification Scenarios
+
+### Scenario 1: T_S completeness
+- `joint_seed_states().len()` > 0
+- No seed violates feasibility constraints
+- All seeds are distinct (no duplicates)
+
+### Scenario 2: T_SE full coverage
+- coverage.json shows all (ControlState, ControlEvent) pairs visited
+- No (state, event) pair has a missing successor
+
+### Scenario 3: T_C conflict resolution
+- Insert two conflicting candidates (meta says "must have CONTAINS", discovered says "CONTAINS optional")
+- Verify meta wins, ConflictRecord written
+
+### Scenario 4: T_I demotion
+- Promote a candidate by supplying sufficient support_samples
+- Inject one violation via `record_violation()`
+- Assert status = Demoted after `tick()`
+- Assert status = HardBanned after 6 violations
+
+### Scenario 5: T_P round-trip
+- `round_trip_check()` returns true for any non-empty store
+- `idempotency_check()` confirms no state mutations on second tick with same epoch
+
+### Scenario 6: T_R bisimulation holds on normal path
+- Walk control trace: `PendingRequestStarted → PromptDispatched → PromptCleared → RouteSelectedEmitted`
+- Walk constraint trace: equivalent path through ConstraintState
+- Assert projected traces agree on all shared events
+
+### Scenario 7: T_R bisimulation detects divergence
+- Inject a control trace that emits `route_selected(plan)` while constraint layer says `Block`
+- Assert `BisimViolation` is recorded with correct states + shared_event
 
 ---
 
 ## What This Does NOT Fix
 
-- The LLM relay timeout root cause (why `llm.plan` times out). That is a separate issue — possibly the context/prompt sent to the planner is too large, or the relay at 9101 is slow. This plan only breaks the infinite loop.
-- The `event_repair_trigger` connection refused error at port 9102. That service is not running. Fix that separately if workspace repair is needed.
-- The `discover_test_surface` strategy logic. Once the loop is broken and the agent routes to `observe`, the existing observe machinery will re-evaluate state and the planner will eventually produce a valid batch.
+- The root cause of LLM relay timeouts (addressed in `mini-agent-plan.md`)
+- The `consecutive_llm_plan_failures` counter wiring (addressed in `mini-agent-plan.md`)
+- `event_repair_trigger` connection refused on 9102 (separate repair server concern)
+- Semantic clustering or embedding quality (in `canon-tools-analysis/src/semantics/`)
 
 ---
 
-## Verification
+## Acceptance Criteria
 
-After the fix, the expected event sequence when the LLM planner times out twice should be:
-
-```
-route_selected(plan) → planning_completed(llm_failed)   [failure 1]
-route_selected(plan) → planning_completed(llm_failed)   [failure 2]
-route_selected(observe) → loop_observed                 [fallback kicks in]
-```
-
-Instead of the current infinite `plan → llm_failed → plan → ...` loop.
-
----
-
-## FULL EXPANDED TASK BREAKDOWN (IMPLEMENTATION READY)
-
-### A. Context State Tracking (Hard Requirement)
-
-1. Add field to RouteContext
-   - file: canon-utils/canon-route/src/context.rs
-   - modify struct RouteContext
-   - add:
-     consecutive_llm_plan_failures: u32
-
-2. Initialize field
-   - locate RouteContext::new()
-   - set consecutive_llm_plan_failures = 0
-
-3. Add updater method
-   - fn record_planning_completion(&mut self, status: &str, planned_count: usize)
-   - logic:
-     if status == "llm_failed" || status == "llm_timeout" → increment
-     if status == "ok" OR planned_count > 0 → reset to 0
-
-4. Add getter (optional but recommended)
-   - fn consecutive_failures(&self) -> u32
-
----
-
-### B. Executor Integration (Critical Path)
-
-5. [x] Hook into PlanningCompleted handling ✓ done
-   - file: canon-utils/canon-route/src/executor.rs
-   - locate event handler for PlanningCompleted
-   - extract:
-     - status
-     - planned_count
-   - call:
-     self.ctx.record_planning_completion(status, planned_count)
-
-6. Ensure exactly-once update
-   - verify no duplicate handler paths call this
-   - ensure idempotency per event
-
----
-
-### C. Deterministic Routing Fix (Root Cause)
-
-7. Modify router_disabled_fallback_rule()
-   - add FIRST branch:
-     if self.ctx.consecutive_llm_plan_failures >= 2 {
-         return DeterministicRouteRule::LlmPlanTimeoutObserve;
-     }
-
-8. Verify ordering
-   - must be BEFORE other fallback rules
-   - prevents Plan from always winning
-
-9. Modify router_disabled_fallback()
-   - remove hardcoded RouteKind::Plan
-   - match on rule:
-     - MissingTargetPlan → Plan
-     - InvalidPlanReplan → Plan
-     - BlockedValidationPlan → Plan
-     - LlmPlanTimeoutObserve → Observe
-
-10. Update rationale string
-    - include failure count:
-      format!("router_llm_disabled; consecutive_failures={}; routing=observe", count)
-
-11. Update prompt_tag
-    - distinguish:
-      - "router_llm_disabled_plan"
-      - "router_llm_timeout_observe"
-
-12. Update noop_reason
-    - ensure observability layer can differentiate fallback cause
-
----
-
-### D. Policy Layer Update (Clean Semantics)
-
-13. Extend enum
-   - file: canon-utils/canon-route/src/policy.rs
-   - enum DeterministicRouteRule
-   - add:
-     LlmPlanTimeoutObserve
-
-14. Update all match statements
-   - ensure exhaustive handling
-   - compiler must pass without warnings
-
-15. Replace previous usage
-   - do NOT reuse NoActionableFailureObserve
-   - use LlmPlanTimeoutObserve explicitly for this path
-
----
-
-### E. Invariant Protection (Prevents noop_spam)
-
-16. Validate successor emission
-   - ensure Observe produces a valid successor event
-   - avoid emitting noop-only cycles
-
-17. Ensure route_selected(observe) leads to:
-   - observe.list_dir OR equivalent
-   - NOT immediate noop
-
-18. Confirm invariant layer behavior
-   - no duplicate events
-   - no rejected successor
-
----
-
-### F. Event Flow Guarantees
-
-19. Each PlanningCompleted must produce exactly ONE route_selected
-
-20. Each route_selected must produce exactly ONE stage transition
-
-21. No silent suppression due to pending_required_successor deadlock
-
----
-
-### G. Logging & Debugging
-
-22. Log consecutive failure count
-   - on each planning_completed
-
-23. Log routing decision
-   - include rule + count
-
-24. Verify logs show transition:
-   plan → plan → observe
-
----
-
-### H. Validation Scenarios
-
-25. Scenario 1: normal success
-   - plan succeeds → counter resets
-
-26. Scenario 2: single failure
-   - plan fails once → retry plan
-
-27. Scenario 3: double failure
-   - second failure → route to observe
-
-28. Scenario 4: recovery
-   - observe produces new context → plan resumes
-
-29. Scenario 5: no invariant violations
-   - confirm no noop_spam
-
----
-
-### I. Final Acceptance Criteria Mapping
-
-✔ no infinite plan loop
-✔ deterministic routing after failure threshold
-✔ no noop_spam invariant violation
-✔ event log append succeeds
-✔ replay produces identical routing decisions
+| Criterion                                      | Test                                                            |
+|------------------------------------------------+-----------------------------------------------------------------|
+| T_S: all joint seeds enumerated and classified | `joint_seed_states().len() == expected_count`                   |
+| T_SE: full reachability table built            | `joint_reachability_table()` no missing entries                 |
+| T_C: meta always wins conflicts                | conflict resolution scenario passes                             |
+| T_I: demotion path fires on negative evidence  | lifecycle scenario 4 passes                                     |
+| T_P: round-trip + idempotency                  | persistence scenarios 5 pass                                    |
+| T_R: bisim check passes on normal path         | bisim scenario 6 passes                                         |
+| T_R: bisim check detects divergence            | bisim scenario 7 records violation                              |
+| Pipeline runs end-to-end without panic         | `run_invariant_pipeline()` completes on real graph              |
+| No new clippy warnings                         | `cargo clippy -p canon-invariant -p canon-tools-analysis` clean |
