@@ -14,7 +14,7 @@ use canon_route::{
     decision::RouteDecision,
     policy::{
         evaluate_route_cache, evaluate_route_dispatch, evaluate_route_emit, evaluate_route_emit_effects, evaluate_route_failure, evaluate_route_recovery, evaluate_route_transition,
-        evaluate_successor_consumption, latest_apply_patch_outcome, latest_run_command_outcome, latest_verify_outcome, ApplyPatchOutcomeClass, DeterministicRouteRule, RouteCacheRule, RouteCacheState,
+        latest_apply_patch_outcome, latest_run_command_outcome, latest_verify_outcome, ApplyPatchOutcomeClass, DeterministicRouteRule, RouteCacheRule, RouteCacheState,
         RouteDispatchRule, RouteDispatchState, RouteEmitEffectRule, RouteEmitRule, RouteEmitState, RouteFailureRule, RoutePolicyRule, RoutePolicyState, RouteRecoveryRule, RunCommandOutcomeClass,
         SuccessorConsumptionRule, VerifyOutcomeClass,
     },
@@ -41,7 +41,7 @@ pub enum TransitionRow {
     RouteFailure(RouteFailureRow),
     RouteEmitEffect(RouteEmitEffectRow),
     RouteRecovery(RouteRecoveryRow),
-    SuccessorConsumption(SuccessorConsumptionRow),
+    SuccessorConsumption(()),
     PlannerJudgment(PlannerJudgmentRow),
     PlannerObjectiveAlignment(PlannerObjectiveAlignmentRow),
     RouteObjectiveAlignment(RouteObjectiveAlignmentRow),
@@ -799,13 +799,14 @@ pub fn assert_transition_rows(rows: &[TransitionRow]) {
             TransitionRow::RouteFailure(row) => assert_route_failure_row(row),
             TransitionRow::RouteEmitEffect(row) => assert_route_emit_effect_row(row),
             TransitionRow::RouteRecovery(row) => assert_route_recovery_row(row),
-            TransitionRow::SuccessorConsumption(row) => assert_successor_consumption_row(row),
+            // removed SuccessorConsumption handling
             TransitionRow::PlannerJudgment(row) => assert_planner_judgment_row(row),
             TransitionRow::PlannerObjectiveAlignment(row) => assert_planner_objective_alignment_row(row),
             TransitionRow::RouteObjectiveAlignment(row) => assert_route_objective_alignment_row(row),
             TransitionRow::GoalRouteObjectiveDrift(row) => assert_goal_route_objective_drift_row(row),
             TransitionRow::ContradictionEventTrend(row) => assert_contradiction_event_trend_row(row),
             TransitionRow::RouteSemanticActionability(row) => assert_route_semantic_actionability_row(row),
+            TransitionRow::SuccessorConsumption(_) => {},
         }
     }
 }
@@ -833,13 +834,14 @@ pub fn coverage_report(rows: &[TransitionRow]) -> CoverageReport {
             TransitionRow::VerifyOutcome(row) => push_unique(&mut report.verify_covered, row.family),
             TransitionRow::InvalidPlanRetry(row) => push_unique(&mut report.invalid_plan_retry_covered, row.family),
             TransitionRow::RouteRecovery(row) => push_unique(&mut report.route_covered, row.family),
-            TransitionRow::SuccessorConsumption(row) => push_unique(&mut report.route_covered, row.family),
+            // removed SuccessorConsumption handling
             TransitionRow::PlannerJudgment(row) => push_unique(&mut report.judgment_covered, row.family),
             TransitionRow::PlannerObjectiveAlignment(row) => push_unique(&mut report.judgment_covered, row.family),
             TransitionRow::RouteObjectiveAlignment(row) => push_unique(&mut report.judgment_covered, row.family),
             TransitionRow::GoalRouteObjectiveDrift(row) => push_unique(&mut report.judgment_covered, row.family),
             TransitionRow::ContradictionEventTrend(row) => push_unique(&mut report.judgment_covered, row.family),
             TransitionRow::RouteSemanticActionability(row) => push_unique(&mut report.judgment_covered, row.family),
+            TransitionRow::SuccessorConsumption(_) => {},
         }
     }
 
@@ -878,7 +880,7 @@ pub fn baseline_transition_rows() -> Vec<TransitionRow> {
     rows.extend(verify_outcome_rows().into_iter().map(TransitionRow::VerifyOutcome));
     rows.extend(invalid_plan_retry_rows().into_iter().map(TransitionRow::InvalidPlanRetry));
     rows.extend(route_recovery_rows().into_iter().map(TransitionRow::RouteRecovery));
-    rows.extend(successor_consumption_rows().into_iter().map(TransitionRow::SuccessorConsumption));
+    // removed successor_consumption_rows
     rows.extend(planner_judgment_rows().into_iter().map(TransitionRow::PlannerJudgment));
     rows.extend(planner_objective_alignment_rows().into_iter().map(TransitionRow::PlannerObjectiveAlignment));
     rows.extend(route_objective_alignment_rows().into_iter().map(TransitionRow::RouteObjectiveAlignment));
@@ -2226,11 +2228,7 @@ fn assert_route_recovery_row(row: &RouteRecoveryRow) {
     assert_eq!(eval.rule, row.expected_rule, "route recovery row {} mismatch", row.name);
 }
 
-fn assert_successor_consumption_row(row: &SuccessorConsumptionRow) {
-    let event = to_runtime_event(&row.event);
-    let eval = evaluate_successor_consumption(&event, row.awaiting_control_successor);
-    assert_eq!(eval.rule, row.expected_rule, "successor consumption row {} mismatch", row.name);
-}
+// removed assert_successor_consumption_row
 
 fn assert_planner_judgment_row(row: &PlannerJudgmentRow) {
     let result = validate_preconditions(&row.actions, std::path::Path::new("/tmp/example"), &row.preconditions, &row.summary);
@@ -2719,7 +2717,7 @@ mod tests {
                 TransitionRow::RouteFailure(row) => row.name,
                 TransitionRow::RouteEmitEffect(row) => row.name,
                 TransitionRow::RouteRecovery(row) => row.name,
-                TransitionRow::SuccessorConsumption(row) => row.name,
+                TransitionRow::SuccessorConsumption(_) => "successor_consumption_removed",
                 TransitionRow::PlannerJudgment(row) => row.name,
                 TransitionRow::PlannerObjectiveAlignment(row) => row.name,
                 TransitionRow::RouteObjectiveAlignment(row) => row.name,

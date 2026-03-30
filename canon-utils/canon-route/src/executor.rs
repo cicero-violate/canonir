@@ -3,7 +3,7 @@ use crate::{
     decision::{decide_from_json, RouteDecision},
     policy::{
         apply_route_policy, evaluate_route_cache, evaluate_route_dispatch, evaluate_route_emit, evaluate_route_emit_effects, evaluate_route_event_dispatch, evaluate_route_failure,
-        evaluate_route_recovery, evaluate_route_transition, evaluate_successor_consumption, DeterministicRouteDecision, RouteCacheRule, RouteCacheState, RouteDispatchState, RouteEmitRule,
+        evaluate_route_recovery, evaluate_route_transition, DeterministicRouteDecision, RouteCacheRule, RouteCacheState, RouteDispatchState, RouteEmitRule,
         RouteEmitState, RouteEventDispatchRule, RoutePolicyRule, RoutePolicyState,
     },
 };
@@ -33,7 +33,6 @@ pub struct RouteExecutor {
     last_route_prompt_hash: Option<u64>,
     last_route_selected: Option<RouteSelected>,
     force_fresh_route_once: bool,
-    awaiting_control_successor: Option<String>,
     current_trigger: Option<EventId>,
 }
 
@@ -51,7 +50,6 @@ impl RouteExecutor {
             last_route_prompt_hash: None,
             last_route_selected: None,
             force_fresh_route_once: false,
-            awaiting_control_successor: None,
             current_trigger: None,
         }
     }
@@ -364,7 +362,7 @@ impl RouteExecutor {
     }
 
     fn emit_route_stall(&self, emitter: &EventEmitterHandle, trigger_id: EventId, reason: &str) {
-        if self.pending_request_id.is_some() || self.awaiting_control_successor.is_some() {
+        if self.pending_request_id.is_some() {
             return;
         }
         emitter.emit_child(
@@ -436,7 +434,7 @@ impl RouteExecutor {
                 "last_control_kind": "removed",
                 "pending_required_successor": "removed",
                 "verify_seen": self.ctx.verify_seen,
-                "awaiting_control_successor": self.awaiting_control_successor,
+                // removed awaiting_control_successor
             }),
         ))
     }
@@ -507,10 +505,7 @@ impl EventConsumer for RouteExecutor {
             self.emit_invariant_violation(&trigger_id, feature, &reason, context);
             return EventOutcome::NoOp("verifier_sequence_invariant_violation");
         }
-        let successor_eval = evaluate_successor_consumption(event, self.awaiting_control_successor.as_deref());
-        if successor_eval.clear_awaiting_control_successor {
-            self.awaiting_control_successor = None;
-        }
+        // successor consumption removed
         self.ctx.update_from_event(event, &self.workspace);
         // control-state tracking removed
 
@@ -681,21 +676,14 @@ impl RouteExecutor {
         self.last_route_prompt_hash = Some(hash_str(&decision.prompt));
         self.last_route_selected = Some(route_payload.clone());
         let tid = self.current_trigger.clone().expect("emit_route_selected_from_decision called without current_trigger set");
-        self.awaiting_control_successor = match decision.lane.as_str() {
-            "observe" => Some("loop_observed".to_string()),
-            "plan" => Some("planning_completed".to_string()),
-            "act" => Some("loop_acted".to_string()),
-            "verify" => Some("verifier_policy_updated".to_string()),
-            "conclude" => Some("loop_rewarded".to_string()),
-            _ => None,
-        };
+        // removed awaiting_control_successor assignment
         eprintln!(
-            "[route_executor][emit] route_selected lane={} trigger={:?} last_control={:?} pending_succ={:?} awaiting={:?}",
+            "[route_executor][emit] route_selected lane={} trigger={:?} last_control={:?} pending_succ={:?}",
             decision.lane.as_str(),
             self.current_trigger,
             None::<&str>,
             None::<&str>,
-            self.awaiting_control_successor,
+            // removed awaiting_control_successor
         );
         emitter.emit_with_parents(route_event, vec![tid], file!(), line!());
         self.last_route_emitted_for_control_id = None;
@@ -716,13 +704,13 @@ impl RouteExecutor {
             return;
         };
         eprintln!(
-            "[route_executor][det] rule={} route={} trigger={:?} last_control={:?} pending_succ={:?} awaiting={:?}",
+            "[route_executor][det] rule={} route={} trigger={:?} last_control={:?} pending_succ={:?}",
             deterministic.prompt_tag,
             deterministic.route.as_str(),
             self.current_trigger,
             None::<&str>,
             None::<&str>,
-            self.awaiting_control_successor,
+            // removed awaiting_control_successor
         );
         let emit_eval = evaluate_route_emit(RouteEmitState {
             // removed awaiting_control_successor

@@ -22,7 +22,7 @@ canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RewardSema
 canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteFailure(row) => assert_route_failure_row(row),
 canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteEmitEffect(row) => assert_route_emit_effect_row(row),
 canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteRecovery(row) => assert_route_recovery_row(row),
-canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::SuccessorConsumption(row) => assert_successor_consumption_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            // removed SuccessorConsumption
 canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::PlannerJudgment(row) => assert_planner_judgment_row(row),
 canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::PlannerObjectiveAlignment(row) => assert_planner_objective_alignment_row(row),
 canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteObjectiveAlignment(row) => assert_route_objective_alignment_row(row),
@@ -74,7 +74,7 @@ canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(apply_patch_outcome_r
 canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(verify_outcome_rows().into_iter().map(TransitionRow::VerifyOutcome));
 canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(invalid_plan_retry_rows().into_iter().map(TransitionRow::InvalidPlanRetry));
 canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(route_recovery_rows().into_iter().map(TransitionRow::RouteRecovery));
-canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(successor_consumption_rows().into_iter().map(TransitionRow::SuccessorConsumption));
+canon-utils/canon-policy-matrix/src/lib.rs:    // removed successor_consumption_rows
 canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(planner_judgment_rows().into_iter().map(TransitionRow::PlannerJudgment));
 canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(planner_objective_alignment_rows().into_iter().map(TransitionRow::PlannerObjectiveAlignment));
 canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(route_objective_alignment_rows().into_iter().map(TransitionRow::RouteObjectiveAlignment));

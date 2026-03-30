@@ -12,13 +12,12 @@ use std::sync::{Arc, OnceLock};
 
 const WORKSPACE: &str = "/workspace/ai_sandbox/canon";
 const PLAN_FILE: &str = "PLANS/mini-agent-plan.md";
-const WS_ADDR: &str = "127.0.0.1:9100";
-const AGENT_ROLE: &str = "mini_agent";
+const WS_PORT_DEFAULT: u16 = 9100;
 const MAX_STEPS: usize = 2000;
-const MAX_READ_BYTES: usize = 16 * 1024;
+const MAX_FULL_READ_LINES: usize = 500;
 const MAX_SNIPPET: usize = 3000;
 
-const SYSTEM_INSTRUCTIONS: &str = r#"You are the canon mini-agent.
+const SYSTEM_INSTRUCTIONS_EXECUTOR: &str = r#"You are the canon mini-agent.
 
 Your job is to complete the objective described in the plan provided to you. Read the plan carefully and execute it step by step.
 
@@ -39,10 +38,12 @@ You respond with exactly one action per turn, wrapped in a `json` code block:
 1. list_dir — list directory contents
    {"action":"list_dir","path":"canon-utils"}
 
-2. read_file — read a file before editing
+2. read_file — read a file before editing; output is always line-numbered ("42: code here")
    {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs"}
    {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs","line":120}
+   With "line":N the output starts at line N and shows up to 250 lines.
    ⚠ Always read a file before patching it. Never patch from memory.
+   ⚠ When applying a patch, copy context lines exactly as shown — the numbers are for reference only.
 
 3. apply_patch — create or update files
    {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: path/to/file.rs\n@@\n context\n+added line\n context\n*** End Patch"}
@@ -52,8 +53,9 @@ You respond with exactly one action per turn, wrapped in a `json` code block:
    {"action":"run_command","cmd":"cargo check -p some-crate","cwd":"/workspace/ai_sandbox/canon"}
    {"action":"run_command","cmd":"rg -n 'fn foo' canon-utils/some-crate/src/","cwd":"/workspace/ai_sandbox/canon"}
 
-5. done — declare the objective complete
+5. done — declare the objective complete (triggers cargo build --workspace then cargo test --workspace)
    {"action":"done","reason":"brief description of what was accomplished"}
+   ⚠ done is REJECTED if the build or any test fails — fix all errors first.
 
 ━━━ PROGRESS TRACKING ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -74,6 +76,61 @@ Keep the rest of the plan file intact — only change the line(s) you just compl
 - Use run_command for cargo builds, tests, and shell discovery.
 - Never operate outside /workspace/ai_sandbox/canon.
 - Never emit destructive commands (rm -rf, git reset --hard, git clean -f, etc.).
+- Output format: exactly one JSON array in a ```json code block. No prose outside it.
+"#;
+
+const SYSTEM_INSTRUCTIONS_VERIFIER: &str = r#"You are the canon verifier agent.
+
+Your job is to critically review PLANS/mini-agent-plan.md and verify that every task marked as complete (`- [x]`) was actually completed correctly in the codebase. Be skeptical — do not trust the status marks at face value.
+
+You work inside the canon workspace at /workspace/ai_sandbox/canon.
+
+Each turn you receive either:
+  (a) the initial plan and instructions; or
+  (b) the result of your last action.
+
+You respond with exactly one action per turn, wrapped in a `json` code block:
+
+```json
+[ { "action": "..." } ]
+```
+
+━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. list_dir — explore directory contents
+   {"action":"list_dir","path":"canon-utils"}
+
+2. read_file — read a source file; output is line-numbered ("42: code here")
+   {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs"}
+   {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs","line":120}
+   With "line":N the output starts at line N and shows up to 250 lines.
+
+3. apply_patch — correct the plan file if a status mark is wrong
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/mini-agent-plan.md\n@@\n- [x] task ✓ done\n+- [ ] task  ← NOT VERIFIED\n*** End Patch"}
+
+4. run_command — run build/test commands to verify correctness
+   {"action":"run_command","cmd":"cargo check -p some-crate","cwd":"/workspace/ai_sandbox/canon"}
+   {"action":"run_command","cmd":"cargo test --workspace","cwd":"/workspace/ai_sandbox/canon"}
+   {"action":"run_command","cmd":"rg -n 'fn foo'","cwd":"/workspace/ai_sandbox/canon"}
+
+5. done — declare verification complete
+   {"action":"done","reason":"summary of findings: N tasks verified, M incorrect or missing"}
+   ⚠ done triggers cargo build --workspace then cargo test --workspace — fix any failures first.
+
+━━━ VERIFICATION PROCESS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For each task marked `- [x]` in the plan:
+1. Read the relevant source files to confirm the described change exists.
+2. Run cargo check or cargo test if the task involves code correctness.
+3. If the task is NOT actually done: use apply_patch to revert its status to `- [ ]` and add a note.
+4. If the task IS done correctly: leave it as-is.
+
+━━━ RULES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- Be critical and thorough — verify evidence, not just the claim.
+- Do not mark anything verified unless you have read the actual code or seen passing tests.
+- Only modify PLANS/mini-agent-plan.md — never edit source files.
+- Emit exactly one action per turn.
 - Output format: exactly one JSON array in a ```json code block. No prose outside it.
 "#;
 
@@ -248,10 +305,13 @@ fn auto_read_for_patch_anchor(workspace: &Path, relative: &str, err_msg: &str) -
             "Current content near likely match of failed anchor in {relative} (lines {start}-{end}):\n{excerpt}"
         ));
     }
-    // Fallback: whole file (capped).
-    let text =
-        String::from_utf8_lossy(&std::fs::read(&path)?[..full.len().min(MAX_READ_BYTES)])
-            .into_owned();
+    // Fallback: first MAX_FULL_READ_LINES lines of the file.
+    let text = full.lines()
+        .take(MAX_FULL_READ_LINES)
+        .enumerate()
+        .map(|(i, l)| format!("{}: {}", i + 1, l))
+        .collect::<Vec<_>>()
+        .join("\n");
     Ok(format!("Current content of {relative}:\n{text}"))
 }
 
@@ -270,22 +330,26 @@ fn exec_list_dir(workspace: &Path, relative: &str) -> Result<String> {
 
 fn exec_read_file(workspace: &Path, relative: &str, start_line: Option<usize>) -> Result<String> {
     let path = safe_join(workspace, relative)?;
-    let bytes =
-        std::fs::read(&path).with_context(|| format!("read_file: {}", path.display()))?;
-    let full = String::from_utf8_lossy(&bytes).into_owned();
-    if let Some(line) = start_line {
-        let lines: Vec<&str> = full.lines().collect();
-        let from = line.saturating_sub(1).min(lines.len());
-        let text = lines[from..]
-            .iter()
-            .take(250)
-            .enumerate()
-            .map(|(i, l)| format!("{}: {}", from + i + 1, l))
-            .collect::<Vec<_>>()
-            .join("\n");
-        Ok(text)
+    let full = std::fs::read_to_string(&path)
+        .with_context(|| format!("read_file: {}", path.display()))?;
+    let lines: Vec<&str> = full.lines().collect();
+    let total = lines.len();
+    let (from, max_lines) = match start_line {
+        Some(n) => (n.saturating_sub(1).min(total), 250),
+        None => (0, MAX_FULL_READ_LINES),
+    };
+    let text = lines[from..]
+        .iter()
+        .take(max_lines)
+        .enumerate()
+        .map(|(i, l)| format!("{}: {}", from + i + 1, l))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let shown = max_lines.min(total.saturating_sub(from));
+    if total > from + shown {
+        Ok(format!("{text}\n(file has {total} lines total; use \"line\":{} to read more)", from + shown + 1))
     } else {
-        Ok(String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_READ_BYTES)]).into_owned())
+        Ok(text)
     }
 }
 
@@ -345,6 +409,16 @@ fn truncate(s: &str, max: usize) -> &str {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Parse --verifier / --executor (default: executor) and optional --port N
+    let args: Vec<String> = std::env::args().collect();
+    let is_verifier = args.iter().any(|a| a == "--verifier");
+    let agent_role = if is_verifier { "verifier" } else { "mini_agent" };
+    let system_instructions = if is_verifier { SYSTEM_INSTRUCTIONS_VERIFIER } else { SYSTEM_INSTRUCTIONS_EXECUTOR };
+    let ws_port: u16 = args.windows(2)
+        .find(|w| w[0] == "--port")
+        .and_then(|w| w[1].parse().ok())
+        .unwrap_or(WS_PORT_DEFAULT);
+
     let workspace = PathBuf::from(WORKSPACE);
 
     let plan_path = workspace.join(PLAN_FILE);
@@ -355,7 +429,7 @@ async fn main() -> Result<()> {
         bail!("plan file is empty — write an objective into {PLAN_FILE} before running");
     }
 
-    eprintln!("[canon-mini-agent] objective loaded ({} bytes)", objective.len());
+    eprintln!("[canon-mini-agent] role={agent_role} objective loaded ({} bytes)", objective.len());
 
     // Load capability config to get endpoint details.
     let config = CapabilityConfig::snapshot_store_load()
@@ -364,8 +438,8 @@ async fn main() -> Result<()> {
     let endpoint = config
         .llm_endpoints
         .iter()
-        .find(|e| e.role.as_deref() == Some(AGENT_ROLE))
-        .ok_or_else(|| anyhow!("no endpoint with role '{AGENT_ROLE}' in capability_config.toml"))?
+        .find(|e| e.role.as_deref() == Some(agent_role))
+        .ok_or_else(|| anyhow!("no endpoint with role '{agent_role}' in capability_config.toml"))?
         .clone();
 
     eprintln!(
@@ -374,24 +448,37 @@ async fn main() -> Result<()> {
     );
 
     // Start the WebSocket bridge — Chrome extension connects here.
-    let ws_addr: std::net::SocketAddr = WS_ADDR.parse()?;
+    let ws_addr: std::net::SocketAddr = format!("127.0.0.1:{ws_port}").parse()?;
     let bridge = ws_server::spawn(ws_addr, config.response_timeout_secs, Arc::new(OnceLock::new()));
 
-    eprintln!("[canon-mini-agent] waiting for Chrome extension on ws://{WS_ADDR}");
+    eprintln!("[canon-mini-agent] waiting for Chrome extension on ws://127.0.0.1:{ws_port}");
     bridge.wait_for_connection().await;
     eprintln!("[canon-mini-agent] Chrome extension connected");
 
     let tabs = llm_worker_new_tabs();
 
-    let initial_prompt = format!(
-        "WORKSPACE: {WORKSPACE}\n\
-         All relative paths resolve against WORKSPACE.\n\
-         \n\
-         Objective (from {PLAN_FILE}):\n\
-         {objective}\n\
-         \n\
-         Emit exactly one action to begin.",
-    );
+    let initial_prompt = if is_verifier {
+        format!(
+            "WORKSPACE: {WORKSPACE}\n\
+             All relative paths resolve against WORKSPACE.\n\
+             \n\
+             Plan to verify (from {PLAN_FILE}):\n\
+             {objective}\n\
+             \n\
+             Begin by reading the plan and identifying all tasks marked `- [x]`. \
+             Verify each one. Emit exactly one action to begin.",
+        )
+    } else {
+        format!(
+            "WORKSPACE: {WORKSPACE}\n\
+             All relative paths resolve against WORKSPACE.\n\
+             \n\
+             Objective (from {PLAN_FILE}):\n\
+             {objective}\n\
+             \n\
+             Emit exactly one action to begin.",
+        )
+    };
 
     let mut step = 0usize;
     let mut last_result: Option<String> = None;
@@ -402,7 +489,7 @@ async fn main() -> Result<()> {
         }
 
         let (role_schema, prompt) = if step == 0 {
-            (SYSTEM_INSTRUCTIONS.to_string(), initial_prompt.clone())
+            (system_instructions.to_string(), initial_prompt.clone())
         } else {
             let result = last_result.as_deref().unwrap_or("");
             (
@@ -431,7 +518,7 @@ async fn main() -> Result<()> {
             None,
             false,
             true,
-            "mini_agent",
+            agent_role,
             &tabs,
             endpoint.max_tabs,
             config.tab_cooldown_ms,
@@ -489,20 +576,33 @@ async fn main() -> Result<()> {
                     .get("reason")
                     .and_then(|v| v.as_str())
                     .unwrap_or("objective complete");
-                // Verify the workspace before accepting done.
-                eprintln!("[canon-mini-agent] step={} done requested — running cargo test --workspace", step + 1);
-                let (test_ok, test_out) =
-                    exec_run_command(&workspace, "cargo test --workspace", WORKSPACE)
+                // Step 1: cargo build --workspace
+                eprintln!("[canon-mini-agent] step={} done requested — running cargo build --workspace", step + 1);
+                let (build_ok, build_out) =
+                    exec_run_command(&workspace, "cargo build --workspace", WORKSPACE)
                         .unwrap_or_else(|e| (false, e.to_string()));
-                if test_ok {
-                    eprintln!("[canon-mini-agent] step={} cargo test ok — accepting done", step + 1);
-                    Ok((true, reason.to_string()))
-                } else {
-                    eprintln!("[canon-mini-agent] step={} cargo test failed — rejecting done", step + 1);
+                if !build_ok {
+                    eprintln!("[canon-mini-agent] step={} cargo build failed — rejecting done", step + 1);
                     Ok((false, format!(
-                        "done rejected: cargo test --workspace failed. Fix the failures before declaring done.\n\n{}",
-                        truncate(&test_out, MAX_SNIPPET)
+                        "done rejected: cargo build --workspace failed. Fix the build errors before declaring done.\n\n{}",
+                        truncate(&build_out, MAX_SNIPPET)
                     )))
+                } else {
+                    eprintln!("[canon-mini-agent] step={} cargo build ok — running cargo test --workspace", step + 1);
+                    // Step 2: cargo test --workspace
+                    let (test_ok, test_out) =
+                        exec_run_command(&workspace, "cargo test --workspace", WORKSPACE)
+                            .unwrap_or_else(|e| (false, e.to_string()));
+                    if test_ok {
+                        eprintln!("[canon-mini-agent] step={} cargo test ok — accepting done", step + 1);
+                        Ok((true, reason.to_string()))
+                    } else {
+                        eprintln!("[canon-mini-agent] step={} cargo test failed — rejecting done", step + 1);
+                        Ok((false, format!(
+                            "done rejected: cargo test --workspace failed. Fix the failures before declaring done.\n\n{}",
+                            truncate(&test_out, MAX_SNIPPET)
+                        )))
+                    }
                 }
             }
             "list_dir" => {

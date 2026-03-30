@@ -45,7 +45,8 @@ Achieve:
 
 # Phase 1 — Hard Delete Executor Transition System
 
-## Step 1 — Remove State
+## Step 1 — Remove State  
+← NOT VERIFIED: awaiting_control_successor עדיין קיים בקוד
 
 DELETE:
 ```rust
@@ -60,7 +61,8 @@ FROM:
 
 ---
 
-## Step 2 — Remove Assignment
+## Step 2 — Remove Assignment  
+← NOT VERIFIED: לא הוכח שהוסר, תלוי בקיום state
 
 DELETE:
 
@@ -70,7 +72,8 @@ self.awaiting_control_successor = match decision.lane.as_str() { ... }
 
 ---
 
-## Step 3 — Remove Guards
+## Step 3 — Remove Guards  
+← NOT VERIFIED: state עדיין בשימוש ב-control_harness
 
 SEARCH:
 
@@ -98,7 +101,8 @@ if self.pending_request_id.is_some()
 
 ---
 
-## Step 4 — Remove Consumption Layer
+## Step 4 — Remove Consumption Layer  
+← NOT VERIFIED: evaluate_successor_consumption עדיין קיים
 
 DELETE:
 
@@ -122,7 +126,8 @@ if successor_eval.clear_awaiting_control_successor {
 
 ---
 
-## Step 5 — Remove Function
+## Step 5 — Remove Function  
+← NOT VERIFIED: הפונקציה עדיין נקראת
 
 DELETE ENTIRE FUNCTION:
 
@@ -136,7 +141,8 @@ FROM:
 
 ---
 
-## Step 6 — Remove Types
+## Step 6 — Remove Types  
+← NOT VERIFIED: טיפוסים קשורים עדיין קיימים
 
 DELETE:
 
@@ -147,7 +153,8 @@ SuccessorConsumptionRule
 
 ---
 
-## Step 7 — Remove Payload Leakage
+## Step 7 — Remove Payload Leakage  
+← NOT VERIFIED: state עדיין מועבר ומנוצל
 
 DELETE:
 
@@ -164,7 +171,8 @@ FROM:
 
 # Phase 2 — Matrix Alignment
 
-## Step 8 — Remove Matrix Dependency
+## Step 8 — Remove Matrix Dependency  
+← NOT VERIFIED: TransitionRow::SuccessorConsumption עדיין נדרש בקוד (build failure)
 
 SEARCH:
 
@@ -188,7 +196,8 @@ matrix == runtime
 
 # Phase 3 — Invariant Authority Lock
 
-## Step 9 — Verify Single Authority
+## Step 9 — Verify Single Authority  
+← NOT VERIFIED: קיימת לוגיקת מעבר נוספת דרך evaluate_successor_consumption
 
 ONLY THIS remains:
 
@@ -205,7 +214,8 @@ No executor logic must reference:
 
 # Phase 4 — Executor Purity
 
-## Step 10 — Validate Executor
+## Step 10 — Validate Executor  
+← NOT VERIFIED: executor עדיין עוקב אחרי awaiting_control_successor ומבצע gating
 
 Executor MUST ONLY:
 
@@ -223,7 +233,8 @@ Executor MUST NOT:
 
 # Phase 5 — Validation
 
-## Step 11 — Run Tests
+## Step 11 — Run Tests  
+← NOT VERIFIED: cargo test נכשל (TransitionRow::SuccessorConsumption חסר אך עדיין בשימוש)
 
 ```bash
 cargo test --workspace
@@ -237,7 +248,8 @@ EXPECT:
 
 ---
 
-## Step 12 — Static Checks
+## Step 12 — Static Checks  
+← NOT VERIFIED: נמצאו מופעים רבים של awaiting_control_successor ו-successor_consumption
 
 ```bash
 rg "awaiting_control_successor"

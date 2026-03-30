@@ -1,21 +1,21 @@
-# Filesystem Snapshot Diff and Replay Engine
+# HTTP Routing Engine with Middleware Pipeline and Coverage Discovery
 
-This project implements a Rust-based filesystem snapshot engine that captures directory states, computes diffs between snapshots, and replays changes to reconstruct or transform filesystem states, along with a coverage discovery system that identifies untested diff scenarios, edge-case file operations, and replay inconsistencies. It is interesting because filesystem state transitions involve complex combinations of operations (create, delete, move, modify), ordering constraints, and edge cases that are difficult to fully test without systematic coverage exploration.
+This project implements a Rust-based HTTP routing and middleware execution engine that simulates request handling, route matching, and layered middleware processing, along with a coverage discovery system that identifies untested routing paths, middleware interactions, and edge-case request scenarios. It is interesting because HTTP routing systems involve pattern matching, layered execution, and branching logic that can create complex and subtle behavior across many combinations of routes and middleware.
 
 ## Target
-- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/fs-snapshot-diff`
+- Project path: `/workspace/ai_sandbox/canon/test_projects/goalgen/http-router-coverage`
 
 ## Requirements
 
-1. Implement a Rust binary crate organized into modules such as `fs`, `node`, `file`, `directory`, `metadata`, `snapshot`, `diff`, `patch`, `operation`, `replay`, `path`, `walker`, `hash`, `store`, `runtime`, `trace`, `coverage`, `analysis`, `generator`, `report`, `cli`, and `errors`.
-2. Design an in-memory representation of a filesystem including directories, files, metadata (timestamps, permissions), and content hashes.
-3. Implement snapshot functionality that captures the full state of a filesystem tree from a given root path.
-4. Develop a diff engine that computes changes between two snapshots, including file creation, deletion, modification, renaming, and directory restructuring.
-5. Represent diffs as ordered operations and implement a patch/replay engine that can apply diffs to reconstruct target states from a base snapshot.
-6. Support detection of content changes using hashing (e.g., SHA-256) and structural differences using tree comparisons.
-7. Handle edge cases such as empty directories, deeply nested trees, cyclic symbolic links (simulated), permission changes, identical content with different paths, and conflicting operations.
-8. Provide a CLI using `clap` to snapshot directories, compute diffs, apply patches, and inspect filesystem states.
-9. Create a trace system that records traversal steps, diff decisions, operation ordering, and replay execution.
-10. Build a coverage tracking system that records which filesystem operations, diff cases, path structures, and replay scenarios have been exercised.
-11. Develop an analysis module that identifies untested scenarios such as rare rename patterns, deep directory mutations, conflicting operations, and edge-case metadata changes, and implement a generator that produces synthetic filesystem trees and mutation sequences targeting uncovered behaviors.
-12. Include reporting features such as operation counts, diff sizes, replay correctness checks, coverage summaries, and uncovered scenarios, ensuring the implementation spans at least 800 lines of Rust code across modules and compiles successfully with `cargo check`.
+1. Implement a Rust binary crate organized into modules such as `request`, `response`, `router`, `route`, `matcher`, `pattern`, `method`, `middleware`, `pipeline`, `handler`, `context`, `runtime`, `executor`, `trace`, `coverage`, `analysis`, `generator`, `report`, `cli`, and `errors`.
+2. Design HTTP request and response models including method, path, headers, query parameters, and body.
+3. Implement a routing system supporting static paths, parameterized paths (e.g., `/users/:id`), and wildcard matching.
+4. Build a route matcher that selects the correct handler based on HTTP method and path pattern with precedence rules.
+5. Implement a middleware pipeline where middleware can modify requests/responses, short-circuit execution, or pass control to the next layer.
+6. Support chaining and ordering of middleware with explicit execution flow control.
+7. Handle edge cases such as ambiguous routes, missing parameters, unsupported methods, deeply nested middleware, and malformed requests.
+8. Provide a CLI using `clap` to define routes and middleware via JSON/YAML, simulate HTTP requests, and inspect responses.
+9. Create a trace system that records route matching decisions, middleware execution order, handler invocation, and response generation.
+10. Build a coverage tracking system that records which routes, patterns, middleware paths, and branching behaviors have been exercised.
+11. Develop an analysis module that identifies untested scenarios such as rare route overlaps, middleware short-circuit cases, parameter edge cases, and conflicting patterns, and implement a request generator that produces synthetic HTTP requests targeting uncovered behaviors.
+12. Include reporting features such as route hit counts, middleware execution statistics, coverage summaries, and uncovered scenarios, ensuring the implementation spans at least 800 lines of Rust code across modules and compiles successfully with `cargo check`.
