@@ -396,12 +396,7 @@ impl LoopStageExecutor {
 
     fn handle_planning_completed(&mut self, completed: &canon_event::PlanningCompleted) {
         self.ctx.objective_trend_state.record_planning_completion(&completed.status);
-        let transition = evaluate_loop_transition(self.ctx.pending_required_successor.as_deref(), Some(&completed.status), None, None);
-        if transition.recovery_rules.contains(&LoopRecoveryRule::ClearPlannerSuppressionOnInvalidPlan) {
-            self.reset_plan_window_state();
-        } else {
-            self.clear_invalid_plan_tracking();
-        }
+        self.apply_planning_transition_effects(Some(&completed.status), None);
     }
 
     fn handle_runtime_state_updated(&mut self, updated: &canon_event::RuntimeStateUpdated) {
@@ -573,12 +568,7 @@ impl LoopStageExecutor {
         self.ctx.last_acted = Some(acted.clone());
         self.ctx.last_action_kind = acted.action_kind.clone();
         self.ctx.batch_acted.push(acted.clone());
-        self.reset_plan_window_state();
-
-        const READ_ONLY_ACTIONS: &[&str] = &["list_dir", "read_file", "search_files", "done"];
-        if !READ_ONLY_ACTIONS.contains(&acted.action_kind.as_str()) {
-            self.clear_invalid_plan_tracking();
-        }
+        self.apply_post_act_cleanup(&acted.action_kind);
 
         if let Some(action_id) = acted.action_id.clone() {
             if let Some(intents) = self.ctx.action_semantic_intents.remove(&action_id) {
@@ -595,7 +585,7 @@ impl LoopStageExecutor {
                     self.ctx.file_write_tracker.release(&p);
                 }
             }
-            if !READ_ONLY_ACTIONS.contains(&acted.action_kind.as_str()) {
+            if !matches!(acted.action_kind.as_str(), "list_dir" | "read_file" | "search_files" | "done") {
                 self.ctx.dirty_tracker.mark_dirty("orchestrator", Some(&action_id));
             }
             for task in self.ctx.dep_tracker.complete(&action_id) {
@@ -639,6 +629,15 @@ impl LoopStageExecutor {
         }
     }
 
+    fn apply_post_act_cleanup(&mut self, action_kind: &str) {
+        self.reset_plan_window_state();
+
+        const READ_ONLY_ACTIONS: &[&str] = &["list_dir", "read_file", "search_files", "done"];
+        if !READ_ONLY_ACTIONS.contains(&action_kind) {
+            self.clear_invalid_plan_tracking();
+        }
+    }
+
     fn handle_error_occurred(&mut self, err: &canon_event::ErrorOccurred, trigger_observe: &mut bool) {
         if err.severity == "warning" {
             self.ctx.warning_count = self.ctx.warning_count.saturating_add(1);
@@ -656,15 +655,36 @@ impl LoopStageExecutor {
 
         let fatal_invariant_diag = err.kind == "diagnostics_triggered" && err.context.get("fatal_invariant").and_then(|v| v.as_bool()).unwrap_or(false);
 
-        let transition = evaluate_loop_transition(self.ctx.pending_required_successor.as_deref(), None, Some(&err.kind), None);
-        if transition.recovery_rules.contains(&LoopRecoveryRule::TriggerObserveOnActStall) {
+        let transition = self.apply_planning_transition_effects(None, Some(&err.kind));
+        if transition {
             *trigger_observe = true;
         }
 
-        let observe_rule = evaluate_error_observe(&err.kind, false, fatal_invariant_diag);
-        if matches!(observe_rule, ErrorObserveRule::GenericErrorObserve) {
-            *trigger_observe = true;
+        *trigger_observe |= self.should_trigger_observe_from_error(&err.kind, fatal_invariant_diag);
+    }
+
+    fn should_trigger_observe_from_error(&self, error_kind: &str, fatal_invariant: bool) -> bool {
+        matches!(
+            evaluate_error_observe(error_kind, false, fatal_invariant),
+            ErrorObserveRule::GenericErrorObserve
+        )
+    }
+
+    fn apply_planning_transition_effects(&mut self, planning_status: Option<&str>, error_kind: Option<&str>) -> bool {
+        let transition = evaluate_loop_transition(
+            self.ctx.pending_required_successor.as_deref(),
+            planning_status,
+            error_kind,
+            None,
+        );
+
+        if transition.recovery_rules.contains(&LoopRecoveryRule::ClearPlannerSuppressionOnInvalidPlan) {
+            self.reset_plan_window_state();
+        } else if planning_status.is_some() {
+            self.clear_invalid_plan_tracking();
         }
+
+        transition.recovery_rules.contains(&LoopRecoveryRule::TriggerObserveOnActStall)
     }
 
     fn handle_recovery_event(&mut self, event: &RuntimeEvent, trigger_id: &EventId, recovery_eval: &Option<(Option<String>, crate::policy::RecoveryEventEvaluation)>) -> Option<EventOutcome> {

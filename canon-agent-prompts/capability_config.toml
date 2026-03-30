@@ -104,6 +104,20 @@ role = "harness_eventlog"
 stateful = true
 max_tabs = 1
 
+[llm.endpoints.mini_agent]
+id = "mini_agent_chatgpt"
+url = "https://chatgpt.com/gg/69ca500acd888199a32b90339c82fa31"
+role_markdown = "builtin:planner"
+role = "mini_agent"
+stateful = true
+max_tabs = 1
+
+[llm.roles.mini_agent.weights]
+mini_agent_chatgpt = 100
+
+[llm.roles.mini_agent]
+burst = 1
+
 [llm.roles.analyst.weights]
 analyst_chatgpt = 100
 
